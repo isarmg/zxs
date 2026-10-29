@@ -74,7 +74,10 @@ fn edit(
 fn labels_inherit_across_content_path_events_and_recovery_without_new_bodies() {
     let (root, mut e, r) = setup();
     let first = save(&mut e, &r.main_branch_id, "folder/a.txt", b"first");
-    let context = e.file_context(&r.repository_id, "folder/a.txt").unwrap();
+    let context = e
+        .file_context(&r.repository_id, "folder/a.txt")
+        .unwrap()
+        .unwrap();
     let branch = context.branch_id;
     let count = e.state().versions.len();
     let tagged = edit(
@@ -92,6 +95,7 @@ fn labels_inherit_across_content_path_events_and_recovery_without_new_bodies() {
     );
     assert_eq!(
         e.file_context(&r.repository_id, "folder/a.txt")
+            .unwrap()
             .unwrap()
             .node_id
             .as_deref(),
@@ -123,6 +127,7 @@ fn labels_inherit_across_content_path_events_and_recovery_without_new_bodies() {
     let path = e
         .file_context(&r.repository_id, "folder/b.txt")
         .unwrap()
+        .unwrap()
         .node_id
         .unwrap();
     assert_eq!(e.file_node_tags(&first.file_id, &path).unwrap().len(), 2);
@@ -145,7 +150,11 @@ fn historical_labels_add_a_child_without_rewinding_newer_content() {
     let (_root, mut e, r) = setup();
     let first = save(&mut e, &r.main_branch_id, "a.txt", b"old");
     let second = save(&mut e, &r.main_branch_id, "a.txt", b"new");
-    let branch = e.file_context(&r.repository_id, "a.txt").unwrap().branch_id;
+    let branch = e
+        .file_context(&r.repository_id, "a.txt")
+        .unwrap()
+        .unwrap()
+        .branch_id;
     let head = e.file_branch_head(&branch).unwrap();
     let child = edit(
         &mut e,
@@ -175,7 +184,11 @@ fn historical_labels_add_a_child_without_rewinding_newer_content() {
 fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
     let (_root, mut e, r) = setup();
     let first = save(&mut e, &r.main_branch_id, "a.txt", b"A");
-    let branch = e.file_context(&r.repository_id, "a.txt").unwrap().branch_id;
+    let branch = e
+        .file_context(&r.repository_id, "a.txt")
+        .unwrap()
+        .unwrap()
+        .branch_id;
     let mut t = target(&e, &branch, &first.version_id);
     let op = storage_contract::OperationId::generate();
     let add = vec!["one".into()];
@@ -268,7 +281,11 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
 fn pending_file_labels_preserve_first_write_and_batches_keep_branch_snapshots_independent() {
     let (_root, mut e, r) = setup();
     let file = save(&mut e, &r.main_branch_id, "a.txt", b"source");
-    let main = e.file_context(&r.repository_id, "a.txt").unwrap().branch_id;
+    let main = e
+        .file_context(&r.repository_id, "a.txt")
+        .unwrap()
+        .unwrap()
+        .branch_id;
     let pending = e
         .create_file_branch(
             &file.file_id,

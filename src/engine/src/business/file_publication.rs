@@ -12,6 +12,8 @@ pub(crate) fn advance_branch_node(
     materialize: bool,
     principal: &str,
     operation: OperationId,
+    base: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
 ) -> Result<()> {
     let previous = state.branches.get(branch).cloned().ok_or_else(|| {
         Error::new(
@@ -34,7 +36,15 @@ pub(crate) fn advance_branch_node(
             "file branch snapshot missing",
         )
     })?;
-    let mut entries = current.entries.clone();
+    // A file branch's namespace holds its one file; the walk reads one page
+    // and the rebuilt root is equally small.
+    let mut entries = {
+        let draft = crate::namespace::DraftSource {
+            fresh: &*fresh,
+            base,
+        };
+        crate::namespace::NamespaceView::new(&current.namespace, &draft).collect_entries()?
+    };
     let mut found = false;
     for entry in entries
         .iter_mut()
@@ -55,6 +65,7 @@ pub(crate) fn advance_branch_node(
     } else {
         previous.pending_file_versions.clone()
     };
+    let namespace = crate::namespace::build_from_entries(&entries, fresh)?;
     let id = new_id("commit");
     state.commits.insert(
         id.clone(),
@@ -69,7 +80,7 @@ pub(crate) fn advance_branch_node(
             operation_id: operation,
             author: principal.into(),
             message: "Advance file metadata node".into(),
-            entries,
+            namespace,
             pending_file_versions: pending.clone(),
             provenance: Some(node.into()),
         },
@@ -128,6 +139,8 @@ struct Publication<'a> {
     maximum: usize,
     rewrites: BTreeMap<String, String>,
     visiting: BTreeSet<String>,
+    base: &'a dyn crate::namespace::NamespaceSource,
+    fresh: &'a mut crate::namespace::NamespaceObjects,
 }
 impl Publication<'_> {
     fn rewrite(&mut self, state: &mut State, tree_id: &str) -> Result<String> {
@@ -230,18 +243,23 @@ impl Publication<'_> {
             })?;
             let mut full = tree.entries.clone();
             let key = name_policy::path_key(&tree.path);
-            full.extend(
-                previous
-                    .entries
-                    .iter()
-                    .filter(|entry| {
-                        entry.kind == NamespaceEntryKind::Directory
-                            && (entry.lookup_key() == key
-                                || namespace::is_descendant(&key, entry.lookup_key()))
-                    })
-                    .cloned(),
-            );
+            // The frozen tree carries its own subtree entries; the rebuilt
+            // commit additionally needs the directory itself and its ancestor
+            // chain from the current head, exactly the old ancestor filter.
+            {
+                let draft = crate::namespace::DraftSource {
+                    fresh: &*self.fresh,
+                    base: self.base,
+                };
+                full.extend(
+                    crate::namespace::NamespaceView::new(&previous.namespace, &draft)
+                        .ancestor_closure(&key)?
+                        .into_iter()
+                        .filter(|entry| entry.kind == NamespaceEntryKind::Directory),
+                );
+            }
             validate_entries(&mut full, self.maximum)?;
+            let rebuilt = crate::namespace::build_from_entries(&full, self.fresh)?;
             let id = new_id("commit");
             let pending = full
                 .iter()
@@ -271,7 +289,7 @@ impl Publication<'_> {
                     operation_id: self.operation,
                     author: self.principal.into(),
                     message: "Publish exact file references".into(),
-                    entries: full,
+                    namespace: rebuilt,
                     pending_file_versions: pending,
                     provenance: None,
                 },
@@ -304,7 +322,12 @@ pub(crate) struct NodePublication<'a> {
     pub(crate) maximum: usize,
 }
 
-pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Result<Vec<String>> {
+pub(crate) fn publish_node(
+    state: &mut State,
+    input: NodePublication<'_>,
+    base: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
+) -> Result<Vec<String>> {
     let NodePublication {
         file,
         matching_branches,
@@ -348,6 +371,8 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
         maximum,
         rewrites: BTreeMap::new(),
         visiting: BTreeSet::new(),
+        base,
+        fresh: &mut *fresh,
     };
     let mut affected = Vec::new();
     for original in &originals {
@@ -411,15 +436,28 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
             "repository head missing",
         )
     })?;
-    let mut entries = previous.entries.clone();
+    // Publication retargets every occurrence of one file in the main head:
+    // whole-tree by definition, so the head materializes once and rebuilds.
+    let mut entries = {
+        let draft = crate::namespace::DraftSource {
+            fresh: &*fresh,
+            base,
+        };
+        crate::namespace::NamespaceView::new(&previous.namespace, &draft).collect_entries()?
+    };
     let mut changed_paths = Vec::new();
     for entry in entries
         .iter_mut()
         .filter(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
     {
-        let Some(mut context) =
-            directory::context_at_key(state, &repo.repository_id, entry.lookup_key())
-        else {
+        let context = {
+            let draft = crate::namespace::DraftSource {
+                fresh: &*fresh,
+                base,
+            };
+            directory::context_at_key(state, &repo.repository_id, entry.lookup_key(), &draft)?
+        };
+        let Some(mut context) = context else {
             continue;
         };
         if !matches(&context, entry, matching_branches, matching_node) {
@@ -441,8 +479,15 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
     }
     if !changed_paths.is_empty() {
         validate_entries(&mut entries, maximum)?;
+        let namespace = crate::namespace::build_from_entries(&entries, fresh)?;
         let id = new_id("commit");
-        let pending = directory::snapshot_pending(state, &entries);
+        let pending = {
+            let draft = crate::namespace::DraftSource {
+                fresh: &*fresh,
+                base,
+            };
+            directory::snapshot_pending(state, &entries, &draft)?
+        };
         state.commits.insert(
             id.clone(),
             Commit {
@@ -456,7 +501,7 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
                 operation_id: operation,
                 author: principal.into(),
                 message: "Publish current file references".into(),
-                entries,
+                namespace,
                 pending_file_versions: pending,
                 provenance: None,
             },
@@ -487,6 +532,8 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
                 &repo.repository_id,
                 &changed_paths,
                 None,
+                base,
+                fresh,
             )?);
         }
     }

@@ -125,6 +125,57 @@ impl Backend for LostCommitReply {
         self.inner.snapshot_at(identity, branch, commit)
     }
 
+    fn snapshot_entry_by_identity(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+        entry_id: &str,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        // The reconciliation flow reads the published snapshot through this
+        // bounded probe; the injected one-shot failure targets that read.
+        if self
+            .reconciliation_failure
+            .compare_exchange(
+                RECONCILIATION_SNAPSHOT,
+                0,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            return Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::MetadataUnavailable,
+                "injected one-shot published snapshot read failure",
+            ));
+        }
+        self.inner
+            .snapshot_entry_by_identity(identity, branch, commit, key, entry_id)
+    }
+
+    fn snapshot_entry(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+    ) -> Result<Option<storage_contract::Entry>, crate::ApiError> {
+        self.inner.snapshot_entry(identity, branch, commit, key)
+    }
+
+    fn snapshot_directory_has_children(
+        &self,
+        identity: &crate::auth::Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+    ) -> Result<bool, crate::ApiError> {
+        self.inner
+            .snapshot_directory_has_children(identity, branch, commit, key)
+    }
+
     fn authorize_current(
         &self,
         identity: &crate::auth::Identity,

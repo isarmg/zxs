@@ -5,10 +5,57 @@ fn fixture() -> State {
         "../journal/fixtures/canonical_publication.json"
     ))
     .unwrap();
-    json_codec::from_str(fixture["state_bytes"].as_str().unwrap()).unwrap()
+    let state: State = json_codec::from_str(fixture["state_bytes"].as_str().unwrap()).unwrap();
+    // Publish every recorded commit namespace into the in-process fixture
+    // store; the deterministic rebuild must reproduce the recorded roots.
+    for (commit_id, entries) in fixture["commit_namespaces"].as_object().unwrap() {
+        let entries: Vec<storage_contract::Entry> =
+            json_codec::from_value(entries.clone()).unwrap();
+        let namespace = crate::namespace::fixture_store::namespace(&entries);
+        assert_eq!(namespace, state.commits[commit_id.as_str()].namespace);
+    }
+    state
+}
+
+/// The fixture state with its namespace objects also published onto the given
+/// member disks, for flows that read through disk-backed graph sources.
+fn fixture_stored(members: &[DiskConfig]) -> State {
+    let fixture: json_codec::Value = json_codec::from_str(include_str!(
+        "../journal/fixtures/canonical_publication.json"
+    ))
+    .unwrap();
+    let state: State = json_codec::from_str(fixture["state_bytes"].as_str().unwrap()).unwrap();
+    for (commit_id, entries) in fixture["commit_namespaces"].as_object().unwrap() {
+        let entries: Vec<storage_contract::Entry> =
+            json_codec::from_value(entries.clone()).unwrap();
+        let namespace = crate::namespace::fixture_store::namespace_stored(&entries, members);
+        assert_eq!(namespace, state.commits[commit_id.as_str()].namespace);
+    }
+    state
+}
+fn fixture_directory(namespace: &storage_contract::CommitNamespace) -> Option<String> {
+    let mut found = None;
+    crate::namespace::NamespaceView::new(
+        namespace,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .walk(|_, entry| {
+        if let storage_contract::NamespacePageEntry::Directory { entry_id, .. } = entry {
+            found = Some(entry_id.clone());
+            return Ok(false);
+        }
+        Ok(true)
+    })
+    .ok()?;
+    found
 }
 fn dirty(before: &State, after: &State) -> BTreeSet<String> {
-    changes::HistoryChanges::between(before, after).histories
+    changes::HistoryChanges::between(
+        before,
+        after,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .histories
 }
 fn expected(ids: &[&str]) -> BTreeSet<String> {
     ids.iter().map(|id| (*id).to_owned()).collect()
@@ -28,7 +75,7 @@ fn incremental_history_dependencies_stay_on_the_admitted_roots_after_rebinding()
     }
     let admitted = ValidatedConfig::try_from(config.clone()).unwrap();
     let resources = DiskResources::open(&admitted, false).unwrap();
-    let before = fixture();
+    let before = fixture_stored(&config.disks);
     let previous =
         store_history_manifests_bounded_at(&resources, &config.disks, &before, MAX_METADATA)
             .unwrap();
@@ -38,8 +85,16 @@ fn incremental_history_dependencies_stay_on_the_admitted_roots_after_rebinding()
     }
     let mut after = fork(&before);
     after.sequence += 1;
-    let owners = DerivedOwners::from_state(&before);
-    let mut projection = ProjectionTransition::new(&before, &after, Some(&owners)).unwrap();
+    let owners =
+        DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+            .unwrap();
+    let mut projection = ProjectionTransition::new(
+        &before,
+        &after,
+        Some(&owners),
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     let mut faults = 0;
     let (catalog, objects) = prepare_history_manifests_incremental_observed_at(
         &resources,
@@ -48,6 +103,7 @@ fn incremental_history_dependencies_stay_on_the_admitted_roots_after_rebinding()
         &config.disks,
         MAX_METADATA,
         &mut |_| faults += 1,
+        &crate::namespace::fixture_store::FixtureSource,
     )
     .unwrap();
     assert_eq!(faults, 0);
@@ -180,20 +236,10 @@ fn selection_retarget_alias_sources_and_shared_directory_membership_are_exact() 
     let mut commit = before
         .commits
         .values()
-        .find(|c| {
-            c.entries
-                .iter()
-                .any(|e| e.kind == NamespaceEntryKind::Directory)
-        })
+        .find(|c| fixture_directory(&c.namespace).is_some())
         .unwrap()
         .clone();
-    let directory = commit
-        .entries
-        .iter()
-        .find(|e| e.kind == NamespaceEntryKind::Directory)
-        .unwrap()
-        .entry_id
-        .clone();
+    let directory = fixture_directory(&commit.namespace).unwrap();
     commit.commit_id = "commit_other".into();
     commit.history_tree_id = "history_other".into();
     before.commits.insert(commit.commit_id.clone(), commit);
@@ -207,10 +253,9 @@ fn selection_retarget_alias_sources_and_shared_directory_membership_are_exact() 
 fn independent_fields_are_ignored_and_unknown_lineage_falls_back() {
     let before = fixture();
     let mut next = fork(&before);
-    next.operations.clear();
-    next.operation_principals.clear();
+    next.operations = storage_contract::OperationLog::new();
     next.plans.clear();
-    next.events.clear();
+    next.events = storage_contract::SegmentedEvents::new();
     next.control_auth = Some(json!({"changed":true}));
     next.sequence += 1;
     next.business_generation += 1;
@@ -249,17 +294,29 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
         temp.path().join("two"),
         temp.path().join("three"),
     ]);
-    let before = fixture();
+    let before = fixture_stored(&config.disks);
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let mut next = fork(&before);
     next.sequence += 1;
-    next.operations.clear();
-    let (actual, objects) =
-        prepare_history_manifests_incremental(&before, &next, &roots, &config.disks, MAX_METADATA)
-            .unwrap();
+    next.operations = storage_contract::OperationLog::new();
+    let (actual, objects) = prepare_history_manifests_incremental(
+        &before,
+        &next,
+        &roots,
+        &config.disks,
+        MAX_METADATA,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     assert_eq!(
         actual,
-        prepare_history_manifests(&next, MAX_METADATA).unwrap().0
+        prepare_history_manifests(
+            &next,
+            MAX_METADATA,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .unwrap()
+        .0
     );
     assert!(dirty(&before, &next).is_empty());
     for object in &objects {
@@ -267,12 +324,24 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
     }
     let file = before.versions.values().next().unwrap().file_id.clone();
     next.file_notes.insert(file, "changed note".into());
-    let (actual, objects) =
-        prepare_history_manifests_incremental(&before, &next, &roots, &config.disks, MAX_METADATA)
-            .unwrap();
+    let (actual, objects) = prepare_history_manifests_incremental(
+        &before,
+        &next,
+        &roots,
+        &config.disks,
+        MAX_METADATA,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     assert_eq!(
         actual,
-        prepare_history_manifests(&next, MAX_METADATA).unwrap().0
+        prepare_history_manifests(
+            &next,
+            MAX_METADATA,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .unwrap()
+        .0
     );
     assert_ne!(actual, roots);
     for object in objects {
@@ -286,9 +355,15 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
     let path = object_path(&config.disks[0], "history-manifest", hash);
     fs::write(&path, b"corrupt").unwrap();
     let next = fork(&before);
-    let (_, objects) =
-        prepare_history_manifests_incremental(&before, &next, &roots, &config.disks, MAX_METADATA)
-            .unwrap();
+    let (_, objects) = prepare_history_manifests_incremental(
+        &before,
+        &next,
+        &roots,
+        &config.disks,
+        MAX_METADATA,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     assert!(
         objects
             .iter()
@@ -304,9 +379,15 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
             fs::remove_file(object_path(disk, kind, object_hash)).unwrap();
         }
     }
-    let (recreated, objects) =
-        prepare_history_manifests_incremental(&before, &next, &roots, &config.disks, MAX_METADATA)
-            .unwrap();
+    let (recreated, objects) = prepare_history_manifests_incremental(
+        &before,
+        &next,
+        &roots,
+        &config.disks,
+        MAX_METADATA,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     assert_eq!(recreated, roots);
     for object in objects {
         object.store(&config.disks).unwrap();
@@ -317,10 +398,17 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
     let mut next = fork(&before);
     next.histories.clear();
     assert!(
-        prepare_history_manifests_incremental(&before, &next, &roots, &config.disks, MAX_METADATA)
-            .unwrap()
-            .0
-            .reference()
+        prepare_history_manifests_incremental(
+            &before,
+            &next,
+            &roots,
+            &config.disks,
+            MAX_METADATA,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .unwrap()
+        .0
+        .reference()
             == &crate::journal::stored_map(&[], json_codec::Map::new())
     );
 }
@@ -333,7 +421,7 @@ fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_ro
         temp.path().join("two"),
         temp.path().join("three"),
     ]);
-    let before = fixture();
+    let before = fixture_stored(&config.disks);
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let hash = &roots
         .catalog_binding(before.histories.keys().next().unwrap())
@@ -343,9 +431,15 @@ fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_ro
         fs::write(object_path(disk, "history-manifest", hash), b"corrupt").unwrap();
     }
     let next = fork(&before);
-    let (actual, objects) =
-        prepare_history_manifests_incremental(&before, &next, &roots, &config.disks, MAX_METADATA)
-            .unwrap();
+    let (actual, objects) = prepare_history_manifests_incremental(
+        &before,
+        &next,
+        &roots,
+        &config.disks,
+        MAX_METADATA,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     assert_eq!(actual, roots);
     assert!(
         objects
@@ -363,9 +457,15 @@ fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_ro
     fs::write(&outside, b"untouched").unwrap();
     fs::remove_file(&path).unwrap();
     std::os::unix::fs::symlink(&outside, &path).unwrap();
-    let (_, objects) =
-        prepare_history_manifests_incremental(&before, &next, &roots, &config.disks, MAX_METADATA)
-            .unwrap();
+    let (_, objects) = prepare_history_manifests_incremental(
+        &before,
+        &next,
+        &roots,
+        &config.disks,
+        MAX_METADATA,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     assert!(
         objects
             .iter()
@@ -401,6 +501,7 @@ fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_ro
         &incorrect,
         &config.disks,
         MAX_METADATA,
+        &crate::namespace::fixture_store::FixtureSource,
     )
     .err()
     .unwrap();
@@ -421,7 +522,9 @@ fn single_history_projection_shares_complete_maps_with_identical_graph() {
     assert!(!state.commits.is_empty());
     assert!(!state.directory_trees.is_empty());
     let id = state.histories.keys().next().unwrap();
-    let projected = HistoryManifest::from_state(&state, id).unwrap();
+    let projected =
+        HistoryManifest::from_state(&state, id, &crate::namespace::fixture_store::FixtureSource)
+            .unwrap();
     assert!(projected.commits.shares_storage_with(&state.commits));
     assert!(
         projected
@@ -451,7 +554,9 @@ fn single_history_projection_shares_complete_maps_with_identical_graph() {
             .directory_trees
             .shares_storage_with(&projected.directory_trees)
     );
-    materialized.validate().unwrap();
+    materialized
+        .validate(&crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     assert_eq!(
         canonical_json(&projected).unwrap(),
         canonical_json(&materialized).unwrap()
@@ -464,53 +569,58 @@ fn single_history_projection_shares_complete_maps_with_identical_graph() {
 
 #[test]
 fn commit_entry_order_admission_matches_canonical_byte_oracle() {
+    // Flat entry order no longer exists on commits: pages are canonical by
+    // construction, so admission re-verifies the paged graph and its recorded
+    // totals instead of re-sorting a list.
     let state = fixture();
     let history = state.histories.keys().next().unwrap();
-    let manifest = HistoryManifest::from_state(&state, history).unwrap();
-    let commit = state
-        .commits
-        .values()
-        .find(|commit| commit.entries.len() == 3)
+    let manifest = HistoryManifest::from_state(
+        &state,
+        history,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
+    manifest
+        .validate(&crate::namespace::fixture_store::FixtureSource)
         .unwrap();
-    for permutation in [
-        [0, 1, 2],
-        [0, 2, 1],
-        [1, 0, 2],
-        [1, 2, 0],
-        [2, 0, 1],
-        [2, 1, 0],
-    ] {
-        let entries: Vec<_> = permutation
-            .into_iter()
-            .map(|index| commit.entries[index].clone())
-            .collect();
-        let mut normalized = entries.clone();
-        crate::business::validate_entries(&mut normalized, 1_000_000).unwrap();
-        let expected = canonical_json(&normalized).unwrap() == canonical_json(&entries).unwrap();
-        let mut changed_manifest = manifest.clone();
-        changed_manifest
-            .commits
-            .get_mut(&commit.commit_id)
-            .unwrap()
-            .entries = entries.clone();
-        assert_eq!(changed_manifest.validate().is_ok(), expected);
-        let mut changed_state = state.clone();
-        changed_state
-            .commits
-            .get_mut(&commit.commit_id)
-            .unwrap()
-            .entries = entries;
-        let raw: RawState =
-            json_codec::from_slice(&canonical_json(&changed_state).unwrap()).unwrap();
-        assert_eq!(AdmittedState::try_from(raw).is_ok(), expected);
-    }
+    let commit = state.commits.values().next().unwrap();
+    // A lying recorded total is rejected by manifest validation and by the
+    // complete snapshot admission alike.
+    let mut changed_manifest = manifest.clone();
+    changed_manifest
+        .commits
+        .get_mut(&commit.commit_id)
+        .unwrap()
+        .namespace
+        .entries += 1;
+    let error = changed_manifest
+        .validate(&crate::namespace::fixture_store::FixtureSource)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("canonical namespace form"),
+        "{error}"
+    );
+    let mut changed_state = state.clone();
+    changed_state
+        .commits
+        .get_mut(&commit.commit_id)
+        .unwrap()
+        .namespace
+        .entries += 1;
+    let raw: RawState = json_codec::from_slice(&canonical_json(&changed_state).unwrap()).unwrap();
+    assert!(AdmittedState::admit(raw, &crate::namespace::fixture_store::FixtureSource).is_err());
 }
 
 #[test]
 fn directory_branch_head_entry_comparison_preserves_boundary_rejections() {
     let state = fixture();
     let history = state.histories.keys().next().unwrap();
-    let manifest = HistoryManifest::from_state(&state, history).unwrap();
+    let manifest = HistoryManifest::from_state(
+        &state,
+        history,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     let branch = manifest
         .directory_branches
         .values()
@@ -550,7 +660,7 @@ fn directory_branch_head_entry_comparison_preserves_boundary_rejections() {
             .get_mut(&branch.directory_branch_id)
             .unwrap()
             .entries = entries.clone();
-        match changed.validate() {
+        match changed.validate(&crate::namespace::fixture_store::FixtureSource) {
             Ok(()) => assert!(expected),
             Err(error) => {
                 assert!(!expected);
@@ -569,7 +679,10 @@ fn directory_branch_head_entry_comparison_preserves_boundary_rejections() {
             .entries = entries;
         let raw: RawState =
             json_codec::from_slice(&canonical_json(&changed_state).unwrap()).unwrap();
-        assert_eq!(AdmittedState::try_from(raw).is_ok(), expected);
+        assert_eq!(
+            AdmittedState::admit(raw, &crate::namespace::fixture_store::FixtureSource).is_ok(),
+            expected
+        );
     }
     // A reordered persisted HEAD is independently valid but disagrees with the branch.
     let mut changed = manifest.clone();
@@ -579,7 +692,9 @@ fn directory_branch_head_entry_comparison_preserves_boundary_rejections() {
         .unwrap()
         .entries
         .reverse();
-    let error = changed.validate().unwrap_err();
+    let error = changed
+        .validate(&crate::namespace::fixture_store::FixtureSource)
+        .unwrap_err();
     assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
     assert_eq!(
         error.message(),
@@ -596,7 +711,7 @@ fn branch_value_updates_preserve_full_graph_bytes_and_rebuild_unavailable_old_ro
             temp.path().join("two"),
             temp.path().join("three"),
         ]);
-        let before = fixture();
+        let before = fixture_stored(&config.disks);
         let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
         let branch = before
             .branches
@@ -618,13 +733,19 @@ fn branch_value_updates_preserve_full_graph_bytes_and_rebuild_unavailable_old_ro
                 .unwrap();
             }
         }
-        let (expected, expected_objects) = prepare_history_manifests(&after, MAX_METADATA).unwrap();
+        let (expected, expected_objects) = prepare_history_manifests(
+            &after,
+            MAX_METADATA,
+            &crate::namespace::fixture_store::FixtureSource,
+        )
+        .unwrap();
         let (actual, objects) = prepare_history_manifests_incremental(
             &before,
             &after,
             &roots,
             &config.disks,
             MAX_METADATA,
+            &crate::namespace::fixture_store::FixtureSource,
         )
         .unwrap();
         assert_eq!(actual, expected);
@@ -678,7 +799,7 @@ fn unknown_branch_mutation_and_cold_state_retain_complete_manifest_admission() {
         temp.path().join("two"),
         temp.path().join("three"),
     ]);
-    let before = fixture();
+    let before = fixture_stored(&config.disks);
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let branch = before
         .branches
@@ -698,10 +819,24 @@ fn unknown_branch_mutation_and_cold_state_retain_complete_manifest_admission() {
         storage_contract::MapChanges::All
     ));
     let raw: RawState = json_codec::from_slice(&canonical_json(&after).unwrap()).unwrap();
-    assert!(AdmittedState::try_from(raw).is_err());
-    assert!(prepare_history_manifests(&after, MAX_METADATA).is_err());
+    assert!(AdmittedState::admit(raw, &crate::namespace::fixture_store::FixtureSource).is_err());
     assert!(
-        prepare_history_manifests_incremental(&before, &after, &roots, &config.disks, MAX_METADATA)
-            .is_err()
+        prepare_history_manifests(
+            &after,
+            MAX_METADATA,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .is_err()
+    );
+    assert!(
+        prepare_history_manifests_incremental(
+            &before,
+            &after,
+            &roots,
+            &config.disks,
+            MAX_METADATA,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .is_err()
     );
 }

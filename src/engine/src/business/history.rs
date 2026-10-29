@@ -31,30 +31,33 @@ impl Engine {
         super::file::pending_file_source(&self.state, branch_id, file_id)
     }
 
+    /// The complete materialized tree at the branch head, in the legacy
+    /// canonical order. Whole-tree by definition; point lookups and listing
+    /// pages go through the paged namespace view instead.
     pub fn list_tree(&self, branch_id: &str) -> Result<Vec<Entry>> {
-        Ok(self.list_tree_ref(branch_id)?.to_vec())
+        self.namespace_entries(&self.tree_commit(branch_id)?.namespace.clone())
     }
 
-    /// Borrow the current frozen namespace without copying unrelated entries.
-    pub fn list_tree_ref(&self, branch_id: &str) -> Result<&[Entry]> {
+    /// An unwritten snapshot reads its frozen parent versions. Reservation
+    /// markers separately distinguish inherited content from owned versions.
+    pub fn list_tree_at(&self, branch_id: &str, commit_id: &str) -> Result<Vec<Entry>> {
+        self.namespace_entries(&self.tree_commit_at(branch_id, commit_id)?.namespace.clone())
+    }
+
+    /// The branch head commit that owns the current frozen namespace.
+    pub(crate) fn tree_commit(&self, branch_id: &str) -> Result<&Commit> {
         let branch = self.state.branches.get(branch_id).ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::BranchNotFound,
                 "branch not found",
             )
         })?;
-        self.list_tree_at_ref(branch_id, &branch.head_commit_id)
+        self.tree_commit_at(branch_id, &branch.head_commit_id)
     }
 
-    /// An unwritten snapshot reads its frozen parent versions. Reservation
-    /// markers separately distinguish inherited content from owned versions.
-    pub fn list_tree_at(&self, branch_id: &str, commit_id: &str) -> Result<Vec<Entry>> {
-        Ok(self.list_tree_at_ref(branch_id, commit_id)?.to_vec())
-    }
-
-    /// Borrow a selected frozen namespace within the branch's history.
-    /// Like `list_tree_at`, rejects migrated branches and foreign snapshots.
-    pub fn list_tree_at_ref(&self, branch_id: &str, commit_id: &str) -> Result<&[Entry]> {
+    /// A selected frozen snapshot within the branch's history. Like
+    /// `list_tree_at`, rejects migrated branches and foreign snapshots.
+    pub(crate) fn tree_commit_at(&self, branch_id: &str, commit_id: &str) -> Result<&Commit> {
         let branch = self.state.branches.get(branch_id).ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::BranchNotFound,
@@ -67,8 +70,7 @@ impl Engine {
                 "this branch moved during a history split; use the published mapping",
             ));
         }
-        let commit = self
-            .state
+        self.state
             .commits
             .get(commit_id)
             .filter(|commit| commit.history_tree_id == branch.history_tree_id)
@@ -77,8 +79,7 @@ impl Engine {
                     storage_contract::ErrorCode::CommitNotFound,
                     "selected snapshot is outside this branch's history",
                 )
-            })?;
-        Ok(&commit.entries)
+            })
     }
     pub fn file_history(&self, file_id: &str) -> Result<Vec<FileVersion>> {
         if self.history_index_is_selective(file_id)
@@ -155,7 +156,7 @@ impl Engine {
             operation,
             json!({"source_commit_id":source_commit,"name":name.as_str()}),
             None,
-            |engine, state, _| {
+            |engine, state, scratch| {
                 let source = state.commits.get(source_commit).cloned().ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::CommitNotFound,
@@ -183,15 +184,21 @@ impl Engine {
                 }
                 let id = new_id("br");
                 let commit_id = new_id("commit");
-                let mut entries = source.entries.clone();
+                // Whole-tree by semantics: a new branch head re-identifies
+                // every entry, so the source namespace materializes once and
+                // the branch builds its own complete paged root.
+                let mut entries = engine.namespace_entries(&source.namespace)?;
                 let pending_file_versions: std::collections::BTreeMap<String, String> = entries
                     .iter()
                     .filter(|entry| entry.kind == NamespaceEntryKind::File)
                     .map(|entry| (entry.file_id.clone(), entry.version_id.clone()))
                     .collect();
+                let placeholder_files = pending_file_versions.len();
                 for entry in &mut entries {
                     entry.entry_id = new_id("entry");
                 }
+                let namespace =
+                    crate::namespace::build_from_entries(&entries, &mut scratch.namespace)?;
                 state.commits.insert(
                     commit_id.clone(),
                     Commit {
@@ -205,7 +212,7 @@ impl Engine {
                         operation_id: operation,
                         author: principal.into(),
                         message: format!("Create pending branch {}", name.as_str()),
-                        entries,
+                        namespace,
                         pending_file_versions: pending_file_versions.clone(),
                         provenance: Some(source_commit.into()),
                     },
@@ -230,8 +237,7 @@ impl Engine {
                     "history_tree_id": source.history_tree_id,
                     "created_branch": created_branch,
                     "copied_files": "0",
-                    "placeholder_files": source.entries.iter()
-                        .filter(|entry| entry.kind == NamespaceEntryKind::File).count().to_string()
+                    "placeholder_files": placeholder_files.to_string()
                 }))
             },
         )?;
@@ -246,6 +252,7 @@ impl Engine {
             MutationPlan::Prepared {
                 next,
                 prepared,
+                namespace,
                 result,
             } => {
                 // The closure stores this same record in the candidate and receipt.
@@ -255,7 +262,7 @@ impl Engine {
                     .and_then(|id| next.branches.get(id))
                     .expect("invariant: branch creation candidate contains its created branch")
                     .clone();
-                self.persist(*next, prepared, result)?;
+                self.persist_with_objects(*next, prepared, namespace, result)?;
                 Ok(created)
             }
         }
@@ -443,7 +450,16 @@ impl Engine {
                 "right commit missing",
             )
         })?;
-        Ok(CommitComparison::between(left, right))
+        // Comparison is whole-namespace by definition; both sides materialize
+        // once and the comparison owns the compared records.
+        let left_entries = self.namespace_entries(&left.namespace)?;
+        let right_entries = self.namespace_entries(&right.namespace)?;
+        Ok(CommitComparison::between(
+            left,
+            left_entries,
+            right,
+            right_entries,
+        ))
     }
 }
 

@@ -555,14 +555,16 @@ fn changing_one_entity_reuses_unrelated_radix_pages() {
 
 // Fixed codec fixture, independent of random IDs and wall-clock time. It need
 // not be a semantically valid history: this pins the logical/graph wire format.
-#[test]
-fn shared_manifest_projection_preserves_canonical_golden() {
+fn manifest_sharing_golden_bundle() -> json_codec::Value {
     let mut logical = json_codec::to_value(manifest()).unwrap();
     logical["commits"] = json!({"commit": {
         "commit_id": "commit", "history_tree_id": "history", "kind": "save",
         "parent_commit_ids": [], "tree_id": "tree", "sequence": "18446744073709551615",
         "operation_id": "op_00000000000000000000000000000000", "author": "作者", "message": "quotes: \" / 📁",
-        "entries": [], "pending_file_versions": {"file": "version"},
+        "namespace": {"root": {"kind": "namespace-page",
+            "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"},
+            "entries": "18446744073709551615"},
+        "pending_file_versions": {"file": "version"},
         "namespace_deletions": {"timestamp": "9007199254740993", "paths": []},
         "provenance": null
     }});
@@ -575,18 +577,38 @@ fn shared_manifest_projection_preserves_canonical_golden() {
     let manifest: HistoryManifest = json_codec::from_value(logical).unwrap();
     let bytes = canonical_json(&manifest).unwrap();
     let (root, _, objects) = encoded(&manifest, MAX_METADATA);
-    let bundle = json!({
+    json!({
         "logical": String::from_utf8(bytes).unwrap(),
         "root": root,
         "objects": objects.into_iter().map(|((kind, hash), value)| json!({
             "kind": kind, "hash": hash,
             "bytes": String::from_utf8(canonical_json(&value).unwrap()).unwrap()
         })).collect::<Vec<_>>()
-    });
+    })
+}
+
+#[test]
+fn shared_manifest_projection_preserves_canonical_golden() {
     assert_eq!(
-        canonical_json(&bundle).unwrap(),
+        canonical_json(&manifest_sharing_golden_bundle()).unwrap(),
         include_bytes!("manifest-sharing-golden.json")
     );
+}
+
+/// Manual regeneration tool for the committed golden file, for intentional
+/// wire-format changes only. Run with:
+/// `cargo test -p storage-engine regenerate_manifest_sharing_golden -- --ignored`
+#[test]
+#[ignore = "manual golden regeneration tool; rewrites the committed golden file"]
+fn regenerate_manifest_sharing_golden() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test/engine/unit/history_package/graph/manifest-sharing-golden.json");
+    std::fs::write(
+        &path,
+        canonical_json(&manifest_sharing_golden_bundle()).unwrap(),
+    )
+    .unwrap();
+    println!("wrote {}", path.display());
 }
 
 #[test]

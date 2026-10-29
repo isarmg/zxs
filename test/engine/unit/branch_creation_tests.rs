@@ -23,8 +23,9 @@ fn fresh_branch_matches_complete_receipt_and_canonical_shape() {
                 .root_commit_id
                 .clone()
         };
-        let expected_pending = engine.state().commits[&source]
-            .entries
+        let expected_pending = engine
+            .namespace_entries(&engine.state().commits[&source].namespace)
+            .unwrap()
             .iter()
             .filter(|entry| entry.kind == NamespaceEntryKind::File)
             .map(|entry| (entry.file_id.clone(), entry.version_id.clone()))
@@ -34,7 +35,7 @@ fn fresh_branch_matches_complete_receipt_and_canonical_shape() {
         let created = engine
             .create_branch(&source, &name, "admin", operation)
             .unwrap();
-        let receipt = &engine.state().operations[&operation];
+        let receipt = engine.published_receipt(operation).unwrap().unwrap();
         let decoded: Branch =
             json_codec::from_value(receipt.result["created_branch"].clone()).unwrap();
         assert_eq!(created, decoded);
@@ -99,7 +100,7 @@ fn fresh_branch_matches_complete_receipt_and_canonical_shape() {
         );
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
         assert_eq!(
-            canonical_json(&engine.state().operations[&operation].result).unwrap(),
+            canonical_json(&engine.published_receipt(operation).unwrap().unwrap().result).unwrap(),
             canonical_json(&expected_result).unwrap()
         );
     }
@@ -118,22 +119,25 @@ fn branch_replay_rejects_damaged_receipt_with_json_source_not_live_fallback() {
     let created = engine
         .create_branch(&source, &name, "admin", operation)
         .unwrap();
-    let original = engine.state().operations[&operation].clone();
+    let original = engine.published_receipt(operation).unwrap().unwrap();
     for payload in [
         None,
         Some(json!("wrong type")),
         Some(json!({"branch_id": created.branch_id})),
     ] {
-        let receipt = std::sync::Arc::make_mut(&mut engine.state)
-            .operations
-            .get_mut(&operation)
+        let state = std::sync::Arc::make_mut(&mut engine.state);
+        let mut records = state.operations.tail().to_vec();
+        let receipt = records
+            .iter_mut()
+            .find(|entry| entry.result.operation_id == operation)
             .unwrap();
-        *receipt = original.clone();
-        let fields = receipt.result.as_object_mut().unwrap();
+        receipt.result = original.clone();
+        let fields = receipt.result.result.as_object_mut().unwrap();
         fields.remove("created_branch");
         if let Some(payload) = payload {
             fields.insert("created_branch".into(), payload);
         }
+        state.operations = storage_contract::OperationLog::from_records(records).unwrap();
         let before = canonical_json(engine.state()).unwrap();
         let error = engine
             .create_branch(&source, &name, "admin", operation)
@@ -289,7 +293,7 @@ fn fresh_branch_is_not_returned_before_publication_and_recovery_replays_once() {
         drop(engine);
         let mut engine = Engine::open(&fixture.root).unwrap();
         assert_eq!(
-            engine.state().operations.contains_key(&operation),
+            engine.published_receipt(operation).unwrap().is_some(),
             accepted,
             "{point}"
         );
@@ -307,7 +311,7 @@ fn fresh_branch_is_not_returned_before_publication_and_recovery_replays_once() {
         assert_eq!(created.pending_file_versions.len(), 1);
         assert_eq!(engine.state().branches.len(), branches + 1, "{point}");
         assert_eq!(engine.state().operations.len(), operations + 1, "{point}");
-        let receipt = &engine.state().operations[&operation];
+        let receipt = engine.published_receipt(operation).unwrap().unwrap();
         assert_eq!(receipt.commit_state, CommitState::Published);
         assert_eq!(
             canonical_json(&created).unwrap(),

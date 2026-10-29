@@ -14,19 +14,12 @@ fn commit_wire_borrows_collections_and_preserves_open_kind_and_canonical_bytes()
             operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
             author: "author".into(),
             message: "message".into(),
-            entries: vec![Entry {
-                entry_id: "entry".into(),
-                path: name_policy::PortablePath::parse("Café.txt").unwrap(),
-                kind: storage_contract::NamespaceEntryKind::File,
-                file_id: "file".into(),
-                version_id: "version".into(),
-                size: u64::MAX,
-            }],
+            namespace: crate::fixture_commit_namespace(u64::MAX),
             namespace_deletions: None,
             pending_file_versions: BTreeMap::new(),
             provenance: None,
         };
-        let mut expected = json!({"commit_id":"commit","history_tree_id":"history","kind":"extension.kind/α","parent_commit_ids":["parent"],"tree_id":"tree","sequence":"18446744073709551615","operation_id":"op_00000000000000000000000000000000","author":"author","message":"message","entries":[{"entry_id":"entry","path":"Café.txt","name":"Café.txt","lookup_key":"café.txt","kind":"file","file_id":"file","version_id":"version","size":"18446744073709551615"}],"provenance":null});
+        let mut expected = json!({"commit_id":"commit","history_tree_id":"history","kind":"extension.kind/α","parent_commit_ids":["parent"],"tree_id":"tree","sequence":"18446744073709551615","operation_id":"op_00000000000000000000000000000000","author":"author","message":"message","namespace":{"root":{"kind":"namespace-page","hash":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"},"entries":"18446744073709551615"},"provenance":null});
         if populated {
             commit
                 .pending_file_versions
@@ -45,7 +38,7 @@ fn commit_wire_borrows_collections_and_preserves_open_kind_and_canonical_bytes()
         }
         let commit = Arc::new(commit);
         let view = CommitRecord::from(commit.as_ref());
-        assert_eq!(view.entries.as_ptr(), commit.entries.as_ptr());
+        assert!(std::ptr::eq(view.namespace, &commit.namespace));
         assert_eq!(
             view.parent_commit_ids.as_ptr(),
             commit.parent_commit_ids.as_ptr()

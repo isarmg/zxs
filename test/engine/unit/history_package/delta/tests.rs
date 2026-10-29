@@ -3,6 +3,7 @@ use crate::state_projection::{DerivedOwners, Field, HistoryEdits, ProjectionDelt
 use crate::{State, canonical_json, disk::MAX_METADATA, journal::AuthenticatedMetadataObject};
 use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use storage_contract::{Entry, NamespaceEntryKind};
 
 // Independent input coverage, not an export of the production field schema.
 macro_rules! projected_fields {
@@ -31,7 +32,9 @@ fn candidate(before: &State) -> State {
 }
 
 fn logical(state: &State, id: &str) -> Value {
-    let manifest = HistoryManifest::project_state(state, id).unwrap();
+    let manifest =
+        HistoryManifest::project_state(state, id, &crate::namespace::fixture_store::FixtureSource)
+            .unwrap();
     let mut value = json_codec::to_value(&manifest).unwrap();
     for field in Field::ALL {
         if value.get(field.name()).is_none() {
@@ -44,10 +47,18 @@ fn logical(state: &State, id: &str) -> Value {
 // Independent full projection/encoding is intentionally only test code. The
 // fixture includes multiple owners disallowed by today's external admission.
 fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwners {
-    let mut delta = ProjectionDelta::between(before, after, index)
-        .unwrap()
-        .unwrap();
-    assert_eq!(delta.owners, DerivedOwners::from_state(after));
+    let mut delta = ProjectionDelta::between(
+        before,
+        after,
+        index,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        delta.owners,
+        DerivedOwners::from_state(after, &crate::namespace::fixture_store::FixtureSource).unwrap()
+    );
     let mut expected_histories = BTreeSet::new();
     for id in before
         .histories
@@ -73,11 +84,21 @@ fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwner
         expected_histories
     );
     for id in after.histories.keys() {
-        let expected_manifest = HistoryManifest::project_state(after, id).unwrap();
+        let expected_manifest = HistoryManifest::project_state(
+            after,
+            id,
+            &crate::namespace::fixture_store::FixtureSource,
+        )
+        .unwrap();
         let (expected_hash, expected_objects) =
             graph::prepare(&expected_manifest, MAX_METADATA).unwrap();
         let (actual_hash, actual_objects) = if before.histories.contains_key(id) {
-            let before_manifest = HistoryManifest::project_state(before, id).unwrap();
+            let before_manifest = HistoryManifest::project_state(
+                before,
+                id,
+                &crate::namespace::fixture_store::FixtureSource,
+            )
+            .unwrap();
             let prepared = graph::prepare_encoded(&before_manifest, MAX_METADATA).unwrap();
             let hash = prepared.binding.hash;
             let origin = prepared.binding.encoder.unwrap();
@@ -207,7 +228,8 @@ fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwner
 #[test]
 fn every_projection_map_insert_delete_and_same_value_write_matches_full_oracle() {
     let before = dependency_fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     macro_rules! exercise {
         ($($field:ident,)*) => { $(
             for key in before.$field.keys() {
@@ -219,7 +241,7 @@ fn every_projection_map_insert_delete_and_same_value_write_matches_full_oracle()
                 compare(&after, &restored, &removed_index);
                 let mut same = candidate(&before);
                 same.$field.insert(key.clone(), cloned(&before.$field[key]));
-                assert!(ProjectionDelta::between(&before, &same, &index).unwrap().unwrap().histories.is_empty(), stringify!($field));
+                assert!(ProjectionDelta::between(&before, &same, &index, &crate::namespace::fixture_store::FixtureSource).unwrap().unwrap().histories.is_empty(), stringify!($field));
             }
         )* };
     }
@@ -229,7 +251,8 @@ fn every_projection_map_insert_delete_and_same_value_write_matches_full_oracle()
 #[test]
 fn every_owner_move_propagates_old_and_new_dependent_rows() {
     let before = dependency_fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     macro_rules! moved {
         ($field:ident, $key:literal, $member:ident, $value:literal) => {{
             let mut after = candidate(&before);
@@ -272,7 +295,15 @@ fn every_owner_move_propagates_old_and_new_dependent_rows() {
                 after.file_contexts.insert("r2/path".into(), value);
             }
             4 => {
-                after.commits.get_mut("c1").unwrap().entries[0].entry_id = "other-directory".into();
+                after.commits.get_mut("c1").unwrap().namespace =
+                    crate::namespace::fixture_store::namespace(&[Entry {
+                        entry_id: "other-directory".into(),
+                        path: name_policy::PortablePath::parse("directory").unwrap(),
+                        kind: NamespaceEntryKind::Directory,
+                        file_id: String::new(),
+                        version_id: String::new(),
+                        size: 0,
+                    }]);
             }
             5 => {
                 after
@@ -300,7 +331,9 @@ fn deleting_one_of_multiple_references_retains_ownership_until_the_last_referenc
     let mut extra = before.commits["c1"].clone();
     extra.commit_id = "c1-extra".into();
     before.commits.insert(extra.commit_id.clone(), extra);
-    let mut index = DerivedOwners::from_state(&before);
+    let mut index =
+        DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+            .unwrap();
     for (version, commit) in [("v1", "c1"), ("v1-extra", "c1-extra"), ("v2", "c2")] {
         let mut after = candidate(&before);
         after.versions.remove_discard(version);
@@ -314,7 +347,8 @@ fn deleting_one_of_multiple_references_retains_ownership_until_the_last_referenc
 #[test]
 fn adding_and_removing_history_and_joint_owner_edits_match_independent_projection() {
     let mut before = dependency_fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     let mut after = candidate(&before);
     let mut history = before.histories["h1"].clone();
     history.history_tree_id = "h4".into();
@@ -342,7 +376,9 @@ fn adding_and_removing_history_and_joint_owner_edits_match_independent_projectio
 #[test]
 fn repeated_precise_generations_preserve_reverse_indices_and_untouched_history_storage() {
     let mut before = dependency_fixture();
-    let mut index = DerivedOwners::from_state(&before);
+    let mut index =
+        DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+            .unwrap();
     for step in 0..20 {
         let mut after = candidate(&before);
         after.file_selections.insert(
@@ -363,9 +399,14 @@ fn repeated_precise_generations_preserve_reverse_indices_and_untouched_history_s
     }
     let mut after = candidate(&before);
     after.branches.get_mut("b1").unwrap().name = "precise label".into();
-    let delta = ProjectionDelta::between(&before, &after, &index)
-        .unwrap()
-        .unwrap();
+    let delta = ProjectionDelta::between(
+        &before,
+        &after,
+        &index,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(delta.histories.len(), 1);
     assert_eq!(delta.histories["h1"].maps.len(), 1);
     // Storage-sharing assertions live beside the private derived relation
@@ -375,40 +416,55 @@ fn repeated_precise_generations_preserve_reverse_indices_and_untouched_history_s
 #[test]
 fn exact_empty_and_control_writes_are_ignored_but_all_foreign_and_overflow_are_explicit() {
     let before = dependency_fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     let mut after = candidate(&before);
     after.operations = Default::default();
-    after.operation_principals = Default::default();
     after.plans = Default::default();
     after.control_auth = Some(json!({"independent": true}));
-    after.events.clear();
+    after.events = storage_contract::SegmentedEvents::new();
     assert!(
-        ProjectionDelta::between(&before, &after, &index)
-            .unwrap()
-            .unwrap()
-            .histories
-            .is_empty()
+        ProjectionDelta::between(
+            &before,
+            &after,
+            &index,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .unwrap()
+        .unwrap()
+        .histories
+        .is_empty()
     );
     macro_rules! unknown {
         ($($field:ident,)*) => { $(
             let mut after = candidate(&before);
             after.$field = Default::default();
-            assert!(ProjectionDelta::between(&before, &after, &index).unwrap().is_none(), stringify!($field));
+            assert!(ProjectionDelta::between(&before, &after, &index, &crate::namespace::fixture_store::FixtureSource).unwrap().is_none(), stringify!($field));
         )* };
     }
     projected_fields!(unknown);
     let mut after = candidate(&before);
     after.branches.values_mut().next().unwrap().name = "unknown mutable iterator".into();
     assert!(
-        ProjectionDelta::between(&before, &after, &index)
-            .unwrap()
-            .is_none()
+        ProjectionDelta::between(
+            &before,
+            &after,
+            &index,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .unwrap()
+        .is_none()
     );
     let decoded = json_codec::from_slice(&canonical_json(&before).unwrap()).unwrap();
     assert!(
-        ProjectionDelta::between(&before, &decoded, &index)
-            .unwrap()
-            .is_none()
+        ProjectionDelta::between(
+            &before,
+            &decoded,
+            &index,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .unwrap()
+        .is_none()
     );
     let mut after = candidate(&before);
     for index in 0..16_385 {
@@ -417,16 +473,22 @@ fn exact_empty_and_control_writes_are_ignored_but_all_foreign_and_overflow_are_e
             .insert(format!("unowned-{index}"), "note".into());
     }
     assert!(
-        ProjectionDelta::between(&before, &after, &index)
-            .unwrap()
-            .is_none()
+        ProjectionDelta::between(
+            &before,
+            &after,
+            &index,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .unwrap()
+        .is_none()
     );
 }
 
 #[test]
 fn stable_history_and_directory_head_writes_do_not_rebuild_dependency_membership() {
     let before = dependency_fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     let mut after = candidate(&before);
     after.histories.get_mut("h1").unwrap().generation += 1;
     after.directory_branches.get_mut("d1").unwrap().sequence += 1;
@@ -435,9 +497,14 @@ fn stable_history_and_directory_head_writes_do_not_rebuild_dependency_membership
         .get_mut("policy")
         .unwrap()
         .generation += 1;
-    let delta = ProjectionDelta::between(&before, &after, &index)
-        .unwrap()
-        .unwrap();
+    let delta = ProjectionDelta::between(
+        &before,
+        &after,
+        &index,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(delta.histories["h1"].maps.len(), 2);
     assert_eq!(delta.histories["h2"].maps.len(), 2);
     compare(&before, &after, &index);
@@ -447,7 +514,9 @@ fn stable_history_and_directory_head_writes_do_not_rebuild_dependency_membership
 fn a_newly_encoded_equal_history_root_remains_created_not_retained() {
     let state = dependency_fixture();
     let id = state.histories.keys().next().unwrap();
-    let manifest = HistoryManifest::project_state(&state, id).unwrap();
+    let manifest =
+        HistoryManifest::project_state(&state, id, &crate::namespace::fixture_store::FixtureSource)
+            .unwrap();
     let (old_hash, objects) = graph::prepare(&manifest, MAX_METADATA).unwrap();
     let objects = objects
         .into_iter()

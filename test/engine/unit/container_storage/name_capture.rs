@@ -80,7 +80,10 @@ fn fixture() -> State {
                 operation_id: OperationId::generate(),
                 author: "alice".into(),
                 message: String::new(),
-                entries: vec![entry(number, &format!("repo-{number}/original.txt"))],
+                namespace: crate::namespace::fixture_store::namespace(&[entry(
+                    number,
+                    &format!("repo-{number}/original.txt"),
+                )]),
                 namespace_deletions: None,
                 pending_file_versions: BTreeMap::new(),
                 provenance: None,
@@ -99,7 +102,13 @@ fn reference_capture(state: &mut State) {
     for repository in state.repositories.values() {
         let branch = &state.branches[&repository.main_branch_id];
         let commit = &state.commits[&branch.head_commit_id];
-        for entry in &commit.entries {
+        let entries = crate::namespace::NamespaceView::new(
+            &commit.namespace,
+            &crate::namespace::fixture_store::FixtureSource,
+        )
+        .collect_entries()
+        .unwrap();
+        for entry in &entries {
             if entry.kind == NamespaceEntryKind::File {
                 names
                     .entry(entry.file_id.clone())
@@ -123,7 +132,12 @@ fn candidate(previous: &State) -> State {
 fn compare(previous: &State, mut next: State) -> State {
     let mut expected = next.clone();
     reference_capture(&mut expected);
-    capture_changed_names(previous, &mut next);
+    capture_changed_names(
+        previous,
+        &mut next,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     assert_eq!(next, expected);
     next
 }
@@ -135,7 +149,7 @@ fn add_head(state: &mut State, repository: usize, number: usize, entries: Vec<En
     let mut commit = state.commits[&previous].clone();
     commit.parent_commit_ids = vec![previous];
     commit.commit_id = id("commit", number);
-    commit.entries = entries;
+    commit.namespace = crate::namespace::fixture_store::namespace(&entries);
     state.commits.insert(commit.commit_id.clone(), commit);
 }
 
@@ -152,7 +166,7 @@ fn metadata_and_non_main_branch_writes_visit_no_namespace() {
     next.branches.insert(branch.branch_id.clone(), branch);
     let mut commit = next.commits[&id("commit", 1)].clone();
     commit.commit_id = id("commit", 9);
-    commit.entries = vec![entry(9, "unselected.txt")];
+    commit.namespace = crate::namespace::fixture_store::namespace(&[entry(9, "unselected.txt")]);
     next.commits.insert(commit.commit_id.clone(), commit);
     assert_eq!(
         changed_namespace_repositories(&previous, &next),
@@ -195,7 +209,8 @@ fn changed_heads_preserve_first_alias_and_independent_existing_fields() {
         Some(BTreeSet::from([id("repo", 1), id("repo", 2)]))
     );
     let next = compare(&previous, next);
-    assert_eq!(next.file_locations[&id("file", 3)], "first.txt");
+    // Canonical component order decides the first alias: alias < first.
+    assert_eq!(next.file_locations[&id("file", 3)], "alias.txt");
     assert_eq!(next.file_names[&id("file", 4)], "retained-name.txt");
     assert_eq!(next.file_locations[&id("file", 4)], "new/name-only.txt");
     assert_eq!(next.file_names[&id("file", 5)], "location-only.txt");
@@ -212,7 +227,10 @@ fn rebinding_an_existing_head_captures_its_previously_unselected_files() {
     previous.branches.insert(branch.branch_id.clone(), branch);
     let mut commit = previous.commits[&id("commit", 1)].clone();
     commit.commit_id = id("commit", 8);
-    commit.entries = vec![entry(8, "selected.txt"), entry(1, "old-alias.txt")];
+    commit.namespace = crate::namespace::fixture_store::namespace(&[
+        entry(8, "selected.txt"),
+        entry(1, "old-alias.txt"),
+    ]);
     previous.commits.insert(commit.commit_id.clone(), commit);
     let mut next = candidate(&previous);
     next.repositories
@@ -232,11 +250,11 @@ fn rebinding_an_existing_head_captures_its_previously_unselected_files() {
 fn same_head_record_replacement_is_not_mistaken_for_an_unchanged_namespace() {
     let previous = fixture();
     let mut next = candidate(&previous);
-    next.commits
-        .get_mut(&id("commit", 1))
-        .unwrap()
-        .entries
-        .push(entry(7, "added.txt"));
+    next.commits.get_mut(&id("commit", 1)).unwrap().namespace =
+        crate::namespace::fixture_store::namespace(&[
+            entry(1, "repo-1/original.txt"),
+            entry(7, "added.txt"),
+        ]);
     assert_eq!(
         changed_namespace_repositories(&previous, &next),
         Some(BTreeSet::from([id("repo", 1)]))
@@ -273,7 +291,7 @@ fn cold_pre_capture_wins_before_rebinding_and_remains_in_the_write_set() {
     previous.file_locations.remove(&id("file", 1));
     previous.file_names.remove(&id("file", 1));
     let mut next = candidate(&previous);
-    capture_names(&mut next);
+    capture_names(&mut next, &crate::namespace::fixture_store::FixtureSource).unwrap();
     add_head(&mut next, 1, 11, vec![entry(1, "later-alias.txt")]);
     let next = compare(&previous, next);
     assert_eq!(next.file_names[&id("file", 1)], "original.txt");
@@ -316,7 +334,7 @@ fn bounded_write_set_overflow_keeps_full_capture_semantics() {
     for number in 10..16_395 {
         let mut commit = previous.commits[&id("commit", 1)].clone();
         commit.commit_id = id("commit", number);
-        commit.entries.clear();
+        commit.namespace = crate::namespace::fixture_store::namespace(&[]);
         next.commits.insert(commit.commit_id.clone(), commit);
     }
     add_head(&mut next, 1, 16_395, vec![entry(9, "overflow.txt")]);

@@ -29,11 +29,23 @@ pub use directory_branch_summary::{
 };
 pub mod model;
 pub use commit_comparison::{CommitChange, CommitComparison};
+mod segmented_log;
 mod shared_records;
 mod tracked;
-mod tracked_events;
-pub use tracked::{MapChanges, Tracked, TrackedMap, TrackedOperations, TrackedRecords};
-pub use tracked_events::{SequenceChanges, TrackedEvents};
+pub use segmented_log::{
+    EVENT_SEGMENT_KIND, EVENT_SEGMENT_SPAN, EventDirectoryEntry, EventSegment, EventSegmentRef,
+    OPERATION_SEGMENT_KIND, OPERATION_SEGMENT_RECORDS, OPERATION_SEGMENT_TARGET_BYTES,
+    OperationDirectoryEntry, OperationLog, OperationRecordEntry, OperationSegment,
+    OperationSegmentRef, SegmentChanges, SegmentedEvents,
+};
+pub use tracked::{MapChanges, Tracked, TrackedMap, TrackedRecords};
+mod namespace_pages;
+pub use namespace_pages::{
+    CommitNamespace, NAMESPACE_INDEX_DEPTH, NAMESPACE_INDEX_FANOUT, NAMESPACE_INDEX_KIND,
+    NAMESPACE_PAGE_ENTRIES, NAMESPACE_PAGE_KIND, NAMESPACE_PAGE_TARGET_BYTES, NamespaceIndex,
+    NamespaceIndexChild, NamespaceIndexFormat, NamespacePage, NamespacePageEntry,
+    NamespacePageFormat, NamespaceRefKind, NamespaceReference,
+};
 pub mod text;
 mod workspace_capacity;
 pub use api_path::validate_api_path;

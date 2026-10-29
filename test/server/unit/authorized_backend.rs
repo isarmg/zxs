@@ -452,7 +452,9 @@ impl Backend for RecordingBackend {
         )?;
         Ok(storage_contract::CommitComparison::between(
             recorded_commit(request.left),
+            vec![],
             recorded_commit(request.right),
+            vec![],
         ))
     }
     fn disk_status(
@@ -2410,7 +2412,7 @@ fn recorded_commit(commit: &str) -> Arc<storage_contract::Commit> {
         operation_id: storage_contract::OperationId::generate(),
         author: "author".into(),
         message: "snapshot fixture".into(),
-        entries: vec![],
+        namespace: crate::fixture_commit_namespace(0),
         namespace_deletions: None,
         pending_file_versions: Default::default(),
         provenance: None,

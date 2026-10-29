@@ -7107,11 +7107,8 @@
           "message": {
             "type": "string"
           },
-          "entries": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Entry"
-            }
+          "namespace": {
+            "$ref": "#/components/schemas/CommitNamespace"
           },
           "pending_file_versions": {
             "$ref": "#/components/schemas/PendingFileVersions"
@@ -7136,11 +7133,11 @@
           "operation_id",
           "author",
           "message",
-          "entries",
+          "namespace",
           "provenance"
         ],
         "additionalProperties": false,
-        "description": "不可变目录快照。pending_file_versions固定当时尚未拥有正文的文件及其继承父版本；分支首写后读旧快照仍显示原父版本。空映射省略编码；文件Entry引用可见真实版本。namespace_deletions仅在实际删除时保存，无删除则省略；重命名、移动及视图选择不算删除。"
+        "description": "不可变目录快照。命名空间以有界分页根引用保存（namespace-page/namespace-index 对象，按组件键排序），绝对路径由遍历重建；局部修改只重写受影响目录的页与祖先链，目录改名不重编码后代。pending_file_versions固定当时尚未拥有正文的文件及其继承父版本；分支首写后读旧快照仍显示原父版本。空映射省略编码；文件条目引用可见真实版本。namespace_deletions仅在实际删除时保存，无删除则省略；重命名、移动及视图选择不算删除。"
       },
       "DirectoryBranchId": {
         "type": "string",
@@ -8671,6 +8668,351 @@
         "additionalProperties": false,
         "description": "提交拥有的命名空间删除事实。时间按UINT64十进制字符串编码；非空paths按实际操作效果顺序保存，允许同一路径删除、重建后再次删除，不排序或去重。不依赖操作回执或正文存在性。"
       },
+      "NamespaceReference": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "namespace-page",
+              "namespace-index"
+            ]
+          },
+          "hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "kind",
+          "hash"
+        ],
+        "additionalProperties": false,
+        "description": "指向一个不可变命名空间页或页索引对象的强引用；对象域哈希与引用位置由核心验证，state-page/metadata-index 不得冒充。"
+      },
+      "CommitNamespace": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "$ref": "#/components/schemas/NamespaceReference"
+          },
+          "entries": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "root",
+          "entries"
+        ],
+        "additionalProperties": false,
+        "description": "提交命名空间的有界分页根加记录条目总数。总数是放置事实，完整准入逐项重核，不作为可信分配长度；空命名空间根是一个空 entries 页。"
+      },
+      "NamespacePageEntry": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "entry_id": {
+                "$ref": "#/components/schemas/EntryId"
+              },
+              "name": {
+                "type": "string"
+              },
+              "lookup_key": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "file"
+              },
+              "file_id": {
+                "$ref": "#/components/schemas/FileId"
+              },
+              "version_id": {
+                "$ref": "#/components/schemas/VersionId"
+              },
+              "size": {
+                "$ref": "#/components/schemas/UInt64"
+              }
+            },
+            "required": [
+              "entry_id",
+              "name",
+              "lookup_key",
+              "kind",
+              "file_id",
+              "version_id",
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "entry_id": {
+                "$ref": "#/components/schemas/EntryId"
+              },
+              "name": {
+                "type": "string"
+              },
+              "lookup_key": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "directory"
+              },
+              "entries": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "files": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "subtree": {
+                "$ref": "#/components/schemas/NamespaceReference"
+              }
+            },
+            "required": [
+              "entry_id",
+              "name",
+              "lookup_key",
+              "kind",
+              "entries",
+              "files",
+              "subtree"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "目录的一个直接子项：文件绑定冻结逻辑版本，子目录引用其不可变子树根并记录递归条目/文件总数。name 是组件显示拼写，lookup_key 必须等于其规范化键；绝对路径由遍历重建并满足既有路径预算。"
+      },
+      "NamespacePage": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "const": "namespace-page"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NamespacePageEntry"
+            },
+            "maxItems": 128
+          }
+        },
+        "required": [
+          "format",
+          "entries"
+        ],
+        "additionalProperties": false,
+        "description": "namespace-page 域对象：单目录直接子项（或其一个切片）按组件 lookup_key 的 UTF-8 字节序排序且键唯一；页规范字节≤64KiB（单条目页可至 MAX_METADATA）。空 entries 页仅允许作为某个目录的根。排序、键唯一性、字节上限与域哈希由核心验证。"
+      },
+      "NamespaceIndexChild": {
+        "type": "object",
+        "properties": {
+          "first_key": {
+            "type": "string"
+          },
+          "entries": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "files": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/NamespaceReference"
+          }
+        },
+        "required": [
+          "first_key",
+          "entries",
+          "files",
+          "ref"
+        ],
+        "additionalProperties": false,
+        "description": "同一目录有序页的一个孩子；first_key 等于其子图第一个条目键，兄弟间严格递增，查询与游标在此二分。"
+      },
+      "NamespaceIndex": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "const": "namespace-index"
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NamespaceIndexChild"
+            },
+            "minItems": 1,
+            "maxItems": 128
+          }
+        },
+        "required": [
+          "format",
+          "children"
+        ],
+        "additionalProperties": false,
+        "description": "namespace-index 域对象：单目录直接子项超过一页时的有序页索引，可多层且深度≤4；不得引用空页。层深、递增性与域哈希由核心验证。"
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "operation_id",
+          "kind",
+          "object_id"
+        ],
+        "additionalProperties": false,
+        "description": "一条已发布事件；sequence 全局递增，object_id 指向事件主体（如提交）。"
+      },
+      "EventSegment": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "const": "event-segment"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "maxItems": 1024
+          }
+        },
+        "required": [
+          "format",
+          "events"
+        ],
+        "additionalProperties": false,
+        "description": "event-segment 域对象：按发布顺序的事件段，固定跨度 1024 条，仅最大序号的尾段可不满。连续性与域哈希由核心验证。"
+      },
+      "OperationResult": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "commit_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history_tree_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit_state": {
+            "enum": [
+              "STAGING",
+              "SEALED",
+              "PREPARED",
+              "DECIDING",
+              "DECIDED",
+              "PROTECTED",
+              "PUBLISHED",
+              "ACKED",
+              "RECOVERING",
+              "RECOVERY_REQUIRED",
+              "IN_DOUBT",
+              "PUBLISHED_DEGRADED",
+              "ABORTED"
+            ]
+          },
+          "protection_at_publish": {
+            "enum": [
+              "NOT_APPLICABLE",
+              "TARGET_MET",
+              "BELOW_TARGET",
+              "UNCONFIRMED"
+            ]
+          },
+          "current_health": {
+            "enum": [
+              "HEALTHY",
+              "DEGRADED",
+              "UNAVAILABLE",
+              "UNKNOWN",
+              "RECOVERING"
+            ]
+          },
+          "request_digest": {
+            "type": "string"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "result": {}
+        },
+        "required": [
+          "operation_id",
+          "kind",
+          "commit_state",
+          "protection_at_publish",
+          "current_health",
+          "request_digest",
+          "sequence",
+          "result"
+        ],
+        "additionalProperties": false,
+        "description": "持久化 OperationResult 的字段形状，不是 HTTP SaveOperation DTO。kind、request_digest 保持当前模型的开放字符串；三个可空标识字段按 Option<String> 解码，可省略，写出时显式为字符串或 null。result 保持任意 JSON 正文，并遵守全局严格 JSON 整数约束；字段形状不证明请求摘要、对象归属或发布语义。"
+      },
+      "OperationSegment": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "const": "operation-segment"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "principal": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "result": {
+                  "$ref": "#/components/schemas/OperationResult"
+                }
+              },
+              "required": [
+                "principal",
+                "result"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 256
+          }
+        },
+        "required": [
+          "format",
+          "records"
+        ],
+        "additionalProperties": false,
+        "description": "operation-segment 域对象：按 decision slot 顺序的永久回执段；封印条件为满 256 条或规范字节首次≥1MiB，仅尾段可未封印。principal 即原 operation_principals 绑定值；result 使用持久化 OperationResult 的准确字段形状，发布顺序、绑定关系与域哈希仍由核心验证。"
+      },
       "ControlAuthReference": {
         "type": "object",
         "properties": {
@@ -8733,7 +9075,10 @@
               "content_states": {
                 "$ref": "#/components/schemas/MetadataReference"
               },
-              "operations": {
+              "operation_log": {
+                "$ref": "#/components/schemas/MetadataReference"
+              },
+              "operation_locators": {
                 "$ref": "#/components/schemas/MetadataReference"
               },
               "plans": {
@@ -8743,9 +9088,6 @@
                 "$ref": "#/components/schemas/MetadataReference"
               },
               "protection_policies": {
-                "$ref": "#/components/schemas/MetadataReference"
-              },
-              "operation_principals": {
                 "$ref": "#/components/schemas/MetadataReference"
               },
               "file_selections": {
@@ -8822,11 +9164,11 @@
               "merge_links",
               "history_boundaries",
               "content_states",
-              "operations",
+              "operation_log",
+              "operation_locators",
               "plans",
               "placement_rules",
               "protection_policies",
-              "operation_principals",
               "file_selections",
               "directory_branches",
               "directory_trees",
@@ -8868,7 +9210,7 @@
           "control_auth"
         ],
         "additionalProperties": false,
-        "description": "snapshot域固定35个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零ordinal，由核心验证0..len-1连续。拒绝旧scalars/pages形状；schema不验证对象存在、摘要、事件连续性或State语义。"
+        "description": "snapshot域固定35个State映射根及独立events根；空映射仍有根引用。events叶键为20位补零段序号、叶值为 {\"kind\":\"event-segment\",\"hash\"} 引用；operation_log叶键为20位补零段序号、叶值为 {\"kind\":\"operation-segment\",\"hash\"} 引用；operation_locators叶键为OperationId文本、叶值为全局回执序号十进制字符串，仅作定位，不是第二提交权威。由核心验证段序连续与引用存在。拒绝旧scalars/pages形状与旧operations/operation_principals字段；schema不验证对象存在、摘要、事件连续性或State语义。"
       },
       "InclusionProof": {
         "type": "object",

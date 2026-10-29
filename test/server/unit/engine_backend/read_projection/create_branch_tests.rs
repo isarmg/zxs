@@ -34,7 +34,13 @@ fn typed_creation_binds_digest_and_checks_scope_before_receipt() {
     let expected=storage_contract::object_hash("request",&json!({"kind":"branch.create","principal":identity.principal,"body":{"source_commit_id":source,"name":"Café"}})).unwrap();
     let mut engine = backend.engine.lock().unwrap();
     assert_eq!(
-        engine.state().operations[&operation].request_digest,
+        engine
+            .state()
+            .operations
+            .tail_record(operation)
+            .unwrap()
+            .result
+            .request_digest,
         expected
     );
     let direct = engine

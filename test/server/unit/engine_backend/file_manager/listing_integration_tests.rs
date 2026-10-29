@@ -19,6 +19,111 @@ pub(super) fn listing_json(engine: &AdmissionEngine, input: &Value) -> Result<Va
 }
 
 #[test]
+fn paged_namespace_listing_preserves_selection_and_cursors_across_source_chunks() {
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("d1")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Files").unwrap(),
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    // Exercise real immutable namespace pages without publishing hundreds of
+    // unrelated mutations. This checks response semantics, not allocation or
+    // source-read counts; the existing seam exposes neither measurement.
+    let mut names = (0..storage_contract::NAMESPACE_PAGE_ENTRIES * 2 + 5)
+        .map(|index| format!("item-{index:04}"))
+        .collect::<Vec<_>>();
+    names.extend(["Straße".into(), "STRASSZ".into(), "zzz-selected".into()]);
+    let mut entries = names
+        .iter()
+        .map(|name| format!("nested/{name}"))
+        .chain(
+            (0..storage_contract::NAMESPACE_PAGE_ENTRIES)
+                .map(|index| format!("exact/item-{index:04}")),
+        )
+        .chain(["nested".into(), "exact".into(), "empty".into()])
+        .map(|path| storage_contract::Entry {
+            entry_id: new_id("entry"),
+            path: name_policy::PortablePath::parse(&path).unwrap(),
+            kind: storage_contract::NamespaceEntryKind::Directory,
+            file_id: String::new(),
+            version_id: String::new(),
+            size: 0,
+        })
+        .collect::<Vec<_>>();
+    let namespace = storage_engine::test_support::plant_namespace(&engine, &entries).unwrap();
+    let mut state = engine.state().clone();
+    let head = state.branches[&repo.main_branch_id].head_commit_id.clone();
+    state.commits.get_mut(&head).unwrap().namespace = namespace;
+    storage_engine::test_support::replace_state(&mut engine, state);
+    let engine = AdmissionEngine::new(engine);
+    entries.retain(|entry| entry.path().starts_with("nested/"));
+    entries.sort_by_key(|entry| {
+        crate::backend_listing::SortKey::for_entry(entry, &format!("Files/{}", entry.path))
+    });
+    let expected = entries.iter().map(|entry| entry.name()).collect::<Vec<_>>();
+    let selected = entries
+        .iter()
+        .find(|entry| entry.name() == "zzz-selected")
+        .unwrap();
+    let selected_path = format!("Files/{}", selected.path);
+    let request = |cursor: Option<&Value>, query: &str| {
+        let mut input = json!({"slot_id":"P01","query":{
+            "path":"Files/nested", "limit":"137", "query":query,
+            "selected_path":selected_path, "selected_entry_id":selected.entry_id
+        }});
+        if let Some(cursor) = cursor {
+            input["query"]["cursor"] = cursor.clone();
+        }
+        listing_json(&engine, &input).unwrap()
+    };
+    let first = request(None, "");
+    assert_eq!(first["entries"].as_array().unwrap().len(), 137);
+    assert_eq!(first["total_entries"], names.len().to_string());
+    assert_eq!(first["selected_entry"]["path"], selected_path);
+    assert!(first["previous_cursor"].is_null());
+    let second = request(Some(&first["next_cursor"]), "");
+    let back = request(Some(&second["previous_cursor"]), "");
+    assert_eq!(back["entries"], first["entries"]);
+    let actual = first["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(second["entries"].as_array().unwrap())
+        .map(|entry| entry["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+    assert!(second["next_cursor"].is_null());
+    let filtered = request(None, "item-02");
+    assert_eq!(filtered["total_entries"], "61");
+    assert_eq!(filtered["selected_entry"], first["selected_entry"]);
+    assert!(
+        filtered["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["name"].as_str().unwrap().starts_with("item-02"))
+    );
+    for (path, count) in [("Files/exact", 128), ("Files/empty", 0)] {
+        let page = listing_json(
+            &engine,
+            &json!({"slot_id":"P01","query":{"path":path,"limit":"500"}}),
+        )
+        .unwrap();
+        assert_eq!(page["entries"].as_array().unwrap().len(), count);
+        assert!(page["next_cursor"].is_null());
+    }
+}
+
+#[test]
 fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independent() {
     let root = tempfile::tempdir().unwrap();
     let config = Config::development([
@@ -331,7 +436,7 @@ fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_c
             request_digest: None,
         })
         .unwrap();
-    let entry = engine.list_tree_ref(&repo.main_branch_id).unwrap()[0].clone();
+    let entry = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
     engine
         .file_namespace(
             &repo.repository_id,

@@ -12,15 +12,43 @@ fn fixture_disk() -> (tempfile::TempDir, Config) {
 fn event_state(count: usize) -> State {
     State {
         sequence: count as u64,
-        events: (0..count)
-            .map(|index| Event {
-                sequence: index as u64,
-                operation_id: format!("op_{index:032x}").parse().unwrap(),
-                kind: "MUTATION".into(),
-                object_id: "retained-history".into(),
-            })
-            .collect(),
+        events: storage_contract::SegmentedEvents::from_events(
+            (0..count)
+                .map(|index| Event {
+                    sequence: index as u64,
+                    operation_id: format!("op_{index:032x}").parse().unwrap(),
+                    kind: "MUTATION".into(),
+                    object_id: "retained-history".into(),
+                })
+                .collect(),
+        )
+        .unwrap(),
         ..Default::default()
+    }
+}
+/// Sealed event bodies live on the members since the publications that sealed
+/// them; only the open tail and one fresh seal stay resident, so a fixture
+/// state assembled in memory installs them before its first store.
+fn install_sealed_event_bodies(config: &Config, state: &State) {
+    for (ordinal, reference) in state.events.sealed().iter().enumerate() {
+        let span = storage_contract::EVENT_SEGMENT_SPAN;
+        let segment = storage_contract::EventSegment {
+            format: Default::default(),
+            events: (ordinal * span..(ordinal + 1) * span)
+                .map(|index| Event {
+                    sequence: index as u64,
+                    operation_id: format!("op_{index:032x}").parse().unwrap(),
+                    kind: "MUTATION".into(),
+                    object_id: "retained-history".into(),
+                })
+                .collect(),
+        };
+        for disk in &config.disks {
+            assert_eq!(
+                store_object(disk, storage_contract::EVENT_SEGMENT_KIND, &segment).unwrap(),
+                reference.hash
+            );
+        }
     }
 }
 fn object_bytes(objects: &[PreparedMetadataObject]) -> BTreeMap<String, String> {
@@ -56,9 +84,11 @@ fn aggregate_snapshot_roots_are_fixed_schema_not_flat_page_lists() {
     assert!(root.len() < 8192);
     assert_eq!(prepared.descriptor.maps.len(), empty.descriptor.maps.len());
     assert_eq!(prepared.descriptor.maps.len(), 35);
+    // 4096 events collapse to a four-entry segment directory: one bounded
+    // page, never a flat per-event list.
     assert!(matches!(
         prepared.descriptor.events.kind(),
-        crate::metadata_map::ReferenceKind::Index
+        crate::metadata_map::ReferenceKind::Page
     ));
     assert!(matches!(
         prepared.descriptor.maps["file_notes"].kind(),
@@ -66,6 +96,7 @@ fn aggregate_snapshot_roots_are_fixed_schema_not_flat_page_lists() {
     ));
     assert!(prepared.objects.len() > 20);
     let (_temp, config) = fixture_disk();
+    install_sealed_event_bodies(&config, &state);
     prepared.store(&config.disks, &state).unwrap();
     assert_eq!(
         load_raw_snapshot_fixture(&config.disks[0], &prepared.hash).unwrap(),
@@ -163,17 +194,20 @@ fn event_ordinal_map_rejects_missing_or_noncanonical_indexes() {
     let state = event_state(3);
     let prepared = prepare_snapshot(&state, MAX_METADATA).unwrap();
     prepared.store(&config.disks, &state).unwrap();
+    // The single key of a three-event log is its open-tail directory entry.
+    let tail = storage_contract::EventSegment {
+        format: Default::default(),
+        events: state.events.tail().to_vec(),
+    };
+    let entry = json_codec::to_value(storage_contract::EventDirectoryEntry {
+        kind: Default::default(),
+        hash: storage_contract::object_hash(storage_contract::EVENT_SEGMENT_KIND, &tail).unwrap(),
+        first_sequence: 0,
+    })
+    .unwrap();
     for key in ["00000000000000000004", "2"] {
-        let mut events = (0..3)
-            .map(|i| {
-                (
-                    format!("{i:020}"),
-                    json_codec::to_value(&state.events[i]).unwrap(),
-                )
-            })
-            .collect::<json_codec::Map<_, _>>();
-        let value = events.remove("00000000000000000002").unwrap();
-        events.insert(key.into(), value);
+        let mut events = json_codec::Map::new();
+        events.insert(key.into(), entry.clone());
         let mut altered = prepared.descriptor.clone();
         altered.events = stored_map(&config.disks, events);
         let hash = store_object(disk, "snapshot", &altered).unwrap();
@@ -234,21 +268,63 @@ fn typed_snapshot_preserves_decimal_counters_unicode_and_operation_keys() {
     state
         .file_notes
         .insert("quoted\"\\\n".into(), "value\n中文".into());
+    // 4096 receipts seal sixteen 256-record segments; the locator map keeps
+    // exactly one typed OperationId key per receipt with its decimal ordinal.
     let mut expected = json_codec::Map::new();
+    let mut records = Vec::new();
     for index in 0..4096u64 {
         let key = format!("op_{index:032x}");
-        state
-            .operation_principals
-            .insert(key.parse().unwrap(), "owner".into());
-        expected.insert(key, json_codec::json!("owner"));
+        records.push(storage_contract::OperationRecordEntry {
+            principal: "owner".into(),
+            result: OperationResult {
+                operation_id: key.parse().unwrap(),
+                kind: "file.save".into(),
+                commit_id: None,
+                history_tree_id: None,
+                branch_id: None,
+                commit_state: storage_contract::CommitState::Published,
+                protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
+                current_health: storage_contract::CurrentHealth::Healthy,
+                request_digest: "digest".into(),
+                sequence: index,
+                result: json_codec::json!({}),
+            },
+        });
+        expected.insert(key, json_codec::json!(index.to_string()));
     }
+    // Push one receipt at a time, capturing every sealed body: only the open
+    // tail and one fresh seal stay resident, while a store needs each sealed
+    // body published on the members, exactly as the publications that sealed
+    // them left it.
+    let mut log = storage_contract::OperationLog::new();
+    let mut bodies = Vec::new();
+    for record in records {
+        log.push(record).unwrap();
+        if let Some((ordinal, segment)) = log.fresh_seal()
+            && bodies.len() as u64 == ordinal
+        {
+            bodies.push(segment.clone());
+        }
+    }
+    state.operations = log;
+    assert_eq!(state.operations.sealed().len(), 16);
+    assert_eq!(bodies.len(), 16);
+    state.sequence = u64::MAX;
     let prepared = prepare_snapshot(&state, MAX_METADATA).unwrap();
     assert_reference(&state);
     assert_eq!(
-        prepared.descriptor.maps["operation_principals"],
+        prepared.descriptor.maps["operation_locators"],
         stored_map(&[], expected)
     );
     let (_temp, config) = fixture_disk();
+    for (segment, reference) in bodies.iter().zip(state.operations.sealed()) {
+        for disk in &config.disks {
+            assert_eq!(
+                store_object(disk, storage_contract::OPERATION_SEGMENT_KIND, segment).unwrap(),
+                reference.hash
+            );
+        }
+    }
     prepared.store(&config.disks, &state).unwrap();
     assert_eq!(
         load_raw_snapshot_fixture(&config.disks[0], &prepared.hash).unwrap(),
@@ -295,9 +371,13 @@ fn content_states_keep_exact_string_values_and_unknown_values_fail_closed() {
 
 // Independent fixed bytes from a real pool. The C fixture was transformed using
 // a separate JSON/BLAKE3 tool, not generated by the encoder under test.
+// `commit_namespaces` records each commit's complete materialized entry list;
+// the deterministic builder must rebuild exactly the recorded roots, which also
+// republishes the namespace objects for fixture-driven reads.
 #[derive(Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct CanonicalPublicationFixture {
+    commit_namespaces: BTreeMap<String, Vec<storage_contract::Entry>>,
     state_bytes: String,
     snapshot_hash: String,
     snapshot_objects: BTreeMap<String, String>,
@@ -315,11 +395,138 @@ fn canonical_value_encoding_preserves_publication_bytes_and_hashes() {
         canonical_json(&state).unwrap(),
         fixture.state_bytes.as_bytes()
     );
+    for (commit_id, entries) in &fixture.commit_namespaces {
+        let namespace = crate::namespace::fixture_store::namespace(entries);
+        assert_eq!(namespace, state.commits[commit_id].namespace, "{commit_id}");
+    }
     let snapshot = prepare_snapshot(&state, MAX_METADATA).unwrap();
     assert_eq!(snapshot.hash, fixture.snapshot_hash);
     assert_eq!(object_bytes(&snapshot.objects), fixture.snapshot_objects);
-    let (catalog, objects) =
-        crate::history_package::prepare_history_manifests(&state, MAX_METADATA).unwrap();
+    let (catalog, objects) = crate::history_package::prepare_history_manifests(
+        &state,
+        MAX_METADATA,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     assert_eq!(catalog.reference(), &fixture.history_roots);
     assert_eq!(object_bytes(&objects), fixture.history_objects);
+}
+
+/// Manual regeneration tool for `fixtures/canonical_publication.json` after an
+/// intentional storage-format change. Every recorded value is captured from a
+/// real publication through the public engine API; commit namespaces are
+/// recorded as materialized entry lists whose deterministic rebuild reproduces
+/// the recorded roots, keeping the fixture loadable without raw object bytes.
+/// Run with:
+/// `cargo test -p storage-engine regenerate_canonical_publication_fixture -- --ignored`
+#[test]
+#[ignore = "manual fixture regeneration tool; rewrites the committed fixture file"]
+fn regenerate_canonical_publication_fixture() {
+    let (temp, config) = fixture_disk();
+    let mut engine = crate::Engine::initialize(&temp.path().join("state"), config).unwrap();
+    let repo = engine
+        .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
+        .unwrap();
+    for round in ["base", "final"] {
+        let workspace = engine
+            .create_workspace(&repo.main_branch_id, "owner")
+            .unwrap();
+        engine
+            .stage_bytes(
+                &workspace.workspace_id,
+                "folder/a.txt",
+                format!("a {round}").as_bytes(),
+            )
+            .unwrap();
+        engine
+            .stage_bytes(
+                &workspace.workspace_id,
+                "folder/报告.txt",
+                format!("报 {round}").as_bytes(),
+            )
+            .unwrap();
+        engine
+            .commit_workspace(storage_contract::CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: storage_contract::OperationId::generate(),
+                principal: "owner".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "legacy shared entries fixture".into(),
+                request_digest: None,
+            })
+            .unwrap();
+    }
+    // Consumers decode state_bytes, so capture through the same decode: the
+    // live state released its cold locator index at the published basis, while
+    // a decoded tail-only log carries the derivable complete index.
+    let state_bytes = String::from_utf8(canonical_json(engine.state()).unwrap()).unwrap();
+    let state: State = json_codec::from_slice(state_bytes.as_bytes()).unwrap();
+    assert_eq!(canonical_json(&state).unwrap(), state_bytes.as_bytes());
+    // The oracle fixtures rely on genuinely populated coverage; a scenario
+    // change that silently drops a field would weaken every consumer.
+    assert_eq!(state.repositories.len(), 1);
+    assert_eq!(state.histories.len(), 1);
+    assert_eq!(
+        state.branches.len(),
+        3,
+        "main plus two shared file branches"
+    );
+    assert_eq!(state.commits.len(), 7);
+    assert_eq!(state.versions.len(), 4);
+    for (name, empty) in [
+        ("placements", state.placements.is_empty()),
+        ("content_states", state.content_states.is_empty()),
+        ("file_selections", state.file_selections.is_empty()),
+        ("directory_branches", state.directory_branches.is_empty()),
+        ("directory_trees", state.directory_trees.is_empty()),
+        ("file_contexts", state.file_contexts.is_empty()),
+        (
+            "directory_tree_selections",
+            state.directory_tree_selections.is_empty(),
+        ),
+        ("file_locations", state.file_locations.is_empty()),
+        (
+            "directory_selections",
+            state.directory_selections.is_empty(),
+        ),
+        ("file_names", state.file_names.is_empty()),
+        ("events", state.events.is_empty()),
+        ("operations", state.operations.is_empty()),
+    ] {
+        assert!(!empty, "fixture scenario leaves {name} unpopulated");
+    }
+    let mut commit_namespaces = BTreeMap::new();
+    for (commit_id, commit) in state.commits.iter() {
+        let entries = engine
+            .commit_namespace(commit_id)
+            .unwrap()
+            .entries()
+            .unwrap();
+        let (rebuilt, _) = crate::namespace::fixture_namespace(&entries);
+        assert_eq!(rebuilt, commit.namespace, "{commit_id}");
+        commit_namespaces.insert(commit_id.clone(), entries);
+    }
+    for entries in commit_namespaces.values() {
+        crate::namespace::fixture_store::namespace(entries);
+    }
+    let snapshot = prepare_snapshot(&state, MAX_METADATA).unwrap();
+    let (catalog, objects) = crate::history_package::prepare_history_manifests(
+        &state,
+        MAX_METADATA,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
+    let fixture = json_codec::json!({
+        "commit_namespaces": commit_namespaces,
+        "history_objects": object_bytes(&objects),
+        "history_roots": catalog.reference(),
+        "snapshot_hash": snapshot.hash,
+        "snapshot_objects": object_bytes(&snapshot.objects),
+        "state_bytes": state_bytes,
+    });
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test/engine/unit/journal/fixtures/canonical_publication.json");
+    std::fs::write(&path, json_codec::to_string_pretty(&fixture).unwrap()).unwrap();
+    println!("wrote {}", path.display());
 }

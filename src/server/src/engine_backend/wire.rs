@@ -52,9 +52,10 @@ enum CurrentContext<'a> {
     Resolved(Option<&'a storage_contract::FileContext>),
 }
 
-/// Borrowed, request-local source resolution. Only `pending_versions` can use
-/// the direct-entry path, because it iterates this resolver's own snapshot.
-/// External entries always retain the checked first-match lookup semantics.
+/// Borrowed, request-local source resolution. Only `pending_versions` and the
+/// current-entry resolver use the direct-entry path, because their entries are
+/// this resolver's own snapshot materializations. External entries always
+/// retain the checked point-lookup semantics against the commit namespace.
 pub(super) struct PendingSources<'a> {
     engine: &'a Engine,
     branch: &'a str,
@@ -93,22 +94,38 @@ impl<'a> PendingSources<'a> {
         }
     }
 
-    fn visible(&self, entry: &storage_contract::Entry) -> Option<&'a storage_contract::Entry> {
-        self.commit.entries.iter().find(|visible| {
-            #[cfg(test)]
-            self.matching_visits.set(self.matching_visits.get() + 1);
-            visible.lookup_key() == entry.lookup_key() && visible.file_id == entry.file_id
-        })
+    /// One checked point read of this resolver's commit namespace: the entry's
+    /// normalized key must resolve to the same file identity. Never a scan.
+    fn visible(
+        &self,
+        entry: &storage_contract::Entry,
+    ) -> Result<Option<storage_contract::Entry>, storage_engine::Error> {
+        #[cfg(test)]
+        self.matching_visits.set(self.matching_visits.get() + 1);
+        let Some(tree) = self.engine.commit_namespace(&self.commit.commit_id) else {
+            return Ok(None);
+        };
+        Ok(tree
+            .get_key(entry.lookup_key())?
+            .filter(|visible| visible.file_id == entry.file_id))
     }
 
-    pub(super) fn checked(&self, entry: &storage_contract::Entry) -> Option<&'a str> {
+    pub(super) fn checked(
+        &self,
+        entry: &storage_contract::Entry,
+    ) -> Result<Option<String>, storage_engine::Error> {
         if entry.kind != storage_contract::NamespaceEntryKind::File {
-            return None;
+            return Ok(None);
         }
-        self.resolve(entry, self.visible(entry)?, CurrentContext::Lookup, None)
+        let Some(visible) = self.visible(entry)? else {
+            return Ok(None);
+        };
+        self.resolve(entry, &visible, CurrentContext::Lookup, None)
     }
 
-    pub(super) fn pending_versions(&self) -> std::collections::BTreeMap<String, String> {
+    pub(super) fn pending_versions(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, storage_engine::Error> {
         let historical = self
             .current
             .filter(|current| current.head_commit_id != self.commit.commit_id)
@@ -128,57 +145,60 @@ impl<'a> PendingSources<'a> {
                 }
                 contexts
             });
-        self.commit
-            .entries
-            .iter()
-            .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
-            .filter_map(|entry| {
-                let visible = entry;
-                let context = self.main_repository.and_then(|repository| {
-                    self.engine
-                        .file_context_for_current_entry(repository, entry)
-                });
-                self.resolve(
-                    entry,
-                    visible,
-                    CurrentContext::Resolved(context.as_deref()),
-                    historical.as_ref(),
-                )
-                .map(|source| (entry.file_id.clone(), source.to_owned()))
-            })
-            .collect()
+        let Some(tree) = self.engine.commit_namespace(&self.commit.commit_id) else {
+            return Ok(std::collections::BTreeMap::new());
+        };
+        let mut versions = std::collections::BTreeMap::new();
+        tree.walk(|entry| {
+            if entry.kind != storage_contract::NamespaceEntryKind::File {
+                return Ok(true);
+            }
+            let context = self.main_repository.and_then(|repository| {
+                self.engine
+                    .file_context_for_current_entry(repository, entry)
+            });
+            if let Some(source) = self.resolve(
+                entry,
+                entry,
+                CurrentContext::Resolved(context.as_deref()),
+                historical.as_ref(),
+            )? {
+                versions.insert(entry.file_id.clone(), source);
+            }
+            Ok(true)
+        })?;
+        Ok(versions)
     }
 
     fn resolve(
         &self,
         entry: &storage_contract::Entry,
-        visible: &'a storage_contract::Entry,
+        visible: &storage_contract::Entry,
         context: CurrentContext<'_>,
         historical: Option<&std::collections::BTreeMap<&str, &'a storage_contract::FileContext>>,
-    ) -> Option<&'a str> {
+    ) -> Result<Option<String>, storage_engine::Error> {
         let state = self.engine.state();
-        let current = self.current?;
+        let Some(current) = self.current else {
+            return Ok(None);
+        };
         if current.head_commit_id == self.commit.commit_id {
             if let Some(repository) = self.main_repository {
                 let owned;
                 let context = match context {
                     CurrentContext::Resolved(context) => context,
                     CurrentContext::Lookup => {
-                        owned = self.engine.file_context(repository, &entry.path);
+                        owned = self.engine.file_context(repository, &entry.path)?;
                         owned.as_ref()
                     }
                 };
                 if let Some(context) = context {
-                    return if context.inherited_from.is_some() {
-                        Some(visible.version_id.as_str())
+                    return Ok(if context.inherited_from.is_some() {
+                        Some(visible.version_id.clone())
                     } else {
-                        state
-                            .branches
-                            .get(&context.branch_id)?
-                            .pending_file_versions
-                            .get(&entry.file_id)
-                            .map(String::as_str)
-                    };
+                        state.branches.get(&context.branch_id).and_then(|branch| {
+                            branch.pending_file_versions.get(&entry.file_id).cloned()
+                        })
+                    });
                 }
             }
         } else {
@@ -191,22 +211,27 @@ impl<'a> PendingSources<'a> {
                     .find_map(|tree| tree.file_contexts.get(entry.lookup_key())),
             };
             if let Some(context) = context {
-                return context
+                return Ok(context
                     .inherited_from
                     .as_ref()
-                    .map(|_| visible.version_id.as_str());
+                    .map(|_| visible.version_id.clone()));
             }
         }
-        self.commit
+        Ok(self
+            .commit
             .pending_file_versions
             .get(&entry.file_id)
             .filter(|version| **version == entry.version_id)
-            .map(String::as_str)
+            .cloned()
             .or_else(|| {
                 (current.head_commit_id == self.commit.commit_id)
-                    .then(|| self.engine.pending_file_source(self.branch, &entry.file_id))
+                    .then(|| {
+                        self.engine
+                            .pending_file_source(self.branch, &entry.file_id)
+                            .map(str::to_owned)
+                    })
                     .flatten()
-            })
+            }))
     }
 
     #[cfg(test)]
@@ -215,39 +240,46 @@ impl<'a> PendingSources<'a> {
     }
 }
 
-pub(super) fn pending_entry_source<'a>(
-    engine: &'a Engine,
-    branch: &'a str,
-    commit: &'a storage_contract::Commit,
+pub(super) fn pending_entry_source(
+    engine: &Engine,
+    branch: &str,
+    commit: &storage_contract::Commit,
     entry: &storage_contract::Entry,
-) -> Option<&'a str> {
+) -> Result<Option<String>, storage_engine::Error> {
     PendingSources::new(engine, branch, commit).checked(entry)
 }
 
-pub(super) fn current_entry_source<'a>(
-    engine: &'a Engine,
-    branch: &'a str,
+pub(super) fn current_entry_source(
+    engine: &Engine,
+    branch: &str,
     entry: &storage_contract::Entry,
-) -> Option<&'a str> {
-    let current = engine.state().branches.get(branch)?;
-    let commit = engine.state().commits.get(&current.head_commit_id)?;
+) -> Result<Option<String>, storage_engine::Error> {
+    let Some(current) = engine.state().branches.get(branch) else {
+        return Ok(None);
+    };
+    let Some(commit) = engine.state().commits.get(&current.head_commit_id) else {
+        return Ok(None);
+    };
     pending_entry_source(engine, branch, commit, entry)
 }
 
-/// The index resolves against this resolver's own current commit. Unlike the
-/// checked external-entry API, callers cannot substitute another snapshot's
-/// entry and no repeated path scan is necessary.
-pub(super) fn current_entry_source_at_index<'a>(
-    engine: &'a Engine,
-    branch: &'a str,
-    index: usize,
+/// The entry is this branch's own current-commit materialization, already in
+/// hand at the caller. Unlike the checked external-entry API, callers cannot
+/// substitute another snapshot's entry and no repeated key lookup is needed.
+pub(super) fn current_entry_source_resolved(
+    engine: &Engine,
+    branch: &str,
+    entry: &storage_contract::Entry,
     context: Option<&storage_contract::FileContext>,
-) -> Option<&'a str> {
-    let current = engine.state().branches.get(branch)?;
-    let commit = engine.state().commits.get(&current.head_commit_id)?;
-    let entry = commit.entries.get(index)?;
+) -> Result<Option<String>, storage_engine::Error> {
+    let Some(current) = engine.state().branches.get(branch) else {
+        return Ok(None);
+    };
+    let Some(commit) = engine.state().commits.get(&current.head_commit_id) else {
+        return Ok(None);
+    };
     if entry.kind != storage_contract::NamespaceEntryKind::File {
-        return None;
+        return Ok(None);
     }
     PendingSources::new(engine, branch, commit).resolve(
         entry,

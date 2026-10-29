@@ -455,7 +455,7 @@ fn bound_snapshot_repair_preserves_alternate_page_partition() {
         branch.name = format!("branch-{n}");
         state.branches.insert(branch.branch_id.clone(), branch);
     }
-    let canonical = prepare_snapshot(&state, MAX_METADATA).unwrap();
+    let canonical = crate::journal::prepare_snapshot_fixture(&state, MAX_METADATA).unwrap();
     canonical.store(&members[..1], &state).unwrap();
     std::fs::remove_file(object_path(&members[0], "snapshot", &canonical.hash)).unwrap();
     let mut alternate = canonical.descriptor.clone();

@@ -69,7 +69,13 @@ async fn metadata_projection_failure_returns_published_http_receipt_and_same_id_
     let recovered = reopen_after_router_drop(&root.path().join("system")).await;
     assert_eq!(recovered.state().sequence, before + 1);
     let operation = operation.parse::<storage_contract::OperationId>().unwrap();
-    let receipt = &recovered.state().operations[&operation];
+    // The just-published receipt is the newest record of the resident tail.
+    let receipt = &recovered
+        .state()
+        .operations
+        .tail_record(operation)
+        .unwrap()
+        .result;
     assert_eq!(
         receipt.commit_state,
         storage_contract::CommitState::Published
@@ -165,7 +171,13 @@ async fn native_client_receives_published_content_receipt_when_projection_update
     let recovered = reopen_after_router_drop(&root.path().join("system")).await;
     assert_eq!(recovered.state().sequence, before + 1);
     let operation = operation.parse::<storage_contract::OperationId>().unwrap();
-    let receipt = &recovered.state().operations[&operation];
+    // The just-published receipt is the newest record of the resident tail.
+    let receipt = &recovered
+        .state()
+        .operations
+        .tail_record(operation)
+        .unwrap()
+        .result;
     assert_eq!(
         receipt.commit_state,
         storage_contract::CommitState::Published

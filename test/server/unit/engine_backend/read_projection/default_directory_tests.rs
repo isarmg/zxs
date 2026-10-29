@@ -384,7 +384,13 @@ fn typed_scope_initialization_preserves_lookup_spelling_receipts_and_live_admiss
         assert_eq!(engine.state().directory_trees[tree].entries.len(), 1);
         let expected=storage_contract::object_hash("request",&json!({"kind":"directory.scope.initialize","principal":identity.principal,"body":{"repository_id":repo.repository_id,"path":"Cafe\u{301}"}})).unwrap();
         assert_eq!(
-            engine.state().operations[&operation].request_digest,
+            engine
+                .state()
+                .operations
+                .tail_record(operation)
+                .unwrap()
+                .result
+                .request_digest,
             expected
         );
     }

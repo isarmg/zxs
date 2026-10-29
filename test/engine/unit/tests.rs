@@ -1440,7 +1440,12 @@ fn active_reads_protect_history_and_split_remaps_full_payloads() {
             .is_empty()
     );
     for c in &graph.commits {
-        for entry in &c.entries {
+        for entry in e
+            .namespace_entries(&c.namespace)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
+        {
             assert_eq!(
                 e.state().versions[&entry.version_id].history_tree_id,
                 new_history
@@ -2732,7 +2737,7 @@ fn workspace_commit_rejects_bytes_changed_after_upload_sealing() {
         let error = engine.commit_workspace(request.clone()).unwrap_err();
         assert_eq!(error.code(), storage_contract::ErrorCode::ChecksumMismatch);
         assert_eq!(engine.state().sequence, sequence);
-        assert!(!engine.state().operations.contains_key(&operation));
+        assert!(engine.published_receipt(operation).unwrap().is_none());
         assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
         assert_eq!(
             engine
@@ -2981,9 +2986,9 @@ fn unchanged_save_recovery_persists_operation_without_creating_content_history()
         let mut engine = Engine::open(&fixture.root).unwrap();
         assert_eq!(
             engine
-                .state()
-                .operations
-                .contains_key(&request.operation_id),
+                .published_receipt(request.operation_id)
+                .unwrap()
+                .is_some(),
             accepted,
             "{fault}"
         );
@@ -3559,7 +3564,12 @@ fn detached_workspace_preparation_writes_no_decision_and_replays_original_operat
             .collect::<Vec<_>>(),
         before
     );
-    assert!(!engine.state.operations.contains_key(&request.operation_id));
+    assert!(
+        engine
+            .published_receipt(request.operation_id)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         engine
             .workspace(&workspace.workspace_id)
@@ -3622,7 +3632,12 @@ fn detached_workspace_commit_stale_base_is_definite_retryable_conflict() {
         error.code(),
         storage_contract::ErrorCode::CommitPreparationStale
     );
-    assert!(!engine.state.operations.contains_key(&request.operation_id));
+    assert!(
+        engine
+            .published_receipt(request.operation_id)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         engine
             .workspace(&workspace.workspace_id)
@@ -3678,7 +3693,12 @@ fn detached_workspace_commit_rechecks_fence_and_releases_cancelled_admission() {
         engine.finish_workspace_commit(prepared).unwrap_err().code(),
         storage_contract::ErrorCode::CommitPreparationStale
     );
-    assert!(!engine.state.operations.contains_key(&request.operation_id));
+    assert!(
+        engine
+            .published_receipt(request.operation_id)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -3698,7 +3718,12 @@ fn detached_workspace_commit_consumes_real_fault_only_at_decision_boundary() {
         storage_contract::ErrorCode::InjectedFailure
     );
     assert!(!engine.blocked);
-    assert!(!engine.state.operations.contains_key(&request.operation_id));
+    assert!(
+        engine
+            .published_receipt(request.operation_id)
+            .unwrap()
+            .is_none()
+    );
     let retry = engine
         .prepare_workspace_commit(request.clone(), None)
         .unwrap()
@@ -3753,7 +3778,12 @@ fn detached_workspace_commit_checks_actual_source_owner_and_topology() {
                 }
             );
         }
-        assert!(!engine.state.operations.contains_key(&request.operation_id));
+        assert!(
+            engine
+                .published_receipt(request.operation_id)
+                .unwrap()
+                .is_none()
+        );
         assert!(!engine.blocked);
     }
 }
@@ -3914,7 +3944,12 @@ fn detached_commit_rechecks_lease_expiry_at_finish() {
         storage_contract::ErrorCode::FencingTokenExpired
     );
     assert_eq!(engine.state.sequence, before);
-    assert!(!engine.state.operations.contains_key(&request.operation_id));
+    assert!(
+        engine
+            .published_receipt(request.operation_id)
+            .unwrap()
+            .is_none()
+    );
     assert!(engine.require_write().is_ok());
 }
 
@@ -3957,7 +3992,7 @@ fn pending_operation_reads_exact_snapshot_replica_without_repair() {
                 let snapshot: crate::journal::Snapshot =
                     crate::journal::load_object(source, "snapshot", &candidate.snapshot_hash)
                         .unwrap();
-                crate::journal::map_pages(source, &snapshot.maps["operation_principals"])[0].clone()
+                crate::journal::map_pages(source, &snapshot.maps["operation_log"])[0].clone()
             }
         };
         let path = crate::journal::object_path(source, kind, &hash);
@@ -4212,7 +4247,10 @@ mod retained_workspace_budget;
 mod runtime_workspace_limits;
 
 #[test]
-fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
+fn materialized_tree_reads_preserve_selection_and_validation_checks() {
+    // Flat zero-copy commit entries no longer exist: every read materializes
+    // from the paged namespace. Selection, foreign-commit and migration
+    // validation must stay identical between current and historical reads.
     let fixture = Fixture::new();
     let mut engine = fixture.initialize();
     let repo = repository(&mut engine, 1);
@@ -4220,16 +4258,11 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
     let head = engine.state.branches[&repo.main_branch_id]
         .head_commit_id
         .clone();
-    let borrowed = engine.list_tree_ref(&repo.main_branch_id).unwrap();
-    assert!(!borrowed.is_empty());
-    assert_eq!(borrowed, engine.list_tree(&repo.main_branch_id).unwrap());
+    let listed = engine.list_tree(&repo.main_branch_id).unwrap();
+    assert!(!listed.is_empty());
     assert_eq!(
-        borrowed,
+        listed,
         engine.list_tree_at(&repo.main_branch_id, &head).unwrap()
-    );
-    assert_eq!(
-        borrowed.as_ptr(),
-        engine.state.commits[&head].entries.as_ptr()
     );
     save(
         &mut engine,
@@ -4241,36 +4274,14 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         .head_commit_id
         .clone();
     assert_ne!(head, current_head);
-    for selected in [&head, &current_head] {
-        let borrowed = engine
-            .list_tree_at_ref(&repo.main_branch_id, selected)
-            .unwrap();
-        assert_eq!(
-            borrowed.as_ptr(),
-            engine.state.commits[selected].entries.as_ptr()
-        );
-        assert_eq!(
-            borrowed,
-            engine.list_tree_at(&repo.main_branch_id, selected).unwrap()
-        );
-    }
-    let historical = engine
-        .list_tree_at_ref(&repo.main_branch_id, &head)
-        .unwrap();
+    let historical = engine.list_tree_at(&repo.main_branch_id, &head).unwrap();
     let current = engine
-        .list_tree_at_ref(&repo.main_branch_id, &current_head)
+        .list_tree_at(&repo.main_branch_id, &current_head)
         .unwrap();
     assert_ne!(historical[0].version_id, current[0].version_id);
     assert_eq!(historical[0].size, 7);
     assert_eq!(current[0].size, 15);
-    assert_eq!(
-        engine.list_tree_ref(&repo.main_branch_id).unwrap().as_ptr(),
-        current.as_ptr()
-    );
-    assert_eq!(
-        engine.list_tree_ref("missing").unwrap_err().code(),
-        storage_contract::ErrorCode::BranchNotFound
-    );
+    assert_eq!(engine.list_tree(&repo.main_branch_id).unwrap(), current);
     assert_eq!(
         engine.list_tree("missing").unwrap_err().code(),
         storage_contract::ErrorCode::BranchNotFound
@@ -4310,11 +4321,8 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
             storage_contract::ErrorCode::CommitNotFound,
         ),
     ] {
-        let borrowed = engine.list_tree_at_ref(branch, selected).unwrap_err();
         let owned = engine.list_tree_at(branch, selected).unwrap_err();
-        assert_eq!(borrowed.code(), code);
-        assert_eq!(borrowed.code(), owned.code());
-        assert_eq!(borrowed.message(), owned.message());
+        assert_eq!(owned.code(), code);
     }
     // Exercise identical validation when the current head itself is invalid.
     std::sync::Arc::make_mut(&mut engine.state)
@@ -4323,23 +4331,13 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
         .unwrap()
         .head_commit_id = foreign_head.clone();
     assert_eq!(
-        engine
-            .list_tree_ref(&repo.main_branch_id)
-            .unwrap_err()
-            .code(),
-        storage_contract::ErrorCode::CommitNotFound
-    );
-    assert_eq!(
         engine.list_tree(&repo.main_branch_id).unwrap_err().code(),
         storage_contract::ErrorCode::CommitNotFound
     );
     // An explicit valid snapshot is independent of the current head.
     assert_eq!(
-        engine
-            .list_tree_at_ref(&repo.main_branch_id, &head)
-            .unwrap()
-            .as_ptr(),
-        engine.state.commits[&head].entries.as_ptr()
+        engine.list_tree_at(&repo.main_branch_id, &head).unwrap(),
+        historical
     );
     let branch = std::sync::Arc::make_mut(&mut engine.state)
         .branches
@@ -4348,27 +4346,15 @@ fn borrowed_tree_shares_the_snapshot_and_preserves_owned_read_checks() {
     branch.head_commit_id = head.clone();
     branch.state = storage_contract::BranchState::Migrated;
     assert_eq!(
-        engine
-            .list_tree_ref(&repo.main_branch_id)
-            .unwrap_err()
-            .code(),
-        storage_contract::ErrorCode::TreeMoved
-    );
-    assert_eq!(
         engine.list_tree(&repo.main_branch_id).unwrap_err().code(),
         storage_contract::ErrorCode::TreeMoved
     );
     // Migration wins over commit lookup, including missing and foreign IDs.
     for selected in [head.as_str(), foreign_head.as_str(), "missing"] {
-        let borrowed = engine
-            .list_tree_at_ref(&repo.main_branch_id, selected)
-            .unwrap_err();
         let owned = engine
             .list_tree_at(&repo.main_branch_id, selected)
             .unwrap_err();
-        assert_eq!(borrowed.code(), storage_contract::ErrorCode::TreeMoved);
-        assert_eq!(borrowed.code(), owned.code());
-        assert_eq!(borrowed.message(), owned.message());
+        assert_eq!(owned.code(), storage_contract::ErrorCode::TreeMoved);
     }
 }
 

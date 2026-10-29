@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 [features]
 fault-injection = []
+# Fixture helpers for dependent crates' own unit tests (dev-dependencies
+# only); production builds never enable it.
+test-support = []
 
 [dependencies]
 tracing = { version = "0.1", default-features = false, features = ["std"], path = "../foundation/diagnostics/tracing" }
@@ -51,3 +54,7 @@ sqlite-access = { version = "0.9.0", default-features = false, path = "../founda
 [[test]]
 name = "hash_table_compatibility"
 path = "../../test/engine/integration/hash_table_compatibility.rs"
+
+[[example]]
+name = "task1_bench"
+path = "../../test/engine/bench/task1_bench.rs"

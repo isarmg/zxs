@@ -35,8 +35,9 @@ def validate(output, consumer, edges):
     for package, feature_sets in selected.items():
         if package == "storage-engine":
             expected = edges == "normal,build,dev" and consumer in {"storage-engine", "storage-server"}
-            if edges == "normal,build" and any("fault-injection" in features for features in feature_sets):
-                raise AssertionError(f"{consumer}: production graph enables fault-injection")
+            if edges == "normal,build" and any(
+                    {"fault-injection", "test-support"} & features for features in feature_sets):
+                raise AssertionError(f"{consumer}: production graph enables test-only engine features")
             if expected and not all("fault-injection" in features for features in feature_sets):
                 raise AssertionError(f"{consumer}: test graph lacks fault-injection coverage")
             continue

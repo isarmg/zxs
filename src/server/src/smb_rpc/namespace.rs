@@ -163,28 +163,32 @@ impl Session {
             )?;
             record_durable = true;
             // Check exactly the immutable namespace used by this workspace.
-            // A later HTTP mutation must not change the meaning of these checks.
-            let snapshot = self.shared.backend.snapshot_at(
-                &self.identity,
-                &self.branch,
-                &workspace.base_head,
-            )?;
-            let entries = &snapshot.entries;
+            // A later HTTP mutation must not change the meaning of these
+            // checks: every read below names the workspace's own base head.
+            self.shared
+                .backend
+                .snapshot_at(&self.identity, &self.branch, &workspace.base_head)?;
             let find = |key: &str| {
-                entries
-                    .binary_search_by(|entry| entry.lookup_key().cmp(key))
-                    .ok()
-                    .map(|index| &entries[index])
+                self.shared.backend.snapshot_entry(
+                    &self.identity,
+                    &self.branch,
+                    &workspace.base_head,
+                    key,
+                )
             };
-            let nonempty = |entry: &Entry| {
-                let prefix = format!("{}/", entry.lookup_key());
-                entry.kind == storage_contract::NamespaceEntryKind::Directory
-                    && entries
-                        .iter()
-                        .any(|child| child.lookup_key().starts_with(&prefix))
+            let nonempty = |entry: &Entry| -> Result<bool, ApiError> {
+                Ok(
+                    entry.kind == storage_contract::NamespaceEntryKind::Directory
+                        && self.shared.backend.snapshot_directory_has_children(
+                            &self.identity,
+                            &self.branch,
+                            &workspace.base_head,
+                            entry.lookup_key(),
+                        )?,
+                )
             };
             if kind == NamespaceOperation::Unlink || kind == NamespaceOperation::Rmdir {
-                let entry = find(source_path.key()).ok_or_else(|| {
+                let entry = find(source_path.key())?.ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
@@ -209,7 +213,7 @@ impl Session {
                         "rmdir requires a directory",
                     ));
                 }
-                if nonempty(entry) {
+                if nonempty(&entry)? {
                     return Err(ApiError::new(
                         ::http::StatusCode::CONFLICT,
                         storage_contract::ErrorCode::DirectoryNotEmpty,
@@ -220,9 +224,9 @@ impl Session {
             if kind == NamespaceOperation::Rename
                 && replace
                 && let Some(target) = destination_path.as_ref()
-                && let Some(target_entry) = find(target.key())
+                && let Some(target_entry) = find(target.key())?
             {
-                let source = find(source_path.key()).ok_or_else(|| {
+                let source = find(source_path.key())?.ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
@@ -236,7 +240,7 @@ impl Session {
                 }
                 // A case-only rename addresses the same stable entry.
                 if source.entry_id != target_entry.entry_id {
-                    if nonempty(target_entry) {
+                    if nonempty(&target_entry)? {
                         return Err(ApiError::new(
                             ::http::StatusCode::CONFLICT,
                             storage_contract::ErrorCode::DirectoryNotEmpty,

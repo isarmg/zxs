@@ -52,6 +52,13 @@ pub(crate) fn snapshot_addresses(
     {
         addresses.extend(map_addresses(disk, reference));
     }
+    // Segment bodies hang off directory leaf values, not radix references.
+    crate::journal::visit_segment_objects(snapshot, |kind, hash| {
+        let object = load_authenticated_object(disk, kind, hash)?;
+        addresses.insert((object.kind(), object.hash().to_owned()));
+        Ok(object)
+    })
+    .unwrap();
     addresses.insert((
         "state-control-auth",
         snapshot.control_auth.hash().to_owned(),

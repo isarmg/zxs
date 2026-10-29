@@ -145,7 +145,11 @@ fn missing_directory_selection_references_return_errors_without_publication() {
 fn missing_baseline_branch_or_tree_cannot_initialize_or_fork() {
     for missing in ["branch", "tree"] {
         let (_temporary, mut engine, repo, _) = fixture();
-        let (directory, _, _) = scope(&engine.state, &repo.repository_id, "folder").unwrap();
+        let (directory, _, _) = engine
+            .with_namespace_source(|source| {
+                scope(&engine.state, &repo.repository_id, "folder", source)
+            })
+            .unwrap();
         if missing == "branch" {
             let branch = engine.state.directory_selections[&directory].clone();
             std::sync::Arc::make_mut(&mut engine.state)
@@ -223,16 +227,25 @@ fn unchanged_selection_still_rejects_unavailable_file_branch() {
 fn directory_snapshot_source_shares_immutable_commit_and_only_owns_selected_entries() {
     let (_temporary, engine, repo, _) = fixture();
     let mut state = engine.state().clone();
-    let view = scope_view(&state, &repo.repository_id, "FOLDER").unwrap();
-    let commit_id = view.commit.commit_id.clone();
+    let snapshot = engine
+        .with_namespace_source(|namespace_source| {
+            let view = scope_view(&state, &repo.repository_id, "FOLDER", namespace_source)?;
+            let commit_id = view.commit.commit_id.clone();
+            let snapshot = DirectorySnapshotSource::capture(&state, view, namespace_source)?;
+            Ok((commit_id, snapshot))
+        })
+        .unwrap();
+    let (commit_id, source) = snapshot;
     let shared = state.commits.get_shared(&commit_id).unwrap();
-    let source = DirectorySnapshotSource::capture(&state, view);
     assert!(Arc::ptr_eq(&shared, &source.current));
     assert_eq!(source.path, "folder");
     assert_eq!(source.entries.len(), 1);
     assert_eq!(source.entries[0].path(), "folder/file.txt");
-    let old_entries = source.current.entries.clone();
-    state.commits.get_mut(&commit_id).unwrap().entries.clear();
-    assert_eq!(source.current.entries, old_entries);
+    // The snapshot owns its selected entries and shares the immutable commit:
+    // replacing the live record cannot change either.
+    let old_namespace = source.current.namespace.clone();
+    state.commits.get_mut(&commit_id).unwrap().namespace =
+        crate::namespace::fixture_store::namespace(&[]);
+    assert_eq!(source.current.namespace, old_namespace);
     assert_eq!(source.entries[0].path(), "folder/file.txt");
 }

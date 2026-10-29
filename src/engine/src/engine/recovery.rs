@@ -322,8 +322,12 @@ impl Engine {
                     )?
                     .into_state();
                     if publication.recovery.is_some() {
-                        next.operations
-                            .insert(candidate.operation_id, publication.result.clone());
+                        self.overlay_recovered_result(
+                            &online,
+                            &mut next,
+                            candidate.operation_id,
+                            publication.result.clone(),
+                        )?;
                     }
                     self.state = std::sync::Arc::new(next);
                 }
@@ -347,9 +351,9 @@ impl Engine {
                 && mode == RecoveryMode::CompletePending
                 && online.len() == members.len()
             {
-                let result = next
-                    .operations
-                    .get(&candidate.operation_id)
+                let result = self
+                    .candidate_receipt(&next, &online, candidate.operation_id)?
+                    .map(|entry| entry.result)
                     .ok_or_else(|| {
                         Error::new(
                             storage_contract::ErrorCode::StateInvalid,
@@ -359,7 +363,7 @@ impl Engine {
                 crate::metadata_budget::preflight_bound_publication(
                     self,
                     &candidate,
-                    result,
+                    &result,
                     &next,
                     None,
                     MAX_METADATA,
@@ -445,7 +449,12 @@ impl Engine {
                     self.complete_candidate(&candidate, &hash, &next, None)?;
                 }
                 if let Some(result) = recovered_result {
-                    next.operations.insert(candidate.operation_id, result);
+                    self.overlay_recovered_result(
+                        &online,
+                        &mut next,
+                        candidate.operation_id,
+                        result,
+                    )?;
                 }
                 self.state = std::sync::Arc::new(next);
                 self.snapshot = Some(candidate.snapshot_hash);
@@ -474,8 +483,12 @@ impl Engine {
                     break;
                 }
                 if p.recovery.is_some() {
-                    next.operations
-                        .insert(candidate.operation_id, p.result.clone());
+                    self.overlay_recovered_result(
+                        &online,
+                        &mut next,
+                        candidate.operation_id,
+                        p.result.clone(),
+                    )?;
                 }
                 self.state = std::sync::Arc::new(next);
                 self.snapshot = Some(candidate.snapshot_hash);
@@ -575,6 +588,18 @@ fn repair_snapshot_copies(
             },
         )?;
     }
+    crate::journal::visit_segment_objects(&snapshot, |kind, hash| {
+        let object =
+            crate::publication_evidence::verified_graph_object_at(resources, sources, kind, hash)?;
+        let address = format!("{}/{}", object.kind(), object.hash());
+        if !repaired_pages.contains(&address) {
+            crate::publication_evidence::repair_authenticated_object_at(
+                resources, members, &object,
+            )?;
+            remember_repaired_page(repaired_pages, &address);
+        }
+        Ok(object)
+    })?;
     let auth = crate::publication_evidence::verified_graph_object_at(
         resources,
         sources,
@@ -593,6 +618,68 @@ thread_local! {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/recovery/tests.rs"]
 mod tests;
+
+impl Engine {
+    /// Recovery tail update: replace this candidate's own receipt — by
+    /// construction the newest record of its snapshot's log — with the
+    /// publication's bound result. Explicit degraded recovery prepares this
+    /// before publication; replay supplies an already authoritative result.
+    /// When the receipt landed exactly on
+    /// a seal boundary, the sealed segment reopens from its verified body and
+    /// re-seals on the next encoding; earlier segments are never touched.
+    pub(crate) fn overlay_recovered_result(
+        &self,
+        online: &[DiskConfig],
+        next: &mut State,
+        operation_id: OperationId,
+        result: OperationResult,
+    ) -> Result<()> {
+        if next.operations.tail().is_empty() {
+            let reference = next.operations.sealed().last().cloned().ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::StateInvalid,
+                    "recovered candidate has no receipt to update",
+                )
+            })?;
+            let records = self
+                .segment_reader(online)
+                .operation_segment(&reference)?
+                .as_ref()
+                .clone();
+            next.operations
+                .reopen_last_sealed(records)
+                .map_err(crate::Error::from)?;
+        }
+        let principal = next
+            .operations
+            .tail()
+            .last()
+            .filter(|entry| entry.result.operation_id == operation_id)
+            .map(|entry| entry.principal.clone())
+            .ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::StateInvalid,
+                    "recovered result does not target the newest receipt",
+                )
+            })?;
+        next.operations
+            .replace_last(storage_contract::OperationRecordEntry { principal, result })
+            .map_err(crate::Error::from)?;
+        // Materialize the corrected receipt's derived sealed body before
+        // publication or exposing a recovered in-memory reference:
+        // a later transaction drops fresh_seal, and historical readers load
+        // sealed bodies by hash. The original candidate root remains unchanged.
+        if let Some((_, segment)) = next.operations.fresh_seal() {
+            PreparedMetadataObject::new(
+                storage_contract::OPERATION_SEGMENT_KIND,
+                segment,
+                MAX_METADATA,
+            )?
+            .store_at(&self.disk_resources, online)?;
+        }
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/recovery/diagnostics_tests.rs"]

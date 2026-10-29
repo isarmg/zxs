@@ -41,10 +41,14 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
 
 // Reference predicate from the generation-first implementation. Keep the
 // original traversal here to check the new traversal's complete selection set.
-fn generation_first_conflict(state: &State, workspace: &Workspace, path: &str) -> bool {
+fn generation_first_conflict(
+    state: &State,
+    workspace: &Workspace,
+    path: &str,
+    base_entries: &[Entry],
+    current_entries: &[Entry],
+) -> bool {
     let branch = &state.branches[&workspace.branch_id];
-    let base = &state.commits[&workspace.base_head];
-    let current = &state.commits[&branch.head_commit_id];
     let path = name_policy::path_key(path);
     state
         .directory_selection_generations
@@ -52,7 +56,7 @@ fn generation_first_conflict(state: &State, workspace: &Workspace, path: &str) -
         .any(|(id, generation)| {
             let relevant = state.repositories.values().any(|repo| {
                 repo.history_tree_id == branch.history_tree_id && repo.repository_id == *id
-            }) || base.entries.iter().chain(&current.entries).any(|entry| {
+            }) || base_entries.iter().chain(current_entries).any(|entry| {
                 entry.kind == NamespaceEntryKind::Directory
                     && entry.entry_id == *id
                     && (path == entry.lookup_key()
@@ -90,22 +94,55 @@ fn directory_generation_checks_match_both_views_roots_and_component_boundaries()
     current.commit_id = new_id("commit");
     let old = directory("Old");
     let future = directory("Future");
+    // Path-copy both synthetic heads; their fresh pages resolve before the
+    // published store throughout this test.
+    let mut built = crate::namespace::NamespaceObjects::new();
+    let (base_ns, current_ns) = engine
+        .with_namespace_source(|base| {
+            let mut editor = crate::namespace::NamespaceEditor::open(&current.namespace, base)?;
+            editor.upsert_directory(&old)?;
+            let base_ns = editor.seal(&mut built)?;
+            let mut editor = crate::namespace::NamespaceEditor::open(&current.namespace, base)?;
+            editor.upsert_directory(&future)?;
+            let current_ns = editor.seal(&mut built)?;
+            Ok((base_ns, current_ns))
+        })
+        .unwrap();
     state
         .commits
         .get_mut(&workspace.base_head)
         .unwrap()
-        .entries
-        .push(old.clone());
-    current.entries.push(future.clone());
+        .namespace = base_ns;
+    current.namespace = current_ns;
     state
         .branches
         .get_mut(&workspace.branch_id)
         .unwrap()
         .head_commit_id = current.commit_id.clone();
     state.commits.insert(current.commit_id.clone(), current);
-    let mut ids = state.commits[&workspace.base_head]
-        .entries
+    let (base_entries, current_entries) = engine
+        .with_namespace_source(|base| {
+            let source = crate::namespace::DraftSource {
+                fresh: &built,
+                base,
+            };
+            let base_entries = crate::namespace::NamespaceView::new(
+                &state.commits[&workspace.base_head].namespace,
+                &source,
+            )
+            .collect_entries()?;
+            let branch = &state.branches[&workspace.branch_id];
+            let current_entries = crate::namespace::NamespaceView::new(
+                &state.commits[&branch.head_commit_id].namespace,
+                &source,
+            )
+            .collect_entries()?;
+            Ok((base_entries, current_entries))
+        })
+        .unwrap();
+    let mut ids = base_entries
         .iter()
+        .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
         .map(|entry| entry.entry_id.clone())
         .collect::<Vec<_>>();
     ids.extend([future.entry_id, repo.repository_id.clone(), new_id("entry")]);
@@ -145,12 +182,27 @@ fn directory_generation_checks_match_both_views_roots_and_component_boundaries()
                     "Future/new.txt",
                     "unrelated.txt",
                 ] {
-                    let expected = generation_first_conflict(&state, &workspace, path);
-                    let actual = validate_directory_selection_key(
+                    let expected = generation_first_conflict(
                         &state,
                         &workspace,
-                        &name_policy::path_key(path),
+                        path,
+                        &base_entries,
+                        &current_entries,
                     );
+                    let actual = engine
+                        .with_namespace_source(|base| {
+                            let source = crate::namespace::DraftSource {
+                                fresh: &built,
+                                base,
+                            };
+                            Ok(validate_directory_selection_key(
+                                &state,
+                                &workspace,
+                                &name_policy::path_key(path),
+                                &source,
+                            ))
+                        })
+                        .unwrap();
                     assert_eq!(
                         actual.is_err(),
                         expected,
@@ -195,7 +247,14 @@ fn empty_generations_still_validate_workspace_references_in_order() {
                 "current namespace missing"
             }
         };
-        let error = validate_directory_selection_key(&state, &workspace, "new.txt").unwrap_err();
+        let error = engine
+            .with_namespace_source(|source| {
+                Ok(validate_directory_selection_key(
+                    &state, &workspace, "new.txt", source,
+                ))
+            })
+            .unwrap()
+            .unwrap_err();
         assert!(error.to_string().contains(expected), "{missing}: {error}");
     }
 }
@@ -314,22 +373,32 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
                 .unwrap();
         }
         let head = &engine.state().branches[&repo.main_branch_id].head_commit_id;
-        let expected = engine.state().commits[head]
-            .entries
-            .iter()
-            .filter(|entry| entry.kind == NamespaceEntryKind::File)
-            .map(|entry| {
-                (
-                    directory::context_key_from_key(&repo.repository_id, entry.lookup_key()),
-                    directory::context_at_key(
-                        engine.state(),
-                        &repo.repository_id,
-                        entry.lookup_key(),
-                    )
-                    .unwrap(),
+        let expected = engine
+            .with_namespace_source(|source| {
+                let entries = crate::namespace::NamespaceView::new(
+                    &engine.state().commits[head].namespace,
+                    source,
                 )
+                .collect_entries()?;
+                let mut map = BTreeMap::new();
+                for entry in entries
+                    .iter()
+                    .filter(|entry| entry.kind == NamespaceEntryKind::File)
+                {
+                    map.insert(
+                        directory::context_key_from_key(&repo.repository_id, entry.lookup_key()),
+                        directory::context_at_key(
+                            engine.state(),
+                            &repo.repository_id,
+                            entry.lookup_key(),
+                            source,
+                        )?
+                        .unwrap(),
+                    );
+                }
+                Ok(map)
             })
-            .collect::<BTreeMap<_, _>>();
+            .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")
             .unwrap();
@@ -417,7 +486,13 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
                 None,
             )
             .unwrap();
-        let MutationPlan::Prepared { next, result, .. } = plan.mutation else {
+        let MutationPlan::Prepared {
+            next,
+            result,
+            namespace,
+            ..
+        } = plan.mutation
+        else {
             panic!("new namespace operation must produce a candidate");
         };
         if !inherited {
@@ -429,16 +504,25 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
         assert!(std::ptr::eq(&next.commits[&workspace.base_head], source));
         let committed = &next.commits[result.commit_id.as_ref().unwrap()];
         assert_eq!(committed.parent_commit_ids, [workspace.base_head]);
+        // The plan's fresh namespace objects resolve before the published
+        // store, exactly as publication installs them.
+        let committed_entries = engine
+            .with_namespace_source(|base| {
+                let planned = crate::namespace::PreparedSource::new(&namespace, base)?;
+                crate::namespace::NamespaceView::new(&committed.namespace, &planned)
+                    .collect_entries()
+            })
+            .unwrap();
+        let source_entries = engine.namespace_entries(&source.namespace).unwrap();
         assert_eq!(
-            committed
-                .entries
+            committed_entries
                 .iter()
                 .map(|entry| entry.path.as_str())
                 .collect::<Vec<_>>(),
             ["Folderish", "Moved", "Moved/Child", "Moved/Child/file.txt"]
         );
-        let moved = find_unordered(&committed.entries, "Moved/Child/file.txt").unwrap();
-        let original = find_unordered(&source.entries, "Folder/Child/file.txt").unwrap();
+        let moved = find_unordered(&committed_entries, "Moved/Child/file.txt").unwrap();
+        let original = find_unordered(&source_entries, "Folder/Child/file.txt").unwrap();
         if inherited {
             assert!(source.pending_file_versions.contains_key(&original.file_id));
         }
@@ -480,10 +564,11 @@ fn workspace_first_writes_clear_only_written_pending_file_identities() {
     assert!(repository::main_for_branch(engine.state(), &branch.branch_id).is_none());
     let workspace = engine.create_workspace(&branch.branch_id, "admin").unwrap();
     let source = &engine.state().commits[&workspace.base_head];
-    let written = find_unordered(&source.entries, "Folder/Child/file.txt")
+    let source_entries = engine.namespace_entries(&source.namespace).unwrap();
+    let written = find_unordered(&source_entries, "Folder/Child/file.txt")
         .unwrap()
         .clone();
-    let retained = find_unordered(&source.entries, "Folderish/file.txt")
+    let retained = find_unordered(&source_entries, "Folderish/file.txt")
         .unwrap()
         .clone();
     assert_eq!(source.pending_file_versions.len(), 2);
@@ -509,7 +594,13 @@ fn workspace_first_writes_clear_only_written_pending_file_identities() {
             None,
         )
         .unwrap();
-    let MutationPlan::Prepared { next, result, .. } = plan.mutation else {
+    let MutationPlan::Prepared {
+        next,
+        result,
+        namespace,
+        ..
+    } = plan.mutation
+    else {
         panic!("first writes must produce a candidate");
     };
     let commit = &next.commits[result.commit_id.as_ref().unwrap()];
@@ -519,15 +610,21 @@ fn workspace_first_writes_clear_only_written_pending_file_identities() {
         next.branches[&branch.branch_id].pending_file_versions,
         expected
     );
-    let materialized = find_unordered(&commit.entries, written.path()).unwrap();
+    let commit_entries = engine
+        .with_namespace_source(|base| {
+            let planned = crate::namespace::PreparedSource::new(&namespace, base)?;
+            crate::namespace::NamespaceView::new(&commit.namespace, &planned).collect_entries()
+        })
+        .unwrap();
+    let materialized = find_unordered(&commit_entries, written.path()).unwrap();
     assert_eq!(materialized.file_id, written.file_id);
     assert_ne!(materialized.version_id, written.version_id);
     assert_eq!(
-        find_unordered(&commit.entries, retained.path())
+        find_unordered(&commit_entries, retained.path())
             .unwrap()
             .version_id,
         retained.version_id
     );
-    assert!(find_unordered(&commit.entries, "New.txt").is_some());
+    assert!(find_unordered(&commit_entries, "New.txt").is_some());
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
 }

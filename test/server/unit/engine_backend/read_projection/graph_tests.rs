@@ -61,7 +61,6 @@ fn typed_graph_shares_only_selected_payloads_and_preserves_the_frozen_legacy_res
         for commit in &snapshot.commits {
             let record = &engine.state().commits[&commit.commit_id];
             assert!(std::ptr::eq(commit.as_ref(), record));
-            assert_eq!(commit.entries.as_ptr(), record.entries.as_ptr());
             assert_eq!(commit.history_tree_id, repo.history_tree_id);
         }
         save_projection_file(&mut engine, &repo.main_branch_id, "later.txt", b"later");

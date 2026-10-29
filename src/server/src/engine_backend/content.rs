@@ -36,6 +36,7 @@ impl EngineBackend {
                 .namespace_tree(&repo.main_branch_id)
                 .map_err(error)?
                 .get_key(context.path.key())
+                .map_err(error)?
                 .filter(|entry| {
                     entry.kind == storage_contract::NamespaceEntryKind::File
                         && entry.file_id == record.file_id
@@ -127,24 +128,20 @@ fn default_download_name(
     record: &storage_contract::FileVersion,
 ) -> Result<String, ApiError> {
     let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
-    let entries = tree.entries();
-    let preferred = engine
-        .state()
-        .file_locations
-        .get(&record.file_id)
-        .and_then(|path| {
-            tree.get(path).filter(|entry| {
-                entry.kind == storage_contract::NamespaceEntryKind::File
-                    && entry.file_id == record.file_id
-            })
-        });
-    Ok(preferred
-        .or_else(|| {
-            entries.iter().find(|entry| {
-                entry.kind == storage_contract::NamespaceEntryKind::File
-                    && entry.file_id == record.file_id
-            })
-        })
+    // Canonical location first (one point read); otherwise one early-stop
+    // walk, never a full materialization.
+    let preferred = match engine.state().file_locations.get(&record.file_id) {
+        Some(path) => tree.get(path).map_err(error)?.filter(|entry| {
+            entry.kind == storage_contract::NamespaceEntryKind::File
+                && entry.file_id == record.file_id
+        }),
+        None => None,
+    };
+    let located = match preferred {
+        Some(entry) => Some(entry),
+        None => tree.find_file(&record.file_id).map_err(error)?,
+    };
+    Ok(located
         .map(|entry| entry.name().to_owned())
         .or_else(|| engine.state().file_names.get(&record.file_id).cloned())
         .unwrap_or_else(|| record.creation_name.clone()))

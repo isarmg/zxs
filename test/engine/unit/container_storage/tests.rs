@@ -632,7 +632,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
         .insert(file.clone(), ".ZXS-NAMESPACE.JSON".into());
 
     assert!(matches!(
-        prepare_names(&config, &resources, &ProjectionTransition::new(&previous, &published, None).unwrap(), MAX_METADATA),
+        prepare_names(&config, &resources, &ProjectionTransition::new(&previous, &published, None, &crate::namespace::fixture_store::FixtureSource).unwrap(), MAX_METADATA),
         Err(error) if error.code() == storage_contract::ErrorCode::NameCollision
     ));
     // The same physical spelling is valid for replay of an immutable decision.
@@ -640,7 +640,13 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     prepare_names_inner(
         &config,
         &resources,
-        &ProjectionTransition::new(&previous, &published, None).unwrap(),
+        &ProjectionTransition::new(
+            &previous,
+            &published,
+            None,
+            &crate::namespace::fixture_store::FixtureSource,
+        )
+        .unwrap(),
         MAX_METADATA,
         true,
     )
@@ -660,7 +666,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
         .insert(file.clone(), NAMESPACE_MARKER.into());
     assert!(
         matches!(
-            prepare_names(&config, &resources, &ProjectionTransition::new(&published, &renamed, None).unwrap(), MAX_METADATA),
+            prepare_names(&config, &resources, &ProjectionTransition::new(&published, &renamed, None, &crate::namespace::fixture_store::FixtureSource).unwrap(), MAX_METADATA),
             Err(error) if error.code() == storage_contract::ErrorCode::NameCollision
         ),
         "case-only changes are new admissions, not publication replay"
@@ -675,7 +681,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     write_json(&marker, &new_id("file"), true).unwrap();
     let evidence = fs::read(&marker).unwrap();
     assert!(matches!(
-        prepare_names_inner(&config, &resources, &ProjectionTransition::new(&previous, &published, None).unwrap(), MAX_METADATA, true),
+        prepare_names_inner(&config, &resources, &ProjectionTransition::new(&previous, &published, None, &crate::namespace::fixture_store::FixtureSource).unwrap(), MAX_METADATA, true),
         Err(error) if error.code() == storage_contract::ErrorCode::ContainerLayoutInvalid
     ));
     assert_eq!(
@@ -939,7 +945,13 @@ fn empty_name_projection_has_no_staging_file() {
             let prepared = prepare_names_inner(
                 &config,
                 &resources,
-                &ProjectionTransition::new(&previous, next, None).unwrap(),
+                &ProjectionTransition::new(
+                    &previous,
+                    next,
+                    None,
+                    &crate::namespace::fixture_store::FixtureSource,
+                )
+                .unwrap(),
                 0,
                 historical,
             )
@@ -975,44 +987,53 @@ fn capture_fixture() -> (State, String, String) {
     let mut state = engine.state().clone();
     let head = state.branches[&repo.main_branch_id].head_commit_id.clone();
     let file = new_id("file");
-    state.commits.get_mut(&head).unwrap().entries = ["first.txt", "alias.txt"]
-        .into_iter()
-        .map(|name| Entry {
-            entry_id: new_id("entry"),
-            path: name_policy::PortablePath::parse(&(format!("folder/{name}"))).unwrap(),
-            kind: NamespaceEntryKind::File,
-            file_id: file.clone(),
-            version_id: new_id("ver"),
-            size: 1,
-        })
-        .collect();
+    let mut entries: Vec<Entry> = vec![Entry {
+        entry_id: new_id("entry"),
+        path: name_policy::PortablePath::parse("folder").unwrap(),
+        kind: NamespaceEntryKind::Directory,
+        file_id: String::new(),
+        version_id: String::new(),
+        size: 0,
+    }];
+    entries.extend(["first.txt", "alias.txt"].into_iter().map(|name| Entry {
+        entry_id: new_id("entry"),
+        path: name_policy::PortablePath::parse(&(format!("folder/{name}"))).unwrap(),
+        kind: NamespaceEntryKind::File,
+        file_id: file.clone(),
+        version_id: new_id("ver"),
+        size: 1,
+    }));
+    state.commits.get_mut(&head).unwrap().namespace =
+        crate::namespace::fixture_store::namespace(&entries);
     (state, repo.main_branch_id, file)
 }
 
 #[test]
 fn capture_names_only_inserts_missing_fields_and_keeps_first_alias() {
     let (mut state, _, file) = capture_fixture();
-    capture_names(&mut state);
-    assert_eq!(state.file_names[&file], "first.txt");
-    assert_eq!(state.file_locations[&file], "folder/first.txt");
+    capture_names(&mut state, &crate::namespace::fixture_store::FixtureSource).unwrap();
+    // The paged namespace enumerates in canonical component order, which is
+    // also the only publishable stored order: the first alias is canonical.
+    assert_eq!(state.file_names[&file], "alias.txt");
+    assert_eq!(state.file_locations[&file], "folder/alias.txt");
 
     state.file_names.insert(file.clone(), "retained.txt".into());
     state.file_locations.remove(&file);
-    capture_names(&mut state);
+    capture_names(&mut state, &crate::namespace::fixture_store::FixtureSource).unwrap();
     assert_eq!(state.file_names[&file], "retained.txt");
-    assert_eq!(state.file_locations[&file], "folder/first.txt");
+    assert_eq!(state.file_locations[&file], "folder/alias.txt");
 
     state.file_names.remove(&file);
     state
         .file_locations
         .insert(file.clone(), "retained/location.txt".into());
-    capture_names(&mut state);
-    assert_eq!(state.file_names[&file], "first.txt");
+    capture_names(&mut state, &crate::namespace::fixture_store::FixtureSource).unwrap();
+    assert_eq!(state.file_names[&file], "alias.txt");
     assert_eq!(state.file_locations[&file], "retained/location.txt");
 
     let before = state.clone();
     state.begin_tracking();
-    capture_names(&mut state);
+    capture_names(&mut state, &crate::namespace::fixture_store::FixtureSource).unwrap();
     assert!(
         state
             .file_names
@@ -1053,7 +1074,7 @@ fn name_capture_exposes_missing_internal_main_branch() {
         .main_branch_id
         .clone();
     state.branches.remove(&branch);
-    capture_names(&mut state);
+    capture_names(&mut state, &crate::namespace::fixture_store::FixtureSource).unwrap();
 }
 
 #[test]
@@ -1429,7 +1450,13 @@ fn prepared_names_apply_to_the_resource_captured_before_root_replacement() {
         .insert(item.file_id.clone(), "renamed".into());
     next.file_locations
         .insert(item.file_id.clone(), "nested/renamed".into());
-    let projection = ProjectionTransition::new(&previous, &next, None).unwrap();
+    let projection = ProjectionTransition::new(
+        &previous,
+        &next,
+        None,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     let prepared = prepare_names(&config, &resources, &projection, MAX_METADATA).unwrap();
 
     let moved = disk.root.with_extension("held");

@@ -48,7 +48,9 @@ fn published_new_file_context_fences_same_version_branch_switch() {
         let key = directory::context_key_from_key(&repo.repository_id, "fresh.txt");
         assert!(
             find_unordered(
-                &engine.state().commits[&workspace.base_head].entries,
+                &engine
+                    .namespace_entries(&engine.state().commits[&workspace.base_head].namespace)
+                    .unwrap(),
                 "fresh.txt"
             )
             .is_none()
@@ -58,6 +60,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
             workspace.selected_file_contexts.get(&key),
             engine
                 .file_context(&repo.repository_id, "fresh.txt")
+                .unwrap()
                 .as_ref()
         );
         assert!(workspace.selected_file_contexts.contains_key(&key));
@@ -109,6 +112,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
             workspace.selected_file_contexts.get(&key),
             engine
                 .file_context(&repo.repository_id, "fresh.txt")
+                .unwrap()
                 .as_ref()
         );
         assert_eq!(
@@ -173,6 +177,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
                 )),
             engine
                 .file_context(&repo.repository_id, "fresh.txt")
+                .unwrap()
                 .as_ref()
         );
         engine
@@ -219,6 +224,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
     assert_eq!(
         engine
             .file_context(&repo.repository_id, "fresh.txt")
+            .unwrap()
             .unwrap()
             .branch_id,
         draft
@@ -302,6 +308,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
         let completed = engine.workspace(&workspace.workspace_id).unwrap();
         let published_context = engine
             .file_context(&repo.repository_id, "fresh.txt")
+            .unwrap()
             .unwrap();
         assert_eq!(completed.state, WorkspaceState::Committed);
         assert_eq!(completed.fencing_token, before.fencing_token + 1);
@@ -344,6 +351,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
         assert_ne!(
             engine
                 .file_context(&repo.repository_id, "fresh.txt")
+                .unwrap()
                 .unwrap(),
             published_context
         );
@@ -417,12 +425,15 @@ fn published_workspace_completion_errors_keep_receipt_source_and_write_fence() {
         let MutationPlan::Prepared {
             next,
             prepared,
+            namespace,
             result,
         } = plan.mutation
         else {
             panic!("invariant: first submission prepares a new publication")
         };
-        engine.persist(*next, prepared, result.clone()).unwrap();
+        engine
+            .persist_with_objects(*next, prepared, namespace, result.clone())
+            .unwrap();
         let before = engine.workspace(&request.workspace_id).unwrap();
         let directories = [
             engine.workspace_data_directory(&before).unwrap(),
@@ -672,7 +683,9 @@ fn published_workspace_context_preserves_concrete_io_and_native_diagnostics() {
     let result = engine
         .state()
         .operations
-        .values()
+        .tail()
+        .iter()
+        .map(|entry| &entry.result)
         .find(|result| result.kind == "workspace.commit")
         .unwrap();
     for raw in [5, 20, 28] {

@@ -6,38 +6,36 @@ use crate::{
 };
 
 pub(super) fn matching<'a>(
-    state: &'a storage_contract::State,
+    engine: &'a Engine,
     repository: &Repository,
     requested_key: Option<&str>,
-) -> Vec<&'a storage_contract::DirectoryBranch> {
-    let requested_directory_id = requested_key.and_then(|key| {
-        if key.is_empty() {
-            return Some(repository.repository_id.as_str());
+) -> Result<Vec<&'a storage_contract::DirectoryBranch>, ApiError> {
+    let state = engine.state();
+    let requested_directory_id = match requested_key {
+        Some(key) if key.is_empty() => Some(repository.repository_id.clone()),
+        Some(key) => {
+            let namespace = state
+                .branches
+                .get(&repository.main_branch_id)
+                .expect("invariant: admitted repository references its main branch");
+            // One indexed point read locates the directory identity.
+            engine
+                .commit_namespace(&namespace.head_commit_id)
+                .expect("invariant: admitted branch references its head commit")
+                .get_key(key)
+                .map_err(error)?
+                .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::Directory)
+                .map(|entry| entry.entry_id)
         }
-        let namespace = state
-            .branches
-            .get(&repository.main_branch_id)
-            .expect("invariant: admitted repository references its main branch");
-        let commit = state
-            .commits
-            .get(&namespace.head_commit_id)
-            .expect("invariant: admitted branch references its head commit");
-        commit
-            .entries
-            .iter()
-            .find(|entry| {
-                entry.kind == storage_contract::NamespaceEntryKind::Directory
-                    && entry.lookup_key() == key
-            })
-            .map(|entry| entry.entry_id.as_str())
-    });
+        None => None,
+    };
     let mut branches = state
         .directory_branches
         .values()
         .filter(|branch| {
             branch.repository_id == repository.repository_id
                 && requested_key.is_none_or(|key| {
-                    requested_directory_id.map_or_else(
+                    requested_directory_id.as_deref().map_or_else(
                         || name_policy::path_key(&branch.path) == key,
                         |id| branch.directory_id == id,
                     )
@@ -50,7 +48,7 @@ pub(super) fn matching<'a>(
             branch.directory_branch_id.as_str(),
         )
     });
-    branches
+    Ok(branches)
 }
 pub(super) fn capture(
     engine: &Engine,
@@ -58,7 +56,7 @@ pub(super) fn capture(
 ) -> Result<DirectoryScopesSnapshot, ApiError> {
     let repo = repository(engine, request.repository_id)?;
     let state = engine.state();
-    let scopes = matching(state, repo, request.filter.key());
+    let scopes = matching(engine, repo, request.filter.key())?;
     let current = |branch: &storage_contract::DirectoryBranch| {
         state.directory_selections.get(&branch.directory_id) == Some(&branch.directory_branch_id)
     };

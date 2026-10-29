@@ -21,6 +21,8 @@ pub(crate) fn rename_node(
     context: Option<FileContext>,
     principal: &str,
     operation: OperationId,
+    source: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
 ) -> Result<FileContext> {
     let repo = state.repositories.get(repository).cloned().ok_or_else(|| {
         Error::new(
@@ -50,7 +52,7 @@ pub(crate) fn rename_node(
         FileContext {
             node_id: None,
             selection_generation: 0,
-            branch_id: file::ensure_shared_file_branch(state, &current, old)?,
+            branch_id: file::ensure_shared_file_branch(state, &current, old, source, fresh)?,
             inherited_from: None,
         }
     };
@@ -59,7 +61,7 @@ pub(crate) fn rename_node(
         .get(&context.branch_id)
         .is_some_and(|b| b.file_id.as_deref() == Some(&old.file_id))
     {
-        context.branch_id = file::ensure_shared_file_branch(state, &current, old)?;
+        context.branch_id = file::ensure_shared_file_branch(state, &current, old, source, fresh)?;
     }
     let parent = context
         .node_id
@@ -67,7 +69,7 @@ pub(crate) fn rename_node(
         .unwrap_or_else(|| old.version_id.clone());
     source_node(state, &old.file_id, &old.version_id, &parent)?;
     let advance_head =
-        file_nodes::branch_head(state, &context.branch_id).is_ok_and(|head| head == parent);
+        file_nodes::branch_head(state, &context.branch_id, source).is_ok_and(|head| head == parent);
     let node_id = new_id("fnode");
     state.file_path_nodes.insert(
         node_id.clone(),
@@ -94,6 +96,8 @@ pub(crate) fn rename_node(
             false,
             principal,
             operation,
+            source,
+            fresh,
         )?;
     }
     context.node_id = Some(node_id);
@@ -167,7 +171,7 @@ impl Engine {
             principal,
             operation,
             json!({"file_id":file,"source_version_id":version,"source_node_id":node,"name":name.as_str()}),
-            |engine, state, _| {
+            |engine, state, scratch| {
                 source_node(state, file, version, node)?;
                 let mut result = file::create_file_branch_change(
                     &engine.planning_context(),
@@ -175,6 +179,7 @@ impl Engine {
                     file::FileBranchCreation {file_id:file,source_version:version,name:name.as_str(),name_key:name.key()},
                     principal,
                     operation,
+                    &mut scratch.namespace,
                 )?;
                 let branch = result["branch_id"].as_str().ok_or_else(|| {
                     Error::new(

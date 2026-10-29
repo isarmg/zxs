@@ -59,6 +59,8 @@ fn metadata_graph_limit_rejects_before_any_new_payload_or_decision_and_keeps_pub
     let snapshot = engine.snapshot.clone();
     let next_slot = engine.next_slot;
     let mut next = engine.state().clone();
+    // Production planners begin tracking immediately after the clone.
+    next.begin_tracking();
     next.sequence = next_slot;
     // A realistic next tree grows the history while preserving the original snapshot.
     let original = next.commits[&next.branches[&repo.main_branch_id].head_commit_id].clone();
@@ -84,14 +86,21 @@ fn metadata_graph_limit_rejects_before_any_new_payload_or_decision_and_keeps_pub
     let mut commit = original.clone();
     commit.commit_id = new_id("commit");
     commit.parent_commit_ids = vec![original.commit_id];
-    commit.entries.push(Entry {
-        entry_id: new_id("entry"),
-        path: name_policy::PortablePath::parse("pending.txt").unwrap(),
-        kind: NamespaceEntryKind::File,
-        file_id: version.file_id.clone(),
-        version_id: version.version_id.clone(),
-        size: version.logical_size,
-    });
+    let mut built = crate::namespace::NamespaceObjects::new();
+    commit.namespace = engine
+        .with_namespace_source(|base| {
+            let mut editor = crate::namespace::NamespaceEditor::open(&original.namespace, base)?;
+            editor.upsert_file(&Entry {
+                entry_id: new_id("entry"),
+                path: name_policy::PortablePath::parse("pending.txt").unwrap(),
+                kind: NamespaceEntryKind::File,
+                file_id: version.file_id.clone(),
+                version_id: version.version_id.clone(),
+                size: version.logical_size,
+            })?;
+            editor.seal(&mut built)
+        })
+        .unwrap();
     commit.kind = "content".into();
     commit.sequence = next_slot;
     next.branches
@@ -99,36 +108,51 @@ fn metadata_graph_limit_rejects_before_any_new_payload_or_decision_and_keeps_pub
         .unwrap()
         .head_commit_id = commit.commit_id.clone();
     next.commits.insert(commit.commit_id.clone(), commit);
-    let mut result = next.operations.values().next().unwrap().clone();
+    let mut result = next.operations.tail().first().unwrap().result.clone();
     result.operation_id = storage_contract::OperationId::generate();
     result.sequence = next_slot;
-    next.operations.insert(result.operation_id, result.clone());
-    // Derive the exact successful boundary using the same serializer.
+    next.operations
+        .push(storage_contract::OperationRecordEntry {
+            principal: "alice".into(),
+            result: result.clone(),
+        })
+        .unwrap();
+    // Derive the exact successful boundary using the same serializer. The
+    // fresh edit's namespace objects resolve before the published store.
+    let encode = |maximum: usize| {
+        engine.with_namespace_source(|base| {
+            let source = crate::namespace::DraftSource {
+                fresh: &built,
+                base,
+            };
+            crate::history_package::prepare_history_manifests(&next, maximum, &source)
+        })
+    };
     let mut high = 1usize;
-    while crate::history_package::store_history_manifests_bounded(&[], &next, high).is_err() {
+    while encode(high).is_err() {
         high *= 2;
     }
     let mut low = 0usize;
     while low + 1 < high {
         let mid = low + (high - low) / 2;
-        if crate::history_package::store_history_manifests_bounded(&[], &next, mid).is_ok() {
+        if encode(mid).is_ok() {
             high = mid;
         } else {
             low = mid;
         }
     }
-    assert!(crate::history_package::store_history_manifests_bounded(&[], &next, high).is_ok());
+    assert!(encode(high).is_ok());
     // The fixed Snapshot root can now exceed the smaller history root. The
     // rejection contract is independent of which metadata object is checked
     // first: this limit is already proven insufficient for a real history object.
-    assert!(crate::history_package::store_history_manifests_bounded(&[], &next, high - 1).is_err());
+    assert!(encode(high - 1).is_err());
     let logs = engine
         .members()
         .iter()
         .map(|d| fs_bytes(&log_path(d)))
         .collect::<Vec<_>>();
     let error = engine
-        .persist_with_metadata_limit(next, pending, result.clone(), high - 1)
+        .persist_with_metadata_limit(next, pending, built.take(), result.clone(), high - 1)
         .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
@@ -735,7 +759,10 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
     let (record, _) = scanned.records.last().unwrap();
     let mut candidate: Candidate =
         load_object(&members[0], "candidate", &record.candidate_hash).unwrap();
-    let mut result = engine.state.operations[&candidate.operation_id].clone();
+    let mut result = engine
+        .published_receipt(candidate.operation_id)
+        .unwrap()
+        .unwrap();
     let mut before = engine.state().clone();
     for n in 0u32..600 {
         before.content_states.insert(
@@ -750,20 +777,28 @@ fn reused_content_pages_have_identical_exact_tombstone_budget_without_installing
             .file_notes
             .insert(format!("unrelated-{n:08}"), "note".into());
     }
-    let prepared = prepare_snapshot(&before, MAX_METADATA).unwrap();
+    let prepared = crate::journal::prepare_snapshot_fixture(&before, MAX_METADATA).unwrap();
     prepared.store(&members, &before).unwrap();
     let mut after = before.clone();
     after.begin_tracking();
     after.sequence += 1;
     result.sequence = after.sequence;
     candidate.sequence = after.sequence;
-    let fresh = prepare_snapshot(&after, MAX_METADATA).unwrap();
-    let reused =
-        prepare_snapshot_incremental(&before, &after, &prepared.reuse_basis(), MAX_METADATA)
-            .unwrap();
+    let fresh = crate::journal::prepare_snapshot_fixture(&after, MAX_METADATA).unwrap();
+    let reused = prepare_snapshot_incremental(
+        &before,
+        &after,
+        &prepared.reuse_basis(),
+        MAX_METADATA,
+        &mut crate::journal::no_reused_snapshot_sources,
+    )
+    .unwrap();
     assert_eq!(fresh.hash, reused.hash);
     candidate.snapshot_hash = reused.hash.clone();
-    let catalog = crate::history_package::prepare_history_manifests(&after, MAX_METADATA)
+    let catalog = engine
+        .with_namespace_source(|source| {
+            crate::history_package::prepare_history_manifests(&after, MAX_METADATA, source)
+        })
         .unwrap()
         .0;
     let budget = |snapshot: &PreparedSnapshot, maximum| {

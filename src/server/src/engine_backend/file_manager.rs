@@ -58,7 +58,12 @@ fn admit_root_operation(
     operation: storage_contract::OperationId,
 ) -> Result<bool, ApiError> {
     let needs_root = needs_disk_root(engine, slot, path);
-    if needs_root && engine.state().operations.contains_key(&operation) {
+    if needs_root
+        && engine
+            .published_receipt(operation)
+            .map_err(crate::engine_backend::error)?
+            .is_some()
+    {
         return Err(ApiError::conflict(
             storage_contract::ErrorCode::IdempotencyKeyReused,
             "operation is already bound to another request",
@@ -85,17 +90,18 @@ fn ensure_unambiguous_disk_path(
         .map(|repo| name_policy::lookup_key(&repo.name))
         .filter(|name| path.is_empty() || *name == key)
         .collect::<BTreeSet<_>>();
-    if !names.is_empty()
-        && engine
-            .list_tree_ref(&root.main_branch_id)
-            .map_err(error)?
-            .iter()
-            .any(|entry| names.contains(entry.lookup_key()))
-    {
-        return Err(ApiError::conflict(
-            storage_contract::ErrorCode::NameCollision,
-            "a named repository conflicts with a disk-root entry; use an explicit repository identity to rename the entry",
-        ));
+    if !names.is_empty() {
+        // Repository names are single components, so each candidate is one
+        // point lookup against the disk root's paged namespace.
+        let tree = engine.namespace_tree(&root.main_branch_id).map_err(error)?;
+        for name in &names {
+            if tree.get_key(name).map_err(error)?.is_some() {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::NameCollision,
+                    "a named repository conflicts with a disk-root entry; use an explicit repository identity to rename the entry",
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -212,16 +218,17 @@ pub(super) fn file_repo<'a>(engine: &'a Engine, file: &str) -> Result<&'a Reposi
 #[cfg(test)]
 thread_local! { static LISTED_ENTRY_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+/// `entry` is this repository's own current-commit materialization, already
+/// in hand at the caller; no listing or key lookup is repeated here.
 fn listed_current_entry(
     engine: &Engine,
     repo: &Repository,
-    index: usize,
+    entry: &storage_contract::Entry,
     prefix: &str,
 ) -> Result<crate::ListingEntry, ApiError> {
     use crate::{ListingEntry, ListingLocation, ListingVersion};
     #[cfg(test)]
     LISTED_ENTRY_PROJECTIONS.set(LISTED_ENTRY_PROJECTIONS.get() + 1);
-    let entry = &engine.list_tree_ref(&repo.main_branch_id).map_err(error)?[index];
     let display = if prefix.is_empty() {
         entry.path().to_owned()
     } else {
@@ -238,12 +245,14 @@ fn listed_current_entry(
             let content = super::branch::capture_content(
                 engine.state(),
                 Some(&entry.version_id),
-                super::wire::current_entry_source_at_index(
+                super::wire::current_entry_source_resolved(
                     engine,
                     &repo.main_branch_id,
-                    index,
+                    entry,
                     context.as_deref(),
-                ),
+                )
+                .map_err(error)?
+                .as_deref(),
             );
             let node = context
                 .as_ref()
@@ -333,7 +342,6 @@ pub(super) fn file_history(
     let repo = file_repo(engine, file)?;
     let state = engine.state();
     let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
-    let entries = tree.entries();
     let current = if let Some((repository_id, path)) = request.location() {
         if repository_id != repo.repository_id {
             return Err(ApiError::new(
@@ -344,6 +352,7 @@ pub(super) fn file_history(
         }
         Some(
             tree.get_key(path.key())
+                .map_err(error)?
                 .filter(|entry| {
                     entry.kind == storage_contract::NamespaceEntryKind::File
                         && entry.file_id == file
@@ -357,15 +366,25 @@ pub(super) fn file_history(
                 })?,
         )
     } else {
-        state
-            .file_locations
-            .get(file)
-            .and_then(|path| tree.get(path).filter(|entry| entry.file_id == file))
-            .or_else(|| entries.iter().find(|entry| entry.file_id == file))
+        let located = match state.file_locations.get(file) {
+            Some(path) => tree
+                .get(path)
+                .map_err(error)?
+                .filter(|entry| entry.file_id == file),
+            None => None,
+        };
+        match located {
+            Some(entry) => Some(entry),
+            // Early-stop canonical walk; there is no path hint to point-read.
+            None => tree.find_file(file).map_err(error)?,
+        }
     };
-    let context = current
-        .as_ref()
-        .and_then(|entry| engine.file_context(&repo.repository_id, &entry.path));
+    let context = match current.as_ref() {
+        Some(entry) => engine
+            .file_context(&repo.repository_id, &entry.path)
+            .map_err(error)?,
+        None => None,
+    };
     let current_node = context
         .as_ref()
         .and_then(|context| context.node_id.clone())
@@ -382,11 +401,13 @@ pub(super) fn file_history(
     let branches = file_branches
         .iter()
         .filter(|branch| branch.state != storage_contract::BranchState::Migrated)
-        .map(|branch| HistoryBranch {
-            branch: super::branch::capture(state, branch),
-            current: selected.as_deref() == Some(branch.branch_id.as_str()),
+        .map(|branch| {
+            Ok(HistoryBranch {
+                branch: super::branch::capture(engine, branch).map_err(error)?,
+                current: selected.as_deref() == Some(branch.branch_id.as_str()),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiError>>()?;
     let history = engine
         .file_history(file)
         .map_err(error)?
@@ -398,34 +419,49 @@ pub(super) fn file_history(
         .map(|version| (version.version_id.as_str(), version))
         .collect::<BTreeMap<_, _>>();
 
-    // Scan commit entries once. Re-scanning all commits for every version made
-    // one file's history grow quadratically while holding the engine mutex.
+    // Walk each commit namespace once. Re-scanning all commits for every
+    // version made one file's history grow quadratically while holding the
+    // engine mutex. Keys borrow this request's own `visible` map.
     let mut first_commits = BTreeMap::<&str, &storage_contract::Commit>::new();
     for commit in state.commits.values() {
-        for entry in &commit.entries {
-            if visible.contains_key(entry.version_id.as_str()) {
-                let first = first_commits.entry(&entry.version_id).or_insert(commit);
-                if commit.sequence < first.sequence {
-                    *first = commit;
+        let Some(commit_tree) = engine.commit_namespace(&commit.commit_id) else {
+            continue;
+        };
+        commit_tree
+            .walk(|entry| {
+                if let Some((version_id, _)) = visible.get_key_value(entry.version_id.as_str()) {
+                    let first = first_commits.entry(*version_id).or_insert(commit);
+                    if commit.sequence < first.sequence {
+                        *first = commit;
+                    }
                 }
-            }
-        }
+                Ok(true)
+            })
+            .map_err(error)?;
     }
     let mut heads = BTreeMap::new();
     for branch in file_branches {
         if let Some(commit) = state.commits.get(&branch.head_commit_id) {
-            for entry in &commit.entries {
-                // Keep the first branch in stable branch-id order, matching the
-                // previous find() behavior if several branches share one head.
-                if !branch.pending_file_versions.contains_key(&entry.file_id)
-                    && !commit.pending_file_versions.contains_key(&entry.file_id)
-                    && visible.contains_key(entry.version_id.as_str())
-                {
-                    heads
-                        .entry(entry.version_id.as_str())
-                        .or_insert(branch.branch_id.as_str());
-                }
-            }
+            let Some(commit_tree) = engine.commit_namespace(&commit.commit_id) else {
+                continue;
+            };
+            commit_tree
+                .walk(|entry| {
+                    // Keep the first branch in stable branch-id order, matching
+                    // the previous find() behavior if several branches share
+                    // one head. File-branch head namespaces stay tiny.
+                    if !branch.pending_file_versions.contains_key(&entry.file_id)
+                        && !commit.pending_file_versions.contains_key(&entry.file_id)
+                        && let Some((version_id, _)) =
+                            visible.get_key_value(entry.version_id.as_str())
+                    {
+                        heads
+                            .entry(*version_id)
+                            .or_insert(branch.branch_id.as_str());
+                    }
+                    Ok(true)
+                })
+                .map_err(error)?;
         }
     }
     let mut versions = history
@@ -485,13 +521,16 @@ pub(super) fn file_history(
         &first_commits,
         current_node.as_deref(),
     )?;
-    let content = current.as_ref().map(|entry| {
-        super::branch::capture_content(
+    let content = match current.as_ref() {
+        Some(entry) => Some(super::branch::capture_content(
             state,
             Some(&entry.version_id),
-            current_entry_source(engine, &repo.main_branch_id, entry),
-        )
-    });
+            current_entry_source(engine, &repo.main_branch_id, entry)
+                .map_err(error)?
+                .as_deref(),
+        )),
+        None => None,
+    };
     Ok(crate::FileHistorySnapshot {
         file_id: file.into(),
         repository_id: repo.repository_id.clone(),
@@ -636,8 +675,9 @@ pub(super) fn write_session(
         )
     };
     let tree = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
-    let existing = tree.get_key(relative.key());
+    let existing = tree.get_key(relative.key()).map_err(error)?;
     let context = existing
+        .as_ref()
         .and_then(|entry| engine.file_context_for_current_entry(&repo.repository_id, entry));
     if let Some(context) = context.as_ref()
         && context.inherited_from.is_none()
@@ -657,7 +697,7 @@ pub(super) fn write_session(
             .as_ref()
             .map(|context| context.branch_id.as_str())
             .or_else(|| {
-                existing.and_then(|entry| {
+                existing.as_ref().and_then(|entry| {
                     engine
                         .state()
                         .file_selections

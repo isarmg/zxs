@@ -185,6 +185,138 @@ impl PreparedSnapshot {
                 Ok(())
             })?;
         }
+        // Sealed and open segment bodies hang off directory leaf values, not
+        // radix references, so the field visit above does not reach them.
+        // New bodies (open tail, a seal decided this transaction) install
+        // from this invocation's encoder output; reused sealed bodies get
+        // the same full read-back, byte verification and member sync as
+        // every other reused dependency, with the same exact-field
+        // reconstruction fallback on source loss.
+        let mut segment_dependency = |field: &'static str,
+                                      kind: &'static str,
+                                      hash: &str,
+                                      installed: &mut BTreeSet<(&'static str, String)>|
+         -> Result<()> {
+            let address = (kind, hash.to_owned());
+            if installed.contains(&address) {
+                return Ok(());
+            }
+            if let Some(object) = prepared.get(&(kind, hash)) {
+                for disk in members {
+                    install(disk, object.kind, &object.hash, &object.bytes)?;
+                }
+            } else {
+                let bytes = match read_published_object_with(
+                    members,
+                    kind,
+                    hash,
+                    self.maximum,
+                    &mut fault,
+                    &mut read,
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(source) => {
+                        let (_, objects) = snapshot::reconstruct_field(state, field, self.maximum)?;
+                        objects
+                            .into_iter()
+                            .find(|object| object.kind == kind && object.hash == hash)
+                            .ok_or_else(|| {
+                                source.context(
+                                    ErrorCode::ObjectCorrupt,
+                                    "sealed segment has no readable or resident source",
+                                )
+                            })?
+                            .bytes
+                    }
+                };
+                for disk in members {
+                    install(disk, kind, hash, &bytes)?;
+                }
+            }
+            if installed.len() < 16_384 {
+                installed.insert(address);
+            }
+            Ok(())
+        };
+        for reference in state.events.sealed() {
+            segment_dependency(
+                "events",
+                storage_contract::EVENT_SEGMENT_KIND,
+                &reference.hash,
+                &mut installed,
+            )?;
+        }
+        for reference in state.operations.sealed() {
+            segment_dependency(
+                "operation_log",
+                storage_contract::OPERATION_SEGMENT_KIND,
+                &reference.hash,
+                &mut installed,
+            )?;
+        }
+        // Commit values reference immutable namespace graphs that the radix
+        // visit does not reach. New objects install from this invocation's
+        // encoder output; reused graphs get the same full read-back, byte
+        // verification and member sync as every other reused dependency. A
+        // namespace object lost on every member is history loss and fails
+        // closed: it is not reconstructible from resident state.
+        // With no members there is nothing to install or synchronize: the
+        // store is a pure re-encode (test fixtures derive hashes that way),
+        // so the closure sync below would have no source and no destination.
+        let mut namespace_visited = BTreeSet::new();
+        for commit in state.commits.values().filter(|_| !members.is_empty()) {
+            crate::namespace::visit_namespace_objects(
+                &commit.namespace.root,
+                &mut |kind, hash| {
+                    let address = (kind, hash.to_owned());
+                    let bytes = if let Some(object) = prepared.get(&(kind, hash)) {
+                        for disk in members {
+                            install(disk, object.kind, &object.hash, &object.bytes)?;
+                        }
+                        object.bytes.clone()
+                    } else {
+                        let bytes = read_published_object_with(
+                            members,
+                            kind,
+                            hash,
+                            self.maximum,
+                            &mut fault,
+                            &mut read,
+                        )?;
+                        for disk in members {
+                            install(disk, kind, hash, &bytes)?;
+                        }
+                        bytes
+                    };
+                    if installed.len() < 16_384 {
+                        installed.insert(address);
+                    }
+                    AuthenticatedMetadataObject::authenticate(
+                        kind,
+                        hash,
+                        json_codec::from_slice(&bytes)?,
+                    )
+                },
+                &mut namespace_visited,
+            )?;
+        }
+        for object in &self.objects {
+            if matches!(
+                object.kind,
+                storage_contract::EVENT_SEGMENT_KIND
+                    | storage_contract::OPERATION_SEGMENT_KIND
+                    | storage_contract::NAMESPACE_PAGE_KIND
+                    | storage_contract::NAMESPACE_INDEX_KIND
+            ) && !installed.contains(&(object.kind, object.hash.clone()))
+            {
+                for disk in members {
+                    install(disk, object.kind, &object.hash, &object.bytes)?;
+                }
+                if installed.len() < 16_384 {
+                    installed.insert((object.kind, object.hash.clone()));
+                }
+            }
+        }
         let hash = self.descriptor.control_auth.hash();
         if let Some(object) = prepared.get(&("state-control-auth", hash)) {
             for disk in members {

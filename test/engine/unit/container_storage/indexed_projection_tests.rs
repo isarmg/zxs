@@ -476,8 +476,15 @@ fn warm_and_cold_container_bytes_match_full_scans_before_and_after_physical_appl
     after
         .file_notes
         .insert(fixture.file.clone(), "changed file note".into());
-    let owners = DerivedOwners::from_state(before);
-    let transition = ProjectionTransition::new(before, &after, Some(&owners)).unwrap();
+    let owners =
+        DerivedOwners::from_state(before, &crate::namespace::fixture_store::FixtureSource).unwrap();
+    let transition = ProjectionTransition::new(
+        before,
+        &after,
+        Some(&owners),
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     validate_new_projection_paths(&transition).unwrap();
     assert_eq!(
         projection_locations(transition.previous(), transition.next(), &fixture.file),
@@ -502,7 +509,13 @@ fn warm_and_cold_container_bytes_match_full_scans_before_and_after_physical_appl
         assert_eq!(fs::read(current.join("container.json")).unwrap(), *bytes);
     }
     fixture.assert_bodies_unchanged();
-    let cold = ProjectionTransition::new(before, &after, None).unwrap();
+    let cold = ProjectionTransition::new(
+        before,
+        &after,
+        None,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     let mut replay = prepare_names(&fixture.config, &resources, &cold, MAX_METADATA).unwrap();
     assert_eq!(staged_bytes(&mut replay), expected);
     replay.apply().unwrap();
@@ -518,8 +531,18 @@ fn deleted_migrated_version_retains_old_only_history_route_without_recreating_co
     after.versions.remove(&id("ver", 3));
     after.placements.remove(&id("ver", 3));
     after.content_states.remove(&id("ver", 3));
-    let owners = DerivedOwners::from_state(&fixture.state);
-    let transition = ProjectionTransition::new(&fixture.state, &after, Some(&owners)).unwrap();
+    let owners = DerivedOwners::from_state(
+        &fixture.state,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
+    let transition = ProjectionTransition::new(
+        &fixture.state,
+        &after,
+        Some(&owners),
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     let expected = fixture.expected(&fixture.state, &after);
     let old_history = ("C01".into(), id("history", 2), fixture.file.clone());
     assert!(expected.contains_key(&old_history));
@@ -543,8 +566,18 @@ fn per_object_budget_failure_leaves_physical_names_and_bodies_unmodified() {
     after
         .file_notes
         .insert(fixture.file.clone(), "x".repeat(4096));
-    let owners = DerivedOwners::from_state(&fixture.state);
-    let transition = ProjectionTransition::new(&fixture.state, &after, Some(&owners)).unwrap();
+    let owners = DerivedOwners::from_state(
+        &fixture.state,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
+    let transition = ProjectionTransition::new(
+        &fixture.state,
+        &after,
+        Some(&owners),
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     let mut names = Vec::new();
     for disk in &fixture.config.disks {
         for history in [id("history", 1), id("history", 2)] {

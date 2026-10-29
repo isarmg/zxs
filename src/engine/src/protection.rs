@@ -115,7 +115,13 @@ impl Engine {
             if actual!=expected_generation { return Err(Error::new(storage_contract::ErrorCode::GenerationMismatch,"protection policy changed; reread before updating")); }
             if state.protection_policies.get(id).is_some_and(|p|p.repository_id!=repository) { return Err(Error::new(storage_contract::ErrorCode::RequestBindingMismatch,"policy is bound to another repository")); }
             if state.protection_policies.get(id).is_some_and(|p|!p.inheritable||p.scope_directory_id.is_some()||p.scope_file_id.is_some()) { return Err(Error::new(storage_contract::ErrorCode::BackupConfigurationRequired,"scoped and retained settings must be changed through file or directory backup configuration")); }
-            if state.protection_policies.values().any(|p|p.inheritable&&p.policy_id!=id&&p.repository_id==repository&&backup_paths::scope_path(state,p).is_some_and(|path|name_policy::path_key(path)==name_policy::path_key(path_prefix))) { return Err(Error::new(storage_contract::ErrorCode::NameCollision,"an equivalent protection prefix already has a policy")); }
+            let equivalent=engine.with_namespace_source(|source|{
+                for p in state.protection_policies.values() {
+                    if p.inheritable&&p.policy_id!=id&&p.repository_id==repository&&backup_paths::scope_path(state,p,source)?.is_some_and(|path|name_policy::path_key(&path)==name_policy::path_key(path_prefix)) { return Ok(true); }
+                }
+                Ok(false)
+            })?;
+            if equivalent { return Err(Error::new(storage_contract::ErrorCode::NameCollision,"an equivalent protection prefix already has a policy")); }
             engine.route(&engine.file_placement_settings(repository,None,path_prefix)?.0,copies)?;
             let previous=state.protection_policies.get(id);
             let policy=ProtectionPolicy{policy_id:id.into(),repository_id:repository.into(),path_prefix:path_prefix.into(),target_copies:copies,inheritable:true,scope_directory_id:None,scope_file_id:None,backup_prefixes:previous.map(|policy|policy.backup_prefixes.clone()).unwrap_or_default(),generation:actual.checked_add(1).ok_or_else(||Error::new(storage_contract::ErrorCode::ResourceLimit,"policy generation exhausted"))?};
@@ -159,8 +165,11 @@ impl crate::engine::PlanningContext<'_> {
             .max_by_key(|r| r.path_prefix.len())
             .map(|r| r.primary_slot_id.clone())
             .unwrap_or_else(|| repo.primary_slot_id.clone());
-        let copies = backup_paths::effective_policy(self.state, repository, file_id, path)
-            .map(|p| p.target_copies)
+        let copies = self
+            .with_namespace_source(|source| {
+                backup_paths::effective_policy(self.state, repository, file_id, path, source)
+                    .map(|policy| policy.map(|p| p.target_copies))
+            })?
             .unwrap_or(repo.target_copies);
         Ok((primary, copies))
     }

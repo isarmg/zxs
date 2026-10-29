@@ -12,10 +12,11 @@ impl TreeSnapshot {
         let branch = request.branch;
         let (commit, snapshot) = branch_snapshot(engine.state(), branch, request.commit)?;
         #[cfg(test)]
-        tests::record_tree_projection(snapshot.entries.len());
+        tests::record_tree_projection(snapshot.namespace.entries as usize);
         let entries = engine.list_tree_at(branch, commit).map_err(error)?;
-        let pending_file_versions =
-            PendingSources::new(engine, branch, snapshot).pending_versions();
+        let pending_file_versions = PendingSources::new(engine, branch, snapshot)
+            .pending_versions()
+            .map_err(error)?;
         Ok(Self {
             branch_id: branch.to_owned(),
             commit_id: commit.to_owned(),
@@ -30,12 +31,12 @@ pub(super) fn resolve_entry(
     request: crate::ResolveEntry<'_>,
 ) -> Result<crate::ResolvedEntry, ApiError> {
     let (commit_id, commit) = branch_snapshot(engine.state(), request.branch, request.commit)?;
-    let entries = engine
-        .list_tree_at_ref(request.branch, commit_id)
+    let tree = engine
+        .namespace_tree_at(request.branch, commit_id)
         .map_err(error)?;
-    let entry = entries
-        .iter()
-        .find(|entry| entry.lookup_key() == request.path.key())
+    let entry = tree
+        .get_key(request.path.key())
+        .map_err(error)?
         .ok_or_else(|| {
             ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
@@ -47,7 +48,9 @@ pub(super) fn resolve_entry(
         Some(super::branch::capture_content(
             engine.state(),
             Some(&entry.version_id),
-            super::wire::pending_entry_source(engine, request.branch, commit, entry),
+            super::wire::pending_entry_source(engine, request.branch, commit, &entry)
+                .map_err(error)?
+                .as_deref(),
         ))
     } else {
         None
@@ -55,8 +58,8 @@ pub(super) fn resolve_entry(
     Ok(crate::ResolvedEntry {
         branch_id: request.branch.to_owned(),
         commit_id: commit_id.to_owned(),
-        entry: entry.clone(),
         version: engine.state().versions.get(&entry.version_id).cloned(),
+        entry,
         content,
     })
 }
@@ -102,7 +105,7 @@ pub(super) fn lookup_current(
 ) -> Result<Option<storage_contract::Entry>, ApiError> {
     branch_snapshot(engine.state(), branch, None)?;
     let tree = engine.namespace_tree(branch).map_err(error)?;
-    Ok(tree.get_key(path.key()).cloned())
+    tree.get_key(path.key()).map_err(error)
 }
 
 impl DirectorySnapshot {
@@ -143,7 +146,7 @@ impl DirectorySnapshot {
                 return Err(ApiError::invalid("invalid root directory identity"));
             }
         } else {
-            let directory = tree.get_key(key);
+            let directory = tree.get_key(key).map_err(error)?;
             if directory.is_none_or(|entry| {
                 entry.kind != storage_contract::NamespaceEntryKind::Directory
                     || entry.entry_id != entry_id
@@ -162,14 +165,14 @@ impl DirectorySnapshot {
                 more: false,
             }),
             crate::DirectorySelection::Page { after, .. } => {
-                Self::page(&snapshot.commit_id, tree.entries(), key, after)
+                Self::page(&snapshot.commit_id, &tree, key, after)
             }
         }
     }
 
     fn page(
         commit_id: &str,
-        entries: &[storage_contract::Entry],
+        tree: &storage_engine::NamespaceTree<'_>,
         key: &str,
         after: Option<&str>,
     ) -> Result<Self, ApiError> {
@@ -181,10 +184,15 @@ impl DirectorySnapshot {
         } else {
             format!("{key}/")
         };
-        let start = entries.partition_point(|entry| {
-            entry.lookup_key() < prefix.as_str()
-                || after.is_some_and(|after| entry.lookup_key() <= after)
-        });
+        // Wire cursors carry the last returned entry's full lookup key; the
+        // paged namespace positions by component key within one directory.
+        // The cursor is located through the directory's index pages before
+        // this page's entries are read; descendants are never enumerated.
+        let after = after.map(|after| after.strip_prefix(prefix.as_str()).unwrap_or(after));
+        let children = tree
+            .directory_page(key, after, MAX_DIRECTORY_PAGE_ENTRIES + 1)
+            .map_err(error)?
+            .unwrap_or_default();
         let mut page = Self {
             commit_id: commit_id.into(),
             entries: Vec::new(),
@@ -198,14 +206,8 @@ impl DirectorySnapshot {
         })
         .expect("invariant: internal JSON serialization succeeds")
         .len();
-        for entry in &entries[start..] {
-            let Some(rest) = entry.lookup_key().strip_prefix(&prefix) else {
-                break;
-            };
-            if rest.is_empty() || rest.contains('/') {
-                continue;
-            }
-            let extra = json_codec::to_vec(entry)
+        for entry in children {
+            let extra = json_codec::to_vec(&entry)
                 .expect("invariant: internal JSON serialization succeeds")
                 .len()
                 + usize::from(!page.entries.is_empty());
@@ -219,7 +221,7 @@ impl DirectorySnapshot {
                 break;
             }
             bytes += extra;
-            page.entries.push(entry.clone());
+            page.entries.push(entry);
         }
         Ok(page)
     }

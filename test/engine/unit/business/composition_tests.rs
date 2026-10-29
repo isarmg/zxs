@@ -582,10 +582,20 @@ fn content_save_with_equivalent_spelling_preserves_the_existing_display_path() {
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-        assert_eq!(entries(&e, &r)[lookup_path].version_id, current.version_id);
+        // Display paths are reconstructed from component names: a file rename
+        // respells its own leaf, while ancestor spelling stays owned by the
+        // directory entry (the flat model allowed incoherent per-entry paths).
+        let renamed_display = match (original_path.rsplit_once('/'), lookup_path.rsplit_once('/')) {
+            (Some((parent, _)), Some((_, leaf))) => format!("{parent}/{leaf}"),
+            _ => lookup_path.to_owned(),
+        };
+        assert_eq!(
+            entries(&e, &r)[renamed_display.as_str()].version_id,
+            current.version_id
+        );
         assert!(e.state().file_path_nodes.values().any(|node| {
             node.file_id == current.file_id
-                && node.path == lookup_path
+                && node.path == renamed_display
                 && node.version_id == current.version_id
         }));
     }
@@ -623,20 +633,25 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
             .file_write_origins
             .insert(file.into(), "inherited".into());
     }
-    let mut after = vec![before[0].clone(), before[1].clone(), before[0].clone()];
+    let mut after = vec![before[0].clone(), before[1].clone()];
     after[0].version_id = "updated".into();
-    // A later same-key entry must not shadow the original match before
-    // namespace validation rejects duplicates at the caller.
-    after[2].entry_id = "different".into();
+    // The paged wire cannot carry duplicate sibling keys at all, so the old
+    // shadowing hazard is structurally impossible; bookkeeping still resolves
+    // by normalized path key against both views.
+    let before_namespace = crate::namespace::fixture_store::namespace(&before);
+    let after_namespace = crate::namespace::fixture_store::namespace(&after);
     let expected = state.file_contexts.clone();
+    let mut fresh = crate::namespace::NamespaceObjects::new();
     super::directory::namespace_locations(
         &mut state,
         "repo",
-        &before,
-        &after,
+        &before_namespace,
+        &after_namespace,
         &[NamespaceOperation::parse(NamespaceOperationKind::Delete, "Gone.txt", None).unwrap()],
         "admin",
         OperationId::generate(),
+        &crate::namespace::fixture_store::FixtureSource,
+        &mut fresh,
     )
     .unwrap();
     assert_eq!(state.file_contexts.len(), 2);
@@ -683,7 +698,14 @@ fn system_clock_seconds_preserve_epoch_and_reject_before_epoch() {
 #[test]
 fn system_clock_receipt_replay_bypasses_new_mutation_planning() {
     let (_temp, engine, _) = fixture();
-    let receipt = engine.state.operations.values().next().unwrap();
+    let receipt = engine
+        .state
+        .operations
+        .tail()
+        .first()
+        .unwrap()
+        .result
+        .clone();
     let sequence = engine.state.sequence;
     let plan = engine
         .plan_mutation_digest(

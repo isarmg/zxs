@@ -37,7 +37,9 @@ fn retained_policy_manifests_require_bindings_and_unique_current_scopes() {
         })
         .unwrap();
     let current = configured.result["policy"]["policy_id"].as_str().unwrap();
-    let mut manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
+    let mut manifest =
+        HistoryManifest::fixture_from_state(&engine, engine.state(), &repo.history_tree_id)
+            .unwrap();
     let mut retained = manifest.protection_policies[current].clone();
     retained.policy_id = new_id("policy");
     retained.inheritable = false;
@@ -46,30 +48,46 @@ fn retained_policy_manifests_require_bindings_and_unique_current_scopes() {
     manifest
         .file_backup_policies
         .insert(file.file_id.clone(), id.clone());
-    manifest.validate().unwrap();
+    manifest
+        .fixture_validate(&engine, &Default::default())
+        .unwrap();
     let mut unbound = manifest.clone();
     unbound.file_backup_policies.remove(&file.file_id);
-    assert!(unbound.validate().is_err());
+    assert!(
+        unbound
+            .fixture_validate(&engine, &Default::default())
+            .is_err()
+    );
     let mut ambiguous = manifest.clone();
     ambiguous
         .protection_policies
         .get_mut(&id)
         .unwrap()
         .inheritable = true;
-    assert!(ambiguous.validate().is_err());
+    assert!(
+        ambiguous
+            .fixture_validate(&engine, &Default::default())
+            .is_err()
+    );
     let mut dangling = manifest.clone();
     dangling
         .protection_policies
         .get_mut(&id)
         .unwrap()
         .scope_file_id = Some(new_id("file"));
-    assert!(dangling.validate().is_err());
+    assert!(
+        dangling
+            .fixture_validate(&engine, &Default::default())
+            .is_err()
+    );
     manifest
         .protection_policies
         .get_mut(&id)
         .unwrap()
         .scope_file_id = None;
-    manifest.validate().unwrap();
+    manifest
+        .fixture_validate(&engine, &Default::default())
+        .unwrap();
 }
 
 fn initialize(root: &Path) -> Engine {
@@ -404,6 +422,8 @@ fn paged_pending_recovery_repairs_leaf_index_and_root_and_checkpoint_checks_them
             )
             .unwrap();
         let mut next = engine.state().clone();
+        // Production planners begin tracking immediately after the clone.
+        next.begin_tracking();
         next.sequence = engine.next_slot;
         let original = next.commits[&next.histories[&repo.history_tree_id].root_commit_id].clone();
         let mut parent = original.commit_id.clone();
@@ -415,10 +435,11 @@ fn paged_pending_recovery_repairs_leaf_index_and_root_and_checkpoint_checks_them
             parent = commit.commit_id.clone();
             next.commits.insert(commit.commit_id.clone(), commit);
         }
-        let mut result = next.operations.values().next().unwrap().clone();
-        result.operation_id = storage_contract::OperationId::generate();
-        result.sequence = next.sequence;
-        next.operations.insert(result.operation_id, result.clone());
+        let mut entry = next.operations.tail().last().unwrap().clone();
+        entry.result.operation_id = storage_contract::OperationId::generate();
+        entry.result.sequence = next.sequence;
+        let result = entry.result.clone();
+        next.operations.push(entry).unwrap();
         engine.inject_fault_once("after_accept_2");
         assert!(
             engine
@@ -520,7 +541,8 @@ fn paged_history_resolves_disjoint_replicas_without_read_repair() {
     assert_ne!(
         object_hash(
             "history-manifest",
-            &HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap()
+            &HistoryManifest::fixture_from_state(&engine, &engine.state, &repo.history_tree_id)
+                .unwrap()
         )
         .unwrap(),
         hash
@@ -563,7 +585,9 @@ fn admitted_snapshot_binding_rejects_rehashed_different_and_invalid_histories() 
         panic!("missing history coverage must fail");
     };
     assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
-    let original = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
+    let original =
+        HistoryManifest::fixture_from_state(&engine, engine.state(), &repo.history_tree_id)
+            .unwrap();
     for invalid in [false, true] {
         let mut manifest = original.clone();
         if invalid {
@@ -658,7 +682,7 @@ fn paged_package_missing_leaf_and_flat_proof_substitution_fail_closed() {
     let report = engine
         .export_history_package(&repo.history_tree_id, &package)
         .unwrap();
-    let (manifest, proof, _) = load_package(&package).unwrap();
+    let (manifest, proof, _, _) = load_package(&package).unwrap();
     assert_eq!(proof.manifest_hash, report.manifest_hash);
     let proof_bytes = fs::read(package.join("publication.json")).unwrap();
     let mut unsupported = json_codec::to_value(&proof).unwrap();
@@ -838,7 +862,8 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             body_proofs[&node.version_id]
         );
     }
-    let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
+    let manifest =
+        HistoryManifest::fixture_from_state(&engine, &engine.state, &repo.history_tree_id).unwrap();
     assert_eq!(manifest.directory_branches[&id].directory_id, directory);
     assert!(!manifest.directory_branches[&id].directory_refs.is_empty());
     assert_eq!(manifest.file_write_origins.get(&frozen.file_id), Some(&id));
@@ -1054,7 +1079,8 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
         saved_tree
     );
     assert_eq!(engine.state.file_contexts, saved_contexts);
-    let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
+    let manifest =
+        HistoryManifest::fixture_from_state(&engine, &engine.state, &repo.history_tree_id).unwrap();
     let a_key = format!("{}/a/f.txt", repo.repository_id);
     let b_key = format!("{}/b/f.txt", repo.repository_id);
     assert_eq!(
@@ -1254,7 +1280,8 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
+    let manifest =
+        HistoryManifest::fixture_from_state(&engine, &engine.state, &repo.history_tree_id).unwrap();
     assert_eq!(
         manifest.content_states[&old.version_id],
         storage_contract::ContentState::Purged
@@ -1266,7 +1293,10 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .unwrap()
         .parent_node_ids = vec![node.clone()];
     assert_eq!(
-        cyclic.validate().unwrap_err().code(),
+        cyclic
+            .fixture_validate(&engine, &Default::default())
+            .unwrap_err()
+            .code(),
         storage_contract::ErrorCode::HistoryPackageInvalid
     );
     let mut wrong_body = manifest.clone();
@@ -1276,7 +1306,10 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .unwrap()
         .version_id = latest.version_id.clone();
     assert_eq!(
-        wrong_body.validate().unwrap_err().code(),
+        wrong_body
+            .fixture_validate(&engine, &Default::default())
+            .unwrap_err()
+            .code(),
         storage_contract::ErrorCode::HistoryPackageInvalid
     );
     let mut wrong_parent = manifest.clone();
@@ -1284,7 +1317,10 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .file_node_parents
         .insert(latest.version_id.clone(), vec![latest.version_id.clone()]);
     assert_eq!(
-        wrong_parent.validate().unwrap_err().code(),
+        wrong_parent
+            .fixture_validate(&engine, &Default::default())
+            .unwrap_err()
+            .code(),
         storage_contract::ErrorCode::HistoryPackageInvalid
     );
     let package = temporary.path().join("package");
@@ -1420,7 +1456,8 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
             },
         )
         .unwrap();
-    let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
+    let manifest =
+        HistoryManifest::fixture_from_state(&engine, &engine.state, &repo.history_tree_id).unwrap();
     // Shared branches can advance without rewriting an older composition.
     assert_ne!(
         manifest.directory_branches[&first].entries[0].version_id,
@@ -1432,7 +1469,10 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
     );
     let bad = |manifest: &HistoryManifest| {
         assert_eq!(
-            manifest.validate().unwrap_err().code(),
+            manifest
+                .fixture_validate(&engine, &Default::default())
+                .unwrap_err()
+                .code(),
             storage_contract::ErrorCode::HistoryPackageInvalid
         )
     };
@@ -1695,7 +1735,8 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
     let selected = engine.list_tree(&branch).unwrap();
     assert_eq!(selected[0].version_id, file.version_id);
     assert_eq!(selected[0].size, file.size);
-    let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
+    let manifest =
+        HistoryManifest::fixture_from_state(&engine, &engine.state, &repo.history_tree_id).unwrap();
     let mut invalid = manifest.clone();
     invalid
         .branches
@@ -1704,7 +1745,10 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
         .pending_file_versions
         .insert(file.file_id.clone(), new_id("ver"));
     assert_eq!(
-        invalid.validate().unwrap_err().code(),
+        invalid
+            .fixture_validate(&engine, &Default::default())
+            .unwrap_err()
+            .code(),
         storage_contract::ErrorCode::HistoryPackageInvalid
     );
     let pending_commit = engine.state.branches[&branch].head_commit_id.clone();
@@ -1720,7 +1764,10 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
         .pending_file_versions
         .insert(file.file_id.clone(), new_id("ver"));
     assert_eq!(
-        invalid.validate().unwrap_err().code(),
+        invalid
+            .fixture_validate(&engine, &Default::default())
+            .unwrap_err()
+            .code(),
         storage_contract::ErrorCode::HistoryPackageInvalid
     );
     let package = temp.path().join("package");
@@ -1991,8 +2038,9 @@ fn split_package_restores_full_history_after_all_original_paths_are_removed() {
     assert_eq!(graph.commits.len(), 2);
     let mut contents = Vec::new();
     for commit in &graph.commits {
-        for entry in commit
-            .entries
+        for entry in restored
+            .namespace_entries(&commit.namespace)
+            .unwrap()
             .iter()
             .filter(|e| e.kind == NamespaceEntryKind::File)
         {
@@ -2168,7 +2216,7 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
     source
         .export_history_package(&repo.history_tree_id, &package)
         .unwrap();
-    let (baseline, proof, _) = load_package(&package).unwrap();
+    let (baseline, proof, _, _) = load_package(&package).unwrap();
     assert!(!package_version(&package, &old).exists());
     for status in [
         storage_contract::ContentState::Purged,
@@ -2200,7 +2248,9 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
                 .collect::<Vec<_>>();
             let next_slot = restored.next_slot;
             if malformed == "none" {
-                manifest.validate().unwrap();
+                manifest
+                    .fixture_validate(&source, &Default::default())
+                    .unwrap();
                 assert_eq!(
                     offline_check_history_package(&package).unwrap().tombstones,
                     1
@@ -2218,7 +2268,10 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
                 assert_eq!(restored.state.content_states[&old], status);
             } else {
                 assert_eq!(
-                    manifest.validate().unwrap_err().code(),
+                    manifest
+                        .fixture_validate(&source, &Default::default())
+                        .unwrap_err()
+                        .code(),
                     storage_contract::ErrorCode::HistoryPackageInvalid
                 );
                 assert_eq!(
@@ -2364,6 +2417,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
     let branch = engine
         .file_context(&repo.repository_id, "file.txt")
         .unwrap()
+        .unwrap()
         .branch_id;
     let tagged = engine
         .update_file_node_tags(crate::FileNodeTagsUpdateRequest {
@@ -2494,7 +2548,8 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
+    let manifest =
+        HistoryManifest::fixture_from_state(&engine, &engine.state, &repo.history_tree_id).unwrap();
     assert_eq!(manifest.file_metadata_nodes.len(), 2);
     assert_eq!(manifest.file_branch_merges.len(), 1);
     assert_eq!(manifest.file_branch_aliases[&right], left);
@@ -2504,12 +2559,20 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         .get_mut(&tagged)
         .unwrap()
         .parent_node_ids = vec![merged.clone()];
-    assert!(cycle.validate().is_err());
+    assert!(
+        cycle
+            .fixture_validate(&engine, &Default::default())
+            .is_err()
+    );
     let mut alias_cycle = manifest.clone();
     alias_cycle
         .file_branch_aliases
         .insert(left.clone(), right.clone());
-    assert!(alias_cycle.validate().is_err());
+    assert!(
+        alias_cycle
+            .fixture_validate(&engine, &Default::default())
+            .is_err()
+    );
     let mut scope = manifest.clone();
     scope
         .file_branch_merges
@@ -2517,7 +2580,11 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         .next()
         .unwrap()
         .input_branch_ids[0] = repo.main_branch_id.clone();
-    assert!(scope.validate().is_err());
+    assert!(
+        scope
+            .fixture_validate(&engine, &Default::default())
+            .is_err()
+    );
     let package = temp.path().join("package");
     engine
         .export_history_package(&repo.history_tree_id, &package)
@@ -2576,7 +2643,9 @@ fn history_notes_use_the_current_write_format_without_legacy_limits() {
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"note target");
-    let manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
+    let manifest =
+        HistoryManifest::fixture_from_state(&engine, engine.state(), &repo.history_tree_id)
+            .unwrap();
     let version = manifest.versions.values().next().unwrap();
     for note in [String::new(), "x".repeat(128), "界".repeat(42)] {
         let mut valid = manifest.clone();
@@ -2584,7 +2653,9 @@ fn history_notes_use_the_current_write_format_without_legacy_limits() {
             .file_notes
             .insert(version.file_id.clone(), note.clone());
         valid.version_notes.insert(version.version_id.clone(), note);
-        valid.validate().unwrap();
+        valid
+            .fixture_validate(&engine, &Default::default())
+            .unwrap();
     }
     for note in [
         "x".repeat(129),
@@ -2605,7 +2676,10 @@ fn history_notes_use_the_current_write_format_without_legacy_limits() {
                     .insert(version.version_id.clone(), note.clone());
             }
             assert_eq!(
-                invalid.validate().unwrap_err().code(),
+                invalid
+                    .fixture_validate(&engine, &Default::default())
+                    .unwrap_err()
+                    .code(),
                 storage_contract::ErrorCode::HistoryPackageInvalid,
                 "{scope}"
             );
@@ -2633,19 +2707,22 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
         "folder/file.txt",
         b"valid file",
     );
-    let manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
+    let manifest =
+        HistoryManifest::fixture_from_state(&engine, engine.state(), &repo.history_tree_id)
+            .unwrap();
+    let manifest_entries: Vec<Entry> = manifest
+        .commits
+        .values()
+        .flat_map(|commit| engine.namespace_entries(&commit.namespace).unwrap())
+        .collect();
     assert!(
-        manifest
-            .commits
-            .values()
-            .flat_map(|commit| &commit.entries)
+        manifest_entries
+            .iter()
             .any(|entry| entry.kind == NamespaceEntryKind::Directory)
     );
     assert!(
-        manifest
-            .commits
-            .values()
-            .flat_map(|commit| &commit.entries)
+        manifest_entries
+            .iter()
             .any(|entry| entry.kind == NamespaceEntryKind::File)
     );
     let valid_package = temporary.path().join("valid-package");
@@ -2654,19 +2731,22 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
         .unwrap();
     offline_check_history_package(&valid_package).unwrap();
 
-    let mut raw = json_codec::to_value(&manifest).unwrap();
-    let entries = raw["commits"][&manifest.history.root_commit_id]["entries"]
-        .as_array_mut()
-        .unwrap();
-    entries.push(json_codec::json!({
-        "entry_id":new_id("entry"), "path":"ghost", "name":"ghost",
-        "lookup_key":"ghost", "kind":"unsupported", "file_id":"",
-        "version_id":"", "size":"0"
-    }));
-    assert!(json_codec::from_value::<HistoryManifest>(raw).is_err());
+    // Entries now live in namespace pages: an unsupported entry kind is
+    // rejected at the page read boundary instead of the manifest wire.
+    assert!(
+        json_codec::from_value::<storage_contract::NamespacePage>(json_codec::json!({
+            "format":"namespace-page",
+            "entries":[{"kind":"unsupported","entry_id":new_id("entry"),"name":"ghost",
+                "file_id":"","version_id":"","size":"0"}]
+        }))
+        .is_err()
+    );
 
+    // A directory entry with a file payload is unrepresentable in the paged
+    // wire (the Directory variant carries no payload fields), so only the
+    // identifier envelopes remain corruptible.
     let version = manifest.versions.values().next().unwrap();
-    for case in ["entry_id", "file_id", "version_id", "directory_payload"] {
+    for case in ["entry_id", "file_id", "version_id"] {
         let mut entry = Entry {
             entry_id: new_id("entry"),
             path: name_policy::PortablePath::parse("ghost").unwrap(),
@@ -2688,20 +2768,19 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
                     entry.version_id = "not-a-version-id".into();
                 }
             }
-            "directory_payload" => {
-                entry.file_id = new_id("file");
-                entry.version_id = new_id("ver");
-                entry.size = 1;
-            }
             _ => unreachable!(),
         }
+        let (namespace, objects) = crate::namespace::fixture_namespace(&[entry]);
         let mut invalid = manifest.clone();
         invalid
             .commits
             .get_mut(&manifest.history.root_commit_id)
             .unwrap()
-            .entries = vec![entry];
-        assert!(invalid.validate().is_err(), "{case}");
+            .namespace = namespace;
+        assert!(
+            invalid.fixture_validate(&engine, &objects).is_err(),
+            "{case}"
+        );
     }
 }
 
@@ -2742,7 +2821,9 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
         )
         .unwrap();
     let directory = directory.result["directory_branch_id"].as_str().unwrap();
-    let manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
+    let manifest =
+        HistoryManifest::fixture_from_state(&engine, engine.state(), &repo.history_tree_id)
+            .unwrap();
     let package = temporary.path().join("valid-package");
     engine
         .export_history_package(&repo.history_tree_id, &package)
@@ -2758,7 +2839,10 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
                 invalid.directory_branches.get_mut(directory).unwrap().name = name.clone();
             }
             assert_eq!(
-                invalid.validate().unwrap_err().code(),
+                invalid
+                    .fixture_validate(&engine, &Default::default())
+                    .unwrap_err()
+                    .code(),
                 storage_contract::ErrorCode::MetadataTooLong,
                 "{scope}: {name}"
             );
@@ -2780,7 +2864,9 @@ fn namespace_deletion_facts_validate_without_snapshot_or_content_dependencies() 
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let mut manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
+    let mut manifest =
+        HistoryManifest::fixture_from_state(&engine, engine.state(), &repo.history_tree_id)
+            .unwrap();
     let root = manifest.history.root_commit_id.clone();
     // An intermediate path may be absent from every snapshot; repeated paths
     // represent separate sequential operations rather than duplicate identities.
@@ -2794,7 +2880,9 @@ fn namespace_deletion_facts_validate_without_snapshot_or_content_dependencies() 
             2
         ],
     });
-    manifest.validate().unwrap();
+    manifest
+        .fixture_validate(&engine, &Default::default())
+        .unwrap();
     assert!(manifest.versions.is_empty());
     let encoded = canonical_json(&manifest).unwrap();
     let decoded: HistoryManifest = json_codec::from_slice(&encoded).unwrap();
@@ -2813,7 +2901,12 @@ fn namespace_deletion_facts_validate_without_snapshot_or_content_dependencies() 
             .unwrap()
             .paths[0]
             .path = path.into();
-        assert!(invalid.validate().is_err(), "accepted {path:?}");
+        assert!(
+            invalid
+                .fixture_validate(&engine, &Default::default())
+                .is_err(),
+            "accepted {path:?}"
+        );
     }
     for timestamp in [u64::MAX, i64::MAX as u64] {
         let mut invalid = manifest.clone();
@@ -2825,7 +2918,11 @@ fn namespace_deletion_facts_validate_without_snapshot_or_content_dependencies() 
             .as_mut()
             .unwrap()
             .timestamp = timestamp;
-        assert!(invalid.validate().is_err());
+        assert!(
+            invalid
+                .fixture_validate(&engine, &Default::default())
+                .is_err()
+        );
     }
     manifest
         .commits
@@ -2836,7 +2933,11 @@ fn namespace_deletion_facts_validate_without_snapshot_or_content_dependencies() 
         .unwrap()
         .paths
         .clear();
-    assert!(manifest.validate().is_err());
+    assert!(
+        manifest
+            .fixture_validate(&engine, &Default::default())
+            .is_err()
+    );
 }
 
 #[test]
@@ -2923,10 +3024,10 @@ fn namespace_deletions_survive_export_restore_and_replay_without_operation_recor
         Some(&facts)
     );
     assert!(
-        !restored
-            .state()
-            .operations
-            .contains_key(&engine.state().commits[&commit_id].operation_id)
+        restored
+            .published_receipt(engine.state().commits[&commit_id].operation_id)
+            .unwrap()
+            .is_none()
     );
     assert_eq!(restored.state().versions.len(), report.versions);
 }
@@ -3026,7 +3127,7 @@ fn net_zero_namespace_sequence_persists_deletion_once() {
         .commit_id
         .unwrap();
     assert_ne!(commit, workspace.base_head);
-    assert!(engine.state().commits[&commit].entries.is_empty());
+    assert_eq!(engine.state().commits[&commit].namespace.entries, 0);
     let facts = engine.state().commits[&commit]
         .namespace_deletions
         .as_ref()
@@ -3081,7 +3182,8 @@ fn manifest_record_projection_is_scoped_shared_and_mutation_isolated() {
             .unwrap();
     }
     let mut source = engine.state().clone();
-    let mut manifest = HistoryManifest::from_state(&source, &first.history_tree_id).unwrap();
+    let mut manifest =
+        HistoryManifest::fixture_from_state(&engine, &source, &first.history_tree_id).unwrap();
     assert!(!manifest.directory_trees.is_empty());
     let expected_commits = source
         .commits
@@ -3195,13 +3297,20 @@ fn manifest_content_state_coverage_rejects_equal_length_wrong_version_keys() {
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"body");
-    let mut manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
-    manifest.validate().unwrap();
+    let mut manifest =
+        HistoryManifest::fixture_from_state(&engine, engine.state(), &repo.history_tree_id)
+            .unwrap();
+    manifest
+        .fixture_validate(&engine, &Default::default())
+        .unwrap();
     let version = manifest.versions.keys().next().unwrap().clone();
     let state = manifest.content_states.remove(&version).unwrap();
     manifest.content_states.insert(new_id("ver"), state);
     assert_eq!(
-        manifest.validate().unwrap_err().code(),
+        manifest
+            .fixture_validate(&engine, &Default::default())
+            .unwrap_err()
+            .code(),
         storage_contract::ErrorCode::HistoryPackageInvalid
     );
 }
@@ -3303,7 +3412,7 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
     engine
         .export_history_package(&repo.history_tree_id, &package)
         .unwrap();
-    let (mut baseline, proof, _) = load_package(&package).unwrap();
+    let (mut baseline, proof, _, _) = load_package(&package).unwrap();
     let first_node = baseline.file_branch_merges[&first_merge]
         .result_node_id
         .clone();
@@ -3321,7 +3430,9 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
     baseline
         .file_branch_merges
         .insert(second_merge.clone(), event);
-    baseline.validate().unwrap();
+    baseline
+        .fixture_validate(&engine, &Default::default())
+        .unwrap();
     rebind_test_package(
         &package,
         &temp.path().join("proof-valid"),
@@ -3437,10 +3548,20 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let owners = crate::state_projection::DerivedOwners::from_state(&before);
-    let delta = crate::state_projection::ProjectionDelta::between(&before, engine.state(), &owners)
-        .unwrap()
-        .expect("the real rename retains an exact history projection write set");
+    let (owners, delta) = engine
+        .with_namespace_source(|source| {
+            let owners = crate::state_projection::DerivedOwners::from_state(&before, source)?;
+            let delta = crate::state_projection::ProjectionDelta::between(
+                &before,
+                engine.state(),
+                &owners,
+                source,
+            )?;
+            Ok((owners, delta))
+        })
+        .unwrap();
+    let _ = owners;
+    let delta = delta.expect("the real rename retains an exact history projection write set");
     assert_eq!(delta.histories.len(), 1);
     let edits = &delta.histories[&repo.history_tree_id];
     assert_eq!(edits.maps.len(), 1);
@@ -3448,7 +3569,11 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
         edits.maps[&crate::state_projection::Field::Branches].len(),
         1
     );
-    let (expected, objects) = prepare_history_manifests(engine.state(), MAX_METADATA).unwrap();
+    let (expected, objects) = engine
+        .with_namespace_source(|source| {
+            prepare_history_manifests(engine.state(), MAX_METADATA, source)
+        })
+        .unwrap();
     let disk = &engine.config.disks[0];
     let scanned = scan(disk).unwrap();
     let record = &scanned
@@ -3475,23 +3600,29 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
 
 #[test]
 fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() {
-    fn precise(before: &State, after: &State, history: &str) {
-        let owners = crate::state_projection::DerivedOwners::from_state(before);
-        let delta = crate::state_projection::ProjectionDelta::between(before, after, &owners)
-            .unwrap()
-            .expect("ordinary saves and metadata writes have exact map provenance");
-        assert_eq!(
-            delta
-                .histories
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            vec![history]
-        );
-        assert_eq!(
-            delta.owners,
-            crate::state_projection::DerivedOwners::from_state(after)
-        );
+    fn precise(engine: &Engine, before: &State, after: &State, history: &str) {
+        engine
+            .with_namespace_source(|source| {
+                let owners = crate::state_projection::DerivedOwners::from_state(before, source)?;
+                let delta = crate::state_projection::ProjectionDelta::between(
+                    before, after, &owners, source,
+                )?
+                .expect("ordinary saves and metadata writes have exact map provenance");
+                assert_eq!(
+                    delta
+                        .histories
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    vec![history]
+                );
+                assert_eq!(
+                    delta.owners,
+                    crate::state_projection::DerivedOwners::from_state(after, source)?
+                );
+                Ok(())
+            })
+            .unwrap();
     }
     let temp = tempfile::tempdir().unwrap();
     let mut engine = initialize(temp.path());
@@ -3510,7 +3641,7 @@ fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() 
     ] {
         let before = engine.state().clone();
         save(&mut engine, &repo.main_branch_id, body);
-        precise(&before, engine.state(), &repo.history_tree_id);
+        precise(&engine, &before, engine.state(), &repo.history_tree_id);
     }
     let entry = engine
         .list_tree(&repo.main_branch_id)
@@ -3546,7 +3677,7 @@ fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() 
                 storage_contract::OperationId::generate(),
             )
             .unwrap();
-        precise(&before, engine.state(), &repo.history_tree_id);
+        precise(&engine, &before, engine.state(), &repo.history_tree_id);
     }
     let before = engine.state().clone();
     engine
@@ -3560,8 +3691,12 @@ fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() 
             operation_id: storage_contract::OperationId::generate(),
         })
         .unwrap();
-    precise(&before, engine.state(), &repo.history_tree_id);
-    let (catalog, objects) = prepare_history_manifests(engine.state(), MAX_METADATA).unwrap();
+    precise(&engine, &before, engine.state(), &repo.history_tree_id);
+    let (catalog, objects) = engine
+        .with_namespace_source(|source| {
+            prepare_history_manifests(engine.state(), MAX_METADATA, source)
+        })
+        .unwrap();
     let disk = &engine.config.disks[0];
     let scanned = scan(disk).unwrap();
     let record = &scanned

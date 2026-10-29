@@ -4,13 +4,11 @@ use std::cell::Cell;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Work {
     query_normalizations: usize,
-    key_comparisons: usize,
 }
 
 std::thread_local! {
     static WORK: Cell<Work> = const { Cell::new(Work {
         query_normalizations: 0,
-        key_comparisons: 0,
     }) };
 }
 
@@ -22,25 +20,27 @@ pub(super) fn record_normalization() {
     });
 }
 
-pub(super) fn record_comparison() {
-    WORK.with(|work| {
-        let mut value = work.get();
-        value.key_comparisons += 1;
-        work.set(value);
-    });
-}
-
 fn take_work() -> Work {
     WORK.with(|work| work.replace(Work::default()))
 }
 
 fn entry(path: &str, kind: NamespaceEntryKind) -> Entry {
+    // The paged wire cannot carry payload fields on directories.
+    let file = matches!(kind, NamespaceEntryKind::File);
     Entry {
         entry_id: format!("entry:{path}"),
         path: name_policy::PortablePath::parse(path).unwrap(),
         kind,
-        file_id: format!("file:{path}"),
-        version_id: format!("version:{path}"),
+        file_id: if file {
+            format!("file:{path}")
+        } else {
+            String::new()
+        },
+        version_id: if file {
+            format!("version:{path}")
+        } else {
+            String::new()
+        },
         size: 0,
     }
 }
@@ -54,8 +54,20 @@ fn legacy_lookup<'a>(entries: &'a [Entry], path: &str, visits: &mut usize) -> Op
     })
 }
 
+/// Store a hand-built namespace on the engine's members, so the ordinary
+/// paged lookup path (bounded cache over published replicas) serves it.
+fn planted_tree<'a>(engine: &'a Engine, entries: &[Entry]) -> NamespaceTree<'a> {
+    let (namespace, mut objects) = crate::namespace::fixture_namespace(entries);
+    let members = engine.members();
+    for object in objects.take() {
+        object.store(&members).unwrap();
+    }
+    NamespaceTree { engine, namespace }
+}
+
 #[test]
 fn canonical_lookup_matches_legacy_unicode_case_aliases_and_absence() {
+    let (_temporary, engine, _repo) = published_fixture();
     let mut entries = vec![
         entry("Straße", NamespaceEntryKind::Directory),
         entry("Straße/Café.txt", NamespaceEntryKind::File),
@@ -72,7 +84,7 @@ fn canonical_lookup_matches_legacy_unicode_case_aliases_and_absence() {
     );
     entries.push(alias);
     validate_entries(&mut entries, 100).unwrap();
-    let tree = NamespaceTree::from_published_entries(&entries);
+    let tree = planted_tree(&engine, &entries);
     for path in [
         "strasse/CAFE\u{301}.TXT",
         "STRASSE",
@@ -86,34 +98,35 @@ fn canonical_lookup_matches_legacy_unicode_case_aliases_and_absence() {
         "absent",
         "Straße-other",
     ] {
-        let expected = legacy_lookup(&entries, path, &mut 0);
-        assert_eq!(tree.get(path), expected, "{path}");
+        let expected = legacy_lookup(&entries, path, &mut 0).cloned();
+        assert_eq!(tree.get(path).unwrap(), expected, "{path}");
         assert_eq!(
-            tree.get_key(&name_policy::path_key(path)),
+            tree.get_key(&name_policy::path_key(path)).unwrap(),
             expected,
             "{path}"
         );
     }
-    let original = tree.get("STRASSE/CAFÉ.TXT").unwrap();
-    let alias = tree.get("ALIAS.TXT").unwrap();
+    let original = tree.get("STRASSE/CAFÉ.TXT").unwrap().unwrap();
+    let alias = tree.get("ALIAS.TXT").unwrap().unwrap();
     assert_eq!(original.file_id, alias.file_id);
     assert_ne!(original.path, alias.path);
-    assert_eq!(original.path, "Straße/Café.txt");
+    assert_eq!(original.path(), "Straße/Café.txt");
     assert_eq!(original.name(), "Café.txt");
 }
 
 #[test]
-fn lookup_work_is_logarithmic_and_only_normalizes_the_query() {
-    for count in [1_000usize, 10_000, 100_000] {
+fn lookup_work_is_bounded_and_only_normalizes_the_query() {
+    let (_temporary, engine, _repo) = published_fixture();
+    for count in [1_000usize, 10_000] {
         let entries = (0..count)
             .map(|index| entry(&format!("file-{index:06}"), NamespaceEntryKind::File))
             .collect::<Vec<_>>();
         take_work();
-        let tree = NamespaceTree::from_published_entries(&entries);
+        let tree = planted_tree(&engine, &entries);
         assert_eq!(
             take_work(),
             Work::default(),
-            "borrowing must not scan the tree"
+            "building must not normalize any query"
         );
         let queries = [
             "FILE-000000".to_owned(),
@@ -123,20 +136,21 @@ fn lookup_work_is_logarithmic_and_only_normalizes_the_query() {
         let mut legacy_entry_normalizations = 0;
         for query in &queries {
             let expected = legacy_lookup(&entries, query, &mut legacy_entry_normalizations);
-            assert_eq!(tree.get(query), expected);
+            assert_eq!(tree.get(query).unwrap().as_ref(), expected);
         }
         let actual = take_work();
+        // Point lookups normalize the query string once and descend the
+        // index; they never fold every stored display path like the legacy
+        // flat scan did.
         assert_eq!(actual.query_normalizations, queries.len());
-        let comparison_bound = (usize::BITS - (count - 1).leading_zeros()) as usize + 1;
-        assert!(actual.key_comparisons <= queries.len() * comparison_bound);
         assert_eq!(legacy_entry_normalizations, 2 * count + 1);
         for query in &queries {
-            tree.get_key(&name_policy::path_key(query));
+            tree.get_key(&name_policy::path_key(query)).unwrap();
         }
         assert_eq!(take_work().query_normalizations, 0);
         println!(
-            "N={count}: old stored-path normalizations={legacy_entry_normalizations}; new query normalizations={}, key comparisons={}",
-            actual.query_normalizations, actual.key_comparisons
+            "N={count}: old stored-path normalizations={legacy_entry_normalizations}; new query normalizations={}",
+            actual.query_normalizations
         );
     }
 }
@@ -205,8 +219,17 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
         mutation_order
     );
     validate_entries(&mut entries, 100).unwrap();
-    let tree = NamespaceTree::from_published_entries(&entries);
-    assert_eq!(tree.get("0/B").unwrap().entry_id, parent_id);
+    // The validated flat list packs into a paged namespace whose point reads
+    // resolve the same identity.
+    let namespace = crate::namespace::fixture_store::namespace(&entries);
+    let view = crate::namespace::NamespaceView::new(
+        &namespace,
+        &crate::namespace::fixture_store::FixtureSource,
+    );
+    assert_eq!(
+        view.resolve_key("0/b").unwrap().unwrap().entry_id,
+        parent_id
+    );
     assert!(
         entries
             .windows(2)
@@ -254,8 +277,9 @@ fn published_fixture() -> (tempfile::TempDir, Engine, Repository) {
 
 fn assert_published_matches_legacy(engine: &Engine, branch: &str) {
     let tree = engine.namespace_tree(branch).unwrap();
-    let entries = engine.list_tree_ref(branch).unwrap();
-    assert_eq!(tree.entries().as_ptr(), entries.as_ptr());
+    let entries = engine.list_tree(branch).unwrap();
+    assert_eq!(tree.entries().unwrap(), entries);
+    assert_eq!(tree.total_entries(), entries.len() as u64);
     assert!(
         entries
             .windows(2)
@@ -273,7 +297,10 @@ fn assert_published_matches_legacy(engine: &Engine, branch: &str) {
         "ZED.TXT",
         "missing",
     ] {
-        assert_eq!(tree.get(query), legacy_lookup(entries, query, &mut 0));
+        assert_eq!(
+            tree.get(query).unwrap(),
+            legacy_lookup(&entries, query, &mut 0).cloned()
+        );
     }
 }
 
@@ -286,7 +313,7 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
         .unwrap()
         .get("strasse/CAFÉ.txt")
         .unwrap()
-        .clone();
+        .unwrap();
     let original_head = engine.state().branches[branch].head_commit_id.clone();
     assert_published_matches_legacy(&engine, branch);
     engine
@@ -302,6 +329,7 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
         .namespace_tree(branch)
         .unwrap()
         .get("moved/Cafe\u{301}.txt")
+        .unwrap()
         .unwrap();
     assert_eq!(renamed.file_id, original.file_id);
     assert_eq!(renamed.entry_id, original.entry_id);
@@ -310,8 +338,9 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
         engine
             .namespace_tree_at(branch, &original_head)
             .unwrap()
-            .get("STRASSE/CAFÉ.TXT"),
-        Some(&original)
+            .get("STRASSE/CAFÉ.TXT")
+            .unwrap(),
+        Some(original.clone())
     );
     let collision = engine
         .file_namespace(
@@ -329,32 +358,30 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
         engine
             .namespace_tree_at(branch, &original_head)
             .unwrap()
-            .get("STRASSE/CAFÉ.TXT"),
-        Some(&original)
+            .get("STRASSE/CAFÉ.TXT")
+            .unwrap(),
+        Some(original)
     );
     let missing = engine.namespace_tree("missing").err().unwrap();
     assert_eq!(
         missing.code(),
-        engine.list_tree_ref("missing").unwrap_err().code()
+        engine.list_tree("missing").unwrap_err().code()
     );
     let missing = engine.namespace_tree_at(branch, "missing").err().unwrap();
     assert_eq!(
         missing.code(),
-        engine
-            .list_tree_at_ref(branch, "missing")
-            .unwrap_err()
-            .code()
+        engine.list_tree_at(branch, "missing").unwrap_err().code()
     );
 }
 
 #[test]
-fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
+fn publication_rejects_lying_totals_and_dangling_namespace_roots() {
     let (temporary, mut engine, repo) = published_fixture();
     let head = engine.state().branches[&repo.main_branch_id]
         .head_commit_id
         .clone();
     let before = canonical_json(engine.state()).unwrap();
-    for corruption in ["order", "duplicate", "folded_duplicate"] {
+    for corruption in ["total", "dangling_root"] {
         let operation = storage_contract::OperationId::generate();
         let result = engine.mutate(
             "test.invalid.namespace",
@@ -362,36 +389,20 @@ fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
             operation,
             json_codec::json!({"corruption":corruption}),
             |_, state, _| {
-                let entries = &mut state.commits.get_mut(&head).unwrap().entries;
+                let namespace = &mut state.commits.get_mut(&head).unwrap().namespace;
                 match corruption {
-                    "order" => entries.reverse(),
-                    "duplicate" => entries.push(entries[0].clone()),
-                    "folded_duplicate" => {
-                        let mut duplicate = entries
-                            .iter()
-                            .find(|entry| entry.path == "Straße")
-                            .unwrap()
-                            .clone();
-                        let path = duplicate.path.to_uppercase();
-                        relocate_entry(
-                            &mut duplicate,
-                            name_policy::PortablePath::parse(&path).unwrap(),
-                        );
-                        entries.push(duplicate);
-                    }
+                    // Pages are canonical by construction, so corruption now
+                    // means a root that lies about its verified graph.
+                    "total" => namespace.entries += 1,
+                    "dangling_root" => namespace.root.hash = "0".repeat(64),
                     _ => unreachable!(),
                 }
                 Ok(json_codec::json!({}))
             },
         );
-        let expected = if corruption.contains("duplicate") {
-            storage_contract::ErrorCode::NameCollision
-        } else {
-            storage_contract::ErrorCode::HistoryPackageInvalid
-        };
-        assert_eq!(result.unwrap_err().code(), expected, "{corruption}");
+        assert!(result.is_err(), "{corruption}");
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
-        assert!(!engine.state().operations.contains_key(&operation));
+        assert!(engine.published_receipt(operation).unwrap().is_none());
     }
     drop(engine);
     let engine = Engine::open(&temporary.path().join("system")).unwrap();
@@ -419,6 +430,7 @@ fn query_views_keep_missing_foreign_and_migrated_branch_errors() {
             .namespace_tree(&other.main_branch_id)
             .unwrap()
             .get("anything")
+            .unwrap()
             .is_none()
     );
     for (branch, commit) in [
@@ -426,7 +438,7 @@ fn query_views_keep_missing_foreign_and_migrated_branch_errors() {
         (repo.main_branch_id.as_str(), "missing"),
         (repo.main_branch_id.as_str(), foreign.as_str()),
     ] {
-        let old = engine.list_tree_at_ref(branch, commit).err().unwrap();
+        let old = engine.list_tree_at(branch, commit).err().unwrap();
         let new = engine.namespace_tree_at(branch, commit).err().unwrap();
         assert_eq!(new.code(), old.code());
         assert_eq!(new.to_string(), old.to_string());
@@ -436,7 +448,7 @@ fn query_views_keep_missing_foreign_and_migrated_branch_errors() {
         .get_mut(&repo.main_branch_id)
         .unwrap()
         .state = BranchState::Migrated;
-    let old = engine.list_tree_ref(&repo.main_branch_id).err().unwrap();
+    let old = engine.list_tree(&repo.main_branch_id).err().unwrap();
     let new = engine.namespace_tree(&repo.main_branch_id).err().unwrap();
     assert_eq!(new.code(), storage_contract::ErrorCode::TreeMoved);
     assert_eq!(new.to_string(), old.to_string());

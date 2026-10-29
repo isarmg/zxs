@@ -111,9 +111,12 @@ fn large_candidate_uses_bounded_full_revalidation_and_rejects_changes() {
             }
         })
         .collect();
-    let result = engine.state.operations[&candidate.operation_id].clone();
+    let result = engine
+        .published_receipt(candidate.operation_id)
+        .unwrap()
+        .unwrap();
     let detached = engine
-        .prepare_publication(next, prepared, result, MAX_METADATA)
+        .prepare_publication(next, prepared, Vec::new(), result, MAX_METADATA)
         .unwrap();
     let evidence = &candidate.versions[0];
     let slot = &evidence.placement.route_slot_ids[0];
@@ -312,9 +315,12 @@ fn detached_decision_rejects_changed_topology_before_journaling() {
     let (_temp, mut engine, candidate) = fixture();
     let mut next = engine.state().clone();
     next.sequence = engine.next_slot;
-    let result = engine.state.operations[&candidate.operation_id].clone();
+    let result = engine
+        .published_receipt(candidate.operation_id)
+        .unwrap()
+        .unwrap();
     let detached = engine
-        .prepare_publication(next, Vec::new(), result, MAX_METADATA)
+        .prepare_publication(next, Vec::new(), Vec::new(), result, MAX_METADATA)
         .unwrap();
     let sequence = engine.state.sequence;
     let slot = engine.next_slot;
@@ -579,8 +585,11 @@ fn existing_admission_preserves_capacity_and_corruption_causes() {
         engine.config = ValidatedConfig::try_from(config).unwrap();
         let mut next = engine.state().clone();
         next.sequence = engine.next_slot;
-        let result = engine.state.operations[&candidate.operation_id].clone();
-        let outcome = engine.prepare_publication(next, prepared, result, MAX_METADATA);
+        let result = engine
+            .published_receipt(candidate.operation_id)
+            .unwrap()
+            .unwrap();
+        let outcome = engine.prepare_publication(next, prepared, Vec::new(), result, MAX_METADATA);
         match damage {
             "none" => assert!(outcome.is_ok()),
             "body" | "manifest" => assert_eq!(
@@ -653,9 +662,12 @@ fn existing_admission_above_descriptor_budget_uses_uncached_preparation() {
     );
     let mut next = engine.state().clone();
     next.sequence = engine.next_slot;
-    let result = engine.state.operations[&candidate.operation_id].clone();
+    let result = engine
+        .published_receipt(candidate.operation_id)
+        .unwrap()
+        .unwrap();
     let detached = engine
-        .prepare_publication(next, prepared, result, MAX_METADATA)
+        .prepare_publication(next, prepared, Vec::new(), result, MAX_METADATA)
         .unwrap();
     assert!(detached.verified.full_revalidation);
     assert!(detached.verified.entries.is_empty());
@@ -677,7 +689,16 @@ fn name_projection_uses_the_owner_but_payload_admission_reports_a_corrupt_seal()
     crate::container_storage::prepare_names(
         &engine.config,
         &engine.disk_resources,
-        &crate::state_projection::ProjectionTransition::new(engine.state(), &next, None).unwrap(),
+        &engine
+            .with_namespace_source(|source| {
+                crate::state_projection::ProjectionTransition::new(
+                    engine.state(),
+                    &next,
+                    None,
+                    source,
+                )
+            })
+            .unwrap(),
         MAX_METADATA,
     )
     .unwrap();
@@ -717,9 +738,12 @@ fn detached_decision_rejects_a_different_disk_resource_generation() {
     let (_temp, mut engine, candidate) = fixture();
     let mut next = engine.state().clone();
     next.sequence = engine.next_slot;
-    let result = engine.state.operations[&candidate.operation_id].clone();
+    let result = engine
+        .published_receipt(candidate.operation_id)
+        .unwrap()
+        .unwrap();
     let detached = engine
-        .prepare_publication(next, Vec::new(), result, MAX_METADATA)
+        .prepare_publication(next, Vec::new(), Vec::new(), result, MAX_METADATA)
         .unwrap();
     let sequence = engine.state.sequence;
     let slot = engine.next_slot;

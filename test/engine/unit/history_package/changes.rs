@@ -21,7 +21,7 @@ macro_rules! projection_fields {
             file { file_write_origins, file_locations, file_backup_paths, file_backup_policies, file_selection_generations, file_notes, file_names, }
             directory { directory_tree_selections, directory_selection_generations, }
             special { file_contexts, file_branch_aliases, file_path_notes, file_selections, directory_trees, directory_selections, }
-            independent { operations, operation_principals, plans, }
+            independent { plans, }
         }
     };
 }
@@ -78,7 +78,11 @@ impl HistoryChanges {
             self.directories.insert(id.to_owned());
         }
     }
-    pub(super) fn between(before: &State, after: &State) -> Self {
+    pub(super) fn between(
+        before: &State,
+        after: &State,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Self {
         let mut changes = Self::default();
         // This one schema drives exhaustive State matching and dependency
         // application. A new State field cannot compile until classified.
@@ -91,7 +95,7 @@ impl HistoryChanges {
              directory { $($directory:ident,)* }
              special { $($special:ident,)* }
              independent { $($independent:ident,)* }) => {{
-                let State { sequence: _, business_generation: _, topology_generation: _, control_auth: _, events: _,
+                let State { sequence: _, business_generation: _, topology_generation: _, control_auth: _, events: _, operations: _,
                     $($branch: _,)* $($history: _,)* $($repository: _,)* $($version: _,)*
                     $($file: _,)* $($directory: _,)* $($special: _,)* $($independent: _,)*
                 } = after;
@@ -220,10 +224,21 @@ impl HistoryChanges {
             }
             if !changes.directories.is_empty() {
                 for commit in state.commits.values() {
-                    if commit.entries.iter().any(|entry| {
-                        entry.kind == NamespaceEntryKind::Directory
-                            && changes.directories.contains(&entry.entry_id)
-                    }) {
+                    let mut found = false;
+                    crate::namespace::NamespaceView::new(&commit.namespace, source)
+                        .walk(|_, entry| {
+                            if let storage_contract::NamespacePageEntry::Directory {
+                                entry_id, ..
+                            } = entry
+                                && changes.directories.contains(entry_id)
+                            {
+                                found = true;
+                                return Ok(false);
+                            }
+                            Ok(true)
+                        })
+                        .expect("oracle commit namespaces resolve");
+                    if found {
                         changes.histories.insert(commit.history_tree_id.clone());
                     }
                 }

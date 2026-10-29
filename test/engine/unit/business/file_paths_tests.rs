@@ -203,6 +203,7 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
         let node = e
             .file_context(&r.repository_id, to)
             .unwrap()
+            .unwrap()
             .node_id
             .unwrap();
         let n = &e.state().file_path_nodes[&node];
@@ -214,11 +215,13 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
     let first = e
         .file_context(&r.repository_id, "renamed/a.txt")
         .unwrap()
+        .unwrap()
         .node_id
         .unwrap();
     rename(&mut e, &r, "renamed/a.txt", "renamed/final.txt");
     let second = e
         .file_context(&r.repository_id, "renamed/final.txt")
+        .unwrap()
         .unwrap()
         .node_id
         .unwrap();
@@ -239,6 +242,7 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
     );
     assert!(
         e.file_context(&r.repository_id, "renamed/final.txt")
+            .unwrap()
             .unwrap()
             .node_id
             .is_none()
@@ -264,6 +268,7 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
     let file = entries(&e, &r)["b.txt"].clone();
     let node = e
         .file_context(&r.repository_id, "b.txt")
+        .unwrap()
         .unwrap()
         .node_id
         .unwrap();
@@ -305,6 +310,7 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
     assert_eq!(
         e.file_context(&r.repository_id, "b.txt")
             .unwrap()
+            .unwrap()
             .node_id
             .as_deref(),
         Some(node.as_str())
@@ -320,7 +326,11 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
     let (_t, mut e, r) = setup();
     save(&mut e, &r, "a.txt", b"original body");
     let original = entries(&e, &r)["a.txt"].clone();
-    let original_branch = e.file_context(&r.repository_id, "a.txt").unwrap().branch_id;
+    let original_branch = e
+        .file_context(&r.repository_id, "a.txt")
+        .unwrap()
+        .unwrap()
+        .branch_id;
     let branch = e
         .create_file_branch(
             &original.file_id,
@@ -376,7 +386,10 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
     );
     assert_eq!(canonical_json(e.state()).unwrap(), before);
     assert_eq!(
-        e.file_context(&r.repository_id, "a.txt").unwrap().branch_id,
+        e.file_context(&r.repository_id, "a.txt")
+            .unwrap()
+            .unwrap()
+            .branch_id,
         branch
     );
 }
@@ -434,6 +447,7 @@ fn pending_selection_preserves_frozen_source_even_when_source_replicas_are_missi
     assert_eq!(
         engine
             .file_context(&repo.repository_id, "file.txt")
+            .unwrap()
             .unwrap()
             .branch_id,
         pending

@@ -1,7 +1,7 @@
 //! Public commit response fields borrowed from one immutable shared record.
 use data_serialization::{Serialize, Serializer};
 use std::{collections::BTreeMap, sync::Arc};
-use storage_contract::{Commit, Entry, NamespaceDeletions, OperationId};
+use storage_contract::{Commit, CommitNamespace, NamespaceDeletions, OperationId};
 
 pub(crate) struct CommitResponse(Arc<Commit>);
 impl From<Arc<Commit>> for CommitResponse {
@@ -27,7 +27,7 @@ pub(crate) struct CommitRecord<'a> {
     operation_id: OperationId,
     author: &'a str,
     message: &'a str,
-    entries: &'a [Entry],
+    namespace: &'a CommitNamespace,
     #[serialization(skip_serializing_if = "Option::is_none")]
     namespace_deletions: Option<&'a NamespaceDeletions>,
     #[serialization(skip_serializing_if = "BTreeMap::is_empty")]
@@ -46,7 +46,7 @@ impl<'a> From<&'a Commit> for CommitRecord<'a> {
             operation_id,
             author,
             message,
-            entries,
+            namespace,
             namespace_deletions,
             pending_file_versions,
             provenance,
@@ -61,7 +61,7 @@ impl<'a> From<&'a Commit> for CommitRecord<'a> {
             operation_id: *operation_id,
             author,
             message,
-            entries,
+            namespace,
             namespace_deletions: namespace_deletions.as_ref(),
             pending_file_versions,
             provenance: provenance.as_deref(),

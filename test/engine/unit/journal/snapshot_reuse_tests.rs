@@ -27,8 +27,14 @@ fn next(state: &State) -> State {
 }
 fn heat(state: &State, prepared: &PreparedSnapshot) -> (State, PreparedSnapshot) {
     let next = next(state);
-    let hot =
-        prepare_snapshot_incremental(state, &next, &prepared.reuse_basis(), MAX_METADATA).unwrap();
+    let hot = prepare_snapshot_incremental(
+        state,
+        &next,
+        &prepared.reuse_basis(),
+        MAX_METADATA,
+        &mut crate::journal::no_reused_snapshot_sources,
+    )
+    .unwrap();
     (next, hot)
 }
 
@@ -81,8 +87,14 @@ fn reused_fields_hold_one_page_buffer_and_never_serialize_their_records() {
     assert!(note_pages(&config, &prepared).len() > 16);
     let next = next(&state);
     snapshot::take_encoding_counts();
-    let hot =
-        prepare_snapshot_incremental(&state, &next, &prepared.reuse_basis(), MAX_METADATA).unwrap();
+    let hot = prepare_snapshot_incremental(
+        &state,
+        &next,
+        &prepared.reuse_basis(),
+        MAX_METADATA,
+        &mut crate::journal::no_reused_snapshot_sources,
+    )
+    .unwrap();
     assert_eq!(snapshot::take_encoding_counts().get("file_notes"), None);
     REUSED_OBJECT_PEAK_BYTES.with(|peak| peak.set(0));
     hot.store(&config.disks, &next).unwrap();
@@ -263,12 +275,27 @@ fn reused_page_maxima_are_admitted_before_reading_sources_or_reencoding_records(
         }
     }
     snapshot::take_encoding_counts();
-    let error = prepare_snapshot_incremental(&state, &next(&state), &basis, maximum - 1)
-        .err()
-        .unwrap();
+    let error = prepare_snapshot_incremental(
+        &state,
+        &next(&state),
+        &basis,
+        maximum - 1,
+        &mut crate::journal::no_reused_snapshot_sources,
+    )
+    .err()
+    .unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert_eq!(snapshot::take_encoding_counts().get("file_notes"), None);
-    assert!(prepare_snapshot_incremental(&state, &next(&state), &basis, maximum).is_ok());
+    assert!(
+        prepare_snapshot_incremental(
+            &state,
+            &next(&state),
+            &basis,
+            maximum,
+            &mut crate::journal::no_reused_snapshot_sources
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -282,7 +309,14 @@ fn large_opaque_auth_is_not_copied_into_the_bounded_snapshot_root() {
     let basis = prepared.reuse_basis();
     assert!(canonical_json(&basis.descriptor).unwrap().len() < 8192);
     let after = next(&state);
-    let hot = prepare_snapshot_incremental(&state, &after, &basis, MAX_METADATA).unwrap();
+    let hot = prepare_snapshot_incremental(
+        &state,
+        &after,
+        &basis,
+        MAX_METADATA,
+        &mut crate::journal::no_reused_snapshot_sources,
+    )
+    .unwrap();
     assert!(
         hot.objects
             .iter()

@@ -58,11 +58,18 @@ pub(super) fn dependency_fixture() -> State {
             "branch_id":branch,"history_tree_id":history,"name":branch,"head_commit_id":commit,
             "fork_commit_id":commit,"branch_kind":"file","file_id":file,"generation":"1","state":"active"
         })));
+        let namespace = crate::namespace::fixture_store::namespace(&[Entry {
+            entry_id: directory.into(),
+            path: name_policy::PortablePath::parse("directory").unwrap(),
+            kind: NamespaceEntryKind::Directory,
+            file_id: String::new(),
+            version_id: String::new(),
+            size: 0,
+        }]);
         state.commits.insert(commit.into(), record(json!({
             "commit_id":commit,"history_tree_id":history,"kind":"save","parent_commit_ids":[],
             "tree_id":"tree","sequence":"1","operation_id":"op_00000000000000000000000000000000","author":"author","message":"message",
-            "entries":[{"entry_id":directory,"path":"directory","name":"directory","lookup_key":"directory",
-                "kind":"directory","file_id":"","version_id":"","size":"0"}],"provenance":null
+            "namespace":json_codec::to_value(&namespace).unwrap(),"provenance":null
         })));
         state.versions.insert(version.into(), record(json!({
             "history_tree_id":history,"version_id":version,"file_id":file,"creation_primary_slot_id":"P01",
@@ -174,7 +181,12 @@ fn assert_changes(before: &State, expected: &[&str], change: impl FnOnce(&mut St
     after.begin_tracking();
     change(&mut after);
     assert_eq!(
-        HistoryChanges::between(before, &after).histories,
+        HistoryChanges::between(
+            before,
+            &after,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .histories,
         expected
             .iter()
             .map(|id| (*id).to_owned())
@@ -333,7 +345,12 @@ fn replacement_all_and_lost_lineage_are_conservative_but_control_state_is_indepe
     });
     let decoded: State = json_codec::from_slice(&canonical_json(&before).unwrap()).unwrap();
     assert_eq!(
-        HistoryChanges::between(&before, &decoded).histories,
+        HistoryChanges::between(
+            &before,
+            &decoded,
+            &crate::namespace::fixture_store::FixtureSource
+        )
+        .histories,
         before.histories.keys().cloned().collect()
     );
     assert_changes(&before, &[], |after| {
@@ -341,17 +358,36 @@ fn replacement_all_and_lost_lineage_are_conservative_but_control_state_is_indepe
         after.business_generation += 1;
         after.topology_generation += 1;
         after.control_auth = Some(json!({"revision": "new"}));
-        after.events.push(Event {
-            sequence: 9,
-            operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
-            kind: "file.save".into(),
-            object_id: "h1".into(),
-        });
+        after
+            .events
+            .push(Event {
+                sequence: 9,
+                operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
+                kind: "file.save".into(),
+                object_id: "h1".into(),
+            })
+            .unwrap();
         after.operations = Default::default();
         after.plans = Default::default();
         after
-            .operation_principals
-            .insert(OperationId::generate(), "author".into());
+            .operations
+            .push(storage_contract::OperationRecordEntry {
+                principal: "author".into(),
+                result: OperationResult {
+                    operation_id: OperationId::generate(),
+                    kind: "file.save".into(),
+                    commit_id: None,
+                    history_tree_id: None,
+                    branch_id: None,
+                    commit_state: CommitState::Published,
+                    protection_at_publish: ProtectionAtPublish::NotApplicable,
+                    current_health: CurrentHealth::Healthy,
+                    request_digest: "digest".into(),
+                    sequence: 9,
+                    result: json!({}),
+                },
+            })
+            .unwrap();
     });
 }
 
@@ -386,9 +422,11 @@ fn assert_full_encoder_oracle(
     roots: &crate::metadata_map::MapRoot,
     members: &[DiskConfig],
 ) -> crate::metadata_map::MapRoot {
+    let source = crate::history_package::fixture_member_source(members);
     let (actual, prepared) =
-        prepare_history_manifests_incremental(before, after, roots, members, MAX_METADATA).unwrap();
-    let (expected, full) = prepare_history_manifests(after, MAX_METADATA).unwrap();
+        prepare_history_manifests_incremental(before, after, roots, members, MAX_METADATA, &source)
+            .unwrap();
+    let (expected, full) = prepare_history_manifests(after, MAX_METADATA, &source).unwrap();
     assert_eq!(
         canonical_json(actual.reference()).unwrap(),
         canonical_json(expected.reference()).unwrap()
@@ -414,6 +452,22 @@ fn assert_full_encoder_oracle(
     let oracle = &config.disks[..1];
     for object in full {
         object.store(oracle).unwrap();
+    }
+    // Graph admission walks each commit's namespace closure. Those objects are
+    // published by publication, never by the manifest encoder under test, so
+    // the oracle disk replays a member's exact published namespace bytes.
+    for kind in [
+        storage_contract::NAMESPACE_PAGE_KIND,
+        storage_contract::NAMESPACE_INDEX_KIND,
+    ] {
+        for hash in crate::journal::list_object_hashes(&members[0], kind).unwrap() {
+            let target = object_path(&oracle[0], kind, &hash);
+            let mut directories = std::fs::DirBuilder::new();
+            directories.recursive(true);
+            std::os::unix::fs::DirBuilderExt::mode(&mut directories, 0o700);
+            directories.create(target.parent().unwrap()).unwrap();
+            fs::copy(object_path(&members[0], kind, &hash), target).unwrap();
+        }
     }
     for id in after.histories.keys() {
         let hash = &expected.catalog_binding(id).unwrap().hash;
@@ -489,9 +543,13 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
     after.sequence += 1;
     after.control_auth = Some(json!({"generation": "private"}));
     assert!(
-        HistoryChanges::between(&before, &after)
-            .histories
-            .is_empty()
+        HistoryChanges::between(
+            &before,
+            &after,
+            &crate::history_package::fixture_member_source(&members)
+        )
+        .histories
+        .is_empty()
     );
     let unchanged = assert_full_encoder_oracle(&before, &after, &roots, &members);
     assert_eq!(unchanged, roots);
@@ -507,8 +565,12 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
         assert_full_encoder_oracle(&before, &decoded, &roots, &members),
         roots
     );
-    assert!(prepare_history_manifests_incremental(&before, &before, &roots, &members, 1).is_err());
-    assert!(prepare_history_manifests(&before, 1).is_err());
+    let source = crate::history_package::fixture_member_source(&members);
+    assert!(
+        prepare_history_manifests_incremental(&before, &before, &roots, &members, 1, &source)
+            .is_err()
+    );
+    assert!(prepare_history_manifests(&before, 1, &source).is_err());
 
     // Exercise a genuine newly published history from the same logical base:
     // every old root remains byte-identical, and deletion removes only its root.
@@ -525,7 +587,12 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
         .unwrap();
     let new_state = engine.state().clone();
     assert_eq!(
-        HistoryChanges::between(&base, &new_state).histories,
+        HistoryChanges::between(
+            &base,
+            &new_state,
+            &crate::history_package::fixture_member_source(&members)
+        )
+        .histories,
         BTreeSet::from([third.history_tree_id.clone()])
     );
     let expanded = assert_full_encoder_oracle(&base, &new_state, &original_roots, &members);
@@ -559,6 +626,14 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
         temp.path().join("b"),
         temp.path().join("c"),
     ]);
+    // Publish the recorded commit namespaces onto these member disks; the
+    // manifest encoder walks them through the same disk-backed source.
+    for (commit_id, entries) in fixture["commit_namespaces"].as_object().unwrap() {
+        let entries: Vec<storage_contract::Entry> =
+            json_codec::from_value(entries.clone()).unwrap();
+        let namespace = crate::namespace::fixture_store::namespace_stored(&entries, &config.disks);
+        assert_eq!(namespace, before.commits[commit_id.as_str()].namespace);
+    }
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let history = before.histories.keys().next().unwrap();
     let hash = &roots.catalog_binding(history).unwrap().hash;
@@ -574,9 +649,15 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
     for disk in &config.disks {
         fs::remove_file(object_path(disk, kind, leaf)).unwrap();
     }
-    let (actual, objects) =
-        prepare_history_manifests_incremental(&before, &after, &roots, &config.disks, MAX_METADATA)
-            .unwrap();
+    let (actual, objects) = prepare_history_manifests_incremental(
+        &before,
+        &after,
+        &roots,
+        &config.disks,
+        MAX_METADATA,
+        &crate::history_package::fixture_member_source(&config.disks),
+    )
+    .unwrap();
     assert_eq!(actual, roots);
     for object in objects {
         object.store(&config.disks).unwrap();
@@ -589,9 +670,15 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
     for disk in &config.disks {
         fs::write(object_path(disk, "history-manifest", hash), b"corrupt root").unwrap();
     }
-    let (actual, objects) =
-        prepare_history_manifests_incremental(&before, &after, &roots, &config.disks, MAX_METADATA)
-            .unwrap();
+    let (actual, objects) = prepare_history_manifests_incremental(
+        &before,
+        &after,
+        &roots,
+        &config.disks,
+        MAX_METADATA,
+        &crate::history_package::fixture_member_source(&config.disks),
+    )
+    .unwrap();
     assert_eq!(actual, roots);
     let error = objects
         .iter()
@@ -622,6 +709,7 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
         &wrong_roots,
         &config.disks,
         MAX_METADATA,
+        &crate::history_package::fixture_member_source(&config.disks),
     ) else {
         panic!("fallback must retain the exact published root");
     };
@@ -637,9 +725,15 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
         fs::remove_file(&path).unwrap();
         std::os::unix::fs::symlink(&target, &path).unwrap();
     }
-    let (_, objects) =
-        prepare_history_manifests_incremental(&before, &after, &roots, &config.disks, MAX_METADATA)
-            .unwrap();
+    let (_, objects) = prepare_history_manifests_incremental(
+        &before,
+        &after,
+        &roots,
+        &config.disks,
+        MAX_METADATA,
+        &crate::history_package::fixture_member_source(&config.disks),
+    )
+    .unwrap();
     let error = objects
         .iter()
         .try_for_each(|object| object.store(&config.disks).map(|_| ()))
@@ -657,37 +751,37 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
 }
 
 #[test]
-fn typed_operation_map_inserts_are_history_independent_with_exact_tracking() {
+fn receipt_log_appends_are_history_independent_with_exact_segment_tracking() {
     let before = dependency_fixture();
     let id = OperationId::generate();
     assert_changes(&before, &[], |after| {
-        after.operations.insert(
-            id,
-            OperationResult {
-                operation_id: id,
-                kind: "file.save".into(),
-                commit_id: Some("c1".into()),
-                history_tree_id: Some("h1".into()),
-                branch_id: Some("b1".into()),
-                commit_state: CommitState::Published,
-                protection_at_publish: ProtectionAtPublish::NotApplicable,
-                current_health: CurrentHealth::Healthy,
-                request_digest: "digest".into(),
-                sequence: 1,
-                result: json!({}),
-            },
+        after
+            .operations
+            .push(storage_contract::OperationRecordEntry {
+                principal: "author".into(),
+                result: OperationResult {
+                    operation_id: id,
+                    kind: "file.save".into(),
+                    commit_id: Some("c1".into()),
+                    history_tree_id: Some("h1".into()),
+                    branch_id: Some("b1".into()),
+                    commit_state: CommitState::Published,
+                    protection_at_publish: ProtectionAtPublish::NotApplicable,
+                    current_health: CurrentHealth::Healthy,
+                    request_digest: "digest".into(),
+                    sequence: u64::MAX,
+                    result: json!({}),
+                },
+            })
+            .unwrap();
+        let storage_contract::SegmentChanges::Segments(dirty) =
+            after.operations.changes_since(&before.operations)
+        else {
+            panic!("normal receipt append must retain its exact segment write set");
+        };
+        assert_eq!(
+            dirty.iter().copied().collect::<Vec<_>>(),
+            vec![after.operations.tail_ordinal()]
         );
-        after.operation_principals.insert(id, "author".into());
-        for changes in [
-            after.operations.changes_since(&before.operations),
-            after
-                .operation_principals
-                .changes_since(&before.operation_principals),
-        ] {
-            let MapChanges::Keys(keys) = changes else {
-                panic!("normal operation insert must retain its exact typed write set");
-            };
-            assert_eq!(keys.iter().copied().collect::<Vec<_>>(), vec![id]);
-        }
     });
 }

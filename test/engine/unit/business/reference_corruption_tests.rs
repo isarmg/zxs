@@ -32,12 +32,15 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry, String) {
             request_digest: None,
         })
         .unwrap();
-    let entry = engine.state.commits[&engine.state.branches[&repo.main_branch_id].head_commit_id]
-        .entries
-        .iter()
-        .find(|entry| entry.kind == NamespaceEntryKind::File)
+    let entry = engine
+        .namespace_entries(
+            &engine.state.commits[&engine.state.branches[&repo.main_branch_id].head_commit_id]
+                .namespace,
+        )
         .unwrap()
-        .clone();
+        .into_iter()
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
+        .unwrap();
     let branch = engine
         .create_file_branch(
             &entry.file_id,
@@ -311,6 +314,7 @@ fn file_node_publication_requires_frozen_path_contexts_without_publication() {
         let file_branch = engine
             .file_context(&repo.repository_id, &entry.path)
             .unwrap()
+            .unwrap()
             .branch_id
             .clone();
         let result = engine
@@ -372,7 +376,7 @@ fn file_node_publication_requires_frozen_path_contexts_without_publication() {
         assert_eq!(engine.state.sequence, sequence, "{missing}");
         assert_eq!(engine.next_slot, slot, "{missing}");
         assert!(
-            !engine.state.operations.contains_key(&operation),
+            engine.published_receipt(operation).unwrap().is_none(),
             "{missing}"
         );
     }

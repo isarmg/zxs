@@ -631,19 +631,45 @@ pub(crate) fn install_version_content_at(
 /// Initialize missing physical identities from the published namespace. Saved
 /// branch aliases never retarget an existing container; actual namespace edits
 /// update these fields explicitly, and deletion retains the last owner.
-pub(crate) fn capture_names(state: &mut State) {
-    let State {
-        repositories,
-        branches,
-        commits,
-        file_names,
-        file_locations,
-        ..
-    } = state;
-    let entries = repositories
+/// Entries stream through the paged namespace walk, bounded by what the maps
+/// are missing; `source` resolves this transaction's fresh objects first.
+pub(crate) fn capture_names(
+    state: &mut State,
+    source: &dyn crate::namespace::NamespaceSource,
+) -> crate::Result<()> {
+    let namespaces: Vec<storage_contract::CommitNamespace> = state
+        .repositories
         .values()
-        .flat_map(|repository| &main_head(repository, branches, commits).entries);
-    capture_entry_names(entries, file_names, file_locations);
+        .map(|repository| {
+            main_head(repository, &state.branches, &state.commits)
+                .namespace
+                .clone()
+        })
+        .collect();
+    capture_namespace_names(state, &namespaces, source)
+}
+
+fn capture_namespace_names(
+    state: &mut State,
+    namespaces: &[storage_contract::CommitNamespace],
+    source: &dyn crate::namespace::NamespaceSource,
+) -> crate::Result<()> {
+    for namespace in namespaces {
+        crate::namespace::NamespaceView::new(namespace, source).walk(|location, entry| {
+            if let storage_contract::NamespacePageEntry::File { file_id, name, .. } = entry {
+                if !state.file_names.contains_key(file_id) {
+                    state.file_names.insert(file_id.clone(), name.clone());
+                }
+                if !state.file_locations.contains_key(file_id) {
+                    state
+                        .file_locations
+                        .insert(file_id.clone(), location.as_str().to_owned());
+                }
+            }
+            Ok(true)
+        })?;
+    }
+    Ok(())
 }
 
 fn main_head<'a>(
@@ -659,43 +685,27 @@ fn main_head<'a>(
         .expect("invariant: every branch has its head commit")
 }
 
-fn capture_entry_names<'a>(
-    entries: impl Iterator<Item = &'a Entry>,
-    file_names: &mut storage_contract::TrackedMap<String>,
-    file_locations: &mut storage_contract::TrackedMap<String>,
-) {
-    for entry in entries.filter(|entry| entry.kind == NamespaceEntryKind::File) {
-        if !file_names.contains_key(&entry.file_id) {
-            file_names.insert(entry.file_id.clone(), entry.name().to_owned());
-        }
-        if !file_locations.contains_key(&entry.file_id) {
-            file_locations.insert(entry.file_id.clone(), entry.path().to_owned());
-        }
-    }
-}
-
 /// The planner captured every previous main HEAD before invoking its private
 /// mutation closure. Business writers retain identity keys; only explicit
 /// namespace edits replace their values. Unchanged heads therefore need no scan.
-pub(crate) fn capture_changed_names(previous: &State, next: &mut State) {
+pub(crate) fn capture_changed_names(
+    previous: &State,
+    next: &mut State,
+    source: &dyn crate::namespace::NamespaceSource,
+) -> crate::Result<()> {
     let Some(repositories) = changed_namespace_repositories(previous, next) else {
-        capture_names(next);
-        return;
+        return capture_names(next, source);
     };
-    let State {
-        repositories: current,
-        branches,
-        commits,
-        file_names,
-        file_locations,
-        ..
-    } = next;
-    // Preserve the full capture's repository order and each commit's entry order.
-    let entries = repositories
+    // Preserve the full capture's repository order.
+    let namespaces: Vec<storage_contract::CommitNamespace> = repositories
         .iter()
-        .map(|id| &current[id])
-        .flat_map(|repository| &main_head(repository, branches, commits).entries);
-    capture_entry_names(entries, file_names, file_locations);
+        .map(|id| {
+            main_head(&next.repositories[id], &next.branches, &next.commits)
+                .namespace
+                .clone()
+        })
+        .collect();
+    capture_namespace_names(next, &namespaces, source)
 }
 
 fn changed_namespace_repositories(previous: &State, next: &State) -> Option<BTreeSet<String>> {
@@ -991,8 +1001,16 @@ pub(crate) fn synchronize_names(
     previous: &State,
     next: &State,
 ) -> Result<()> {
-    let projection = ProjectionTransition::new(previous, next, None)?;
     let resources = Arc::new(DiskResources::open(config, true)?);
+    let members: Vec<DiskConfig> = config
+        .disks
+        .iter()
+        .filter(|disk| disk.metadata_member)
+        .cloned()
+        .collect();
+    let caches = crate::segment_store::SegmentCaches::new();
+    let source = crate::namespace::resources_source(&resources, &members, &caches);
+    let projection = ProjectionTransition::new(previous, next, None, &source)?;
     prepare_names(config, &resources, &projection, MAX_METADATA)?.apply()
 }
 
@@ -1005,7 +1023,15 @@ pub(crate) fn repair_historical_names(
     previous: &State,
     next: &State,
 ) -> Result<()> {
-    let projection = ProjectionTransition::new(previous, next, None)?;
+    let members: Vec<DiskConfig> = config
+        .disks
+        .iter()
+        .filter(|disk| disk.metadata_member)
+        .cloned()
+        .collect();
+    let caches = crate::segment_store::SegmentCaches::new();
+    let source = crate::namespace::resources_source(resources, &members, &caches);
+    let projection = ProjectionTransition::new(previous, next, None, &source)?;
     prepare_names_inner(config, resources, &projection, MAX_METADATA, true)?.apply()
 }
 

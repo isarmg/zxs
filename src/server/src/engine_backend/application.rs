@@ -159,9 +159,8 @@ impl<'a> Application<'a> {
         // the core still requires the exact original request digest.
         let replay = self
             .engine
-            .state()
-            .operations
-            .get(&operation_id)
+            .published_receipt(operation_id)
+            .map_err(crate::engine_backend::error)?
             .is_some_and(|operation| {
                 operation.kind == "merge-link.create"
                     && operation.history_tree_id.as_deref()

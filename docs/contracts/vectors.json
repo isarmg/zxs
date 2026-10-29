@@ -508,18 +508,13 @@
         "operation_id": "op_00000000000000000000000000000001",
         "author": "alice",
         "message": "legacy snapshot",
-        "entries": [
-          {
-            "entry_id": "entry_00000000000000000000000000000001",
-            "path": "a.txt",
-            "name": "a.txt",
-            "lookup_key": "a.txt",
-            "kind": "file",
-            "file_id": "file_00000000000000000000000000000001",
-            "version_id": "ver_00000000000000000000000000000001",
-            "size": "3"
-          }
-        ],
+        "namespace": {
+          "root": {
+            "kind": "namespace-page",
+            "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+          },
+          "entries": "1"
+        },
         "provenance": null
       }
     },
@@ -539,18 +534,13 @@
         "operation_id": "op_00000000000000000000000000000001",
         "author": "alice",
         "message": "legacy snapshot",
-        "entries": [
-          {
-            "entry_id": "entry_00000000000000000000000000000001",
-            "path": "a.txt",
-            "name": "a.txt",
-            "lookup_key": "a.txt",
-            "kind": "file",
-            "file_id": "file_00000000000000000000000000000001",
-            "version_id": "ver_00000000000000000000000000000001",
-            "size": "3"
-          }
-        ],
+        "namespace": {
+          "root": {
+            "kind": "namespace-page",
+            "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+          },
+          "entries": "1"
+        },
         "provenance": null,
         "pending_file_versions": {
           "file_00000000000000000000000000000001": "ver_00000000000000000000000000000001"
@@ -1348,7 +1338,13 @@
         "operation_id": "op_00000000000000000000000000000001",
         "author": "alice",
         "message": "删除目录与文件",
-        "entries": [],
+        "namespace": {
+          "root": {
+            "kind": "namespace-page",
+            "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+          },
+          "entries": "0"
+        },
         "provenance": null,
         "namespace_deletions": {
           "timestamp": "18446744073709551615",
@@ -1483,7 +1479,11 @@
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
-          "operations": {
+          "operation_log": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_locators": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -1496,10 +1496,6 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "protection_policies": {
-            "kind": "state-page",
-            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
-          },
-          "operation_principals": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -1682,6 +1678,150 @@
           {},
           {}
         ]
+      }
+    },
+    {
+      "name": "namespace-page-with-file-and-directory-entries",
+      "schema": "NamespacePage",
+      "layer": "schema",
+      "value": {
+        "format": "namespace-page",
+        "entries": [
+          {
+            "entry_id": "entry_00000000000000000000000000000001",
+            "name": "a.txt",
+            "lookup_key": "a.txt",
+            "kind": "file",
+            "file_id": "file_00000000000000000000000000000001",
+            "version_id": "ver_00000000000000000000000000000001",
+            "size": "3"
+          },
+          {
+            "entry_id": "entry_00000000000000000000000000000002",
+            "name": "资料",
+            "lookup_key": "资料",
+            "kind": "directory",
+            "entries": "2",
+            "files": "1",
+            "subtree": {
+              "kind": "namespace-page",
+              "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "namespace-index-with-increasing-first-keys",
+      "schema": "NamespaceIndex",
+      "layer": "schema",
+      "value": {
+        "format": "namespace-index",
+        "children": [
+          {
+            "first_key": "a.txt",
+            "entries": "128",
+            "files": "128",
+            "ref": {
+              "kind": "namespace-page",
+              "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            }
+          },
+          {
+            "first_key": "b.txt",
+            "entries": "200",
+            "files": "180",
+            "ref": {
+              "kind": "namespace-index",
+              "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "event-segment-tail",
+      "schema": "EventSegment",
+      "layer": "schema",
+      "value": {
+        "format": "event-segment",
+        "events": [
+          {
+            "sequence": "1",
+            "operation_id": "op_00000000000000000000000000000001",
+            "kind": "workspace.commit",
+            "object_id": "commit_00000000000000000000000000000001"
+          }
+        ]
+      }
+    },
+    {
+      "name": "operation-segment-with-bound-principal",
+      "schema": "OperationSegment",
+      "layer": "schema",
+      "value": {
+        "format": "operation-segment",
+        "records": [
+          {
+            "principal": "alice",
+            "result": {
+              "operation_id": "op_00000000000000000000000000000001",
+              "kind": "workspace.commit",
+              "commit_id": "commit_00000000000000000000000000000001",
+              "history_tree_id": "history_00000000000000000000000000000001",
+              "branch_id": "br_00000000000000000000000000000001",
+              "commit_state": "PUBLISHED",
+              "protection_at_publish": "TARGET_MET",
+              "current_health": "HEALTHY",
+              "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+              "sequence": "1",
+              "result": {
+                "commit_id": "commit_00000000000000000000000000000001"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "operation-result-open-kind-and-json-body",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "future.operation",
+        "commit_id": null,
+        "history_tree_id": null,
+        "branch_id": null,
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "RECOVERING",
+        "request_digest": "fixture",
+        "sequence": "18446744073709551615",
+        "result": [
+          null,
+          true,
+          -1,
+          "detail",
+          {
+            "nested": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "operation-result-null-body-with-optional-identifiers-absent",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "future.operation",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "RECOVERING",
+        "request_digest": "fixture",
+        "sequence": "18446744073709551615",
+        "result": null
       }
     }
   ],
@@ -2375,18 +2515,13 @@
         "operation_id": "op_00000000000000000000000000000001",
         "author": "alice",
         "message": "legacy snapshot",
-        "entries": [
-          {
-            "entry_id": "entry_00000000000000000000000000000001",
-            "path": "a.txt",
-            "name": "a.txt",
-            "lookup_key": "a.txt",
-            "kind": "file",
-            "file_id": "file_00000000000000000000000000000001",
-            "version_id": "ver_00000000000000000000000000000001",
-            "size": "3"
-          }
-        ],
+        "namespace": {
+          "root": {
+            "kind": "namespace-page",
+            "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+          },
+          "entries": "1"
+        },
         "provenance": null,
         "pending_file_versions": {
           "bad": "ver_00000000000000000000000000000001"
@@ -2394,7 +2529,7 @@
       }
     },
     {
-      "name": "snapshot-pending-source-must-match-entry",
+      "name": "commit-empty-namespace-must-use-page-root",
       "schema": "Commit",
       "layer": "semantic",
       "value": {
@@ -2409,28 +2544,20 @@
         "operation_id": "op_00000000000000000000000000000001",
         "author": "alice",
         "message": "legacy snapshot",
-        "entries": [
-          {
-            "entry_id": "entry_00000000000000000000000000000001",
-            "path": "a.txt",
-            "name": "a.txt",
-            "lookup_key": "a.txt",
-            "kind": "file",
-            "file_id": "file_00000000000000000000000000000001",
-            "version_id": "ver_00000000000000000000000000000001",
-            "size": "3"
-          }
-        ],
-        "provenance": null,
-        "pending_file_versions": {
-          "file_00000000000000000000000000000001": "ver_00000000000000000000000000000002"
-        }
+        "namespace": {
+          "root": {
+            "kind": "namespace-index",
+            "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+          },
+          "entries": "0"
+        },
+        "provenance": null
       }
     },
     {
-      "name": "snapshot-pending-file-must-be-in-entries",
+      "name": "commit-namespace-root-hash-must-be-domain-hash",
       "schema": "Commit",
-      "layer": "semantic",
+      "layer": "schema",
       "value": {
         "commit_id": "commit_00000000000000000000000000000002",
         "history_tree_id": "history_00000000000000000000000000000001",
@@ -2443,44 +2570,25 @@
         "operation_id": "op_00000000000000000000000000000001",
         "author": "alice",
         "message": "legacy snapshot",
-        "entries": [
-          {
-            "entry_id": "entry_00000000000000000000000000000001",
-            "path": "a.txt",
-            "name": "a.txt",
-            "lookup_key": "a.txt",
-            "kind": "file",
-            "file_id": "file_00000000000000000000000000000001",
-            "version_id": "ver_00000000000000000000000000000001",
-            "size": "3"
-          }
-        ],
-        "provenance": null,
-        "pending_file_versions": {
-          "file_00000000000000000000000000000002": "ver_00000000000000000000000000000001"
-        }
+        "namespace": {
+          "root": {
+            "kind": "namespace-page",
+            "hash": "not-a-domain-hash"
+          },
+          "entries": "1"
+        },
+        "provenance": null
       }
     },
     {
-      "name": "snapshot-persistent-entry-cannot-be-empty-version",
-      "schema": "Commit",
-      "layer": "semantic",
+      "name": "namespace-page-file-entry-cannot-be-empty-version",
+      "schema": "NamespacePage",
+      "layer": "schema",
       "value": {
-        "commit_id": "commit_00000000000000000000000000000002",
-        "history_tree_id": "history_00000000000000000000000000000001",
-        "kind": "file_branch_pending",
-        "parent_commit_ids": [
-          "commit_00000000000000000000000000000001"
-        ],
-        "tree_id": "tree_00000000000000000000000000000001",
-        "sequence": "2",
-        "operation_id": "op_00000000000000000000000000000001",
-        "author": "alice",
-        "message": "legacy snapshot",
+        "format": "namespace-page",
         "entries": [
           {
             "entry_id": "entry_00000000000000000000000000000001",
-            "path": "a.txt",
             "name": "a.txt",
             "lookup_key": "a.txt",
             "kind": "file",
@@ -2488,11 +2596,7 @@
             "version_id": "",
             "size": "3"
           }
-        ],
-        "provenance": null,
-        "pending_file_versions": {
-          "file_00000000000000000000000000000001": "ver_00000000000000000000000000000001"
-        }
+        ]
       }
     },
     {
@@ -5474,7 +5578,13 @@
         "operation_id": "op_00000000000000000000000000000001",
         "author": "alice",
         "message": "删除目录与文件",
-        "entries": [],
+        "namespace": {
+          "root": {
+            "kind": "namespace-page",
+            "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+          },
+          "entries": "0"
+        },
         "provenance": null,
         "namespace_deletions": null
       }
@@ -6131,7 +6241,11 @@
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
-          "operations": {
+          "operation_log": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_locators": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -6144,10 +6258,6 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "protection_policies": {
-            "kind": "state-page",
-            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
-          },
-          "operation_principals": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -6292,7 +6402,7 @@
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
-          "operations": {
+          "operation_log": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -6449,7 +6559,11 @@
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
-          "operations": {
+          "operation_log": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_locators": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -6462,10 +6576,6 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "protection_policies": {
-            "kind": "state-page",
-            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
-          },
-          "operation_principals": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -6614,7 +6724,11 @@
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
-          "operations": {
+          "operation_log": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_locators": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -6627,10 +6741,6 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "protection_policies": {
-            "kind": "state-page",
-            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
-          },
-          "operation_principals": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -6775,7 +6885,11 @@
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
-          "operations": {
+          "operation_log": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_locators": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -6788,10 +6902,6 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "protection_policies": {
-            "kind": "state-page",
-            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
-          },
-          "operation_principals": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -6933,7 +7043,11 @@
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
-          "operations": {
+          "operation_log": {
+            "kind": "state-page",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "operation_locators": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -6946,10 +7060,6 @@
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
           "protection_policies": {
-            "kind": "state-page",
-            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
-          },
-          "operation_principals": {
             "kind": "state-page",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000"
           },
@@ -7277,6 +7387,391 @@
           },
           "cold_records": "0"
         }
+      }
+    },
+    {
+      "name": "namespace-page-entries-must-sort-by-component-key",
+      "schema": "NamespacePage",
+      "layer": "semantic",
+      "value": {
+        "format": "namespace-page",
+        "entries": [
+          {
+            "entry_id": "entry_00000000000000000000000000000002",
+            "name": "资料",
+            "lookup_key": "资料",
+            "kind": "directory",
+            "entries": "2",
+            "files": "1",
+            "subtree": {
+              "kind": "namespace-page",
+              "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            }
+          },
+          {
+            "entry_id": "entry_00000000000000000000000000000001",
+            "name": "a.txt",
+            "lookup_key": "a.txt",
+            "kind": "file",
+            "file_id": "file_00000000000000000000000000000001",
+            "version_id": "ver_00000000000000000000000000000001",
+            "size": "3"
+          }
+        ]
+      }
+    },
+    {
+      "name": "namespace-page-file-entry-rejects-directory-fields",
+      "schema": "NamespacePage",
+      "layer": "schema",
+      "value": {
+        "format": "namespace-page",
+        "entries": [
+          {
+            "entry_id": "entry_00000000000000000000000000000001",
+            "name": "a.txt",
+            "lookup_key": "a.txt",
+            "kind": "file",
+            "file_id": "file_00000000000000000000000000000001",
+            "version_id": "ver_00000000000000000000000000000001",
+            "size": "3",
+            "entries": "1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "namespace-index-children-cannot-be-empty",
+      "schema": "NamespaceIndex",
+      "layer": "schema",
+      "value": {
+        "format": "namespace-index",
+        "children": []
+      }
+    },
+    {
+      "name": "namespace-index-first-keys-must-strictly-increase",
+      "schema": "NamespaceIndex",
+      "layer": "semantic",
+      "value": {
+        "format": "namespace-index",
+        "children": [
+          {
+            "first_key": "a.txt",
+            "entries": "128",
+            "files": "128",
+            "ref": {
+              "kind": "namespace-page",
+              "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            }
+          },
+          {
+            "first_key": "a.txt",
+            "entries": "200",
+            "files": "180",
+            "ref": {
+              "kind": "namespace-index",
+              "hash": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "operation-segment-incomplete-receipt",
+      "schema": "OperationSegment",
+      "layer": "schema",
+      "value": {
+        "format": "operation-segment",
+        "records": [
+          {
+            "principal": "alice",
+            "result": {
+              "operation_id": "op_00000000000000000000000000000001"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "operation-result-unknown-field",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "workspace.commit",
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "HEALTHY",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": "1",
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        },
+        "obsolete": true
+      }
+    },
+    {
+      "name": "operation-result-unknown-commit-state",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "workspace.commit",
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED_TYPO",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "HEALTHY",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": "1",
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "name": "operation-result-unknown-protection",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "workspace.commit",
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "HEALTHY",
+        "current_health": "HEALTHY",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": "1",
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "name": "operation-result-unknown-current-health",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "workspace.commit",
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "healthy",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": "1",
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "name": "operation-result-sequence-number",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "workspace.commit",
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "HEALTHY",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": 1,
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "name": "operation-result-sequence-leading-zero",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "workspace.commit",
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "HEALTHY",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": "01",
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "name": "operation-result-sequence-overflow",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "workspace.commit",
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "HEALTHY",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": "18446744073709551616",
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "name": "operation-result-invalid-operation-id",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_0000000000000000000000000000000A",
+        "kind": "workspace.commit",
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "HEALTHY",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": "1",
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "name": "operation-result-null-kind",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": null,
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "HEALTHY",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": "1",
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "name": "operation-result-numeric-optional-id",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "workspace.commit",
+        "commit_id": 1,
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "HEALTHY",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": "1",
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "name": "operation-result-null-request-digest",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "workspace.commit",
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "HEALTHY",
+        "request_digest": null,
+        "sequence": "1",
+        "result": {
+          "commit_id": "commit_00000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "name": "operation-result-missing-json-body",
+      "schema": "OperationResult",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "kind": "workspace.commit",
+        "commit_id": "commit_00000000000000000000000000000001",
+        "history_tree_id": "history_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "TARGET_MET",
+        "current_health": "HEALTHY",
+        "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        "sequence": "1"
+      }
+    },
+    {
+      "name": "operation-segment-non-object-receipt",
+      "schema": "OperationSegment",
+      "layer": "schema",
+      "value": {
+        "format": "operation-segment",
+        "records": [
+          {
+            "principal": "alice",
+            "result": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "operation-segment-unknown-record-field",
+      "schema": "OperationSegment",
+      "layer": "schema",
+      "value": {
+        "format": "operation-segment",
+        "records": [
+          {
+            "principal": "alice",
+            "result": {
+              "operation_id": "op_00000000000000000000000000000001",
+              "kind": "workspace.commit",
+              "commit_id": "commit_00000000000000000000000000000001",
+              "history_tree_id": "history_00000000000000000000000000000001",
+              "branch_id": "br_00000000000000000000000000000001",
+              "commit_state": "PUBLISHED",
+              "protection_at_publish": "TARGET_MET",
+              "current_health": "HEALTHY",
+              "request_digest": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+              "sequence": "1",
+              "result": {
+                "commit_id": "commit_00000000000000000000000000000001"
+              }
+            },
+            "obsolete": true
+          }
+        ]
       }
     }
   ],

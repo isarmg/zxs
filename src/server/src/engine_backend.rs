@@ -184,24 +184,12 @@ fn repository_in_state<'a>(
         )
     })
 }
-fn capture_event_page<'a>(
-    events: impl Iterator<Item = &'a storage_contract::Event>,
-    published: u64,
-    after: u64,
-) -> Result<crate::EventPage, ApiError> {
-    if after > published {
-        return Err(ApiError::new(
-            ::http::StatusCode::BAD_REQUEST,
-            storage_contract::ErrorCode::InvalidCursor,
-            "event cursor is ahead of the published sequence",
-        ));
-    }
-    let events: Vec<_> = events.take(1000).cloned().collect();
+fn capture_event_page(events: Vec<storage_contract::Event>, after: u64) -> crate::EventPage {
     let next_cursor = events.last().map_or(after, |event| event.sequence);
-    Ok(crate::EventPage {
+    crate::EventPage {
         events,
         next_cursor,
-    })
+    }
 }
 fn repo_for_history<'a>(engine: &'a Engine, id: &str) -> Result<&'a Repository, ApiError> {
     repo_for_history_in_state(engine.state(), id)
@@ -389,6 +377,68 @@ impl Backend for EngineBackend {
             .commits
             .get_shared(commit)
             .expect("invariant: admitted commit exists under the engine lock"))
+    }
+
+    fn snapshot_entry(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        read_projection::branch_snapshot(engine.state(), branch, Some(commit))?;
+        let tree = engine.namespace_tree_at(branch, commit).map_err(error)?;
+        tree.get_key(key).map_err(error)
+    }
+
+    fn snapshot_directory_has_children(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+    ) -> Result<bool, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        read_projection::branch_snapshot(engine.state(), branch, Some(commit))?;
+        let tree = engine.namespace_tree_at(branch, commit).map_err(error)?;
+        Ok(tree
+            .directory_page(key, None, 1)
+            .map_err(error)?
+            .is_some_and(|children| !children.is_empty()))
+    }
+
+    fn snapshot_entry_by_identity(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+        entry_id: &str,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        read_projection::branch_snapshot(engine.state(), branch, Some(commit))?;
+        let tree = engine.namespace_tree_at(branch, commit).map_err(error)?;
+        if let Some(entry) = tree.get_key(key).map_err(error)? {
+            if entry.entry_id == entry_id {
+                return Ok(Some(entry));
+            }
+        }
+        // A concurrent rename moved the stable entry away from the caller's
+        // last-known key: resolve by identity with an early-stop walk.
+        let mut found = None;
+        tree.walk(|entry| {
+            if entry.entry_id == entry_id {
+                found = Some(entry.clone());
+                return Ok(false);
+            }
+            Ok(true)
+        })
+        .map_err(error)?;
+        Ok(found)
     }
 
     fn create_workspace(
@@ -747,9 +797,9 @@ impl Backend for EngineBackend {
     ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        let (left, right) = {
-            let capture = |id: &str| {
-                let commit = engine.state().commits.get_shared(id).ok_or_else(|| {
+        {
+            let validate = |id: &str| {
+                let commit = engine.state().commits.get(id).ok_or_else(|| {
                     ApiError::new(
                         ::http::StatusCode::NOT_FOUND,
                         storage_contract::ErrorCode::NotFound,
@@ -757,12 +807,15 @@ impl Backend for EngineBackend {
                     )
                 })?;
                 repo_for_history(&engine, &commit.history_tree_id)?;
-                Ok::<_, ApiError>(commit)
+                Ok::<_, ApiError>(())
             };
-            (capture(request.left)?, capture(request.right)?)
-        };
-        drop(engine);
-        Ok(storage_contract::CommitComparison::between(left, right))
+            validate(request.left)?;
+            validate(request.right)?;
+        }
+        // Whole-commit comparison materializes both sides once in the engine.
+        engine
+            .compare_commits(request.left, request.right)
+            .map_err(error)
     }
     fn disk_status(
         &self,
@@ -825,7 +878,7 @@ impl Backend for EngineBackend {
             .expect("invariant: service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         let branch = Application::new(&mut engine, &current).create_branch(request)?;
-        Ok(branch::capture_owned(engine.state(), branch))
+        branch::capture_owned(&engine, branch).map_err(error)
     }
     fn create_file_branch(
         &self,
@@ -1397,7 +1450,15 @@ impl Backend for EngineBackend {
     ) -> Result<crate::EventPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        capture_event_page(engine.events_after(after), engine.state().sequence, after)
+        if after > engine.state().sequence {
+            return Err(ApiError::new(
+                ::http::StatusCode::BAD_REQUEST,
+                storage_contract::ErrorCode::InvalidCursor,
+                "event cursor is ahead of the published sequence",
+            ));
+        }
+        let events = engine.events_page(after, 1000).map_err(error)?;
+        Ok(capture_event_page(events, after))
     }
     fn activity_history(
         &self,
@@ -1454,10 +1515,7 @@ impl Backend for EngineBackend {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         repo_for_branch(&engine, id)?;
-        Ok(branch::capture(
-            engine.state(),
-            &engine.state().branches[id],
-        ))
+        branch::capture(&engine, &engine.state().branches[id]).map_err(error)
     }
     fn branches_snapshot(
         &self,
@@ -1467,13 +1525,13 @@ impl Backend for EngineBackend {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         let repo = repository(&engine, id)?;
-        Ok(engine
+        engine
             .state()
             .branches
             .values()
             .filter(|branch| branch.history_tree_id == repo.history_tree_id)
-            .map(|branch| branch::capture(engine.state(), branch))
-            .collect())
+            .map(|branch| branch::capture(&engine, branch).map_err(error))
+            .collect()
     }
     fn repositories_snapshot(
         &self,
@@ -1610,11 +1668,12 @@ impl Backend for EngineBackend {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         let (_, snapshot) = read_projection::branch_snapshot(engine.state(), branch, Some(commit))?;
-        Ok(snapshot
-            .entries
-            .binary_search_by(|entry| entry.lookup_key().cmp(path.key()))
-            .ok()
-            .map(|index| snapshot.entries[index].clone()))
+        // One indexed point read replaces the former sorted-list search.
+        engine
+            .commit_namespace(&snapshot.commit_id)
+            .expect("invariant: validated snapshot commit exists")
+            .get_key(path.key())
+            .map_err(error)
     }
 
     fn plan(&self, identity: &Identity, plan_id: &str) -> Result<storage_contract::Plan, ApiError> {

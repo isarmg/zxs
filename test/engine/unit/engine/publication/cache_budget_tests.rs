@@ -38,6 +38,8 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
         .unwrap();
     let before = canonical_json(engine.state()).unwrap();
     let mut next = engine.state().clone();
+    // Production planners begin tracking immediately after the clone.
+    next.begin_tracking();
     next.sequence = engine.next_slot;
     let file = next.versions.values().next().unwrap().file_id.clone();
     // Valid metadata must reach the deliberately tiny cache budget; an invalid
@@ -45,10 +47,15 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     let note = "n".repeat(storage_contract::MAX_NOTE_BYTES);
     storage_contract::validate_note(&note).unwrap();
     next.file_notes.insert(file, note);
-    let mut result = next.operations.values().next().unwrap().clone();
+    let mut result = next.operations.tail().first().unwrap().result.clone();
     result.operation_id = storage_contract::OperationId::generate();
     result.sequence = next.sequence;
-    next.operations.insert(result.operation_id, result.clone());
+    next.operations
+        .push(storage_contract::OperationRecordEntry {
+            principal: "alice".into(),
+            result: result.clone(),
+        })
+        .unwrap();
     let logs: Vec<_> = engine
         .members()
         .iter()
@@ -56,7 +63,14 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
         .collect();
     let error = engine
         .planning_context()
-        .prepare_publication_bounded(next.clone(), Vec::new(), result.clone(), MAX_METADATA, 128)
+        .prepare_publication_bounded(
+            next.clone(),
+            Vec::new(),
+            Vec::new(),
+            result.clone(),
+            MAX_METADATA,
+            128,
+        )
         .err()
         .unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
@@ -82,7 +96,14 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     let detached = engine
         .planning_context()
-        .prepare_publication_bounded(next, Vec::new(), result.clone(), MAX_METADATA, MAX_METADATA)
+        .prepare_publication_bounded(
+            next,
+            Vec::new(),
+            Vec::new(),
+            result.clone(),
+            MAX_METADATA,
+            MAX_METADATA,
+        )
         .unwrap();
     engine.inject_fault_once("after_accept_1");
     assert_eq!(
@@ -161,6 +182,8 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         .map(|disk| std::fs::read(log_path(disk)).unwrap())
         .collect();
     let mut next = engine.state().clone();
+    // Production planners begin tracking immediately after the clone.
+    next.begin_tracking();
     next.sequence = engine.next_slot;
     let source = root.join("unpublished-source");
     std::fs::write(&source, b"replacement bytes").unwrap();
@@ -187,14 +210,20 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     commit.parent_commit_ids = vec![original.commit_id];
     commit.sequence = next.sequence;
     commit.kind = "content".into();
-    commit.entries = vec![Entry {
-        entry_id: new_id("entry"),
-        path: name_policy::PortablePath::parse("renamed.txt").unwrap(),
-        kind: NamespaceEntryKind::File,
-        file_id: old_entry.file_id.clone(),
-        version_id: version.version_id.clone(),
-        size: version.logical_size,
-    }];
+    let mut built_objects = crate::namespace::NamespaceObjects::new();
+    commit.namespace = crate::namespace::build_from_entries(
+        &[Entry {
+            entry_id: new_id("entry"),
+            path: name_policy::PortablePath::parse("renamed.txt").unwrap(),
+            kind: NamespaceEntryKind::File,
+            file_id: old_entry.file_id.clone(),
+            version_id: version.version_id.clone(),
+            size: version.logical_size,
+        }],
+        &mut built_objects,
+    )
+    .unwrap();
+    let built = built_objects.take();
     next.branches
         .get_mut(&repo.main_branch_id)
         .unwrap()
@@ -204,10 +233,15 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         .insert(old_entry.file_id.clone(), "renamed.txt".into());
     next.file_locations
         .insert(old_entry.file_id.clone(), "renamed.txt".into());
-    let mut result = next.operations.values().next().unwrap().clone();
+    let mut result = next.operations.tail().first().unwrap().result.clone();
     result.operation_id = storage_contract::OperationId::generate();
     result.sequence = next.sequence;
-    next.operations.insert(result.operation_id, result.clone());
+    next.operations
+        .push(storage_contract::OperationRecordEntry {
+            principal: "alice".into(),
+            result: result.clone(),
+        })
+        .unwrap();
     let retry_pending = pending
         .iter()
         .map(|payload| Prepared {
@@ -218,7 +252,14 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         .collect();
     let error = engine
         .planning_context()
-        .prepare_publication_bounded(next.clone(), pending, result.clone(), MAX_METADATA, 128)
+        .prepare_publication_bounded(
+            next.clone(),
+            pending,
+            built.clone(),
+            result.clone(),
+            MAX_METADATA,
+            128,
+        )
         .err()
         .unwrap();
     assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
@@ -260,6 +301,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         .prepare_publication_bounded(
             next,
             retry_pending,
+            built,
             result.clone(),
             MAX_METADATA,
             MAX_METADATA,

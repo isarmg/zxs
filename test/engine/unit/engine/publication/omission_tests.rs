@@ -157,13 +157,14 @@ fn prepare_auth(engine: &Engine) -> DetachedPublication {
     let crate::engine::MutationPlan::Prepared {
         next,
         prepared,
+        namespace,
         result,
     } = plan
     else {
         panic!("new operation must prepare")
     };
     engine
-        .prepare_publication(*next, prepared, result, MAX_METADATA)
+        .prepare_publication(*next, prepared, namespace, result, MAX_METADATA)
         .unwrap()
 }
 
@@ -290,12 +291,13 @@ fn try_prepare_history_change(engine: &Engine) -> Result<DetachedPublication> {
     let crate::engine::MutationPlan::Prepared {
         next,
         prepared,
+        namespace,
         result,
     } = plan
     else {
         panic!("new history operation must prepare")
     };
-    let detached = engine.prepare_publication(*next, prepared, result, MAX_METADATA)?;
+    let detached = engine.prepare_publication(*next, prepared, namespace, result, MAX_METADATA)?;
     let updated = detached.history_basis.catalog_binding(&history).unwrap();
     assert_ne!(updated.hash, prior.hash);
     assert_eq!(updated.encoder.is_some(), prior.encoder.is_some());
@@ -851,7 +853,7 @@ fn changed_history_index_failure_preserves_new_descriptor_until_a_metadata_fault
     assert_eq!(result.commit_state, CommitState::Published);
     assert!(!engine.blocked);
     assert_eq!(engine.state.sequence, sequence);
-    assert!(engine.state.operations.contains_key(&operation));
+    assert!(engine.published_receipt(operation).unwrap().is_some());
     assert_eq!(accepts(&engine, sequence), engine.members().len());
     assert!(epoch.matches(&engine.metadata_integrity));
     assert!(engine.has_current_integrity_scrub_coverage());

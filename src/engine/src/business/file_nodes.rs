@@ -231,7 +231,11 @@ impl<'a> NodeProjection<'a> {
     }
 }
 
-pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
+pub(crate) fn branch_head(
+    state: &State,
+    branch: &str,
+    source: &dyn crate::namespace::NamespaceSource,
+) -> Result<String> {
     let branch = state.branches.get(branch).ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::FileBranchNotFound,
@@ -244,26 +248,39 @@ pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
             "an independent file branch is required",
         )
     })?;
-    let node = branch
-        .file_node_id
-        .clone()
-        .or_else(|| {
-            state
-                .commits
-                .get(&branch.head_commit_id)
-                .and_then(|c| {
-                    c.entries
-                        .iter()
-                        .find(|e| e.kind == NamespaceEntryKind::File && e.file_id == file)
-                })
-                .map(|e| e.version_id.clone())
-        })
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "file branch head is missing",
-            )
-        })?;
+    let node = match branch.file_node_id.clone() {
+        Some(node) => Some(node),
+        // A file branch's commit holds its one file entry; the walk reads a
+        // single page.
+        None => match state.commits.get(&branch.head_commit_id) {
+            Some(commit) => {
+                let mut found = None;
+                crate::namespace::NamespaceView::new(&commit.namespace, source).walk(
+                    |_, entry| {
+                        if let storage_contract::NamespacePageEntry::File {
+                            file_id,
+                            version_id,
+                            ..
+                        } = entry
+                            && file_id == file
+                        {
+                            found = Some(version_id.clone());
+                            return Ok(false);
+                        }
+                        Ok(true)
+                    },
+                )?;
+                found
+            }
+            None => None,
+        },
+    }
+    .ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "file branch head is missing",
+        )
+    })?;
     node_version(state, file, &node)?;
     Ok(node)
 }
@@ -293,7 +310,7 @@ impl Engine {
         Ok(node_parents(&self.state, node))
     }
     pub fn file_branch_head(&self, branch: &str) -> Result<String> {
-        branch_head(&self.state, branch)
+        self.with_namespace_source(|source| branch_head(&self.state, branch, source))
     }
 }
 

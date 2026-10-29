@@ -1,5 +1,7 @@
 use super::*;
-use crate::{NamespaceEntryKind, OperationId};
+use crate::{
+    CommitNamespace, NamespaceEntryKind, NamespaceRefKind, NamespaceReference, OperationId,
+};
 use json_codec::{Value, json};
 fn entry(path: &str, version: &str) -> Entry {
     Entry {
@@ -11,7 +13,7 @@ fn entry(path: &str, version: &str) -> Entry {
         size: 7,
     }
 }
-fn commit(id: &str, entries: Vec<Entry>) -> Arc<Commit> {
+fn commit(id: &str, entries: u64) -> Arc<Commit> {
     Arc::new(Commit {
         commit_id: id.into(),
         history_tree_id: "history".into(),
@@ -22,25 +24,29 @@ fn commit(id: &str, entries: Vec<Entry>) -> Arc<Commit> {
         operation_id: OperationId::generate(),
         author: "author".into(),
         message: "".into(),
-        entries,
+        namespace: CommitNamespace {
+            root: NamespaceReference {
+                kind: NamespaceRefKind::Page,
+                hash: "e".repeat(64),
+            },
+            entries,
+        },
         pending_file_versions: Default::default(),
         namespace_deletions: None,
         provenance: None,
     })
 }
-fn old_changes(left: &Commit, right: &Commit) -> Value {
+fn old_changes(left: &[Entry], right: &[Entry]) -> Value {
     let before: BTreeMap<_, _> = left
-        .entries
         .iter()
         .map(|entry| (entry.lookup_key(), entry))
         .collect();
     let after: BTreeMap<_, _> = right
-        .entries
         .iter()
         .map(|entry| (entry.lookup_key(), entry))
         .collect();
     let mut changes = Vec::new();
-    for entry in &left.entries {
+    for entry in left {
         match after.get(entry.lookup_key()) {
             None => changes.push(json!({"path":entry.path(),"change":"removed","before":entry})),
             Some(other) if entry.version_id != other.version_id || entry.path() != other.path() => {
@@ -51,7 +57,7 @@ fn old_changes(left: &Commit, right: &Commit) -> Value {
             _ => {}
         }
     }
-    for entry in &right.entries {
+    for entry in right {
         if !before.contains_key(entry.lookup_key()) {
             changes.push(json!({"path":entry.path(),"change":"added","after":entry}));
         }
@@ -84,10 +90,10 @@ fn comparison_preserves_order_keys_and_legacy_last_match_semantics() {
     ];
     for before in &cases {
         for after in &cases {
-            let left = commit("left", before.clone());
-            let right = commit("right", after.clone());
-            let expected = old_changes(&left, &right);
-            let comparison = CommitComparison::between(left, right);
+            let left = commit("left", before.len() as u64);
+            let right = commit("right", after.len() as u64);
+            let expected = old_changes(before, after);
+            let comparison = CommitComparison::between(left, before.clone(), right, after.clone());
             assert_eq!(changes(&comparison), expected);
             assert_eq!(
                 comparison.changes().rev().count(),
@@ -97,35 +103,36 @@ fn comparison_preserves_order_keys_and_legacy_last_match_semantics() {
     }
 }
 #[test]
-fn comparison_shares_entries_and_survives_owner_copy_on_write_and_drop() {
-    let mut left = commit(
-        "unparsed left id",
-        vec![entry("file.txt", "old"), entry("removed.txt", "old")],
+fn comparison_owns_entries_and_survives_commit_copy_on_write_and_drop() {
+    let mut left = commit("unparsed left id", 2);
+    let right = commit("", 2);
+    let left_entries = vec![entry("file.txt", "old"), entry("removed.txt", "old")];
+    let right_entries = vec![entry("FILE.txt", "new"), entry("added.txt", "new")];
+    let comparison = CommitComparison::between(
+        Arc::clone(&left),
+        left_entries.clone(),
+        Arc::clone(&right),
+        right_entries.clone(),
     );
-    let right = commit(
-        "",
-        vec![entry("FILE.txt", "new"), entry("added.txt", "new")],
-    );
-    let comparison = CommitComparison::between(Arc::clone(&left), Arc::clone(&right));
     assert_eq!(Arc::strong_count(&left), 2);
     assert_eq!(Arc::strong_count(&right), 2);
-    let mut changes = comparison.changes();
-    let CommitChange::Modified { before, after } = changes.next().unwrap() else {
+    let mut iterated = comparison.changes();
+    let CommitChange::Modified { before, after } = iterated.next().unwrap() else {
         panic!("expected modified")
     };
-    assert!(std::ptr::eq(before, &left.entries[0]));
-    assert!(std::ptr::eq(after, &right.entries[0]));
-    let CommitChange::Removed { before } = changes.next().unwrap() else {
+    assert_eq!(before, &left_entries[0]);
+    assert_eq!(after, &right_entries[0]);
+    let CommitChange::Removed { before } = iterated.next().unwrap() else {
         panic!("expected removed")
     };
-    assert!(std::ptr::eq(before, &left.entries[1]));
-    let CommitChange::Added { after } = changes.next().unwrap() else {
+    assert_eq!(before, &left_entries[1]);
+    let CommitChange::Added { after } = iterated.next().unwrap() else {
         panic!("expected added")
     };
-    assert!(std::ptr::eq(after, &right.entries[1]));
-    assert_eq!(changes.len(), 0);
-    let expected = old_changes(&left, &right);
-    Arc::make_mut(&mut left).entries[0].version_id = "later".into();
+    assert_eq!(after, &right_entries[1]);
+    assert_eq!(iterated.len(), 0);
+    let expected = old_changes(&left_entries, &right_entries);
+    Arc::make_mut(&mut left).message = "later".into();
     drop(left);
     drop(right);
     assert_eq!(comparison.left_id(), "unparsed left id");
@@ -134,11 +141,17 @@ fn comparison_shares_entries_and_survives_owner_copy_on_write_and_drop() {
 }
 #[test]
 fn comparison_modified_semantics_do_not_expand_to_other_entry_metadata() {
-    let left = commit("left", vec![entry("file.txt", "version")]);
-    let mut changed = left.entries.clone();
+    let left = commit("left", 1);
+    let left_entries = vec![entry("file.txt", "version")];
+    let mut changed = left_entries.clone();
     changed[0].entry_id = "other entry".into();
     changed[0].file_id = "other file".into();
     changed[0].size = 99;
-    let right = commit("right", changed);
-    assert_eq!(CommitComparison::between(left, right).changes().len(), 0);
+    let right = commit("right", 1);
+    assert_eq!(
+        CommitComparison::between(left, left_entries, right, changed)
+            .changes()
+            .len(),
+        0
+    );
 }

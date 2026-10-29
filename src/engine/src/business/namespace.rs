@@ -1,8 +1,10 @@
 //! Namespace changes preserve stable identity and path invariants.
 use super::*;
 use std::collections::BTreeMap;
+#[cfg(test)]
 mod draft;
 mod query;
+#[cfg(test)]
 pub(crate) use draft::NamespaceDraft;
 pub use query::NamespaceTree;
 
@@ -20,6 +22,7 @@ pub(crate) fn sorted(entries: &mut [Entry]) {
 /// Retain/push and subtree renames preserve operation/deletion ordering; sorting
 /// between operations would change that observable order. Published reads use
 /// `NamespaceTree` instead, and indexed upload construction uses `NamespaceDraft`.
+#[cfg(test)]
 pub(crate) fn find_unordered<'a>(entries: &'a [Entry], path: &str) -> Option<&'a Entry> {
     let key = name_policy::path_key(path);
     find_unordered_key(entries, &key)

@@ -13,10 +13,10 @@ pub(super) fn read(
     let repo = repository(engine, selection.repository_id())?;
     let state = engine.state();
     let scopes = super::directory_scopes::matching(
-        state,
+        engine,
         repo,
         Some(selection.scope().map_or("", name_policy::LookupPath::key)),
-    )
+    )?
     .into_iter()
     .map(|branch| (branch.directory_branch_id.as_str(), branch))
     .collect::<BTreeMap<_, _>>();

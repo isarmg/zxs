@@ -67,20 +67,33 @@ fn name_capture_receipt_is_bound_only_to_its_immutable_state() {
     assert!(base.names_captured_for(&engine.state));
     assert_eq!(
         base.history_owners,
-        crate::state_projection::DerivedOwners::from_state(&engine.state)
+        engine
+            .with_namespace_source(|source| crate::state_projection::DerivedOwners::from_state(
+                &engine.state,
+                source
+            ))
+            .unwrap()
     );
     let mut next = engine.state().clone();
     next.file_notes.insert(file.clone(), "changed note".into());
-    let mut projection = crate::state_projection::ProjectionTransition::new(
-        &engine.state,
-        &next,
-        Some(&base.history_owners),
-    )
-    .unwrap();
+    let mut projection = engine
+        .with_namespace_source(|source| {
+            crate::state_projection::ProjectionTransition::new(
+                &engine.state,
+                &next,
+                Some(&base.history_owners),
+                source,
+            )
+        })
+        .unwrap();
     assert!(!projection.take_history_edits().unwrap().is_empty());
     assert_eq!(
         projection.into_owners(),
-        crate::state_projection::DerivedOwners::from_state(&next)
+        engine
+            .with_namespace_source(|source| crate::state_projection::DerivedOwners::from_state(
+                &next, source
+            ))
+            .unwrap()
     );
 
     let equal_state = Arc::new(engine.state().clone());
@@ -104,7 +117,14 @@ fn cold_planning_captures_admitted_missing_fields_before_the_business_closure() 
         }
         let decoded: crate::history_package::RawState =
             json_codec::from_slice(&canonical_json(&raw).unwrap()).unwrap();
-        let admitted = Arc::new(State::try_from(decoded).unwrap());
+        let admitted = Arc::new(
+            engine
+                .with_namespace_source(|source| {
+                    crate::history_package::AdmittedState::admit(decoded, source)
+                })
+                .unwrap()
+                .into_state(),
+        );
         let old_receipt = engine.published_state_base.as_ref().unwrap();
         assert!(!old_receipt.names_captured_for(&admitted));
         let mut context = engine.planning_context();
@@ -241,7 +261,7 @@ fn derived_index_failure_preserves_completed_member_authority_not_future_failure
         .persist_auth_state(json!({"auth":"published"}), "alice", operation)
         .unwrap();
     assert!(!engine.blocked);
-    assert!(engine.state.operations.contains_key(&operation));
+    assert!(engine.published_receipt(operation).unwrap().is_some());
     assert!(epoch.matches(&engine.metadata_integrity));
     let current = engine.published_state_base.clone().unwrap();
     assert!(!Arc::ptr_eq(&base, &current));
@@ -394,9 +414,16 @@ fn detached_publication_rejects_faults_observed_after_full_preparation_before_an
     let mut engine = engine(temp.path());
     let mut next = engine.state().clone();
     next.sequence = engine.next_slot;
-    let result = engine.state.operations.values().next().unwrap().clone();
+    let result = engine
+        .state
+        .operations
+        .tail()
+        .first()
+        .unwrap()
+        .result
+        .clone();
     let detached = engine
-        .prepare_publication(next, Vec::new(), result, MAX_METADATA)
+        .prepare_publication(next, Vec::new(), Vec::new(), result, MAX_METADATA)
         .unwrap();
     let sequence = engine.state.sequence;
     let slot = engine.next_slot;

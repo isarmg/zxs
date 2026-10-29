@@ -131,7 +131,16 @@ fn protection_commands_preserve_core_replay_and_transport_contract() {
             401
         );
         assert_eq!(
-            backend.engine.lock().unwrap().state().operations[&operation].request_digest,
+            backend
+                .engine
+                .lock()
+                .unwrap()
+                .state()
+                .operations
+                .tail_record(operation)
+                .unwrap()
+                .result
+                .request_digest,
             original.request_digest
         );
         let applied = execute(&owner, "", 1, storage_contract::OperationId::generate()).unwrap();
@@ -675,7 +684,7 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
                     storage_contract::ErrorCode::Unauthorized
                 );
                 let engine = backend.engine.lock().unwrap();
-                assert!(!engine.state().operations.contains_key(&operation));
+                assert!(engine.state().operations.tail_record(operation).is_none());
                 assert!(engine.list_tree(&repo.main_branch_id).unwrap().is_empty());
                 continue;
             }
@@ -740,7 +749,7 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
             let result = writer.join().unwrap();
             let engine = backend.engine.lock().unwrap();
             assert!(result.is_ok(), "{result:?}");
-            assert!(engine.state().operations.contains_key(&operation));
+            assert!(engine.state().operations.tail_record(operation).is_some());
         }
     }
 }

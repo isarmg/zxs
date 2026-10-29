@@ -96,27 +96,50 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
         let current = engine.state.commits[&workspace.base_head].clone();
         let mut changed = current.clone();
         changed.commit_id = new_id("commit");
-        changed
-            .entries
-            .iter_mut()
-            .find(|entry| entry.kind == NamespaceEntryKind::File)
-            .unwrap()
-            .version_id = new_id("ver");
+        let mut built = crate::namespace::NamespaceObjects::new();
+        changed.namespace = engine
+            .with_namespace_source(|base| {
+                let mut entry = crate::namespace::NamespaceView::new(&current.namespace, base)
+                    .collect_entries()?
+                    .into_iter()
+                    .find(|entry| entry.kind == NamespaceEntryKind::File)
+                    .unwrap();
+                entry.version_id = new_id("ver");
+                let mut editor = crate::namespace::NamespaceEditor::open(&current.namespace, base)?;
+                editor.upsert_file(&entry)?;
+                editor.seal(&mut built)
+            })
+            .unwrap();
         std::sync::Arc::make_mut(&mut engine.state)
             .commits
             .insert(changed.commit_id.clone(), changed.clone());
-        assert_eq!(
-            synchronize_directory_edits(
-                std::sync::Arc::make_mut(&mut engine.state),
-                &changed.commit_id,
-                &["report.txt".into()],
-                "admin",
-                storage_contract::OperationId::generate(),
-            )
-            .unwrap_err()
-            .code(),
-            storage_contract::ErrorCode::BranchNotActive
-        );
+        let members = engine.members();
+        // Field-disjoint borrows: the reader never touches `state`.
+        let reader = crate::segment_store::SegmentReader {
+            resources: &engine.disk_resources,
+            members: &members,
+            caches: &engine.segment_caches,
+        };
+        let base =
+            crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {
+                reader.namespace_node(reference)
+            });
+        let draft = crate::namespace::DraftSource {
+            fresh: &built,
+            base: &base,
+        };
+        let mut fresh = crate::namespace::NamespaceObjects::new();
+        let error = synchronize_directory_edits(
+            std::sync::Arc::make_mut(&mut engine.state),
+            &changed.commit_id,
+            &["report.txt".into()],
+            "admin",
+            storage_contract::OperationId::generate(),
+            &draft,
+            &mut fresh,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), storage_contract::ErrorCode::BranchNotActive);
         assert_eq!(engine.state.branches[&branch].head_commit_id, before);
     }
 }

@@ -25,9 +25,11 @@ pub use journal::JournalFault;
 mod maintenance;
 mod metadata_budget;
 mod metadata_map;
+mod namespace;
 mod protection;
 mod publication_evidence;
 mod repair;
+mod segment_store;
 mod state_projection;
 mod wire;
 pub use business::{
@@ -53,6 +55,38 @@ pub use protection::{
 };
 pub use storage_contract::*;
 pub use wire::{commit_request_digest, manifest_hash as workspace_manifest_hash};
+
+/// Test-only fixture support for dependent crates' unit tests. Gated behind
+/// the `test-support` feature, which production builds never enable. Nothing
+/// here relaxes admission: planted objects are canonical encodings, and a
+/// replaced state is the caller's responsibility to keep admitted-shaped.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    use crate::engine::Engine;
+
+    /// Build the canonical paged namespace of `entries` (absent parent
+    /// directories are synthesized deterministically) and store its objects
+    /// onto this engine's member disks, so hand-built commit fixtures resolve
+    /// through the same bounded reads as published commits.
+    pub fn plant_namespace(
+        engine: &Engine,
+        entries: &[storage_contract::Entry],
+    ) -> crate::Result<storage_contract::CommitNamespace> {
+        let (namespace, mut objects) = crate::namespace::fixture_namespace(entries);
+        let members = engine.members();
+        for object in objects.take() {
+            object.store(&members)?;
+        }
+        Ok(namespace)
+    }
+
+    /// Replace the engine's in-memory state with a hand-mutated fixture copy.
+    /// The caller owns consistency with planted namespace objects and derived
+    /// indexes; reads served from the replaced state are fixture reads.
+    pub fn replace_state(engine: &mut Engine, state: storage_contract::State) {
+        engine.state = std::sync::Arc::new(state);
+    }
+}
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/r29_local_publication.rs"]
 mod r29_local_publication;

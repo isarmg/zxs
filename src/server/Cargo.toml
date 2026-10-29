@@ -44,7 +44,7 @@ tempfile.workspace = true
 sqlite-access.workspace = true
 storage-client.workspace = true
 # HTTP and admission recovery tests exercise the same engine failpoints.
-storage-engine = { path = "../engine", features = ["fault-injection"] }
+storage-engine = { path = "../engine", features = ["fault-injection", "test-support"] }
 service-stack = { version = "0.5", features = ["util"], path = "../foundation/networking/service-stack"}
 
 [[test]]

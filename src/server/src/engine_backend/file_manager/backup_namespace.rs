@@ -36,7 +36,7 @@ enum Node<'a> {
     },
     File {
         repository: &'a Repository,
-        current: Option<(usize, &'a Entry)>,
+        current: Option<&'a Entry>,
         version: &'a FileVersion,
         display: String,
     },
@@ -60,7 +60,7 @@ impl Node<'_> {
             Self::File {
                 current, version, ..
             } => current
-                .map(|(_, entry)| entry.entry_id.clone())
+                .map(|entry| entry.entry_id.clone())
                 .unwrap_or_else(|| version.file_id.clone()),
         }
     }
@@ -152,8 +152,8 @@ fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<crate::Listin
             ..
         } => {
             // Resolve against the current entry before overlaying historical content.
-            let mut value = if let Some((index, _)) = current {
-                let mut entry = listed_current_entry(engine, repo, *index, "")?;
+            let mut value = if let Some(current) = current {
+                let mut entry = listed_current_entry(engine, repo, current, "")?;
                 entry.path = display.into();
                 entry.name = name.into();
                 entry
@@ -193,7 +193,7 @@ fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<crate::Listin
                     historical_only: None,
                 }
             };
-            if current.is_some_and(|(_, entry)| entry.version_id != version.version_id) {
+            if current.is_some_and(|entry| entry.version_id != version.version_id) {
                 value.node_id = Some(version.version_id.clone());
                 value.version = crate::ListingVersion::File {
                     content: super::super::branch::capture_content(
@@ -249,26 +249,31 @@ pub(super) fn entries(
             }
         }
     }
-    let mut canonical = BTreeMap::<&str, (usize, &Entry)>::new();
+    // Stream each main head once, retaining only candidate file entries.
+    let mut collected: Vec<Entry> = Vec::new();
     for repo in repositories.values() {
-        for (index, entry) in engine
-            .list_tree_ref(&repo.main_branch_id)
+        engine
+            .namespace_tree(&repo.main_branch_id)
             .map_err(error)?
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                entry.kind == storage_contract::NamespaceEntryKind::File
+            .walk(|entry| {
+                if entry.kind == storage_contract::NamespaceEntryKind::File
                     && latest.contains_key(entry.file_id.as_str())
+                {
+                    collected.push(entry.clone());
+                }
+                Ok(true)
             })
-        {
-            let owner = engine
-                .state()
-                .file_locations
-                .get(&entry.file_id)
-                .is_some_and(|owner| name_policy::path_key(owner) == entry.lookup_key());
-            if owner || !canonical.contains_key(entry.file_id.as_str()) {
-                canonical.insert(&entry.file_id, (index, entry));
-            }
+            .map_err(error)?;
+    }
+    let mut canonical = BTreeMap::<&str, &Entry>::new();
+    for entry in &collected {
+        let owner = engine
+            .state()
+            .file_locations
+            .get(&entry.file_id)
+            .is_some_and(|owner| name_policy::path_key(owner) == entry.lookup_key());
+        if owner || !canonical.contains_key(entry.file_id.as_str()) {
+            canonical.insert(&entry.file_id, entry);
         }
     }
     let maximum = engine.config().max_entries;
@@ -276,8 +281,8 @@ pub(super) fn entries(
     for (file, (repo, newest)) in latest {
         let current = canonical.get(file).copied();
         let version = current
-            .filter(|(_, entry)| available_on(engine, slot, &entry.version_id))
-            .and_then(|(_, entry)| engine.state().versions.get(&entry.version_id))
+            .filter(|entry| available_on(engine, slot, &entry.version_id))
+            .and_then(|entry| engine.state().versions.get(&entry.version_id))
             .unwrap_or(newest);
         let display = engine
             .state()
@@ -285,9 +290,7 @@ pub(super) fn entries(
             .get(file)
             .and_then(|paths| paths.get(slot))
             .cloned()
-            .unwrap_or_else(|| {
-                default_backup_path(repo, current.map(|(_, entry)| entry), version, engine)
-            });
+            .unwrap_or_else(|| default_backup_path(repo, current, version, engine));
         name_policy::validate_path(&display).map_err(ApiError::invalid_source)?;
         parents(&mut nodes, &display, maximum)?;
         retain_node(

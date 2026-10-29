@@ -72,6 +72,7 @@ fn snapshot_admission_rejects_broken_split_identities() {
             .create_split_plan(&repo.history_tree_id, &cut, "admin")
             .unwrap();
         let prefix = engine.state.commits[&cut].parent_commit_ids[0].clone();
+        let mut built = crate::namespace::NamespaceObjects::new();
         match corruption {
             "missing_prefix" => {
                 std::sync::Arc::make_mut(&mut engine.state)
@@ -107,13 +108,13 @@ fn snapshot_admission_rejects_broken_split_identities() {
                     .commit_id = "missing".into();
             }
             "version_identity" | "version_file" => {
-                let version = engine.state.commits[&cut]
-                    .entries
-                    .iter()
+                let version = engine
+                    .namespace_entries(&engine.state.commits[&cut].namespace)
+                    .unwrap()
+                    .into_iter()
                     .find(|entry| entry.kind == NamespaceEntryKind::File)
                     .unwrap()
-                    .version_id
-                    .clone();
+                    .version_id;
                 let version = std::sync::Arc::make_mut(&mut engine.state)
                     .versions
                     .get_mut(&version)
@@ -125,23 +126,35 @@ fn snapshot_admission_rejects_broken_split_identities() {
                 }
             }
             "reused_version_file" => {
-                let version = engine.state.commits[&cut]
-                    .entries
-                    .iter()
+                let version = engine
+                    .namespace_entries(&engine.state.commits[&cut].namespace)
+                    .unwrap()
+                    .into_iter()
                     .find(|entry| entry.kind == NamespaceEntryKind::File)
                     .unwrap()
-                    .version_id
-                    .clone();
-                let entry = std::sync::Arc::make_mut(&mut engine.state)
-                    .commits
-                    .get_mut(&last)
+                    .version_id;
+                let last_namespace = engine.state.commits[&last].namespace.clone();
+                let mut entry = engine
+                    .namespace_entries(&last_namespace)
                     .unwrap()
-                    .entries
-                    .iter_mut()
+                    .into_iter()
                     .find(|entry| entry.kind == NamespaceEntryKind::File)
                     .unwrap();
                 entry.version_id = version;
                 entry.file_id = "missing".into();
+                let namespace = engine
+                    .with_namespace_source(|base| {
+                        let mut editor =
+                            crate::namespace::NamespaceEditor::open(&last_namespace, base)?;
+                        editor.upsert_file(&entry)?;
+                        editor.seal(&mut built)
+                    })
+                    .unwrap();
+                std::sync::Arc::make_mut(&mut engine.state)
+                    .commits
+                    .get_mut(&last)
+                    .unwrap()
+                    .namespace = namespace;
             }
             "branch_identity" => {
                 std::sync::Arc::make_mut(&mut engine.state)
@@ -154,7 +167,15 @@ fn snapshot_admission_rejects_broken_split_identities() {
         }
         let before = canonical_json(engine.state()).unwrap();
         let raw: crate::history_package::RawState = decode_strict(&before).unwrap();
-        let error = State::try_from(raw).unwrap_err();
+        let error = engine
+            .with_namespace_source(|base| {
+                let source = crate::namespace::DraftSource {
+                    fresh: &built,
+                    base,
+                };
+                crate::history_package::AdmittedState::admit(raw, &source).map(|_| ())
+            })
+            .unwrap_err();
         assert_eq!(
             error.code(),
             storage_contract::ErrorCode::StateInvalid,
@@ -235,7 +256,11 @@ fn snapshot_admission_rejects_broken_crossing_merge_endpoints() {
             .insert(key, link);
         let before = canonical_json(engine.state()).unwrap();
         let raw: crate::history_package::RawState = decode_strict(&before).unwrap();
-        let error = State::try_from(raw).unwrap_err();
+        let error = engine
+            .with_namespace_source(|source| {
+                crate::history_package::AdmittedState::admit(raw, source).map(|_| ())
+            })
+            .unwrap_err();
         assert_eq!(
             error.code(),
             storage_contract::ErrorCode::StateInvalid,

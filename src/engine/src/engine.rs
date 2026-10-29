@@ -100,6 +100,11 @@ pub struct Engine {
     pub(crate) upload_preparations: Arc<Mutex<BTreeSet<String>>>,
     commit_preparation: Arc<std::sync::atomic::AtomicBool>,
     history_query_proof: Mutex<index::QueryProof>,
+    /// Bounded, non-authoritative caches for sealed segment and locator reads.
+    pub(crate) segment_caches: Arc<crate::segment_store::SegmentCaches>,
+    /// The published operation-locator root; None only while the one-shot
+    /// cold index from recovery is still attached to the resident log.
+    pub(crate) operation_locator_root: Option<crate::metadata_map::Reference>,
     recovery_warnings: RecoveryWarnings,
     _locks: Vec<File>,
     #[cfg(feature = "fault-injection")]
@@ -158,8 +163,18 @@ pub(crate) enum MutationPlan {
     Prepared {
         next: Box<State>,
         prepared: Vec<Prepared>,
+        namespace: Vec<crate::journal::PreparedMetadataObject>,
         result: OperationResult,
     },
+}
+
+/// Per-mutation preparation outputs beyond the next State: payload placements
+/// and the transaction's freshly built immutable namespace objects, which
+/// install with the snapshot before the decision.
+#[derive(Default)]
+pub(crate) struct MutationScratch {
+    pub(crate) payloads: Vec<Prepared>,
+    pub(crate) namespace: crate::namespace::NamespaceObjects,
 }
 
 impl Engine {
@@ -345,6 +360,8 @@ impl Engine {
             reads: Arc::new(Mutex::new(BTreeMap::new())),
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            segment_caches: Arc::new(crate::segment_store::SegmentCaches::new()),
+            operation_locator_root: None,
             history_query_proof: Mutex::new(index::QueryProof::default()),
             recovery_warnings: RecoveryWarnings::default(),
             _locks: locks,
@@ -417,6 +434,8 @@ impl Engine {
             reads: Arc::new(Mutex::new(BTreeMap::new())),
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            segment_caches: Arc::new(crate::segment_store::SegmentCaches::new()),
+            operation_locator_root: None,
             history_query_proof: Mutex::new(index::QueryProof::default()),
             recovery_warnings: RecoveryWarnings::default(),
             _locks: locks,
@@ -567,15 +586,49 @@ impl Engine {
     pub fn is_read_only(&self) -> bool {
         self.blocked
     }
-    /// Borrow the unseen event suffix from admitted, publication-ordered State.
-    /// Cold admission rejects decreasing sequences; writers only append newer
-    /// publication slots, and recovery preserves the admitted ordinal order.
-    pub fn events_after(&self, after: u64) -> impl ExactSizeIterator<Item = &Event> {
-        let rank = self
-            .state
-            .events
-            .partition_point(|event| event.sequence <= after);
-        self.state.events[rank..].iter()
+    /// The unseen event suffix from admitted, publication-ordered State, up to
+    /// `limit` events. Cold admission rejects decreasing sequences; writers
+    /// only append newer publication slots. The resident tail serves recent
+    /// cursors directly; older cursors locate their sealed segment through the
+    /// resident directory and read it on demand with a bounded cache.
+    pub fn events_page(&self, after: u64, limit: usize) -> Result<Vec<Event>> {
+        let members = self.members();
+        crate::segment_store::events_page(
+            &self.state.events,
+            &self.segment_reader(&members),
+            after,
+            limit,
+        )
+    }
+    /// Total number of published events, for cursor validation and paging.
+    pub fn event_count(&self) -> u64 {
+        self.state.events.len()
+    }
+    /// Run one read over published namespace objects: a transaction's fresh
+    /// objects never appear here, only hash-verified published pages and
+    /// indexes through the bounded cache.
+    pub(crate) fn with_namespace_source<T>(
+        &self,
+        read: impl FnOnce(&dyn crate::namespace::NamespaceSource) -> Result<T>,
+    ) -> Result<T> {
+        let members = self.members();
+        let reader = self.segment_reader(&members);
+        let source =
+            crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {
+                reader.namespace_node(reference)
+            });
+        read(&source)
+    }
+    /// The complete materialized entry list of one commit's namespace in the
+    /// legacy canonical order. O(total entries) by definition; point and page
+    /// queries go through `with_namespace_source` and the view instead.
+    pub(crate) fn namespace_entries(
+        &self,
+        namespace: &storage_contract::CommitNamespace,
+    ) -> Result<Vec<Entry>> {
+        self.with_namespace_source(|source| {
+            crate::namespace::NamespaceView::new(namespace, source).collect_entries()
+        })
     }
     pub fn auth_state(&self) -> Option<json_codec::Value> {
         self.state.control_auth.clone()
@@ -749,7 +802,7 @@ impl Engine {
         change: F,
     ) -> Result<OperationResult>
     where
-        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+        F: FnOnce(&Self, &mut State, &mut MutationScratch) -> Result<json_codec::Value>,
     {
         self.mutate_digest(kind, principal, operation_id, input, None, change)
     }
@@ -763,7 +816,7 @@ impl Engine {
         change: F,
     ) -> Result<OperationResult>
     where
-        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+        F: FnOnce(&Self, &mut State, &mut MutationScratch) -> Result<json_codec::Value>,
     {
         match self.plan_mutation_digest(
             kind,
@@ -777,9 +830,10 @@ impl Engine {
             MutationPlan::Prepared {
                 next,
                 prepared,
+                namespace,
                 result,
             } => {
-                self.persist(*next, prepared, result.clone())?;
+                self.persist_with_objects(*next, prepared, namespace, result.clone())?;
                 Ok(result)
             }
         }
@@ -794,7 +848,7 @@ impl Engine {
         change: F,
     ) -> Result<MutationPlan>
     where
-        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+        F: FnOnce(&Self, &mut State, &mut MutationScratch) -> Result<json_codec::Value>,
     {
         Self::require_actor(principal)?;
         let digest = digest_override.map(Ok).unwrap_or_else(|| {
@@ -803,10 +857,8 @@ impl Engine {
                 &json!({"kind":kind,"principal":principal,"body":input}),
             )
         })?;
-        if let Some(result) = self.state.operations.get(&operation_id) {
-            if result.request_digest == digest
-                && self.operation_owner(operation_id)?.as_deref() == Some(principal)
-            {
+        if let Some(entry) = self.find_receipt(operation_id)? {
+            if entry.result.request_digest == digest && entry.principal == principal {
                 return self.operation(operation_id).map(MutationPlan::Existing);
             }
             return Err(Error::new(

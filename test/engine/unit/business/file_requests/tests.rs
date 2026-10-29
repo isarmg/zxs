@@ -78,8 +78,8 @@ fn location_lookup_preserves_case_identity_kind_and_repository_boundaries() {
         .unwrap()
         .get("Straße/Café.txt")
         .unwrap()
-        .file_id
-        .clone();
+        .unwrap()
+        .file_id;
     let mut location = FileLocation {
         repository_id: repo.repository_id.clone(),
         path: "STRASSE/CAFÉ.TXT".into(),

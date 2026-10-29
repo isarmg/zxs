@@ -66,6 +66,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
         .unwrap();
     let context = engine
         .file_context(&repo.repository_id, "after.txt")
+        .unwrap()
         .unwrap();
     let head = engine.file_branch_head(&context.branch_id).unwrap();
     engine

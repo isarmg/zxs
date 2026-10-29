@@ -32,6 +32,8 @@ struct PlanningSnapshot {
     metadata_integrity: Arc<super::provenance::MetadataIntegrity>,
     integrity_scrub_schedule: Option<std::sync::Weak<super::integrity_scrub::ScheduleState>>,
     next_slot: u64,
+    segment_caches: Arc<crate::segment_store::SegmentCaches>,
+    operation_locator_root: Option<crate::metadata_map::Reference>,
     replay: Option<super::OperationReadPlan>,
     locks: Vec<File>,
 }
@@ -49,6 +51,8 @@ impl PlanningSnapshot {
             published_state_base: self.published_state_base.as_ref(),
             metadata_integrity: &self.metadata_integrity,
             integrity_scrub_schedule: self.integrity_scrub_schedule.as_ref(),
+            segment_caches: &self.segment_caches,
+            operation_locator_root: self.operation_locator_root.as_ref(),
         }
     }
 }
@@ -86,23 +90,19 @@ impl Engine {
     /// Missing publications and foreign operation owners remain explicit errors.
     pub fn native_workspace_commit_completed(&self, request: &CommitRequest) -> Result<bool> {
         let workspace = self.workspace_view(&request.workspace_id)?;
-        let operation = self
-            .state
-            .operations
-            .get(&request.operation_id)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorCode::OperationNotFound,
-                    "published workspace operation is absent",
-                )
-            })?;
-        if self.state.operation_principals.get(&request.operation_id) != Some(&request.principal) {
+        let entry = self.find_receipt(request.operation_id)?.ok_or_else(|| {
+            Error::new(
+                ErrorCode::OperationNotFound,
+                "published workspace operation is absent",
+            )
+        })?;
+        if entry.principal != request.principal {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
                 "operation belongs to another principal",
             ));
         }
-        native_workspace_commit_completed(&workspace, request, operation)
+        native_workspace_commit_completed(&workspace, request, &entry.result)
     }
 
     /// Structural binding also used during restart. Account authentication is
@@ -111,7 +111,7 @@ impl Engine {
         &self,
         workspace: &Workspace,
         request: &CommitRequest,
-    ) -> bool {
+    ) -> Result<bool> {
         self.planning_context()
             .workspace_request_matches_operation(workspace, request)
     }
@@ -144,7 +144,7 @@ impl Engine {
                 "workspace belongs to another principal",
             ));
         }
-        let replay = self.state.operations.contains_key(&request.operation_id);
+        let replay = self.find_receipt(request.operation_id)?.is_some();
         self.repository_for_branch(&workspace.branch_id)?;
         if !replay {
             self.require_write()?;
@@ -182,6 +182,8 @@ impl Engine {
             metadata_integrity: Arc::clone(&self.metadata_integrity),
             integrity_scrub_schedule: self.integrity_scrub_schedule.clone(),
             next_slot: self.next_slot,
+            segment_caches: Arc::clone(&self.segment_caches),
+            operation_locator_root: self.operation_locator_root.clone(),
             replay: if replay {
                 Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
             } else {
@@ -222,11 +224,7 @@ impl Engine {
                 "workspace owner changed",
             ));
         }
-        if self
-            .state
-            .operations
-            .contains_key(&prepared.request.operation_id)
-        {
+        if self.find_receipt(prepared.request.operation_id)?.is_some() {
             self.validate_workspace_commit_replay(&prepared.request, &prepared.expected_digest)?;
             return self.operation(prepared.request.operation_id);
         }
@@ -287,8 +285,13 @@ impl WorkspaceCommitPreparation {
         let replay = self.snapshot.replay.take();
         let engine = self.snapshot.context();
         let plan = if let Some(envelope) = self.wire_body.take() {
-            let envelope =
-                crate::wire::admit_public_commit(envelope, &self.request, &self.snapshot.state)?;
+            let existing = engine.find_receipt(self.request.operation_id)?;
+            let envelope = crate::wire::admit_public_commit(
+                envelope,
+                &self.request,
+                &self.snapshot.state,
+                existing.as_ref(),
+            )?;
             engine.plan_workspace_commit_wire(
                 self.snapshot.workspace.clone(),
                 self.request,
@@ -311,6 +314,7 @@ impl WorkspaceCommitPreparation {
             MutationPlan::Prepared {
                 next,
                 prepared,
+                namespace,
                 result,
             } => {
                 let digest = result.request_digest.clone();
@@ -318,6 +322,7 @@ impl WorkspaceCommitPreparation {
                     Some(engine.prepare_publication(
                         *next,
                         prepared,
+                        namespace,
                         result,
                         crate::disk::MAX_METADATA,
                     )?),
@@ -364,15 +369,13 @@ impl super::PlanningContext<'_> {
         &self,
         workspace: &Workspace,
         request: &CommitRequest,
-    ) -> bool {
-        self.state
-            .operations
-            .get(&request.operation_id)
-            .is_some_and(|operation| {
-                workspace_request_matches_result(workspace, request, operation)
-                    && self.state.operation_principals.get(&request.operation_id)
-                        == Some(&request.principal)
-            })
+    ) -> Result<bool> {
+        Ok(self
+            .find_receipt(request.operation_id)?
+            .is_some_and(|entry| {
+                workspace_request_matches_result(workspace, request, &entry.result)
+                    && entry.principal == request.principal
+            }))
     }
 }
 
@@ -441,18 +444,14 @@ impl super::PlanningContext<'_> {
             ));
         }
         self.repository_for_branch(&workspace.branch_id)?;
-        let existing = self
-            .state
-            .operations
-            .get(&request.operation_id)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::OperationNotFound,
-                    "published workspace operation is absent",
-                )
-            })?;
-        if !self.workspace_request_matches_operation(workspace, request)
-            || existing.request_digest != digest
+        let existing = self.find_receipt(request.operation_id)?.ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::OperationNotFound,
+                "published workspace operation is absent",
+            )
+        })?;
+        if !self.workspace_request_matches_operation(workspace, request)?
+            || existing.result.request_digest != digest
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::IdempotencyKeyReused,

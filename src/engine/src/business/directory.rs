@@ -56,20 +56,31 @@ fn frozen_context(
 pub(crate) fn context_key_from_key(repository: &str, key: &str) -> String {
     format!("{repository}/{key}")
 }
-pub(crate) fn context_at_key(state: &State, repository: &str, key: &str) -> Option<FileContext> {
+pub(crate) fn context_at_key(
+    state: &State,
+    repository: &str,
+    key: &str,
+    source: &dyn crate::namespace::NamespaceSource,
+) -> Result<Option<FileContext>> {
     if let Some(context) = state
         .file_contexts
         .get(&context_key_from_key(repository, key))
     {
-        return Some(context.clone());
+        return Ok(Some(context.clone()));
     }
-    let repo = state.repositories.get(repository)?;
-    let commit = state
-        .commits
-        .get(&state.branches.get(&repo.main_branch_id)?.head_commit_id)?;
-    let entry = namespace::find_unordered_key(&commit.entries, key)
-        .filter(|e| e.kind == NamespaceEntryKind::File)?;
-    Some(context_for_entry(state, repo, entry))
+    let Some(repo) = state.repositories.get(repository) else {
+        return Ok(None);
+    };
+    let Some(branch) = state.branches.get(&repo.main_branch_id) else {
+        return Ok(None);
+    };
+    let Some(commit) = state.commits.get(&branch.head_commit_id) else {
+        return Ok(None);
+    };
+    let entry = crate::namespace::NamespaceView::new(&commit.namespace, source)
+        .resolve_key(key)?
+        .filter(|e| e.kind == NamespaceEntryKind::File);
+    Ok(entry.map(|entry| context_for_entry(state, repo, &entry)))
 }
 
 // A freshly written namespace has not registered a directory composition yet.
@@ -94,23 +105,26 @@ pub(crate) fn branch_context_at_key(
     state: &State,
     namespace: &str,
     key: &str,
-) -> Option<FileContext> {
-    let branch = state.branches.get(namespace)?;
+    source: &dyn crate::namespace::NamespaceSource,
+) -> Result<Option<FileContext>> {
+    let Some(branch) = state.branches.get(namespace) else {
+        return Ok(None);
+    };
     if let Some(repo) = repository::main_for_branch(state, namespace) {
-        context_at_key(state, &repo.repository_id, key)
+        context_at_key(state, &repo.repository_id, key, source)
     } else {
-        Some(FileContext {
+        Ok(Some(FileContext {
             node_id: branch.file_node_id.clone(),
             selection_generation: 0,
             branch_id: branch.branch_id.clone(),
             inherited_from: None,
-        })
+        }))
     }
 }
 
 struct DirectoryScopeView<'a> {
-    directory_id: &'a str,
-    path: &'a str,
+    directory_id: String,
+    path: String,
     key: Cow<'a, str>,
     commit: &'a Commit,
 }
@@ -118,6 +132,7 @@ fn scope_view<'a>(
     state: &'a State,
     repository: &str,
     path: &str,
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<DirectoryScopeView<'a>> {
     if !path.is_empty() {
         name_policy::validate_lookup_path(path)?;
@@ -128,12 +143,13 @@ fn scope_view<'a>(
             "directory repository missing",
         )
     })?;
-    scope_view_for_key(state, repo, Cow::Owned(name_policy::path_key(path)))
+    scope_view_for_key(state, repo, Cow::Owned(name_policy::path_key(path)), source)
 }
 fn scope_view_for_key<'a>(
     state: &'a State,
     repo: &'a Repository,
     key: Cow<'a, str>,
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<DirectoryScopeView<'a>> {
     let branch = required(
         state.branches.get(&repo.main_branch_id),
@@ -144,21 +160,20 @@ fn scope_view_for_key<'a>(
         "repository head commit missing",
     )?;
     let (directory_id, path) = if key.is_empty() {
-        (repo.repository_id.as_str(), "")
+        (repo.repository_id.clone(), String::new())
     } else {
-        let entry = commit
-            .entries
-            .iter()
-            .find(|entry| {
-                entry.kind == NamespaceEntryKind::Directory && entry.lookup_key() == key.as_ref()
-            })
+        // One point read locates the directory; no tree scan.
+        let entry = crate::namespace::NamespaceView::new(&commit.namespace, source)
+            .resolve_key(key.as_ref())?
+            .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
             .ok_or_else(|| {
                 Error::new(
                     storage_contract::ErrorCode::DirectoryNotFound,
                     "directory missing",
                 )
             })?;
-        (entry.entry_id.as_str(), entry.path())
+        let path = entry.path().to_owned();
+        (entry.entry_id, path)
     };
     Ok(DirectoryScopeView {
         directory_id,
@@ -167,6 +182,26 @@ fn scope_view_for_key<'a>(
         commit,
     })
 }
+/// The scope's descendant entries (excluding the scope directory itself) in
+/// canonical order; the complete tree for the root scope. O(subtree).
+fn scope_entries(
+    view: &DirectoryScopeView<'_>,
+    source: &dyn crate::namespace::NamespaceSource,
+) -> Result<Vec<Entry>> {
+    let ns = crate::namespace::NamespaceView::new(&view.commit.namespace, source);
+    if view.key.is_empty() {
+        return ns.collect_entries();
+    }
+    let mut out = Vec::new();
+    ns.walk_subtree(view.key.as_ref(), |_, entry| {
+        if entry.lookup_key() != view.key.as_ref() {
+            out.push(entry.clone());
+        }
+        Ok(true)
+    })?;
+    out.sort_by(|a, b| a.lookup_key().cmp(b.lookup_key()));
+    Ok(out)
+}
 struct DirectorySnapshotSource {
     directory_id: String,
     path: String,
@@ -174,25 +209,21 @@ struct DirectorySnapshotSource {
     entries: Vec<Entry>,
 }
 impl DirectorySnapshotSource {
-    fn capture(state: &State, view: DirectoryScopeView<'_>) -> Self {
-        let entries = view
-            .commit
-            .entries
-            .iter()
-            .filter(|entry| {
-                view.key.is_empty() || namespace::is_descendant(entry.lookup_key(), &view.key)
-            })
-            .cloned()
-            .collect();
-        Self {
-            directory_id: view.directory_id.into(),
-            path: view.path.into(),
+    fn capture(
+        state: &State,
+        view: DirectoryScopeView<'_>,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Result<Self> {
+        let entries = scope_entries(&view, source)?;
+        Ok(Self {
+            directory_id: view.directory_id,
+            path: view.path,
             current: state
                 .commits
                 .get_shared(&view.commit.commit_id)
                 .expect("invariant: scope view borrows an existing commit"),
             entries,
-        }
+        })
     }
 }
 
@@ -200,22 +231,11 @@ pub(crate) fn scope(
     state: &State,
     repository: &str,
     path: &str,
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<(String, Vec<Entry>, String)> {
-    let view = scope_view(state, repository, path)?;
-    let entries = view
-        .commit
-        .entries
-        .iter()
-        .filter(|entry| {
-            view.key.is_empty() || namespace::is_descendant(entry.lookup_key(), &view.key)
-        })
-        .cloned()
-        .collect();
-    Ok((
-        view.directory_id.to_owned(),
-        entries,
-        view.commit.commit_id.clone(),
-    ))
+    let view = scope_view(state, repository, path, source)?;
+    let entries = scope_entries(&view, source)?;
+    Ok((view.directory_id, entries, view.commit.commit_id.clone()))
 }
 
 pub(crate) fn rebase_path(path: &str, from: &str, to: &str) -> Result<String> {
@@ -271,14 +291,23 @@ pub(crate) fn rebase_entries(entries: &[Entry], from: &str, to: &str) -> Result<
         .collect()
 }
 
-fn snapshot(state: &mut State, repository: &str, path: &str) -> Result<String> {
-    let source = DirectorySnapshotSource::capture(state, scope_view(state, repository, path)?);
-    snapshot_source(state, repository, source)
+fn snapshot(
+    state: &mut State,
+    repository: &str,
+    path: &str,
+    base: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
+) -> Result<String> {
+    let source =
+        DirectorySnapshotSource::capture(state, scope_view(state, repository, path, base)?, base)?;
+    snapshot_source(state, repository, source, base, fresh)
 }
 fn snapshot_source(
     state: &mut State,
     repository: &str,
     source: DirectorySnapshotSource,
+    base: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
 ) -> Result<String> {
     let DirectorySnapshotSource {
         directory_id,
@@ -294,9 +323,13 @@ fn snapshot_source(
     {
         files.insert(
             e.file_id.clone(),
-            file::ensure_shared_file_branch(state, &current, e)?,
+            file::ensure_shared_file_branch(state, &current, e, base, fresh)?,
         );
     }
+    let draft = crate::namespace::DraftSource {
+        fresh: &*fresh,
+        base,
+    };
     let file_contexts = entries
         .iter()
         .filter(|e| e.kind == NamespaceEntryKind::File)
@@ -304,7 +337,7 @@ fn snapshot_source(
             let branch_id =
                 required(files.get(&e.file_id), "snapshot file branch missing")?.clone();
             let context =
-                context_at_key(state, repository, e.lookup_key()).unwrap_or(FileContext {
+                context_at_key(state, repository, e.lookup_key(), &draft)?.unwrap_or(FileContext {
                     node_id: None,
                     selection_generation: 0,
                     branch_id,
@@ -433,35 +466,38 @@ fn snapshot_source(
     Ok(id)
 }
 
-pub(crate) fn snapshot_pending(state: &State, entries: &[Entry]) -> BTreeMap<String, String> {
-    entries
+pub(crate) fn snapshot_pending(
+    state: &State,
+    entries: &[Entry],
+    source: &dyn crate::namespace::NamespaceSource,
+) -> Result<BTreeMap<String, String>> {
+    let mut pending = BTreeMap::new();
+    for e in entries
         .iter()
         .filter(|e| e.kind == NamespaceEntryKind::File)
-        .filter_map(|e| {
-            let context = state
-                .repositories
-                .values()
-                .find(|r| {
-                    state
-                        .versions
-                        .get(&e.version_id)
-                        .is_some_and(|v| v.history_tree_id == r.history_tree_id)
-                })
-                .and_then(|r| context_at_key(state, &r.repository_id, e.lookup_key()));
-            context.and_then(|c| {
-                if c.inherited_from.is_some()
-                    || state
-                        .branches
-                        .get(&c.branch_id)
-                        .is_some_and(|b| b.pending_file_versions.contains_key(&e.file_id))
-                {
-                    Some((e.file_id.clone(), e.version_id.clone()))
-                } else {
-                    None
-                }
-            })
-        })
-        .collect()
+    {
+        let context = match state.repositories.values().find(|r| {
+            state
+                .versions
+                .get(&e.version_id)
+                .is_some_and(|v| v.history_tree_id == r.history_tree_id)
+        }) {
+            Some(r) => context_at_key(state, &r.repository_id, e.lookup_key(), source)?,
+            None => None,
+        };
+        let Some(c) = context else {
+            continue;
+        };
+        if c.inherited_from.is_some()
+            || state
+                .branches
+                .get(&c.branch_id)
+                .is_some_and(|b| b.pending_file_versions.contains_key(&e.file_id))
+        {
+            pending.insert(e.file_id.clone(), e.version_id.clone());
+        }
+    }
+    Ok(pending)
 }
 
 /// Namespace mutations change physical ownership; selecting an alias does not.
@@ -533,18 +569,71 @@ fn namespace_location(
 
 /// Prepare real directory identities before changing their display path, so
 /// rename produces a child subtree even for empty directories.
+/// The pre-edit key of `key`, replayed backward through the earlier
+/// operations' renames. A superset guard: candidates found through it are
+/// still replayed forward individually, so imprecision never changes results.
+fn preimage_key(mut key: String, earlier: &[NamespaceOperation]) -> String {
+    for change in earlier.iter().rev() {
+        let NamespaceOperation::Rename {
+            source,
+            destination,
+        } = change
+        else {
+            continue;
+        };
+        let (from, to) = (destination.key(), source.key());
+        if key == from {
+            key = to.to_owned();
+        } else if namespace::is_descendant(&key, from) {
+            key = format!("{to}{}", &key[from.len()..]);
+        }
+    }
+    key
+}
+
+/// The directory entries that any operation's source subtree can touch:
+/// the rename/delete sources (and their pre-edit images for chained renames)
+/// plus their descendants, out of the pre-edit namespace. Untouched subtrees
+/// are never read.
+fn candidate_directories(
+    before: &storage_contract::CommitNamespace,
+    changes: &[NamespaceOperation],
+    source: &dyn crate::namespace::NamespaceSource,
+) -> Result<Vec<Entry>> {
+    let view = crate::namespace::NamespaceView::new(before, source);
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (index, change) in changes.iter().enumerate() {
+        if !matches!(change, NamespaceOperation::Rename { .. }) {
+            continue;
+        }
+        let key = preimage_key(change.key().to_owned(), &changes[..index]);
+        for entry in view.subtree_directories(&key)? {
+            if seen.insert(entry.entry_id.clone()) {
+                out.push(entry);
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn prepare_renamed_directories(
     state: &mut State,
     repository: &str,
-    before: &[Entry],
+    before: &storage_contract::CommitNamespace,
     changes: &[NamespaceOperation],
+    source: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
 ) -> Result<Vec<String>> {
+    if !changes
+        .iter()
+        .any(|change| matches!(change, NamespaceOperation::Rename { .. }))
+    {
+        return Ok(Vec::new());
+    }
     let mut renamed = Vec::new();
     let mut old_paths = Vec::new();
-    for dir in before
-        .iter()
-        .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
-    {
+    for dir in candidate_directories(before, changes, source)? {
         let mut path = std::borrow::Cow::Borrowed(dir.location());
         for change in changes {
             let NamespaceOperation::Rename {
@@ -570,9 +659,9 @@ pub(crate) fn prepare_renamed_directories(
     old_paths.sort_by_key(|p| std::cmp::Reverse(p.split('/').count()));
     old_paths.dedup();
     for path in old_paths {
-        let (id, _, _) = scope(state, repository, &path)?;
+        let (id, _, _) = scope(state, repository, &path, source)?;
         if !state.directory_selections.contains_key(&id) {
-            snapshot(state, repository, &path)?;
+            snapshot(state, repository, &path, source, fresh)?;
         }
     }
     Ok(renamed)
@@ -583,8 +672,10 @@ pub(crate) fn prepare_renamed_directories(
 pub(crate) fn prepare_independent_renamed_directories(
     state: &mut State,
     repository: &str,
-    before: &[Entry],
+    before: &storage_contract::CommitNamespace,
     changes: &[NamespaceOperation],
+    source: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
 ) -> Result<Vec<String>> {
     let mut renamed = Vec::new();
     for change in changes {
@@ -593,6 +684,8 @@ pub(crate) fn prepare_independent_renamed_directories(
             repository,
             before,
             std::slice::from_ref(change),
+            source,
+            fresh,
         )?);
     }
     Ok(renamed)
@@ -601,29 +694,83 @@ pub(crate) fn prepare_independent_renamed_directories(
 pub(crate) fn namespace_locations(
     state: &mut State,
     repository: &str,
-    before: &[Entry],
-    after: &[Entry],
+    before: &storage_contract::CommitNamespace,
+    after: &storage_contract::CommitNamespace,
     changes: &[NamespaceOperation],
     principal: &str,
     operation: OperationId,
+    base: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
 ) -> Result<()> {
-    // Workspace entries may not be sorted yet. Keep the first path match,
-    // just like `find`, without rescanning all siblings for every file.
-    let mut after_by_path = BTreeMap::new();
-    for entry in after {
-        after_by_path.entry(entry.lookup_key()).or_insert(entry);
+    // No operations means no path moved: a proven no-op, skipped outright.
+    if changes.is_empty() {
+        return Ok(());
     }
-    let original_contexts = before
-        .iter()
-        .filter(|e| e.kind == NamespaceEntryKind::File)
-        .filter_map(|e| {
-            context_at_key(state, repository, e.lookup_key())
-                .map(|c| (context_key_from_key(repository, e.lookup_key()), c))
-        })
-        .collect::<BTreeMap<_, _>>();
+    // Only files under an operation's source subtree (or its pre-edit image
+    // for chained renames) can be touched; everything else keeps its context.
+    let affected: Vec<Entry> = {
+        let draft = crate::namespace::DraftSource {
+            fresh: &*fresh,
+            base,
+        };
+        let view = crate::namespace::NamespaceView::new(before, &draft);
+        let mut out = Vec::new();
+        let mut seen = BTreeSet::new();
+        for (index, change) in changes.iter().enumerate() {
+            if matches!(change, NamespaceOperation::Mkdir { .. }) {
+                continue;
+            }
+            let key = preimage_key(change.key().to_owned(), &changes[..index]);
+            let Some(root) = view.resolve_key(&key)? else {
+                continue;
+            };
+            // Dedupe by path key, never by identity: logical aliases share
+            // one stable entry identity at several paths, and each path's
+            // context migrates independently.
+            match root.kind {
+                NamespaceEntryKind::File => {
+                    if seen.insert(root.lookup_key().to_owned()) {
+                        out.push(root);
+                    }
+                }
+                NamespaceEntryKind::Directory => {
+                    view.walk_subtree(&key, |_, entry| {
+                        if entry.kind == NamespaceEntryKind::File
+                            && seen.insert(entry.lookup_key().to_owned())
+                        {
+                            out.push(entry.clone());
+                        }
+                        Ok(true)
+                    })?;
+                }
+            }
+        }
+        out
+    };
+    let original_contexts = {
+        let draft = crate::namespace::DraftSource {
+            fresh: &*fresh,
+            base,
+        };
+        let mut contexts = BTreeMap::new();
+        for e in affected
+            .iter()
+            .filter(|e| e.kind == NamespaceEntryKind::File)
+        {
+            if let Some(c) = context_at_key(state, repository, e.lookup_key(), &draft)? {
+                contexts.insert(context_key_from_key(repository, e.lookup_key()), c);
+            }
+        }
+        contexts
+    };
     let mut physical_outcomes = BTreeMap::<String, String>::new();
     let mut contexts = BTreeMap::new();
-    for old in before.iter().filter(|e| e.kind == NamespaceEntryKind::File) {
+    let mut removed_keys = Vec::new();
+    let mut maybe_dead = BTreeMap::<String, String>::new();
+    for old in affected
+        .iter()
+        .filter(|e| e.kind == NamespaceEntryKind::File)
+    {
         // Replay each entry's path independently. Looking only at the first
         // rename loses chained moves; matching by file ID alone confuses aliases.
         let mut moved = old.clone();
@@ -671,19 +818,32 @@ pub(crate) fn namespace_locations(
             moved.relocate(path);
             renamed = true;
         }
-        if !deleted
-            && let Some(current) = after_by_path.get(moved.lookup_key()).filter(|e| {
-                e.kind == NamespaceEntryKind::File
-                    && e.entry_id == old.entry_id
-                    && e.file_id == old.file_id
-            })
-        {
+        removed_keys.push(old.lookup_key().to_owned());
+        if deleted {
+            maybe_dead.insert(old.file_id.clone(), old.lookup_key().to_owned());
+        }
+        let current = if deleted {
+            None
+        } else {
+            let draft = crate::namespace::DraftSource {
+                fresh: &*fresh,
+                base,
+            };
+            crate::namespace::NamespaceView::new(after, &draft)
+                .resolve_key(moved.lookup_key())?
+                .filter(|e| {
+                    e.kind == NamespaceEntryKind::File
+                        && e.entry_id == old.entry_id
+                        && e.file_id == old.file_id
+                })
+        };
+        if let Some(current) = current.as_ref() {
             let context = original_contexts
                 .get(&context_key_from_key(repository, old.lookup_key()))
                 .cloned();
             let context = if current.path() != old.path() {
                 Some(file_paths::rename_node(
-                    state, repository, old, current, context, principal, operation,
+                    state, repository, old, current, context, principal, operation, base, fresh,
                 )?)
             } else {
                 state
@@ -720,45 +880,59 @@ pub(crate) fn namespace_locations(
             .insert(file.clone(), path.rsplit('/').next().unwrap_or("").into());
         state.file_locations.insert(file, path);
     }
-    // Remove old keys together before installing new keys, so a path swap
-    // cannot erase the context already installed for the other file.
-    for old in before.iter().filter(|e| e.kind == NamespaceEntryKind::File) {
+    // Remove the affected old keys together before installing new keys, so a
+    // path swap cannot erase the context already installed for the other
+    // file. Untouched files keep their contexts without any churn.
+    for key in removed_keys {
         state
             .file_contexts
-            .remove(&context_key_from_key(repository, old.lookup_key()));
+            .remove(&context_key_from_key(repository, &key));
     }
     state.file_contexts.extend(contexts);
-    let live = after
-        .iter()
-        .filter(|e| e.kind == NamespaceEntryKind::File)
-        .map(|e| e.file_id.as_str())
-        .collect::<BTreeSet<_>>();
-    for old in before
-        .iter()
-        .filter(|e| e.kind == NamespaceEntryKind::File && !live.contains(e.file_id.as_str()))
-    {
-        state.file_selections.remove(&old.file_id);
-        state.file_write_origins.remove(&old.file_id);
+    // A deleted entry's file is gone unless another entry still carries it:
+    // one walk of the post-edit tree, stopping once every candidate is seen.
+    if !maybe_dead.is_empty() {
+        let draft = crate::namespace::DraftSource {
+            fresh: &*fresh,
+            base,
+        };
+        crate::namespace::NamespaceView::new(after, &draft).walk(|_, entry| {
+            if let storage_contract::NamespacePageEntry::File { file_id, .. } = entry {
+                maybe_dead.remove(file_id);
+            }
+            Ok(!maybe_dead.is_empty())
+        })?;
+        for file in maybe_dead.keys() {
+            state.file_selections.remove(file);
+            state.file_write_origins.remove(file);
+        }
     }
     Ok(())
 }
 
-pub(crate) fn unwritten_source_at<'a>(
-    state: &'a State,
+pub(crate) fn unwritten_source_at(
+    state: &State,
     branch: &str,
     key: &str,
-) -> Option<&'a str> {
-    branch_context_at_key(state, branch, key)?
-        .inherited_from
-        .as_ref()?;
-    namespace::find_unordered_key(
-        &state
-            .commits
-            .get(&state.branches.get(branch)?.head_commit_id)?
-            .entries,
-        key,
+    source: &dyn crate::namespace::NamespaceSource,
+) -> Result<Option<String>> {
+    if branch_context_at_key(state, branch, key, source)?
+        .and_then(|context| context.inherited_from)
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let Some(branch) = state.branches.get(branch) else {
+        return Ok(None);
+    };
+    let Some(commit) = state.commits.get(&branch.head_commit_id) else {
+        return Ok(None);
+    };
+    Ok(
+        crate::namespace::NamespaceView::new(&commit.namespace, source)
+            .resolve_key(key)?
+            .map(|entry| entry.version_id),
     )
-    .map(|entry| entry.version_id.as_str())
 }
 
 // Persisted directory labels are admitted as NFC portable branch names. A nonzero
@@ -789,25 +963,38 @@ pub(crate) fn prepare_file_write(
     key: &str,
     principal: &str,
     operation: OperationId,
+    base: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
 ) -> Result<()> {
     let Some(repository) =
         repository::main_for_branch(state, branch).map(|r| r.repository_id.clone())
     else {
         return Ok(());
     };
-    let Some(origin) = context_at_key(state, &repository, key).and_then(|c| c.inherited_from)
-    else {
+    let origin = {
+        let draft = crate::namespace::DraftSource {
+            fresh: &*fresh,
+            base,
+        };
+        context_at_key(state, &repository, key, &draft)?.and_then(|c| c.inherited_from)
+    };
+    let Some(origin) = origin else {
         return Ok(());
     };
     let head = required(state.branches.get(branch), "repository main branch missing")?;
-    let original = required(
+    let head_commit = required(
         state.commits.get(&head.head_commit_id),
         "repository head commit missing",
-    )?
-    .entries
-    .iter()
-    .find(|e| e.lookup_key() == key && e.kind == NamespaceEntryKind::File)
-    .cloned()
+    )?;
+    let original = {
+        let draft = crate::namespace::DraftSource {
+            fresh: &*fresh,
+            base,
+        };
+        crate::namespace::NamespaceView::new(&head_commit.namespace, &draft)
+            .resolve_key(key)?
+            .filter(|e| e.kind == NamespaceEntryKind::File)
+    }
     .ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::FileNotFound,
@@ -854,6 +1041,7 @@ pub(crate) fn prepare_file_write(
         },
         principal,
         operation,
+        fresh,
     )?;
     let id = result["branch_id"].as_str().ok_or_else(|| {
         Error::new(
@@ -861,7 +1049,13 @@ pub(crate) fn prepare_file_write(
             "file fork receipt missing",
         )
     })?;
-    let inherited_node = context_at_key(state, &repository, key).and_then(|c| c.node_id);
+    let inherited_node = {
+        let draft = crate::namespace::DraftSource {
+            fresh: &*fresh,
+            base,
+        };
+        context_at_key(state, &repository, key, &draft)?.and_then(|c| c.node_id)
+    };
     state
         .branches
         .get_mut(id)
@@ -891,6 +1085,8 @@ pub(crate) fn record_directory_edits(
     repository: &str,
     changed_paths: &[String],
     exclude: Option<&str>,
+    base: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
 ) -> Result<Vec<String>> {
     let repo = required(
         state.repositories.get(repository),
@@ -933,10 +1129,36 @@ pub(crate) fn record_directory_edits(
         if exclude.is_some_and(|key| name_policy::path_key(&path) == key) {
             continue;
         }
-        match scope(state, repository, &path) {
-            Err(e) if e.code() == storage_contract::ErrorCode::DirectoryNotFound => continue,
-            Err(e) => return Err(e),
-            Ok(_) => result.push(snapshot(state, repository, &path)?),
+        let located = {
+            let draft = crate::namespace::DraftSource {
+                fresh: &*fresh,
+                base,
+            };
+            match scope(state, repository, &path, &draft) {
+                Err(e) if e.code() == storage_contract::ErrorCode::DirectoryNotFound => continue,
+                Err(e) => return Err(e),
+                Ok(_) => true,
+            }
+        };
+        if located {
+            let draft_snapshot = {
+                let draft = crate::namespace::DraftSource {
+                    fresh: &*fresh,
+                    base,
+                };
+                DirectorySnapshotSource::capture(
+                    state,
+                    scope_view(state, repository, &path, &draft)?,
+                    &draft,
+                )?
+            };
+            result.push(snapshot_source(
+                state,
+                repository,
+                draft_snapshot,
+                base,
+                fresh,
+            )?);
         }
     }
     Ok(result)
@@ -951,6 +1173,8 @@ pub(crate) fn select_change(
     principal: &str,
     operation: OperationId,
     max_entries: usize,
+    base: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
 ) -> Result<Value> {
     let selected = state
         .directory_branches
@@ -999,22 +1223,28 @@ pub(crate) fn select_change(
     let path = if selected.directory_id == repository {
         String::new()
     } else {
-        previous
-            .entries
-            .iter()
-            .find(|e| {
-                e.entry_id == selected.directory_id && e.kind == NamespaceEntryKind::Directory
-            })
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::DirectoryNotFound,
-                    "directory no longer exists",
-                )
-            })?
-            .path()
-            .to_owned()
+        // Directory identities have no recorded location: one early-stopping
+        // walk of the head finds the selection target.
+        let mut found = None;
+        crate::namespace::NamespaceView::new(&previous.namespace, base).walk(
+            |location, entry| {
+                if let storage_contract::NamespacePageEntry::Directory { entry_id, .. } = entry
+                    && entry_id == &selected.directory_id
+                {
+                    found = Some(location.as_str().to_owned());
+                    return Ok(false);
+                }
+                Ok(true)
+            },
+        )?;
+        found.ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::DirectoryNotFound,
+                "directory no longer exists",
+            )
+        })?
     };
-    let (_, old_entries, _) = scope(state, repository, &path)?;
+    let (_, old_entries, _) = scope(state, repository, &path, base)?;
     let restored = rebase_entries(&selected.entries, &selected.path, &path)?;
     let selected_contexts = selected
         .entries
@@ -1057,8 +1287,11 @@ pub(crate) fn select_change(
     // A frozen subtree can fit by itself while exceeding the repository budget
     // when combined with the currently selected siblings. Check the complete
     // replacement before changing any selections or publishing a commit.
+    // A selection replaces a whole subtree: materialize the head once at the
+    // operation's own O(subtree + siblings) cost, swap, and rebuild.
     let key = name_policy::path_key(&path);
-    let mut entries = previous.entries.clone();
+    let mut entries =
+        crate::namespace::NamespaceView::new(&previous.namespace, base).collect_entries()?;
     entries.retain(|e| !key.is_empty() && !namespace::is_descendant(e.lookup_key(), &key));
     entries.extend(restored);
     validate_entries(&mut entries, max_entries)?;
@@ -1106,7 +1339,13 @@ pub(crate) fn select_change(
     state
         .directory_tree_selections
         .insert(selected.directory_id.clone(), selected.head_tree_id.clone());
-    let pending = snapshot_pending(state, &entries);
+    let pending = {
+        let draft = crate::namespace::DraftSource {
+            fresh: &*fresh,
+            base,
+        };
+        snapshot_pending(state, &entries, &draft)?
+    };
     let commit_id = new_id("commit");
     state.commits.insert(
         commit_id.clone(),
@@ -1121,7 +1360,7 @@ pub(crate) fn select_change(
             operation_id: operation,
             author: principal.into(),
             message: format!("Select directory branch {}", selected.name),
-            entries,
+            namespace: crate::namespace::build_from_entries(&entries, fresh)?,
             pending_file_versions: pending,
             provenance: Some(selected.commit_id.clone()),
         },
@@ -1157,15 +1396,22 @@ pub(crate) fn select_change(
     } else {
         vec![path.clone()]
     };
-    let parents = record_directory_edits(state, repository, &changed, Some(&key))?;
+    let parents = record_directory_edits(state, repository, &changed, Some(&key), base, fresh)?;
     Ok(
         json!({"directory_branch_id":branch_id,"branch_id":repo.main_branch_id,"commit_id":commit_id,"history_tree_id":repo.history_tree_id,"path":path,"name":selected.name,"head_tree_id":selected.head_tree_id,"count":selected.file_branches.len().to_string(),"selected":true,"directory_branch_ids":parents}),
     )
 }
 
 impl Engine {
-    pub fn file_context(&self, repository: &str, path: &str) -> Option<FileContext> {
-        context_at_key(&self.state, repository, &name_policy::path_key(path))
+    pub fn file_context(&self, repository: &str, path: &str) -> Result<Option<FileContext>> {
+        self.with_namespace_source(|source| {
+            context_at_key(
+                &self.state,
+                repository,
+                &name_policy::path_key(path),
+                source,
+            )
+        })
     }
 
     /// Resolve an entry already borrowed from this repository's current main
@@ -1201,26 +1447,29 @@ impl Engine {
             principal,
             operation,
             json!({"repository_id":repository,"path":path.map_or("",name_policy::LookupPath::as_str)}),
-            |_, state, _| {
-                let repo = state.repositories.get(repository).ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::RepositoryNotFound,
-                        "repository missing",
-                    )
-                })?;
+            |engine, state, scratch| {
+                engine.with_namespace_source(|base| {
+                    let repo = state.repositories.get(repository).ok_or_else(|| {
+                        Error::new(
+                            storage_contract::ErrorCode::RepositoryNotFound,
+                            "repository missing",
+                        )
+                    })?;
 
-                let view = scope_view_for_key(
-                    state,
-                    repo,
-                    Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
-                )?;
-                let id = view.directory_id.to_owned();
-                if !state.directory_selections.contains_key(&id) {
-                    let source = DirectorySnapshotSource::capture(state, view);
-                    snapshot_source(state, repository, source)?;
-                }
-                let (branch, tree) = selected_tree(state, &id)?;
-                Ok(json!({"directory_branch_id":branch,"head_tree_id":tree.tree_id}))
+                    let view = scope_view_for_key(
+                        state,
+                        repo,
+                        Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
+                        base,
+                    )?;
+                    let id = view.directory_id.to_owned();
+                    if !state.directory_selections.contains_key(&id) {
+                        let source = DirectorySnapshotSource::capture(state, view, base)?;
+                        snapshot_source(state, repository, source, base, &mut scratch.namespace)?;
+                    }
+                    let (branch, tree) = selected_tree(state, &id)?;
+                    Ok(json!({"directory_branch_id":branch,"head_tree_id":tree.tree_id}))
+                })
             },
         )
     }
@@ -1241,7 +1490,7 @@ impl Engine {
                 "path": path.map_or("", name_policy::LookupPath::as_str),
                 "name": name.as_str(),
             }),
-            |_, state, _| {
+            |engine, state, scratch| {
                 let repo = state.repositories.get(repository).ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::RepositoryNotFound,
@@ -1250,16 +1499,24 @@ impl Engine {
                 })?;
 
                 let history_tree_id = repo.history_tree_id.clone();
-                let view = scope_view_for_key(
-                    state,
-                    repo,
-                    Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
-                )?;
-                let directory_id = view.directory_id.to_owned();
-                if !state.directory_selections.contains_key(&directory_id) {
-                    let source = DirectorySnapshotSource::capture(state, view);
-                    snapshot_source(state, repository, source)?;
-                }
+                let directory_id = engine.with_namespace_source(|base| {
+                    let repo = required(
+                        state.repositories.get(repository),
+                        "directory repository missing",
+                    )?;
+                    let view = scope_view_for_key(
+                        state,
+                        repo,
+                        Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
+                        base,
+                    )?;
+                    let directory_id = view.directory_id.to_owned();
+                    if !state.directory_selections.contains_key(&directory_id) {
+                        let source = DirectorySnapshotSource::capture(state, view, base)?;
+                        snapshot_source(state, repository, source, base, &mut scratch.namespace)?;
+                    }
+                    Ok(directory_id)
+                })?;
                 if state.directory_branches.values().any(|b| {
                     b.directory_id == directory_id
                         && name_policy::lookup_key(&b.name) == name.key()
@@ -1341,41 +1598,46 @@ impl Engine {
                 "path": path.map_or("", name_policy::LookupPath::as_str),
                 "name": name.as_str(),
             }),
-            |engine, state, _| {
-                let repo = state.repositories.get(repository).ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::RepositoryNotFound,
-                        "repository missing",
-                    )
-                })?;
-
-                let view = scope_view_for_key(
-                    state,
-                    repo,
-                    Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
-                )?;
-                let id = view.directory_id;
-                let selected = state
-                    .directory_branches
-                    .values()
-                    .find(|b| {
-                        b.directory_id == id && name_policy::lookup_key(&b.name) == name.key()
-                    })
-                    .map(|b| b.directory_branch_id.clone())
-                    .ok_or_else(|| {
+            |engine, state, scratch| {
+                engine.with_namespace_source(|base| {
+                    let repo = state.repositories.get(repository).ok_or_else(|| {
                         Error::new(
-                            storage_contract::ErrorCode::DirectoryBranchNotFound,
-                            "directory branch missing",
+                            storage_contract::ErrorCode::RepositoryNotFound,
+                            "repository missing",
                         )
                     })?;
-                select_change(
-                    state,
-                    repository,
-                    &selected,
-                    principal,
-                    operation,
-                    engine.config.max_entries,
-                )
+
+                    let view = scope_view_for_key(
+                        state,
+                        repo,
+                        Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
+                        base,
+                    )?;
+                    let id = view.directory_id;
+                    let selected = state
+                        .directory_branches
+                        .values()
+                        .find(|b| {
+                            b.directory_id == id && name_policy::lookup_key(&b.name) == name.key()
+                        })
+                        .map(|b| b.directory_branch_id.clone())
+                        .ok_or_else(|| {
+                            Error::new(
+                                storage_contract::ErrorCode::DirectoryBranchNotFound,
+                                "directory branch missing",
+                            )
+                        })?;
+                    select_change(
+                        state,
+                        repository,
+                        &selected,
+                        principal,
+                        operation,
+                        engine.config.max_entries,
+                        base,
+                        &mut scratch.namespace,
+                    )
+                })
             },
         )
     }
@@ -1384,12 +1646,15 @@ impl Engine {
         repository: &str,
         path: &str,
     ) -> Result<Vec<storage_contract::DirectoryBranchSummary>> {
-        let view = scope_view(&self.state, repository, path)?;
+        let view = self.with_namespace_source(|source| {
+            let view = scope_view(&self.state, repository, path, source)?;
+            Ok(view.directory_id)
+        })?;
         Ok(storage_contract::directory_branch_summaries(
             &self.state,
             storage_contract::DirectoryBranchScope {
                 repository_id: repository,
-                directory_id: view.directory_id,
+                directory_id: &view,
                 path,
             },
         ))
@@ -1406,7 +1671,7 @@ impl Engine {
             principal,
             operation,
             json!({"repository_id":repository,"directory_branch_id":branch}),
-            |engine, state, _| {
+            |engine, state, scratch| {
                 state.repositories.get(repository).ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::RepositoryNotFound,
@@ -1424,14 +1689,18 @@ impl Engine {
                         "default requires a root composition",
                     ));
                 }
-                select_change(
-                    state,
-                    repository,
-                    branch,
-                    principal,
-                    operation,
-                    engine.config.max_entries,
-                )
+                engine.with_namespace_source(|base| {
+                    select_change(
+                        state,
+                        repository,
+                        branch,
+                        principal,
+                        operation,
+                        engine.config.max_entries,
+                        base,
+                        &mut scratch.namespace,
+                    )
+                })
             },
         )
     }

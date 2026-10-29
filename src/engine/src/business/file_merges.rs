@@ -34,7 +34,7 @@ impl Engine {
         } = request;
         self.mutate("file.branches.merge", principal, operation,
             body,
-            |engine,state,_| {
+            |engine,state,scratch| {
                 super::file_requests::validate_location(engine, file, location)?;
                 if inputs.len() < 2 || inputs.len() > engine.config.max_entries {
                     return Err(Error::new(storage_contract::ErrorCode::InvalidRequest, "merge requires at least two bounded file branches"));
@@ -56,7 +56,7 @@ impl Engine {
                     if branch.state != BranchState::Active || state.file_branch_aliases.contains_key(&input.branch_id) {
                         return Err(Error::new(storage_contract::ErrorCode::FileBranchConflict,"merged branches cannot be merged or written again"));
                     }
-                    let head = super::file_nodes::branch_head(state,&input.branch_id)?;
+                    let head = engine.with_namespace_source(|source| super::file_nodes::branch_head(state, &input.branch_id, source))?;
                     if head != input.expected_node_id {
                         return Err(Error::new(storage_contract::ErrorCode::FileBranchConflict,"merge branch head changed; review all inputs again"));
                     }
@@ -87,8 +87,8 @@ impl Engine {
                     chosen_node_id:chosen_node.into(),result_node_id:result.clone(),surviving_branch_id:survivor.into(),
                     reused_node:reused,parent_node_ids:edges,operation_id:operation,sequence:state.sequence,
                 });
-                super::file_publication::advance_branch_node(state,survivor,&result,true,principal,operation)?;
-                let affected = super::file_publication::publish_node(state, crate::business::file_publication::NodePublication { file, matching_branches: &branches, matching_node: None, target_branch: survivor, target_node: &result, principal, operation, maximum: engine.config.max_entries })?;
+                engine.with_namespace_source(|base| super::file_publication::advance_branch_node(state,survivor,&result,true,principal,operation,base,&mut scratch.namespace))?;
+                let affected = engine.with_namespace_source(|base| super::file_publication::publish_node(state, crate::business::file_publication::NodePublication { file, matching_branches: &branches, matching_node: None, target_branch: survivor, target_node: &result, principal, operation, maximum: engine.config.max_entries }, base, &mut scratch.namespace))?;
                 for branch in branches.iter().filter(|branch| branch.as_str()!=survivor) {
                     state.file_branch_aliases.insert(branch.clone(),survivor.into());
                     let branch = state.branches.get_mut(branch).expect("checked merge branch");

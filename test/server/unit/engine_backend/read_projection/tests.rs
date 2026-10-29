@@ -184,17 +184,20 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
 }
 
 // Exact pre-optimization behavior used to compare the request-local resolver.
+// Commits no longer embed entries, so the oracle takes the commit's complete
+// materialized namespace exactly as the old flat scan saw it.
 fn legacy_pending_entry_source<'a>(
     engine: &'a Engine,
     branch: &str,
     commit: &'a storage_contract::Commit,
+    commit_entries: &'a [storage_contract::Entry],
     entry: &storage_contract::Entry,
 ) -> Option<&'a str> {
     if entry.kind != storage_contract::NamespaceEntryKind::File {
         return None;
     }
     let state = engine.state();
-    let visible = commit.entries.iter().find(|visible| {
+    let visible = commit_entries.iter().find(|visible| {
         visible.lookup_key() == entry.lookup_key() && visible.file_id == entry.file_id
     })?;
     let current = state.branches.get(branch)?;
@@ -203,7 +206,9 @@ fn legacy_pending_entry_source<'a>(
             .repositories
             .values()
             .find(|repo| repo.main_branch_id == branch)
-            && let Some(context) = engine.file_context(&repo.repository_id, &entry.path)
+            && let Some(context) = engine
+                .file_context(&repo.repository_id, &entry.path)
+                .unwrap()
         {
             return if context.inherited_from.is_some() {
                 Some(visible.version_id.as_str())
@@ -239,15 +244,18 @@ fn legacy_pending_entry_source<'a>(
         })
 }
 
+/// A historical commit with `count` synthetic file entries whose namespace is
+/// planted on the engine's members and installed into the engine state, so
+/// resolver point reads see exactly these entries.
 fn synthetic_commit(
-    engine: &Engine,
+    engine: &mut Engine,
     repo: &storage_engine::Repository,
     count: usize,
-) -> storage_contract::Commit {
+) -> (storage_contract::Commit, Vec<storage_contract::Entry>) {
     let head = &engine.state().branches[&repo.main_branch_id].head_commit_id;
     let mut commit = engine.state().commits[head].clone();
     commit.commit_id = "historical-projection-fixture".into();
-    commit.entries = (0..count)
+    let entries: Vec<_> = (0..count)
         .map(|index| {
             let path = format!("file-{index:05}.txt");
             storage_contract::Entry {
@@ -260,45 +268,51 @@ fn synthetic_commit(
             }
         })
         .collect();
-    commit.pending_file_versions = commit
-        .entries
+    commit.namespace = storage_engine::test_support::plant_namespace(engine, &entries).unwrap();
+    commit.pending_file_versions = entries
         .iter()
         .map(|entry| (entry.file_id.clone(), entry.version_id.clone()))
         .collect();
-    commit
+    let mut state = engine.state().clone();
+    state
+        .commits
+        .insert(commit.commit_id.clone(), commit.clone());
+    storage_engine::test_support::replace_state(engine, state);
+    (commit, entries)
 }
 
 #[test]
 fn canonical_tree_resolution_eliminates_repeated_entry_matching_at_scale() {
-    let (_root, engine, repo, _) = fixture();
+    let (_root, mut engine, repo, _) = fixture();
     for count in [100, 1_000, 10_000] {
-        let commit = synthetic_commit(&engine, &repo, count);
+        let (commit, entries) = synthetic_commit(&mut engine, &repo, count);
         let resolver = PendingSources::new(&engine, &repo.main_branch_id, &commit);
-        let optimized = resolver.pending_versions();
+        let optimized = resolver.pending_versions().unwrap();
         assert_eq!(
             resolver.matching_visits(),
             0,
             "known entries need no search"
         );
-        let checked: BTreeMap<_, _> = commit
-            .entries
+        let checked: BTreeMap<_, _> = entries
             .iter()
             .filter_map(|entry| {
                 resolver
                     .checked(entry)
-                    .map(|source| (entry.file_id.clone(), source.to_owned()))
+                    .unwrap()
+                    .map(|source| (entry.file_id.clone(), source))
             })
             .collect();
-        assert_eq!(resolver.matching_visits(), count * (count + 1) / 2);
+        // One bounded point read per checked entry, never a snapshot scan:
+        // the old flat resolver visited count*(count+1)/2 entries here.
+        assert_eq!(resolver.matching_visits(), count);
         assert_eq!(optimized, checked);
         assert_eq!(optimized, commit.pending_file_versions);
         // The exact original implementation remains the semantic oracle, not a
         // timing threshold. Its loop is also exercised at every requested size.
-        let legacy: BTreeMap<_, _> = commit
-            .entries
+        let legacy: BTreeMap<_, _> = entries
             .iter()
             .filter_map(|entry| {
-                legacy_pending_entry_source(&engine, &repo.main_branch_id, &commit, entry)
+                legacy_pending_entry_source(&engine, &repo.main_branch_id, &commit, &entries, entry)
                     .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect();
@@ -307,36 +321,41 @@ fn canonical_tree_resolution_eliminates_repeated_entry_matching_at_scale() {
 }
 
 #[test]
-fn checked_entries_and_noncanonical_snapshots_preserve_original_first_match() {
-    let (_root, engine, repo, _) = fixture();
-    let mut commit = synthetic_commit(&engine, &repo, 3);
-    let mut duplicate = commit.entries[0].clone();
-    duplicate.version_id = "different-version".into();
-    commit.entries.insert(1, duplicate.clone());
-    commit.entries.swap(2, 3);
+fn checked_entries_resolve_against_published_identity_not_caller_claims() {
+    let (_root, mut engine, repo, _) = fixture();
+    let (commit, entries) = synthetic_commit(&mut engine, &repo, 3);
     let resolver = PendingSources::new(&engine, &repo.main_branch_id, &commit);
-    let expected: BTreeMap<_, _> = commit
-        .entries
+    let expected: BTreeMap<_, _> = entries
         .iter()
         .filter_map(|entry| {
-            legacy_pending_entry_source(&engine, &repo.main_branch_id, &commit, entry)
+            legacy_pending_entry_source(&engine, &repo.main_branch_id, &commit, &entries, entry)
                 .map(|source| (entry.file_id.clone(), source.to_owned()))
         })
         .collect();
-    assert_eq!(resolver.pending_versions(), expected);
-    for entry in &commit.entries {
+    assert_eq!(resolver.pending_versions().unwrap(), expected);
+    // An external snapshot's entry resolves through the commit's own published
+    // entry at that key: the caller's claimed version never participates.
+    let mut external = entries[0].clone();
+    external.version_id = "different-version".into();
+    assert_eq!(
+        resolver.checked(&external).unwrap(),
+        legacy_pending_entry_source(&engine, &repo.main_branch_id, &commit, &entries, &external)
+            .map(str::to_owned)
+    );
+    for entry in &entries {
         assert_eq!(
-            resolver.checked(entry),
-            legacy_pending_entry_source(&engine, &repo.main_branch_id, &commit, entry)
+            resolver.checked(entry).unwrap(),
+            legacy_pending_entry_source(&engine, &repo.main_branch_id, &commit, &entries, entry)
+                .map(str::to_owned)
         );
     }
-    duplicate.file_id = "absent-file".into();
-    assert_eq!(resolver.checked(&duplicate), None);
-    duplicate.kind = storage_contract::NamespaceEntryKind::Directory;
-    assert_eq!(resolver.checked(&duplicate), None);
+    external.file_id = "absent-file".into();
+    assert_eq!(resolver.checked(&external).unwrap(), None);
+    external.kind = storage_contract::NamespaceEntryKind::Directory;
+    assert_eq!(resolver.checked(&external).unwrap(), None);
     assert!(
         resolver.matching_visits() > 0,
-        "noncanonical input keeps checked lookup"
+        "external input keeps checked lookup"
     );
 }
 
@@ -381,11 +400,13 @@ fn real_current_and_historical_tree_sources_match_previous_wire_output() {
         .clone();
     for commit_id in [&first, &current] {
         let commit = &engine.state().commits[commit_id];
-        let expected: BTreeMap<_, _> = commit
-            .entries
+        let entries = engine
+            .list_tree_at(&repo.main_branch_id, commit_id)
+            .unwrap();
+        let expected: BTreeMap<_, _> = entries
             .iter()
             .filter_map(|entry| {
-                legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, entry)
+                legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, &entries, entry)
                     .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect();
@@ -397,27 +418,32 @@ fn real_current_and_historical_tree_sources_match_previous_wire_output() {
         )
         .unwrap();
         assert_eq!(projection.pending_file_versions, expected);
-        assert_eq!(projection.entries, commit.entries);
+        assert_eq!(projection.entries, entries);
         assert_eq!(
             json_codec::to_value(&projection).unwrap(),
             json!({
                 "branch_id": repo.main_branch_id,
                 "commit_id": commit_id,
-                "entries": commit.entries,
+                "entries": entries,
                 "pending_file_versions": expected,
             })
         );
-        for entry in &commit.entries {
+        for entry in &entries {
             assert_eq!(
-                PendingSources::new(&engine, &repo.main_branch_id, commit).checked(entry),
-                legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, entry)
+                PendingSources::new(&engine, &repo.main_branch_id, commit)
+                    .checked(entry)
+                    .unwrap(),
+                legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, &entries, entry)
+                    .map(str::to_owned)
             );
             if commit_id == &current {
                 assert_eq!(
                     engine
                         .file_context_for_current_entry(&repo.repository_id, entry)
                         .map(|context| context.into_owned()),
-                    engine.file_context(&repo.repository_id, &entry.path)
+                    engine
+                        .file_context(&repo.repository_id, &entry.path)
+                        .unwrap()
                 );
             }
         }
@@ -460,11 +486,11 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
     let old_pending = engine.state().branches[&pending].head_commit_id.clone();
     let assert_sources = |engine: &Engine, branch: &str, commit_id: &str| {
         let commit = &engine.state().commits[commit_id];
-        let legacy: BTreeMap<_, _> = commit
-            .entries
+        let entries = engine.list_tree_at(branch, commit_id).unwrap();
+        let legacy: BTreeMap<_, _> = entries
             .iter()
             .filter_map(|entry| {
-                legacy_pending_entry_source(engine, branch, commit, entry)
+                legacy_pending_entry_source(engine, branch, commit, &entries, entry)
                     .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect();
@@ -476,13 +502,13 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
         )
         .unwrap();
         assert_eq!(tree.pending_file_versions, legacy);
-        assert_eq!(tree.entries, commit.entries);
+        assert_eq!(tree.entries, entries);
         assert_eq!(
             json_codec::to_value(&tree).unwrap(),
             json!({
                 "branch_id": branch,
                 "commit_id": commit_id,
-                "entries": commit.entries,
+                "entries": entries,
                 "pending_file_versions": legacy,
             })
         );
@@ -536,14 +562,15 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
         .head_commit_id
         .clone();
     let commit = &engine.state().commits[&head];
-    let original = commit
-        .entries
+    let head_entries = engine.list_tree_at(&repo.main_branch_id, &head).unwrap();
+    let original = head_entries
         .iter()
         .find(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
         .unwrap();
     assert!(
         engine
             .file_context(&repo.repository_id, &original.path)
+            .unwrap()
             .unwrap()
             .inherited_from
             .is_some()
@@ -554,28 +581,34 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
     ));
     let resolver = PendingSources::new(&engine, &repo.main_branch_id, commit);
     assert_eq!(
-        resolver.checked(original),
+        resolver.checked(original).unwrap().as_deref(),
         Some(original.version_id.as_str())
     );
     let mut external = original.clone();
     external.version_id = "not-the-first-visible-version".into();
     assert_eq!(
-        resolver.checked(&external),
+        resolver.checked(&external).unwrap().as_deref(),
         Some(original.version_id.as_str())
     );
     assert_eq!(
-        resolver.checked(&external),
-        legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, &external)
+        resolver.checked(&external).unwrap(),
+        legacy_pending_entry_source(
+            &engine,
+            &repo.main_branch_id,
+            commit,
+            &head_entries,
+            &external
+        )
+        .map(str::to_owned)
     );
-    let expected: BTreeMap<_, _> = commit
-        .entries
+    let expected: BTreeMap<_, _> = head_entries
         .iter()
         .filter_map(|entry| {
-            legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, entry)
+            legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, &head_entries, entry)
                 .map(|source| (entry.file_id.clone(), source.to_owned()))
         })
         .collect();
-    assert_eq!(resolver.pending_versions(), expected);
+    assert_eq!(resolver.pending_versions().unwrap(), expected);
     save_projection_file(
         &mut engine,
         &repo.main_branch_id,
@@ -583,12 +616,17 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
         b"materialized",
     );
     let historical = &engine.state().commits[&head];
-    let expected: BTreeMap<_, _> = historical
-        .entries
+    let expected: BTreeMap<_, _> = head_entries
         .iter()
         .filter_map(|entry| {
-            legacy_pending_entry_source(&engine, &repo.main_branch_id, historical, entry)
-                .map(|source| (entry.file_id.clone(), source.to_owned()))
+            legacy_pending_entry_source(
+                &engine,
+                &repo.main_branch_id,
+                historical,
+                &head_entries,
+                entry,
+            )
+            .map(|source| (entry.file_id.clone(), source.to_owned()))
         })
         .collect();
     let projection = crate::TreeSnapshot::capture(
@@ -611,11 +649,25 @@ fn directory_entry(index: usize, path: String) -> storage_contract::Entry {
         size: 0,
     }
 }
+/// Point the branch head at a planted namespace of exactly these entries.
+fn plant_head_namespace(
+    engine: &mut Engine,
+    repo: &storage_engine::Repository,
+    entries: &[storage_contract::Entry],
+) -> String {
+    let namespace = storage_engine::test_support::plant_namespace(engine, entries).unwrap();
+    let mut state = engine.state().clone();
+    let head = state.branches[&repo.main_branch_id].head_commit_id.clone();
+    state.commits.get_mut(&head).unwrap().namespace = namespace;
+    storage_engine::test_support::replace_state(engine, state);
+    head
+}
 #[test]
 fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copies() {
     use smb_protocol::protocol::{
         MAX_DIRECTORY_PAGE_BYTES, MAX_DIRECTORY_PAGE_ENTRIES, MAX_FRAME_BYTES, Response,
     };
+    let (_root, mut engine, repo, _) = fixture();
     let mut entries: Vec<_> = (0..12_000)
         .map(|index| directory_entry(index, format!("f{index:05}-{}", "x".repeat(180))))
         .collect();
@@ -629,16 +681,12 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
             .len()
             > MAX_FRAME_BYTES
     );
+    let head = plant_head_namespace(&mut engine, &repo, &entries);
+    let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
     let mut after = None;
     let mut seen = Vec::new();
     loop {
-        let page = DirectorySnapshot::page(
-            "commit_00000000000000000000000000000000",
-            &entries,
-            "",
-            after.as_deref(),
-        )
-        .unwrap();
+        let page = DirectorySnapshot::page(&head, &tree, "", after.as_deref()).unwrap();
         assert!(page.entries.len() <= MAX_DIRECTORY_PAGE_ENTRIES);
         assert!(
             json_codec::to_vec(&Response::Ok {
@@ -671,6 +719,7 @@ fn directory_byte_bound_applies_to_utf8_and_long_paths_before_the_count_limit() 
     use smb_protocol::protocol::{MAX_DIRECTORY_PAGE_BYTES, MAX_DIRECTORY_PAGE_ENTRIES, Response};
     // Valid paths have up to 200 UTF-16 units, so non-ASCII names can consume
     // considerably more bytes than the entry-count budget alone predicts.
+    let (_root, mut engine, repo, _) = fixture();
     let parent = vec!["界".repeat(50); 3].join("/");
     let entries: Vec<_> = (0..300)
         .map(|index| directory_entry(index, format!("{parent}/f{index:05}")))
@@ -678,13 +727,10 @@ fn directory_byte_bound_applies_to_utf8_and_long_paths_before_the_count_limit() 
     for entry in &entries {
         name_policy::validate_path(&entry.path).unwrap();
     }
-    let page = DirectorySnapshot::page(
-        "commit_00000000000000000000000000000000",
-        &entries,
-        &parent,
-        None,
-    )
-    .unwrap();
+    let head = plant_head_namespace(&mut engine, &repo, &entries);
+    let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
+    let page =
+        DirectorySnapshot::page(&head, &tree, &name_policy::path_key(&parent), None).unwrap();
     assert!(page.more);
     assert!(page.entries.len() < MAX_DIRECTORY_PAGE_ENTRIES);
     assert!(
@@ -712,7 +758,7 @@ fn smb_lookup_matches_legacy_on_published_and_reopened_unicode_trees() {
         .unwrap()
         .get("strasse/CAFÉ.TXT")
         .unwrap()
-        .clone();
+        .unwrap();
     for reopened in [false, true] {
         if reopened {
             drop(engine);
@@ -729,11 +775,10 @@ fn smb_lookup_matches_legacy_on_published_and_reopened_unicode_trees() {
             // Exact former lookup; only canonical published entries enter the
             // new view. Engine boundary tests reject bad keys/order/collisions.
             let legacy = engine
-                .list_tree_ref(&repo.main_branch_id)
+                .list_tree(&repo.main_branch_id)
                 .unwrap()
-                .iter()
-                .find(|entry| name_policy::path_key(&entry.path) == key)
-                .cloned();
+                .into_iter()
+                .find(|entry| name_policy::path_key(&entry.path) == key);
             if path.is_empty() {
                 assert!(name_policy::LookupPath::parse(path).is_err());
                 continue;

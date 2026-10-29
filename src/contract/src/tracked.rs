@@ -38,7 +38,6 @@ pub struct Tracked<T, K = String> {
 }
 pub type TrackedMap<T> = Tracked<BTreeMap<String, T>>;
 pub type TrackedRecords<T> = Tracked<SharedRecords<T>>;
-pub type TrackedOperations<T> = Tracked<BTreeMap<crate::OperationId, T>, crate::OperationId>;
 
 impl<T, K: Clone + Ord> Tracked<T, K> {
     pub fn new(value: T) -> Self {
@@ -303,15 +302,3 @@ impl<V> IntoIterator for TrackedMap<V> {
 #[cfg(test)]
 #[path = "../../../test/contract/unit/tracked.rs"]
 mod tests;
-
-impl<V> TrackedOperations<V> {
-    pub fn insert(&mut self, key: crate::OperationId, value: V) -> Option<V> {
-        self.key_changed(&key, std::mem::size_of::<crate::OperationId>());
-        self.value.insert(key, value)
-    }
-}
-impl<V> FromIterator<(crate::OperationId, V)> for TrackedOperations<V> {
-    fn from_iter<I: IntoIterator<Item = (crate::OperationId, V)>>(iter: I) -> Self {
-        Self::new(iter.into_iter().collect())
-    }
-}

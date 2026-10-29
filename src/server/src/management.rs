@@ -641,6 +641,43 @@ impl Backend for ManagementBackend {
         self.inner.backend()?.snapshot_at(identity, branch, commit)
     }
 
+    fn snapshot_entry(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        self.inner
+            .backend()?
+            .snapshot_entry(identity, branch, commit, key)
+    }
+
+    fn snapshot_directory_has_children(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+    ) -> Result<bool, ApiError> {
+        self.inner
+            .backend()?
+            .snapshot_directory_has_children(identity, branch, commit, key)
+    }
+
+    fn snapshot_entry_by_identity(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+        entry_id: &str,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        self.inner
+            .backend()?
+            .snapshot_entry_by_identity(identity, branch, commit, key, entry_id)
+    }
+
     fn create_workspace(
         &self,
         identity: &Identity,

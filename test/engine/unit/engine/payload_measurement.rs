@@ -158,6 +158,7 @@ fn existing_publication_operation() {
     let MutationPlan::Prepared {
         next,
         prepared,
+        namespace,
         result,
     } = plan.mutation
     else {
@@ -168,7 +169,7 @@ fn existing_publication_operation() {
     engine.prepare_payload(&prepared[0]).unwrap();
     measure("existing_publication", bytes, || {
         engine
-            .prepare_publication(*next, prepared, result, MAX_METADATA)
+            .prepare_publication(*next, prepared, namespace, result, MAX_METADATA)
             .unwrap();
     });
 }

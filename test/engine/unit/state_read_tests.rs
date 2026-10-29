@@ -37,13 +37,13 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
     let root = original.histories[&repo.history_tree_id]
         .root_commit_id
         .clone();
-    let version = original.commits[&head]
-        .entries
-        .iter()
+    let version = engine
+        .namespace_entries(&original.commits[&head].namespace)
+        .unwrap()
+        .into_iter()
         .find(|entry| entry.kind == NamespaceEntryKind::File)
         .unwrap()
-        .version_id
-        .clone();
+        .version_id;
     for corruption in [
         RepositoryKey,
         HistoryKey,
@@ -451,6 +451,7 @@ fn stored_event_sequences_admit_duplicates_and_reject_rehashed_invalid_sequences
     assert!(
         original
             .events
+            .tail()
             .iter()
             .map(|event| event.sequence)
             .is_sorted()
@@ -458,9 +459,10 @@ fn stored_event_sequences_admit_duplicates_and_reject_rehashed_invalid_sequences
     let mut duplicate = original.clone();
     duplicate
         .events
-        .push(original.events.iter().next_back().unwrap().clone());
+        .push(original.events.tail().last().unwrap().clone())
+        .unwrap();
     assert_eq!(
-        duplicate.events.iter().next_back().unwrap().sequence,
+        duplicate.events.tail().last().unwrap().sequence,
         duplicate.sequence
     );
     let duplicate_hash = store_snapshot(&fixture.config.disks, &duplicate).unwrap();
@@ -474,21 +476,43 @@ fn stored_event_sequences_admit_duplicates_and_reject_rehashed_invalid_sequences
         duplicate
     );
     let mut decreasing = original.clone();
-    decreasing.events = original.events.iter().rev().cloned().collect();
+    decreasing.events = storage_contract::SegmentedEvents::from_events(
+        original.events.tail().iter().rev().cloned().collect(),
+    )
+    .unwrap();
     assert!(
         !decreasing
             .events
+            .tail()
             .iter()
             .map(|event| event.sequence)
             .is_sorted()
     );
     let mut future = original.clone();
-    let last = future.events.len() - 1;
-    future.events[last].sequence = future.sequence + 1;
-    assert!(future.events.iter().map(|event| event.sequence).is_sorted());
-    for (invalid, message) in [
-        (decreasing, "snapshot event sequences are not nondecreasing"),
-        (future, "snapshot event sequence exceeds published sequence"),
+    let mut reordered = original.events.tail().to_vec();
+    reordered.last_mut().unwrap().sequence = future.sequence + 1;
+    future.events = storage_contract::SegmentedEvents::from_events(reordered).unwrap();
+    assert!(
+        future
+            .events
+            .tail()
+            .iter()
+            .map(|event| event.sequence)
+            .is_sorted()
+    );
+    // Out-of-order bytes now fail at the segment decode boundary, before the
+    // resident-state admission that still owns the published-sequence bound.
+    for (invalid, code, message) in [
+        (
+            decreasing,
+            ErrorCode::ObjectCorrupt,
+            "event segment sequences are out of order",
+        ),
+        (
+            future,
+            ErrorCode::StateInvalid,
+            "snapshot event sequence exceeds published sequence",
+        ),
     ] {
         // Recompute every object address so a raw digest mismatch cannot hide
         // semantic admission failures. No candidate/journal is changed.
@@ -506,13 +530,13 @@ fn stored_event_sequences_admit_duplicates_and_reject_rehashed_invalid_sequences
                 evidence.push((path.clone(), fs::read(path).unwrap()));
             }
             let error = load_snapshot(disk, &hash).unwrap_err();
-            assert_eq!(error.code(), ErrorCode::StateInvalid);
+            assert_eq!(error.code(), code);
             assert_eq!(error.message(), message);
         }
         let error = crate::publication_evidence::verified_snapshot(&fixture.config.disks, &hash)
             .err()
             .unwrap();
-        assert_eq!(error.code(), ErrorCode::StateInvalid);
+        assert_eq!(error.code(), code);
         assert_eq!(error.message(), message);
         for (path, bytes) in evidence {
             assert_eq!(fs::read(path).unwrap(), bytes);

@@ -118,13 +118,17 @@ pub(super) fn finish_publication(
         .expect("invariant: published workspace operation identifies its commit");
     // Bytes may have changed after a response was lost. Never acknowledge the
     // earlier publication as if it included those later FD-backed writes.
-    let snapshot = shared
+    // The writer's own path is a point-read hint; a concurrent rename keeps
+    // resolving through the descriptor's stable entry identity.
+    let entry = shared
         .backend
-        .snapshot_at(identity, branch, &writer.last_head)?;
-    let entry = snapshot
-        .entries
-        .iter()
-        .find(|entry| entry.entry_id == writer.item_id)
+        .snapshot_entry_by_identity(
+            identity,
+            branch,
+            &writer.last_head,
+            writer.path.key(),
+            &writer.item_id,
+        )?
         .ok_or_else(|| {
             ApiError::conflict(
                 storage_contract::ErrorCode::FileVersionConflict,

@@ -531,7 +531,7 @@ pub(crate) use test_support::{
 };
 
 mod object_storage;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use object_storage::write_object_bytes;
 use object_storage::write_object_bytes_at;
 #[cfg(test)]
@@ -560,10 +560,11 @@ pub(crate) fn store_object_at<T: Serialize + ?Sized>(
 /// Frozen canonical bytes shared by size preflight and every replica write.
 /// Construction performs all serialization and hashing; installation retains
 /// atomic writes, immutable-byte collision checks and reader-size limits.
+#[derive(Clone)]
 pub(crate) struct PreparedMetadataObject {
-    kind: &'static str,
+    pub(crate) kind: &'static str,
     pub(crate) hash: String,
-    bytes: Vec<u8>,
+    pub(crate) bytes: Vec<u8>,
 }
 impl PreparedMetadataObject {
     pub(crate) fn new<T: Serialize + ?Sized>(
@@ -586,7 +587,7 @@ impl PreparedMetadataObject {
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn store(&self, members: &[DiskConfig]) -> Result<String> {
         self.store_with(members, |disk| {
             write_object_bytes(disk, self.kind, &self.hash, &self.bytes)
@@ -667,8 +668,16 @@ impl AuthenticatedMetadataObject {
     pub(crate) fn value(&self) -> &json_codec::Value {
         &self.value
     }
+    pub(crate) fn canonical_len(&self) -> usize {
+        self.prepared.bytes.len()
+    }
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.prepared.bytes
+    }
+    /// Test fixture: copy the prepared bytes for a second store target.
+    #[cfg(test)]
+    pub(crate) fn clone_prepared_fixture(&self) -> PreparedMetadataObject {
+        self.prepared.clone()
     }
     pub(crate) fn into_prepared(self, maximum: usize) -> Result<PreparedMetadataObject> {
         if self.bytes().len() > maximum {
@@ -850,12 +859,38 @@ pub(crate) fn store_snapshot_bounded(
     state: &State,
     maximum: usize,
 ) -> Result<String> {
-    prepare_snapshot(state, maximum)?.store(members, state)
+    let prepared = prepare_snapshot_fixture(state, maximum)?;
+    prepared.store(members, state)
+}
+/// Test fixtures hand over published states whose one-shot cold index was
+/// already consumed by the engine's publication. With no sealed segments the
+/// complete locator index derives from the resident tail, keeping full-encode
+/// helpers pure without a disk-read entry; the index never changes the
+/// encoded bytes.
+#[cfg(test)]
+pub(crate) fn fixture_indexed_state(state: &State) -> Result<std::borrow::Cow<'_, State>> {
+    if state.operations.cold_index().is_none() && state.operations.sealed().is_empty() {
+        let mut indexed = state.clone();
+        let index = indexed
+            .operations
+            .tail()
+            .iter()
+            .enumerate()
+            .map(|(ordinal, entry)| (entry.result.operation_id, ordinal as u64))
+            .collect();
+        indexed.operations.attach_cold_index(index)?;
+        return Ok(std::borrow::Cow::Owned(indexed));
+    }
+    Ok(std::borrow::Cow::Borrowed(state))
+}
+#[cfg(test)]
+pub(crate) fn prepare_snapshot_fixture(state: &State, maximum: usize) -> Result<PreparedSnapshot> {
+    prepare_snapshot(fixture_indexed_state(state)?.as_ref(), maximum)
 }
 /// Same-process published provenance. Each map root clone only increments an Arc.
 #[derive(Clone)]
 pub(crate) struct SnapshotReuse {
-    descriptor: Snapshot,
+    pub(crate) descriptor: Snapshot,
     hash: String,
     fields: BTreeMap<String, snapshot::FieldRoot>,
     auth_bytes: usize,
@@ -865,7 +900,7 @@ pub(crate) struct PreparedSnapshot {
         Option<std::sync::Arc<crate::engine::provenance::MetadataIntegrity>>,
     pub(crate) descriptor: Snapshot,
     pub(crate) hash: String,
-    objects: Vec<PreparedMetadataObject>,
+    pub(crate) objects: Vec<PreparedMetadataObject>,
     fields: BTreeMap<String, snapshot::FieldRoot>,
     auth_bytes: usize,
     maximum: usize,
@@ -883,8 +918,30 @@ pub(crate) fn prepare_snapshot_incremental(
     after: &State,
     basis: &SnapshotReuse,
     maximum: usize,
+    reused: &mut dyn FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<PreparedSnapshot> {
-    snapshot::prepare_incremental(before, after, basis, maximum)
+    snapshot::prepare_incremental(before, after, basis, maximum, reused)
+}
+#[cfg(test)]
+pub(crate) use snapshot::no_reused_sources as no_reused_snapshot_sources;
+#[cfg(test)]
+pub(crate) fn test_reused_loader(
+    disks: &[DiskConfig],
+) -> impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject> + '_ {
+    move |kind, hash| {
+        let mut first = None;
+        for disk in disks {
+            match load_authenticated_object(disk, kind, hash) {
+                Ok(object) => return Ok(object),
+                Err(error) => {
+                    first.get_or_insert(error);
+                }
+            }
+        }
+        Err(first.unwrap_or_else(|| {
+            Error::new(ErrorCode::ObjectCorrupt, "published metadata has no source")
+        }))
+    }
 }
 #[cfg(test)]
 fn prepare_snapshot_reference(state: &State, maximum: usize) -> Result<PreparedSnapshot> {
@@ -916,9 +973,13 @@ pub(crate) fn resolve_snapshot(
 }
 pub(crate) fn resolve_admitted_snapshot(
     snapshot: Snapshot,
-    load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+    mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<crate::history_package::AdmittedState> {
-    resolve_raw_snapshot(snapshot, load)?.try_into()
+    let raw = resolve_raw_snapshot(snapshot, &mut load)?;
+    // Admission reads each commit's namespace through the same authenticated
+    // object loader that produced the snapshot's own pages.
+    let source = crate::namespace::ObjectLoaderSource::new(&mut load);
+    crate::history_package::AdmittedState::admit(raw, &source)
 }
 fn resolve_raw_snapshot(
     snapshot: Snapshot,
@@ -940,28 +1001,317 @@ fn resolve_raw_snapshot(
         snapshot.topology_generation.to_string().into(),
     );
     out.insert("control_auth".into(), auth.value().clone());
+    let mut operation_log = None;
+    let mut operation_locators = None;
     for (field, reference) in snapshot.maps {
-        out.insert(
-            field,
-            json_codec::Value::Object(crate::metadata_map::read_map(&reference, &mut load)?),
-        );
+        let map = crate::metadata_map::read_map(&reference, &mut load)?;
+        match field.as_str() {
+            "operation_log" => operation_log = Some(map),
+            "operation_locators" => operation_locators = Some(map),
+            _ => {
+                out.insert(field, json_codec::Value::Object(map));
+            }
+        }
     }
-    let mut events = Vec::new();
-    for (index, (key, value)) in crate::metadata_map::read_map(&snapshot.events, &mut load)?
-        .into_iter()
-        .enumerate()
-    {
+    // The disk-read entry reads and verifies every sealed segment: format,
+    // span/seal rules, contiguous directory keys, nondecreasing sequences
+    // within and across segments, and recorded placement facts against the
+    // decoded bodies. Only the directory and the open tail stay resident.
+    let events = resolve_event_segments(
+        crate::metadata_map::read_map(&snapshot.events, &mut load)?,
+        snapshot.sequence,
+        &mut load,
+    )?;
+    out.insert("events".into(), events);
+    let operations = resolve_operation_segments(
+        operation_log.expect("invariant: the validated schema carries operation_log"),
+        operation_locators.expect("invariant: the validated schema carries operation_locators"),
+        snapshot.sequence,
+        &mut load,
+    )?;
+    out.insert("operations".into(), operations);
+    Ok(json_codec::from_value(json_codec::Value::Object(out))?)
+}
+
+fn directory_entries<T: data_serialization::de::DeserializeOwned>(
+    map: json_codec::Map<String, json_codec::Value>,
+    what: &'static str,
+) -> Result<Vec<T>> {
+    let mut entries = Vec::with_capacity(map.len());
+    for (index, (key, value)) in map.into_iter().enumerate() {
         if key != format!("{index:020}") {
             return Err(Error::new(
                 ErrorCode::ObjectCorrupt,
-                "snapshot event indexes are not contiguous",
+                "segment directory ordinals are not contiguous",
             ));
         }
-        events.push(value);
+        entries.push(
+            json_codec::from_value(value)
+                .map_err(|source| Error::from(source).context(ErrorCode::ObjectCorrupt, what))?,
+        );
     }
-    out.insert("events".into(), json_codec::Value::Array(events));
-    Ok(json_codec::from_value(json_codec::Value::Object(out))?)
+    Ok(entries)
 }
+
+/// Visit every sealed/tail segment object referenced by this snapshot's
+/// events and operation_log directories, verifying each body against its
+/// typed directory entry. Shape-level: full cross-segment admission belongs
+/// to the single disk-read entry.
+pub(crate) fn visit_segment_objects(
+    snapshot: &Snapshot,
+    mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+) -> Result<()> {
+    use storage_contract::{EVENT_SEGMENT_KIND, EVENT_SEGMENT_SPAN, OPERATION_SEGMENT_KIND};
+    let events = crate::metadata_map::read_map(&snapshot.events, &mut load)?;
+    for entry in directory_entries::<storage_contract::EventDirectoryEntry>(
+        events,
+        "invalid event directory entry",
+    )? {
+        let segment: storage_contract::EventSegment =
+            json_codec::from_value(load(EVENT_SEGMENT_KIND, &entry.hash)?.value().clone())?;
+        if segment.events.is_empty()
+            || segment.events.len() > EVENT_SEGMENT_SPAN
+            || segment.events[0].sequence != entry.first_sequence
+        {
+            return Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "event segment differs from its directory entry",
+            ));
+        }
+    }
+    let log = snapshot
+        .maps
+        .get("operation_log")
+        .ok_or_else(|| Error::new(ErrorCode::ObjectCorrupt, "snapshot map schema differs"))?;
+    let log = crate::metadata_map::read_map(log, &mut load)?;
+    for entry in directory_entries::<storage_contract::OperationDirectoryEntry>(
+        log,
+        "invalid operation directory entry",
+    )? {
+        let segment: storage_contract::OperationSegment =
+            json_codec::from_value(load(OPERATION_SEGMENT_KIND, &entry.hash)?.value().clone())?;
+        if segment.records.is_empty()
+            || segment.records.len() as u64 != entry.records
+            || segment.records[0].result.sequence != entry.first_sequence
+        {
+            return Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "operation segment differs from its directory entry",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Visit every namespace page/index reachable from one snapshot's commits, for
+/// scrub coverage. Commit values reference immutable namespace graphs that the
+/// radix page walk stores but never decodes; each object is loaded once.
+pub(crate) fn visit_commit_namespace_objects(
+    snapshot: &Snapshot,
+    mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+) -> Result<()> {
+    let commits = snapshot
+        .maps
+        .get("commits")
+        .ok_or_else(|| Error::new(ErrorCode::ObjectCorrupt, "snapshot map schema differs"))?;
+    let commits = crate::metadata_map::read_map(commits, &mut load)?;
+    let mut visited = std::collections::BTreeSet::new();
+    for (commit_id, value) in &commits {
+        let namespace: storage_contract::CommitNamespace =
+            json_codec::from_value(value["namespace"].clone()).map_err(|error| {
+                Error::from(error).context(
+                    ErrorCode::ObjectCorrupt,
+                    format!("commit {commit_id} has no valid namespace root"),
+                )
+            })?;
+        crate::namespace::visit_namespace_objects(&namespace.root, &mut load, &mut visited)?;
+    }
+    Ok(())
+}
+
+fn resolve_event_segments(
+    directory: json_codec::Map<String, json_codec::Value>,
+    published_sequence: u64,
+    load: &mut impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+) -> Result<json_codec::Value> {
+    use storage_contract::{EVENT_SEGMENT_KIND, EVENT_SEGMENT_SPAN};
+    let entries: Vec<storage_contract::EventDirectoryEntry> =
+        directory_entries(directory, "invalid event directory entry")?;
+    let mut sealed = Vec::new();
+    let mut tail: Vec<storage_contract::Event> = Vec::new();
+    let mut previous_sequence = None::<u64>;
+    let count = entries.len();
+    for (index, entry) in entries.into_iter().enumerate() {
+        let segment: storage_contract::EventSegment =
+            json_codec::from_value(load(EVENT_SEGMENT_KIND, &entry.hash)?.value().clone())?;
+        let last = index + 1 == count;
+        if segment.events.is_empty()
+            || segment.events.len() > EVENT_SEGMENT_SPAN
+            || (!last && segment.events.len() != EVENT_SEGMENT_SPAN)
+        {
+            return Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "event segment span differs from the seal rule",
+            ));
+        }
+        if segment.events[0].sequence != entry.first_sequence
+            || !segment
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .is_sorted()
+            || previous_sequence.is_some_and(|previous| segment.events[0].sequence < previous)
+        {
+            return Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "event segment sequences are out of order",
+            ));
+        }
+        previous_sequence = segment.events.last().map(|event| event.sequence);
+        if previous_sequence.is_some_and(|sequence| sequence > published_sequence) {
+            return Err(Error::new(
+                ErrorCode::StateInvalid,
+                "snapshot event sequence exceeds published sequence",
+            ));
+        }
+        if last && segment.events.len() < EVENT_SEGMENT_SPAN {
+            tail = segment.events;
+        } else {
+            sealed.push(storage_contract::EventSegmentRef {
+                hash: entry.hash,
+                first_sequence: entry.first_sequence,
+            });
+        }
+    }
+    Ok(json_codec::json!({
+        "sealed": json_codec::to_value(&sealed)?,
+        "tail": json_codec::to_value(&tail)?,
+    }))
+}
+
+fn resolve_operation_segments(
+    directory: json_codec::Map<String, json_codec::Value>,
+    locators: json_codec::Map<String, json_codec::Value>,
+    published_sequence: u64,
+    load: &mut impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+) -> Result<json_codec::Value> {
+    use storage_contract::{
+        OPERATION_SEGMENT_KIND, OPERATION_SEGMENT_RECORDS, OPERATION_SEGMENT_TARGET_BYTES,
+    };
+    let entries: Vec<storage_contract::OperationDirectoryEntry> =
+        directory_entries(directory, "invalid operation directory entry")?;
+    let mut sealed = Vec::new();
+    let mut tail: Vec<storage_contract::OperationRecordEntry> = Vec::new();
+    let mut next_ordinal = 0u64;
+    let mut previous_sequence = None::<u64>;
+    let mut index_map = std::collections::BTreeMap::new();
+    let count = entries.len();
+    for (position, entry) in entries.into_iter().enumerate() {
+        let segment: storage_contract::OperationSegment =
+            json_codec::from_value(load(OPERATION_SEGMENT_KIND, &entry.hash)?.value().clone())?;
+        if segment.records.is_empty()
+            || segment.records.len() as u64 != entry.records
+            || entry.first_ordinal != next_ordinal
+            || segment.records[0].result.sequence != entry.first_sequence
+        {
+            return Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "operation segment differs from its directory entry",
+            ));
+        }
+        if !segment
+            .records
+            .iter()
+            .map(|record| record.result.sequence)
+            .is_sorted()
+            || previous_sequence
+                .is_some_and(|previous| segment.records[0].result.sequence < previous)
+        {
+            return Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "operation segment sequences are out of order",
+            ));
+        }
+        let last = position + 1 == count;
+        // A writer seals on the first append that reaches either threshold.
+        // No body may include records after that first hit, even the last one.
+        let mut bytes = 0usize;
+        let mut full = false;
+        for (offset, record) in segment.records.iter().enumerate() {
+            if full {
+                return Err(Error::new(
+                    ErrorCode::ObjectCorrupt,
+                    "operation segment continues beyond the seal rule",
+                ));
+            }
+            bytes += storage_contract::canonical_json(record)?.len();
+            full =
+                offset + 1 == OPERATION_SEGMENT_RECORDS || bytes >= OPERATION_SEGMENT_TARGET_BYTES;
+        }
+        if !last && !full {
+            return Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "operation segment ends before the seal rule",
+            ));
+        }
+        for (offset, record) in segment.records.iter().enumerate() {
+            if index_map
+                .insert(record.result.operation_id, next_ordinal + offset as u64)
+                .is_some()
+            {
+                return Err(Error::new(
+                    ErrorCode::ObjectCorrupt,
+                    "operation id appears in two receipts",
+                ));
+            }
+        }
+        previous_sequence = segment.records.last().map(|record| record.result.sequence);
+        if previous_sequence.is_some_and(|sequence| sequence > published_sequence) {
+            return Err(Error::new(
+                ErrorCode::StateInvalid,
+                "snapshot operation sequence exceeds published sequence",
+            ));
+        }
+        next_ordinal += entry.records;
+        if last && !full {
+            tail = segment.records;
+        } else {
+            sealed.push(entry.reference());
+        }
+    }
+    // The locator map is the published id index. A complete read must agree
+    // exactly with the index derived from the receipt bodies.
+    if locators.len() != index_map.len() {
+        return Err(Error::new(
+            ErrorCode::ObjectCorrupt,
+            "operation locators differ from the receipt log",
+        ));
+    }
+    for (key, value) in locators {
+        let id: storage_contract::OperationId = key.parse()?;
+        let ordinal =
+            storage_contract::parse_u64_decimal(&json_codec::from_value::<String>(value)?)?;
+        if index_map.get(&id) != Some(&ordinal) {
+            return Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "operation locators differ from the receipt log",
+            ));
+        }
+    }
+    let index = index_map
+        .into_iter()
+        .map(|(id, ordinal)| (id.to_string(), ordinal.to_string()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    Ok(json_codec::json!({
+        "sealed": json_codec::to_value(&sealed)?,
+        "tail": json_codec::to_value(&tail)?,
+        "index": json_codec::to_value(&index)?,
+    }))
+}
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/journal/segmented_admission_tests.rs"]
+mod segmented_admission_tests;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct VersionEvidence {

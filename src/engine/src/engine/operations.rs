@@ -62,9 +62,108 @@ impl OperationReadPlan {
 }
 
 impl Engine {
+    pub(crate) fn segment_reader<'a>(
+        &'a self,
+        members: &'a [DiskConfig],
+    ) -> crate::segment_store::SegmentReader<'a> {
+        crate::segment_store::SegmentReader {
+            resources: &self.disk_resources,
+            members,
+            caches: &self.segment_caches,
+        }
+    }
+
+    /// One permanent receipt by id over the current published State; see
+    /// `segment_store::ReceiptLookup` for the exact lookup order.
+    pub(crate) fn find_receipt(
+        &self,
+        id: OperationId,
+    ) -> Result<Option<storage_contract::OperationRecordEntry>> {
+        let members = self.members();
+        crate::segment_store::ReceiptLookup {
+            state: &self.state,
+            reader: self.segment_reader(&members),
+            locator_root: self.operation_locator_root.as_ref(),
+        }
+        .find(id)
+    }
+
+    /// A candidate's own receipt in its prepared or fully admitted snapshot.
+    /// Preparation may have just sealed it; cold admission supplies the full
+    /// locator index when the body is no longer resident. Never borrow the
+    /// current published state's locator root for another snapshot.
+    pub(crate) fn candidate_receipt(
+        &self,
+        state: &State,
+        members: &[DiskConfig],
+        id: OperationId,
+    ) -> Result<Option<storage_contract::OperationRecordEntry>> {
+        crate::segment_store::ReceiptLookup {
+            state,
+            reader: self.segment_reader(members),
+            locator_root: None,
+        }
+        .find(id)
+    }
+
+    /// One published permanent receipt by id, without health recomputation.
+    /// This is a read of the frozen publication facts for projections; it is
+    /// not authorization and not the pending-decision path.
+    pub fn published_receipt(&self, id: OperationId) -> Result<Option<OperationResult>> {
+        Ok(self.find_receipt(id)?.map(|entry| entry.result))
+    }
+
+    /// The permanent receipt published at exactly this decision slot, if any.
+    /// Locates the segment through the resident directory; one bounded read.
+    pub fn receipt_by_sequence(
+        &self,
+        sequence: u64,
+    ) -> Result<Option<storage_contract::OperationRecordEntry>> {
+        let log = &self.state.operations;
+        let tail = log.tail();
+        if let Some(first) = tail.first() {
+            if sequence >= first.result.sequence {
+                let rank = tail.partition_point(|entry| entry.result.sequence < sequence);
+                return Ok(tail
+                    .get(rank)
+                    .filter(|entry| entry.result.sequence == sequence)
+                    .cloned());
+            }
+        }
+        let sealed = log.sealed();
+        let Some(index) = sealed
+            .partition_point(|segment| segment.first_sequence <= sequence)
+            .checked_sub(1)
+        else {
+            return Ok(None);
+        };
+        let members = self.members();
+        let segment = self
+            .segment_reader(&members)
+            .operation_segment(&sealed[index])?;
+        let rank = segment.partition_point(|entry| entry.result.sequence < sequence);
+        Ok(segment
+            .get(rank)
+            .filter(|entry| entry.result.sequence == sequence)
+            .cloned())
+    }
+
+    /// Pull permanent receipts newest-first. Each sealed segment is read on
+    /// demand through the bounded cache; a caller that stops early reads only
+    /// the segments it visited.
+    pub fn receipts_descending(&self) -> ReceiptsDescending<'_> {
+        ReceiptsDescending {
+            engine: self,
+            members: self.members(),
+            tail_remaining: self.state.operations.tail().len(),
+            segment: None,
+            next_sealed: self.state.operations.sealed().len(),
+        }
+    }
+
     pub fn operation_owner(&self, id: OperationId) -> Result<Option<String>> {
-        if let Some(owner) = self.state.operation_principals.get(&id) {
-            return Ok(Some(owner.clone()));
+        if let Some(entry) = self.find_receipt(id)? {
+            return Ok(Some(entry.principal));
         }
         let (members, snapshot, _) = match self.pending_operation_snapshot(id) {
             Ok(pending) => pending,
@@ -73,35 +172,23 @@ impl Engine {
             }
             Err(error) => return Err(error),
         };
-        snapshot_entry(
-            &self.disk_resources,
-            &members,
-            &snapshot,
-            "operation_principals",
-            id,
-        )
+        Ok(pending_snapshot_receipt(self, &members, &snapshot, id)?.map(|entry| entry.principal))
     }
 
     /// Published records are metadata-only. An uncertain decision reads only
-    /// the hash-bound owner/operation pages, not the candidate's entire State.
+    /// the hash-bound locator path and one receipt segment, not the
+    /// candidate's entire State.
     pub fn operation_record(&self, id: OperationId) -> Result<OperationRecord> {
-        if let Some(result) = self.state.operations.get(&id) {
+        if let Some(entry) = self.find_receipt(id)? {
             return Ok(OperationRecord {
-                owner: self.state.operation_principals.get(&id).cloned(),
-                result: result.clone(),
+                owner: Some(entry.principal),
+                result: entry.result,
             });
         }
         let (members, snapshot, candidate) = self.pending_operation_snapshot(id)?;
-        let owner = snapshot_entry(
-            &self.disk_resources,
-            &members,
-            &snapshot,
-            "operation_principals",
-            id,
-        )?;
-        let mut result: OperationResult =
-            snapshot_entry(&self.disk_resources, &members, &snapshot, "operations", id)?
-                .ok_or_else(operation_not_found)?;
+        let entry = pending_snapshot_receipt(self, &members, &snapshot, id)?
+            .ok_or_else(operation_not_found)?;
+        let (owner, mut result) = (Some(entry.principal), entry.result);
         if result.operation_id != id
             || result.request_digest != candidate.request_digest
             || result.sequence != candidate.sequence
@@ -139,19 +226,31 @@ impl Engine {
         else {
             return plan;
         };
-        let mut selected = BTreeSet::new();
-        for entry in commit
-            .entries
-            .iter()
-            .filter(|entry| entry.kind == NamespaceEntryKind::File)
-        {
-            if !selected.insert(&entry.version_id) {
-                continue;
-            }
-            let prepared = self.prepare_content(&entry.version_id);
+        // Health covers the publication's complete commit: stream its file
+        // versions through the paged namespace, deduplicated, without holding
+        // the materialized tree.
+        let mut versions = Vec::new();
+        let streamed = self.with_namespace_source(|source| {
+            let mut selected = BTreeSet::new();
+            crate::namespace::NamespaceView::new(&commit.namespace, source).walk(|_, entry| {
+                if let storage_contract::NamespacePageEntry::File { version_id, .. } = entry
+                    && selected.insert(version_id.clone())
+                {
+                    versions.push(version_id.clone());
+                }
+                Ok(true)
+            })
+        });
+        if streamed.is_err() {
+            // An unreadable namespace page cannot prove any content healthy.
+            plan.unavailable = true;
+            return plan;
+        }
+        for version_id in versions {
+            let prepared = self.prepare_content(&version_id);
             match prepared {
                 Ok(content) => {
-                    let target = self.state.placements[&entry.version_id].target_copies;
+                    let target = self.state.placements[&version_id].target_copies;
                     plan.versions.push((content, target));
                 }
                 // Purged/migrated, missing or inconsistent descriptors all fail
@@ -236,6 +335,52 @@ impl Engine {
     }
 }
 
+/// Newest-first pull over the permanent receipt log. Owned items; segment
+/// bodies stay in the bounded cache, never pinned by the iterator.
+pub struct ReceiptsDescending<'e> {
+    engine: &'e Engine,
+    members: Vec<DiskConfig>,
+    tail_remaining: usize,
+    segment: Option<(
+        std::sync::Arc<Vec<storage_contract::OperationRecordEntry>>,
+        usize,
+    )>,
+    next_sealed: usize,
+}
+impl Iterator for ReceiptsDescending<'_> {
+    type Item = Result<storage_contract::OperationRecordEntry>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.tail_remaining > 0 {
+            self.tail_remaining -= 1;
+            return Some(Ok(
+                self.engine.state.operations.tail()[self.tail_remaining].clone()
+            ));
+        }
+        loop {
+            if let Some((segment, remaining)) = &mut self.segment {
+                if *remaining > 0 {
+                    *remaining -= 1;
+                    return Some(Ok(segment[*remaining].clone()));
+                }
+                self.segment = None;
+            }
+            self.next_sealed = self.next_sealed.checked_sub(1)?;
+            let reference = &self.engine.state.operations.sealed()[self.next_sealed];
+            match self
+                .engine
+                .segment_reader(&self.members)
+                .operation_segment(reference)
+            {
+                Ok(segment) => {
+                    let length = segment.len();
+                    self.segment = Some((segment, length));
+                }
+                Err(error) => return Some(Err(error)),
+            }
+        }
+    }
+}
+
 fn operation_not_found() -> Error {
     Error::new(
         storage_contract::ErrorCode::OperationNotFound,
@@ -245,12 +390,12 @@ fn operation_not_found() -> Error {
 
 // Verify exact bounded pages one at a time. Do not materialize unrelated maps,
 // or trust an unverified index/cache as a substitute for the accepted root.
-fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::DeserializeOwned>(
+fn pending_snapshot_entry<T: data_serialization::de::DeserializeOwned>(
     resources: &DiskResources,
     members: &[DiskConfig],
     snapshot: &Snapshot,
     field: &str,
-    id: OperationId,
+    key: &str,
 ) -> Result<Option<T>> {
     let reference = snapshot.maps.get(field).ok_or_else(|| {
         Error::new(
@@ -258,7 +403,7 @@ fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::Des
             "operation snapshot field is missing",
         )
     })?;
-    let value = crate::metadata_map::lookup(reference, &id.to_string(), |kind, hash| {
+    let value = crate::metadata_map::lookup(reference, key, |kind, hash| {
         crate::publication_evidence::verified_graph_object_at(resources, members, kind, hash)
     })?;
     value
@@ -267,6 +412,110 @@ fn snapshot_entry<T: data_serialization::Serialize + data_serialization::de::Des
         .map_err(Into::into)
 }
 
+/// Locate one receipt in a foreign accepted snapshot: locator → directory
+/// entry (located by its recorded ordinal range) → exact segment body. The
+/// located receipt is cross-checked against the id, so recorded counts are
+/// placement hints that cannot substitute a wrong record.
+fn pending_snapshot_receipt(
+    engine: &Engine,
+    members: &[DiskConfig],
+    snapshot: &Snapshot,
+    id: OperationId,
+) -> Result<Option<storage_contract::OperationRecordEntry>> {
+    let Some(text) = pending_snapshot_entry::<String>(
+        &engine.disk_resources,
+        members,
+        snapshot,
+        "operation_locators",
+        &id.to_string(),
+    )?
+    else {
+        return Ok(None);
+    };
+    let ordinal = storage_contract::parse_u64_decimal(&text)?;
+    let entry_at = |segment: u64| -> Result<Option<storage_contract::OperationDirectoryEntry>> {
+        pending_snapshot_entry(
+            &engine.disk_resources,
+            members,
+            snapshot,
+            "operation_log",
+            &format!("{segment:020}"),
+        )
+    };
+    let corrupt = || {
+        Error::new(
+            ErrorCode::ObjectCorrupt,
+            "operation locator points outside the receipt log",
+        )
+    };
+    let end = |entry: &storage_contract::OperationDirectoryEntry| {
+        entry
+            .first_ordinal
+            .checked_add(entry.records)
+            .ok_or_else(corrupt)
+    };
+    // Directory keys are contiguous segment ordinals. Gallop to a bracket
+    // whose recorded range passes the target, then binary search inside it.
+    let mut entry = entry_at(0)?.ok_or_else(corrupt)?;
+    if ordinal >= end(&entry)? {
+        let mut low = 0u64;
+        let mut step = 1u64;
+        let mut high = None;
+        while high.is_none() {
+            let probe = low.checked_add(step).ok_or_else(corrupt)?;
+            match entry_at(probe)? {
+                Some(candidate) if ordinal >= end(&candidate)? => {
+                    low = probe;
+                    step = step.checked_mul(2).ok_or_else(corrupt)?;
+                }
+                Some(candidate) if ordinal >= candidate.first_ordinal => {
+                    entry = candidate;
+                    high = Some(probe);
+                }
+                Some(_) | None => high = Some(probe),
+            }
+        }
+        let mut high = high.expect("invariant: the gallop sets its bracket");
+        while entry.first_ordinal > ordinal || ordinal >= end(&entry)? {
+            if high <= low + 1 {
+                return Err(corrupt());
+            }
+            let middle = low + (high - low) / 2;
+            match entry_at(middle)? {
+                Some(candidate) if ordinal >= end(&candidate)? => {
+                    low = middle;
+                }
+                Some(candidate) => {
+                    entry = candidate;
+                    high = middle;
+                }
+                None => high = middle,
+            }
+        }
+    }
+    let segment = engine
+        .segment_reader(members)
+        .operation_segment(&entry.reference())?;
+    let offset = usize::try_from(
+        ordinal
+            .checked_sub(entry.first_ordinal)
+            .ok_or_else(corrupt)?,
+    )
+    .map_err(|_| corrupt())?;
+    let record = segment.get(offset).cloned().ok_or_else(corrupt)?;
+    if record.result.operation_id != id {
+        return Err(Error::new(
+            ErrorCode::ObjectCorrupt,
+            "operation locator points at a different receipt",
+        ));
+    }
+    Ok(Some(record))
+}
+
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/operations/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/operations/segmented_receipts_tests.rs"]
+mod segmented_receipts_tests;

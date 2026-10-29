@@ -190,11 +190,15 @@ fn semantics(name: &str, value: &Value) -> Result {
         )?,
         "Branch" | "FileBranchView" | "Commit" => {
             if name == "Commit" {
-                for entry in array(&value["entries"])? {
-                    if entry["kind"] == "file" {
-                        storage_contract::validate_id(text(&entry["file_id"])?, "file")?;
-                        storage_contract::validate_id(text(&entry["version_id"])?, "ver")?;
-                    }
+                // The wire commit carries only its bounded namespace root; the
+                // pending map's binding to real page entries is re-verified by
+                // core admission through the paged namespace itself.
+                let namespace = &value["namespace"];
+                if uint(&namespace["entries"])? == 0 {
+                    require(
+                        namespace["root"]["kind"] == "namespace-page",
+                        "empty namespace must bind an empty page root",
+                    )?;
                 }
             }
             if let Some(pending) = value.get("pending_file_versions") {
@@ -205,16 +209,6 @@ fn semantics(name: &str, value: &Value) -> Result {
                         require(
                             value["file_id"] == *file,
                             "pending file escapes branch scope",
-                        )?;
-                    }
-                    if name == "Commit" {
-                        require(
-                            array(&value["entries"])?.iter().any(|entry| {
-                                entry["kind"] == "file"
-                                    && entry["file_id"] == *file
-                                    && entry["version_id"] == *version
-                            }),
-                            "snapshot pending source differs from its file entry",
                         )?;
                     }
                 }
@@ -246,6 +240,28 @@ fn semantics(name: &str, value: &Value) -> Result {
                     == text(&value["request_digest"])?,
                 "request digest mismatch",
             )?;
+        }
+        "NamespacePage" => {
+            let mut previous: Option<&str> = None;
+            for entry in array(&value["entries"])? {
+                let key = text(&entry["lookup_key"])?;
+                require(
+                    previous.is_none_or(|before| before < key),
+                    "namespace page keys must strictly increase in component order",
+                )?;
+                previous = Some(key);
+            }
+        }
+        "NamespaceIndex" => {
+            let mut previous: Option<&str> = None;
+            for child in array(&value["children"])? {
+                let key = text(&child["first_key"])?;
+                require(
+                    previous.is_none_or(|before| before < key),
+                    "namespace index first keys must strictly increase",
+                )?;
+                previous = Some(key);
+            }
         }
         "SaveResult" => validate_result(value)?,
         "SaveOperation" if !value["result"].is_null() => {
@@ -392,6 +408,20 @@ fn schema_valid(schema: &Value, value: &Value) -> Result {
     validator(schema)?
         .validate(value)
         .map_err(|error| error.to_owned().into())
+}
+
+fn decode_operation_vector(name: &str, value: &Value) -> Result {
+    let bytes = storage_contract::canonical_json(value)?;
+    match name {
+        "OperationResult" => {
+            storage_contract::decode_strict::<storage_contract::OperationResult>(&bytes)?;
+        }
+        "OperationSegment" => {
+            storage_contract::decode_strict::<storage_contract::OperationSegment>(&bytes)?;
+        }
+        _ => unreachable!("invariant: only persisted operation vectors reach this decoder"),
+    }
+    Ok(())
 }
 
 fn openapi(api: &Value) -> Result {
@@ -592,6 +622,17 @@ fn run(root: &Path) -> Result<Report> {
                 validators.insert(name.to_owned(), validator(&schema)?);
             }
             let valid = validators[name].is_valid(value);
+            if matches!(name, "OperationResult" | "OperationSegment") {
+                let decoded = decode_operation_vector(name, value);
+                if valid {
+                    decoded.map_err(|source| ContextError {
+                        context: format!("Rust decoder rejected {label}"),
+                        source,
+                    })?;
+                } else {
+                    require(decoded.is_err(), format!("Rust decoder accepted {label}"))?;
+                }
+            }
             if group == "positive" {
                 require(valid, format!("positive vector failed schema: {label}"))?;
                 semantics(name, value).map_err(|error| format!("{label}: {error}"))?;

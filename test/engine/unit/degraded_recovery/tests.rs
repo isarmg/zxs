@@ -14,6 +14,14 @@ fn fixture_with_members(
     retained: usize,
     metadata_members: [bool; 3],
 ) -> (tempfile::TempDir, Engine, OperationId, Candidate) {
+    fixture_with_members_and_receipts(point, retained, metadata_members, 0)
+}
+fn fixture_with_members_and_receipts(
+    point: &str,
+    retained: usize,
+    metadata_members: [bool; 3],
+    receipts: usize,
+) -> (tempfile::TempDir, Engine, OperationId, Candidate) {
     let temp = tempfile::tempdir().unwrap();
     let mut config = Config::development([
         temp.path().join("p"),
@@ -35,6 +43,8 @@ fn fixture_with_members(
         .unwrap();
     if retained > 0 {
         let mut next = engine.state().clone();
+        // Production planners begin tracking immediately after the clone.
+        next.begin_tracking();
         next.sequence = engine.next_slot;
         let original = next.commits[&next.histories[&repo.history_tree_id].root_commit_id].clone();
         let mut parent = original.commit_id.clone();
@@ -46,11 +56,27 @@ fn fixture_with_members(
             parent = commit.commit_id.clone();
             next.commits.insert(commit.commit_id.clone(), commit);
         }
-        let mut result = next.operations.values().next().unwrap().clone();
+        let mut result = next.operations.tail().first().unwrap().result.clone();
         result.operation_id = storage_contract::OperationId::generate();
         result.sequence = next.sequence;
-        next.operations.insert(result.operation_id, result.clone());
+        next.operations
+            .push(storage_contract::OperationRecordEntry {
+                principal: "alice".into(),
+                result: result.clone(),
+            })
+            .unwrap();
         engine.persist(next, Vec::new(), result).unwrap();
+    }
+    for _ in 0..receipts {
+        engine
+            .mutate(
+                "fixture.receipt",
+                "alice",
+                OperationId::generate(),
+                json!({}),
+                |_, _, _| Ok(json!({})),
+            )
+            .unwrap();
     }
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "alice")
@@ -89,6 +115,119 @@ fn fixture_with_members(
     let record = records.records.last().unwrap();
     let candidate = load_object(&member, "candidate", &record.0.candidate_hash).unwrap();
     (temp, engine, operation, candidate)
+}
+
+#[test]
+fn corrected_sealed_receipt_install_failure_precedes_publication_and_retries_same_plan() {
+    let (temp, engine, operation, candidate) = fixture_with_members_and_receipts(
+        "after_accept_2",
+        0,
+        [true; 3],
+        storage_contract::OPERATION_SEGMENT_RECORDS - 2,
+    );
+    lose(&engine, &candidate, true);
+    drop(engine);
+    let root = temp.path().join("state");
+    let mut engine = Engine::open_for_recovery(&root).unwrap();
+    let plan = engine
+        .prepare_degraded_recovery(operation, "alice", "permanent loss")
+        .unwrap();
+    // Derive the exact corrected body independently, then obstruct its second
+    // replica. The first member can install bytes, but that is not publication.
+    let members = engine.members();
+    let bound = engine
+        .load_bound_snapshot(&candidate.snapshot_hash)
+        .unwrap();
+    assert!(bound.operations.tail().is_empty());
+    let reference = bound.operations.sealed().last().unwrap();
+    let mut records = engine
+        .segment_reader(&members)
+        .operation_segment(reference)
+        .unwrap()
+        .as_ref()
+        .clone();
+    let corrected = &mut records.last_mut().unwrap().result;
+    assert_eq!(corrected.operation_id, operation);
+    corrected.commit_state = storage_contract::CommitState::PublishedDegraded;
+    corrected.protection_at_publish = storage_contract::ProtectionAtPublish::BelowTarget;
+    corrected.current_health = storage_contract::CurrentHealth::Unavailable;
+    corrected.result["recovery_id"] = json!(plan.recovery_id);
+    corrected.result["recovery_plan_digest"] = json!(plan.digest);
+    corrected.result["isolation_generation"] = json!(plan.isolation_generation);
+    corrected.result["outcome"] = json!("COMMITTED_DEGRADED");
+    corrected.result["version_protection"] = json!(plan.version_protection);
+    let corrected_hash = object_hash(
+        storage_contract::OPERATION_SEGMENT_KIND,
+        &storage_contract::OperationSegment {
+            format: Default::default(),
+            records,
+        },
+    )
+    .unwrap();
+    let obstruction = object_path(
+        &members[1],
+        storage_contract::OPERATION_SEGMENT_KIND,
+        &corrected_hash,
+    );
+    private_dir(obstruction.parent().unwrap()).unwrap();
+    fs::create_dir(&obstruction).unwrap();
+    let before = engine.state.clone();
+    let error = engine
+        .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::UnsafePath);
+    assert!(error.published_result().is_none());
+    assert!(std::sync::Arc::ptr_eq(&engine.state, &before));
+    assert!(engine.is_read_only());
+    assert!(engine.published_receipt(operation).unwrap().is_none());
+    assert!(
+        object_path(
+            &members[0],
+            storage_contract::OPERATION_SEGMENT_KIND,
+            &corrected_hash,
+        )
+        .is_file()
+    );
+    assert!(
+        discover_publication(&engine, &candidate, &plan.candidate_hash)
+            .unwrap()
+            .is_none()
+    );
+    for member in &members {
+        assert!(!publication_seal_path(member, &plan.candidate_hash).exists());
+        assert!(!scan(member).unwrap().records.iter().any(|(record, _)| {
+            record.sequence == candidate.sequence && record.record_type == RecordType::Publication
+        }));
+    }
+    fs::remove_dir(&obstruction).unwrap();
+    let result = engine
+        .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+        .unwrap();
+    assert!(engine.state.operations.tail().is_empty());
+    assert_eq!(
+        engine
+            .receipt_by_sequence(result.sequence)
+            .unwrap()
+            .unwrap()
+            .result,
+        result
+    );
+    assert_eq!(
+        engine.receipts_descending().next().unwrap().unwrap().result,
+        result
+    );
+    engine
+        .mutate(
+            "fixture.after_recovery",
+            "alice",
+            OperationId::generate(),
+            json!({}),
+            |_, _, _| Ok(json!({})),
+        )
+        .unwrap();
+    drop(engine);
+    let reopened = Engine::open(&root).unwrap();
+    assert_eq!(reopened.published_receipt(operation).unwrap(), Some(result));
 }
 
 #[test]
@@ -140,7 +279,7 @@ fn recovery_preview_and_commit_read_required_seals_from_the_held_generation() {
                 if !corrupt_bytes {
                     assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch);
                 }
-                assert!(!engine.state.operations.contains_key(&operation));
+                assert!(engine.state.operations.tail_record(operation).is_none());
                 for (path, bytes) in journals {
                     assert_eq!(fs::read(path).unwrap(), bytes, "no recovery decision write");
                 }
@@ -514,7 +653,7 @@ fn degraded_recovery_rejects_unverifiable_snapshot_before_reprotect() {
             .is_err()
     );
     assert!(engine.is_read_only());
-    assert!(!engine.state.operations.contains_key(&operation));
+    assert!(engine.state.operations.tail_record(operation).is_none());
     for (member, log) in members.iter().zip(logs) {
         assert_eq!(fs::read(log_path(member)).unwrap(), log);
     }
@@ -569,7 +708,10 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
             }
         );
         assert_eq!(error.published_result(), Some(context.result()));
-        assert_eq!(context.result(), &engine.state().operations[&operation]);
+        assert_eq!(
+            context.result(),
+            &engine.published_receipt(operation).unwrap().unwrap()
+        );
         assert_eq!(
             context.result().protection_at_publish,
             ProtectionAtPublish::BelowTarget

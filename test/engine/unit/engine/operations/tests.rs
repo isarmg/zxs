@@ -91,14 +91,35 @@ fn operation_read_plan_blocks_purge_until_observation_finishes() {
 fn operation_capture_is_metadata_only_deduplicated_and_cancel_safe() {
     let (_root, mut engine, repo) = fixture();
     let operation = save(&mut engine, &repo.main_branch_id, b"content");
-    let commit = std::sync::Arc::make_mut(&mut engine.state)
-        .commits
-        .get_mut(operation.commit_id.as_ref().unwrap())
-        .unwrap();
-    let entry = commit.entries[0].clone();
+    let commit_id = operation.commit_id.clone().unwrap();
+    let base_namespace = engine.state.commits[&commit_id].namespace.clone();
     // One immutable version may be referenced more than once. It must not
     // cause repeated full hashing or one lease per directory appearance.
-    commit.entries.push(entry.clone());
+    let mut built = crate::namespace::NamespaceObjects::new();
+    let (entry, namespace) = engine
+        .with_namespace_source(|base| {
+            let entry = crate::namespace::NamespaceView::new(&base_namespace, base)
+                .collect_entries()?
+                .into_iter()
+                .find(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
+                .unwrap();
+            let mut alias = entry.clone();
+            alias.entry_id = new_id("entry");
+            alias.path = name_policy::PortablePath::parse("alias-copy.txt").unwrap();
+            let mut editor = crate::namespace::NamespaceEditor::open(&base_namespace, base)?;
+            editor.upsert_file(&alias)?;
+            Ok((entry, editor.seal(&mut built)?))
+        })
+        .unwrap();
+    let members = engine.members();
+    for object in built.take() {
+        object.store(&members).unwrap();
+    }
+    std::sync::Arc::make_mut(&mut engine.state)
+        .commits
+        .get_mut(&commit_id)
+        .unwrap()
+        .namespace = namespace;
     for disk in &engine.config.disks {
         fs::remove_dir_all(disk.root.join("histories")).unwrap();
     }
@@ -149,7 +170,13 @@ fn health_reverifies_each_replica_and_never_rewrites_publication_facts() {
     let observed = engine.operation(operation.operation_id).unwrap();
     assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
     assert_frozen(&observed, &operation);
-    assert_eq!(engine.state.operations[&operation.operation_id], operation);
+    assert_eq!(
+        engine
+            .published_receipt(operation.operation_id)
+            .unwrap()
+            .unwrap(),
+        operation
+    );
     assert!(engine.reads.lock().unwrap().is_empty());
 }
 
@@ -197,16 +224,16 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
     assert!(plan.versions.is_empty());
     assert!(engine.reads.lock().unwrap().is_empty());
     SNAPSHOT_LOAD_COUNT.with(|count| assert_eq!(count.get(), 0));
-    // Ownership lookup does not load potentially large operation results.
-    for hash in crate::journal::map_pages(&members[0], &snapshot.maps["operations"]) {
-        for disk in &members {
-            fs::write(object_path(disk, "state-page", &hash), b"broken results").unwrap();
+    // The receipt lives in the locator and log directories plus one segment
+    // body; damaged receipt pages fail closed instead of guessing an owner.
+    for field in ["operation_locators", "operation_log"] {
+        for hash in crate::journal::map_pages(&members[0], &snapshot.maps[field]) {
+            for disk in &members {
+                fs::write(object_path(disk, "state-page", &hash), b"broken results").unwrap();
+            }
         }
     }
-    assert_eq!(
-        engine.operation_owner(operation).unwrap().as_deref(),
-        Some("owner")
-    );
+    assert!(engine.operation_owner(operation).is_err());
     assert!(engine.operation_record(operation).is_err());
 }
 

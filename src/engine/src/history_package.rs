@@ -66,13 +66,26 @@ pub(crate) fn package_proof_bytes(
     Ok(bytes)
 }
 
+/// Test fixture: resolve namespace objects through verified member replicas.
+#[cfg(test)]
+pub(crate) fn fixture_member_source(
+    members: &[DiskConfig],
+) -> impl crate::namespace::NamespaceSource + '_ {
+    crate::namespace::ObjectLoaderSource::new(move |kind, hash: &str| {
+        crate::publication_evidence::verified_graph_object(members, kind, hash)
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn store_history_manifests_bounded(
     members: &[DiskConfig],
     state: &State,
     maximum: usize,
 ) -> Result<crate::metadata_map::MapRoot> {
-    let (catalog, objects) = prepare_history_manifests(state, maximum)?;
+    let source = crate::namespace::ObjectLoaderSource::new(|kind, hash: &str| {
+        crate::publication_evidence::verified_graph_object(members, kind, hash)
+    });
+    let (catalog, objects) = prepare_history_manifests(state, maximum, &source)?;
     for object in objects {
         object.store(members)?;
     }
@@ -85,7 +98,10 @@ pub(crate) fn store_history_manifests_bounded_at(
     state: &State,
     maximum: usize,
 ) -> Result<crate::metadata_map::MapRoot> {
-    let (catalog, objects) = prepare_history_manifests(state, maximum)?;
+    let source = crate::namespace::ObjectLoaderSource::new(|kind, hash: &str| {
+        crate::publication_evidence::verified_graph_object_at(resources, members, kind, hash)
+    });
+    let (catalog, objects) = prepare_history_manifests(state, maximum, &source)?;
     for object in objects {
         object.store_at(resources, members)?;
     }
@@ -94,11 +110,12 @@ pub(crate) fn store_history_manifests_bounded_at(
 pub(crate) fn prepare_history_manifests(
     state: &State,
     maximum: usize,
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     let mut bindings = BTreeMap::new();
     let mut objects = Vec::new();
     for id in state.histories.keys() {
-        let manifest = HistoryManifest::from_state(state, id)?;
+        let manifest = HistoryManifest::from_state(state, id, source)?;
         let prepared = graph::prepare_encoded(&manifest, maximum)?;
         bindings.insert(id.clone(), prepared.binding);
         objects.extend(prepared.objects);
@@ -117,15 +134,17 @@ pub(crate) fn prepare_history_manifests_incremental(
     previous: &crate::metadata_map::MapRoot,
     members: &[DiskConfig],
     maximum: usize,
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
-    let owners = DerivedOwners::from_state(before);
-    let mut projection = ProjectionTransition::new(before, after, Some(&owners))?;
+    let owners = DerivedOwners::from_state(before, source)?;
+    let mut projection = ProjectionTransition::new(before, after, Some(&owners), source)?;
     prepare_history_manifests_incremental_observed(
         &mut projection,
         previous,
         members,
         maximum,
         &mut |_| {},
+        source,
     )
 }
 
@@ -136,6 +155,7 @@ pub(crate) fn prepare_history_manifests_incremental_observed(
     members: &[DiskConfig],
     maximum: usize,
     fault: &mut impl FnMut(&Error),
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     prepare_history_incremental(
         projection,
@@ -145,6 +165,7 @@ pub(crate) fn prepare_history_manifests_incremental_observed(
         &mut |kind, hash, fault| {
             crate::publication_evidence::verified_graph_object_observed(members, kind, hash, fault)
         },
+        source,
     )
 }
 
@@ -155,6 +176,7 @@ pub(crate) fn prepare_history_manifests_incremental_observed_at(
     members: &[DiskConfig],
     maximum: usize,
     fault: &mut impl FnMut(&Error),
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     prepare_history_incremental(
         projection,
@@ -166,6 +188,7 @@ pub(crate) fn prepare_history_manifests_incremental_observed_at(
                 resources, members, kind, hash, fault,
             )
         },
+        source,
     )
 }
 
@@ -176,6 +199,7 @@ pub(crate) fn prepare_history_manifests_reusing_published_at(
     members: &[DiskConfig],
     maximum: usize,
     fault: &mut impl FnMut(&Error),
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     prepare_history_incremental(
         projection,
@@ -187,6 +211,7 @@ pub(crate) fn prepare_history_manifests_reusing_published_at(
                 resources, members, kind, hash, fault,
             )
         },
+        source,
     )
 }
 
@@ -201,6 +226,7 @@ fn prepare_history_incremental<F: FnMut(&Error)>(
     maximum: usize,
     fault: &mut F,
     load: &mut impl FnMut(&'static str, &str, &mut F) -> Result<AuthenticatedMetadataObject>,
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<(crate::metadata_map::MapRoot, Vec<PreparedMetadataObject>)> {
     let previous = match &baseline {
         HistoryBaseline::Revalidate(previous) => *previous,
@@ -214,7 +240,7 @@ fn prepare_history_incremental<F: FnMut(&Error)>(
     let Some(mut histories) = edits else {
         // Cold/unknown lineage still performs complete logical admission. The
         // same rebuilt membership remains available to container preparation.
-        return prepare_history_manifests(after, maximum);
+        return prepare_history_manifests(after, maximum, source);
     };
     let changed: BTreeSet<_> = histories.keys().cloned().collect();
     let mut bindings = BTreeMap::new();
@@ -465,7 +491,12 @@ fn bound_history_graph_with<F: FnMut(&Error)>(
         fault(error);
     }
     let (manifest, objects) = result?;
-    if let Err(error) = manifest.validate() {
+    let validated = {
+        let source =
+            crate::namespace::ObjectLoaderSource::new(|kind, hash: &str| load(kind, hash, fault));
+        manifest.validate(&source)
+    };
+    if let Err(error) = validated {
         fault(&error);
         return Err(error);
     }
@@ -524,7 +555,12 @@ fn bound_history_objects_with(
         }
         match state {
             Some(state) => {
-                let expected = HistoryManifest::project_state(state, id)?;
+                let expected = {
+                    let source = crate::namespace::ObjectLoaderSource::new(|kind, hash: &str| {
+                        load(kind, hash)
+                    });
+                    HistoryManifest::project_state(state, id, &source)?
+                };
                 if canonical_json(&expected)? != canonical_json(&manifest)? {
                     return Err(Error::new(
                         storage_contract::ErrorCode::ObjectCorrupt,
@@ -532,7 +568,11 @@ fn bound_history_objects_with(
                     ));
                 }
             }
-            None => manifest.validate()?,
+            None => {
+                let source =
+                    crate::namespace::ObjectLoaderSource::new(|kind, hash: &str| load(kind, hash));
+                manifest.validate(&source)?;
+            }
         }
         for object in graph {
             if seen.insert((object.kind(), object.hash().to_owned())) {
@@ -592,8 +632,13 @@ fn package_version(package: &Path, version: &str) -> PathBuf {
     package.join("versions").join(version)
 }
 fn package_object(package: &Path, kind: &str, hash: &str) -> Result<PathBuf> {
-    if !matches!(kind, "state-page" | "metadata-index")
-        || hash.len() != 64
+    if !matches!(
+        kind,
+        "state-page"
+            | "metadata-index"
+            | storage_contract::NAMESPACE_PAGE_KIND
+            | storage_contract::NAMESPACE_INDEX_KIND
+    ) || hash.len() != 64
         || !hash
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -610,7 +655,58 @@ fn package_object(package: &Path, kind: &str, hash: &str) -> Result<PathBuf> {
         .join(format!("{hash}.json")))
 }
 
-fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, HistoryPackageReport)> {
+/// Read every namespace object of one commit closure from the package's own
+/// files, authenticating and decoding each node exactly once.
+fn load_package_namespace(
+    package: &Path,
+    root: &storage_contract::NamespaceReference,
+    out: &mut crate::namespace::NamespaceObjects,
+    visited: &mut BTreeSet<(storage_contract::NamespaceRefKind, String)>,
+) -> Result<()> {
+    if !visited.insert((root.kind, root.hash.clone())) {
+        return Ok(());
+    }
+    root.validate()?;
+    let kind = root.kind.as_str();
+    let object = AuthenticatedMetadataObject::authenticate(
+        kind,
+        &root.hash,
+        read_json(&package_object(package, kind, &root.hash)?)?,
+    )
+    .map_err(|error| {
+        error.context(
+            storage_contract::ErrorCode::HistoryPackageInvalid,
+            "packaged namespace object differs from its address",
+        )
+    })?;
+    let node =
+        crate::namespace::NamespaceNode::decode(root, object.value(), object.canonical_len())?;
+    out.install(root, object)?;
+    match node {
+        crate::namespace::NamespaceNode::Page(page) => {
+            for entry in &page.entries {
+                if let storage_contract::NamespacePageEntry::Directory { subtree, .. } = entry {
+                    load_package_namespace(package, subtree, out, visited)?;
+                }
+            }
+        }
+        crate::namespace::NamespaceNode::Index(index) => {
+            for child in &index.children {
+                load_package_namespace(package, &child.reference, out, visited)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn load_package(
+    package: &Path,
+) -> Result<(
+    HistoryManifest,
+    PackageProof,
+    HistoryPackageReport,
+    crate::namespace::NamespaceObjects,
+)> {
     let proof: PackageProof = read_json(&package.join("publication.json"))?;
     let root = AuthenticatedMetadataObject::authenticate(
         "history-manifest",
@@ -631,7 +727,35 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
             read_json(&package_object(package, kind, hash)?)?,
         )
     })?;
-    manifest.validate()?;
+    // A package is self-contained: every commit's complete namespace closure
+    // loads from the package's own object files before any validation reads.
+    let mut namespace = crate::namespace::NamespaceObjects::new();
+    {
+        let mut visited = BTreeSet::new();
+        for commit in manifest.commits.values() {
+            load_package_namespace(
+                package,
+                &commit.namespace.root,
+                &mut namespace,
+                &mut visited,
+            )?;
+        }
+    }
+    {
+        let deny = crate::namespace::LoaderSource(
+            |_: &storage_contract::NamespaceReference| -> Result<crate::namespace::NamespaceNode> {
+                Err(Error::new(
+                    storage_contract::ErrorCode::HistoryPackageInvalid,
+                    "namespace object is missing from the package",
+                ))
+            },
+        );
+        let source = crate::namespace::DraftSource {
+            fresh: &namespace,
+            base: &deny,
+        };
+        manifest.validate(&source)?;
+    }
     verify_publication_seal(
         &proof.candidate,
         &proof.publication,
@@ -685,11 +809,11 @@ fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, Histor
         tombstones,
         full_bytes,
     };
-    Ok((manifest, proof, report))
+    Ok((manifest, proof, report, namespace))
 }
 /// Validate one history without a system index, source pool, network or account store.
 pub fn offline_check_history_package(package: &Path) -> Result<HistoryPackageReport> {
-    load_package(package).map(|(_, _, report)| report)
+    load_package(package).map(|(_, _, report, _)| report)
 }
 impl Engine {
     pub fn export_history_package(
@@ -698,7 +822,9 @@ impl Engine {
         destination: &Path,
     ) -> Result<HistoryPackageReport> {
         self.repository_for_history(history)?;
-        let manifest = HistoryManifest::project_state(&self.state, history)?;
+        let manifest = self.with_namespace_source(|source| {
+            HistoryManifest::project_state(&self.state, history, source)
+        })?;
         let mut proof = None;
         let mut graph_objects = Vec::new();
         let members = self.trusted_evidence_members();
@@ -797,6 +923,31 @@ impl Engine {
                 "no published manifest matches the current history",
             )
         })?;
+        // The package must be self-contained: collect the complete namespace
+        // closure of every exported commit from verified member replicas.
+        let namespace_objects = {
+            let mut visited = BTreeSet::new();
+            let mut collected: Vec<(&'static str, String, Vec<u8>)> = Vec::new();
+            for commit in manifest.commits.values() {
+                crate::namespace::visit_namespace_objects(
+                    &commit.namespace.root,
+                    &mut |kind, hash| {
+                        let object =
+                            crate::publication_evidence::verified_graph_object_observed_at(
+                                &self.disk_resources,
+                                &members,
+                                kind,
+                                hash,
+                                &mut |error| self.metadata_integrity.fault(error),
+                            )?;
+                        collected.push((kind, object.hash().to_owned(), object.bytes().to_vec()));
+                        Ok(object)
+                    },
+                    &mut visited,
+                )?;
+            }
+            collected
+        };
         let parent = destination
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -835,6 +986,9 @@ impl Engine {
                 };
                 write_atomic(&path, object.bytes(), false)?;
             }
+            for (kind, hash, bytes) in &namespace_objects {
+                write_atomic(&package_object(&staging, kind, hash)?, bytes, false)?;
+            }
             write_json(&staging.join("publication.json"), &proof, false)?;
             sync_dir(&staging)?;
             let report = offline_check_history_package(&staging)?;
@@ -872,7 +1026,7 @@ impl Engine {
         operation: OperationId,
     ) -> Result<OperationResult> {
         self.require_write()?;
-        let (manifest, proof, report) = load_package(package)?;
+        let (manifest, proof, report, namespace_objects) = load_package(package)?;
         let route = self.route(primary, copies)?;
         for version in manifest.versions.values() {
             if version.checksum_chunk_bytes != self.config.checksum_chunk_bytes
@@ -990,6 +1144,9 @@ impl Engine {
                 return Err(Error::new(storage_contract::ErrorCode::NameCollision,"restored repository name already exists"));
             }
             state.sequence = state.sequence.max(after_source);
+            // Imported commits reference the package's namespace objects; they
+            // install with this publication's own fresh objects.
+            pending.namespace.absorb(namespace_objects);
             let mut repository = manifest.repository.clone();
             repository.primary_slot_id = primary.into(); repository.target_copies = copies;
             repository.smb_enabled = false;
@@ -1036,7 +1193,7 @@ impl Engine {
                 state.versions.insert(id.clone(),version.clone()); state.placements.insert(id.clone(),placement.clone());
                 state.content_states.insert(id.clone(),manifest.content_states[id]);
                 if manifest.content_states[id] == ContentState::Available {
-                    pending.push(crate::engine::Prepared {version:version.clone(),placement,
+                    pending.payloads.push(crate::engine::Prepared {version:version.clone(),placement,
                         source:crate::engine::ReadSource::external(package_version(package,id).join("content").join(&version.creation_name))});
                 }
             }

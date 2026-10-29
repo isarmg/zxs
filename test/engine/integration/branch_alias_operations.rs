@@ -388,10 +388,12 @@ fn archive_respects_each_selected_alias_and_preserves_closed_branch_head() {
     let a = p
         .engine
         .file_context(&p.repo.repository_id, "a/report.txt")
+        .unwrap()
         .unwrap();
     let b = p
         .engine
         .file_context(&p.repo.repository_id, "b/report.txt")
+        .unwrap()
         .unwrap();
     assert_ne!(a.branch_id, b.branch_id);
     assert_eq!(
@@ -407,7 +409,7 @@ fn archive_respects_each_selected_alias_and_preserves_closed_branch_head() {
             .code(),
         storage_contract::ErrorCode::FileBranchSelected
     );
-    assert!(!p.engine.state().operations.contains_key(&operation));
+    assert!(p.engine.published_receipt(operation).unwrap().is_none());
     assert_eq!(
         p.engine.state().branches[&b.branch_id].state.as_str(),
         "active"
@@ -456,16 +458,98 @@ fn archive_respects_each_selected_alias_and_preserves_closed_branch_head() {
 }
 
 #[test]
+fn workspace_writes_two_aliases_synchronize_each_selected_file_branch() {
+    for reverse in [false, true] {
+        let mut p = Pool::new();
+        let (_, _, original) = selected_aliases(&mut p);
+        p.save("b/report.txt", b"previous explicit branch content");
+        let before_a = p.current_entry("a/report.txt");
+        let before_b = p.current_entry("b/report.txt");
+        assert_eq!(before_a.entry_id, before_b.entry_id);
+        assert_eq!(before_a.file_id, original.file_id);
+        assert_eq!(before_b.file_id, original.file_id);
+        assert_ne!(before_a.version_id, before_b.version_id);
+
+        let workspace = p
+            .engine
+            .create_workspace(&p.repo.main_branch_id, "admin")
+            .unwrap();
+        let mut writes = [
+            ("a/report.txt", b"new inherited alias content".as_slice()),
+            ("b/report.txt", b"new explicit alias content".as_slice()),
+        ];
+        if reverse {
+            writes.reverse();
+        }
+        for (path, bytes) in writes {
+            p.engine
+                .stage_bytes(&workspace.workspace_id, path, bytes)
+                .unwrap();
+        }
+        p.commit(workspace);
+
+        let a = p.current_entry("a/report.txt");
+        let b = p.current_entry("b/report.txt");
+        assert_eq!(a.entry_id, b.entry_id);
+        assert_ne!(a.version_id, before_a.version_id);
+        assert_ne!(b.version_id, before_b.version_id);
+        assert_ne!(a.version_id, b.version_id);
+        let repository_id = p.repo.repository_id.clone();
+        let contexts = [&a, &b].map(|entry| {
+            p.engine
+                .file_context(&repository_id, entry.path())
+                .unwrap()
+                .unwrap()
+        });
+        assert_ne!(contexts[0].branch_id, contexts[1].branch_id);
+        let check = |engine: &Engine| {
+            for (entry, context) in [&a, &b].into_iter().zip(&contexts) {
+                let current_context = engine
+                    .file_context(&repository_id, entry.path())
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(current_context, *context);
+                assert!(current_context.inherited_from.is_none());
+                let branch = &engine.state().branches[&context.branch_id];
+                assert!(!branch.pending_file_versions.contains_key(&entry.file_id));
+                let head = &engine.state().commits[&branch.head_commit_id];
+                assert!(!head.pending_file_versions.contains_key(&entry.file_id));
+                let published = engine
+                    .list_tree(&context.branch_id)
+                    .unwrap()
+                    .into_iter()
+                    .find(|candidate| candidate.file_id == entry.file_id)
+                    .unwrap();
+                assert_eq!(published, *entry);
+            }
+            for (entry, expected) in [
+                (&a, b"new inherited alias content".as_slice()),
+                (&b, b"new explicit alias content".as_slice()),
+            ] {
+                let mut content = engine.open_content(&entry.version_id).unwrap();
+                let mut bytes = Vec::new();
+                content.file.read_to_end(&mut bytes).unwrap();
+                assert_eq!(bytes, expected);
+            }
+        };
+        check(&p.engine);
+        p.reopen(check);
+    }
+}
+
+#[test]
 fn workspace_namespace_renames_two_aliases_atomically_with_distinct_write_contexts() {
     let mut p = Pool::new();
     let (n, l, original) = selected_aliases(&mut p);
     let a_context = p
         .engine
         .file_context(&p.repo.repository_id, "a/report.txt")
+        .unwrap()
         .unwrap();
     let b_context = p
         .engine
         .file_context(&p.repo.repository_id, "b/report.txt")
+        .unwrap()
         .unwrap();
     assert_ne!(a_context.branch_id, b_context.branch_id);
     assert!(a_context.inherited_from.is_some());
@@ -496,10 +580,12 @@ fn workspace_namespace_renames_two_aliases_atomically_with_distinct_write_contex
     let renamed_a = p
         .engine
         .file_context(&p.repo.repository_id, "a/renamed.txt")
+        .unwrap()
         .unwrap();
     let renamed_b = p
         .engine
         .file_context(&p.repo.repository_id, "b/renamed.txt")
+        .unwrap()
         .unwrap();
     for (renamed, before, path, old_path) in [
         (&renamed_a, &a_context, "a/renamed.txt", "a/report.txt"),
@@ -598,6 +684,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
     let context = p
         .engine
         .file_context(&p.repo.repository_id, "a/report.txt")
+        .unwrap()
         .unwrap();
     let branch = p.engine.state().branches[&context.branch_id].clone();
     let versions = p.engine.state().versions.len();
@@ -645,6 +732,7 @@ fn public_file_branch_rename_is_bounded_authorized_metadata_without_content_node
     assert_eq!(
         p.engine
             .file_context(&p.repo.repository_id, "a/report.txt")
+            .unwrap()
             .unwrap(),
         context
     );
@@ -710,10 +798,12 @@ fn workspace_conflicting_alias_names_reject_the_complete_namespace_decision() {
     let a_context = p
         .engine
         .file_context(&p.repo.repository_id, "a/report.txt")
+        .unwrap()
         .unwrap();
     let b_context = p
         .engine
         .file_context(&p.repo.repository_id, "b/report.txt")
+        .unwrap()
         .unwrap();
     let a_head = p.branch(&n).head_tree_id;
     let b_head = p.branch(&l).head_tree_id;
@@ -761,12 +851,14 @@ fn workspace_conflicting_alias_names_reject_the_complete_namespace_decision() {
     assert_eq!(
         p.engine
             .file_context(&p.repo.repository_id, "a/report.txt")
+            .unwrap()
             .unwrap(),
         a_context
     );
     assert_eq!(
         p.engine
             .file_context(&p.repo.repository_id, "b/report.txt")
+            .unwrap()
             .unwrap(),
         b_context
     );
@@ -793,6 +885,7 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
     let context = p
         .engine
         .file_context(&p.repo.repository_id, &original.path)
+        .unwrap()
         .unwrap();
     let workspace = p
         .engine
@@ -817,6 +910,7 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
     let updated = p
         .engine
         .file_context(&p.repo.repository_id, &renamed.path)
+        .unwrap()
         .unwrap();
     assert_eq!(updated.branch_id, context.branch_id);
     assert_eq!(updated.inherited_from, context.inherited_from);
@@ -829,7 +923,10 @@ fn chained_workspace_directory_renames_keep_context_and_physical_owner() {
     assert_eq!(p.bytes(&original.version_id), b"original");
     let repo = p.repo.repository_id.clone();
     p.reopen(|engine| {
-        assert_eq!(engine.file_context(&repo, &renamed.path).unwrap(), updated);
+        assert_eq!(
+            engine.file_context(&repo, &renamed.path).unwrap().unwrap(),
+            updated
+        );
         assert_eq!(
             engine.state().file_locations[&original.file_id],
             renamed.path()
@@ -849,10 +946,12 @@ fn workspace_path_swap_preserves_each_files_exact_branch_context() {
     let ca = p
         .engine
         .file_context(&p.repo.repository_id, "a.txt")
+        .unwrap()
         .unwrap();
     let cb = p
         .engine
         .file_context(&p.repo.repository_id, "b.txt")
+        .unwrap()
         .unwrap();
     let workspace = p
         .engine
@@ -879,7 +978,11 @@ fn workspace_path_swap_preserves_each_files_exact_branch_context() {
     for (original, context, path) in [(a, ca, "b.txt"), (b, cb, "a.txt")] {
         let current = p.current_entry(path);
         assert_eq!(current.file_id, original.file_id);
-        let updated = p.engine.file_context(&p.repo.repository_id, path).unwrap();
+        let updated = p
+            .engine
+            .file_context(&p.repo.repository_id, path)
+            .unwrap()
+            .unwrap();
         assert_eq!(updated.branch_id, context.branch_id);
         assert_eq!(updated.inherited_from, context.inherited_from);
         assert_eq!(p.engine.state().file_locations[&original.file_id], path);
@@ -902,6 +1005,7 @@ fn workspace_delete_then_replace_path_keeps_surviving_files_context() {
     let context = p
         .engine
         .file_context(&p.repo.repository_id, "b.txt")
+        .unwrap()
         .unwrap();
     let workspace = p
         .engine
@@ -930,12 +1034,14 @@ fn workspace_delete_then_replace_path_keeps_surviving_files_context() {
     let updated = p
         .engine
         .file_context(&p.repo.repository_id, "a.txt")
+        .unwrap()
         .unwrap();
     assert_eq!(updated.branch_id, context.branch_id);
     assert_eq!(updated.inherited_from, context.inherited_from);
     assert!(
         p.engine
             .file_context(&p.repo.repository_id, "b.txt")
+            .unwrap()
             .is_none()
     );
     assert!(
@@ -946,15 +1052,24 @@ fn workspace_delete_then_replace_path_keeps_surviving_files_context() {
     );
     assert_eq!(p.bytes(&survivor.version_id), b"surviving");
     let repo = p.repo.repository_id.clone();
-    p.reopen(|engine| assert_eq!(engine.file_context(&repo, "a.txt").unwrap(), updated));
+    p.reopen(|engine| {
+        assert_eq!(
+            engine.file_context(&repo, "a.txt").unwrap().unwrap(),
+            updated
+        )
+    });
 }
 
 #[test]
 fn chained_alias_renames_preserve_distinct_contexts_and_one_physical_owner() {
     let mut p = Pool::new();
     let (_, _, original) = selected_aliases(&mut p);
-    let contexts = ["a/report.txt", "b/report.txt"]
-        .map(|path| p.engine.file_context(&p.repo.repository_id, path).unwrap());
+    let contexts = ["a/report.txt", "b/report.txt"].map(|path| {
+        p.engine
+            .file_context(&p.repo.repository_id, path)
+            .unwrap()
+            .unwrap()
+    });
     let workspace = p
         .engine
         .create_workspace(&p.repo.main_branch_id, "admin")
@@ -979,7 +1094,11 @@ fn chained_alias_renames_preserve_distinct_contexts_and_one_physical_owner() {
     }
     p.commit(workspace);
     for (path, before) in ["a/final.txt", "b/final.txt"].into_iter().zip(contexts) {
-        let context = p.engine.file_context(&p.repo.repository_id, path).unwrap();
+        let context = p
+            .engine
+            .file_context(&p.repo.repository_id, path)
+            .unwrap()
+            .unwrap();
         assert_eq!(context.branch_id, before.branch_id);
         assert_eq!(context.inherited_from, before.inherited_from);
         assert_eq!(p.current_entry(path).file_id, original.file_id);
@@ -1081,6 +1200,7 @@ fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
     let before = p
         .engine
         .file_context(&p.repo.repository_id, "b/report.txt")
+        .unwrap()
         .unwrap();
     let workspace = p
         .engine
@@ -1105,6 +1225,7 @@ fn exact_no_op_rename_of_stale_alias_preserves_physical_name() {
     assert_eq!(
         p.engine
             .file_context(&p.repo.repository_id, "b/report.txt")
+            .unwrap()
             .unwrap(),
         before
     );
@@ -1179,6 +1300,7 @@ fn inherited_first_write_truncates_a_multibyte_collision_label_and_reopens() {
     let context = p
         .engine
         .file_context(&p.repo.repository_id, "docs/report.txt")
+        .unwrap()
         .unwrap();
     let expected = format!("{}-1", "文".repeat(42));
     assert_eq!(expected.len(), 128);

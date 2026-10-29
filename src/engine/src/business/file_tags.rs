@@ -75,7 +75,7 @@ impl Engine {
         let body = request.body();
         self.mutate("file.tags.update", principal, operation,
             body,
-            |engine,state,_| {
+            |engine,state,scratch| {
                 super::file_requests::validate_location(engine, file, location)?;
                 // Complete preflight before any branch, context or tree advances.
                 let mut seen = BTreeSet::new();
@@ -91,7 +91,7 @@ impl Engine {
                     if branch.state != BranchState::Active || state.file_branch_aliases.contains_key(&target.branch_id) {
                         return Err(Error::new(storage_contract::ErrorCode::BranchNotActive, "merged aliases are read-only"));
                     }
-                    let head = file_nodes::branch_head(state,&target.branch_id)?;
+                    let head = engine.with_namespace_source(|source| file_nodes::branch_head(state, &target.branch_id, source))?;
                     if head != target.expected_node_id {
                         return Err(Error::new(storage_contract::ErrorCode::FileBranchConflict, "tag target head changed"));
                     }
@@ -126,9 +126,9 @@ impl Engine {
                         kind:FileMetadataKind::Tags,tags:tags.clone(),operation_id:operation,author:principal.into(),sequence:state.sequence,created_at:now()?,
                     });
                     if advance {
-                        file_publication::advance_branch_node(state,&target.branch_id,&node,false,principal,operation)?;
+                        engine.with_namespace_source(|base| file_publication::advance_branch_node(state,&target.branch_id,&node,false,principal,operation,base,&mut scratch.namespace))?;
                     }
-                    let directories = file_publication::publish_node(state, crate::business::file_publication::NodePublication { file, matching_branches: &BTreeSet::from([target.branch_id.clone()]), matching_node: Some(&target.source_node_id), target_branch: &target.branch_id, target_node: &node, principal, operation, maximum: engine.config.max_entries })?;
+                    let directories = engine.with_namespace_source(|base| file_publication::publish_node(state, crate::business::file_publication::NodePublication { file, matching_branches: &BTreeSet::from([target.branch_id.clone()]), matching_node: Some(&target.source_node_id), target_branch: &target.branch_id, target_node: &node, principal, operation, maximum: engine.config.max_entries }, base, &mut scratch.namespace))?;
                     results.push(json!({"branch_id":target.branch_id,"source_node_id":target.source_node_id,"node_id":node,"tags":tags,"no_change":false,"advanced":advance,"directory_branch_ids":directories}));
                 }
                 Ok(json!({"file_id":file,"nodes":results,"content_versions_created":"0"}))

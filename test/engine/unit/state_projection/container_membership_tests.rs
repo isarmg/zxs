@@ -226,7 +226,13 @@ fn candidate(before: &State) -> State {
 }
 
 fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwners {
-    let transition = ProjectionTransition::new(before, after, Some(index)).unwrap();
+    let transition = ProjectionTransition::new(
+        before,
+        after,
+        Some(index),
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     assert_memberships(before, transition.previous().owners);
     assert_memberships(after, transition.next().owners);
     assert_memberships(before, index);
@@ -236,7 +242,8 @@ fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwner
 #[test]
 fn every_container_membership_insert_delete_and_same_value_has_a_full_scan_oracle() {
     let before = fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     assert_memberships(&before, &index);
     macro_rules! exercise {
         ($($field:ident),* $(,)?) => {$(
@@ -267,7 +274,9 @@ fn every_container_membership_insert_delete_and_same_value_has_a_full_scan_oracl
 #[test]
 fn version_membership_keeps_multiple_references_and_removes_only_the_final_owner() {
     let mut before = fixture();
-    let mut index = DerivedOwners::from_state(&before);
+    let mut index =
+        DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+            .unwrap();
     for id in ["v-a1", "v-a2", "v-a3"] {
         let mut after = candidate(&before);
         after.versions.remove(id);
@@ -297,7 +306,9 @@ fn swapping_version_histories_preserves_exact_buckets_through_successive_deletes
             .versions
             .insert(id.into(), version(id, "file-a", history));
     }
-    let mut index = DerivedOwners::from_state(&before);
+    let mut index =
+        DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+            .unwrap();
     assert_memberships(&before, &index);
 
     // The flattened version set and history-owner set stay unchanged by this swap.
@@ -319,7 +330,8 @@ fn swapping_version_histories_preserves_exact_buckets_through_successive_deletes
 #[test]
 fn moving_versions_nodes_and_branches_updates_old_and_new_file_memberships() {
     let before = fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     let mut after = candidate(&before);
     let moved = after.versions.get_mut("v-a1").unwrap();
     moved.file_id = "file-c".into();
@@ -335,7 +347,8 @@ fn moving_versions_nodes_and_branches_updates_old_and_new_file_memberships() {
 #[test]
 fn simultaneous_context_retarget_and_branch_reownership_preserve_source_alias_semantics() {
     let before = fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     let mut after = candidate(&before);
     after.branches.get_mut("b-a").unwrap().file_id = Some("file-c".into());
     after.branches.get_mut("b-b").unwrap().file_id = Some("file-d".into());
@@ -366,7 +379,8 @@ fn simultaneous_context_retarget_and_branch_reownership_preserve_source_alias_se
 #[test]
 fn pending_membership_includes_non_file_branches_and_tracks_last_reference_removal() {
     let before = fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     let mut after = candidate(&before);
     let pending = &mut after
         .branches
@@ -399,10 +413,17 @@ fn pending_membership_includes_non_file_branches_and_tracks_last_reference_remov
 #[test]
 fn cold_foreign_all_and_overflow_rebuild_memberships_from_the_authoritative_states() {
     let before = fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     let mut cold: State = json_codec::from_value(json_codec::to_value(&before).unwrap()).unwrap();
     cold.versions.get_mut("v-a1").unwrap().file_id = "file-c".into();
-    let transition = ProjectionTransition::new(&before, &cold, None).unwrap();
+    let transition = ProjectionTransition::new(
+        &before,
+        &cold,
+        None,
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     assert_memberships(&cold, transition.next().owners);
     let mut foreign = candidate(&before);
     foreign.versions = before
@@ -466,10 +487,17 @@ fn sharing_fixture() -> State {
 #[test]
 fn branch_label_only_changes_preserve_untouched_membership_backing() {
     let before = sharing_fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     let mut after = candidate(&before);
     after.branches.get_mut("b-a").unwrap().name = "new branch label".into();
-    let transition = ProjectionTransition::new(&before, &after, Some(&index)).unwrap();
+    let transition = ProjectionTransition::new(
+        &before,
+        &after,
+        Some(&index),
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     let next = transition.next().owners;
     assert!(index.history_rows.shares_storage_with(&next.history_rows));
     assert!(index.files.0.shares_storage_with(&next.files.0));
@@ -480,14 +508,21 @@ fn branch_label_only_changes_preserve_untouched_membership_backing() {
 #[test]
 fn control_and_unowned_rows_do_not_rebuild_unchanged_relations() {
     let before = sharing_fixture();
-    let index = DerivedOwners::from_state(&before);
+    let index = DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+        .unwrap();
     let mut after = candidate(&before);
     after.control_auth = Some(json!({"control":"changed"}));
     after.sequence += 1;
     after
         .file_notes
         .insert("absent-file".into(), "unowned note".into());
-    let transition = ProjectionTransition::new(&before, &after, Some(&index)).unwrap();
+    let transition = ProjectionTransition::new(
+        &before,
+        &after,
+        Some(&index),
+        &crate::namespace::fixture_store::FixtureSource,
+    )
+    .unwrap();
     let next = transition.next().owners;
     assert!(
         index

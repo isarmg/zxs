@@ -84,8 +84,10 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
         }
         let before = canonical_json(engine.state()).unwrap();
         assert_eq!(
-            canonical_json(&engine.state().operations[&operation].result["created_branch"])
-                .unwrap(),
+            canonical_json(
+                &engine.published_receipt(operation).unwrap().unwrap().result["created_branch"]
+            )
+            .unwrap(),
             original_bytes
         );
         assert_eq!(

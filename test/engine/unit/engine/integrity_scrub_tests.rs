@@ -115,6 +115,17 @@ fn healthy_scrub_reads_unique_retained_metadata_and_all_required_copies_without_
             let snapshot: Snapshot =
                 load_object(&member, "snapshot", &candidate.snapshot_hash).unwrap();
             addresses.extend(crate::journal::snapshot_addresses(&member, &snapshot));
+            // Commit namespace pages/indexes are scrubbed through the same
+            // snapshot closure; collect them with the production visitor.
+            crate::journal::visit_commit_namespace_objects(&snapshot, |kind, hash| {
+                addresses.insert((kind, hash.to_owned()));
+                crate::publication_evidence::verified_graph_object(
+                    std::slice::from_ref(&member),
+                    kind,
+                    hash,
+                )
+            })
+            .unwrap();
             for object in crate::history_package::bound_history_objects(
                 std::slice::from_ref(&member),
                 &candidate,
@@ -147,7 +158,7 @@ fn healthy_scrub_reads_unique_retained_metadata_and_all_required_copies_without_
 fn state_only_metadata_corruption_is_not_hidden_by_healthy_version_inventory() {
     let (_temp, mut engine, repository) = fixture();
     save(&mut engine, &repository, b"payload");
-    let hash = page(&engine, "operation_principals");
+    let hash = page(&engine, "operation_locators");
     let path = object_path(&engine.members()[0], "state-page", &hash);
     let mut bytes = fs::read(&path).unwrap();
     bytes[0] = b'!';
@@ -220,7 +231,7 @@ fn absent_history_root_is_reported_without_reencoding_from_state() {
 fn missing_all_page_replicas_never_uses_state_or_sqlite_to_guess_repair() {
     let (_temp, mut engine, repository) = fixture();
     save(&mut engine, &repository, b"readable payload");
-    let hash = page(&engine, "operation_principals");
+    let hash = page(&engine, "operation_locators");
     let paths: Vec<_> = engine
         .members()
         .iter()
@@ -1397,7 +1408,7 @@ fn scrub_member_fault_revokes_the_writer_before_its_progress_callback() {
     let (_temp, mut engine, repository) = fixture();
     save(&mut engine, &repository, b"known graph fault");
     let epoch = engine.metadata_integrity.capture();
-    let hash = page(&engine, "operation_principals");
+    let hash = page(&engine, "operation_locators");
     fs::remove_file(object_path(&engine.members()[0], "state-page", &hash)).unwrap();
     let mut observed = false;
     let outcome = engine.prepare_integrity_scrub().unwrap().run(

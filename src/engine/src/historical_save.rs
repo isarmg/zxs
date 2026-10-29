@@ -59,12 +59,13 @@ fn historical_workspace(
 /// Compose a virtual final tree before reading any payload. Removed or fully
 /// replaced old bytes are therefore never mistaken for required source data.
 fn final_entries(
-    source: &Commit,
+    source_entries: Vec<Entry>,
     workspace: Option<&Workspace>,
     maximum: usize,
 ) -> Result<(Vec<Entry>, Vec<DeletedPath>)> {
     let mut deleted = Vec::new();
-    let mut entries = source.entries.clone();
+    let base = source_entries.clone();
+    let mut entries = source_entries;
     if let Some(workspace) = workspace {
         for staged in workspace.files.values() {
             let previous =
@@ -94,11 +95,7 @@ fn final_entries(
             entries.retain(|entry| entry.lookup_key() != key);
             entries.push(entry);
         }
-        deleted = apply_workspace_namespace(
-            &mut entries,
-            &source.entries,
-            &workspace.namespace_operations,
-        )?;
+        deleted = apply_workspace_namespace(&mut entries, &base, &workspace.namespace_operations)?;
     }
     validate_entries(&mut entries, maximum)?;
     Ok((entries, deleted))
@@ -259,7 +256,11 @@ impl Engine {
         } else {
             None
         };
-        let (entries, _) = final_entries(&source, workspace.as_ref(), self.config.max_entries)?;
+        let (entries, _) = final_entries(
+            self.namespace_entries(&source.namespace)?,
+            workspace.as_ref(),
+            self.config.max_entries,
+        )?;
         let mut per_slot = BTreeMap::<String, u64>::new();
         let mut total = 0u64;
         let mut count = 0usize;
@@ -348,7 +349,7 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        if let Some(previous) = self.state.operations.get(&operation) {
+        if let Some(previous) = self.find_receipt(operation)?.map(|entry| entry.result) {
             if previous.kind == "history.historical_save"
                 && previous.result["plan_id"].as_str() == Some(id)
                 && self.operation_owner(operation)?.as_deref() == Some(principal)
@@ -444,7 +445,7 @@ impl Engine {
                     .filter(|commit| commit.history_tree_id == history)
                     .cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::CommitNotFound, "historical source no longer exists"))?;
-                let (mut entries, deleted) = final_entries(&source, workspace.as_ref(), engine.config.max_entries)?;
+                let (mut entries, deleted) = final_entries(engine.namespace_entries(&source.namespace)?, workspace.as_ref(), engine.config.max_entries)?;
                 let branch_id = new_id("br");
                 let commit_id = new_id("commit");
                 let mut copied = 0usize;
@@ -472,7 +473,7 @@ impl Engine {
                         _ => engine.new_file_placement(&repository.repository_id, entry.path())?,
                     };
                     let version = engine.build_version(
-                        state, pending, crate::business::VersionBuild { history: &history, file_id: &entry.file_id, path: entry.location(), source: &source_path, primary: &primary, copies, source_ids: source_versions, checkpoint: true },
+                        state, &mut pending.payloads, crate::business::VersionBuild { history: &history, file_id: &entry.file_id, path: entry.location(), source: &source_path, primary: &primary, copies, source_ids: source_versions, checkpoint: true },
                     )?;
                     if version.logical_size != expected_size || version.content_hash != expected_hash {
                         return Err(Error::new(storage_contract::ErrorCode::ChecksumMismatch, "historical source changed after sealing"));
@@ -482,13 +483,14 @@ impl Engine {
                     copied += 1;
                 }
                 validate_entries(&mut entries, engine.config.max_entries)?;
+                let namespace = crate::namespace::build_from_entries(&entries, &mut pending.namespace)?;
                 state.commits.insert(commit_id.clone(), Commit {
                     namespace_deletions: deletion_record(deleted, now()?),
                     commit_id: commit_id.clone(), history_tree_id: history.clone(),
                     kind: "historical_save".into(), parent_commit_ids: vec![source_id.clone()],
                     tree_id: new_id("tree"), sequence: state.sequence, operation_id: operation,
                     author: principal.into(), message: format!("Save written content to historical branch {name}"),
-                    entries, pending_file_versions: pending_file_versions.clone(), provenance: Some(source_id.clone()),
+                    namespace, pending_file_versions: pending_file_versions.clone(), provenance: Some(source_id.clone()),
                 });
                 state.branches.insert(branch_id.clone(), Branch {file_node_id:None,
                     branch_id: branch_id.clone(), history_tree_id: history.clone(), name: name.clone(),

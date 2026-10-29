@@ -33,7 +33,13 @@ fn typed_merge_link_keeps_receipt_binding_and_scope_admission() {
     let expected=storage_contract::object_hash("request",&json!({"kind":"merge-link.create","principal":identity.principal,"body":{"source_branch_id":side.branch_id,"source_commit_id":side.head_commit_id,"target_branch_id":repo.main_branch_id,"target_commit_id":head}})).unwrap();
     let mut engine = backend.engine.lock().unwrap();
     assert_eq!(
-        engine.state().operations[&operation].request_digest,
+        engine
+            .state()
+            .operations
+            .tail_record(operation)
+            .unwrap()
+            .result
+            .request_digest,
         expected
     );
     assert_eq!(

@@ -13,7 +13,11 @@ fn typed_comparison_shares_captured_entries_and_serializes_after_unlock_and_revo
         .head_commit_id
         .clone();
     let right = engine.state().commits.get_shared(&right_id).unwrap();
-    let expected = json!({"left":left_id,"right":right_id,"changes":[{"path":"file.txt","change":"modified","before":left.entries[0],"after":right.entries[0]}]});
+    let left_entries = engine.list_tree_at(&repo.main_branch_id, &left_id).unwrap();
+    let right_entries = engine
+        .list_tree_at(&repo.main_branch_id, &right_id)
+        .unwrap();
+    let expected = json!({"left":left_id,"right":right_id,"changes":[{"path":"file.txt","change":"modified","before":left_entries[0],"after":right_entries[0]}]});
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
     let before_left = Arc::strong_count(&left);
     let before_right = Arc::strong_count(&right);
@@ -33,8 +37,10 @@ fn typed_comparison_shares_captured_entries_and_serializes_after_unlock_and_revo
     else {
         panic!("expected modified")
     };
-    assert!(std::ptr::eq(before, &left.entries[0]));
-    assert!(std::ptr::eq(after, &right.entries[0]));
+    // The comparison owns its materialized namespaces; the compared records
+    // must still be the exact published entries of each side.
+    assert_eq!(before, &left_entries[0]);
+    assert_eq!(after, &right_entries[0]);
     save_projection_file(
         &mut backend.engine.lock().unwrap(),
         &repo.main_branch_id,

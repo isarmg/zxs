@@ -195,7 +195,7 @@ Snapshot、历史目录及历史投影共用同一 radix 算法；引用 `kind` 
 
 导出选择与当前逻辑历史匹配的原发布证据并复制其准确对象图。根的必需语义 marker 不是项目发行版本字段；读取采用严格固定形状，拒绝 markerless/flat 根、旧目录字段及旧索引引用，不升级证明、不兼容双读、不迁移或删除已有数据。拒绝后保留原材料，不以重置运行池解决格式差异；实现格式变更不授权真实部署。当前格式生成的保留历史仍按准确绑定证据恢复。
 
-有界根移除全页 hash 列表和全部 history 根映射随总量增长的根瓶颈，但单个大型实体（例如 `Commit.entries`、完整控制认证对象）、本次 Candidate.versions、成员集合及组合证明仍受实际字节与元数据上限约束。Snapshot/catalog 编码按可信写集更新路径，预算使用驻留精确摘要；完整旧依赖读验、碰撞比较和全部成员同步仍保留，history 投影仅稳定归属分支值更新使用窄增量。一般 owner closure、冷准入/故障重建及其他全量成本仍在，不得宣称端到端 O(delta) 或性能已经提高。
+有界根移除全页 hash 列表和全部 history 根映射随总量增长的根瓶颈；提交命名空间与事件/回执日志进一步按 [ADR 0011](adr/0011-paged-namespace-roots-and-segmented-logs.md) 移入分页根与分段对象，单个大型实体（例如完整控制认证对象）、本次 Candidate.versions、成员集合及组合证明仍受实际字节与元数据上限约束。Snapshot/catalog 编码按可信写集更新路径，预算使用驻留精确摘要；完整旧依赖读验、碰撞比较和全部成员同步仍保留，history 投影仅稳定归属分支值更新使用窄增量。一般 owner closure、冷准入/故障重建及其他全量成本仍在，不得宣称端到端 O(delta) 或性能已经提高。
 
 [S10]: https://btrfs.readthedocs.io/en/latest/btrfs-scrub.html
 [S16]: https://btrfs.readthedocs.io/en/latest/Reflink.html
@@ -208,7 +208,7 @@ Snapshot、历史目录及历史投影共用同一 radix 算法；引用 `kind` 
 
 元数据对象只支持 `metadata/objects/<kind>/<hash前两位>/<hash>.json`。目标摘要存在旧平面文件时读取和写入均拒绝；对象清点拒绝非分片项。程序不自动搬迁、覆盖或删除旧平面文件。
 
-Snapshot 必须携带 `format: "radix-map-roots"`、十进制 UInt64 字符串 `sequence/business_generation/topology_generation`、准确35个 `maps` 根、独立 `events` 根及 `control_auth: {kind: "state-control-auth", hash}`。control_auth 正文仍为原 `Option<Value>`（包括 null），作为独立对象认证，不把它解释为新的认证 DTO。events 使用20位补零 ordinal 文本键；完整读取验证从0连续排列并还原数组，空事件同样有空映射根。拒绝旧 `scalars/pages`、页 hash 列表及缺 marker 结构。Candidate 自身没有 format 字段，其必需 `history_roots` 定义当前目录结构；配置、盘封印和检查点也不添加发行版本号。
+Snapshot 必须携带 `format: "radix-map-roots"`、十进制 UInt64 字符串 `sequence/business_generation/topology_generation`、准确35个 `maps` 根、独立 `events` 根及 `control_auth: {kind: "state-control-auth", hash}`。control_auth 正文仍为原 `Option<Value>`（包括 null），作为独立对象认证，不把它解释为新的认证 DTO。`events` 与 `maps.operation_log` 使用20位补零**段序号**文本键，叶值分别为 `{"kind":"event-segment","hash"}` / `{"kind":"operation-segment","hash"}` 引用；`maps.operation_locators` 键为 OperationId 文本、值为全局回执序号十进制字符串，仅作定位。完整读取验证段序号从0连续排列并整段验证还原；空日志同样有空映射根。提交命名空间以 `namespace-page`/`namespace-index` 对象按 [ADR 0011](adr/0011-paged-namespace-roots-and-segmented-logs.md) 存储。拒绝旧 `scalars/pages`、旧 `operations`/`operation_principals` 字段、页 hash 列表及缺 marker 结构。Candidate 自身没有 format 字段，其必需 `history_roots` 定义当前目录结构；配置、盘封印和检查点也不添加发行版本号。
 
 候选绑定的准确快照根、索引、叶页及独立控制认证对象可以分别从不同的可信元数据成员读取；不要求单个成员恰好保存完整闭包，但全部依赖都必须通过各自摘要及结构校验。副本选择不使用多数票，不尝试替代根或重新编码状态来补齐缺页。该读取过程不改盘；持有写者锁的全部配置成员恢复路径才修复这些已认证对象的副本。缺少任何必需的有效对象时拒绝恢复，不承诺从任意损坏中重建。
 

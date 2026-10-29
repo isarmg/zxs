@@ -111,33 +111,45 @@ enum Completion<'a> {
 }
 
 impl Engine {
+    #[cfg(test)]
     pub(crate) fn persist(
         &mut self,
         next: State,
         prepared: Vec<Prepared>,
         result: OperationResult,
     ) -> Result<()> {
-        self.persist_with_metadata_limit(next, prepared, result, MAX_METADATA)
+        self.persist_with_objects(next, prepared, Vec::new(), result)
+    }
+    pub(crate) fn persist_with_objects(
+        &mut self,
+        next: State,
+        prepared: Vec<Prepared>,
+        namespace: Vec<crate::journal::PreparedMetadataObject>,
+        result: OperationResult,
+    ) -> Result<()> {
+        self.persist_with_metadata_limit(next, prepared, namespace, result, MAX_METADATA)
     }
     pub(crate) fn persist_with_metadata_limit(
         &mut self,
         next: State,
         prepared: Vec<Prepared>,
+        namespace: Vec<crate::journal::PreparedMetadataObject>,
         result: OperationResult,
         maximum: usize,
     ) -> Result<()> {
-        let detached = self.prepare_publication(next, prepared, result, maximum)?;
+        let detached = self.prepare_publication(next, prepared, namespace, result, maximum)?;
         self.decide_publication(detached).map(|_| ())
     }
     pub(crate) fn prepare_publication(
         &self,
         next: State,
         prepared: Vec<Prepared>,
+        namespace: Vec<crate::journal::PreparedMetadataObject>,
         result: OperationResult,
         maximum: usize,
     ) -> Result<DetachedPublication> {
         self.planning_context()
-            .prepare_publication(next, prepared, result, maximum)
+            .prepare_publication(next, prepared, namespace, result, maximum)
     }
     pub(crate) fn decide_publication(
         &mut self,
@@ -285,6 +297,19 @@ impl Engine {
                 .context(storage_contract::ErrorCode::InDoubt, message)
                 .retryable());
         }
+        // The published basis now carries the receipt log's encoding lineage;
+        // release the one-shot cold index and record the locator root for
+        // on-demand id lookups.
+        let mut next = next;
+        next.operations.release_cold_index();
+        self.operation_locator_root = Some(
+            snapshot_basis
+                .descriptor
+                .maps
+                .get("operation_locators")
+                .cloned()
+                .expect("invariant: the validated snapshot schema carries its locator root"),
+        );
         let previous = std::mem::replace(&mut self.state, std::sync::Arc::new(next));
         self.snapshot = Some(candidate.snapshot_hash.clone());
         self.update_index(&previous);
@@ -496,8 +521,18 @@ impl Engine {
         let names = match names {
             Some(names) => names,
             None => {
-                let projection =
-                    crate::state_projection::ProjectionTransition::new(&self.state, next, None)?;
+                let projection_members = self.members();
+                let published = crate::namespace::resources_source(
+                    &self.disk_resources,
+                    &projection_members,
+                    &self.segment_caches,
+                );
+                let projection = crate::state_projection::ProjectionTransition::new(
+                    &self.state,
+                    next,
+                    None,
+                    &published,
+                )?;
                 crate::container_storage::prepare_names(
                     &self.config,
                     &self.disk_resources,
@@ -594,10 +629,9 @@ impl Engine {
             finalize,
             finalize_receipts: final_receipts,
             payload_receipts,
-            result: next
-                .operations
-                .get(&c.operation_id)
-                .cloned()
+            result: self
+                .candidate_receipt(next, &members, c.operation_id)?
+                .map(|entry| entry.result)
                 .ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::StateInvalid,
@@ -843,18 +877,103 @@ impl crate::engine::PlanningContext<'_> {
         &self,
         next: State,
         prepared: Vec<Prepared>,
+        namespace: Vec<crate::journal::PreparedMetadataObject>,
         result: OperationResult,
         maximum: usize,
     ) -> Result<DetachedPublication> {
-        self.prepare_publication_bounded(next, prepared, result, maximum, maximum)
+        self.prepare_publication_bounded(next, prepared, namespace, result, maximum, maximum)
     }
 }
 
 impl crate::engine::PlanningContext<'_> {
+    /// The complete id→ordinal locator index rebuilt through the published
+    /// locator root plus this transaction's resident appends. A full snapshot
+    /// encoding needs it after the one-shot cold index was consumed: a durable
+    /// local preparation (a saved plan, a historical-save bundle) edits the
+    /// visible state outside publication, which deliberately drops the
+    /// incremental baseline so the next snapshot captures that edit in full.
+    fn rebuilt_cold_locator_index(
+        &self,
+        operations: &storage_contract::OperationLog,
+    ) -> Result<std::collections::BTreeMap<storage_contract::OperationId, u64>> {
+        let members = self.members();
+        let lineage = || {
+            Error::new(
+                storage_contract::ErrorCode::StateInvalid,
+                "operation locator lineage is unavailable; recover before publishing",
+            )
+        };
+        // Before the first decision of this process the root is not resident;
+        // the admitted published snapshot carries it.
+        let admitted;
+        let root = match self.operation_locator_root {
+            Some(root) => root,
+            None => {
+                let hash = self.snapshot.as_deref().ok_or_else(lineage)?;
+                let snapshot: Snapshot = crate::publication_evidence::verified_object_at(
+                    self.disk_resources,
+                    &members,
+                    "snapshot",
+                    hash,
+                )?;
+                admitted = snapshot
+                    .maps
+                    .get("operation_locators")
+                    .cloned()
+                    .ok_or_else(lineage)?;
+                &admitted
+            }
+        };
+        fn member_loader<'a>(
+            resources: &'a crate::disk::DiskResources,
+            members: &'a [DiskConfig],
+        ) -> impl FnMut(&'static str, &str) -> Result<crate::journal::AuthenticatedMetadataObject> + 'a
+        {
+            move |kind, hash| {
+                crate::publication_evidence::verified_graph_object_at(
+                    resources, members, kind, hash,
+                )
+            }
+        }
+        let page_map =
+            crate::metadata_map::read_map(root, &mut member_loader(self.disk_resources, &members))?;
+        let mut index = std::collections::BTreeMap::new();
+        for (key, value) in page_map {
+            let text: String = json_codec::from_value(value)?;
+            index.insert(key.parse()?, storage_contract::parse_u64_decimal(&text)?);
+        }
+        if let Some((_, segment)) = operations.fresh_seal() {
+            let first = operations.tail_first_ordinal() - segment.records.len() as u64;
+            for (offset, record) in segment.records.iter().enumerate() {
+                index.insert(record.result.operation_id, first + offset as u64);
+            }
+        }
+        for (offset, record) in operations.tail().iter().enumerate() {
+            index.insert(
+                record.result.operation_id,
+                operations.tail_first_ordinal() + offset as u64,
+            );
+        }
+        Ok(index)
+    }
+    /// Test oracle only: a full encoding of `next` compared byte for byte
+    /// against the incremental one, rebuilding the locator index when the
+    /// resident cold index was already consumed.
+    #[cfg(test)]
+    pub(super) fn oracle_full_snapshot_hash(&self, next: &State, maximum: usize) -> Result<String> {
+        if next.operations.cold_index().is_some() {
+            return Ok(crate::journal::prepare_snapshot(next, maximum)?.hash);
+        }
+        let index = self.rebuilt_cold_locator_index(&next.operations)?;
+        let mut oracle = next.clone();
+        oracle.operations.attach_cold_index(index)?;
+        Ok(crate::journal::prepare_snapshot(&oracle, maximum)?.hash)
+    }
     fn prepare_publication_bounded(
         &self,
-        next: State,
+        mut next: State,
         prepared: Vec<Prepared>,
+        namespace: Vec<crate::journal::PreparedMetadataObject>,
         result: OperationResult,
         maximum: usize,
         cache_maximum: usize,
@@ -941,16 +1060,38 @@ impl crate::engine::PlanningContext<'_> {
                     base.snapshot_basis.matches_snapshot(&base.snapshot),
                     "invariant: published snapshot descriptor binds the successful publication root"
                 );
-                prepare_snapshot_incremental(self.state, &next, &base.snapshot_basis, maximum)?
+                prepare_snapshot_incremental(
+                    self.state,
+                    &next,
+                    &base.snapshot_basis,
+                    maximum,
+                    &mut |kind, hash| {
+                        crate::publication_evidence::verified_graph_object_at(
+                            self.disk_resources,
+                            &self.members(),
+                            kind,
+                            hash,
+                        )
+                    },
+                )?
             }
-            None => prepare_snapshot(&next, maximum)?,
+            None => {
+                // A full encoding after the one-shot cold index was consumed
+                // (a durable local preparation dropped the baseline) rebuilds
+                // the locator index through the published root first.
+                if next.operations.cold_index().is_none() {
+                    let index = self.rebuilt_cold_locator_index(&next.operations)?;
+                    next.operations.attach_cold_index(index)?;
+                }
+                prepare_snapshot(&next, maximum)?
+            }
         };
         snapshot.metadata_integrity = Some(std::sync::Arc::clone(self.metadata_integrity));
         let snapshot_hash = snapshot.hash.clone();
         #[cfg(test)]
         assert_eq!(
             snapshot_hash,
-            prepare_snapshot(&next, maximum)?.hash,
+            self.oracle_full_snapshot_hash(&next, maximum)?,
             "incremental snapshot differs from full encoding"
         );
         // Snapshot work does not extend an earlier metadata epoch's authority.
@@ -964,42 +1105,79 @@ impl crate::engine::PlanningContext<'_> {
             .as_ref()
             .filter(|base| base.names_captured_for(self.state))
             .map(|base| &base.history_owners);
-        let mut projection =
-            crate::state_projection::ProjectionTransition::new(self.state, &next, owners)?;
-        let (history_basis, manifests) = if let Some(reuse) = &reused_dependencies {
-            crate::history_package::prepare_history_manifests_reusing_published_at(
+        let mut projection = {
+            let published = crate::namespace::resources_source(
                 self.disk_resources,
-                &mut projection,
-                reuse,
                 &members,
-                maximum,
-                &mut |error| self.metadata_integrity.fault(error),
-            )?
-        } else {
-            match history_baseline {
-                Some(base) => {
-                    crate::history_package::prepare_history_manifests_incremental_observed_at(
-                        self.disk_resources,
-                        &mut projection,
-                        &base.roots,
-                        &members,
-                        maximum,
-                        &mut |error| self.metadata_integrity.fault(error),
-                    )?
+                self.segment_caches,
+            );
+            // New commits reference namespace objects built by this
+            // transaction; resolve them before the published store.
+            let source = crate::namespace::PreparedSource::new(&namespace, &published)?;
+            crate::state_projection::ProjectionTransition::new(self.state, &next, owners, &source)?
+        };
+        // The transaction's namespace objects install with the snapshot's own
+        // objects, before the decision; the prepared root stays the final
+        // element of the object list.
+        if !namespace.is_empty() {
+            snapshot.objects.splice(0..0, namespace);
+        }
+        let (history_basis, manifests) = {
+            // Fresh namespace objects already ride in the snapshot's object
+            // list; the manifest projection resolves them before the store.
+            let published = crate::namespace::resources_source(
+                self.disk_resources,
+                &members,
+                self.segment_caches,
+            );
+            let source = crate::namespace::PreparedSource::new(&snapshot.objects, &published)?;
+            if let Some(reuse) = &reused_dependencies {
+                crate::history_package::prepare_history_manifests_reusing_published_at(
+                    self.disk_resources,
+                    &mut projection,
+                    reuse,
+                    &members,
+                    maximum,
+                    &mut |error| self.metadata_integrity.fault(error),
+                    &source,
+                )?
+            } else {
+                match history_baseline {
+                    Some(base) => {
+                        crate::history_package::prepare_history_manifests_incremental_observed_at(
+                            self.disk_resources,
+                            &mut projection,
+                            &base.roots,
+                            &members,
+                            maximum,
+                            &mut |error| self.metadata_integrity.fault(error),
+                            &source,
+                        )?
+                    }
+                    None => {
+                        crate::history_package::prepare_history_manifests(&next, maximum, &source)?
+                    }
                 }
-                None => crate::history_package::prepare_history_manifests(&next, maximum)?,
             }
         };
         // The full implementation remains an independent oracle in every
         // engine publication test, including merge/split/restore workflows.
         #[cfg(test)]
-        assert_eq!(
-            history_basis.reference(),
-            crate::history_package::prepare_history_manifests(&next, maximum)?
-                .0
-                .reference(),
-            "incremental history roots differ from complete projection",
-        );
+        {
+            let published = crate::namespace::resources_source(
+                self.disk_resources,
+                &members,
+                self.segment_caches,
+            );
+            let source = crate::namespace::PreparedSource::new(&snapshot.objects, &published)?;
+            let oracle =
+                crate::history_package::prepare_history_manifests(&next, maximum, &source)?;
+            assert_eq!(
+                history_basis.reference(),
+                oracle.0.reference(),
+                "incremental history roots differ from complete projection",
+            );
+        }
         let candidate = Candidate {
             pool_id: self.config.pool_id.clone(),
             sequence: next.sequence,

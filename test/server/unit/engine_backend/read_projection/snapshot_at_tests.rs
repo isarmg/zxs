@@ -8,27 +8,48 @@ fn shared_snapshot_keeps_exact_commit_after_new_publication_and_engine_drop() {
     let commit = engine.state().branches[&repo.main_branch_id]
         .head_commit_id
         .clone();
+    let original = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
     let backend = EngineBackend::new(engine);
     let frozen = backend
         .snapshot_at(&identity, &repo.main_branch_id, &commit)
         .unwrap();
-    let original = frozen.entries[0].clone();
+    // The frozen commit's bounded point probe resolves the exact entry.
+    assert_eq!(
+        backend
+            .snapshot_entry(
+                &identity,
+                &repo.main_branch_id,
+                &commit,
+                original.lookup_key()
+            )
+            .unwrap(),
+        Some(original.clone())
+    );
     {
         let mut engine = backend.engine.lock().unwrap();
         assert!(std::ptr::eq(
             frozen.as_ref(),
             &engine.state().commits[&commit]
         ));
-        assert!(std::ptr::eq(
-            frozen.entries.as_ptr(),
-            engine.state().commits[&commit].entries.as_ptr()
-        ));
+        assert_eq!(frozen.namespace, engine.state().commits[&commit].namespace);
         save_projection_file(&mut engine, &repo.main_branch_id, "Café.txt", b"second");
         assert_ne!(
-            engine.list_tree_ref(&repo.main_branch_id).unwrap()[0].version_id,
+            engine.list_tree(&repo.main_branch_id).unwrap()[0].version_id,
             original.version_id
         );
     }
+    // The frozen commit still names its immutable namespace after publication.
+    assert_eq!(
+        backend
+            .snapshot_entry(
+                &identity,
+                &repo.main_branch_id,
+                &commit,
+                original.lookup_key()
+            )
+            .unwrap(),
+        Some(original.clone())
+    );
     let same = backend
         .snapshot_at(&identity, &repo.main_branch_id, &commit)
         .unwrap();
@@ -36,7 +57,7 @@ fn shared_snapshot_keeps_exact_commit_after_new_publication_and_engine_drop() {
     drop(same);
     drop(backend);
     assert_eq!(frozen.commit_id, commit);
-    assert_eq!(frozen.entries, [original]);
+    assert_eq!(frozen.namespace.entries, 1);
 }
 
 #[test]
@@ -154,9 +175,10 @@ fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
     let tree = backend
         .tree_snapshot(&identity, crate::tests::tree_request(&(json!({"branch_id":archived.branch_id,"query":{"commit_id":archived.head_commit_id}})))).map(|snapshot| json_codec::to_value(snapshot).unwrap())
         .unwrap();
+    assert_eq!(tree["commit_id"].as_str().unwrap(), frozen.commit_id);
     assert_eq!(
-        json_codec::to_value(&frozen.entries).unwrap(),
-        tree["entries"]
+        tree["entries"].as_array().unwrap().len() as u64,
+        frozen.namespace.entries
     );
     {
         let mut engine = backend.engine.lock().unwrap();
@@ -262,7 +284,7 @@ fn measure_shared_snapshot_against_publication_and_namespace_tree_round_trips() 
         let commit = engine.state().branches[&repo.main_branch_id]
             .head_commit_id
             .clone();
-        let entries = engine.list_tree_ref(&repo.main_branch_id).unwrap();
+        let entries = engine.list_tree(&repo.main_branch_id).unwrap();
         assert_eq!(entries.len(), count);
         let item = entries
             .iter()
@@ -270,8 +292,8 @@ fn measure_shared_snapshot_against_publication_and_namespace_tree_round_trips() 
             .unwrap()
             .entry_id
             .clone();
-        let expected_publication = publication_fact(entries, &item);
-        let expected_namespace = namespace_facts(entries, "source", "target");
+        let expected_publication = publication_fact(&entries, &item);
+        let expected_namespace = namespace_facts(&entries, "source", "target");
         let backend = EngineBackend::new(engine);
         let old = || {
             let tree = backend
@@ -285,31 +307,56 @@ fn measure_shared_snapshot_against_publication_and_namespace_tree_round_trips() 
                 .unwrap();
             json_codec::from_value::<Vec<Entry>>(tree["entries"].clone()).unwrap()
         };
-        let new = || {
+        // The typed consumers are the SMB read paths: bounded point probes of
+        // the frozen commit namespace, never a materialized snapshot copy.
+        let probe = |key: &str| {
             backend
-                .snapshot_at(&identity, &repo.main_branch_id, &commit)
+                .snapshot_entry(&identity, &repo.main_branch_id, &commit, key)
                 .unwrap()
         };
+        let typed_publication = || {
+            let entry = probe("target.txt").unwrap();
+            (entry.size, std::hint::black_box(&entry.version_id).len())
+        };
+        let typed_namespace = || {
+            let source = probe("source").unwrap();
+            let target = probe("target").unwrap();
+            (
+                source.kind == target.kind,
+                source.entry_id != target.entry_id,
+                target.kind == NamespaceEntryKind::Directory
+                    && backend
+                        .snapshot_directory_has_children(
+                            &identity,
+                            &repo.main_branch_id,
+                            &commit,
+                            "target",
+                        )
+                        .unwrap(),
+            )
+        };
         assert_eq!(publication_fact(&old(), &item), expected_publication);
-        assert_eq!(
-            publication_fact(&new().entries, &item),
-            expected_publication
-        );
+        assert_eq!(typed_publication(), expected_publication);
         assert_eq!(
             namespace_facts(&old(), "source", "target"),
             expected_namespace
         );
-        assert_eq!(
-            namespace_facts(&new().entries, "source", "target"),
-            expected_namespace
-        );
+        assert_eq!(typed_namespace(), expected_namespace);
         for consumer in [Consumer::Publication, Consumer::Namespace] {
-            let inspect = |entries: &[Entry]| match consumer {
+            let legacy_inspect = |entries: &[Entry]| match consumer {
                 Consumer::Publication => {
                     black_box(publication_fact(entries, &item));
                 }
                 Consumer::Namespace => {
                     black_box(namespace_facts(entries, "source", "target"));
+                }
+            };
+            let typed_inspect = || match consumer {
+                Consumer::Publication => {
+                    black_box(typed_publication());
+                }
+                Consumer::Namespace => {
+                    black_box(typed_namespace());
                 }
             };
             let mut legacy = Vec::with_capacity(101);
@@ -318,17 +365,17 @@ fn measure_shared_snapshot_against_publication_and_namespace_tree_round_trips() 
                 // Alternate ordering to avoid giving one path every warm-cache run.
                 if sample % 2 == 0 {
                     let start = Instant::now();
-                    inspect(&old());
+                    legacy_inspect(&old());
                     legacy.push(start.elapsed().as_nanos());
                     let start = Instant::now();
-                    inspect(&new().entries);
+                    typed_inspect();
                     typed.push(start.elapsed().as_nanos());
                 } else {
                     let start = Instant::now();
-                    inspect(&new().entries);
+                    typed_inspect();
                     typed.push(start.elapsed().as_nanos());
                     let start = Instant::now();
-                    inspect(&old());
+                    legacy_inspect(&old());
                     legacy.push(start.elapsed().as_nanos());
                 }
             }
@@ -357,10 +404,7 @@ fn public_commit_snapshot_reuses_state_arc_and_serializes_after_unlock_and_revoc
             frozen.as_ref(),
             &engine.state().commits[&commit]
         ));
-        assert_eq!(
-            frozen.entries.as_ptr(),
-            engine.state().commits[&commit].entries.as_ptr()
-        );
+        assert_eq!(frozen.namespace, engine.state().commits[&commit].namespace);
     }
     struct Probe<'a>(&'a EngineBackend, crate::commit_wire::CommitResponse);
     impl Serialize for Probe<'_> {

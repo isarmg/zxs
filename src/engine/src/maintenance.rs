@@ -174,7 +174,7 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        if let Some(op) = self.state.operations.get(&operation) {
+        if let Some(op) = self.find_receipt(operation)?.map(|entry| entry.result) {
             if op.kind == "plan.cancel"
                 && op.result["plan_id"].as_str() == Some(id)
                 && self.operation_owner(operation)?.as_deref() == Some(principal)
@@ -258,7 +258,7 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<OperationResult> {
-        if let Some(op) = self.state.operations.get(&operation) {
+        if let Some(op) = self.find_receipt(operation)?.map(|entry| entry.result) {
             if matches!(
                 op.kind.as_str(),
                 "content.purge" | "history.split" | "history.historical_save"
@@ -361,6 +361,47 @@ impl Engine {
     }
     fn check_purge(&self, history: &str, versions: &[String]) -> Result<()> {
         let selected = versions.iter().collect::<BTreeSet<_>>();
+        // One walk per distinct head covers every selected version, instead
+        // of scanning each head once per version.
+        let mut head_pinned = BTreeSet::new();
+        let mut workspace_pinned = false;
+        self.with_namespace_source(|source| {
+            let mut seen = BTreeSet::new();
+            let active_heads = self
+                .state
+                .branches
+                .values()
+                .filter(|b| b.state == BranchState::Active)
+                .map(|b| (&b.head_commit_id, false));
+            let workspace_heads = self
+                .workspaces
+                .values()
+                .filter(|w| matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed))
+                .map(|w| (&w.base_head, true));
+            for (head, workspace) in active_heads.chain(workspace_heads) {
+                let Some(commit) = self.state.commits.get(head) else {
+                    continue;
+                };
+                if !seen.insert((commit.commit_id.clone(), workspace)) {
+                    continue;
+                }
+                crate::namespace::NamespaceView::new(&commit.namespace, source).walk(
+                    |_, entry| {
+                        if let storage_contract::NamespacePageEntry::File { version_id, .. } = entry
+                            && selected.contains(version_id)
+                        {
+                            if workspace {
+                                workspace_pinned = true;
+                            } else {
+                                head_pinned.insert(version_id.clone());
+                            }
+                        }
+                        Ok(true)
+                    },
+                )?;
+            }
+            Ok(())
+        })?;
         let reads = self
             .reads
             .lock()
@@ -384,23 +425,11 @@ impl Engine {
                     "version has an active read lease",
                 ));
             }
-            for b in self
-                .state
-                .branches
-                .values()
-                .filter(|b| b.state == BranchState::Active)
-            {
-                if self
-                    .state
-                    .commits
-                    .get(&b.head_commit_id)
-                    .is_some_and(|c| c.entries.iter().any(|e| e.version_id == *id))
-                {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ContentPinned,
-                        "version is used by an active branch HEAD",
-                    ));
-                }
+            if head_pinned.contains(id) {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ContentPinned,
+                    "version is used by an active branch HEAD",
+                ));
             }
             for branch in self.state.directory_branches.values() {
                 if branch
@@ -415,22 +444,11 @@ impl Engine {
                 }
             }
         }
-        for w in self
-            .workspaces
-            .values()
-            .filter(|w| matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed))
-        {
-            if self
-                .state
-                .commits
-                .get(&w.base_head)
-                .is_some_and(|c| c.entries.iter().any(|e| selected.contains(&e.version_id)))
-            {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::ContentPinned,
-                    "an open workspace needs a selected version",
-                ));
-            }
+        if workspace_pinned {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ContentPinned,
+                "an open workspace needs a selected version",
+            ));
         }
         Ok(())
     }
@@ -635,7 +653,12 @@ impl Engine {
                     .expect("invariant: descendant traversal returns existing commits").clone())
                     .collect::<Vec<_>>();
                 commits.sort_by_key(|c| c.sequence);
-                let selected_versions = commits.iter().flat_map(|c| &c.entries)
+                // A split rewrites every moved snapshot: materialize each one
+                // once, up front, at the operation's own O(moved total) cost.
+                let commit_entries = commits.iter()
+                    .map(|c| Ok((c.commit_id.clone(), engine.namespace_entries(&c.namespace)?)))
+                    .collect::<Result<BTreeMap<String, Vec<Entry>>>>()?;
+                let selected_versions = commit_entries.values().flatten()
                     .filter(|e| e.kind == NamespaceEntryKind::File).map(|e| e.version_id.clone())
                     .collect::<BTreeSet<_>>();
                 let reads = engine.reads.lock().expect("invariant: read lease lock poisoned");
@@ -648,10 +671,10 @@ impl Engine {
                 let commit_map = commits.iter().map(|c| (c.commit_id.clone(), new_id("commit")))
                     .collect::<BTreeMap<_,_>>();
                 // Map identities once for the whole history, rather than once per snapshot.
-                let entry_map = commits.iter().flat_map(|c| &c.entries)
+                let entry_map = commit_entries.values().flatten()
                     .map(|e| e.entry_id.clone()).collect::<BTreeSet<_>>().into_iter()
                     .map(|id| (id, new_id("entry"))).collect::<BTreeMap<_,_>>();
-                let file_map = commits.iter().flat_map(|c| &c.entries).filter(|e| e.kind == NamespaceEntryKind::File)
+                let file_map = commit_entries.values().flatten().filter(|e| e.kind == NamespaceEntryKind::File)
                     .map(|e| e.file_id.clone()).collect::<BTreeSet<_>>().into_iter()
                     .map(|id| (id, new_id("file"))).collect::<BTreeMap<_,_>>();
                 let source_branches = state.branches.values().filter(|branch| branch.history_tree_id == history)
@@ -674,7 +697,7 @@ impl Engine {
                 }
                 let mut version_map = BTreeMap::new();
                 for c in &commits {
-                    for entry in c.entries.iter().filter(|e| e.kind == NamespaceEntryKind::File) {
+                    for entry in commit_entries[&c.commit_id].iter().filter(|e| e.kind == NamespaceEntryKind::File) {
                         let old = state.versions.get(&entry.version_id)
                             .expect("invariant: every file entry references its admitted version");
                         if version_map.contains_key(&entry.version_id) { continue; }
@@ -698,7 +721,7 @@ impl Engine {
                             new
                         } else {
                             let (path, _) = engine.valid_replica(&old.version_id)?;
-                            engine.build_copied_version(state, pending, crate::business::VersionBuild { history: &history_id, file_id, path: entry.location(), source: &path, primary: &placement.primary_slot_id, copies: placement.target_copies, source_ids: Vec::new(), checkpoint: true }, &old)?
+                            engine.build_copied_version(state, &mut pending.payloads, crate::business::VersionBuild { history: &history_id, file_id, path: entry.location(), source: &path, primary: &placement.primary_slot_id, copies: placement.target_copies, source_ids: Vec::new(), checkpoint: true }, &old)?
                         };
                         version_map.insert(old.version_id, new.version_id);
                     }
@@ -724,7 +747,8 @@ impl Engine {
                     new.tree_id = new_id("tree");
                     if commit.commit_id == cut { new.kind = "split_root".into(); }
                     new.provenance = Some(commit.commit_id.clone());
-                    for entry in &mut new.entries {
+                    let mut entries = commit_entries[&commit.commit_id].clone();
+                    for entry in &mut entries {
                         entry.entry_id = entry_map[&entry.entry_id].clone();
                         if entry.kind == NamespaceEntryKind::File {
                             entry.file_id = file_map[&entry.file_id].clone();
@@ -734,7 +758,9 @@ impl Engine {
                     new.pending_file_versions = remap_pending_versions(
                         &commit.pending_file_versions, &file_map, &version_map,
                     )?;
-                    sorted(&mut new.entries);
+                    sorted(&mut entries);
+                    new.namespace =
+                        crate::namespace::build_from_entries(&entries, &mut pending.namespace)?;
                     state.commits.insert(new.commit_id.clone(), new);
                     // Migrated history must not appear as empty-file commits in the old graph.
                     state.commits.remove_discard(&commit.commit_id);
@@ -868,12 +894,23 @@ impl Engine {
                 // The source also loses directory identities found only in the
                 // moved commits. Keep their settings only for explicit source
                 // file bindings, never as a new path-inheritable fallback.
-                let source_directories = state.commits.values()
-                    .filter(|commit| commit.history_tree_id == history)
-                    .flat_map(|commit| commit.entries.iter())
-                    .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
-                    .map(|entry| entry.entry_id.as_str())
-                    .collect::<BTreeSet<_>>();
+                let mut source_directories = BTreeSet::new();
+                engine.with_namespace_source(|source| {
+                    let mut visited = BTreeSet::new();
+                    for commit in state.commits.values()
+                        .filter(|commit| commit.history_tree_id == history)
+                    {
+                        crate::namespace::collect_directory_entry_ids(
+                            &commit.namespace.root,
+                            source,
+                            &mut visited,
+                            &mut source_directories,
+                        )?;
+                    }
+                    Ok(())
+                })?;
+                let source_directories: BTreeSet<&str> =
+                    source_directories.iter().map(String::as_str).collect();
                 let policies = state.protection_policies.iter()
                     .filter(|(_, policy)| policy.repository_id == original.repository_id
                         && policy.scope_directory_id.as_deref().is_some_and(|directory|
@@ -924,10 +961,27 @@ impl Engine {
                     boundary.local_commit_id = commit_map[&boundary.local_commit_id].clone();
                     boundary.local_branch_id = boundary.local_branch_id.as_ref().and_then(|b| branch_map.get(b)).cloned();
                 }
+                // Which moved versions the source history still uses: one
+                // reference-pruned sweep over the remaining source commits
+                // instead of one full scan per version.
+                let mut still_used = BTreeSet::new();
+                engine.with_namespace_source(|source| {
+                    let mut visited = BTreeSet::new();
+                    for commit in state.commits.values()
+                        .filter(|commit| commit.history_tree_id == history)
+                    {
+                        crate::namespace::collect_used_versions(
+                            &commit.namespace.root,
+                            source,
+                            &mut visited,
+                            &version_map,
+                            &mut still_used,
+                        )?;
+                    }
+                    Ok(())
+                })?;
                 for old_version in version_map.keys() {
-                    let used = state.commits.values().filter(|c| c.history_tree_id == history)
-                        .any(|c| c.entries.iter().any(|e| &e.version_id == old_version));
-                    if !used && state.content_states.get(old_version).is_none_or(|s| *s != ContentState::Purged) {
+                    if !still_used.contains(old_version) && state.content_states.get(old_version).is_none_or(|s| *s != ContentState::Purged) {
                         state.content_states.insert(old_version.clone(), ContentState::Migrated);
                     }
                 }

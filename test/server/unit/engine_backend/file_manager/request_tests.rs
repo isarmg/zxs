@@ -420,18 +420,8 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
             }
             // Ambiguity belongs to the merged disk path, not repository state.
             // Explicit identities and unrelated component-boundary paths work.
-            assert!(
-                !engine
-                    .list_tree_ref(&root.main_branch_id)
-                    .unwrap()
-                    .is_empty()
-            );
-            assert!(
-                !engine
-                    .list_tree_ref(&named.main_branch_id)
-                    .unwrap()
-                    .is_empty()
-            );
+            assert!(!engine.list_tree(&root.main_branch_id).unwrap().is_empty());
+            assert!(!engine.list_tree(&named.main_branch_id).unwrap().is_empty());
             let other = super::listing_integration_tests::listing_json(
                 &engine,
                 &json!({"slot_id":"P01","path":format!("{root_name}-other")}),

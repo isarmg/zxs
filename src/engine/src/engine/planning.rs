@@ -1,5 +1,5 @@
 //! Borrowed preparation inputs, without journal or publication authority.
-use super::{Engine, MutationPlan, Prepared};
+use super::{Engine, MutationPlan};
 use crate::{disk::*, *};
 use json_codec::json;
 use std::{
@@ -28,6 +28,8 @@ pub(crate) struct PlanningContext<'a> {
     pub(super) integrity_scrub_schedule:
         Option<&'a std::sync::Weak<super::integrity_scrub::ScheduleState>>,
     pub(super) published_state_base: Option<&'a Arc<super::publication::PublishedStateBase>>,
+    pub(crate) segment_caches: &'a Arc<crate::segment_store::SegmentCaches>,
+    pub(crate) operation_locator_root: Option<&'a crate::metadata_map::Reference>,
 }
 impl Engine {
     pub(crate) fn planning_context(&self) -> PlanningContext<'_> {
@@ -40,6 +42,8 @@ impl Engine {
             next_slot: self.next_slot,
             blocked: self.blocked,
             metadata_integrity: &self.metadata_integrity,
+            segment_caches: &self.segment_caches,
+            operation_locator_root: self.operation_locator_root.as_ref(),
             admission: Admission::Live(&self.commit_preparation),
             published_state_base: self.published_state_base.as_ref(),
             integrity_scrub_schedule: self.integrity_scrub_schedule.as_ref(),
@@ -170,6 +174,42 @@ impl<'a> PlanningContext<'a> {
 }
 
 impl<'a> PlanningContext<'a> {
+    /// One permanent receipt by id over this context's published State; see
+    /// `segment_store::ReceiptLookup` for the exact lookup order.
+    pub(crate) fn find_receipt(
+        &self,
+        id: OperationId,
+    ) -> Result<Option<storage_contract::OperationRecordEntry>> {
+        let members = self.members();
+        crate::segment_store::ReceiptLookup {
+            state: self.state,
+            reader: crate::segment_store::SegmentReader {
+                resources: self.disk_resources,
+                members: &members,
+                caches: self.segment_caches,
+            },
+            locator_root: self.operation_locator_root,
+        }
+        .find(id)
+    }
+    /// Run one read over published namespace objects through the bounded
+    /// cache, from the planning view.
+    pub(crate) fn with_namespace_source<T>(
+        &self,
+        read: impl FnOnce(&dyn crate::namespace::NamespaceSource) -> Result<T>,
+    ) -> Result<T> {
+        let members = self.members();
+        let reader = crate::segment_store::SegmentReader {
+            resources: self.disk_resources,
+            members: &members,
+            caches: self.segment_caches,
+        };
+        let source =
+            crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {
+                reader.namespace_node(reference)
+            });
+        read(&source)
+    }
     pub(crate) fn plan_new_mutation<F>(
         &self,
         kind: &str,
@@ -179,17 +219,31 @@ impl<'a> PlanningContext<'a> {
         change: F,
     ) -> Result<MutationPlan>
     where
-        F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
+        F: FnOnce(
+            &Self,
+            &mut State,
+            &mut crate::engine::MutationScratch,
+        ) -> Result<json_codec::Value>,
     {
         // Published and planning views share only the immutable base. Every
         // mutation still owns an independent next State until publication.
         let mut next = self.state.as_ref().clone();
         next.begin_tracking();
+        let members = self.members();
+        let reader = crate::segment_store::SegmentReader {
+            resources: self.disk_resources,
+            members: &members,
+            caches: self.segment_caches,
+        };
+        let published =
+            crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {
+                reader.namespace_node(reference)
+            });
         if !self
             .published_state_base
             .is_some_and(|base| base.names_captured_for(self.state))
         {
-            crate::container_storage::capture_names(&mut next);
+            crate::container_storage::capture_names(&mut next, &published)?;
         }
         next.sequence = self.next_slot;
         if !kind.starts_with("auth.") {
@@ -204,9 +258,16 @@ impl<'a> PlanningContext<'a> {
         // Existing receipts return before this planner. Reject a bad clock
         // before invoking the new mutation's preparation work.
         let timestamp = crate::business::now()?;
-        let mut prepared = Vec::new();
-        let mut result = change(self, &mut next, &mut prepared)?;
-        crate::container_storage::capture_changed_names(self.state, &mut next);
+        let mut scratch = crate::engine::MutationScratch::default();
+        let mut result = change(self, &mut next, &mut scratch)?;
+        // Fresh namespace objects of this transaction resolve before the
+        // published store, so changed heads stream without self-publication.
+        let draft = crate::namespace::DraftSource {
+            fresh: &scratch.namespace,
+            base: &published,
+        };
+        crate::container_storage::capture_changed_names(self.state, &mut next, &draft)?;
+        let prepared = scratch.payloads;
         result["timestamp"] = json_codec::json!(timestamp.to_string());
         if let Some(branch_id) = result
             .get("branch_id")
@@ -254,9 +315,11 @@ impl<'a> PlanningContext<'a> {
             sequence: next.sequence,
             result,
         };
-        next.operations.insert(operation_id, op.clone());
-        next.operation_principals
-            .insert(operation_id, principal.into());
+        next.operations
+            .push(storage_contract::OperationRecordEntry {
+                principal: principal.into(),
+                result: op.clone(),
+            })?;
         next.events.push(Event {
             sequence: next.sequence,
             operation_id,
@@ -266,10 +329,11 @@ impl<'a> PlanningContext<'a> {
                 .clone()
                 .or_else(|| op.history_tree_id.clone())
                 .unwrap_or_else(|| operation_id.to_string()),
-        });
+        })?;
         Ok(MutationPlan::Prepared {
             next: Box::new(next),
             prepared,
+            namespace: scratch.namespace.take(),
             result: op,
         })
     }

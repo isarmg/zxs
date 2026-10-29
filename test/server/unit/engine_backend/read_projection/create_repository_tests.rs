@@ -16,7 +16,13 @@ fn typed_repository_creation_keeps_route_before_receipt_and_original_binding() {
     let expected=storage_contract::object_hash("request",&json!({"kind":"repository.create","principal":identity.principal,"body":{"name":"Café","primary_slot_id":"P01","target_copies":3}})).unwrap();
     let mut engine = backend.engine.lock().unwrap();
     assert_eq!(
-        engine.state().operations[&operation].request_digest,
+        engine
+            .state()
+            .operations
+            .tail_record(operation)
+            .unwrap()
+            .result
+            .request_digest,
         expected
     );
     assert_eq!(

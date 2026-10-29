@@ -11,7 +11,7 @@ fn commit(id: &str, parent: Option<&str>) -> Commit {
         operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
         author: "author".into(),
         message: String::new(),
-        entries: Vec::new(),
+        namespace: crate::namespace::fixture_store::namespace(&[]),
         pending_file_versions: Default::default(),
         namespace_deletions: None,
         provenance: None,

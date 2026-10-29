@@ -19,15 +19,12 @@ pub(crate) fn admit_public_commit<'state>(
     envelope: PublicCommitEnvelope,
     request: &CommitRequest,
     state: &'state State,
+    existing: Option<&storage_contract::OperationRecordEntry>,
 ) -> Result<ReceiptCheckedEnvelope<'state>> {
-    if let Some(existing) = state.operations.get(&request.operation_id)
-        && (existing.request_digest != envelope.digest()
+    if let Some(existing) = existing
+        && (existing.result.request_digest != envelope.digest()
             || envelope.claimed_digest() != envelope.digest()
-            || state
-                .operation_principals
-                .get(&request.operation_id)
-                .map(String::as_str)
-                != Some(&request.principal))
+            || existing.principal != request.principal)
     {
         return Err(Error::new(
             ErrorCode::IdempotencyKeyReused,
@@ -116,9 +113,10 @@ impl Engine {
             crate::engine::MutationPlan::Prepared {
                 next,
                 prepared,
+                namespace,
                 result,
             } => {
-                self.persist(*next, prepared, result.clone())?;
+                self.persist_with_objects(*next, prepared, namespace, result.clone())?;
                 result
             }
         };
@@ -129,9 +127,10 @@ impl Engine {
         request: CommitRequest,
         envelope: PublicCommitEnvelope,
     ) -> Result<crate::business::WorkspaceMutation> {
-        let envelope = admit_public_commit(envelope, &request, &self.state)?;
+        let existing = self.find_receipt(request.operation_id)?;
+        let envelope = admit_public_commit(envelope, &request, &self.state, existing.as_ref())?;
         let workspace = self.workspace(&request.workspace_id)?;
-        let replay = if self.state.operations.contains_key(&request.operation_id) {
+        let replay = if existing.is_some() {
             Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
         } else {
             None
@@ -248,9 +247,7 @@ impl crate::engine::PlanningContext<'_> {
             self.route(primary, copies)?;
             placements.insert(item.clone(), (primary.clone(), copies));
         }
-        if w.state != WorkspaceState::Sealed
-            && !self.state.operations.contains_key(&request.operation_id)
-        {
+        if w.state != WorkspaceState::Sealed && self.find_receipt(request.operation_id)?.is_none() {
             return Err(Error::new(
                 storage_contract::ErrorCode::WorkspaceNotSealed,
                 "seal the immutable upload manifest before commit",

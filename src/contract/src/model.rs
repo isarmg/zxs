@@ -595,7 +595,10 @@ pub struct Commit {
     pub operation_id: crate::OperationId,
     pub author: String,
     pub message: String,
-    pub entries: Vec<Entry>,
+    /// The commit's complete published namespace: a bounded, immutable paged
+    /// root plus its recorded total entry count, replacing the old flat
+    /// absolute-path entry list.
+    pub namespace: crate::CommitNamespace,
     #[serialization(default, skip_serializing_if = "Option::is_none")]
     pub namespace_deletions: Option<NamespaceDeletions>,
     /// Snapshot-local reservations preserve inherited parent views even after
@@ -1121,16 +1124,16 @@ pub struct State {
     pub merge_links: crate::TrackedMap<MergeLink>,
     pub history_boundaries: crate::TrackedMap<HistoryBoundary>,
     pub content_states: crate::TrackedMap<ContentState>,
-    pub operations: crate::TrackedOperations<OperationResult>,
+    /// Permanent operation receipts in decision order: sealed immutable
+    /// segments plus the open tail. The receipt body lives here alone.
+    pub operations: crate::OperationLog,
     pub plans: crate::TrackedMap<Plan>,
     pub placement_rules: crate::TrackedMap<PlacementRule>,
     pub protection_policies: crate::TrackedMap<ProtectionPolicy>,
-    /// Audit and idempotency owners of published operations, not user accounts.
-    pub operation_principals: crate::TrackedOperations<String>,
     /// Private authentication control state; never expose State as a public API DTO.
     #[serialization(default)]
     pub control_auth: Option<json_codec::Value>,
-    pub events: crate::TrackedEvents,
+    pub events: crate::SegmentedEvents,
     #[serialization(with = "crate::u64_string")]
     pub topology_generation: u64,
 }
@@ -1177,7 +1180,6 @@ impl State {
             plans,
             placement_rules,
             protection_policies,
-            operation_principals,
         } = self;
         events.begin_tracking();
         repositories.begin_tracking();
@@ -1214,7 +1216,6 @@ impl State {
         plans.begin_tracking();
         placement_rules.begin_tracking();
         protection_policies.begin_tracking();
-        operation_principals.begin_tracking();
     }
 }
 

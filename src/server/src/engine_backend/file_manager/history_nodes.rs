@@ -39,7 +39,7 @@ struct NodePaths<'a> {
     cache: BTreeMap<String, String>,
 }
 impl NodePaths<'_> {
-    fn get(&mut self, node: &str) -> String {
+    fn get(&mut self, node: &str) -> Result<String, ApiError> {
         let state = self.engine.state();
         let mut current = node.to_owned();
         let mut trail = Vec::new();
@@ -57,16 +57,22 @@ impl NodePaths<'_> {
                 break path.path.clone();
             }
             if let Some(version) = state.versions.get(&current) {
-                break self
-                    .commits
-                    .get(current.as_str())
-                    .and_then(|commit| {
-                        commit.entries.iter().find(|entry| {
-                            entry.file_id == version.file_id && entry.version_id == current
-                        })
+                // Early-stop walk of the one commit that first carried this
+                // version; the walk ends at the version's own entry.
+                let mut found = None;
+                if let Some(commit) = self.commits.get(current.as_str())
+                    && let Some(tree) = self.engine.commit_namespace(&commit.commit_id)
+                {
+                    tree.walk(|entry| {
+                        if entry.file_id == version.file_id && entry.version_id == current {
+                            found = Some(entry.path().to_owned());
+                            return Ok(false);
+                        }
+                        Ok(true)
                     })
-                    .map(|entry| entry.path().to_owned())
-                    .unwrap_or_else(|| version.creation_name.clone());
+                    .map_err(error)?;
+                }
+                break found.unwrap_or_else(|| version.creation_name.clone());
             }
             if let Some(metadata) = state.file_metadata_nodes.get(&current) {
                 let source = if metadata.kind == storage_contract::FileMetadataKind::Merge {
@@ -90,7 +96,7 @@ impl NodePaths<'_> {
         for id in trail {
             self.cache.insert(id, path.clone());
         }
-        path
+        Ok(path)
     }
 }
 
@@ -158,21 +164,29 @@ pub(super) fn unified_history(
         .collect::<Result<_, ApiError>>()?;
     let mut nodes = versions
         .iter()
-        .map(|version| {
+        .map(|version| -> Result<_, ApiError> {
             let id = version.data.version_id.as_str();
             let commit = first_commits.get(id).copied();
             let summary = take_summary(&mut summaries, id);
-            let path = commit
-                .and_then(|commit| {
-                    commit
-                        .entries
-                        .iter()
-                        .find(|entry| entry.file_id == file && entry.version_id == id)
-                })
-                .map(|entry| entry.path().to_owned())
-                .unwrap_or_else(|| version.data.download_name.clone());
+            let path = {
+                let mut located = None;
+                if let Some(commit) = commit {
+                    engine
+                        .commit_namespace(&commit.commit_id)
+                        .expect("invariant: projected commit exists")
+                        .walk(|entry| {
+                            if entry.file_id == file && entry.version_id == id {
+                                located = Some(entry.path().to_owned());
+                                return Ok(false);
+                            }
+                            Ok(true)
+                        })
+                        .map_err(crate::engine_backend::error)?;
+                }
+                located.unwrap_or_else(|| version.data.download_name.clone())
+            };
             let sequence = commit.map_or(version.sequence, |commit| commit.sequence);
-            (
+            Ok((
                 sequence,
                 id,
                 HistoryNode::Content {
@@ -192,9 +206,9 @@ pub(super) fn unified_history(
                     path,
                     previous_path: None,
                 },
-            )
+            ))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, ApiError>>()?;
     for path in path_nodes {
         let body = &state.versions[&path.version_id];
         let metadata = version_metadata.get(path.version_id.as_str()).copied();
@@ -246,7 +260,7 @@ pub(super) fn unified_history(
     {
         let body = &state.versions[&revision.version_id];
         let metadata = version_metadata.get(revision.version_id.as_str()).copied();
-        let path = paths.get(&revision.node_id);
+        let path = paths.get(&revision.node_id)?;
         let summary = take_summary(&mut summaries, &revision.node_id);
         nodes.push((
             revision.sequence,

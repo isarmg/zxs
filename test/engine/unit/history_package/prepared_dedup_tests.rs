@@ -70,11 +70,13 @@ fn real_histories_share_one_empty_page_and_rebuild_exact_roots() {
             .unwrap();
     }
     let state = engine.state();
-    let (roots, objects) = prepare_history_manifests(state, MAX_METADATA).unwrap();
+    let members = engine.members();
+    let source = crate::history_package::fixture_member_source(&members);
+    let (roots, objects) = prepare_history_manifests(state, MAX_METADATA, &source).unwrap();
     assert_eq!(state.histories.len(), 3);
     let mut logical_count = 0;
     for id in state.histories.keys() {
-        let manifest = HistoryManifest::from_state(state, id).unwrap();
+        let manifest = HistoryManifest::from_state(state, id, &source).unwrap();
         let (hash, graph) = graph::prepare(&manifest, MAX_METADATA).unwrap();
         assert_eq!(hash, roots.catalog_binding(id).unwrap().hash);
         logical_count += graph.len();
@@ -95,10 +97,38 @@ fn real_histories_share_one_empty_page_and_rebuild_exact_roots() {
         temp.path().join("fresh-two"),
         temp.path().join("fresh-three"),
     ]);
+    // A complete replica carries the commit namespace closure alongside the
+    // manifest graph: validation reads those pages through the same member.
+    {
+        let mut visited = BTreeSet::new();
+        for id in state.histories.keys() {
+            let manifest = HistoryManifest::from_state(state, id, &source).unwrap();
+            for commit in manifest.commits.values() {
+                crate::namespace::visit_namespace_objects(
+                    &commit.namespace.root,
+                    &mut |kind, hash| {
+                        let object = crate::publication_evidence::verified_graph_object(
+                            &members, kind, hash,
+                        )?;
+                        object.clone_prepared_fixture().store(&targets.disks)?;
+                        Ok(object)
+                    },
+                    &mut visited,
+                )
+                .unwrap();
+            }
+        }
+    }
     install_and_check_roots(&objects, &targets.disks);
-    let (reused_roots, reused) =
-        prepare_history_manifests_incremental(state, state, &roots, &targets.disks, MAX_METADATA)
-            .unwrap();
+    let (reused_roots, reused) = prepare_history_manifests_incremental(
+        state,
+        state,
+        &roots,
+        &targets.disks,
+        MAX_METADATA,
+        &source,
+    )
+    .unwrap();
     assert_eq!(reused_roots, roots);
     assert_eq!(reused.len(), objects.len());
     let by_address = |objects: &[PreparedMetadataObject]| {
@@ -111,15 +141,22 @@ fn real_histories_share_one_empty_page_and_rebuild_exact_roots() {
     for member in &targets.disks {
         fs::remove_file(object_path(member, "state-page", &empty)).unwrap();
     }
-    let (rebuilt_roots, rebuilt) =
-        prepare_history_manifests_incremental(state, state, &roots, &targets.disks, MAX_METADATA)
-            .unwrap();
+    let (rebuilt_roots, rebuilt) = prepare_history_manifests_incremental(
+        state,
+        state,
+        &roots,
+        &targets.disks,
+        MAX_METADATA,
+        &source,
+    )
+    .unwrap();
     assert_eq!(rebuilt_roots, roots);
     assert_eq!(rebuilt.len(), objects.len());
     install_and_check_roots(&rebuilt, &targets.disks);
-    assert!(prepare_history_manifests(state, 1).is_err());
+    assert!(prepare_history_manifests(state, 1, &source).is_err());
     assert!(
-        prepare_history_manifests_incremental(state, state, &roots, &targets.disks, 1).is_err()
+        prepare_history_manifests_incremental(state, state, &roots, &targets.disks, 1, &source)
+            .is_err()
     );
 }
 

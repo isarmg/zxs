@@ -587,6 +587,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
     // A branch remains a readable snapshot when it is not selected. Only
     // advancing every retained named HEAD releases its former content.
     let latest = engine.state.commits[&engine.state.branches[&shared].head_commit_id].clone();
+    let latest_entries = engine.namespace_entries(&latest.namespace).unwrap();
     engine
         .mutate(
             "fixture.directory_advance",
@@ -605,7 +606,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
                             parent_tree_id: Some(branch.head_tree_id.clone()),
                             commit_id: latest.commit_id.clone(),
                             path: String::new(),
-                            entries: latest.entries.clone(),
+                            entries: latest_entries.clone(),
                             file_branches: branch.file_branches.clone(),
                             file_contexts: branch.file_contexts.clone(),
                             inherited_files: BTreeMap::new(),
@@ -615,7 +616,7 @@ fn all_named_directory_heads_pin_sources_until_every_head_advances() {
                     );
                     branch.head_tree_id = tree;
                     branch.commit_id = latest.commit_id.clone();
-                    branch.entries = latest.entries.clone();
+                    branch.entries = latest_entries.clone();
                     branch.materialized = true;
                     branch.sequence = state.sequence;
                 }
@@ -875,8 +876,9 @@ fn split_remaps_inherited_references_without_creating_placeholder_files() {
     assert_eq!(engine.state.versions[source].file_id, *file);
     assert_eq!(engine.state.versions[source].history_tree_id, history);
     assert!(
-        engine.state.commits[&moved.head_commit_id]
-            .entries
+        engine
+            .namespace_entries(&engine.state.commits[&moved.head_commit_id].namespace)
+            .unwrap()
             .iter()
             .any(|entry| &entry.file_id == file && &entry.version_id == source)
     );
@@ -1001,8 +1003,9 @@ fn split_keeps_pending_prefix_snapshots_and_remaps_mixed_snapshot_reservations()
     assert_ne!(file, &original.file_id);
     assert_ne!(source, &original.version_id);
     assert!(
-        remapped
-            .entries
+        engine
+            .namespace_entries(&remapped.namespace)
+            .unwrap()
             .iter()
             .any(|entry| &entry.file_id == file && &entry.version_id == source)
     );
@@ -1068,7 +1071,7 @@ fn split_preserves_identity_per_file_and_requires_explicit_rebinding() {
     let files = graph
         .commits
         .iter()
-        .flat_map(|c| &c.entries)
+        .flat_map(|c| engine.namespace_entries(&c.namespace).unwrap())
         .filter(|e| e.kind == NamespaceEntryKind::File)
         .collect::<Vec<_>>();
     assert_eq!(files.len(), 2);
@@ -1414,7 +1417,7 @@ fn split_at_deletion_preserves_facts_without_copying_deleted_content() {
         .iter()
         .find(|commit| commit.kind == "split_root")
         .unwrap();
-    assert!(root.entries.is_empty());
+    assert_eq!(root.namespace.entries, 0);
     assert!(root.parent_commit_ids.is_empty());
     assert_eq!(root.namespace_deletions.as_ref(), Some(&facts));
     assert!(

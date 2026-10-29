@@ -1,5 +1,5 @@
 use super::*;
-use storage_contract::{Config, Event, TrackedEvents};
+use storage_contract::{Config, Event};
 
 fn event(sequence: u64) -> Event {
     Event {
@@ -10,42 +10,9 @@ fn event(sequence: u64) -> Event {
     }
 }
 
-// Test fixtures supply the monotone premise directly; production cursor
-// selection is exposed only through the admitted Engine view.
-fn events_after(events: &TrackedEvents, after: u64) -> impl ExactSizeIterator<Item = &Event> {
-    let rank = events.partition_point(|event| event.sequence <= after);
-    events[rank..].iter()
-}
-
-#[test]
-fn event_cursor_seeks_past_boundaries_and_gaps_without_copying() {
-    assert_eq!(events_after(&TrackedEvents::default(), 0).len(), 0);
-    let events: TrackedEvents = [1, 3, 3, 8, u64::MAX].map(event).into_iter().collect();
-    for after in [0, 1, 2, 3, 4, 8, 9, u64::MAX] {
-        let expected = events
-            .iter()
-            .filter(|event| event.sequence > after)
-            .collect::<Vec<_>>();
-        let actual = events_after(&events, after).collect::<Vec<_>>();
-        assert_eq!(actual, expected);
-        assert!(
-            actual
-                .iter()
-                .zip(expected)
-                .all(|(actual, expected)| std::ptr::eq(*actual, expected))
-        );
-    }
-}
-
-#[test]
-fn event_cursor_at_large_history_tail_returns_only_unseen_events() {
-    let events: TrackedEvents = (1..=100_000).map(event).collect();
-    assert_eq!(
-        events_after(&events, 99_999).collect::<Vec<_>>(),
-        vec![&events[99_999]]
-    );
-    assert_eq!(events_after(&events, 100_000).len(), 0);
-}
+// Cursor selection over sealed segments and the resident tail lives in
+// `Engine::events_page` (covered with the segment store); this module covers
+// the page capture and the backend endpoint over a real engine.
 
 fn poll(backend: &EngineBackend, identity: &Identity, after: u64) -> Result<Value, ApiError> {
     backend.event_page(identity, after).map(|page| {
@@ -124,41 +91,17 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
 }
 
 #[test]
-fn typed_event_page_copies_only_bounded_suffix_and_keeps_cursor_gaps() {
-    let events: TrackedEvents = (1..=100_000).map(event).collect();
-    let page = capture_event_page(events_after(&events, 98_500), 100_005, 98_500).unwrap();
+fn typed_event_page_advances_the_cursor_only_past_delivered_events() {
+    // A page's cursor is its last delivered sequence; an empty page keeps the
+    // caller's cursor so a gap is never silently skipped.
+    let page = capture_event_page((98_501..=99_500).map(event).collect(), 98_500);
     assert_eq!(page.events.len(), 1000);
     assert_eq!(page.next_cursor, 99_500);
-    assert_eq!(
-        page.events,
-        events[98_500..]
-            .iter()
-            .take(1000)
-            .cloned()
-            .collect::<Vec<_>>()
-    );
-    assert_ne!(page.events[0].kind.as_ptr(), events[98_500].kind.as_ptr());
-    let last = capture_event_page(
-        events_after(&events, page.next_cursor),
-        100_005,
-        page.next_cursor,
-    )
-    .unwrap();
-    assert_eq!(last.events.len(), 500);
-    assert_eq!(last.next_cursor, 100_000);
-    let empty = capture_event_page(events_after(&events, 100_004), 100_005, 100_004).unwrap();
+    let empty = capture_event_page(Vec::new(), 100_004);
     assert!(empty.events.is_empty());
     assert_eq!(empty.next_cursor, 100_004);
     assert_eq!(
-        capture_event_page(events_after(&events, 100_006), 100_005, 100_006)
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::InvalidCursor
-    );
-    assert_eq!(
-        capture_event_page(std::iter::empty(), u64::MAX, u64::MAX)
-            .unwrap()
-            .next_cursor,
+        capture_event_page(Vec::new(), u64::MAX).next_cursor,
         u64::MAX
     );
 }
@@ -182,7 +125,7 @@ fn typed_event_page_is_frozen_and_serializes_without_the_engine_lock() {
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let expected = json!({"events":engine.state().events,"next_cursor":engine.state().events.iter().next_back().unwrap().sequence.to_string()});
+    let expected = json!({"events":engine.state().events.tail(),"next_cursor":engine.state().events.tail().last().unwrap().sequence.to_string()});
     let backend = EngineBackend::new(engine);
     let snapshot = backend.event_page(&identity, 0).unwrap();
     backend

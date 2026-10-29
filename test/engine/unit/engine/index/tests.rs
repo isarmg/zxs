@@ -808,7 +808,7 @@ fn publication_survives_disabled_marker_view_and_reopen_recovers() {
             .contains("query schema mismatch")
     );
     assert!(!engine.is_read_only());
-    assert!(engine.state.operations.contains_key(&operation));
+    assert!(engine.published_receipt(operation).unwrap().is_some());
     assert!(!index_ready(&engine));
     let published = engine.state().clone();
     drop(engine);
@@ -871,7 +871,7 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
             .is::<sqlite_access::Error>()
     );
     assert!(!engine.is_read_only());
-    assert!(engine.state.operations.contains_key(&operation));
+    assert!(engine.published_receipt(operation).unwrap().is_some());
     let published = engine.state().clone();
     assert_eq!(rows(&path), baseline);
     let replay = engine
@@ -1293,7 +1293,7 @@ fn replaced_database_identity_disables_index_and_preserves_publication() {
     assert_eq!(failure.cause().code(), ErrorCode::UnsafePath);
     assert!(failure.cause().to_string().contains("identity changed"));
     assert!(!engine.is_read_only());
-    assert!(engine.state.operations.contains_key(&operation));
+    assert!(engine.published_receipt(operation).unwrap().is_some());
 }
 
 #[test]

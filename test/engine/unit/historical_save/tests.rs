@@ -92,8 +92,10 @@ fn historical_edits_materialize_only_written_files_without_changing_the_source_h
         saved.result["version_protection"].as_array().unwrap().len(),
         1
     );
-    let old = engine.state.commits[&source]
-        .entries
+    let source_entries = engine
+        .namespace_entries(&engine.state.commits[&source].namespace)
+        .unwrap();
+    let old = source_entries
         .iter()
         .find(|entry| entry.path == "unchanged.txt")
         .unwrap();
@@ -167,7 +169,9 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
             .unwrap();
         commits.push(operation.commit_id.unwrap());
     }
-    let old_version = engine.state.commits[&commits[0]].entries[0]
+    let old_version = engine
+        .namespace_entries(&engine.state.commits[&commits[0]].namespace)
+        .unwrap()[0]
         .version_id
         .clone();
     let purge = engine
@@ -206,7 +210,10 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
         .unwrap();
     assert_eq!(
         inherited[0].version_id,
-        engine.state.commits[&commits[0]].entries[0].version_id
+        engine
+            .namespace_entries(&engine.state.commits[&commits[0]].namespace)
+            .unwrap()[0]
+            .version_id
     );
     assert_eq!(
         engine
@@ -294,7 +301,9 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
                 .unwrap(),
         );
     }
-    let old_version = engine.state.commits[&commits[0]].entries[0]
+    let old_version = engine
+        .namespace_entries(&engine.state.commits[&commits[0]].namespace)
+        .unwrap()[0]
         .version_id
         .clone();
     let purge = engine
@@ -355,7 +364,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
         .unwrap();
     let commit = saved.commit_id.unwrap();
     let historical = &engine.state.commits[&commit];
-    assert!(historical.entries.is_empty());
+    assert_eq!(historical.namespace.entries, 0);
     let facts = historical.namespace_deletions.as_ref().unwrap();
     assert_eq!(facts.paths.len(), 1);
     assert_eq!(facts.paths[0].path, "file.txt");

@@ -148,7 +148,7 @@ impl Engine {
         // An unused operation may resolve the existing disk root. A published
         // operation must first match its original owner and creation request,
         // and return that receipt rather than the root's current SMB binding.
-        if !self.state.operations.contains_key(&operation)
+        if self.find_receipt(operation)?.is_none()
             && let Some(repo) = self
                 .state
                 .repositories
@@ -188,7 +188,7 @@ impl Engine {
             principal,
             operation,
             input,
-            |engine, state, _| {
+            |engine, state, scratch| {
                 if state
                     .repositories
                     .values()
@@ -244,6 +244,8 @@ impl Engine {
                         state: BranchState::Active,
                     },
                 );
+                let empty_namespace =
+                    crate::namespace::build_from_entries(&[], &mut scratch.namespace)?;
                 state.commits.insert(
                     commit_id.clone(),
                     Commit {
@@ -257,7 +259,7 @@ impl Engine {
                         operation_id: operation,
                         author: principal.into(),
                         message: "Create repository".into(),
-                        entries: Vec::new(),
+                        namespace: empty_namespace,
                         pending_file_versions: Default::default(),
                         provenance: None,
                     },

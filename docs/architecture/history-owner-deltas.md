@@ -24,7 +24,7 @@
 
 ## Graph 与信任边界
 
-通用 `edit_map_values` 连接新增／删除／替换到同一个 radix planner。`Resolver::retain_map` 复用同一图形状／路由校验和 address 去重，只保留完整已认证对象，不另造全逻辑 manifest。新 history 经索引选出的所有真实投影行编码；新增大 Commit.entries 本身仍是实际 S 字节成本，没有拆分大 entity。
+通用 `edit_map_values` 连接新增／删除／替换到同一个 radix planner。`Resolver::retain_map` 复用同一图形状／路由校验和 address 去重，只保留完整已认证对象，不另造全逻辑 manifest。新 history 经索引选出的所有真实投影行编码；Commit 自身已缩减为分页命名空间根（[ADR 0011](../adr/0011-paged-namespace-roots-and-segmented-logs.md)），其页/索引对象按内容寻址共享，不随投影行重复编码。
 
 旧 graph 的所有真实 read/hash、原依赖及每成员 store/fsync 保留。变更字段的 radix descriptor 当前还通过 `MapRoot::read` 从已认证旧对象重建；这仍遍历该字段旧图，不能宣称整段 graph 准备只按 delta 计。catalog 仍遍历需要安装的所有旧 history；这是未开启 PGE 的 I/O 成本，不是 State owner scan。source graph acquisition 的失败仍通知既有故障 observer；仅该阶段允许从权威 State/index 重建，未改动 root 必须严格等于原绑定 hash。编码、store、决定失败直接传播。冷／import 外部语义验证没有删除。
 

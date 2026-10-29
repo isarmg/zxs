@@ -61,7 +61,7 @@ pub(super) fn validate_location(
     if location.repository_id != repo.repository_id
         || !engine
             .namespace_tree(&repo.main_branch_id)?
-            .get_key(&key)
+            .get_key(&key)?
             .is_some_and(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
     {
         return Err(Error::new(

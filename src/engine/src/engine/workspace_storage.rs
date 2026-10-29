@@ -133,9 +133,10 @@ impl Engine {
         request: &CommitRequest,
         directories: &[ReadSource],
     ) -> Result<bool> {
-        let Some(operation) = self.state.operations.get(&request.operation_id) else {
+        let Some(entry) = self.find_receipt(request.operation_id)? else {
             return Ok(false);
         };
+        let operation = entry.result;
         if crate::business::native_commit_digest(workspace, request)? == operation.request_digest {
             return Ok(true);
         }
@@ -577,7 +578,9 @@ impl Engine {
             ));
         }
         let published = self.workspace_publication_snapshot(&expected)?;
-        Self::refresh_workspace_contexts(&published, &mut expected);
+        self.with_namespace_source(|source| {
+            Self::refresh_workspace_contexts(&published, &mut expected, source)
+        })?;
         expected.state = WorkspaceState::Committed;
         expected.fencing_token = expected
             .fencing_token
@@ -608,13 +611,21 @@ impl Engine {
             else {
                 continue;
             };
-            if !self.workspace_request_matches_operation(workspace, &request)
+            if !self.workspace_request_matches_operation(workspace, &request)?
                 || workspace.fencing_token != request.fencing_token
                 || !self.saved_request_digest_matches(workspace, &request, &directories)?
             {
                 continue;
             }
-            let operation = &self.state.operations[&request.operation_id];
+            let operation = self
+                .find_receipt(request.operation_id)?
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::OperationNotFound,
+                        "published workspace operation is absent",
+                    )
+                })?
+                .result;
             let members = self.trusted_evidence_members();
             for member in &members {
                 for (record, _) in self
@@ -653,16 +664,16 @@ impl Engine {
                         } else {
                             Arc::new(self.load_bound_snapshot(&candidate.snapshot_hash)?)
                         };
-                    if state
-                        .operations
-                        .get(&request.operation_id)
-                        .is_some_and(|bound| {
-                            bound.sequence == operation.sequence
-                                && bound.request_digest == operation.request_digest
-                        })
-                        && state.operation_principals.get(&request.operation_id)
-                            == Some(&workspace.principal)
-                    {
+                    let bound = if std::sync::Arc::ptr_eq(&state, &self.state) {
+                        self.find_receipt(request.operation_id)?
+                    } else {
+                        self.candidate_receipt(&state, &members, request.operation_id)?
+                    };
+                    if bound.is_some_and(|bound| {
+                        bound.result.sequence == operation.sequence
+                            && bound.result.request_digest == operation.request_digest
+                            && bound.principal == workspace.principal
+                    }) {
                         return Ok(state);
                     }
                 }
@@ -688,7 +699,7 @@ impl Engine {
             else {
                 continue;
             };
-            if self.workspace_request_matches_operation(workspace, &request)
+            if self.workspace_request_matches_operation(workspace, &request)?
                 && self.saved_request_digest_matches(workspace, &request, &directories)?
             {
                 // Closing an already published workspace is permitted. A later
@@ -782,7 +793,9 @@ impl Engine {
                 // Both mirrors may predate completion. Later selections cannot
                 // replace the destination bound by this workspace's publication.
                 let published = self.workspace_publication_snapshot(workspace)?;
-                Self::refresh_workspace_contexts(&published, workspace);
+                self.with_namespace_source(|source| {
+                    Self::refresh_workspace_contexts(&published, workspace, source)
+                })?;
             }
             workspace.state = WorkspaceState::Committed;
             workspace.fencing_token = fence;

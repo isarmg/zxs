@@ -222,7 +222,6 @@ fn hundred_thousand_shared_parent_writes_do_not_rescan_siblings() {
 }
 
 #[test]
-#[should_panic(expected = "invariant: admitted namespace lookup keys are unique")]
 fn workspace_commit_exposes_corrupted_admitted_source() {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
@@ -266,13 +265,15 @@ fn workspace_commit_exposes_corrupted_admitted_source() {
     engine
         .stage_bytes(&workspace.workspace_id, "New.txt", b"staged bytes")
         .unwrap();
-    // Inject corruption only in test memory, not via a read/load admission path.
+    // Inject corruption only in test memory, not via a read/load admission
+    // path: the paged wire cannot even represent duplicate sibling keys, so
+    // a corrupted admitted source is a namespace root whose object is gone.
     let source = std::sync::Arc::make_mut(&mut engine.state)
         .commits
         .get_mut(&workspace.base_head)
         .unwrap();
-    source.entries.push(source.entries[0].clone());
-    engine
+    source.namespace.root.hash = "0".repeat(64);
+    let error = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
             operation_id: storage_contract::OperationId::generate(),
@@ -282,5 +283,6 @@ fn workspace_commit_exposes_corrupted_admitted_source() {
             message: "must not publish".into(),
             request_digest: None,
         })
-        .unwrap();
+        .unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::ObjectCorrupt);
 }

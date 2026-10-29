@@ -65,6 +65,8 @@ enum Shape {
     ControlAuth,
     History(String),
     Snapshot(u64),
+    SegmentBody,
+    NamespaceNode,
 }
 
 struct MemberScan<'a, O, P> {
@@ -287,10 +289,21 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
         kind: &'static str,
         hash: &str,
     ) -> Result<AuthenticatedMetadataObject> {
+        let object = self.read_graph_object(kind, hash)?;
+        self.report.metadata_objects_verified += 1;
+        Ok(object)
+    }
+
+    /// One authenticated read without the unique-object verification count:
+    /// re-traversal of an already verified object is a read, not a new fact.
+    fn read_graph_object(
+        &mut self,
+        kind: &'static str,
+        hash: &str,
+    ) -> Result<AuthenticatedMetadataObject> {
         self.admit_object()?;
-        let object =
-            load_authenticated_object_observed_at(self.root, self.disk, kind, hash, self.observe)
-                .map_err(|error| {
+        load_authenticated_object_observed_at(self.root, self.disk, kind, hash, self.observe)
+            .map_err(|error| {
                 if matches!(
                     error.code(),
                     ErrorCode::OperationAborted | ErrorCode::ResourceLimit
@@ -302,9 +315,7 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
                         format!("{kind}/{hash} failed integrity scrub"),
                     )
                 }
-            })?;
-        self.report.metadata_objects_verified += 1;
-        Ok(object)
+            })
     }
 
     fn admit_object(&mut self) -> Result<()> {
@@ -334,6 +345,42 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
         {
             self.history_node(reference, "")?;
         }
+        // Sealed/tail segment bodies are reachable through directory leaf
+        // values rather than radix references; cover them explicitly. The
+        // directory pages were already verified by the radix walk above, and
+        // a sealed body can be shared by many snapshots: each object is
+        // verified and counted once, and re-read only for traversal.
+        crate::journal::visit_segment_objects(&snapshot, |kind, hash| {
+            let address = (kind, hash.to_owned());
+            if self.verified.contains_key(&address) {
+                return self.read_graph_object(kind, hash);
+            }
+            let object = self.graph_object(kind, hash)?;
+            if matches!(
+                kind,
+                storage_contract::EVENT_SEGMENT_KIND | storage_contract::OPERATION_SEGMENT_KIND
+            ) {
+                self.verified.insert(address, Shape::SegmentBody);
+            }
+            Ok(object)
+        })?;
+        // Commit values reference immutable namespace graphs that the radix
+        // walk stores but never decodes; verify every reachable page and
+        // index once per address, like the shared segment bodies above.
+        crate::journal::visit_commit_namespace_objects(&snapshot, |kind, hash| {
+            let address = (kind, hash.to_owned());
+            if self.verified.contains_key(&address) {
+                return self.read_graph_object(kind, hash);
+            }
+            let object = self.graph_object(kind, hash)?;
+            if matches!(
+                kind,
+                storage_contract::NAMESPACE_PAGE_KIND | storage_contract::NAMESPACE_INDEX_KIND
+            ) {
+                self.verified.insert(address, Shape::NamespaceNode);
+            }
+            Ok(object)
+        })?;
         let auth = (
             "state-control-auth",
             snapshot.control_auth.hash().to_owned(),

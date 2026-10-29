@@ -824,14 +824,16 @@ fn admission_rejects_missing_namespace_or_bound_policy_before_copy_selection() {
         .unwrap();
     let state = engine.state().clone();
     assert_eq!(
-        effective_policy(
-            &state,
-            &repo.repository_id,
-            Some(&file.file_id),
-            "docs/file"
-        )
-        .unwrap()
-        .target_copies,
+        engine
+            .with_namespace_source(|source| effective_policy(
+                &state,
+                &repo.repository_id,
+                Some(&file.file_id),
+                "docs/file",
+                source,
+            )
+            .map(|policy| policy.unwrap().target_copies))
+            .unwrap(),
         3
     );
     for missing in ["branch", "commit", "policy", "policy_repository"] {
@@ -861,7 +863,13 @@ fn admission_rejects_missing_namespace_or_bound_policy_before_copy_selection() {
         let raw: crate::history_package::RawState =
             decode_strict(&canonical_json(&broken).unwrap()).unwrap();
         assert_eq!(
-            State::try_from(raw).err().unwrap().code(),
+            engine
+                .with_namespace_source(|source| {
+                    crate::history_package::AdmittedState::admit(raw, source).map(|_| ())
+                })
+                .err()
+                .unwrap()
+                .code(),
             storage_contract::ErrorCode::StateInvalid,
             "{missing}"
         );
@@ -899,19 +907,27 @@ fn removed_scope_is_absent_but_its_retained_file_binding_still_applies() {
         .unwrap();
     let state = engine.state();
     let policy = &state.protection_policies[&state.file_backup_policies[&file.file_id]];
-    assert_eq!(scope_path(state, policy), None);
-    assert_eq!(
-        effective_policy(
-            state,
-            &repo.repository_id,
-            Some(&file.file_id),
-            "elsewhere/file"
-        )
-        .unwrap()
-        .target_copies,
-        3
-    );
-    assert!(effective_policy(state, &repo.repository_id, None, "docs/new").is_none());
+    engine
+        .with_namespace_source(|source| {
+            assert_eq!(scope_path(state, policy, source)?, None);
+            assert_eq!(
+                effective_policy(
+                    state,
+                    &repo.repository_id,
+                    Some(&file.file_id),
+                    "elsewhere/file",
+                    source,
+                )?
+                .unwrap()
+                .target_copies,
+                3
+            );
+            assert!(
+                effective_policy(state, &repo.repository_id, None, "docs/new", source)?.is_none()
+            );
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]

@@ -131,7 +131,7 @@ fn missing_publication_seal_keeps_the_verified_prefix_and_candidate_cause() {
             canonical_json(&engine.operation(first).unwrap()).unwrap(),
             receipt
         );
-        assert!(!engine.state.operations.contains_key(&second));
+        assert!(engine.state.operations.tail_record(second).is_none());
         let pending = engine.operation(second).unwrap();
         assert_eq!(pending.commit_state, CommitState::InDoubt);
         assert_eq!(

@@ -162,7 +162,7 @@ fn missing_object() -> Error {
         "immutable object is missing",
     )
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn write_object_bytes(
     d: &DiskConfig,
     kind: &str,

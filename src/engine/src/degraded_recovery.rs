@@ -721,7 +721,10 @@ impl Engine {
                 "explicit permanent-loss acknowledgement is required",
             ));
         }
-        if let Some(result) = self.state.operations.get(&plan.operation_id) {
+        if let Some(result) = self
+            .find_receipt(plan.operation_id)?
+            .map(|entry| entry.result)
+        {
             if result.result["recovery_id"].as_str() == Some(id) {
                 return self.operation(plan.operation_id);
             }
@@ -759,10 +762,9 @@ impl Engine {
             Some(&admitted),
         )?;
         let mut next = admitted.into_state();
-        let mut result = next
-            .operations
-            .get(&candidate.operation_id)
-            .cloned()
+        let mut result = self
+            .candidate_receipt(&next, &member_disks, candidate.operation_id)?
+            .map(|entry| entry.result)
             .ok_or_else(|| required("candidate result missing"))?;
         result.commit_state = storage_contract::CommitState::PublishedDegraded;
         result.protection_at_publish = storage_contract::ProtectionAtPublish::BelowTarget;
@@ -901,9 +903,17 @@ impl Engine {
             .as_ref()
             .expect("recovery")
             .verify(&candidate, &publication)?;
+        // Install the corrected receipt's derived segment before any PUBLICATION
+        // object, journal record, or seal can make this result irreversible.
+        // On failure the old visible State and the same pending plan remain;
+        // the immutable candidate snapshot itself is never rewritten.
+        self.overlay_recovered_result(
+            &member_disks,
+            &mut next,
+            candidate.operation_id,
+            result.clone(),
+        )?;
         self.complete_candidate(&candidate, &plan.candidate_hash, &next, Some(publication))?;
-        next.operations
-            .insert(candidate.operation_id, result.clone());
         self.state = std::sync::Arc::new(next);
         self.snapshot = Some(candidate.snapshot_hash);
         self.next_slot = self.next_slot.max(

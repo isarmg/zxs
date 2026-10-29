@@ -26,20 +26,15 @@ impl AdmittedState {
     }
 }
 
-impl TryFrom<RawState> for AdmittedState {
-    type Error = Error;
-
-    fn try_from(raw: RawState) -> Result<Self> {
-        validate(&raw.0)?;
+impl AdmittedState {
+    /// Admission re-verifies every history projection, including the full
+    /// paged namespace of every commit, against the given object source.
+    pub(crate) fn admit(
+        raw: RawState,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Result<Self> {
+        validate(&raw.0, source)?;
         Ok(Self(raw.0))
-    }
-}
-
-impl TryFrom<RawState> for State {
-    type Error = Error;
-
-    fn try_from(raw: RawState) -> Result<Self> {
-        Ok(AdmittedState::try_from(raw)?.into_state())
     }
 }
 
@@ -71,7 +66,7 @@ macro_rules! history_coverage {
             fn finish(self, state: &State) -> Result<()> {
                 let State {
                     sequence: _, business_generation: _, topology_generation: _,
-                    control_auth: _, events: _, operations: _, operation_principals: _, plans: _,
+                    control_auth: _, events: _, operations: _, plans: _,
                     content_states: _,
                     histories: _, repositories, $($field,)*
                 } = state;
@@ -119,23 +114,68 @@ history_coverage! {
     history_boundaries => boundary_marks,
 }
 
-fn validate(state: &State) -> Result<()> {
-    // Event polling seeks by sequence while preserving ordinal array order.
-    // Writers append increasing publication slots; recovery must establish the
-    // same premise for decoded bytes, including equal-sequence event groups.
-    if !state.events.iter().map(|event| event.sequence).is_sorted() {
+fn validate(state: &State, source: &dyn crate::namespace::NamespaceSource) -> Result<()> {
+    // Event polling seeks by sequence while preserving log order. Writers
+    // append increasing publication slots; recovery must establish the same
+    // premise for decoded bytes. Sealed bodies were verified nondecreasing by
+    // the disk-read entry; the resident facts checked here are the segment
+    // directory and the open tail.
+    if !state
+        .events
+        .sealed()
+        .iter()
+        .map(|segment| segment.first_sequence)
+        .is_sorted()
+    {
+        return Err(invalid("snapshot event segments are not in sequence order"));
+    }
+    if !state
+        .events
+        .tail()
+        .iter()
+        .map(|event| event.sequence)
+        .is_sorted()
+    {
         return Err(invalid("snapshot event sequences are not nondecreasing"));
+    }
+    if state
+        .events
+        .tail()
+        .first()
+        .zip(state.events.sealed().last())
+        .is_some_and(|(first, segment)| first.sequence < segment.first_sequence)
+    {
+        return Err(invalid("snapshot event tail precedes its sealed prefix"));
     }
     // The sorted tail must already be published, so the next writer's newer
     // publication slot preserves this order instead of appending behind it.
     if state
         .events
-        .iter()
-        .next_back()
+        .tail()
+        .last()
         .is_some_and(|event| event.sequence > state.sequence)
     {
         return Err(invalid(
             "snapshot event sequence exceeds published sequence",
+        ));
+    }
+    if !state
+        .operations
+        .sealed()
+        .iter()
+        .map(|segment| (segment.first_ordinal, segment.first_sequence))
+        .is_sorted()
+    {
+        return Err(invalid("snapshot operation segments are not in log order"));
+    }
+    if state
+        .operations
+        .tail()
+        .last()
+        .is_some_and(|entry| entry.result.sequence > state.sequence)
+    {
+        return Err(invalid(
+            "snapshot operation sequence exceeds published sequence",
         ));
     }
     // History projection filters unowned rows; reject those at the disk boundary.
@@ -160,10 +200,10 @@ fn validate(state: &State) -> Result<()> {
         if id != &history.history_tree_id {
             return Err(invalid("snapshot history identity differs from its key"));
         }
-        let manifest = HistoryManifest::project_state(state, id)
+        let manifest = HistoryManifest::project_state(state, id, source)
             .map_err(|error| error.context(ErrorCode::StateInvalid, "invalid snapshot history"))?;
         manifest
-            .validate()
+            .validate(source)
             .map_err(|error| error.context(ErrorCode::StateInvalid, "invalid snapshot history"))?;
         covered.include(&manifest)?;
     }

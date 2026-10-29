@@ -309,7 +309,12 @@ pub(crate) fn native_commit_digest(
     ).map_err(Into::into)
 }
 
-fn validate_directory_selection_key(state: &State, workspace: &Workspace, key: &str) -> Result<()> {
+fn validate_directory_selection_key(
+    state: &State,
+    workspace: &Workspace,
+    key: &str,
+    source: &dyn crate::namespace::NamespaceSource,
+) -> Result<()> {
     let branch = state.branches.get(&workspace.branch_id).ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::BranchNotFound,
@@ -347,17 +352,18 @@ fn validate_directory_selection_key(state: &State, workspace: &Workspace, key: &
     // Visit this path's roots and ancestors once, not the whole namespace for
     // every selection generation retained anywhere in the pool. Both views
     // matter: an ancestor can disappear or first appear after workspace open.
+    // The ancestors of one key are its path closure: one point descent per view.
     let root_changed = state
         .repositories
         .values()
         .any(|repo| repo.history_tree_id == branch.history_tree_id && changed(&repo.repository_id));
-    if root_changed
-        || base.entries.iter().chain(&current.entries).any(|entry| {
-            entry.kind == NamespaceEntryKind::Directory
-                && (key == entry.lookup_key() || namespace::is_descendant(key, entry.lookup_key()))
-                && changed(&entry.entry_id)
-        })
-    {
+    let path_changed = |namespace: &storage_contract::CommitNamespace| -> Result<bool> {
+        Ok(crate::namespace::NamespaceView::new(namespace, source)
+            .ancestor_closure(key)?
+            .iter()
+            .any(|entry| entry.kind == NamespaceEntryKind::Directory && changed(&entry.entry_id)))
+    };
+    if root_changed || path_changed(&base.namespace)? || path_changed(&current.namespace)? {
         return Err(Error::new(
             storage_contract::ErrorCode::DirectoryBranchConflict,
             "directory branch changed after the workspace began; staged bytes are preserved",
@@ -372,9 +378,10 @@ fn validate_file_context(
     workspace: &Workspace,
     file: &str,
     key: &str,
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<()> {
-    let selected =
-        directory::branch_context_at_key(state, &workspace.branch_id, key).ok_or_else(|| {
+    let selected = directory::branch_context_at_key(state, &workspace.branch_id, key, source)?
+        .ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::FileNotFound,
                 "file context no longer exists",
@@ -436,10 +443,13 @@ impl Engine {
     ) -> Result<()> {
         let key = path.key();
         let workspace = self.workspace_view(workspace)?;
-        validate_directory_selection_key(&self.state, &workspace, key)?;
-        let mut entry = self
-            .commit_namespace(&workspace.base_head)
-            .and_then(|tree| tree.get_key(key));
+        self.with_namespace_source(|source| {
+            validate_directory_selection_key(&self.state, &workspace, key, source)
+        })?;
+        let mut entry = match self.commit_namespace(&workspace.base_head) {
+            Some(tree) => tree.get_key(key)?,
+            None => None,
+        };
         // First-created files are absent from the original base, but completion
         // records their published destination. The current entry supplies only
         // its identity; the saved context still decides whether it is writable.
@@ -455,7 +465,9 @@ impl Engine {
                     .branches
                     .get(&workspace.branch_id)
                     .and_then(|branch| self.commit_namespace(&branch.head_commit_id))
-                    .and_then(|tree| tree.get_key(key))
+                    .map(|tree| tree.get_key(key))
+                    .transpose()?
+                    .flatten()
                     .ok_or_else(|| {
                         Error::new(
                             storage_contract::ErrorCode::FileNotFound,
@@ -465,7 +477,9 @@ impl Engine {
             );
         }
         if let Some(entry) = entry {
-            validate_file_context(&self.state, &workspace, &entry.file_id, key)?;
+            self.with_namespace_source(|source| {
+                validate_file_context(&self.state, &workspace, &entry.file_id, key, source)
+            })?;
         }
         Ok(())
     }
@@ -507,6 +521,26 @@ impl Engine {
                     "branch HEAD missing",
                 )
             })?;
+        // The workspace freezes a per-file selection snapshot for conflict
+        // fencing, so opening one is O(head files) by contract; file entries
+        // stream once through the paged head rather than from a flat commit.
+        let head_files = {
+            let mut files = Vec::new();
+            self.with_namespace_source(|source| {
+                crate::namespace::NamespaceView::new(&head.namespace, source).walk(
+                    |location, entry| {
+                        if let storage_contract::NamespacePageEntry::File { .. } = entry {
+                            files.push(crate::namespace::materialized_entry(
+                                location.clone(),
+                                entry,
+                            ));
+                        }
+                        Ok(true)
+                    },
+                )
+            })?;
+            files
+        };
         let w = Workspace {
             workspace_id: new_id("ws"),
             purpose: WorkspacePurpose::Normal,
@@ -517,9 +551,8 @@ impl Engine {
             files: BTreeMap::new(),
             selected_file_contexts: repository::main_for_branch(&self.state, branch_id)
                 .map(|r| {
-                    head.entries
+                    head_files
                         .iter()
-                        .filter(|e| e.kind == NamespaceEntryKind::File)
                         .filter_map(|e| {
                             self.file_context_for_current_entry(&r.repository_id, e)
                                 .map(|c| {
@@ -538,10 +571,8 @@ impl Engine {
             selected_directory_branches: (*self.state.directory_selections).clone(),
             directory_selection_generations: (*self.state.directory_selection_generations).clone(),
             file_selection_generations: (*self.state.file_selection_generations).clone(),
-            selected_file_branches: head
-                .entries
+            selected_file_branches: head_files
                 .iter()
-                .filter(|entry| entry.kind == NamespaceEntryKind::File)
                 .filter_map(|entry| {
                     super::file::selected_file_branch(&self.state, branch_id, &entry.file_id)
                         .map(|selected| (entry.file_id.clone(), selected.branch_id.clone()))
@@ -644,7 +675,9 @@ impl Engine {
         validate_id(item, "entry")?;
         let w = self.writable_workspace(workspace)?;
         if w.purpose == WorkspacePurpose::Normal {
-            validate_directory_selection_key(&self.state, &w, path.key())?;
+            self.with_namespace_source(|source| {
+                validate_directory_selection_key(&self.state, &w, path.key(), source)
+            })?;
         }
         let key = path.key();
         // Reject invalid targets before publishing an immutable generation.
@@ -656,13 +689,15 @@ impl Engine {
                 "workspace base is absent",
             )
         })?;
-        let base_entry = base.get_key(key).cloned();
+        let base_entry = base.get_key(key)?;
         if w.purpose == WorkspacePurpose::Normal
             && let Some(entry) = base_entry
                 .as_ref()
                 .filter(|e| e.kind == NamespaceEntryKind::File)
         {
-            validate_file_context(&self.state, &w, &entry.file_id, path.key())?;
+            self.with_namespace_source(|source| {
+                validate_file_context(&self.state, &w, &entry.file_id, path.key(), source)
+            })?;
         }
         if base_entry
             .as_ref()
@@ -679,11 +714,14 @@ impl Engine {
             .get(&w.branch_id)
             .and_then(|b| b.file_id.as_deref())
         {
-            let current = self
-                .state
-                .commits
-                .get(&w.base_head)
-                .and_then(|c| c.entries.iter().find(|e| e.file_id == file_id));
+            // A file branch's head holds its one file entry plus ancestors;
+            // this early-stopping walk reads a single page.
+            let current = match self.state.commits.get(&w.base_head) {
+                Some(c) => self.with_namespace_source(|source| {
+                    crate::namespace::NamespaceView::new(&c.namespace, source).find_file(file_id)
+                })?,
+                None => None,
+            };
             if current.is_none_or(|entry| entry.lookup_key() != key) {
                 return Err(Error::new(
                     storage_contract::ErrorCode::FileBranchScope,
@@ -977,7 +1015,9 @@ impl Engine {
         validate_id(item, "entry")?;
         let parsed = name_policy::PortablePath::parse(path)?;
         if w.purpose == WorkspacePurpose::Normal {
-            validate_directory_selection_key(&self.state, &w, parsed.key())?;
+            self.with_namespace_source(|source| {
+                validate_directory_selection_key(&self.state, &w, parsed.key(), source)
+            })?;
         }
         let end = offset.checked_add(bytes.len() as u64).ok_or_else(|| {
             Error::new(storage_contract::ErrorCode::FileTooLarge, "range overflow")
@@ -997,15 +1037,19 @@ impl Engine {
             )
         })?;
         if w.purpose == WorkspacePurpose::Normal
-            && let Some(entry) = base.get_key(parsed.key())
+            && let Some(entry) = base.get_key(parsed.key())?
         {
-            validate_file_context(&self.state, &w, &entry.file_id, parsed.key())?;
+            self.with_namespace_source(|source| {
+                validate_file_context(&self.state, &w, &entry.file_id, parsed.key(), source)
+            })?;
             let current = self
                 .state
                 .branches
                 .get(&w.branch_id)
                 .and_then(|branch| self.commit_namespace(&branch.head_commit_id))
-                .and_then(|tree| tree.get_key(entry.lookup_key()));
+                .map(|tree| tree.get_key(entry.lookup_key()))
+                .transpose()?
+                .flatten();
             if current.is_none_or(|current| current.version_id != entry.version_id) {
                 return Err(Error::new(
                     storage_contract::ErrorCode::FileVersionConflict,
@@ -1025,7 +1069,7 @@ impl Engine {
                 &mut temporary,
             )?;
             Some((previous.size, previous.content_hash))
-        } else if let Some(entry) = base.get_key(parsed.key()) {
+        } else if let Some(entry) = base.get_key(parsed.key())? {
             let source = self.open_content(&entry.version_id)?;
             std::io::copy(
                 &mut (&source.file).take(source.size.saturating_add(1)),
@@ -1115,9 +1159,10 @@ impl Engine {
             MutationPlan::Prepared {
                 next,
                 prepared,
+                namespace,
                 result,
             } => {
-                self.persist(*next, prepared, result.clone())?;
+                self.persist_with_objects(*next, prepared, namespace, result.clone())?;
                 result
             }
         };
@@ -1129,7 +1174,7 @@ impl Engine {
         wire: Option<crate::wire::WireCommit>,
     ) -> Result<WorkspaceMutation> {
         let workspace = self.workspace(&request.workspace_id)?;
-        let replay = if self.state.operations.contains_key(&request.operation_id) {
+        let replay = if self.find_receipt(request.operation_id)?.is_some() {
             Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
         } else {
             None
@@ -1184,11 +1229,15 @@ impl Engine {
         Ok(())
     }
     /// Keep ordinary completion and restart reconstruction on one definition.
-    pub(crate) fn refresh_workspace_contexts(state: &State, completed: &mut Workspace) {
+    pub(crate) fn refresh_workspace_contexts(
+        state: &State,
+        completed: &mut Workspace,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Result<()> {
         if let Some(repo) = repository::main_for_branch(state, &completed.branch_id) {
             for file in completed.files.values() {
                 if let Some(context) =
-                    directory::context_at_key(state, &repo.repository_id, file.path.key())
+                    directory::context_at_key(state, &repo.repository_id, file.path.key(), source)?
                 {
                     completed.selected_file_contexts.insert(
                         directory::context_key_from_key(&repo.repository_id, file.path.key()),
@@ -1197,6 +1246,7 @@ impl Engine {
                 }
             }
         }
+        Ok(())
     }
 
     pub(crate) fn complete_workspace_commit(
@@ -1208,10 +1258,12 @@ impl Engine {
         // A first inherited save can create a public file branch. The same SMB
         // handle subsequently continues its own published destination; later
         // external selections are still fenced against this post-save receipt.
-        Self::refresh_workspace_contexts(&self.state, &mut completed);
+        let refreshed = self.with_namespace_source(|source| {
+            Self::refresh_workspace_contexts(&self.state, &mut completed, source)
+        });
         completed.state = WorkspaceState::Committed;
         completed.fencing_token += 1;
-        if let Err(source) = self.persist_workspace(&completed) {
+        if let Err(source) = refreshed.and_then(|()| self.persist_workspace(&completed)) {
             // Publication is already authoritative. Even pre-write budget/path
             // failures leave local completion unresolved, never a rejected save.
             self.blocked = true;
@@ -1372,7 +1424,16 @@ impl crate::engine::PlanningContext<'_> {
             .get(history)
             .map(|history| history.repository_id.clone())
         {
-            crate::protection::apply_backup_paths(state, &repository, file_id, path, &route)?;
+            self.with_namespace_source(|source| {
+                crate::protection::apply_backup_paths(
+                    state,
+                    &repository,
+                    file_id,
+                    path,
+                    &route,
+                    source,
+                )
+            })?;
         }
         let placement = Placement {
             version_id: version.version_id.clone(),
@@ -1488,7 +1549,7 @@ impl crate::engine::PlanningContext<'_> {
         Engine::require_actor(&request.principal)?;
         let mutation = self.plan_new_mutation(
             "workspace.commit", &request.principal, request.operation_id, digest,
-            |engine, state, pending| {
+            |engine, state, scratch| engine.with_namespace_source(|published| {
                 let branch = state.branches.get(&w.branch_id).cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::BranchNotFound, "branch disappeared"))?;
                 if branch.state != BranchState::Active {
@@ -1496,40 +1557,56 @@ impl crate::engine::PlanningContext<'_> {
                 }
                 // Freeze the source records without copying the current Commit.
                 // Helpers may insert candidate commits before namespace replay;
-                // the draft below still owns its one mutable entries copy.
+                // the editor below still owns its one mutable draft.
                 let source_commits = state.commits.clone();
                 let current = source_commits.get(&branch.head_commit_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "branch HEAD missing"))?;
-                let base = state.commits.get(&w.base_head)
+                let base = state.commits.get(&w.base_head).cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "workspace base missing"))?;
                 let repo = engine.repository_for_branch(&w.branch_id)?;
 
-                // One explicit mutation-local index serves both conflict checks
-                // and staged replacements, reusing admitted source keys.
-                let mut draft = namespace::NamespaceDraft::new(current.entries.clone());
+                // Path-copy edit: staged writes and namespace operations touch
+                // only their own pages and ancestor routes; untouched subtree
+                // references are shared with the current head.
+                let current_view = crate::namespace::NamespaceView::new(&current.namespace, published);
+                let mut editor = crate::namespace::NamespaceEditor::open(&current.namespace, published)?;
                 for file in w.files.values() {
-                    validate_directory_selection_key(state, &w, file.path.key())?;
-                    let existing = draft.get_key(file.path.key());
-                    if existing.map(|entry| &entry.version_id) != file.base_version_id.as_ref() {
+                    validate_directory_selection_key(state, &w, file.path.key(), published)?;
+                    let existing = current_view.resolve_key(file.path.key())?;
+                    if existing.as_ref().map(|entry| &entry.version_id) != file.base_version_id.as_ref() {
                         return Err(Error::new(storage_contract::ErrorCode::FileVersionConflict, "file changed after this workspace began"));
                     }
                     if let Some(entry) = existing {
-                        validate_file_context(state, &w, &entry.file_id,file.path.key())?;
+                        validate_file_context(state, &w, &entry.file_id, file.path.key(), published)?;
                     }
                 }
                 {
+                    let base_view = crate::namespace::NamespaceView::new(&base.namespace, published);
                     for operation in &w.namespace_operations {
-                        validate_directory_selection_key(state, &w, operation.key())?;
-                        if let Some(destination) = &operation.destination() { validate_directory_selection_key(state, &w, destination.key())?; }
-                        let key = operation.key().to_owned();
-                        let prefix = format!("{key}/");
+                        validate_directory_selection_key(state, &w, operation.key(), published)?;
+                        if let Some(destination) = &operation.destination() { validate_directory_selection_key(state, &w, destination.key(), published)?; }
+                        let key = operation.key();
                         // A same-name replacement is not the entry this workspace
                         // opened. In particular, every directory has an empty
                         // version_id, so path/content alone cannot fence it.
-                        let selected = |entries: &[Entry]| entries.iter()
-                            .filter(|entry| entry.lookup_key() == key || entry.lookup_key().starts_with(&prefix))
-                            .map(|entry| (entry.entry_id.clone(), entry.file_id.clone(), entry.kind, entry.path().to_owned(), entry.version_id.clone())).collect::<Vec<_>>();
-                        if selected(&current.entries) != selected(&base.entries) {
+                        // Each view enumerates only this operation's subtree.
+                        let selected = |view: &crate::namespace::NamespaceView<'_, dyn crate::namespace::NamespaceSource + '_>| -> Result<Vec<(String, String, NamespaceEntryKind, String, String)>> {
+                            let mut out = Vec::new();
+                            match view.resolve_key(key)? {
+                                None => {}
+                                Some(entry) if entry.kind == NamespaceEntryKind::File => {
+                                    out.push((entry.entry_id.clone(), entry.file_id.clone(), entry.kind, entry.path().to_owned(), entry.version_id.clone()));
+                                }
+                                Some(_) => {
+                                    view.walk_subtree(key, |_, entry| {
+                                        out.push((entry.entry_id.clone(), entry.file_id.clone(), entry.kind, entry.path().to_owned(), entry.version_id.clone()));
+                                        Ok(true)
+                                    })?;
+                                }
+                            }
+                            Ok(out)
+                        };
+                        if selected(&current_view)? != selected(&base_view)? {
                             return Err(Error::new(storage_contract::ErrorCode::NamespaceConflict, "namespace changed after the workspace began"));
                         }
                     }
@@ -1538,17 +1615,23 @@ impl crate::engine::PlanningContext<'_> {
                 let mut written_files = std::collections::BTreeSet::new();
                 let mut written_paths = Vec::new();
                 for file in w.files.values() {
-                    let existing = draft.get_key(file.path.key()).cloned();
+                    let existing = current_view.resolve_key(file.path.key())?;
                     // An insensitive lookup is not a rename. Keep the existing
                     // display path; explicit namespace operations own renames.
                     let location = existing.as_ref().map(|entry| entry.location()).unwrap_or(&file.path);
                     let path = location.as_str();
                     written_paths.push(path.to_owned());
                     let file_id = existing.as_ref().map(|entry| entry.file_id.clone()).unwrap_or_else(|| new_id("file"));
-                    super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,request.operation_id)?;
-                    let file_context=directory::branch_context_at_key(state,&w.branch_id,location.key());
-                    let pending_source = file_context.as_ref().and_then(|c|state.branches.get(&c.branch_id)).and_then(|b|b.pending_file_versions.get(&file_id)).cloned()
-                        .or_else(||directory::unwritten_source_at(state,&w.branch_id,location.key()).map(str::to_owned));
+                    super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,request.operation_id,published,&mut scratch.namespace)?;
+                    let (file_context, pending_source) = {
+                        let draft = crate::namespace::DraftSource { fresh: &scratch.namespace, base: published };
+                        let file_context = directory::branch_context_at_key(state,&w.branch_id,location.key(),&draft)?;
+                        let pending_source = match file_context.as_ref().and_then(|c|state.branches.get(&c.branch_id)).and_then(|b|b.pending_file_versions.get(&file_id)).cloned() {
+                            Some(source) => Some(source),
+                            None => directory::unwritten_source_at(state,&w.branch_id,location.key(),&draft)?,
+                        };
+                        (file_context, pending_source)
+                    };
                     // A first write is a new branch-owned version even when its
                     // bytes equal the source or are genuinely empty.
                     if pending_source.is_none() && existing.as_ref().is_some_and(|entry| {
@@ -1557,7 +1640,7 @@ impl crate::engine::PlanningContext<'_> {
                     }) {
                         continue;
                     }
-                    draft.ensure_parents(existing.as_ref().map(|entry| entry.location()).unwrap_or(&file.path))?;
+                    editor.ensure_parents(existing.as_ref().map(|entry| entry.location()).unwrap_or(&file.path))?;
                     let source_ids:Vec<String> = pending_source.as_ref().cloned()
                         .or_else(|| existing.as_ref().map(|entry| entry.version_id.clone()))
                         .into_iter().collect();
@@ -1568,7 +1651,7 @@ impl crate::engine::PlanningContext<'_> {
                     };
                     let source = engine.staged_source(&w, file)?;
                     let version = engine.build_version(
-                        state, pending, crate::business::VersionBuild { history: &branch.history_tree_id, file_id: &file_id, path: location, source: &source, primary: &primary, copies, source_ids: source_ids.clone(), checkpoint: pending_source.is_some() },
+                        state, &mut scratch.payloads, crate::business::VersionBuild { history: &branch.history_tree_id, file_id: &file_id, path: location, source: &source, primary: &primary, copies, source_ids: source_ids.clone(), checkpoint: pending_source.is_some() },
                     )?;
                     if version.logical_size != file.size || version.content_hash != file.content_hash {
                         return Err(Error::new(storage_contract::ErrorCode::ChecksumMismatch, "workspace source changed after sealing"));
@@ -1584,49 +1667,116 @@ impl crate::engine::PlanningContext<'_> {
                     }
                     let location = location.clone();
                     let entry = Entry { entry_id: existing.as_ref().map(|entry| entry.entry_id.clone()).unwrap_or_else(|| file.item_id.clone()), path: location, kind: NamespaceEntryKind::File, file_id: file_id.clone(), version_id: version.version_id, size: version.logical_size };
-                    draft.replace(entry);
+                    editor.upsert_file(&entry)?;
                     state.file_locations.entry(file_id.clone()).or_insert_with(||path.to_owned());
                     state.file_names.entry(file_id.clone()).or_insert_with(||path.rsplit('/').next().unwrap_or("").into());
                     written_files.insert(file_id);
                 }
-                let mut entries = draft.into_entries();
-                let renamed_directories=directory::prepare_renamed_directories(state,&repo.repository_id,&current.entries,&w.namespace_operations)?;
-                let deleted = apply_workspace_namespace(&mut entries, &current.entries, &w.namespace_operations)?;
-                super::directory::namespace_locations(state,&repo.repository_id,&current.entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
-                validate_entries(&mut entries, engine.config.max_entries)?;
-                if entries == current.entries && deleted.is_empty() {
+                let renamed_directories=directory::prepare_renamed_directories(state,&repo.repository_id,&current.namespace,&w.namespace_operations,published,&mut scratch.namespace)?;
+                // Mirror the flat-list workspace replay: an explicit mkdir for a
+                // parent that uploads in this same workspace materialized is
+                // accepted once; every other operation keeps apply's semantics.
+                let deleted = {
+                    let base_view = crate::namespace::NamespaceView::new(&base.namespace, published);
+                    let mut explicit_directories = std::collections::BTreeSet::new();
+                    let mut deleted = Vec::new();
+                    for op in &w.namespace_operations {
+                        let key = op.key();
+                        if op.kind() == NamespaceOperationKind::Mkdir
+                            && base_view.resolve_key(key)?.is_none()
+                            && editor.entry_kind(key)? == Some(NamespaceEntryKind::Directory)
+                            && explicit_directories.insert(key)
+                        {
+                            continue;
+                        }
+                        deleted.extend(editor.apply(op)?);
+                        if op.kind() == NamespaceOperationKind::Mkdir {
+                            explicit_directories.insert(op.key());
+                        }
+                    }
+                    deleted
+                };
+                let namespace = editor.seal(&mut scratch.namespace)?;
+                if namespace.entries > engine.config.max_entries as u64 {
+                    return Err(Error::new(storage_contract::ErrorCode::ResourceLimit, "directory entry budget exceeded"));
+                }
+                super::directory::namespace_locations(state,&repo.repository_id,&current.namespace,&namespace,&w.namespace_operations,&request.principal,request.operation_id,published,&mut scratch.namespace)?;
+                // Deterministic packing makes an unchanged draft reseal to the
+                // identical root, so no-change is one reference comparison.
+                if namespace.root == current.namespace.root && deleted.is_empty() {
                     return Ok(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}));
                 }
-                let live_files = entries.iter().filter(|entry| entry.kind == NamespaceEntryKind::File)
-                    .map(|entry| entry.file_id.clone()).collect::<std::collections::BTreeSet<_>>();
-                let mut snapshot_pending = current.pending_file_versions.clone();
-                snapshot_pending.retain(|file,_| live_files.contains(file) && !written_files.contains(file));
+                // Reservations survive only while their file is still present:
+                // point lookups per pending key, never a full namespace scan.
+                let (snapshot_pending, dead_branch_pending) = {
+                    let draft = crate::namespace::DraftSource { fresh: &scratch.namespace, base: published };
+                    let view = crate::namespace::NamespaceView::new(&namespace, &draft);
+                    let live = |file: &String| -> Result<bool> {
+                        Ok(state.file_locations.get(file)
+                            .map(|location| view.resolve_key(&name_policy::path_key(location)))
+                            .transpose()?
+                            .flatten()
+                            .is_some_and(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == *file)
+                            || view.find_file(file)?.is_some())
+                    };
+                    let mut retained = std::collections::BTreeMap::new();
+                    for (file, source) in current.pending_file_versions.iter() {
+                        if !written_files.contains(file) && live(file)? {
+                            retained.insert(file.clone(), source.clone());
+                        }
+                    }
+                    let mut dead = Vec::new();
+                    let branch_pending: Vec<String> = state
+                        .branches
+                        .get(&w.branch_id)
+                        .map(|b| b.pending_file_versions.keys().cloned().collect())
+                        .unwrap_or_default();
+                    for file in branch_pending {
+                        if written_files.contains(&file) || !(retained.contains_key(&file) || live(&file)?) {
+                            dead.push(file);
+                        }
+                    }
+                    (retained, dead)
+                };
                 state.commits.insert(commit_id.clone(), Commit {
                     namespace_deletions: namespace::deletion_record(deleted, now()?),
                     commit_id: commit_id.clone(), history_tree_id: branch.history_tree_id.clone(),
                     kind: "content".into(), parent_commit_ids: vec![current.commit_id.clone()],
                     tree_id: new_id("tree"), sequence: state.sequence, operation_id: request.operation_id,
-                    author: request.principal.clone(), message: request.message.clone(), entries, pending_file_versions: snapshot_pending, provenance: None,
+                    author: request.principal.clone(), message: request.message.clone(), namespace: namespace.clone(), pending_file_versions: snapshot_pending, provenance: None,
                 });
                 let target = state.branches.get_mut(&w.branch_id).expect("branch checked");
                 target.head_commit_id = commit_id.clone();
                 target.generation = target.generation.checked_add(1).ok_or_else(|| Error::new(storage_contract::ErrorCode::ResourceLimit, "branch generation exhausted"))?;
-                target.pending_file_versions.retain(|file, _| live_files.contains(file) && !written_files.contains(file));
+                for file in dead_branch_pending { target.pending_file_versions.remove(&file); }
                 if !written_files.is_empty(){target.file_node_id=None;}
                 if branch.file_id.is_some() {
-                    if let Some(path)=w.files.values().find(|file|directory::context_at_key(state,&repo.repository_id, file.path.key()).is_some_and(|c|c.branch_id==w.branch_id&&c.inherited_from.is_none())).map(|f|f.path.clone()) {
-                        super::file::publish_selected_file_at(state,&w.branch_id,Some(&path),&request.principal,request.operation_id)?;
+                    let selected_path = {
+                        let draft = crate::namespace::DraftSource { fresh: &scratch.namespace, base: published };
+                        let mut found = None;
+                        for file in w.files.values() {
+                            if directory::context_at_key(state,&repo.repository_id, file.path.key(), &draft)?
+                                .is_some_and(|c|c.branch_id==w.branch_id&&c.inherited_from.is_none())
+                            {
+                                found = Some(file.path.clone());
+                                break;
+                            }
+                        }
+                        found
+                    };
+                    if let Some(path)=selected_path {
+                        super::file::publish_selected_file_at(state,&w.branch_id,Some(&path),&request.principal,request.operation_id,published,&mut scratch.namespace)?;
                     }
                 } else if repo.main_branch_id == w.branch_id {
-                    super::file::synchronize_directory_edits(state, &commit_id, &written_paths, &request.principal, request.operation_id)?;
+                    super::file::synchronize_directory_edits(state, &commit_id, &written_paths, &request.principal, request.operation_id, published, &mut scratch.namespace)?;
                     let changed_paths = written_paths.into_iter()
                         .chain(w.namespace_operations.iter().flat_map(|n| std::iter::once(n.path().to_owned()).chain(n.destination().map(|path|path.as_str().to_owned()))))
                         .chain(renamed_directories)
                         .collect::<Vec<_>>();
-                    super::directory::record_directory_edits(state, &repo.repository_id, &changed_paths, None)?;
+                    super::directory::record_directory_edits(state, &repo.repository_id, &changed_paths, None, published, &mut scratch.namespace)?;
                 }
                 Ok(json!({"commit_id":commit_id,"branch_id":w.branch_id,"history_tree_id":branch.history_tree_id,"file_node_ids":file_paths::operation_nodes(state,request.operation_id)}))
-            },
+            }),
         )?;
         Ok(WorkspaceMutation {
             mutation,

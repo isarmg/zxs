@@ -20,9 +20,11 @@ pub(crate) use ancestry::descendant_commits;
 pub use file_nodes::{FileNodeProjectionRequest, FileNodeSummary};
 pub use file_requests::{FileBranchMergeRequest, FileNodeTagsUpdateRequest};
 pub use namespace::NamespaceTree;
+#[cfg(test)]
+pub(crate) use namespace::find_unordered;
 pub(crate) use namespace::{
-    apply_namespace, apply_workspace_namespace, deletion_record, ensure_parents, find_unordered,
-    find_unordered_key, sorted, validate_entries, validate_workspace_dependencies,
+    apply_workspace_namespace, deletion_record, ensure_parents, find_unordered_key, sorted,
+    validate_entries, validate_workspace_dependencies,
 };
 pub use workspace::{PreparedUpload, UploadPreparation};
 pub(crate) use workspace::{VersionBuild, WorkspaceMutation, native_commit_digest};

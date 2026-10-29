@@ -1,5 +1,5 @@
 //! Scoped logical history projection and closure validation, without storage I/O.
-use crate::business::{validate_branch_name, validate_entries};
+use crate::business::validate_branch_name;
 use crate::{Error, ErrorCode, Result};
 use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -98,14 +98,22 @@ impl HistoryManifest {
         Ok(())
     }
 
-    pub(super) fn from_state(state: &State, history_id: &str) -> Result<Self> {
-        let manifest = Self::project_state(state, history_id)?;
-        manifest.validate()?;
+    pub(super) fn from_state(
+        state: &State,
+        history_id: &str,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Result<Self> {
+        let manifest = Self::project_state(state, history_id, source)?;
+        manifest.validate(source)?;
         Ok(manifest)
     }
 
     /// Build the history projection; reference validation belongs to its caller.
-    pub(super) fn project_state(state: &State, history_id: &str) -> Result<Self> {
+    pub(super) fn project_state(
+        state: &State,
+        history_id: &str,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Result<Self> {
         let history = state.histories.get(history_id).cloned().ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::HistoryNotFound,
@@ -123,19 +131,30 @@ impl HistoryManifest {
                 )
             })?;
         let repository_id = history.repository_id.clone();
-        let directory_ids = state
-            .commits
-            .values()
-            .filter(|commit| commit.history_tree_id == history_id)
-            .flat_map(|commit| {
-                commit
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
-                    .map(|entry| entry.entry_id.as_str())
-            })
-            .chain(std::iter::once(repository_id.as_str()))
-            .collect::<BTreeSet<_>>();
+        // Exports are whole-history by definition: every commit's namespace
+        // streams once through the paged source; nothing else is expanded.
+        let directory_ids = {
+            let mut ids = BTreeSet::new();
+            for commit in state
+                .commits
+                .values()
+                .filter(|commit| commit.history_tree_id == history_id)
+            {
+                crate::namespace::NamespaceView::new(&commit.namespace, source).walk(
+                    |_, entry| {
+                        if let storage_contract::NamespacePageEntry::Directory {
+                            entry_id, ..
+                        } = entry
+                        {
+                            ids.insert(entry_id.clone());
+                        }
+                        Ok(true)
+                    },
+                )?;
+            }
+            ids.insert(repository_id.clone());
+            ids
+        };
         let versions = state
             .versions
             .iter()
@@ -355,7 +374,11 @@ impl HistoryManifest {
         };
         Ok(manifest)
     }
-    fn validate_directory_snapshot(&self, branch: &DirectoryBranch) -> Result<()> {
+    fn validate_directory_snapshot(
+        &self,
+        branch: &DirectoryBranch,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Result<()> {
         let invalid =
             |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
         let history = &self.history.history_tree_id;
@@ -373,11 +396,13 @@ impl HistoryManifest {
         } else {
             name_policy::validate_path(&branch.path)?;
             validate_id(&branch.directory_id, "entry")?;
-            if !commit.entries.iter().any(|entry| {
-                entry.kind == NamespaceEntryKind::Directory
-                    && entry.entry_id == branch.directory_id
-                    && entry.lookup_key() == scope_key
-            }) {
+            if !crate::namespace::NamespaceView::new(&commit.namespace, source)
+                .resolve_key(&scope_key)?
+                .is_some_and(|entry| {
+                    entry.kind == NamespaceEntryKind::Directory
+                        && entry.entry_id == branch.directory_id
+                })
+            {
                 return Err(invalid(
                     "directory composition stable identity is absent from its snapshot",
                 ));
@@ -835,7 +860,7 @@ impl HistoryManifest {
         }
         Ok(())
     }
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self, source: &dyn crate::namespace::NamespaceSource) -> Result<()> {
         let invalid =
             |message| Error::new(storage_contract::ErrorCode::HistoryPackageInvalid, message);
         let history = &self.history.history_tree_id;
@@ -899,40 +924,45 @@ impl HistoryManifest {
                     })?;
                 }
             }
-            let mut entries = commit.entries.clone();
-            validate_entries(&mut entries, 1_000_000)?;
-            if entries != commit.entries {
-                return Err(invalid(
-                    "commit entries are not in canonical namespace form",
-                ));
-            }
-            for entry in &commit.entries {
-                Self::validate_entry_envelope(entry)?;
-                if entry.kind != NamespaceEntryKind::File {
-                    continue;
-                }
-                let version = self
-                    .versions
-                    .get(&entry.version_id)
-                    .ok_or_else(|| invalid("entry version missing"))?;
-                if version.file_id != entry.file_id || version.logical_size != entry.size {
-                    return Err(invalid("entry version identity or size differs"));
-                }
-            }
-            for (file, source) in &commit.pending_file_versions {
+            // Full admission re-verification: the complete paged graph is
+            // re-read, re-counted and structure-checked for every commit.
+            crate::namespace::verify_namespace(&commit.namespace, source, 1_000_000).map_err(
+                |error| {
+                    error.context(
+                        ErrorCode::HistoryPackageInvalid,
+                        "commit entries are not in canonical namespace form",
+                    )
+                },
+            )?;
+            let mut commit_files = BTreeSet::new();
+            crate::namespace::NamespaceView::new(&commit.namespace, source).walk(
+                |location, page_entry| {
+                    let entry = crate::namespace::materialized_entry(location.clone(), page_entry);
+                    Self::validate_entry_envelope(&entry)?;
+                    if entry.kind != NamespaceEntryKind::File {
+                        return Ok(true);
+                    }
+                    let version = self
+                        .versions
+                        .get(&entry.version_id)
+                        .ok_or_else(|| invalid("entry version missing"))?;
+                    if version.file_id != entry.file_id || version.logical_size != entry.size {
+                        return Err(invalid("entry version identity or size differs"));
+                    }
+                    commit_files.insert((entry.file_id, entry.version_id));
+                    Ok(true)
+                },
+            )?;
+            for (file, source_version) in &commit.pending_file_versions {
                 validate_id(file, "file")?;
-                validate_id(source, "ver")?;
+                validate_id(source_version, "ver")?;
                 let version = self
                     .versions
-                    .get(source)
+                    .get(source_version)
                     .ok_or_else(|| invalid("pending snapshot source version is missing"))?;
                 if version.file_id != *file
                     || version.history_tree_id != *history
-                    || !commit.entries.iter().any(|entry| {
-                        entry.kind == NamespaceEntryKind::File
-                            && entry.file_id == *file
-                            && entry.version_id == *source
-                    })
+                    || !commit_files.contains(&(file.clone(), source_version.clone()))
                 {
                     return Err(invalid(
                         "pending snapshot source escapes its file or entries",
@@ -958,19 +988,35 @@ impl HistoryManifest {
             {
                 return Err(invalid("branch has an external live commit reference"));
             }
-            if let Some(file) = branch.file_id.as_deref() {
+            // One head enumeration serves every per-branch namespace check;
+            // branches without such checks never expand their head.
+            let head_files = if branch.file_id.is_some()
+                || branch.file_node_id.is_some()
+                || !branch.pending_file_versions.is_empty()
+            {
                 let head = &self.commits[&branch.head_commit_id];
+                let mut files = Vec::new();
+                crate::namespace::NamespaceView::new(&head.namespace, source).walk(
+                    |_, entry| {
+                        if let storage_contract::NamespacePageEntry::File {
+                            file_id,
+                            version_id,
+                            ..
+                        } = entry
+                        {
+                            files.push((file_id.clone(), version_id.clone()));
+                        }
+                        Ok(true)
+                    },
+                )?;
+                files
+            } else {
+                Vec::new()
+            };
+            if let Some(file) = branch.file_id.as_deref() {
                 if branch.branch_kind != BranchKind::File
-                    || head
-                        .entries
-                        .iter()
-                        .filter(|e| e.kind == NamespaceEntryKind::File)
-                        .count()
-                        != 1
-                    || !head
-                        .entries
-                        .iter()
-                        .any(|e| e.kind == NamespaceEntryKind::File && e.file_id == file)
+                    || head_files.len() != 1
+                    || !head_files.iter().any(|(id, _)| id == file)
                 {
                     return Err(invalid("file branch head escapes its stable file identity"));
                 }
@@ -978,35 +1024,26 @@ impl HistoryManifest {
             if let Some(node) = &branch.file_node_id {
                 let body = self.file_node_version(node)?;
                 if branch.file_id.as_deref() != Some(body.file_id.as_str())
-                    || !self.commits[&branch.head_commit_id]
-                        .entries
+                    || !head_files
                         .iter()
-                        .any(|entry| {
-                            entry.kind == NamespaceEntryKind::File
-                                && entry.version_id == body.version_id
-                        })
+                        .any(|(_, version)| *version == body.version_id)
                 {
                     return Err(invalid("file branch node differs from its HEAD content"));
                 }
             }
-            for (file, source) in &branch.pending_file_versions {
+            for (file, source_version) in &branch.pending_file_versions {
                 validate_id(file, "file")?;
-                validate_id(source, "ver")?;
+                validate_id(source_version, "ver")?;
                 let version = self
                     .versions
-                    .get(source)
+                    .get(source_version)
                     .ok_or_else(|| invalid("pending branch source version is missing"))?;
                 if version.file_id != *file
                     || version.history_tree_id != *history
                     || branch.file_id.as_ref().is_some_and(|id| id != file)
-                    || !self.commits[&branch.head_commit_id]
-                        .entries
+                    || !head_files
                         .iter()
-                        .any(|entry| {
-                            entry.kind == NamespaceEntryKind::File
-                                && entry.file_id == *file
-                                && entry.version_id == *source
-                        })
+                        .any(|(id, version)| id == file && version == source_version)
                 {
                     return Err(invalid(
                         "pending branch source escapes its file or HEAD snapshot",
@@ -1083,7 +1120,7 @@ impl HistoryManifest {
             snapshot.file_contexts = tree.file_contexts.clone();
             snapshot.inherited_files = tree.inherited_files.clone();
             snapshot.directory_refs = tree.directory_refs.clone();
-            self.validate_directory_snapshot(&snapshot)?;
+            self.validate_directory_snapshot(&snapshot, source)?;
             if let Some(parent) = &tree.parent_tree_id {
                 let previous = self
                     .directory_trees
@@ -1143,7 +1180,7 @@ impl HistoryManifest {
                     ));
                 }
             } else {
-                self.validate_directory_snapshot(branch)?;
+                self.validate_directory_snapshot(branch, source)?;
                 if branch.sequence < head.sequence {
                     return Err(invalid(
                         "directory branch registration precedes its inherited tree",
@@ -1198,17 +1235,23 @@ impl HistoryManifest {
                 ));
             }
         }
-        let directory_ids = self
-            .commits
-            .values()
-            .flat_map(|commit| {
-                commit
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
-                    .map(|entry| entry.entry_id.as_str())
-            })
-            .collect::<BTreeSet<_>>();
+        let directory_ids = {
+            let mut ids = BTreeSet::new();
+            for commit in self.commits.values() {
+                crate::namespace::NamespaceView::new(&commit.namespace, source).walk(
+                    |_, entry| {
+                        if let storage_contract::NamespacePageEntry::Directory {
+                            entry_id, ..
+                        } = entry
+                        {
+                            ids.insert(entry_id.clone());
+                        }
+                        Ok(true)
+                    },
+                )?;
+            }
+            ids
+        };
         for directory in self.directory_selection_generations.keys() {
             if directory == &self.repository.repository_id {
                 continue;
@@ -1241,10 +1284,9 @@ impl HistoryManifest {
                 .strip_prefix(&prefix)
                 .ok_or_else(|| invalid("file path context escapes its repository"))?;
             name_policy::validate_path(path)?;
-            let entry = live
-                .entries
-                .iter()
-                .find(|entry| entry.kind == NamespaceEntryKind::File && entry.lookup_key() == path)
+            let entry = crate::namespace::NamespaceView::new(&live.namespace, source)
+                .resolve_key(path)?
+                .filter(|entry| entry.kind == NamespaceEntryKind::File)
                 .ok_or_else(|| invalid("current file path context has no namespace entry"))?;
             self.validate_file_context(context, &entry.file_id, &entry.version_id)?;
         }
@@ -1420,14 +1462,7 @@ impl HistoryManifest {
                     .is_some_and(|file| !file_ids.contains(file.as_str()))
                 || policy.scope_directory_id.as_ref().is_some_and(|directory| {
                     directory != &self.repository.repository_id
-                        && !self
-                            .commits
-                            .values()
-                            .flat_map(|commit| &commit.entries)
-                            .any(|entry| {
-                                entry.kind == NamespaceEntryKind::Directory
-                                    && entry.entry_id == *directory
-                            })
+                        && !directory_ids.contains(directory.as_str())
                 })
             {
                 return Err(invalid("backup policy scope or count differs"));
@@ -1440,5 +1475,29 @@ impl HistoryManifest {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl HistoryManifest {
+    /// Test fixture: project one history of an engine-backed state, resolving
+    /// commit namespaces through that engine's published members.
+    pub(crate) fn fixture_from_state(
+        engine: &crate::engine::Engine,
+        state: &State,
+        history_id: &str,
+    ) -> Result<Self> {
+        engine.with_namespace_source(|source| Self::from_state(state, history_id, source))
+    }
+    /// Test fixture: validate against the engine's published members plus any
+    /// locally built namespace objects a test attached to synthetic commits.
+    pub(crate) fn fixture_validate(
+        &self,
+        engine: &crate::engine::Engine,
+        extra: &crate::namespace::NamespaceObjects,
+    ) -> Result<()> {
+        engine.with_namespace_source(|base| {
+            self.validate(&crate::namespace::DraftSource { fresh: extra, base })
+        })
     }
 }

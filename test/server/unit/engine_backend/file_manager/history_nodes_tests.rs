@@ -79,6 +79,7 @@ fn file_history_matches_preprojection_graph_json() {
     let branch = engine
         .file_context(&repo.repository_id, "before.txt")
         .unwrap()
+        .unwrap()
         .branch_id;
     let tagged = engine
         .update_file_node_tags(FileNodeTagsUpdateRequest {
@@ -114,6 +115,7 @@ fn file_history_matches_preprojection_graph_json() {
         .unwrap();
     let renamed = engine
         .file_context(&repo.repository_id, "after.txt")
+        .unwrap()
         .unwrap()
         .node_id
         .unwrap();

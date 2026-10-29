@@ -1,4 +1,7 @@
 //! Immutable commit comparison without copied entry payloads or wire values.
+//! Commits no longer embed their entry lists; callers materialize each side
+//! from its paged namespace root (full comparison is whole-namespace by
+//! definition) and this type owns the compared records.
 use crate::{Commit, Entry};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -6,6 +9,8 @@ use std::{collections::BTreeMap, sync::Arc};
 pub struct CommitComparison {
     left: Arc<Commit>,
     right: Arc<Commit>,
+    left_entries: Vec<Entry>,
+    right_entries: Vec<Entry>,
     changes: Vec<ChangeIndex>,
 }
 #[derive(Debug)]
@@ -22,8 +27,14 @@ pub enum CommitChange<'a> {
 }
 impl CommitComparison {
     /// Compare cached path keys and version/display identities in entry order.
-    /// Handles keep the exact compared records alive independently of their owner.
-    pub fn between(left: Arc<Commit>, right: Arc<Commit>) -> Self {
+    /// The entry lists are each commit's complete materialized namespace; the
+    /// comparison owns the exact compared records.
+    pub fn between(
+        left: Arc<Commit>,
+        left_entries: Vec<Entry>,
+        right: Arc<Commit>,
+        right_entries: Vec<Entry>,
+    ) -> Self {
         let changes = {
             fn index(entries: &[Entry]) -> BTreeMap<&str, usize> {
                 entries
@@ -32,23 +43,23 @@ impl CommitComparison {
                     .map(|(index, entry)| (entry.lookup_key(), index))
                     .collect()
             }
-            let left_entries = index(&left.entries);
-            let right_entries = index(&right.entries);
+            let left_index = index(&left_entries);
+            let right_index = index(&right_entries);
             let mut changes = Vec::new();
-            for (before, entry) in left.entries.iter().enumerate() {
-                match right_entries.get(entry.lookup_key()) {
+            for (before, entry) in left_entries.iter().enumerate() {
+                match right_index.get(entry.lookup_key()) {
                     None => changes.push(ChangeIndex::Removed(before)),
                     Some(&after)
-                        if entry.version_id != right.entries[after].version_id
-                            || entry.path() != right.entries[after].path() =>
+                        if entry.version_id != right_entries[after].version_id
+                            || entry.path() != right_entries[after].path() =>
                     {
                         changes.push(ChangeIndex::Modified { before, after });
                     }
                     _ => {}
                 }
             }
-            for (after, entry) in right.entries.iter().enumerate() {
-                if !left_entries.contains_key(entry.lookup_key()) {
+            for (after, entry) in right_entries.iter().enumerate() {
+                if !left_index.contains_key(entry.lookup_key()) {
                     changes.push(ChangeIndex::Added(after));
                 }
             }
@@ -57,6 +68,8 @@ impl CommitComparison {
         Self {
             left,
             right,
+            left_entries,
+            right_entries,
             changes,
         }
     }
@@ -70,14 +83,14 @@ impl CommitComparison {
     pub fn changes(&self) -> impl DoubleEndedIterator<Item = CommitChange<'_>> + ExactSizeIterator {
         self.changes.iter().map(|change| match *change {
             ChangeIndex::Removed(before) => CommitChange::Removed {
-                before: &self.left.entries[before],
+                before: &self.left_entries[before],
             },
             ChangeIndex::Modified { before, after } => CommitChange::Modified {
-                before: &self.left.entries[before],
-                after: &self.right.entries[after],
+                before: &self.left_entries[before],
+                after: &self.right_entries[after],
             },
             ChangeIndex::Added(after) => CommitChange::Added {
-                after: &self.right.entries[after],
+                after: &self.right_entries[after],
             },
         })
     }

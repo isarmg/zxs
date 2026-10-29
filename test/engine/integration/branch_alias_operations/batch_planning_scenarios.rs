@@ -73,10 +73,12 @@ fn frozen_batch_swap_preserves_identities_contexts_and_retry_receipt() {
     let a_context = pool
         .engine
         .file_context(&pool.repo.repository_id, "a.txt")
+        .unwrap()
         .unwrap();
     let b_context = pool
         .engine
         .file_context(&pool.repo.repository_id, "b.txt")
+        .unwrap()
         .unwrap();
     let request = DirectoryNamespaceBatch {
         kind: storage_contract::DirectoryBatchKind::Rename,
@@ -108,12 +110,14 @@ fn frozen_batch_swap_preserves_identities_contexts_and_retry_receipt() {
         pool.engine
             .file_context(&pool.repo.repository_id, "b.txt")
             .unwrap()
+            .unwrap()
             .branch_id,
         a_context.branch_id
     );
     assert_eq!(
         pool.engine
             .file_context(&pool.repo.repository_id, "a.txt")
+            .unwrap()
             .unwrap()
             .branch_id,
         b_context.branch_id

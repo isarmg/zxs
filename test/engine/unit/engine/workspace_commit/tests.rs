@@ -167,7 +167,9 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
             .unwrap();
         commits.push(result.commit_id.unwrap());
     }
-    let old_version = engine.state.commits[&commits[0]].entries[0]
+    let old_version = engine
+        .namespace_entries(&engine.state.commits[&commits[0]].namespace)
+        .unwrap()[0]
         .version_id
         .clone();
     let options = HistoricalSaveOptions {
@@ -246,8 +248,19 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
         canonical_json(before_publish.as_ref()).unwrap(),
         before_publish_bytes
     );
-    assert!(!before_publish.operations.contains_key(&result.operation_id));
-    assert_eq!(engine.state.operations[&result.operation_id], result);
+    assert!(
+        before_publish
+            .operations
+            .tail_record(result.operation_id)
+            .is_none()
+    );
+    assert_eq!(
+        engine
+            .published_receipt(result.operation_id)
+            .unwrap()
+            .unwrap(),
+        result
+    );
     assert_eq!(canonical_json(frozen.as_ref()).unwrap(), frozen_bytes);
     assert_eq!(
         canonical_json(with_purge.as_ref()).unwrap(),
@@ -353,7 +366,12 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     );
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert!(Arc::ptr_eq(&frozen, &engine.state));
-    assert!(!engine.state.operations.contains_key(&failed_operation));
+    assert!(
+        engine
+            .published_receipt(failed_operation)
+            .unwrap()
+            .is_none()
+    );
 
     let operation = storage_contract::OperationId::generate();
     let planned = engine
@@ -382,13 +400,13 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
         "private candidate"
     );
     assert!(!next.versions.contains_key("candidate-only-version"));
-    assert!(next.operations.contains_key(&operation));
+    assert!(next.operations.tail_record(operation).is_some());
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     drop(next); // A successful plan is not a publication; cancellation discards it.
     assert_eq!(canonical_json(frozen.as_ref()).unwrap(), before);
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
     assert!(Arc::ptr_eq(&frozen, &engine.state));
-    assert!(!engine.state.operations.contains_key(&operation));
+    assert!(engine.published_receipt(operation).unwrap().is_none());
     assert!(!engine.is_read_only());
 }
 
@@ -432,7 +450,7 @@ fn plan_failed_change_can_abandon_a_temporarily_missing_main_head() {
     );
     assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert_eq!(canonical_json(engine.state()).unwrap(), before);
-    assert!(!engine.state.operations.contains_key(&operation));
+    assert!(engine.published_receipt(operation).unwrap().is_none());
     assert!(!engine.is_read_only());
 }
 
@@ -617,9 +635,14 @@ fn public_preparation_fences_registration_and_finish_rechecks_live_receipt() {
         if change == "actor" {
             // Simulate a conflicting actor receipt after capture, without adding
             // any production hook or pretending another actor owns this workspace.
-            Arc::make_mut(&mut engine.state)
-                .operation_principals
-                .insert(request.operation_id, "different-actor".into());
+            let state = Arc::make_mut(&mut engine.state);
+            let mut records = state.operations.tail().to_vec();
+            records
+                .iter_mut()
+                .find(|entry| entry.result.operation_id == request.operation_id)
+                .unwrap()
+                .principal = "different-actor".into();
+            state.operations = storage_contract::OperationLog::from_records(records).unwrap();
         }
         let sequence = engine.state.sequence;
         let result = engine.finish_workspace_commit(prepared);

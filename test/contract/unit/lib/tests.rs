@@ -69,7 +69,7 @@ fn persisted_workspace_requires_explicit_purpose_without_changing_current_bytes(
 fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
     for generation in [0, u64::MAX] {
         let bytes = format!(
-            r#"{{"branches":{{}},"business_generation":"{generation}","commits":{{}},"content_states":{{}},"control_auth":null,"events":[],"histories":{{}},"history_boundaries":{{}},"merge_links":{{}},"operation_principals":{{}},"operations":{{}},"placement_rules":{{}},"placements":{{}},"plans":{{}},"protection_policies":{{}},"repositories":{{}},"sequence":"0","topology_generation":"0","versions":{{}}}}"#
+            r#"{{"branches":{{}},"business_generation":"{generation}","commits":{{}},"content_states":{{}},"control_auth":null,"events":{{"sealed":[],"tail":[]}},"histories":{{}},"history_boundaries":{{}},"merge_links":{{}},"operations":{{"sealed":[],"tail":[]}},"placement_rules":{{}},"placements":{{}},"plans":{{}},"protection_policies":{{}},"repositories":{{}},"sequence":"0","topology_generation":"0","versions":{{}}}}"#
         );
         let state = State {
             business_generation: generation,
@@ -82,7 +82,8 @@ fn persisted_state_requires_nonsparse_fields_without_changing_current_bytes() {
             "history_boundaries",
             "placement_rules",
             "protection_policies",
-            "operation_principals",
+            "operations",
+            "events",
         ] {
             let mut missing = json_codec::to_value(&state).unwrap();
             assert!(missing.as_object_mut().unwrap().remove(field).is_some());

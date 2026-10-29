@@ -1,7 +1,6 @@
 //! Atomic branch-scoped namespace edits. All baselines are checked before any
 //! publication; named branches retain their identities and gain subtree nodes.
 use super::*;
-use crate::engine::Prepared;
 use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -165,6 +164,8 @@ fn save_inactive(
     operation: OperationId,
     maximum: usize,
     namespace_deletions: Option<NamespaceDeletions>,
+    source: &dyn crate::namespace::NamespaceSource,
+    fresh: &mut crate::namespace::NamespaceObjects,
 ) -> Result<()> {
     let previous = state
         .directory_branches
@@ -186,15 +187,16 @@ fn save_inactive(
         )
     })?;
     let key = name_policy::path_key(&branch.path);
-    entries.extend(
-        base.entries
-            .iter()
-            .filter(|e| {
-                e.kind == NamespaceEntryKind::Directory
-                    && (e.lookup_key() == key || namespace::is_descendant(&key, e.lookup_key()))
-            })
-            .cloned(),
-    );
+    if !key.is_empty() {
+        // Ancestor identities come from one point descent of the base commit;
+        // the frozen subtree itself is already materialized on the branch.
+        entries.extend(
+            crate::namespace::NamespaceView::new(&base.namespace, source)
+                .path_closure(&key)?
+                .into_iter()
+                .filter(|e| e.kind == NamespaceEntryKind::Directory),
+        );
+    }
     validate_entries(&mut entries, maximum)?;
     let commit_id = new_id("commit");
     let repo = state
@@ -219,7 +221,7 @@ fn save_inactive(
             operation_id: operation,
             author: principal.into(),
             message: "Branch-scoped namespace edit".into(),
-            entries,
+            namespace: crate::namespace::build_from_entries(&entries, fresh)?,
             pending_file_versions: BTreeMap::new(),
             provenance: None,
         },
@@ -255,7 +257,8 @@ fn save_inactive(
 fn apply(
     engine: &Engine,
     state: &mut State,
-    pending: &mut Vec<Prepared>,
+    scratch: &mut crate::engine::MutationScratch,
+    base: &dyn crate::namespace::NamespaceSource,
     repository: &str,
     request: &DirectoryNamespaceBatch,
     principal: &str,
@@ -343,6 +346,10 @@ fn apply(
                 "repository head missing",
             )
         })?;
+    // A batch replaces whole live subtrees, so the head materializes once at
+    // the operation's own O(total) cost; items then share this entry list.
+    let current_entries =
+        crate::namespace::NamespaceView::new(&current.namespace, base).collect_entries()?;
     let mut drafts = originals.clone();
     let mut touched = BTreeSet::new();
     let mut source_ranges = BTreeMap::<String, Vec<String>>::new();
@@ -507,10 +514,10 @@ fn apply(
     }
     for id in &touched {
         let mut full = projected.remove(id).expect("checked");
-        ensure_parents_for_scope(state, &drafts[id], &mut full)?;
+        ensure_parents_for_scope(state, &drafts[id], &mut full, base)?;
         validate_entries(&mut full, engine.config.max_entries)?;
     }
-    let active = active_scopes(state, &originals, &touched, repository, &current.entries)?;
+    let active = active_scopes(state, &originals, &touched, repository, &current_entries)?;
     let active_rename_changes = request
         .items
         .iter()
@@ -535,7 +542,7 @@ fn apply(
             {
                 return None;
             }
-            let entry = namespace::find_unordered_key(&current.entries, source_path.key())?;
+            let entry = namespace::find_unordered_key(&current_entries, source_path.key())?;
             if entry.entry_id != item.source.entry_id {
                 return None;
             }
@@ -548,8 +555,10 @@ fn apply(
     let renamed_directories = directory::prepare_independent_renamed_directories(
         state,
         repository,
-        &current.entries,
+        &current.namespace,
         &active_rename_changes,
+        base,
+        &mut scratch.namespace,
     )?;
     let baseline_heads = state
         .directory_branches
@@ -638,7 +647,7 @@ fn apply(
                             engine.new_file_placement(repository, moved.path())?;
                         let version = engine.build_copied_version(
                             state,
-                            pending,
+                            &mut scratch.payloads,
                             crate::business::VersionBuild {
                                 history: &repo.history_tree_id,
                                 file_id: &new_file,
@@ -680,11 +689,47 @@ fn apply(
                     // initializing this independent file belongs to this copy.
                     commit.operation_id = operation;
                     commit.author = principal.into();
-                    commit.entries = target_draft.entries.clone();
-                    commit.entries.push(moved.clone());
-                    ensure_parents_for_scope(state, target_draft, &mut commit.entries)?;
-                    validate_entries(&mut commit.entries, engine.config.max_entries)?;
-                    let branch = file::ensure_shared_file_branch(state, &commit, &moved)?;
+                    let mut combined = target_draft.entries.clone();
+                    combined.push(moved.clone());
+                    ensure_parents_for_scope(state, target_draft, &mut combined, base)?;
+                    validate_entries(&mut combined, engine.config.max_entries)?;
+                    // The file-branch root needs only the new file's ancestor
+                    // chain. Build that closure into a local object set; the
+                    // real root commit re-encodes it into the mutation's fresh
+                    // objects, so no throwaway pages reach the snapshot.
+                    let mut closure = Vec::new();
+                    let moved_key = moved.lookup_key();
+                    let mut consumed = 0usize;
+                    while let Some(split) = moved_key[consumed..].find('/') {
+                        let ancestor = &moved_key[..consumed + split];
+                        let dir = namespace::find_unordered_key(&combined, ancestor)
+                            .filter(|e| e.kind == NamespaceEntryKind::Directory)
+                            .cloned()
+                            .ok_or_else(|| {
+                                Error::new(
+                                    storage_contract::ErrorCode::DirectoryNotFound,
+                                    "destination parent missing",
+                                )
+                            })?;
+                        closure.push(dir);
+                        consumed += split + 1;
+                    }
+                    closure.push(moved.clone());
+                    let mut built = crate::namespace::NamespaceObjects::new();
+                    commit.namespace = crate::namespace::build_from_entries(&closure, &mut built)?;
+                    let branch = {
+                        let synthetic = crate::namespace::DraftSource {
+                            fresh: &built,
+                            base,
+                        };
+                        file::ensure_shared_file_branch(
+                            state,
+                            &commit,
+                            &moved,
+                            &synthetic,
+                            &mut scratch.namespace,
+                        )?
+                    };
                     target_draft.file_contexts.insert(
                         moved.lookup_key().to_owned(),
                         FileContext {
@@ -719,6 +764,8 @@ fn apply(
                         Some(context),
                         principal,
                         operation,
+                        base,
+                        &mut scratch.namespace,
                     )?
                 } else {
                     context
@@ -777,7 +824,7 @@ fn apply(
     for id in &touched {
         let draft = drafts.get_mut(id).expect("checked");
         let mut full = draft.entries.clone();
-        ensure_parents_for_scope(state, draft, &mut full)?;
+        ensure_parents_for_scope(state, draft, &mut full, base)?;
         validate_entries(&mut full, engine.config.max_entries)?;
         validate_identities(&draft.entries)?;
         sorted(&mut draft.entries);
@@ -794,7 +841,7 @@ fn apply(
         }
     }
     let previous = current;
-    let mut entries = previous.entries.clone();
+    let mut entries = current_entries.clone();
     let mut changed_paths = renamed_directories;
     let mut active_paths = BTreeMap::new();
     for id in &active {
@@ -875,7 +922,14 @@ fn apply(
         .collect::<Result<Vec<_>>>()?;
     let commit_id = if !active.is_empty() {
         let id = new_id("commit");
-        let pending = directory::snapshot_pending(state, &entries);
+        let namespace = crate::namespace::build_from_entries(&entries, &mut scratch.namespace)?;
+        let pending = {
+            let draft = crate::namespace::DraftSource {
+                fresh: &scratch.namespace,
+                base,
+            };
+            directory::snapshot_pending(state, &entries, &draft)?
+        };
         state.commits.insert(
             id.clone(),
             Commit {
@@ -893,7 +947,7 @@ fn apply(
                     request.kind.as_str(),
                     request.items.len()
                 ),
-                entries,
+                namespace,
                 pending_file_versions: pending,
                 provenance: None,
             },
@@ -924,9 +978,18 @@ fn apply(
                 inactive_deleted.remove(id).unwrap_or_default(),
                 deletion_timestamp,
             ),
+            base,
+            &mut scratch.namespace,
         )?;
     }
-    let ancestors = directory::record_directory_edits(state, repository, &changed_paths, None)?;
+    let ancestors = directory::record_directory_edits(
+        state,
+        repository,
+        &changed_paths,
+        None,
+        base,
+        &mut scratch.namespace,
+    )?;
     let mut affected = touched;
     affected.extend(ancestors);
     let changes=affected.iter().map(|id| {let b=&state.directory_branches[id];json!({"directory_branch_id":id,"previous_tree_id":baseline_heads.get(id),"head_tree_id":b.head_tree_id,"path":b.path})}).collect::<Vec<_>>();
@@ -942,25 +1005,25 @@ fn ensure_parents_for_scope(
     state: &State,
     branch: &DirectoryBranch,
     entries: &mut Vec<Entry>,
+    source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<()> {
     let key = name_policy::path_key(&branch.path);
+    if key.is_empty() {
+        return Ok(());
+    }
+    let commit = state.commits.get(&branch.commit_id).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "directory branch commit missing",
+        )
+    })?;
+    // The scope's ancestor chain is exactly the path closure of its key: one
+    // point descent per component, never a full expansion of the base commit.
     entries.extend(
-        state
-            .commits
-            .get(&branch.commit_id)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::StateInvalid,
-                    "directory branch commit missing",
-                )
-            })?
-            .entries
-            .iter()
-            .filter(|e| {
-                e.kind == NamespaceEntryKind::Directory
-                    && (e.lookup_key() == key || namespace::is_descendant(&key, e.lookup_key()))
-            })
-            .cloned(),
+        crate::namespace::NamespaceView::new(&commit.namespace, source)
+            .path_closure(&key)?
+            .into_iter()
+            .filter(|e| e.kind == NamespaceEntryKind::Directory),
     );
     Ok(())
 }
@@ -977,10 +1040,12 @@ impl Engine {
             principal,
             operation,
             json!({"repository_id":repository,"request":request}),
-            |engine, state, pending| {
-                apply(
-                    engine, state, pending, repository, request, principal, operation,
-                )
+            |engine, state, scratch| {
+                engine.with_namespace_source(|base| {
+                    apply(
+                        engine, state, scratch, base, repository, request, principal, operation,
+                    )
+                })
             },
         )
     }

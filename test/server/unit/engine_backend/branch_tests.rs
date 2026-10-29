@@ -18,6 +18,9 @@ fn old_content_wire(state: &State, visible: Option<&str>, source: Option<&str>) 
 fn old_branch_wire(
     state: &State,
     branch: &storage_contract::Branch,
+    // The head commit's visible version for the branch file, exactly what the
+    // old oracle found by scanning the head's embedded entry list.
+    head_visible: Option<&str>,
 ) -> Result<Value, json_codec::Error> {
     let mut result = json_codec::to_value(branch)?;
     let snapshot = state
@@ -44,11 +47,7 @@ fn old_branch_wire(
             .get(&branch.branch_id)
             .cloned()
             .into();
-        let visible = snapshot
-            .entries
-            .iter()
-            .find(|entry| entry.file_id == file)
-            .map(|entry| entry.version_id.as_str());
+        let visible = head_visible;
         result["node_id"] = branch
             .file_node_id
             .clone()
@@ -81,9 +80,14 @@ fn branch_projection_matches_fixed_legacy_shapes_and_pending_precedence() {
             storage_contract::OperationId::generate(),
         )
         .unwrap();
+    // Later iterations replace the engine state; mutate pristine copies only.
+    let baseline = engine.state().clone();
     for file in [false, true] {
         for source in [None, Some("source"), Some("")] {
-            for visible in [None, Some("visible"), Some("")] {
+            // An empty visible version id is unrepresentable in the paged
+            // canonical namespace wire: a published file entry always binds a
+            // non-empty version, so only absence and a real version remain.
+            for visible in [None, Some("visible")] {
                 for disposition in [
                     None,
                     Some(storage_contract::ContentState::Available),
@@ -97,7 +101,7 @@ fn branch_projection_matches_fixed_legacy_shapes_and_pending_precedence() {
                         (BranchState::Migrated, false, None),
                         (BranchState::Merged, true, Some("merged-node")),
                     ] {
-                        let mut state = engine.state().clone();
+                        let mut state = baseline.clone();
                         let mut branch = state.branches[&repo.main_branch_id].clone();
                         branch.generation = u64::MAX;
                         branch.state = status;
@@ -123,21 +127,26 @@ fn branch_projection_matches_fixed_legacy_shapes_and_pending_precedence() {
                                 .insert("file".into(), "head-source".into());
                         }
                         if let Some(visible) = visible {
-                            head.entries.push(storage_contract::Entry {
-                                entry_id: "entry".into(),
-                                path: name_policy::PortablePath::parse("file.txt").unwrap(),
-                                kind: storage_contract::NamespaceEntryKind::File,
-                                file_id: "file".into(),
-                                version_id: visible.into(),
-                                size: 7,
-                            });
+                            head.namespace = storage_engine::test_support::plant_namespace(
+                                &engine,
+                                &[storage_contract::Entry {
+                                    entry_id: "entry".into(),
+                                    path: name_policy::PortablePath::parse("file.txt").unwrap(),
+                                    kind: storage_contract::NamespaceEntryKind::File,
+                                    file_id: "file".into(),
+                                    version_id: visible.into(),
+                                    size: 7,
+                                }],
+                            )
+                            .unwrap();
                         }
                         if let Some(disposition) = disposition {
                             state.content_states.insert("source".into(), disposition);
                             state.content_states.insert("visible".into(), disposition);
                         }
-                        let expected = old_branch_wire(&state, &branch).unwrap();
-                        let snapshot = capture(&state, &branch);
+                        let expected = old_branch_wire(&state, &branch, visible).unwrap();
+                        storage_engine::test_support::replace_state(&mut engine, state.clone());
+                        let snapshot = capture(&engine, &branch).unwrap();
                         let actual = json_codec::to_value(BranchResponse::from(snapshot)).unwrap();
                         assert_eq!(
                             actual, expected,
@@ -154,7 +163,7 @@ fn branch_projection_matches_fixed_legacy_shapes_and_pending_precedence() {
 }
 
 fn shared_branch_inputs() -> (State, Branch) {
-    use storage_contract::{BranchKind, Commit, ContentState, Entry, NamespaceEntryKind};
+    use storage_contract::{BranchKind, Commit, ContentState};
     let mut state = State::default();
     state.commits.insert(
         "head".into(),
@@ -168,14 +177,9 @@ fn shared_branch_inputs() -> (State, Branch) {
             operation_id: "op_00000000000000000000000000000001".parse().unwrap(),
             author: "owner".into(),
             message: String::new(),
-            entries: vec![Entry {
-                entry_id: "entry".into(),
-                path: name_policy::PortablePath::parse("file.txt").unwrap(),
-                kind: NamespaceEntryKind::File,
-                file_id: "file".into(),
-                version_id: "body".into(),
-                size: 7,
-            }],
+            // Placeholder; wire fixtures that read through the namespace plant
+            // the real root before capturing.
+            namespace: crate::fixture_commit_namespace(1),
             namespace_deletions: None,
             pending_file_versions: Default::default(),
             provenance: None,
@@ -245,9 +249,29 @@ fn shared_history_wire(case: &str) -> Value {
     let branches = if matches!(case, "no-selection" | "full-selection") {
         vec![]
     } else {
+        let root = crate::tests::private_tempdir();
+        let mut engine = storage_engine::Engine::initialize(
+            &root.path().join("system"),
+            storage_contract::Config::development([root.path().join("disk")]),
+        )
+        .unwrap();
+        state.commits.get_mut("head").unwrap().namespace =
+            storage_engine::test_support::plant_namespace(
+                &engine,
+                &[storage_contract::Entry {
+                    entry_id: "entry".into(),
+                    path: name_policy::PortablePath::parse("file.txt").unwrap(),
+                    kind: storage_contract::NamespaceEntryKind::File,
+                    file_id: "file".into(),
+                    version_id: "body".into(),
+                    size: 7,
+                }],
+            )
+            .unwrap();
+        storage_engine::test_support::replace_state(&mut engine, state.clone());
         vec![HistoryBranch {
             current: selected == Some(branch.branch_id.as_str()),
-            branch: capture(&state, &branch),
+            branch: capture(&engine, &branch).unwrap(),
         }]
     };
     json_codec::to_value(FileHistoryResponse::from(FileHistorySnapshot {

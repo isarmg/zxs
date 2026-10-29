@@ -5,7 +5,7 @@
 use crate::{Result, State};
 use json_codec::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use storage_contract::{ContentState, MapChanges, NamespaceEntryKind, SharedRecords};
+use storage_contract::{ContentState, MapChanges, SharedRecords};
 mod files;
 pub(crate) use files::FileRows;
 
@@ -75,7 +75,7 @@ macro_rules! define_fields {
             fn between(before: &State, after: &State) -> Option<Self> {
                 let State {
                     sequence: _, business_generation: _, topology_generation: _,
-                    control_auth: _, events: _, operations: _, operation_principals: _, plans: _,
+                    control_auth: _, events: _, operations: _, plans: _,
                     histories: _, repositories: _, $($field: _,)*
                 } = after;
                 let mut writes = Self {
@@ -450,18 +450,19 @@ impl<'a> ProjectionTransition<'a> {
         before: &'a State,
         after: &'a State,
         baseline: Option<&'a DerivedOwners>,
+        source: &dyn crate::namespace::NamespaceSource,
     ) -> Result<Self> {
         let previous = match baseline {
             Some(index) => std::borrow::Cow::Borrowed(index),
-            None => std::borrow::Cow::Owned(DerivedOwners::from_state(before)),
+            None => std::borrow::Cow::Owned(DerivedOwners::from_state(before, source)?),
         };
         let delta = match baseline {
-            Some(index) => ProjectionDelta::between(before, after, index)?,
+            Some(index) => ProjectionDelta::between(before, after, index, source)?,
             None => None,
         };
         let (next, history_edits) = match delta {
             Some(delta) => (delta.owners, Some(delta.histories)),
-            None => (DerivedOwners::from_state(after), None),
+            None => (DerivedOwners::from_state(after, source)?, None),
         };
         Ok(Self {
             before,
@@ -496,7 +497,10 @@ impl<'a> ProjectionTransition<'a> {
 }
 
 impl DerivedOwners {
-    pub(crate) fn from_state(state: &State) -> Self {
+    pub(crate) fn from_state(
+        state: &State,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> crate::Result<Self> {
         let mut index = Self::default();
         for history in state.histories.values() {
             index
@@ -511,8 +515,19 @@ impl DerivedOwners {
                 .files
                 .add(&version.file_id, &version.history_tree_id, key);
         }
+        // Stream every commit's directory references through the paged
+        // namespace; object reads share the bounded cache, and the full
+        // enumeration stays confined to this rebuild-from-scratch entry.
         for commit in state.commits.values() {
-            index.commit_directories(commit, true);
+            crate::namespace::directory_reference_deltas(
+                None,
+                Some((&commit.namespace, &commit.history_tree_id)),
+                source,
+                &mut |entry_id, history, _| {
+                    index.directories.add(entry_id, history);
+                    Ok(())
+                },
+            )?;
         }
         for (key, branch) in state.file_selections.iter() {
             index.selected_files.add(branch, key);
@@ -539,7 +554,7 @@ impl DerivedOwners {
             });
         }
         index.build_file_rows(state);
-        index
+        Ok(index)
     }
     pub(super) fn rows(&self, history: &str) -> Option<&Rows> {
         self.history_rows.get(history)
@@ -562,19 +577,6 @@ impl DerivedOwners {
             rows.remove(field, key);
             if rows.0.is_empty() {
                 self.history_rows.remove_discard(history);
-            }
-        }
-    }
-    fn commit_directories(&mut self, commit: &storage_contract::Commit, add: bool) {
-        for entry in &commit.entries {
-            if entry.kind == NamespaceEntryKind::Directory {
-                if add {
-                    self.directories
-                        .add(&entry.entry_id, &commit.history_tree_id);
-                } else {
-                    self.directories
-                        .remove(&entry.entry_id, &commit.history_tree_id);
-                }
             }
         }
     }
@@ -632,13 +634,14 @@ impl ProjectionDelta {
         before: &State,
         after: &State,
         index: &DerivedOwners,
+        source: &dyn crate::namespace::NamespaceSource,
     ) -> Result<Option<Self>> {
         let Some(writes) = Writes::between(before, after) else {
             return Ok(None);
         };
         let mut affected = writes.clone();
         let mut owners = index.clone();
-        owners.update_dependencies(before, after, &writes, &mut affected);
+        owners.update_dependencies(before, after, &writes, &mut affected, source)?;
         owners.update_file_rows(before, after, index, &writes);
         let mut histories = BTreeMap::<String, HistoryEdits>::new();
         for key in &writes.histories {
@@ -781,20 +784,6 @@ fn change_reference(index: &mut References, key: &str, previous: Option<&str>, n
     }
 }
 
-fn commit_references(commit: Option<&storage_contract::Commit>) -> BTreeMap<(&str, &str), usize> {
-    let mut references = BTreeMap::new();
-    if let Some(commit) = commit {
-        for entry in &commit.entries {
-            if entry.kind == NamespaceEntryKind::Directory {
-                *references
-                    .entry((entry.entry_id.as_str(), commit.history_tree_id.as_str()))
-                    .or_default() += 1;
-            }
-        }
-    }
-    references
-}
-
 impl DerivedOwners {
     fn update_dependencies(
         &mut self,
@@ -802,7 +791,8 @@ impl DerivedOwners {
         after: &State,
         writes: &Writes,
         affected: &mut Writes,
-    ) {
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> crate::Result<()> {
         for key in &writes.histories {
             let previous = before.histories.get(key).map(|h| h.repository_id.as_str());
             let next = after.histories.get(key).map(|h| h.repository_id.as_str());
@@ -851,21 +841,36 @@ impl DerivedOwners {
             if before.commits.get(key) == after.commits.get(key) {
                 continue;
             }
-            let previous = commit_references(before.commits.get(key));
-            let next = commit_references(after.commits.get(key));
-            for (&(directory, history), &count) in &previous {
-                let retained = next.get(&(directory, history)).copied().unwrap_or(0);
-                for _ in retained..count {
-                    if self.directories.remove(directory, history) {
-                        affected.directory(directory);
-                    }
-                }
-            }
-            for (&(directory, history), &count) in &next {
-                let retained = previous.get(&(directory, history)).copied().unwrap_or(0);
-                for _ in retained..count {
-                    if self.directories.add(directory, history) {
-                        affected.directory(directory);
+            // Net reference deltas from the reference-pruned namespace diff:
+            // shared subtrees contribute identically on both sides and are
+            // never read, so an edit costs its changed paths only.
+            let mut deltas = BTreeMap::<(String, String), i64>::new();
+            crate::namespace::directory_reference_deltas(
+                before
+                    .commits
+                    .get(key)
+                    .map(|commit| (&commit.namespace, commit.history_tree_id.as_str())),
+                after
+                    .commits
+                    .get(key)
+                    .map(|commit| (&commit.namespace, commit.history_tree_id.as_str())),
+                source,
+                &mut |entry_id, history, delta| {
+                    *deltas
+                        .entry((entry_id.to_owned(), history.to_owned()))
+                        .or_default() += delta;
+                    Ok(())
+                },
+            )?;
+            for ((directory, history), net) in deltas {
+                for _ in 0..net.unsigned_abs() {
+                    let changed = if net < 0 {
+                        self.directories.remove(&directory, &history)
+                    } else {
+                        self.directories.add(&directory, &history)
+                    };
+                    if changed {
+                        affected.directory(&directory);
                     }
                 }
             }
@@ -914,6 +919,7 @@ impl DerivedOwners {
                 self.repository_row(after, field, key, true);
             }
         }
+        Ok(())
     }
 }
 

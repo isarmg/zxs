@@ -145,20 +145,20 @@ fn narrow_authorization_borrows_metadata_without_tree_projection_and_keeps_paylo
     crate::TreeSnapshot::capture(&engine, crate::tests::tree_request(&input)).unwrap();
     assert_eq!(TREE_PROJECTION_WORK.with(|work| work.get()), (1, 1));
     for count in [0, 1, 100, 1_000, 10_000] {
+        let (mut snapshot, _) = synthetic_commit(&mut engine, &repo, count);
         let mut state = engine.state().clone();
         let head = state.branches[&repo.main_branch_id].head_commit_id.clone();
-        let mut snapshot = synthetic_commit(&engine, &repo, count);
         snapshot.commit_id = head.clone();
         state.commits.insert(head.clone(), snapshot);
         let (_, borrowed) = branch_snapshot(&state, &repo.main_branch_id, None).unwrap();
         assert!(std::ptr::eq(borrowed, &state.commits[&head]));
-        assert_eq!(borrowed.entries.len(), count);
+        assert_eq!(borrowed.namespace.entries as usize, count);
         TREE_PROJECTION_WORK.with(|work| work.set((0, 0)));
         for _ in 0..32 {
             authorize_current(&state, &repo.main_branch_id).unwrap();
         }
         assert_eq!(TREE_PROJECTION_WORK.with(|work| work.get()), (0, 0));
-        assert_eq!(state.commits[&head].entries.len(), count);
+        assert_eq!(state.commits[&head].namespace.entries as usize, count);
     }
 }
 

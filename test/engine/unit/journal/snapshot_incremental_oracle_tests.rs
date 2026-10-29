@@ -14,11 +14,11 @@ const REQUIRED_FIELDS: &[&str] = &[
     "merge_links",
     "history_boundaries",
     "content_states",
-    "operations",
+    "operation_log",
+    "operation_locators",
     "plans",
     "placement_rules",
     "protection_policies",
-    "operation_principals",
 ];
 const OPTIONAL_FIELDS: &[&str] = &[
     "file_selections",
@@ -55,11 +55,9 @@ macro_rules! every_tracked_field {
         $apply!(merge_links);
         $apply!(history_boundaries);
         $apply!(content_states);
-        $apply!(operations);
         $apply!(plans);
         $apply!(placement_rules);
         $apply!(protection_policies);
-        $apply!(operation_principals);
         $apply!(file_selections);
         $apply!(directory_branches);
         $apply!(directory_trees);
@@ -164,8 +162,14 @@ fn populated_state() -> State {
     let encoded = json_codec::to_value(&state).unwrap();
     assert_eq!(REQUIRED_FIELDS.len() + OPTIONAL_FIELDS.len(), 35);
     for field in REQUIRED_FIELDS.iter().chain(OPTIONAL_FIELDS) {
+        // The two receipt-log directories encode from the typed log, not from
+        // a serialized State map; their population is checked on the log.
+        if matches!(*field, "operation_log" | "operation_locators") {
+            continue;
+        }
         assert!(!encoded[*field].as_object().unwrap().is_empty(), "{field}");
     }
+    assert!(!state.operations.is_empty() && !state.events.is_empty());
     state
 }
 
@@ -181,6 +185,9 @@ fn raw_hash(kind: &str, bytes: &[u8]) -> String {
 }
 
 fn assert_complete_byte_oracle(actual: &PreparedSnapshot, state: &State, members: &[DiskConfig]) {
+    if !state.commits.is_empty() {
+        plant_fixture_namespaces(members);
+    }
     let reference = prepare_snapshot_reference(state, MAX_METADATA).unwrap();
     let full = prepare_snapshot(state, MAX_METADATA).unwrap();
     assert_eq!(actual.hash, reference.hash);
@@ -260,7 +267,19 @@ fn incremental_oracle_fixture_covers_every_tracked_field_and_current_wire_catego
     assert_complete_byte_oracle(&empty, &empty_state, &config.disks);
 }
 
+/// Snapshot stores verify each commit's namespace closure on the member set,
+/// exactly as publication leaves it; plant the fixture's recorded namespaces
+/// so oracle stores onto fresh disks meet the same precondition.
+fn plant_fixture_namespaces(members: &[DiskConfig]) {
+    for entries in fixture()["commit_namespaces"].as_object().unwrap().values() {
+        let entries: Vec<storage_contract::Entry> =
+            json_codec::from_value(entries.clone()).unwrap();
+        crate::namespace::fixture_store::namespace_stored(&entries, members);
+    }
+}
+
 fn baseline(state: &State, members: &[DiskConfig]) -> SnapshotReuse {
+    plant_fixture_namespaces(members);
     let snapshot = prepare_snapshot(state, MAX_METADATA).unwrap();
     snapshot.store(members, state).unwrap();
     snapshot.reuse_basis()
@@ -273,7 +292,14 @@ fn incremental(
     members: &[DiskConfig],
 ) -> (PreparedSnapshot, BTreeMap<String, usize>) {
     snapshot::take_encoding_counts();
-    let actual = prepare_snapshot_incremental(before, after, basis, MAX_METADATA).unwrap();
+    let actual = prepare_snapshot_incremental(
+        before,
+        after,
+        basis,
+        MAX_METADATA,
+        &mut crate::journal::test_reused_loader(members),
+    )
+    .unwrap();
     actual.store(members, after).unwrap();
     let counts = snapshot::take_encoding_counts();
     (actual, counts)
@@ -356,12 +382,15 @@ fn incremental_snapshot_unchanged_maps_have_zero_record_serialization_with_all_a
         after.business_generation = u64::MAX - 1;
         after.topology_generation = u64::MAX - 2;
         after.control_auth = auth;
-        after.events.push(Event {
-            sequence: u64::MAX,
-            operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
-            kind: "MUTATION".into(),
-            object_id: "\u{10000}".into(),
-        });
+        after
+            .events
+            .push(Event {
+                sequence: u64::MAX,
+                operation_id: "op_00000000000000000000000000000000".parse().unwrap(),
+                kind: "MUTATION".into(),
+                object_id: "\u{10000}".into(),
+            })
+            .unwrap();
         let (actual, counts) = incremental(&before, &after, &basis, &config.disks);
         assert_only_field_encoded(&counts, None);
         assert_complete_byte_oracle(&actual, &after, &config.disks);
@@ -376,12 +405,6 @@ fn incremental_snapshot_each_tracked_field_mutation_reencodes_only_that_field() 
     let basis = baseline(&before, &config.disks);
     let descriptor = prepare_snapshot(&before, MAX_METADATA).unwrap().descriptor;
     macro_rules! new_key {
-        (operations) => {
-            "op_ffffffffffffffffffffffffffffffff".parse().unwrap()
-        };
-        (operation_principals) => {
-            "op_ffffffffffffffffffffffffffffffff".parse().unwrap()
-        };
         ($other:ident) => {
             "new-字段-\u{10000}".into()
         };
@@ -464,7 +487,8 @@ fn incremental_snapshot_empty_required_optional_removal_and_reintroduction_match
         };
     }
     every_tracked_field!(clear_field);
-    empty.events.clear();
+    empty.events = storage_contract::SegmentedEvents::new();
+    empty.operations = storage_contract::OperationLog::new();
     empty.control_auth = None;
     let (actual, counts) = incremental(&before, &empty, &basis, &config.disks);
     assert_only_field_encoded(&counts, None); // No values exist to serialize.
@@ -592,6 +616,7 @@ fn incremental_snapshot_missing_special_map_pages_reconstruct_exact_wire_bytes()
         }));
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
+    plant_fixture_namespaces(&config.disks);
     let original = prepare_snapshot(&before, MAX_METADATA).unwrap();
     original.store(&config.disks, &before).unwrap();
     let basis = original.reuse_basis();
@@ -668,7 +693,14 @@ fn incremental_snapshot_middle_and_final_missing_pages_require_the_exact_reconst
         for disk in &config.disks {
             std::fs::remove_file(object_path(disk, "state-page", missing)).unwrap();
         }
-        let actual = prepare_snapshot_incremental(&before, &after, &basis, MAX_METADATA).unwrap();
+        let actual = prepare_snapshot_incremental(
+            &before,
+            &after,
+            &basis,
+            MAX_METADATA,
+            &mut crate::journal::test_reused_loader(&config.disks),
+        )
+        .unwrap();
         // A different value in an already-read radix prefix must invalidate the
         // reconstruction even when the missing object is later in the traversal.
         let mut wrong = after.clone();
@@ -728,9 +760,14 @@ fn incremental_snapshot_installation_errors_are_not_retried_as_source_failures()
         let mut after = before.clone();
         after.begin_tracking();
         after.sequence += 1;
-        let actual =
-            prepare_snapshot_incremental(&before, &after, &original.reuse_basis(), MAX_METADATA)
-                .unwrap();
+        let actual = prepare_snapshot_incremental(
+            &before,
+            &after,
+            &original.reuse_basis(),
+            MAX_METADATA,
+            &mut crate::journal::test_reused_loader(&config.disks),
+        )
+        .unwrap();
         if missing {
             for disk in &config.disks {
                 std::fs::remove_file(object_path(disk, "state-page", &pages[0])).unwrap();
@@ -759,7 +796,7 @@ fn incremental_snapshot_installation_errors_are_not_retried_as_source_failures()
 }
 
 #[test]
-fn operation_identity_writes_remain_typed_through_snapshot_preparation() {
+fn operation_receipt_appends_update_the_tail_segment_and_one_locator_path() {
     let before = populated_state();
     let temp = tempfile::tempdir().unwrap();
     let config = config(temp.path());
@@ -767,24 +804,42 @@ fn operation_identity_writes_remain_typed_through_snapshot_preparation() {
     let mut after = before.clone();
     after.begin_tracking();
     let id = "op_ffffffffffffffffffffffffffffffff".parse().unwrap();
-    let mut receipt = before.operations.values().next().unwrap().clone();
+    let mut receipt = before.operations.tail().last().unwrap().result.clone();
     receipt.operation_id = id;
-    after.operations.insert(id, receipt);
-    after.operation_principals.insert(id, "new owner".into());
-    for changes in [
-        after.operations.changes_since(&before.operations),
+    receipt.sequence += 1;
+    after.sequence = receipt.sequence;
+    after
+        .operations
+        .push(storage_contract::OperationRecordEntry {
+            principal: "new owner".into(),
+            result: receipt,
+        })
+        .unwrap();
+    let storage_contract::SegmentChanges::Segments(dirty) =
+        after.operations.changes_since(&before.operations)
+    else {
+        panic!("normal receipt append lost its segment write set");
+    };
+    assert_eq!(
+        dirty.iter().copied().collect::<Vec<_>>(),
+        vec![after.operations.tail_ordinal()]
+    );
+    assert_eq!(
         after
-            .operation_principals
-            .changes_since(&before.operation_principals),
-    ] {
-        let MapChanges::Keys(keys) = changes else {
-            panic!("normal receipt insertion lost its typed write set");
-        };
-        assert_eq!(keys.iter().copied().collect::<Vec<_>>(), vec![id]);
-    }
-    let (actual, counts) = incremental(&before, &after, &basis, &config.disks);
-    assert!(counts["operations"] > 0);
-    assert!(counts["operation_principals"] > 0);
+            .operations
+            .appended_ids_since(&before.operations)
+            .unwrap(),
+        vec![(id, before.operations.len())]
+    );
+    let (actual, _) = incremental(&before, &after, &basis, &config.disks);
+    assert_ne!(
+        actual.descriptor.maps["operation_log"],
+        basis.descriptor.maps["operation_log"]
+    );
+    assert_ne!(
+        actual.descriptor.maps["operation_locators"],
+        basis.descriptor.maps["operation_locators"]
+    );
     assert_complete_byte_oracle(&actual, &after, &config.disks);
 }
 

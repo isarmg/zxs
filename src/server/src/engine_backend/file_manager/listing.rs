@@ -8,7 +8,7 @@ enum Candidate<'a> {
     Repository(&'a Repository),
     Entry {
         repository: &'a Repository,
-        index: usize,
+        entry: storage_contract::Entry,
     },
 }
 
@@ -61,11 +61,11 @@ pub(in crate::engine_backend) fn entries(
     if let Some((repo, within)) = &resolved {
         default_branch_scope = within.is_empty();
         let namespace = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
-        let tree = namespace.entries();
         let within_key = name_policy::path_key(within);
         if !within.is_empty()
             && !namespace
                 .get_key(&within_key)
+                .map_err(error)?
                 .is_some_and(|entry| entry.kind == storage_contract::NamespaceEntryKind::Directory)
         {
             return Err(ApiError::new(
@@ -76,7 +76,7 @@ pub(in crate::engine_backend) fn entries(
         }
         if directory_branches_supported {
             directory_branches =
-                super::super::directory_scopes::matching(engine.state(), repo, Some(&within_key))
+                super::super::directory_scopes::matching(engine, repo, Some(&within_key))?
                     .into_iter()
                     .map(|branch| {
                         crate::DirectoryBranchChoice::capture(
@@ -90,36 +90,53 @@ pub(in crate::engine_backend) fn entries(
                     })
                     .collect();
         }
-        let prefix = if within.is_empty() {
-            String::new()
-        } else {
-            format!("{within_key}/")
-        };
-        // The persisted namespace is currently flat. Scan once, retaining only
-        // direct children for page selection; descendants contribute only to
-        // the existing recursive file count, never to a full JSON projection.
-        for (index, entry) in tree.iter().enumerate() {
-            let Some(relative) = entry.lookup_key().strip_prefix(&prefix) else {
-                continue;
-            };
-            if entry.kind == storage_contract::NamespaceEntryKind::File {
-                directory_file_count += 1;
+        // The recursive file count is a recorded directory total; it never
+        // expands descendants. Page selection enumerates one directory level
+        // through the paged namespace, not the whole tree.
+        directory_file_count = namespace
+            .directory_totals(&within_key)
+            .map_err(error)?
+            .expect("invariant: admitted directory exists in this immutable namespace")
+            .1 as usize;
+        // UI sorting, filtering, totals and independent selection still need
+        // an O(directory width) scan. Bound only the source buffer here;
+        // PageSelector retains the requested page rather than every child.
+        let mut after = None;
+        loop {
+            let children = namespace
+                .directory_page(
+                    &within_key,
+                    after.as_deref(),
+                    storage_contract::NAMESPACE_PAGE_ENTRIES,
+                )
+                .map_err(error)?
+                .expect("invariant: admitted directory exists in this immutable namespace");
+            let complete = children.len() < storage_contract::NAMESPACE_PAGE_ENTRIES;
+            after = children.last().map(|entry| {
+                entry
+                    .lookup_key()
+                    .rsplit('/')
+                    .next()
+                    .expect("invariant: a portable path has a component")
+                    .to_owned()
+            });
+            for entry in children {
+                let display = if repo.file_manager_root {
+                    entry.path().to_owned()
+                } else {
+                    format!("{}/{}", repo.name, entry.path)
+                };
+                page.consider(
+                    SortKey::for_entry(&entry, &display),
+                    Candidate::Entry {
+                        repository: repo,
+                        entry,
+                    },
+                );
             }
-            if relative.contains('/') {
-                continue;
+            if complete {
+                break;
             }
-            let display = if repo.file_manager_root {
-                entry.path().to_owned()
-            } else {
-                format!("{}/{}", repo.name, entry.path)
-            };
-            page.consider(
-                SortKey::for_entry(entry, &display),
-                Candidate::Entry {
-                    repository: repo,
-                    index,
-                },
-            );
         }
         let branch = &engine.state().branches[&repo.main_branch_id];
         context = Some(crate::ListingContext {
@@ -134,14 +151,14 @@ pub(in crate::engine_backend) fn entries(
         Candidate::Repository(repo) => Ok(directory(&repo.name, &repo.name, &repo.repository_id)),
         Candidate::Entry {
             repository: repo,
-            index,
+            entry,
         } => {
             let prefix = if repo.file_manager_root {
                 ""
             } else {
                 &repo.name
             };
-            listed_current_entry(engine, repo, *index, prefix)
+            listed_current_entry(engine, repo, entry, prefix)
         }
     };
     let values = page

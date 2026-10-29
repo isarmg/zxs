@@ -44,15 +44,15 @@ fn receipt_timestamp(value: Option<&Value>) -> Result<Option<u64>, ApiError> {
         .transpose()
 }
 
-enum Timestamp<'a> {
+enum Timestamp {
     Seconds(u64),
-    Receipt(Option<&'a Value>),
+    Resolved(Option<u64>),
 }
-impl Timestamp<'_> {
+impl Timestamp {
     fn parse(self) -> Result<Option<u64>, ApiError> {
         match self {
             Self::Seconds(seconds) => Ok(Some(seconds)),
-            Self::Receipt(value) => receipt_timestamp(value),
+            Self::Resolved(timestamp) => Ok(timestamp),
         }
     }
 }
@@ -102,7 +102,7 @@ impl PendingDetail<'_> {
 }
 
 struct PendingEvent<'a> {
-    timestamp: Timestamp<'a>,
+    timestamp: Timestamp,
     slot_id: String,
     path: String,
     action: String,
@@ -211,11 +211,12 @@ fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
         ) {
             continue;
         }
+        let receipt = engine
+            .published_receipt(commit.operation_id)
+            .map_err(crate::engine_backend::error)?;
         if commit.kind == "file_selection"
-            && engine
-                .state()
-                .operations
-                .get(&commit.operation_id)
+            && receipt
+                .as_ref()
                 .is_some_and(|op| op.kind == "workspace.commit")
         {
             continue;
@@ -224,34 +225,37 @@ fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
             .parent_commit_ids
             .first()
             .and_then(|id| engine.state().commits.get(id));
+        let parent_tree = commit
+            .parent_commit_ids
+            .first()
+            .and_then(|id| engine.commit_namespace(id));
         // Branch registration is an audit event, but it does not
         // claim the source version as newly written branch content.
         let pending_creation = matches!(
             commit.kind.as_str(),
             "file_branch_pending" | "branch_pending"
         ) || commit.kind == "file_branch"
-            && engine
-                .state()
-                .operations
-                .get(&commit.operation_id)
+            && receipt
+                .as_ref()
                 .is_some_and(|operation| operation.result.get("placeholder_files").is_some());
-        let timestamp = engine
-            .state()
-            .operations
-            .get(&commit.operation_id)
-            .and_then(|op| op.result.get("timestamp"));
+        let timestamp =
+            receipt_timestamp(receipt.as_ref().and_then(|op| op.result.get("timestamp")))?;
         let action = if commit.kind == "namespace" {
-            engine
-                .state()
-                .operations
-                .get(&commit.operation_id)
+            receipt
+                .as_ref()
                 .and_then(|op| op.result.get("action"))
                 .and_then(Value::as_str)
                 .unwrap_or("namespace")
+                .to_owned()
         } else {
-            commit.kind.as_str()
+            commit.kind.clone()
         };
-        for entry in &commit.entries {
+        let commit_entries = engine
+            .commit_namespace(&commit.commit_id)
+            .expect("invariant: iterated commit exists")
+            .entries()
+            .map_err(crate::engine_backend::error)?;
+        for entry in &commit_entries {
             let pending_source = commit
                 .pending_file_versions
                 .get(&entry.file_id)
@@ -259,17 +263,24 @@ fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
             if pending_creation && entry.kind != storage_contract::NamespaceEntryKind::File {
                 continue;
             }
-            if !(pending_creation && entry.kind == storage_contract::NamespaceEntryKind::File)
-                && parent.is_some_and(|p| {
-                    p.entries.iter().any(|old| {
-                        old.entry_id == entry.entry_id
-                            && old.path == entry.path
-                            && old.version_id == entry.version_id
-                            && p.pending_file_versions.contains_key(&old.file_id)
-                                == pending_source.is_some()
-                    })
-                })
-            {
+            // An unchanged entry is one the parent view resolves identically
+            // at the same key: a point read, never a parent-list scan.
+            let unchanged = !(pending_creation
+                && entry.kind == storage_contract::NamespaceEntryKind::File)
+                && match (&parent, &parent_tree) {
+                    (Some(p), Some(tree)) => tree
+                        .get_key(entry.lookup_key())
+                        .map_err(crate::engine_backend::error)?
+                        .is_some_and(|old| {
+                            old.entry_id == entry.entry_id
+                                && old.path == entry.path
+                                && old.version_id == entry.version_id
+                                && p.pending_file_versions.contains_key(&old.file_id)
+                                    == pending_source.is_some()
+                        }),
+                    _ => false,
+                };
+            if unchanged {
                 continue;
             }
             let display = if repo.file_manager_root {
@@ -289,10 +300,10 @@ fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
                 }
             };
             let event = PendingEvent {
-                timestamp: Timestamp::Receipt(timestamp),
+                timestamp: Timestamp::Resolved(timestamp),
                 slot_id: repo.primary_slot_id.clone(),
                 path: display,
-                action: action.into(),
+                action: action.clone(),
                 principal: Some(commit.author.clone()),
                 file_id: entry.file_id.clone(),
                 message: commit.message.clone(),
@@ -313,18 +324,25 @@ fn file_operation_events<'a>(
     engine: &'a Engine,
     events: &mut ActivityRows<'a>,
 ) -> Result<(), ApiError> {
-    for operation in engine.state().operations.values().filter(|op| {
-        matches!(
-            op.kind.as_str(),
+    // Newest-first: once the page is full and a receipt's slot is older than
+    // the retained page, every later receipt is older still, so the pull
+    // stops without reading further sealed segments.
+    for entry in engine.receipts_descending() {
+        let entry = entry.map_err(crate::engine_backend::error)?;
+        if !history_sequence_may_fit(events, entry.result.sequence) {
+            break;
+        }
+        let operation = &entry.result;
+        if !(matches!(
+            operation.kind.as_str(),
             "file.metadata"
                 | "version.metadata"
                 | "file.branch.rename"
                 | "file.path.metadata"
                 | "file.branches.merge"
                 | "file.tags.update"
-        ) && op.result.get("no_change").and_then(Value::as_bool) != Some(true)
-    }) {
-        if !history_sequence_may_fit(events, operation.sequence) {
+        ) && operation.result.get("no_change").and_then(Value::as_bool) != Some(true))
+        {
             continue;
         }
         let Some(file) = operation.result.get("file_id").and_then(Value::as_str) else {
@@ -372,13 +390,13 @@ fn file_operation_events<'a>(
             operation.sequence,
             operation.operation_id.to_string(),
             PendingEvent {
-                timestamp: Timestamp::Receipt(operation.result.get("timestamp")),
+                timestamp: Timestamp::Resolved(receipt_timestamp(
+                    operation.result.get("timestamp"),
+                )?),
                 slot_id: repo.primary_slot_id.clone(),
                 path: display,
                 action: operation.kind.clone(),
-                principal: engine
-                    .operation_owner(operation.operation_id)
-                    .map_err(crate::engine_backend::error)?,
+                principal: Some(entry.principal.clone()),
                 file_id: file.into(),
                 message: operation
                     .result
@@ -386,12 +404,15 @@ fn file_operation_events<'a>(
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .into(),
-                detail: PendingDetail::FileOperation {
-                    version_id: path_node
-                        .map(|node| node.version_id.as_str())
-                        .or_else(|| metadata_node.map(|node| node.version_id.as_str())),
-                    receipt: &operation.result,
-                },
+                detail: PendingDetail::Captured(
+                    PendingDetail::FileOperation {
+                        version_id: path_node
+                            .map(|node| node.version_id.as_str())
+                            .or_else(|| metadata_node.map(|node| node.version_id.as_str())),
+                        receipt: &operation.result,
+                    }
+                    .parse()?,
+                ),
             },
         );
     }
@@ -402,17 +423,21 @@ fn directory_operation_events<'a>(
     engine: &'a Engine,
     events: &mut ActivityRows<'a>,
 ) -> Result<(), ApiError> {
-    for operation in engine.state().operations.values().filter(|op| {
-        matches!(
-            op.kind.as_str(),
+    for entry in engine.receipts_descending() {
+        let entry = entry.map_err(crate::engine_backend::error)?;
+        if !history_sequence_may_fit(events, entry.result.sequence) {
+            break;
+        }
+        let operation = &entry.result;
+        if !(matches!(
+            operation.kind.as_str(),
             "directory.branches.create"
                 | "directory.branches.select"
                 | "directory.default.select"
                 | "directory.branch.rename"
                 | "directory.scope.initialize"
-        ) && op.result.get("no_change").and_then(Value::as_bool) != Some(true)
-    }) {
-        if !history_sequence_may_fit(events, operation.sequence) {
+        ) && operation.result.get("no_change").and_then(Value::as_bool) != Some(true))
+        {
             continue;
         }
         let Some(id) = operation
@@ -445,13 +470,13 @@ fn directory_operation_events<'a>(
             operation.sequence,
             operation.operation_id.to_string(),
             PendingEvent {
-                timestamp: Timestamp::Receipt(operation.result.get("timestamp")),
+                timestamp: Timestamp::Resolved(receipt_timestamp(
+                    operation.result.get("timestamp"),
+                )?),
                 slot_id: repo.primary_slot_id.clone(),
                 path: display,
                 action: operation.kind.clone(),
-                principal: engine
-                    .operation_owner(operation.operation_id)
-                    .map_err(crate::engine_backend::error)?,
+                principal: Some(entry.principal.clone()),
                 file_id: String::new(),
                 message: operation
                     .result
@@ -459,10 +484,13 @@ fn directory_operation_events<'a>(
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .into(),
-                detail: PendingDetail::DirectoryOperation {
-                    branch_id: id,
-                    head: operation.result.get("head_tree_id"),
-                },
+                detail: PendingDetail::Captured(
+                    PendingDetail::DirectoryOperation {
+                        branch_id: id,
+                        head: operation.result.get("head_tree_id"),
+                    }
+                    .parse()?,
+                ),
             },
         );
     }
@@ -470,13 +498,13 @@ fn directory_operation_events<'a>(
 }
 
 fn backup_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<(), ApiError> {
-    for operation in engine
-        .state()
-        .operations
-        .values()
-        .filter(|op| op.kind == "backup.configure")
-    {
-        if !history_sequence_may_fit(events, operation.sequence) {
+    for entry in engine.receipts_descending() {
+        let entry = entry.map_err(crate::engine_backend::error)?;
+        if !history_sequence_may_fit(events, entry.result.sequence) {
+            break;
+        }
+        let operation = &entry.result;
+        if operation.kind != "backup.configure" {
             continue;
         }
         let history =
@@ -505,21 +533,24 @@ fn backup_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
             operation.sequence,
             operation.operation_id.to_string(),
             PendingEvent {
-                timestamp: Timestamp::Receipt(operation.result.get("timestamp")),
+                timestamp: Timestamp::Resolved(receipt_timestamp(
+                    operation.result.get("timestamp"),
+                )?),
                 slot_id: repo.primary_slot_id.clone(),
                 path: display,
                 action: "backup.configure".into(),
-                principal: engine
-                    .operation_owner(operation.operation_id)
-                    .map_err(crate::engine_backend::error)?,
+                principal: Some(entry.principal.clone()),
                 file_id: operation.result["policy"]["scope_file_id"]
                     .as_str()
                     .unwrap_or("")
                     .into(),
                 message: String::new(),
-                detail: PendingDetail::Backup {
-                    copies: operation.result.get("target_copies"),
-                },
+                detail: PendingDetail::Captured(
+                    PendingDetail::Backup {
+                        copies: operation.result.get("target_copies"),
+                    }
+                    .parse()?,
+                ),
             },
         );
     }
@@ -562,22 +593,19 @@ fn path_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<
 }
 
 fn tree_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<(), ApiError> {
-    // The full page's oldest sequence can only rise, so older
-    // operation metadata cannot be needed by a retained tree below.
-    let operations_by_sequence = engine
-        .state()
-        .operations
-        .values()
-        .filter(|operation| history_sequence_may_fit(events, operation.sequence))
-        .map(|operation| (operation.sequence, operation))
-        .collect::<BTreeMap<_, _>>();
     for tree in engine.state().directory_trees.values() {
         if !history_sequence_may_fit(events, tree.sequence) {
             continue;
         }
-        let Some(operation) = operations_by_sequence.get(&tree.sequence).copied() else {
+        // One bounded lookup per retained tree: the receipt published at this
+        // tree's exact decision slot.
+        let Some(entry) = engine
+            .receipt_by_sequence(tree.sequence)
+            .map_err(crate::engine_backend::error)?
+        else {
             continue;
         };
+        let operation = &entry.result;
         // Registering a directory references the parent's existing
         // subtree. Its initialization is covered by the register event.
         if matches!(
@@ -619,13 +647,13 @@ fn tree_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<
             tree.sequence,
             tree.tree_id.clone(),
             PendingEvent {
-                timestamp: Timestamp::Receipt(operation.result.get("timestamp")),
+                timestamp: Timestamp::Resolved(receipt_timestamp(
+                    operation.result.get("timestamp"),
+                )?),
                 slot_id: repo.primary_slot_id.clone(),
                 path: display,
                 action: action.into(),
-                principal: engine
-                    .operation_owner(operation.operation_id)
-                    .map_err(crate::engine_backend::error)?,
+                principal: Some(entry.principal.clone()),
                 file_id: String::new(),
                 message: String::new(),
                 detail: PendingDetail::Captured(ActivityDetailSnapshot::Tree {

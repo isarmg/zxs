@@ -5,6 +5,209 @@ fn checked_in_contracts_and_document_examples_are_consistent() {
 }
 
 #[test]
+fn persisted_operation_vectors_agree_with_both_schemas_and_rust_decoding() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let mut core = read(&root.join("core.schema.json")).unwrap();
+    let mut api = read(&root.join("openapi.json")).unwrap();
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    for name in ["OperationResult", "OperationSegment"] {
+        core["$ref"] = format!("#/$defs/{name}").into();
+        api["$ref"] = format!("#/components/schemas/{name}").into();
+        let core_schema = validator(&core).unwrap();
+        let api_schema = validator(&api).unwrap();
+        for group in ["positive", "negative"] {
+            for case in array(&vectors[group])
+                .unwrap()
+                .iter()
+                .filter(|case| case["schema"] == name)
+            {
+                let value = &case["value"];
+                let valid = group == "positive";
+                assert_eq!(core_schema.is_valid(value), valid, "{}", case["name"]);
+                assert_eq!(api_schema.is_valid(value), valid, "{}", case["name"]);
+                let decoded = decode_operation_vector(name, value);
+                assert_eq!(decoded.is_ok(), valid, "{}: {decoded:?}", case["name"]);
+                if valid {
+                    let bytes = storage_contract::canonical_json(value).unwrap();
+                    let mut expected = value.clone();
+                    let encoded = match name {
+                        "OperationResult" => {
+                            let receipt: storage_contract::OperationResult =
+                                storage_contract::decode_strict(&bytes).unwrap();
+                            for field in ["commit_id", "history_tree_id", "branch_id"] {
+                                expected
+                                    .as_object_mut()
+                                    .unwrap()
+                                    .entry(field)
+                                    .or_insert(Value::Null);
+                            }
+                            storage_contract::canonical_json(&receipt).unwrap()
+                        }
+                        "OperationSegment" => {
+                            let segment: storage_contract::OperationSegment =
+                                storage_contract::decode_strict(&bytes).unwrap();
+                            storage_contract::canonical_json(&segment).unwrap()
+                        }
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        encoded,
+                        storage_contract::canonical_json(&expected).unwrap(),
+                        "{}",
+                        case["name"]
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn operation_result_fixture() -> (Value, Value, Value) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let mut core = read(&root.join("core.schema.json")).unwrap();
+    core["$ref"] = "#/$defs/OperationResult".into();
+    let mut api = read(&root.join("openapi.json")).unwrap();
+    api["$ref"] = "#/components/schemas/OperationResult".into();
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    let receipt = array(&vectors["positive"])
+        .unwrap()
+        .iter()
+        .find(|case| case["schema"] == "OperationSegment")
+        .unwrap()["value"]["records"][0]["result"]
+        .clone();
+    (core, api, receipt)
+}
+
+#[test]
+fn persisted_operation_fields_preserve_required_nullable_and_open_value_boundaries() {
+    let (core, api, receipt) = operation_result_fixture();
+    let core_schema = validator(&core).unwrap();
+    let api_schema = validator(&api).unwrap();
+    let agrees = |value: &Value, valid: bool| {
+        assert_eq!(core_schema.is_valid(value), valid, "{value}");
+        assert_eq!(api_schema.is_valid(value), valid, "{value}");
+        let decoded = decode_operation_vector("OperationResult", value);
+        assert_eq!(decoded.is_ok(), valid, "{value}: {decoded:?}");
+    };
+    for field in receipt.as_object().unwrap().keys() {
+        let mut missing = receipt.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        agrees(
+            &missing,
+            matches!(
+                field.as_str(),
+                "commit_id" | "history_tree_id" | "branch_id"
+            ),
+        );
+    }
+    for field in ["commit_id", "history_tree_id", "branch_id"] {
+        for value in [json!(null), json!(""), json!("opaque identifier")] {
+            let mut changed = receipt.clone();
+            changed[field] = value;
+            agrees(&changed, true);
+        }
+        for value in [json!(0), json!(false), json!([]), json!({})] {
+            let mut changed = receipt.clone();
+            changed[field] = value;
+            agrees(&changed, false);
+        }
+    }
+    for field in ["kind", "request_digest"] {
+        for value in [json!(""), json!("future.operation")] {
+            let mut changed = receipt.clone();
+            changed[field] = value;
+            agrees(&changed, true);
+        }
+        for value in [json!(null), json!(0), json!(false), json!([]), json!({})] {
+            let mut changed = receipt.clone();
+            changed[field] = value;
+            agrees(&changed, false);
+        }
+    }
+    for value in [
+        json!(null),
+        json!(true),
+        json!(-1),
+        json!("detail"),
+        json!([]),
+        json!({"nested": [null, 0, false, "detail", {}]}),
+    ] {
+        let mut changed = receipt.clone();
+        changed["result"] = value;
+        agrees(&changed, true);
+    }
+}
+
+#[test]
+fn persisted_operation_state_vocabularies_match_the_frozen_rust_enums() {
+    use storage_contract::{CommitState, CurrentHealth, ProtectionAtPublish};
+    let (core, api, receipt) = operation_result_fixture();
+    let core_schema = validator(&core).unwrap();
+    let api_schema = validator(&api).unwrap();
+    let states = [
+        (
+            "commit_state",
+            json_codec::to_value([
+                CommitState::Staging,
+                CommitState::Sealed,
+                CommitState::Prepared,
+                CommitState::Deciding,
+                CommitState::Decided,
+                CommitState::Protected,
+                CommitState::Published,
+                CommitState::Acked,
+                CommitState::Recovering,
+                CommitState::RecoveryRequired,
+                CommitState::InDoubt,
+                CommitState::PublishedDegraded,
+                CommitState::Aborted,
+            ])
+            .unwrap(),
+        ),
+        (
+            "protection_at_publish",
+            json_codec::to_value([
+                ProtectionAtPublish::NotApplicable,
+                ProtectionAtPublish::TargetMet,
+                ProtectionAtPublish::BelowTarget,
+                ProtectionAtPublish::Unconfirmed,
+            ])
+            .unwrap(),
+        ),
+        (
+            "current_health",
+            json_codec::to_value([
+                CurrentHealth::Healthy,
+                CurrentHealth::Degraded,
+                CurrentHealth::Unavailable,
+                CurrentHealth::Unknown,
+                CurrentHealth::Recovering,
+            ])
+            .unwrap(),
+        ),
+    ];
+    for (field, states) in states {
+        assert_eq!(
+            core["$defs"]["OperationResult"]["properties"][field]["enum"],
+            states
+        );
+        for state in states.as_array().unwrap() {
+            let mut changed = receipt.clone();
+            changed[field] = state.clone();
+            assert!(core_schema.is_valid(&changed));
+            assert!(api_schema.is_valid(&changed));
+            decode_operation_vector("OperationResult", &changed).unwrap();
+            let mut object_alias = json_codec::Map::new();
+            object_alias.insert(state.as_str().unwrap().into(), Value::Null);
+            changed[field] = Value::Object(object_alias);
+            assert!(!core_schema.is_valid(&changed));
+            assert!(!api_schema.is_valid(&changed));
+            assert!(decode_operation_vector("OperationResult", &changed).is_err());
+        }
+    }
+}
+
+#[test]
 fn persisted_repository_schema_requires_an_exact_smb_binding_revision() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
     let mut core = read(&root.join("core.schema.json")).unwrap();
@@ -131,8 +334,8 @@ fn sparse_branch_and_commit_canonical_bytes_omit_empty_pending_maps() {
         storage_contract::object_hash("commit", &value).unwrap()
     );
     commit.pending_file_versions.insert(
-        commit.entries[0].file_id.clone(),
-        commit.entries[0].version_id.clone(),
+        storage_contract::new_id("file"),
+        storage_contract::new_id("ver"),
     );
     let encoded = storage_contract::canonical_json(&commit).unwrap();
     let decoded: storage_contract::Commit = storage_contract::decode_strict(&encoded).unwrap();

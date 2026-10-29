@@ -218,10 +218,12 @@ fn merge_preserves_an_unselected_alias_context_of_the_same_stable_file() {
     let unselected = p
         .engine
         .file_context(&p.repo.repository_id, "a/report.txt")
+        .unwrap()
         .unwrap();
     let selected = p
         .engine
         .file_context(&p.repo.repository_id, "b/report.txt")
+        .unwrap()
         .unwrap()
         .branch_id;
     let second = fork(
@@ -250,6 +252,7 @@ fn merge_preserves_an_unselected_alias_context_of_the_same_stable_file() {
     assert_eq!(
         p.engine
             .file_context(&p.repo.repository_id, "a/report.txt")
+            .unwrap()
             .unwrap(),
         unselected
     );
@@ -261,7 +264,7 @@ fn merge_preserves_an_unselected_alias_context_of_the_same_stable_file() {
     let repo = p.repo.repository_id.clone();
     p.reopen(|engine| {
         assert_eq!(
-            engine.file_context(&repo, "a/report.txt").unwrap(),
+            engine.file_context(&repo, "a/report.txt").unwrap().unwrap(),
             unselected
         )
     });

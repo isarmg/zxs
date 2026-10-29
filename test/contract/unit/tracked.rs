@@ -93,69 +93,6 @@ fn oversized_keys_and_bulk_mutation_have_bounded_tracking() {
 }
 
 #[test]
-fn operation_map_insert_tracks_change_without_string_keys() {
-    let id = crate::OperationId::generate();
-    let before = TrackedOperations::new(BTreeMap::from([(id, "owner".to_owned())]));
-    let mut next = before.clone();
-    next.begin_tracking();
-    assert!(next.changes_since(&before).is_empty());
-    assert_eq!(
-        next.insert(id, "replacement".to_owned()),
-        Some("owner".to_owned())
-    );
-    assert_eq!(
-        next.changes_since(&before),
-        MapChanges::Keys(Arc::new(BTreeSet::from([id])))
-    );
-    assert_eq!(before.get(&id).unwrap(), "owner");
-    assert_eq!(next.get(&id).unwrap(), "replacement");
-    let expected = BTreeMap::from([(id.to_string(), "replacement")]);
-    assert_eq!(
-        crate::canonical_json(&next).unwrap(),
-        crate::canonical_json(&expected).unwrap()
-    );
-}
-
-#[test]
-fn operation_write_sets_are_typed_bounded_and_branch_isolated() {
-    let id = crate::OperationId::generate();
-    let second = crate::OperationId::generate();
-    let before = TrackedOperations::<String>::default();
-    let mut next = before.clone();
-    next.begin_tracking();
-    next.insert(id, "first".into());
-    next.insert(id, "updated".into());
-    let mut branch = next.clone();
-    branch.insert(second, "second".into());
-    assert_eq!(
-        next.changes_since(&before),
-        MapChanges::Keys(Arc::new(BTreeSet::from([id])))
-    );
-    assert_eq!(
-        branch.changes_since(&before),
-        MapChanges::Keys(Arc::new(BTreeSet::from([id, second])))
-    );
-    assert_eq!(
-        next.changed_key_bytes,
-        std::mem::size_of::<crate::OperationId>()
-    );
-    let encoded = crate::canonical_json(&branch).unwrap();
-    let decoded: TrackedOperations<String> = json_codec::from_slice(&encoded).unwrap();
-    assert_eq!(decoded.changes_since(&before), MapChanges::All);
-    let escaped: &mut BTreeMap<crate::OperationId, String> = &mut branch;
-    escaped.retain(|_, _| false);
-    assert_eq!(branch.changes_since(&before), MapChanges::All);
-    next.begin_tracking();
-    assert_eq!(next.changes_since(&before), MapChanges::All);
-    let mut many = before.clone();
-    many.begin_tracking();
-    for index in 0..=MAX_CHANGED_KEYS {
-        many.insert(format!("op_{index:032x}").parse().unwrap(), String::new());
-    }
-    assert_eq!(many.changes_since(&before), MapChanges::All);
-}
-
-#[test]
 fn immutable_retention_tracks_only_removals_and_preserves_noop_lineage() {
     let before = base();
     let mut next = before.clone();

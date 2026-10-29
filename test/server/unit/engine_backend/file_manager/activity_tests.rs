@@ -10,7 +10,7 @@ use std::{cmp::Reverse, collections::BTreeMap};
 
 fn pending<'a>(message: &str) -> PendingEvent<'a> {
     PendingEvent {
-        timestamp: Timestamp::Receipt(None),
+        timestamp: Timestamp::Resolved(None),
         slot_id: "P01".into(),
         path: String::new(),
         action: "future.persisted.action".into(),
@@ -153,7 +153,7 @@ fn utc_history_projection_formats_seconds_and_preserves_missing_times() {
     ] {
         let mut event = pending("");
         let raw = json!(seconds.to_string());
-        event.timestamp = Timestamp::Receipt(Some(&raw));
+        event.timestamp = Timestamp::Resolved(receipt_timestamp(Some(&raw)).unwrap());
         let row = wire(ActivityHistorySnapshot {
             events: vec![event.finish(1, "original".into()).unwrap()],
         });
@@ -161,7 +161,7 @@ fn utc_history_projection_formats_seconds_and_preserves_missing_times() {
     }
     for timestamp in [None, Some(&Value::Null)] {
         let mut event = pending("");
-        event.timestamp = Timestamp::Receipt(timestamp);
+        event.timestamp = Timestamp::Resolved(receipt_timestamp(timestamp).unwrap());
         let row = wire(ActivityHistorySnapshot {
             events: vec![event.finish(1, "original".into()).unwrap()],
         });
@@ -256,7 +256,13 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    assert!(!restored.state().operations.contains_key(&operation_id));
+    assert!(
+        restored
+            .state()
+            .operations
+            .tail_record(operation_id)
+            .is_none()
+    );
     assert!(restored.state().versions.is_empty());
     assert_eq!(deletion_rows(&restored), before);
 }
@@ -283,11 +289,12 @@ fn malformed_receipt_fields_are_errors_only_for_retained_rows() {
         row.finish(1, "retained".into()).unwrap_err().code,
         storage_contract::ErrorCode::StateInvalid
     );
-    let mut old = pending("");
-    let malformed = json!(false);
-    old.timestamp = Timestamp::Receipt(Some(&malformed));
+    // Receipts are parsed when the bounded newest-first scan reads them, so a
+    // row past the retention limit is dropped before any field parse; the
+    // oldest recorded row simply falls out of the window.
+    let old = pending("");
     let mut events = BTreeMap::new();
-    record_event(&mut events, 1, "malformed-old-row".into(), old);
+    record_event(&mut events, 1, "dropped-old-row".into(), old);
     for id in 0..HISTORY_LIMIT {
         record_event(&mut events, 2, id.to_string(), pending(""));
     }

@@ -15,7 +15,7 @@ fn graph_wire_retains_raw_branch_and_boundary_fields_and_canonical_bytes() {
             operation_id: operation,
             author: "owner".into(),
             message: "root".into(),
-            entries: vec![],
+            namespace: crate::fixture_commit_namespace(0),
             namespace_deletions: None,
             pending_file_versions: BTreeMap::new(),
             provenance: None,

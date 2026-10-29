@@ -2,14 +2,14 @@
 use super::*;
 use crate::metadata_map::{Encoder, MapRoot, ProofMeasure, RootFormat};
 use std::{borrow::Cow, collections::BTreeSet};
-use storage_contract::{MapChanges, SequenceChanges};
+use storage_contract::{EVENT_SEGMENT_KIND, MapChanges, OPERATION_SEGMENT_KIND};
 
 macro_rules! state_map_fields {
     ($consumer:ident) => {
         $consumer! {
             repositories,histories,branches,commits,versions,placements,merge_links,
-            history_boundaries,content_states,operations,plans,placement_rules,
-            protection_policies,operation_principals,file_selections,directory_branches,
+            history_boundaries,content_states,plans,placement_rules,
+            protection_policies,file_selections,directory_branches,
             directory_trees,file_write_origins,file_contexts,file_path_nodes,file_metadata_nodes,
             file_branch_merges,file_branch_aliases,file_node_parents,file_path_notes,
             directory_tree_selections,file_locations,file_backup_paths,file_backup_policies,
@@ -23,14 +23,14 @@ macro_rules! state_map_fields {
 pub(super) enum FieldRoot {
     Text(MapRoot),
     Operations(MapRoot<OperationId>),
-    Events(MapRoot<usize>),
+    Segments(MapRoot<u64>),
 }
 macro_rules! field_root {
     ($value:expr, $root:ident => $expression:expr) => {
         match $value {
             FieldRoot::Text($root) => $expression,
             FieldRoot::Operations($root) => $expression,
-            FieldRoot::Events($root) => $expression,
+            FieldRoot::Segments($root) => $expression,
         }
     };
 }
@@ -62,12 +62,188 @@ impl FieldRoot {
         };
         root
     }
-    fn events(&self) -> &MapRoot<usize> {
-        let Self::Events(root) = self else {
-            unreachable!("invariant: event field preserves typed ordinals")
+    fn segments(&self) -> &MapRoot<u64> {
+        let Self::Segments(root) = self else {
+            unreachable!("invariant: segment directories preserve typed ordinals")
         };
         root
     }
+}
+/// Directory leaf values are typed wire records carrying each segment's
+/// placement facts (first sequence / ordinal / record count). They are
+/// recorded values, re-verified against decoded bodies by the disk-read
+/// entry; readers never trust them as allocation lengths.
+fn segment_ordinal_text(index: &u64) -> Cow<'_, str> {
+    Cow::Owned(format!("{index:020}"))
+}
+fn event_dir_entry(hash: &str, first_sequence: u64) -> json_codec::Value {
+    count_segment_directory_records("events");
+    json_codec::to_value(storage_contract::EventDirectoryEntry {
+        kind: Default::default(),
+        hash: hash.into(),
+        first_sequence,
+    })
+    .expect("invariant: directory entries are plain JSON records")
+}
+fn op_dir_entry(
+    hash: &str,
+    first_sequence: u64,
+    first_ordinal: u64,
+    records: u64,
+) -> json_codec::Value {
+    count_segment_directory_records("operation_log");
+    json_codec::to_value(storage_contract::OperationDirectoryEntry {
+        kind: Default::default(),
+        hash: hash.into(),
+        first_sequence,
+        first_ordinal,
+        records,
+    })
+    .expect("invariant: directory entries are plain JSON records")
+}
+/// Objects to install plus the complete directory for one segmented log:
+/// every sealed reference, the open tail (when non-empty) as its own object,
+/// and the retained fresh-seal body so a seal decided this transaction is
+/// actually installed before PREPARE.
+fn events_log_encoding(
+    state: &State,
+    maximum: usize,
+) -> Result<(Vec<PreparedMetadataObject>, Vec<(u64, json_codec::Value)>)> {
+    let (objects, tail) = events_log_objects(state, maximum)?;
+    let mut entries = state
+        .events
+        .sealed()
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| {
+            (
+                index as u64,
+                event_dir_entry(&segment.hash, segment.first_sequence),
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.extend(tail);
+    Ok((objects, entries))
+}
+/// Prepare only resident bodies. Incremental directory encoding resolves each
+/// requested key from the resident directory instead of serializing its prefix.
+fn events_log_objects(
+    state: &State,
+    maximum: usize,
+) -> Result<(
+    Vec<PreparedMetadataObject>,
+    Option<(u64, json_codec::Value)>,
+)> {
+    let mut objects = Vec::new();
+    let mut tail = None;
+    if let Some((_, segment)) = state.events.fresh_seal() {
+        objects.push(PreparedMetadataObject::new(
+            EVENT_SEGMENT_KIND,
+            segment,
+            maximum.min(MAX_METADATA),
+        )?);
+    }
+    if let Some(first) = state.events.tail().first() {
+        let segment = storage_contract::EventSegment {
+            format: Default::default(),
+            events: state.events.tail().to_vec(),
+        };
+        let object =
+            PreparedMetadataObject::new(EVENT_SEGMENT_KIND, &segment, maximum.min(MAX_METADATA))?;
+        tail = Some((
+            state.events.tail_ordinal(),
+            event_dir_entry(&object.hash, first.sequence),
+        ));
+        objects.push(object);
+    }
+    Ok((objects, tail))
+}
+fn operations_log_encoding(
+    state: &State,
+    maximum: usize,
+) -> Result<(Vec<PreparedMetadataObject>, Vec<(u64, json_codec::Value)>)> {
+    let (objects, tail) = operations_log_objects(state, maximum)?;
+    let mut entries = state
+        .operations
+        .sealed()
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| {
+            (
+                index as u64,
+                op_dir_entry(
+                    &segment.hash,
+                    segment.first_sequence,
+                    segment.first_ordinal,
+                    segment.records,
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.extend(tail);
+    Ok((objects, entries))
+}
+fn operations_log_objects(
+    state: &State,
+    maximum: usize,
+) -> Result<(
+    Vec<PreparedMetadataObject>,
+    Option<(u64, json_codec::Value)>,
+)> {
+    let mut objects = Vec::new();
+    let mut tail = None;
+    if let Some((_, segment)) = state.operations.fresh_seal() {
+        objects.push(PreparedMetadataObject::new(
+            OPERATION_SEGMENT_KIND,
+            segment,
+            maximum.min(MAX_METADATA),
+        )?);
+    }
+    if let Some(first) = state.operations.tail().first() {
+        let segment = storage_contract::OperationSegment {
+            format: Default::default(),
+            records: state.operations.tail().to_vec(),
+        };
+        let object = PreparedMetadataObject::new(
+            OPERATION_SEGMENT_KIND,
+            &segment,
+            maximum.min(MAX_METADATA),
+        )?;
+        tail = Some((
+            state.operations.tail_ordinal(),
+            op_dir_entry(
+                &object.hash,
+                first.result.sequence,
+                state.operations.tail_first_ordinal(),
+                state.operations.tail().len() as u64,
+            ),
+        ));
+        objects.push(object);
+    }
+    Ok((objects, tail))
+}
+/// Complete locator encoding requires the one-shot cold index that only the
+/// disk-read entry attaches. Normal publications extend the previous basis
+/// instead; reaching this without either is a lineage-handling bug upstream.
+fn operation_key_text(key: &OperationId) -> Cow<'_, str> {
+    Cow::Owned(key.to_string())
+}
+fn full_locator_root(encoder: &mut Encoder, state: &State) -> Result<MapRoot<OperationId>> {
+    let index = state.operations.cold_index().ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "operation locator lineage is unavailable; recover before publishing",
+        )
+    })?;
+    count_field_records("operation_locators", index.len());
+    encoder.map_typed(
+        index
+            .iter()
+            .map(|(id, ordinal)| (*id, json_codec::Value::from(ordinal.to_string())))
+            .collect::<Vec<_>>(),
+        ProofMeasure::Plain,
+        &operation_key_text,
+    )
 }
 struct Builder {
     encoder: Encoder,
@@ -105,23 +281,36 @@ impl Builder {
     }
 }
 pub(super) fn prepare(state: &State, maximum: usize) -> Result<PreparedSnapshot> {
-    prepare_inner(state, maximum, None)
+    prepare_inner(state, maximum, None, &mut no_reused_sources)
 }
 pub(super) fn prepare_incremental(
     before: &State,
     state: &State,
     basis: &SnapshotReuse,
     maximum: usize,
+    reused: &mut dyn FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<PreparedSnapshot> {
     if basis.descriptor.sequence != before.sequence {
         return prepare(state, maximum);
     }
-    prepare_inner(state, maximum, Some((before, basis)))
+    prepare_inner(state, maximum, Some((before, basis)), reused)
+}
+/// A full encoding never touches reused leaf sources; reaching for one there
+/// is a lineage-handling bug, reported rather than silently re-read.
+pub(crate) fn no_reused_sources(
+    _kind: &'static str,
+    _hash: &str,
+) -> Result<AuthenticatedMetadataObject> {
+    Err(Error::new(
+        storage_contract::ErrorCode::StateInvalid,
+        "a full snapshot encoding has no reused leaf sources",
+    ))
 }
 fn prepare_inner(
     state: &State,
     maximum: usize,
     previous: Option<(&State, &SnapshotReuse)>,
+    reused: &mut dyn FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<PreparedSnapshot> {
     let mut builder = Builder {
         encoder: Encoder::new(maximum),
@@ -148,19 +337,6 @@ fn prepare_inner(
         }};
     }
     macro_rules! field {
-        (operations) => {
-            typed_field!(operations, Operations, operations, &|key: &OperationId| {
-                Cow::Owned(key.to_string())
-            })
-        };
-        (operation_principals) => {
-            typed_field!(
-                operation_principals,
-                Operations,
-                operations,
-                &|key: &OperationId| Cow::Owned(key.to_string())
-            )
-        };
         ($field:ident) => {
             typed_field!($field, Text, text, &|key: &String| Cow::Borrowed(
                 key.as_str()
@@ -169,7 +345,7 @@ fn prepare_inner(
     }
     macro_rules! fields {
         ($($field:ident,)*) => {{
-            let State { sequence:_, business_generation:_, topology_generation:_, control_auth:_, events:_, directory_selection_generations:_, file_selection_generations:_, $($field:_,)* } = state;
+            let State { sequence:_, business_generation:_, topology_generation:_, control_auth:_, events:_, operations:_, directory_selection_generations:_, file_selection_generations:_, $($field:_,)* } = state;
             $(field!($field);)*
         }};
     }
@@ -182,35 +358,152 @@ fn prepare_inner(
         builder.fields.insert(stringify!($field).into(), FieldRoot::Text(root));
     )* }; }
     counters!(directory_selection_generations, file_selection_generations);
-    fn ordinal(index: &usize) -> Cow<'_, str> {
-        Cow::Owned(format!("{index:020}"))
-    }
-    let events =
-        match previous.map(|(before, basis)| (state.events.changes_since(&before.events), basis)) {
-            Some((SequenceChanges::Append { start }, basis)) => builder.encoder.update_typed(
-                basis.fields["events"].events(),
-                (start..state.events.len()).collect::<BTreeSet<_>>(),
-                ProofMeasure::Plain,
-                &ordinal,
-                |index| {
-                    state
-                        .events
-                        .get(*index)
-                        .map(|event| encode_value("events", event))
-                        .transpose()
-                },
-            )?,
-            Some((SequenceChanges::All, _)) | None => builder.encoder.map_typed(
-                state
-                    .events
-                    .iter()
-                    .enumerate()
-                    .map(|(index, event)| Ok((index, encode_value("events", event)?)))
-                    .collect::<Result<Vec<_>>>()?,
-                ProofMeasure::Plain,
-                &ordinal,
-            )?,
+    // Segment directories map 20-digit ordinals to typed sealed/tail segment
+    // references. Sealed bodies are byte-stable; only dirty ordinals re-encode,
+    // and the one open tail object per log is re-prepared from resident records.
+    let events = {
+        let changes = previous
+            .map(|(before, _)| state.events.changes_since(&before.events))
+            .unwrap_or(storage_contract::SegmentChanges::All);
+        match (changes, previous) {
+            (storage_contract::SegmentChanges::Segments(dirty), Some((_, basis))) => {
+                let (objects, tail) = events_log_objects(state, maximum)?;
+                for object in objects {
+                    builder.encoder.prepared(object);
+                }
+                builder.encoder.update_typed(
+                    basis.fields["events"].segments(),
+                    (*dirty).clone(),
+                    ProofMeasure::Plain,
+                    &segment_ordinal_text,
+                    |index| {
+                        if let Some(segment) = usize::try_from(*index)
+                            .ok()
+                            .and_then(|index| state.events.sealed().get(index))
+                        {
+                            return Ok(Some(event_dir_entry(
+                                &segment.hash,
+                                segment.first_sequence,
+                            )));
+                        }
+                        Ok(tail
+                            .as_ref()
+                            .filter(|(ordinal, _)| ordinal == index)
+                            .map(|(_, value)| value.clone()))
+                    },
+                )?
+            }
+            _ => {
+                let (objects, entries) = events_log_encoding(state, maximum)?;
+                for object in objects {
+                    builder.encoder.prepared(object);
+                }
+                builder
+                    .encoder
+                    .map_typed(entries, ProofMeasure::Plain, &segment_ordinal_text)?
+            }
+        }
+    };
+    // Receipts: the segment directory plus the id→ordinal locator map.
+    {
+        let changes = previous
+            .map(|(before, _)| state.operations.changes_since(&before.operations))
+            .unwrap_or(storage_contract::SegmentChanges::All);
+        let log_root = match (changes, previous) {
+            (storage_contract::SegmentChanges::Segments(dirty), Some((_, basis))) => {
+                let (objects, tail) = operations_log_objects(state, maximum)?;
+                for object in objects {
+                    builder.encoder.prepared(object);
+                }
+                builder.encoder.update_typed(
+                    basis.fields["operation_log"].segments(),
+                    (*dirty).clone(),
+                    ProofMeasure::Plain,
+                    &segment_ordinal_text,
+                    |index| {
+                        if let Some(segment) = usize::try_from(*index)
+                            .ok()
+                            .and_then(|index| state.operations.sealed().get(index))
+                        {
+                            return Ok(Some(op_dir_entry(
+                                &segment.hash,
+                                segment.first_sequence,
+                                segment.first_ordinal,
+                                segment.records,
+                            )));
+                        }
+                        Ok(tail
+                            .as_ref()
+                            .filter(|(ordinal, _)| ordinal == index)
+                            .map(|(_, value)| value.clone()))
+                    },
+                )?
+            }
+            _ => {
+                let (objects, entries) = operations_log_encoding(state, maximum)?;
+                for object in objects {
+                    builder.encoder.prepared(object);
+                }
+                count_field_records("operation_log", entries.len());
+                builder
+                    .encoder
+                    .map_typed(entries, ProofMeasure::Plain, &segment_ordinal_text)?
+            }
         };
+        builder
+            .fields
+            .insert("operation_log".into(), FieldRoot::Segments(log_root));
+        let locators = match previous {
+            Some((before, basis)) => {
+                match state.operations.appended_ids_since(&before.operations) {
+                    Some(appended) => {
+                        let appended: BTreeMap<OperationId, u64> = appended.into_iter().collect();
+                        let basis_root = basis.fields["operation_locators"].operations();
+                        let basis_reference = basis_root.reference().clone();
+                        // Re-encoding a dirty leaf also re-serializes its
+                        // untouched co-resident rows: their ordinals come
+                        // from exact point reads of the published basis
+                        // pages, memoized so each page is read once.
+                        let mut pages: BTreeMap<String, json_codec::Value> = BTreeMap::new();
+                        let locators = builder.encoder.update_typed(
+                            basis_root,
+                            appended.keys().cloned().collect::<BTreeSet<_>>(),
+                            ProofMeasure::Plain,
+                            &operation_key_text,
+                            |key| {
+                                if let Some(ordinal) = appended.get(key) {
+                                    return Ok(Some(json_codec::Value::from(ordinal.to_string())));
+                                }
+                                crate::metadata_map::lookup(
+                                    &basis_reference,
+                                    &key.to_string(),
+                                    |kind, hash| {
+                                        let address = format!("{kind}/{hash}");
+                                        if let Some(value) = pages.get(&address) {
+                                            return AuthenticatedMetadataObject::authenticate(
+                                                kind,
+                                                hash,
+                                                value.clone(),
+                                            );
+                                        }
+                                        let object = reused(kind, hash)?;
+                                        pages.insert(address, object.value().clone());
+                                        Ok(object)
+                                    },
+                                )
+                            },
+                        )?;
+                        locators
+                    }
+                    None => full_locator_root(&mut builder.encoder, state)?,
+                }
+            }
+            None => full_locator_root(&mut builder.encoder, state)?,
+        };
+        builder
+            .fields
+            .insert("operation_locators".into(), FieldRoot::Operations(locators));
+    }
     let maps = builder
         .fields
         .iter()
@@ -219,7 +512,7 @@ fn prepare_inner(
     let events_reference = events.reference().clone();
     builder
         .fields
-        .insert("events".into(), FieldRoot::Events(events));
+        .insert("events".into(), FieldRoot::Segments(events));
     let (control_auth, auth_bytes) = match previous {
         Some((before, basis)) if state.control_auth == before.control_auth => {
             (basis.descriptor.control_auth.clone(), basis.auth_bytes)
@@ -281,13 +574,26 @@ fn finish(
     })
 }
 fn encode_value<T: Serialize>(field: &str, value: &T) -> Result<json_codec::Value> {
+    count_field_records(field, 1);
+    Ok(json_codec::to_value(value)?)
+}
+/// Test observability only: a complete re-encode of a segment-directory or
+/// locator field records its entry count, exactly like per-value map encodes.
+fn count_field_records(field: &str, records: usize) {
     #[cfg(test)]
     SNAPSHOT_FIELD_SERIALIZATIONS.with(|counts| {
-        *counts.borrow_mut().entry(field.into()).or_default() += 1;
+        *counts.borrow_mut().entry(field.into()).or_default() += records;
+    });
+    #[cfg(not(test))]
+    let _ = (field, records);
+}
+fn count_segment_directory_records(field: &'static str) {
+    #[cfg(test)]
+    SEGMENT_DIRECTORY_SERIALIZATIONS.with(|counts| {
+        *counts.borrow_mut().entry(field).or_default() += 1;
     });
     #[cfg(not(test))]
     let _ = field;
-    Ok(json_codec::to_value(value)?)
 }
 /// Rare source-loss fallback: reconstruct one exact bound field, never substitute
 /// another graph or catch an installation/collision failure as a source failure.
@@ -301,7 +607,17 @@ pub(super) fn reconstruct_field(
         $(stringify!($name)=>state.$name.iter().map(|(k,v)|Ok((k.to_string(),encode_value(field,v)?))).collect::<Result<json_codec::Map<_,_>>>()?,)*
         "directory_selection_generations"=>state.directory_selection_generations.iter().map(|(k,v)|Ok((k.clone(),encode_value(field,&v.to_string())?))).collect::<Result<_>>()?,
         "file_selection_generations"=>state.file_selection_generations.iter().map(|(k,v)|Ok((k.clone(),encode_value(field,&v.to_string())?))).collect::<Result<_>>()?,
-        "events"=>state.events.iter().enumerate().map(|(i,event)|Ok((format!("{i:020}"),encode_value(field,event)?))).collect::<Result<_>>()?,
+        "events"=>{
+            let (objects,entries)=events_log_encoding(state,maximum)?;
+            for object in objects{encoder.prepared(object);}
+            entries.into_iter().map(|(k,v)|(format!("{k:020}"),v)).collect()
+        },
+        "operation_log"=>{
+            let (objects,entries)=operations_log_encoding(state,maximum)?;
+            for object in objects{encoder.prepared(object);}
+            entries.into_iter().map(|(k,v)|(format!("{k:020}"),v)).collect()
+        },
+        "operation_locators"=>state.operations.cold_index().ok_or_else(||Error::new(storage_contract::ErrorCode::StateInvalid,"operation locator lineage is unavailable; recover before reconstructing"))?.iter().map(|(id,ordinal)|(id.to_string(),json_codec::Value::from(ordinal.to_string()))).collect(),
         _=>unreachable!("invariant: snapshot fields use the exhaustive State schema"),
     }};}
     let map = state_map_fields!(dispatch);
@@ -315,7 +631,7 @@ pub(super) fn reconstruct_field(
 }
 pub(crate) fn validate_schema(snapshot: &Snapshot) -> Result<()> {
     macro_rules! check {($($field:ident,)*)=>{{
-        let fields=[$(stringify!($field),)*"directory_selection_generations","file_selection_generations"];
+        let fields=[$(stringify!($field),)*"directory_selection_generations","file_selection_generations","operation_log","operation_locators"];
         if snapshot.maps.len()!=fields.len() || fields.iter().any(|field|!snapshot.maps.contains_key(*field)) {
             return Err(Error::new(ErrorCode::ObjectCorrupt,"snapshot map schema differs"));
         }
@@ -342,31 +658,38 @@ pub(super) fn prepare_reference(state: &State, maximum: usize) -> Result<Prepare
     };
     macro_rules! fields {($($field:ident,)*) => {for field in [$(stringify!($field),)* "directory_selection_generations", "file_selection_generations"] {
         let value = logical.remove(field).unwrap_or_else(|| json_codec::json!({}));
-        let root = if matches!(field, "operations" | "operation_principals") {
-            let map: BTreeMap<OperationId,json_codec::Value> = json_codec::from_value(value)?;
-            FieldRoot::Operations(builder.encoder.map_typed(map, ProofMeasure::Plain, &|key: &OperationId| Cow::Owned(key.to_string()))?)
-        } else {
-            let json_codec::Value::Object(map) = value else { panic!("State field is a map") };
-            let measure = if field == "content_states" { ProofMeasure::ContentStates } else { ProofMeasure::Plain };
-            FieldRoot::Text(builder.encoder.map_root(map, measure)?)
-        };
+        let json_codec::Value::Object(map) = value else { panic!("State field is a map") };
+        let measure = if field == "content_states" { ProofMeasure::ContentStates } else { ProofMeasure::Plain };
+        let root = FieldRoot::Text(builder.encoder.map_root(map, measure)?);
         builder.fields.insert(field.into(), root);
     }};}
     state_map_fields!(fields);
-    let events = logical
-        .remove("events")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (i, v.clone()))
-        .collect::<Vec<_>>();
+    logical.remove("events");
+    logical.remove("operations");
+    // The oracle reads the typed logs directly: the logical JSON omits the
+    // one-shot cold index and the retained fresh-seal body on purpose.
+    let (objects, entries) = events_log_encoding(state, maximum)?;
+    for object in objects {
+        builder.encoder.prepared(object);
+    }
     let events = builder
         .encoder
-        .map_typed(events, ProofMeasure::Plain, &|index: &usize| {
-            Cow::Owned(format!("{index:020}"))
-        })?;
+        .map_typed(entries, ProofMeasure::Plain, &segment_ordinal_text)?;
+    let (objects, entries) = operations_log_encoding(state, maximum)?;
+    for object in objects {
+        builder.encoder.prepared(object);
+    }
+    let log_root =
+        builder
+            .encoder
+            .map_typed(entries, ProofMeasure::Plain, &segment_ordinal_text)?;
+    builder
+        .fields
+        .insert("operation_log".into(), FieldRoot::Segments(log_root));
+    let locators = full_locator_root(&mut builder.encoder, state)?;
+    builder
+        .fields
+        .insert("operation_locators".into(), FieldRoot::Operations(locators));
     let events_reference = events.reference().clone();
     let maps = builder
         .fields
@@ -375,7 +698,7 @@ pub(super) fn prepare_reference(state: &State, maximum: usize) -> Result<Prepare
         .collect();
     builder
         .fields
-        .insert("events".into(), FieldRoot::Events(events));
+        .insert("events".into(), FieldRoot::Segments(events));
     let auth = logical.remove("control_auth").unwrap();
     let auth_bytes = canonical_json_value(&auth)?.len();
     let hash = builder.encoder.object("state-control-auth", &auth)?;
@@ -404,6 +727,7 @@ pub(super) fn prepare_reference(state: &State, maximum: usize) -> Result<Prepare
 #[cfg(test)]
 thread_local! {
     pub(super) static SNAPSHOT_FIELD_SERIALIZATIONS:std::cell::RefCell<BTreeMap<String,usize>>=const{std::cell::RefCell::new(BTreeMap::new())};
+    static SEGMENT_DIRECTORY_SERIALIZATIONS:std::cell::RefCell<BTreeMap<&'static str,usize>>=const{std::cell::RefCell::new(BTreeMap::new())};
 }
 #[cfg(test)]
 pub(super) fn take_encoding_counts() -> BTreeMap<String, usize> {
@@ -413,3 +737,7 @@ pub(super) fn take_encoding_counts() -> BTreeMap<String, usize> {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/journal/event_append_tests.rs"]
 mod event_append_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/journal/segment_directory_cost_tests.rs"]
+mod segment_directory_cost_tests;

@@ -1,7 +1,7 @@
 use super::*;
 use json_codec::json;
 use std::sync::Arc;
-fn commit(id: &str, entries: Vec<Entry>) -> Arc<storage_contract::Commit> {
+fn commit(id: &str, entries: u64) -> Arc<storage_contract::Commit> {
     Arc::new(storage_contract::Commit {
         commit_id: id.into(),
         history_tree_id: "history".into(),
@@ -12,7 +12,7 @@ fn commit(id: &str, entries: Vec<Entry>) -> Arc<storage_contract::Commit> {
         operation_id: storage_contract::OperationId::generate(),
         author: "owner".into(),
         message: "".into(),
-        entries,
+        namespace: crate::fixture_commit_namespace(entries),
         pending_file_versions: Default::default(),
         namespace_deletions: None,
         provenance: None,
@@ -30,20 +30,19 @@ fn entry(path: &str, version: &str) -> Entry {
 }
 #[test]
 fn comparison_wire_preserves_change_variants_omission_order_and_entry_fields() {
-    let left = commit(
-        "left",
-        vec![entry("keep.txt", "version"), entry("remove.txt", "old")],
-    );
-    let right = commit(
-        "right",
-        vec![entry("KEEP.txt", "version"), entry("add.txt", "new")],
-    );
+    let left_entries = vec![entry("keep.txt", "version"), entry("remove.txt", "old")];
+    let right_entries = vec![entry("KEEP.txt", "version"), entry("add.txt", "new")];
     let expected = json!({"left":"left","right":"right","changes":[
-        {"path":"KEEP.txt","change":"modified","before":left.entries[0],"after":right.entries[0]},
-        {"path":"remove.txt","change":"removed","before":left.entries[1]},
-        {"path":"add.txt","change":"added","after":right.entries[1]}
+        {"path":"KEEP.txt","change":"modified","before":left_entries[0],"after":right_entries[0]},
+        {"path":"remove.txt","change":"removed","before":left_entries[1]},
+        {"path":"add.txt","change":"added","after":right_entries[1]}
     ]});
-    let response = ComparisonResponse::from(CommitComparison::between(left, right));
+    let response = ComparisonResponse::from(CommitComparison::between(
+        commit("left", left_entries.len() as u64),
+        left_entries,
+        commit("right", right_entries.len() as u64),
+        right_entries,
+    ));
     assert_eq!(json_codec::to_value(&response).unwrap(), expected);
     assert_eq!(
         storage_contract::canonical_json(&response).unwrap(),
@@ -54,8 +53,10 @@ fn comparison_wire_preserves_change_variants_omission_order_and_entry_fields() {
         u64::MAX.to_string()
     );
     let empty = ComparisonResponse::from(CommitComparison::between(
-        commit("left", vec![]),
-        commit("right", vec![]),
+        commit("left", 0),
+        vec![],
+        commit("right", 0),
+        vec![],
     ));
     assert_eq!(
         storage_contract::canonical_json(&empty).unwrap(),

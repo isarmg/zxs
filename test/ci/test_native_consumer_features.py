@@ -60,6 +60,15 @@ class NativeConsumerFeaturesTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "test graph lacks"):
                 GATE["validate"](MINIMAL + HTTP + ENGINE, consumer, "normal,build,dev")
 
+    def test_fixture_support_cannot_enter_any_production_graph(self):
+        fixture_engine = ENGINE.replace("|\n", "|test-support\n")
+        for consumer in GATE["CONSUMERS"]:
+            with self.subTest(consumer=consumer):
+                with self.assertRaisesRegex(AssertionError, "production graph enables"):
+                    GATE["validate"](MINIMAL + HTTP + fixture_engine, consumer, "normal,build")
+        GATE["validate"](MINIMAL + HTTP + fixture_engine + FAULT_ENGINE,
+                         "storage-client", "normal,build,dev")
+
     def test_cargo_failure_is_not_hidden(self):
         with mock.patch.object(GATE["subprocess"], "run",
                                side_effect=subprocess.CalledProcessError(101, ["cargo"])):

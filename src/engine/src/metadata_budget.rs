@@ -36,11 +36,14 @@ pub(crate) fn preflight_publication(
     recovery: Option<RecoveryProof>,
     maximum: usize,
 ) -> Result<usize> {
+    // Engine fixtures pass published states whose one-shot cold index was
+    // consumed; the sizing full encode derives it from the resident tail.
+    let state = crate::journal::fixture_indexed_state(state)?;
     preflight_publication_prepared(
         &engine.planning_context(),
         candidate,
         result,
-        state,
+        &state,
         recovery,
         maximum,
         None,
@@ -234,9 +237,14 @@ fn preflight_inner(
     // State content scan, page decode, or second independent partition pass.
     let recovering = bound_snapshot || publication.recovery.is_some();
     let generated = if !recovering && prepared_graphs.is_none() {
+        // The sizing full encode runs against published states, so commit
+        // namespaces resolve through verified member replicas.
+        let source = crate::namespace::ObjectLoaderSource::new(|kind, hash: &str| {
+            crate::publication_evidence::verified_graph_object_at(resources, &members, kind, hash)
+        });
         Some((
             prepare_snapshot(state, maximum)?,
-            crate::history_package::prepare_history_manifests(state, maximum)?.0,
+            crate::history_package::prepare_history_manifests(state, maximum, &source)?.0,
         ))
     } else {
         None

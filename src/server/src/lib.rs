@@ -417,6 +417,45 @@ pub trait Backend: Send + Sync {
         branch: &str,
         commit: &str,
     ) -> Result<Arc<storage_contract::Commit>, ApiError>;
+    /// One bounded point read of a published commit namespace, after the same
+    /// branch and identity admission as `snapshot_at`. Never a tree expansion.
+    /// The default refuses loudly; a backend without a readable namespace
+    /// cannot serve bounded probes and must not fake an empty one.
+    fn snapshot_entry(
+        &self,
+        _identity: &Identity,
+        _branch: &str,
+        _commit: &str,
+        _key: &str,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    /// Whether a published directory holds at least one direct child: one
+    /// child-page read of length one, never a subtree expansion. False when
+    /// the key does not name a directory in that commit. The default refuses
+    /// loudly, exactly like `snapshot_entry`.
+    fn snapshot_directory_has_children(
+        &self,
+        _identity: &Identity,
+        _branch: &str,
+        _commit: &str,
+        _key: &str,
+    ) -> Result<bool, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    /// Resolve one stable entry of a published commit: a point read of the
+    /// caller's last-known key first, then an early-stop identity walk, so a
+    /// concurrent rename never changes which entry an open descriptor means.
+    fn snapshot_entry_by_identity(
+        &self,
+        _identity: &Identity,
+        _branch: &str,
+        _commit: &str,
+        _key: &str,
+        _entry_id: &str,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        Err(ApiError::unsupported())
+    }
     /// Create a workspace using the current authenticated actor and pool admission limits.
     fn create_workspace(
         &self,
@@ -844,6 +883,45 @@ impl Backend for AuthorizedBackend {
     ) -> Result<Arc<storage_contract::Commit>, ApiError> {
         self.backend
             .snapshot_at(&self.current(identity)?, branch, commit)
+    }
+
+    fn snapshot_entry(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        self.backend
+            .snapshot_entry(&self.current(identity)?, branch, commit, key)
+    }
+
+    fn snapshot_directory_has_children(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+    ) -> Result<bool, ApiError> {
+        self.backend
+            .snapshot_directory_has_children(&self.current(identity)?, branch, commit, key)
+    }
+
+    fn snapshot_entry_by_identity(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        commit: &str,
+        key: &str,
+        entry_id: &str,
+    ) -> Result<Option<storage_contract::Entry>, ApiError> {
+        self.backend.snapshot_entry_by_identity(
+            &self.current(identity)?,
+            branch,
+            commit,
+            key,
+            entry_id,
+        )
     }
 
     fn create_workspace(
@@ -2503,6 +2581,20 @@ async fn capabilities(
     .await
     .map_err(ApiError::join)?
     .map(Json)
+}
+
+/// A syntactically valid namespace root for hand-built commit fixtures whose
+/// pages are never read: scripted backends serve entry probes directly, so
+/// only the recorded total participates in assertions.
+#[cfg(test)]
+pub(crate) fn fixture_commit_namespace(entries: u64) -> storage_contract::CommitNamespace {
+    storage_contract::CommitNamespace {
+        root: storage_contract::NamespaceReference {
+            kind: storage_contract::NamespaceRefKind::Page,
+            hash: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff".into(),
+        },
+        entries,
+    }
 }
 
 #[cfg(test)]
