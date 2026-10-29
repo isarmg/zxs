@@ -6,6 +6,7 @@ use json_codec::json;
 #[derive(Default, Debug, PartialEq, Eq)]
 struct Membership {
     versions_by_history: BTreeMap<String, BTreeSet<String>>,
+    branches: BTreeSet<String>,
     pending_branches: BTreeSet<String>,
     path_nodes: BTreeSet<String>,
     metadata_nodes: BTreeSet<String>,
@@ -24,6 +25,13 @@ fn full_memberships(state: &State) -> BTreeMap<String, Membership> {
             .insert(id.clone());
     }
     for (id, branch) in state.branches.iter() {
+        if let Some(file) = &branch.file_id {
+            expected
+                .entry(file.clone())
+                .or_default()
+                .branches
+                .insert(id.clone());
+        }
         for file in branch.pending_file_versions.keys() {
             expected
                 .entry(file.clone())
@@ -111,6 +119,7 @@ fn assert_memberships(state: &State, index: &DerivedOwners) {
             ..Membership::default()
         };
         if let Some(rows) = index.file_rows(&file) {
+            actual.branches = rows.branches.keys().cloned().collect();
             actual.pending_branches = rows.pending_branches.keys().cloned().collect();
             actual.path_nodes = rows.path_nodes.keys().cloned().collect();
             actual.metadata_nodes = rows.metadata_nodes.keys().cloned().collect();
@@ -510,6 +519,7 @@ fn branch_label_only_changes_preserve_untouched_membership_backing() {
     let next = transition.next().owners;
     assert!(index.history_rows.shares_storage_with(&next.history_rows));
     assert!(index.files.0.shares_storage_with(&next.files.0));
+    assert!(index.file_rows.shares_storage_with(&next.file_rows));
     assert!(index.directories.0.shares_storage_with(&next.directories.0));
     assert_memberships(&after, next);
 }
@@ -568,4 +578,39 @@ fn first_version_uses_version_order_not_history_order() {
     owners.files.remove("file", "history-a", "version-m");
     owners.files.remove("file", "history-a", "version-z");
     assert_eq!(owners.first_version("file"), None);
+}
+
+#[test]
+fn branch_membership_tracks_unborn_reownership_and_final_removal() {
+    let mut before = State::default();
+    before
+        .branches
+        .insert("unborn".into(), branch("unborn", Some("file-a"), "h1"));
+    let mut index =
+        DerivedOwners::from_state(&before, &crate::namespace::fixture_store::FixtureSource)
+            .unwrap();
+    assert_memberships(&before, &index);
+    assert_eq!(index.file_rows("file-a").unwrap().branches.len(), 1);
+    assert!(index.first_version("file-a").is_none());
+
+    let mut migrated = candidate(&before);
+    let row = migrated.branches.get_mut("unborn").unwrap();
+    row.history_tree_id = "h2".into();
+    row.state = BranchState::Migrated;
+    let next = compare(&before, &migrated, &index);
+    assert!(index.file_rows.shares_storage_with(&next.file_rows));
+    before = migrated;
+    index = next;
+
+    for file in [Some("file-b"), None, Some("file-c")] {
+        let mut after = candidate(&before);
+        after.branches.get_mut("unborn").unwrap().file_id = file.map(str::to_owned);
+        index = compare(&before, &after, &index);
+        before = after;
+    }
+    let mut deleted = candidate(&before);
+    deleted.branches.remove("unborn");
+    let removed = compare(&before, &deleted, &index);
+    assert!(removed.file_rows.is_empty());
+    assert_eq!(index.file_rows("file-c").unwrap().branches.len(), 1);
 }

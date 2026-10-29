@@ -62,6 +62,7 @@ impl FileVersions {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FileRows {
+    pub(crate) branches: SharedRecords<()>,
     pub(crate) pending_branches: SharedRecords<()>,
     pub(crate) path_nodes: SharedRecords<()>,
     pub(crate) metadata_nodes: SharedRecords<()>,
@@ -72,6 +73,7 @@ pub(crate) struct FileRows {
 
 #[derive(Clone, Copy)]
 enum FileField {
+    Branch,
     PendingBranch,
     PathNode,
     MetadataNode,
@@ -83,6 +85,7 @@ enum FileField {
 impl FileRows {
     fn field(&mut self, field: FileField) -> &mut SharedRecords<()> {
         match field {
+            FileField::Branch => &mut self.branches,
             FileField::PendingBranch => &mut self.pending_branches,
             FileField::PathNode => &mut self.path_nodes,
             FileField::MetadataNode => &mut self.metadata_nodes,
@@ -94,6 +97,7 @@ impl FileRows {
 
     fn is_empty(&self) -> bool {
         let Self {
+            branches,
             pending_branches,
             path_nodes,
             metadata_nodes,
@@ -101,7 +105,8 @@ impl FileRows {
             contexts,
             aliases,
         } = self;
-        pending_branches.is_empty()
+        branches.is_empty()
+            && pending_branches.is_empty()
             && path_nodes.is_empty()
             && metadata_nodes.is_empty()
             && merges.is_empty()
@@ -134,6 +139,13 @@ impl DerivedOwners {
                     .expect("invariant: file/history version buckets are nonempty")
             })
             .min()
+    }
+
+    pub(crate) fn version_membership(
+        &self,
+        file: &str,
+    ) -> Option<&SharedRecords<SharedRecords<()>>> {
+        self.files.0.get(file)
     }
 
     pub(crate) fn versions(&self, file: &str) -> impl Iterator<Item = &String> {
@@ -224,6 +236,9 @@ impl DerivedOwners {
 
     pub(super) fn build_file_rows(&mut self, state: &State) {
         for (key, branch) in state.branches.iter() {
+            if let Some(file) = &branch.file_id {
+                self.file_member(file, FileField::Branch, key, true);
+            }
             for file in branch.pending_file_versions.keys() {
                 self.file_member(file, FileField::PendingBranch, key, true);
             }
@@ -261,6 +276,12 @@ impl DerivedOwners {
         for key in &writes.rows[&Field::Branches] {
             let previous = before.branches.get(key);
             let next = after.branches.get(key);
+            self.move_file_member(
+                FileField::Branch,
+                key,
+                previous.and_then(|branch| branch.file_id.as_deref()),
+                next.and_then(|branch| branch.file_id.as_deref()),
+            );
             let previous_files = previous
                 .into_iter()
                 .flat_map(|branch| branch.pending_file_versions.keys())

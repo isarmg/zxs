@@ -110,3 +110,68 @@ fn typed_file_history_preserves_core_query_wire_and_admitted_snapshot_lifetime()
         encoded
     );
 }
+
+#[test]
+fn version_page_finishes_captured_snapshot_but_rechecks_current_authorization() {
+    let (root, mut engine, repo, _) = fixture();
+    save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"first");
+    let file = engine.list_tree(&repo.main_branch_id).unwrap()[0]
+        .file_id
+        .clone();
+    let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
+    let capture = || {
+        let engine = backend.engine.lock().unwrap();
+        crate::engine_backend::current_protected_identity(&engine, &identity).unwrap();
+        crate::engine_backend::file_manager::history_pages::prepare_version_page(
+            &engine,
+            crate::ReadVersionPage::parse(file.clone(), BTreeMap::new()).unwrap(),
+        )
+        .unwrap()
+    };
+    let old = capture();
+    save_projection_file(
+        &mut backend.engine.lock().unwrap(),
+        &repo.main_branch_id,
+        "file.txt",
+        b"second",
+    );
+    let old_page = backend
+        .finish_version_page(&identity, &file, old.read())
+        .unwrap();
+    let fresh = backend
+        .file_version_page(
+            &identity,
+            crate::ReadVersionPage::parse(file.clone(), BTreeMap::new()).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(old_page.versions.len(), 1);
+    assert_eq!(fresh.versions.len(), 2);
+    assert_ne!(old_page.history_root, fresh.history_root);
+    let pending = capture();
+    auth.logout(&token).unwrap();
+    assert_eq!(
+        backend
+            .finish_version_page(&identity, &file, pending.read())
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+    // Completion authorization precedes disclosure of a detached read failure.
+    assert_eq!(
+        backend
+            .finish_version_page(&identity, &file, Err(ApiError::invalid("detached failure")))
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+    assert_eq!(
+        backend
+            .file_version_page(
+                &identity,
+                crate::ReadVersionPage::parse("missing".into(), BTreeMap::new()).unwrap()
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+}

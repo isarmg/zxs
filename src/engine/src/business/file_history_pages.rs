@@ -241,6 +241,70 @@ pub struct FileHistoryScope<'a> {
     pub(crate) history_id: &'a str,
 }
 
+/// Request-scoped version selection over immutable shared roots, not an
+/// authorization grant. No State, authentication data or mutable engine escapes.
+/// Holding this plan retains the old version map until it is consumed.
+pub struct FileVersionReadPlan {
+    versions: storage_contract::SharedRecords<FileVersion>,
+    membership: Option<storage_contract::SharedRecords<storage_contract::SharedRecords<()>>>,
+    file_id: String,
+    history_id: String,
+    boundary: Option<(VersionKey, Direction)>,
+    limit: usize,
+}
+
+impl FileVersionReadPlan {
+    /// Select outside the Engine lock. Only selected record handles outlive
+    /// this call; both shared map roots are dropped before the caller re-admits.
+    pub fn read(self) -> (Selection<VersionKey>, Vec<std::sync::Arc<FileVersion>>) {
+        let versions = self
+            .membership
+            .iter()
+            .flat_map(|histories| histories.values())
+            .flat_map(|versions| versions.keys())
+            .map(|id| {
+                self.versions
+                    .get(id)
+                    .expect("invariant: captured version membership names an existing record")
+            })
+            .filter(|version| {
+                version.file_id == self.file_id && version.history_tree_id == self.history_id
+            });
+        let selection = version_selection(
+            versions,
+            self.boundary
+                .as_ref()
+                .map(|(key, direction)| (key, *direction)),
+            self.limit,
+        );
+        let records = selection
+            .keys
+            .iter()
+            .map(|key| {
+                self.versions
+                    .get_shared(&key.version_id)
+                    .expect("invariant: selected version exists in captured map")
+            })
+            .collect();
+        (selection, records)
+    }
+}
+
+fn version_selection<'a>(
+    versions: impl Iterator<Item = &'a FileVersion>,
+    boundary: Option<(&VersionKey, Direction)>,
+    limit: usize,
+) -> Selection<VersionKey> {
+    let mut selector = Selector::new(boundary, limit);
+    for version in versions {
+        selector.consider(VersionKey {
+            version_sequence: version.version_sequence,
+            version_id: version.version_id.clone(),
+        });
+    }
+    selector.finish()
+}
+
 impl Engine {
     /// A bounded read scope over one file's history in the current State.
     ///
@@ -454,12 +518,12 @@ impl<'a> FileHistoryScope<'a> {
     }
 
     fn head_branch(&self, version_id: &str) -> Result<Option<String>> {
-        for (id, branch) in self
-            .state
-            .branches
-            .iter()
-            .filter(|(_, branch)| branch.file_id.as_deref() == Some(self.file_id))
+        for id in self
+            .file_rows()
+            .into_iter()
+            .flat_map(|rows| rows.branches.keys())
         {
+            let branch = &self.state.branches[id];
             let commit = self
                 .state
                 .commits
@@ -716,11 +780,11 @@ impl<'a> FileHistoryScope<'a> {
             boundary.as_ref().map(|(key, direction)| (key, *direction)),
             limit,
         );
-        for (id, _) in self
-            .state
-            .branches
-            .iter()
-            .filter(|(id, _)| self.branch(id).is_some())
+        for id in self
+            .file_rows()
+            .into_iter()
+            .flat_map(|rows| rows.branches.keys())
+            .filter(|id| self.branch(id).is_some())
         {
             selector.consider(id.clone());
         }
@@ -863,17 +927,37 @@ impl<'a> FileHistoryScope<'a> {
         boundary: Option<(&VersionKey, Direction)>,
         limit: usize,
     ) -> Selection<VersionKey> {
-        let mut selector = Selector::new(boundary, limit);
-        for id in self.version_ids() {
-            let version = self
-                .version(id)
-                .expect("invariant: version ids were filtered to this scope");
-            selector.consider(VersionKey {
-                version_sequence: version.version_sequence,
-                version_id: id.clone(),
-            });
+        version_selection(
+            self.version_ids().map(|id| {
+                self.version(id)
+                    .expect("invariant: version ids were filtered to this scope")
+            }),
+            boundary,
+            limit,
+        )
+    }
+
+    /// Capture shared version roots after cursor admission, without cloning
+    /// the tracked write set or traversing the file's history.
+    ///
+    /// # Errors
+    /// `VersionNotFound` or `InvalidCursor` for an invalid boundary.
+    pub fn prepare_version_page(
+        &self,
+        boundary: Option<(VersionKey, Direction)>,
+        limit: usize,
+    ) -> Result<FileVersionReadPlan> {
+        if let Some((key, _)) = &boundary {
+            self.version_record(key)?;
         }
-        selector.finish()
+        Ok(FileVersionReadPlan {
+            versions: storage_contract::SharedRecords::clone(&self.state.versions),
+            membership: self.owners.version_membership(self.file_id).cloned(),
+            file_id: self.file_id.to_owned(),
+            history_id: self.history_id.to_owned(),
+            boundary,
+            limit,
+        })
     }
 
     /// # Errors

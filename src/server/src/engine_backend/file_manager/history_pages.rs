@@ -1,9 +1,10 @@
 //! Bounded file-history pages over the engine's page projection.
 //!
-//! Every read runs under the engine mutex held by the caller: it resolves
+//! Reads admit under the engine mutex held by the caller: each resolves
 //! the file's repository, captures the exact current root, compares it with
 //! the request's observed root (409 on change), selects a bounded page and
-//! copies only that page's records. JSON encoding happens after the lock.
+//! copies only that page's records. Version selection uses an owned plan outside
+//! the lock; other projections remain borrowed. JSON encoding is also unlocked.
 use super::*;
 use crate::backend_activity::utc_timestamp;
 use crate::backend_file_history::{
@@ -638,10 +639,19 @@ pub(in crate::engine_backend) fn node_field(
     })
 }
 
-pub(in crate::engine_backend) fn version_page(
+pub(in crate::engine_backend) struct VersionPagePlan {
+    file_id: String,
+    history_tree_id: String,
+    history_root: String,
+    seed: HistoryCursorSeed,
+    backward: bool,
+    versions: storage_engine::file_history_pages::FileVersionReadPlan,
+}
+
+pub(in crate::engine_backend) fn prepare_version_page(
     engine: &Engine,
     request: ReadVersionPage,
-) -> Result<VersionPage, ApiError> {
+) -> Result<VersionPagePlan, ApiError> {
     let collection = request;
     let admitted = admit(
         engine,
@@ -670,45 +680,44 @@ pub(in crate::engine_backend) fn version_page(
         }
         None => None,
     };
-    let scope = admitted.scope;
-    if let Some((key, _)) = &boundary {
-        scope.version_record(key).map_err(error)?;
-    }
-    let selection = scope.select_versions(
-        boundary.as_ref().map(|(key, direction)| (key, *direction)),
-        collection.limit,
-    );
-    if selection.keys.is_empty() && !selection.more_before && !selection.more_after {
-        return Err(ApiError::new(
-            ::http::StatusCode::NOT_FOUND,
-            storage_contract::ErrorCode::NotFound,
-            "file history not found",
-        ));
-    }
-    let versions = selection
-        .keys
-        .iter()
-        .map(|key| {
-            scope
-                .version_record(key)
-                .map(crate::backend_file_history::VersionSummary::from)
-                .map_err(error)
-        })
-        .collect::<Result<Vec<_>, ApiError>>()?;
-    Ok(VersionPage {
-        file_id: scope.file_id().to_owned(),
+    Ok(VersionPagePlan {
+        file_id: admitted.scope.file_id().to_owned(),
         history_tree_id: admitted.repo.history_tree_id.clone(),
         history_root: admitted.root.as_str().to_owned(),
-        versions,
-        continuation: continuation(
-            seed,
-            &selection,
-            collection
-                .cursor
-                .as_ref()
-                .is_some_and(|cursor| cursor.backward),
-        ),
+        seed,
+        backward: collection
+            .cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.backward),
+        versions: admitted
+            .scope
+            .prepare_version_page(boundary, collection.limit)
+            .map_err(error)?,
     })
+}
+
+impl VersionPagePlan {
+    pub(in crate::engine_backend) fn read(self) -> Result<VersionPage, ApiError> {
+        let (selection, records) = self.versions.read();
+        if selection.keys.is_empty() && !selection.more_before && !selection.more_after {
+            return Err(ApiError::new(
+                ::http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::NotFound,
+                "file history not found",
+            ));
+        }
+        let versions = records
+            .iter()
+            .map(|record| crate::backend_file_history::VersionSummary::from(record.as_ref()))
+            .collect();
+        Ok(VersionPage {
+            file_id: self.file_id,
+            history_tree_id: self.history_tree_id,
+            history_root: self.history_root,
+            versions,
+            continuation: continuation(self.seed, &selection, self.backward),
+        })
+    }
 }
 
 #[cfg(test)]

@@ -492,6 +492,12 @@ fn exhaustive_paging_of_every_collection_matches_whole_history_oracles() {
     });
     let branches = oracle_branches(state, &g.file, &history);
     assert!(branches.len() >= 3, "{branches:?}");
+    exhaust(&branches, |boundary, limit| {
+        scope.branch_window(
+            boundary.map(|(id, direction)| (id.as_str(), direction)),
+            limit,
+        )
+    });
     for limit in 1..=branches.len() + 1 {
         let mut collected = Vec::new();
         let mut after: Option<String> = None;
@@ -1399,4 +1405,148 @@ fn file_history_owner_does_not_use_membership_from_another_state_allocation() {
         pool.engine.file_history_owner(&other.file_id),
         Some(history.as_str())
     );
+}
+
+#[test]
+fn branch_windows_keep_history_and_migrated_filters_without_requiring_a_version() {
+    let pool = Pool::new();
+    let template = &pool.engine.state().branches[&pool.repo.main_branch_id];
+    let mut state = State::default();
+    for (id, file, history, migrated) in [
+        ("a", Some("file-a"), "h1", false),
+        ("b", Some("file-a"), "h2", false),
+        ("c", Some("file-a"), "h1", true),
+        ("d", Some("file-a"), "h1", false),
+        ("e", None, "h1", false),
+        ("f", Some("file-b"), "h1", false),
+    ] {
+        let mut branch = template.clone();
+        branch.branch_id = id.into();
+        branch.file_id = file.map(str::to_owned);
+        branch.history_tree_id = history.into();
+        branch.state = if migrated {
+            BranchState::Migrated
+        } else {
+            BranchState::Active
+        };
+        branch
+            .pending_file_versions
+            .insert("file-a".into(), "inherited".into());
+        state.branches.insert(id.into(), branch);
+    }
+    let owners =
+        DerivedOwners::from_state(&state, &crate::namespace::fixture_store::FixtureSource).unwrap();
+    assert_eq!(owners.file_rows("file-a").unwrap().branches.len(), 4);
+    assert_eq!(
+        owners.file_rows("file-a").unwrap().pending_branches.len(),
+        6
+    );
+    assert!(state.versions.is_empty());
+    for file in ["file-a", "file-b", "absent"] {
+        for history in ["h1", "h2", "absent"] {
+            let scope = FileHistoryScope {
+                engine: &pool.engine,
+                state: &state,
+                owners: &owners,
+                file_id: file,
+                history_id: history,
+            };
+            let expected = oracle_branches(&state, file, history);
+            exhaust(&expected, |boundary, limit| {
+                scope.branch_window(
+                    boundary.map(|(id, direction)| (id.as_str(), direction)),
+                    limit,
+                )
+            });
+        }
+    }
+}
+
+#[test]
+fn detached_version_pages_match_borrowed_pages_and_reject_invalid_boundaries() {
+    let g = graph();
+    let scope = g.pool.scope(&g.file);
+    let oracle = oracle_versions(g.pool.engine.state(), &g.file, &g.pool.repo.history_tree_id);
+    exhaust(&oracle, |boundary, limit| {
+        let plan = scope
+            .prepare_version_page(
+                boundary.map(|(key, direction)| (key.clone(), direction)),
+                limit,
+            )
+            .unwrap();
+        assert!(
+            plan.versions
+                .shares_storage_with(&g.pool.engine.state().versions)
+        );
+        assert!(
+            plan.membership
+                .as_ref()
+                .unwrap()
+                .shares_storage_with(scope.owners.version_membership(&g.file).unwrap())
+        );
+        let (selection, records) = plan.read();
+        assert_eq!(selection, scope.select_versions(boundary, limit));
+        assert_eq!(records.len(), selection.keys.len());
+        for (key, record) in selection.keys.iter().zip(records) {
+            assert_eq!(record.as_ref(), scope.version_record(key).unwrap());
+        }
+        selection
+    });
+    for (key, expected) in [
+        (
+            VersionKey {
+                version_sequence: 0,
+                version_id: "missing".into(),
+            },
+            storage_contract::ErrorCode::VersionNotFound,
+        ),
+        (
+            VersionKey {
+                version_sequence: oracle[0].version_sequence + 1,
+                version_id: oracle[0].version_id.clone(),
+            },
+            storage_contract::ErrorCode::InvalidCursor,
+        ),
+    ] {
+        let Err(error) = scope.prepare_version_page(Some((key, Direction::Forward)), 3) else {
+            panic!("invalid boundary was admitted");
+        };
+        assert_eq!(error.code(), expected);
+    }
+    let empty = g
+        .pool
+        .scope("missing")
+        .prepare_version_page(None, 3)
+        .unwrap()
+        .read();
+    assert!(empty.0.keys.is_empty());
+    assert!(empty.1.is_empty());
+}
+
+#[test]
+fn detached_version_page_keeps_only_its_captured_roots_across_publication() {
+    let mut pool = Pool::new();
+    let entry = pool.save("file.txt", b"first", "first");
+    let plan = pool
+        .scope(&entry.file_id)
+        .prepare_version_page(None, 10)
+        .unwrap();
+    pool.save("file.txt", b"second", "second");
+    assert!(
+        !plan
+            .versions
+            .shares_storage_with(&pool.engine.state().versions)
+    );
+    let (selected, versions) = plan.read();
+    assert_eq!(selected.keys.len(), 1);
+    assert_eq!(versions[0].version_id, entry.version_id);
+    assert_eq!(
+        pool.scope(&entry.file_id)
+            .select_versions(None, 10)
+            .keys
+            .len(),
+        2
+    );
+    drop(pool);
+    assert_eq!(versions[0].logical_size, 5);
 }

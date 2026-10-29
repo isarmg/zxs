@@ -713,7 +713,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
     )
     .unwrap_err();
     assert_eq!(unknown_merge.status, http::StatusCode::NOT_FOUND);
-    let versions = history_pages::version_page(
+    let versions = version_page(
         &g.engine,
         crate::ReadVersionPage::parse(g.file.clone(), query(&[("limit", "500")])).unwrap(),
     )
@@ -774,7 +774,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
     )
     .unwrap();
     assert_eq!((rest.text.as_str(), rest.complete), ("se", true));
-    let empty = history_pages::version_page(
+    let empty = version_page(
         &g.engine,
         crate::ReadVersionPage::parse("file_missing".into(), BTreeMap::new()).unwrap(),
     )
@@ -839,4 +839,9 @@ fn retried_requests_under_the_same_root_return_byte_identical_pages() {
         ids(&all),
         "backward navigation reaches every node exactly once"
     );
+}
+
+// Synchronous convenience for the existing transport projection fixtures.
+fn version_page(engine: &Engine, request: crate::ReadVersionPage) -> Result<VersionPage, ApiError> {
+    history_pages::prepare_version_page(engine, request)?.read()
 }
