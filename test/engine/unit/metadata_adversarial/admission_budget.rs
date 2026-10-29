@@ -115,6 +115,17 @@ fn save_counterexample(disk: &DiskConfig, snapshot: &Snapshot) {
 
 #[test]
 fn snapshot_admission_applies_namespace_depth_before_projection_reads() {
+    if let Some(path) = std::env::var_os("ZXS_METADATA_ADVERSARIAL_REPLAY_INPUT") {
+        let input: json_codec::Value = decode_strict(&std::fs::read(path).unwrap()).unwrap();
+        let snapshot: Snapshot = json_codec::from_value(input["snapshot"].clone()).unwrap();
+        let objects = input["objects"].as_object().unwrap();
+        assert_depth_before_projection(snapshot, |kind, hash| {
+            let address = format!("{kind}/{hash}");
+            let value = objects.get(&address).expect("counterexample reference closure");
+            AuthenticatedMetadataObject::authenticate(kind, hash, value.clone())
+        });
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([temp.path().join("member")]);
     let mut engine = Engine::initialize(&temp.path().join("system"), config.clone()).unwrap();
@@ -142,6 +153,13 @@ fn snapshot_admission_applies_namespace_depth_before_projection_reads() {
     let snapshot_hash = store_snapshot(&config.disks, &state).unwrap();
     let snapshot: Snapshot = load_object(disk, "snapshot", &snapshot_hash).unwrap();
     save_counterexample(disk, &snapshot);
+    assert_depth_before_projection(snapshot, |kind, hash| load_authenticated_object(disk, kind, hash));
+}
+
+fn assert_depth_before_projection(
+    snapshot: Snapshot,
+    mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+) {
     let attempted = Cell::new(0usize);
     let loaded = Cell::new(0usize);
     let error = resolve_snapshot(snapshot, |kind, hash| {
@@ -157,7 +175,7 @@ fn snapshot_admission_applies_namespace_depth_before_projection_reads() {
                 ));
             }
         }
-        let object = load_authenticated_object(disk, kind, hash)?;
+        let object = load(kind, hash)?;
         if namespace {
             loaded.set(loaded.get() + 1);
         }
