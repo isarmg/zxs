@@ -1,218 +1,281 @@
-name: CI
+# Supplemental evidence-only carrier; the product retains unchanged normal 17-job CI.
+# Reviewed local input 1be9eb77d8cd70390d98ed2b75ddb1446ce91b69,
+# tree 96d02c531530729ede98b524af819198cbdb3c8a; remote product has sole parent A13.
+# Carrier also includes .github/verification/admission-depth-original.json, never in product.
+name: Fixed metadata adversarial R86 verification
 
 on:
   push:
-  pull_request:
+    branches: [verify/adversarial-fixed-20261029-r86]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: adversarial-fixed-r86-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: '1'
+  CARGO_NET_OFFLINE: 'true'
+  CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  PYTHONDONTWRITEBYTECODE: '1'
+  RUST_BACKTRACE: '1'
+  ZXS_PRODUCT_SHA: '5ec48d6a6312ab60df15ab400f8a83a87e54436c'
+  ZXS_PRODUCT_TREE: 'e8564675b5a4f812c8be3d71420e36bc11be9542'
+  ZXS_PRODUCT_PARENT_SHA: '99f02cb978bff53f28d1ad8414037a3f52d74cd2'
 
 jobs:
-  static:
-    name: Static workflow and tooling regressions (no Rust)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check workflows, source governance and script regressions
-        run: bash .github/scripts/check.sh static
-
-  tests:
-    name: Tests (${{ matrix.suite }})
-    needs: static
-    runs-on: ubuntu-24.04
-    # Cold crypto runs include ten packaged/local-generated ring cases, including
-    # both release slow-test matrices; the measured run exceeded 30 minutes.
-    # Match the release verification budget without relaxing other shards.
-    timeout-minutes: ${{ matrix.suite == 'foundation-crypto' && 60 || 30 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
-    env:
-      ZXS_REQUIRE_BROWSER: '1'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: |
-          rustup show active-toolchain
-          rustc --version
-          cargo --version
-      - name: Install WASM standard library for cross-target checks
-        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install system SQLite SDK for unbundled validation
-        if: matrix.suite == 'foundation-data'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
-      - name: Enable sandboxed Chrome for browser future runtime checks
-        if: matrix.suite == 'foundation-language'
-        run: bash .github/scripts/prepare-browser-contract.sh
-      - name: Cache verified security scanner
-        if: matrix.suite == 'security'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            target/security-tools/bin/cargo-audit
-            target/security-tools/verified-build.json
-          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
-      - name: Run locked test suite
-        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
-      - name: Verify isolated system SQLite consumer
-        if: matrix.suite == 'foundation-data'
-        run: python3 .github/scripts/check-sqlite-system.py
-      - name: Retain exact foundation behaviour test evidence
-        if: always() && matrix.suite == 'foundation-async'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: foundation-behaviour-evidence
-          path: |
-            target/foundation-behaviour/logs/
-            target/foundation-behaviour/summary.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  web-production:
-    name: Production WASM build
-    needs: static
+  adversarial:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: product
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read original red input from the verification carrier only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
+          path: carrier
           persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain and WASM target
+          fetch-depth: 1
+          sparse-checkout: .github/verification/admission-depth-original.json
+          sparse-checkout-cone-mode: false
+      - name: Check out the exact frozen product, not the carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.ZXS_PRODUCT_SHA }}
+          path: product
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Prepare isolated paths and immutable-source evidence
         run: |
-          rustup show active-toolchain
-          rustup target add wasm32-unknown-unknown
-          rustc --version
-      - name: Cache locally compiled Rust build helpers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/rust-build-tools
-          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
-          restore-keys: |
-            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build production Web distribution
-        run: bash .github/scripts/check.sh web-production
-      - name: Retain production assets for checks in this run
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/zxs-r86-evidence"
+          mkdir -p "$evidence"
+          printf 'ZXS_EVIDENCE=%s\n' "$evidence" >> "$GITHUB_ENV"
+          printf 'CARGO_HOME=%s\n' "$(mktemp -d "$RUNNER_TEMP/c.XXXXXX")" >> "$GITHUB_ENV"
+          printf 'CARGO_TARGET_DIR=%s\n' "$RUNNER_TEMP/zxs-r86-target" >> "$GITHUB_ENV"
+          printf 'TMPDIR=%s\n' "$(mktemp -d "$RUNNER_TEMP/t.XXXXXX")" >> "$GITHUB_ENV"
+          cp "$GITHUB_WORKSPACE/carrier/.github/verification/admission-depth-original.json" "$evidence/original-input.json"
+          cat > "$RUNNER_TEMP/zxs-r86-identity.py" <<'PY'
+          import hashlib, json, os, pathlib, subprocess, sys, tomllib
+          ROOT, OUT = pathlib.Path.cwd(), pathlib.Path(os.environ['ZXS_EVIDENCE'])
+          def require(ok, message):
+              if not ok:
+                  raise RuntimeError(message)
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+          product, tree, parent = [os.environ[k] for k in ('ZXS_PRODUCT_SHA', 'ZXS_PRODUCT_TREE', 'ZXS_PRODUCT_PARENT_SHA')]
+          phase = sys.argv[1]
+          require(os.environ['GITHUB_REF'] == 'refs/heads/verify/adversarial-fixed-20261029-r86', 'wrong verification ref')
+          require(tree == 'e8564675b5a4f812c8be3d71420e36bc11be9542', 'unreviewed product tree')
+          require(parent == '99f02cb978bff53f28d1ad8414037a3f52d74cd2', 'unexpected baseline parent')
+          require(git('rev-parse', 'HEAD').decode().strip() == product, 'wrong product SHA')
+          require(git('rev-parse', 'HEAD^{tree}').decode().strip() == tree, 'wrong product tree')
+          require(git('show', '-s', '--format=%P', 'HEAD').decode().strip() == parent, 'wrong sole parent')
+          status = git('status', '--porcelain=v1', '--untracked-files=all').decode()
+          (OUT / (phase + '-git-status.txt')).write_text(status)
+          require(not status, 'product worktree changed: ' + status)
+          protected = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml',
+                       '.github/scripts/check.sh', '.github/scripts/check-rust-diagnostics.py',
+                       '.github/scripts/check-foundation-behaviour.py',
+                       'test/ci/fixtures/foundation-behaviour-tests.json', 'tools/rust-sources/workspaces.json']
+          protected += [os.fsdecode(p) for p in git('ls-tree', '-r', '--name-only', '-z', parent,
+                                                  '--', '.github/workflows').split(b'\0') if p]
+          for name in protected:
+              require((ROOT / name).read_bytes() == git('show', parent + ':' + name), 'protected baseline input changed: ' + name)
+          require(not git('diff', '--name-only', parent, product, '--', '.github/workflows'), 'normal workflows changed')
+          require(not git('diff', '--name-only', parent, product, '--', 'Cargo.toml', ':(glob)**/Cargo.toml'), 'Cargo manifests changed')
+          # The combined candidate has a reviewed R83 catalog update: pin that input,
+          # rather than incorrectly claiming it is byte-identical to baseline A13.
+          pins = {'compliance/rust-sources.json': '7093e14473a62eb8f7cfd074ed37769eecfd7900d15e8fd4c9ece0c6af586fa4',
+                  'test/fixtures/metadata_adversarial/expected-tests.txt': '233971b01e752899e175bca30ae7756018127030222eb8cf807ba891f1a5fe9b',
+                  'test/fixtures/metadata_adversarial/admission-depth-minimal.json': '50c68d78ad6e6212425e8432c478704597530e2e595186040bcc0b6247e82908'}
+          for name, expected in pins.items():
+              require(digest(ROOT / name) == expected, 'pinned candidate input changed: ' + name)
+          original_hash = 'eb5c9bdf0cb228d10ec12c476bcb79fb768fb913969c6f1d5aaab7e89ad024e8'
+          require(digest(OUT / 'original-input.json') == original_hash, 'original artifact input hash mismatch')
+          require(tomllib.loads((ROOT / 'rust-toolchain.toml').read_text())['toolchain']['channel'] == '1.99.0', 'unpinned toolchain')
+          config = tomllib.loads((ROOT / '.cargo/config.toml').read_text())
+          require(config['net']['offline'] is True and config['source']['crates-io']['replace-with'] == 'unavailable-registry'
+                  and config['source']['unavailable-registry']['directory'] == 'compliance/empty-registry', 'offline source policy changed')
+          rows = []
+          for item in git('ls-files', '-s', '-z').split(b'\0'):
+              if not item:
+                  continue
+              metadata, raw_path = item.split(b'\t', 1)
+              mode, blob, stage = metadata.decode().split()
+              require(stage == '0', 'unmerged index')
+              name = os.fsdecode(raw_path)
+              path = ROOT / name
+              data = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
+              rows.append([name, mode, blob, hashlib.sha256(data).hexdigest(), path.lstat().st_mode])
+          record = dict(product_sha=product, product_tree=tree, product_parent=parent,
+                        verification_sha=os.environ['GITHUB_SHA'], verification_ref=os.environ['GITHUB_REF'],
+                        run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                        tracked_files=len(rows), protected_sha256={p: digest(ROOT / p) for p in protected},
+                        candidate_pins=pins, original_input_sha256=original_hash,
+                        original_artifact_id=12876291966,
+                        original_artifact_zip_sha256='dd6d3331749f23a71472a69d2137520ed477e9dc7389060258dcd5afc40c098b')
+          if phase == 'before':
+              (OUT / 'input-identity.json').write_text(json.dumps(record, indent=2) + '\n')
+              (OUT / 'tracked-inputs.json').write_text(json.dumps(rows, indent=2) + '\n')
+          else:
+              require(rows == json.loads((OUT / 'tracked-inputs.json').read_text()), 'tracked bytes, modes or index changed')
+              record['result'] = 'PASS'
+              (OUT / 'source-unchanged.json').write_text(json.dumps(record, indent=2) + '\n')
+          print(json.dumps(dict(phase=phase, result='PASS', tracked_files=len(rows))))
+          PY
+      - name: Authenticate exact source, replay input and normal workflow preservation
+        run: python3 "$RUNNER_TEMP/zxs-r86-identity.py" before
+      - name: Verify fixed toolchain and empty isolated Cargo home
+        run: |
+          set -euo pipefail
+          test -d "$CARGO_HOME"
+          test -z "$(find "$CARGO_HOME" -mindepth 1 -print -quit)"
+          rustc +1.99.0 --version | tee "$ZXS_EVIDENCE/rustc.txt"
+          cargo +1.99.0 --version | tee "$ZXS_EVIDENCE/cargo.txt"
+          grep -q '^rustc 1\.99\.0 ' "$ZXS_EVIDENCE/rustc.txt"
+          grep -q '^cargo 1\.99\.0 ' "$ZXS_EVIDENCE/cargo.txt"
+          printf 'CARGO_HOME=%s\nCARGO_TARGET_DIR=%s\nTMPDIR=%s\n' "$CARGO_HOME" "$CARGO_TARGET_DIR" "$TMPDIR" > "$ZXS_EVIDENCE/build-paths.txt"
+          df -h "$RUNNER_TEMP" "$TMPDIR" | tee "$ZXS_EVIDENCE/filesystem-before.txt"
+      - name: Compile real libtest and run eight runner tests, all 37 cases and both replays
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, runpy, subprocess, sys, traceback
+          ROOT, OUT = pathlib.Path.cwd(), pathlib.Path(os.environ['ZXS_EVIDENCE'])
+          summary = {'result': 'RUNNING', 'commands': [], 'executions': {},
+                     'scope': '37 adversarial Rust bodies plus two exact replay executions; eight Python tests; not full normal CI',
+                     'feature_caveat': 'Existing engine dev self-dependency enables fault-injection for lib tests; not a no-feature production build.'}
+          def save():
+              (OUT / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          def require(ok, message):
+              if not ok:
+                  raise RuntimeError(message)
+          def capture(label, command, timeout, stdout_name=None):
+              summary['commands'].append({'label': label, 'argv': command, 'timeout_seconds': timeout, 'cwd': str(ROOT)})
+              save()
+              print('+ ' + ' '.join(command), flush=True)
+              stdout_path = OUT / (stdout_name or label + '.log')
+              with stdout_path.open('w') as output, (OUT / (label + '-stderr.log')).open('w') as error:
+                  completed = subprocess.run(command, stdout=output, stderr=error, text=True, timeout=timeout, cwd=ROOT)
+              print((OUT / (label + '-stderr.log')).read_text(), end='', flush=True)
+              if stdout_name is None:
+                  print(stdout_path.read_text(), end='', flush=True)
+              return completed.returncode
+          try:
+              rc = capture('engine-compile', ['cargo', '+1.99.0', 'test', '--locked', '--offline', '-p',
+                           'storage-engine', '--lib', '--no-run', '--message-format=json'], 720, 'compile.jsonl')
+              diagnostics = runpy.run_path(str(ROOT / '.github/scripts/check-rust-diagnostics.py'))['CargoDiagnostics'](sys.stdout)
+              messages = (OUT / 'compile.jsonl').read_text().splitlines()
+              for number, line in enumerate(messages, 1):
+                  diagnostics.consume(line, number)
+              require(diagnostics.result(rc) == 0, 'strict engine compile gate failed')
+              artifacts = [m for line in messages if (m := json.loads(line)).get('reason') == 'compiler-artifact'
+                           and m.get('profile', {}).get('test') and m.get('executable')
+                           and m.get('target', {}).get('name') == 'storage_engine'
+                           and 'lib' in m.get('target', {}).get('kind', [])]
+              require(len(artifacts) == 1, 'expected one real engine libtest artifact')
+              artifact = artifacts[0]
+              require(pathlib.Path(artifact['target']['src_path']).resolve() == ROOT / 'src/engine/src/lib.rs', 'wrong libtest source')
+              (OUT / 'engine-artifact.json').write_text(json.dumps(artifact, indent=2) + '\n')
+              expected = (ROOT / 'test/fixtures/metadata_adversarial/expected-tests.txt').read_text().splitlines()
+              require(len(expected) == 37 and expected == sorted(set(expected)), 'wrong expected inventory')
+              require(capture('ignored-inventory', [artifact['executable'], '--list', '--ignored', '--format', 'terse'], 45) == 0, 'ignored listing failed')
+              ignored = [line.removesuffix(': test') for line in (OUT / 'ignored-inventory.log').read_text().splitlines() if line.endswith(': test')]
+              require(not set(expected).intersection(ignored), 'adversarial witness is ignored')
+              python_names = sorted(['test_fixed_inventory_has_37_unique_cases',
+                  'test_complete_inventory_accepts_other_engine_tests_and_exact_selection',
+                  'test_missing_inventory_fails_even_when_only_selects_an_existing_case',
+                  'test_unexpected_and_duplicate_cases_fail', 'test_unknown_exact_selection_fails',
+                  'test_one_pass_accepts_expected_filtered_cases_and_nocapture_output',
+                  'test_exit_zero_without_one_executed_body_fails', 'test_failure_exit_missing_or_ambiguous_summary_fails'])
+              rc = capture('python-runner-tests', ['python3', '-m', 'unittest', '-v', 'test/ci/test_metadata_adversarial_runner.py'], 60)
+              python_log = (OUT / 'python-runner-tests.log').read_text() + (OUT / 'python-runner-tests-stderr.log').read_text()
+              actual = sorted(re.findall(r'^(test_\w+) \([^\n]+\) \.\.\. ok$', python_log, re.M))
+              require(rc == 0 and actual == python_names and re.search(r'^Ran 8 tests in ', python_log, re.M), 'Python bodies/counts differ')
+              summary['python_tests'] = actual
+              replay_name = 'journal::metadata_adversarial_admission_budget::snapshot_admission_applies_namespace_depth_before_projection_reads'
+              runner = ['python3', 'test/engine/unit/metadata_adversarial/run.py', '--compile-messages', str(OUT / 'compile.jsonl')]
+              minimal = ROOT / 'test/fixtures/metadata_adversarial/admission-depth-minimal.json'
+              runs = [('all-37', None, expected, 1700), ('original-replay', OUT / 'original-input.json', [replay_name], 100),
+                      ('minimal-replay', minimal, [replay_name], 100)]
+              for label, input_path, names, timeout in runs:
+                  command = [*runner, '--output', str(OUT / label)]
+                  if input_path is not None:
+                      command += ['--only', replay_name, '--replay-input', str(input_path)]
+                  rc = capture(label, command, timeout)
+                  report = json.loads((OUT / label / 'summary.json').read_text())
+                  require(rc == 0 and report['passed'] == len(names) and report['failed'] == 0, label + ' failed or zero bodies')
+                  require([r['test'] for r in report['tests']] == names and all(r['status'] == 'passed' and r['returncode'] == 0 for r in report['tests']), label + ' names/outcomes differ')
+                  summary['executions'][label] = report
+                  if input_path is not None:
+                      require(report['replay_input_sha256'] == hashlib.sha256(input_path.read_bytes()).hexdigest(), 'wrong replay input')
+                      raw = (OUT / label / report['tests'][0]['log']).read_text()
+                      counters = re.findall(r'admission-depth attempted=(\d+) loaded=(\d+) bound=(\d+) error=([^\n]+)', raw)
+                      require(len(counters) == 1, 'missing or ambiguous real replay counters')
+                      attempted, loaded, bound, error = counters[0]
+                      require((attempted, loaded, bound) == ('4', '4', '4'), 'unexpected namespace read counters')
+                      require('ObjectCorrupt' in error and 'namespace index exceeds the depth bound' in error, 'wrong depth error')
+                      summary['executions'][label]['observed_counters'] = dict(attempted=int(attempted), loaded=int(loaded), bound=int(bound), error=error)
+                  save()
+              summary.update(result='PASS', rust_distinct_bodies=37, rust_body_executions=39, python_body_executions=8)
+          except BaseException:
+              summary['result'] = 'FAIL'
+              (OUT / 'failure.txt').write_text(traceback.format_exc())
+              raise
+          finally:
+              save()
+          PY
+      - name: Prove all product source and replay inputs remain unchanged
+        if: always()
+        run: python3 "$RUNNER_TEMP/zxs-r86-identity.py" after
+      - name: Retain raw inventories, per-case logs, counters and immutable-source hashes
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: web-dist
-          path: build/web/
+          name: metadata-adversarial-fixed-r86-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zxs-r86-evidence/
           if-no-files-found: error
           retention-days: 7
 
-      - name: Retain browser template contract fixture
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output/
-          if-no-files-found: error
-          retention-days: 7
-
-  browser-smoke:
-    name: Extracted release browser smoke (Chrome)
-    needs: web-production
+  quality:
+    name: Exact product quality gate
     runs-on: ubuntu-24.04
-    # Compile one release-profile graph for both product and browser harness.
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          ref: ${{ env.ZXS_PRODUCT_SHA }}
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: rustup show active-toolchain
-      - name: Fetch production Web assets from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: web-dist
-          path: build/web
-      - name: Fetch browser template contract fixture from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output
-      - name: Verify runner Chrome and ChromeDriver
+      - name: Verify exact product and install pinned WASM target
         run: |
-          chrome="$(command -v google-chrome)"
-          driver="$(command -v chromedriver)"
-          "$chrome" --version
-          "$driver" --version
-          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
-          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
-          test "$chrome_major" = "$driver_major"
-          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
-          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
-      - name: Install CJK fonts for the Chinese screenshot
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ZXS_PRODUCT_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$ZXS_PRODUCT_TREE"
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+          rustup target add wasm32-unknown-unknown --toolchain 1.99.0
+          rustc +1.99.0 -Vv
+      - name: Run unchanged repository quality gate
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Build and exercise extracted release packages
-        env:
-          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
-          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
-        run: |
-          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
-          cargo test --locked --offline --release -p browser-smoke
-          bash .github/scripts/release-package.sh
-          bash .github/scripts/release-acceptance.sh
-          python3 .github/scripts/check-csr-browser.py
-          bash .github/scripts/release-assemble.sh
-      - name: Retain verified installation candidate (not a published release)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installation-candidate-linux-web
-          path: release-assets/*
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain template browser result and exact input identity
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-browser
-          path: target/csr-template-check/output/*json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain real Web file manager screenshot
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-screenshot
-          path: artifacts/web-file-manager.png
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain responsive Web viewport previews
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          bash .github/scripts/check.sh quality 2>&1 | tee "$RUNNER_TEMP/r86-quality.log"
+      - name: Verify tracked source unchanged
+        if: always()
+        run: git diff --exit-code
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: viewport-previews
-          path: artifacts/viewport-previews/
-          if-no-files-found: warn
+          name: r86-quality-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/r86-quality.log
+          if-no-files-found: error
           retention-days: 7
-
-  smb-sdk:
-    needs: static
-    uses: ./.github/workflows/smb-sdk.yml
