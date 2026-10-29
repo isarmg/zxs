@@ -1,0 +1,16 @@
+{
+  "schema": "namespace-adoption-inputs-v1",
+  "baseline": {
+    "sha": "e2f33d9882cf7263412d9370b6a703e0b216357d",
+    "tree": "bee9d4686088a4af6c659a983c6e711f5f62d272",
+    "adapter_path": "test/engine/bench/namespace_adoption/baseline.rs",
+    "adapter_sha256": "3da2d4a68deba85d64a88a4e07e681ec371283f9874f920a810d0abd45e3dc9f"
+  },
+  "final_candidate": null,
+  "observer_validation_candidate": {
+    "sha": "99f02cb978bff53f28d1ad8414037a3f52d74cd2",
+    "tree": "96d02c531530729ede98b524af819198cbdb3c8a",
+    "adapter_path": "test/engine/bench/namespace_adoption/candidate.rs",
+    "adapter_sha256": "c2e05b8bc6e889e11c168197026cba334409007263186084f74fc8eec677a8c3"
+  }
+}
