@@ -364,10 +364,10 @@ HTTP demand 的同根维护使用窄范围适配器
 consolidation `9a4a44802e8f493dcc1a1546caa723ea774c956de5d18c474076f85fd1280ac4`
 及其精确 layout owner，不把它伪装成新增的 routing terminal。独立仅追加固定列表
 与清单字段 `legacy_proof_maintenance_receipts` 登记同一 `proof-maintenance`
-目录中的 schema 1 收据；当前只支持这一初始维护步骤。
+目录中的 schema 1 内容维护和 schema 2 上游回移收据，后继必须完整衔接前序快照。
 
-收据绑定完整物理 before/after owner、layout/corrections 标识及唯一允许改变的
-`src/common/demand.rs`。before 生产清单必须等于不可变 layout 安装清单，外测
+首张收据绑定完整物理 before/after owner、layout/corrections 标识及唯一允许改变的
+`src/common/demand.rs`。首张 before 生产清单必须等于不可变 layout 安装清单，外测
 逆既有 correction 后必须等于原 layout owner。当前完整生产/外测文件清单与
 字节先核验 after，再仅在历史投影中逆维护补丁，随后执行原 layout 严格逆变换。
 当前来源清单仍记录新字节，旧 origins、consolidation、layout 和收据均不改写。
@@ -377,3 +377,13 @@ consolidation `9a4a44802e8f493dcc1a1546caa723ea774c956de5d18c474076f85fd1280ac4`
 推断歧义；不改变 `SeqCst`、状态转换或增加运行时检查。独立回放与篡改负测见
 `test/tools/rust-sources/test_legacy_http_maintenance.py`；证明不替代实际组合编译
 和 demand 行为回归。
+
+schema 2 回移额外认证 origins 到当前生产／外测路径的精确路由、原上游切片、
+标识符变换及三方合并。普通来源验证在维护链完全逆向后从已认证的历史字节重新定位
+切片；篡改切片并重算合并、解决项和收据摘要仍不被接受。文件集合和历史归属不变，
+仅更新当前内容摘要及实际外测字节总数，不能改写现有外部路径修正覆盖的测试。
+
+HTTP #4222 回移的 `tests_770.rs` 是保留材料，不代表普通门禁执行过该上游单元模块。
+项目新作 `test/architecture/http-transport/backport.rs` 通过既有公开 API 行为门禁执行
+等价边界回归；不加入外测历史双射。不可变回移收据记录 `executed: {}`，后续真实
+执行证据另随 CI 提交保存。操作范围和验证命令见 [HTTP 回移验证](validation/http-backport.md)。

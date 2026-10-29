@@ -374,7 +374,7 @@
       "scripts": [
         ".github/scripts/check-http-transport.py"
       ],
-      "detail": "behavior (25) and ffi (2)"
+      "detail": "behavior (30, including 5 public-API close-drain/upgrade backport regressions) and ffi (2); dispatch/tests_770.rs is retained upstream material, not executed by this harness"
     },
     {
       "package": "http-transport",

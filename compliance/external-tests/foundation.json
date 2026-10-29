@@ -8443,7 +8443,7 @@
         {
           "origin_directory": "vendor/rust/hyper-1.12.0",
           "path": "test/foundation/http-transport/unit/src/proto/h1/dispatch/tests_770.rs",
-          "sha256": "c416db40350a1066838f29926942044fcf9d29e52b9e2cd3da4c936cff502708",
+          "sha256": "af04fbdd307cd0140214b2abdbc1412e23b694396e5dcaf80035fb2598d0a2e5",
           "source": "src/foundation/hyper/src/proto/h1/dispatch.rs",
           "source_sha256_before": "9cd6638c59ae4857ae43ee58857abf585cc6a52dfda616c3631e2e48c02eaba2"
         },
