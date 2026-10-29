@@ -47,6 +47,10 @@ jobs:
         if: always() && steps.compile.outcome == 'success'
         run: |
           python3 test/engine/unit/metadata_adversarial/run.py --compile-messages target/metadata-adversarial/compile.json --output target/metadata-adversarial/results
+      - name: Replay the exported counterexample through the same real entry
+        if: always() && steps.compile.outcome == 'success'
+        run: |
+          python3 test/engine/unit/metadata_adversarial/run.py --compile-messages target/metadata-adversarial/compile.json --output target/metadata-adversarial/replay --only journal::metadata_adversarial_admission_budget::snapshot_admission_applies_namespace_depth_before_projection_reads --replay-input target/metadata-adversarial/results/case-000/admission-depth-input.json
       - name: Retain raw logs and machine readable evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
