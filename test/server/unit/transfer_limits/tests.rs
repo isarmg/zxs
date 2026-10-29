@@ -18,6 +18,19 @@ fn admission_enforces_the_single_capacity_and_releases_permits() {
 }
 
 #[test]
+fn permit_drop_during_unwind_preserves_poisoned_admission_count() {
+    let admission = Admission::new(&TransferLimits::default());
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _permit = admission.acquire().unwrap();
+        let _guard = admission.active.lock().unwrap();
+        panic!("permit owner failed while holding admission accounting");
+    }));
+    assert!(panic.is_err());
+    assert!(admission.active.is_poisoned());
+    assert_eq!(*admission.active.lock().err().unwrap().into_inner(), 1);
+}
+
+#[test]
 fn invalid_limits_cannot_disable_capacity_or_deadlines() {
     for limits in [
         TransferLimits {
@@ -194,4 +207,35 @@ async fn explicit_drop_releases_idle_stream_without_waiting_for_timer() {
     let body = BoundedStream::new(source, &limits, Instant::now() + limits.total_timeout);
     drop(body);
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn poisoned_body_drop_during_unwind_aborts_timer_and_releases_stream_owner() {
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let lease = Lease(Arc::clone(&dropped));
+    let source = stream::poll_fn(
+        move |_| -> Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
+            let _lease = &lease;
+            panic!("source stream failed while being polled");
+        },
+    );
+    let limits = TransferLimits::default();
+    let body = BoundedStream::new(source, &limits, Instant::now() + limits.total_timeout);
+    let state = Arc::clone(&body.state);
+    // Keep the watch channel open: cancellation must not depend on its sender
+    // disappearing, and the normal idle deadline lies beyond wait_for_drop.
+    let progress = body.progress.clone();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut body = body;
+        let mut context = Context::from_waker(futures::task::noop_waker_ref());
+        let _ = body.poll_next_unpin(&mut context);
+    }));
+    assert!(panic.is_err());
+    assert!(state.is_poisoned());
+    assert!(state.lock().err().unwrap().into_inner().stream.is_some());
+    assert_eq!(dropped.load(Ordering::SeqCst), 0);
+    drop(state);
+    wait_for_drop(&dropped).await;
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    drop(progress);
 }

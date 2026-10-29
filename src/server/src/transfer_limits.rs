@@ -66,12 +66,9 @@ impl Admission {
 }
 impl Drop for Permit {
     fn drop(&mut self) {
+        if let Some(mut active) =
+            crate::lock_for_terminal_release(&self.admission.active, "HTTP transfer permits")
         {
-            let mut active = self
-                .admission
-                .active
-                .lock()
-                .expect("service state lock poisoned");
             *active -= 1;
         }
     }
@@ -184,10 +181,11 @@ impl<S: Stream<Item = Result<bytes::Bytes, std::io::Error>>> Stream for BoundedS
 impl<S> Drop for BoundedStream<S> {
     fn drop(&mut self) {
         self.timer.abort();
-        self.state
-            .lock()
-            .expect("service state lock poisoned")
-            .stream = None;
+        if let Some(mut state) =
+            crate::lock_for_terminal_release(&self.state, "HTTP bounded stream")
+        {
+            state.stream = None;
+        }
     }
 }
 

@@ -45,3 +45,30 @@ fn namespace_record_errors_preserve_io_code_and_original_source() {
         );
     }
 }
+
+#[cfg(feature = "core")]
+#[test]
+fn operation_reservation_terminal_release_preserves_poison_without_a_second_panic() {
+    let (_fixture, shared, _backend, _branch) = crate::smb_rpc::tests::fixture();
+    let operation = OperationId::generate();
+    let reservation = OperationReservation::acquire(&shared, operation).unwrap();
+    assert!(
+        shared
+            .namespace_operations
+            .lock()
+            .unwrap()
+            .contains(&operation)
+    );
+    drop(reservation);
+    assert!(shared.namespace_operations.lock().unwrap().is_empty());
+    let reservation = OperationReservation::acquire(&shared, operation).unwrap();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _reservation = reservation;
+        let _operations = shared.namespace_operations.lock().unwrap();
+        panic!("namespace registry failed while an operation was active");
+    }));
+    assert!(panic.is_err());
+    assert!(shared.namespace_operations.is_poisoned());
+    let poisoned = shared.namespace_operations.lock().err().unwrap();
+    assert!(poisoned.get_ref().contains(&operation));
+}

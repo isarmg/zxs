@@ -1992,6 +1992,21 @@ fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     value.lock().expect("service state lock poisoned")
 }
 
+// Terminal owners leave poisoned business registries closed, without a second
+// panic during unwinding. Normal admission still uses the fail-fast lock above.
+fn lock_for_terminal_release<'a, T>(
+    value: &'a Mutex<T>,
+    resource: &'static str,
+) -> Option<std::sync::MutexGuard<'a, T>> {
+    match value.lock() {
+        Ok(guard) => Some(guard),
+        Err(error) => {
+            tracing::error!(%error, resource, "terminal release skipped; registry remains poisoned");
+            None
+        }
+    }
+}
+
 /// Construct an embedded router synchronously, including complete HTTP spool
 /// inventory. Network serving uses pending staging and inventories in the owned
 /// auxiliary startup future instead; neither path admits unaccounted uploads.

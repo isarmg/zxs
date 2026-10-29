@@ -1,4 +1,32 @@
 use super::*;
+
+#[test]
+fn claim_drop_releases_healthy_ownership_but_preserves_poisoned_claims_during_unwind() {
+    use std::{
+        collections::BTreeSet,
+        sync::{Arc, Mutex},
+    };
+    let claims = Arc::new(Mutex::new(BTreeSet::from(["healthy".to_owned()])));
+    drop(Claim {
+        claims: Arc::clone(&claims),
+        key: "healthy".into(),
+    });
+    assert!(claims.lock().unwrap().is_empty());
+    claims.lock().unwrap().insert("retained".into());
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _claim = Claim {
+            claims: Arc::clone(&claims),
+            key: "retained".into(),
+        };
+        let _guard = claims.lock().unwrap();
+        panic!("claim owner failed while holding its inventory");
+    }));
+    assert!(panic.is_err());
+    assert!(claims.is_poisoned());
+    let retained = claims.lock().err().unwrap().into_inner();
+    assert_eq!(*retained, BTreeSet::from(["retained".to_owned()]));
+}
+
 fn test_budget(root: &Path) -> std::sync::Arc<crate::spool_budget::SpoolBudget> {
     crate::spool_budget::SpoolBudget::recover(
         root,

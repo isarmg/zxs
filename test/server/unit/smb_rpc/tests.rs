@@ -2769,3 +2769,25 @@ fn writable_open_copies_authenticated_content_without_the_raw_descriptor_pass() 
     assert_eq!(error.code, storage_contract::ErrorCode::MetadataUnavailable);
     assert_eq!(backend.reconciliation_failure.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn session_terminal_release_preserves_poison_without_a_second_panic() {
+    let (_fixture, shared, _backend, branch) = fixture();
+    let mut client = session(shared.clone(), &branch);
+    client.reserve_paths(&["report.txt"]).unwrap();
+    drop(client);
+    assert!(shared.file_writers.lock().unwrap().is_empty());
+    let mut client = session(shared.clone(), &branch);
+    client.reserve_paths(&["report.txt"]).unwrap();
+    let owners = Arc::strong_count(&shared);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _client = client;
+        let _writers = shared.file_writers.lock().unwrap();
+        panic!("writer registry failed while a session was active");
+    }));
+    assert!(panic.is_err());
+    assert_eq!(Arc::strong_count(&shared), owners - 1);
+    assert!(shared.file_writers.is_poisoned());
+    let poisoned = shared.file_writers.lock().err().unwrap();
+    assert!(poisoned.get_ref().contains(&(branch, "report.txt".into())));
+}

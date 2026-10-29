@@ -39,12 +39,10 @@ impl OperationReservation {
 }
 impl Drop for OperationReservation {
     fn drop(&mut self) {
-        {
-            let mut operations = self
-                .shared
-                .namespace_operations
-                .lock()
-                .expect("service state lock poisoned");
+        if let Some(mut operations) = crate::lock_for_terminal_release(
+            &self.shared.namespace_operations,
+            "SMB namespace operations",
+        ) {
             operations.remove(&self.operation_id);
         }
     }

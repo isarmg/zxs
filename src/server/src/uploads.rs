@@ -414,8 +414,9 @@ pub(crate) struct Claim {
 }
 impl Drop for Claim {
     fn drop(&mut self) {
+        if let Some(mut claims) =
+            crate::lock_for_terminal_release(&self.claims, "HTTP upload claims")
         {
-            let mut claims = self.claims.lock().expect("service state lock poisoned");
             claims.remove(&self.key);
         }
     }

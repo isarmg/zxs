@@ -25,12 +25,9 @@ impl std::ops::Deref for DispatchError {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        if let Some(mut writers) =
+            crate::lock_for_terminal_release(&self.shared.file_writers, "SMB writer paths")
         {
-            let mut writers = self
-                .shared
-                .file_writers
-                .lock()
-                .expect("service state lock poisoned");
             for path in &self.writer_locks {
                 writers.remove(&(self.branch.clone(), path.clone()));
             }
