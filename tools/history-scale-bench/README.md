@@ -41,6 +41,7 @@
 依赖或锁文件，不在引擎里增加测试计数器。临时接线留在验证 checkout，不作为产品补丁。
 
 普通 binary 避开 `storage-engine` 自身开发依赖开启的 `fault-injection`。
+池使用 `Config::development` 的单逻辑盘准入；release 编译不代表真实生产设备配置。
 不要改用 example、libtest、`--all-targets` 或 `--all-features` 来测正常构建成本。
 旧版只有 `events_after`，候选具有 `events_page`，因此旧版仅启用无依赖的
 `perf-check/history-scale-baseline` 适配特性；两边都使用原引擎的真实读取实现。
@@ -72,6 +73,8 @@ python3 -m unittest discover -s test/history-scale-bench -p 'test_*.py' -v
 ## 指标与解释
 
 无 strace 的计时与 strace 计数采用独立运行，不能把追踪耗时作为正常延迟。
+strace 覆盖每个 build／reopen／recovery 的完整阶段，包括核验及幂等重试；
+阶段总同步次数不能直接解释为一次追加的同步次数。
 追加逐条记录延迟，早／中／晚 ID 查询及事件翻页按阶段保留原始样本。
 新进程的重开／恢复时间与其后的驻留内存分别记录；不要把前一进程的高水位当作恢复后的 RSS。
 样本不足以形成分布的阶段保留具体样本和重复范围，不伪造稳定百分位。

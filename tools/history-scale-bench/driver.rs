@@ -447,7 +447,7 @@ fn run(arguments: &Arguments, reporter: &mut Reporter) -> BenchResult<()> {
         "phase": "configuration", "stage": arguments.phase, "mode": arguments.mode,
         "operations": arguments.operations, "verified": true,
         "payload_operations": arguments.operations - 1,
-        "metadata_members": 1, "content_versions": 0,
+        "metadata_members": 1, "content_versions": 0, "development_mode": true,
         "workload": "alternate SMB binding enabled on one unchanged branch",
         "history_scale_baseline": cfg!(feature = "history-scale-baseline")
     }))?;

@@ -165,13 +165,25 @@ def summarize_driver(path: Path, stage: str, operations: int, mode: str = "timin
 def aggregate(output: Path) -> dict:
     manifests = sorted(output.glob("samples/*/manifest.json"))
     samples = [read_json(path.read_text(encoding="utf-8")) for path in manifests]
+    requested_path = output / "requested.json"
+    requested = read_json(requested_path.read_text(encoding="utf-8")) if requested_path.is_file() else {"cohort_complete": False, "samples": []}
+    expected = {row["sample"]: row for row in requested["samples"]}
+    observed = {path.parent.name: sample for path, sample in zip(manifests, samples)}
+    matrix_matches = bool(expected) and len(expected) == len(requested["samples"]) and expected.keys() == observed.keys()
+    if matrix_matches:
+        matrix_matches = all(
+            all(observed[name].get(key) == row[key] for key in ("label", "operations", "repeat", "mode"))
+            for name, row in expected.items()
+        )
     counts = defaultdict(int)
     groups = defaultdict(list)
     for sample in samples:
         counts[sample["status"]] += 1
-        if sample["status"] != "passed" or sample["mode"] != "timing":
+        if sample["mode"] != "timing":
             continue
         for stage, result in sample["stages"].items():
+            if result["status"] != "passed":
+                continue
             for phase, latency in result["driver"]["latencies"].items():
                 key = (sample["label"], sample["operations"], stage, phase)
                 groups[key].append(latency)
@@ -185,7 +197,15 @@ def aggregate(output: Path) -> dict:
         })
     return {
         "status_counts": dict(sorted(counts.items())),
-        "all_requested_samples_passed": bool(samples) and all(sample["status"] == "passed" for sample in samples),
+        "cohort_complete": requested.get("cohort_complete") is True,
+        "requested_matrix_matches": matrix_matches,
+        "missing_requested_samples": sorted(expected.keys() - observed.keys()),
+        "unexpected_samples": sorted(observed.keys() - expected.keys()),
+        "all_requested_samples_passed": requested.get("cohort_complete") is True and matrix_matches and all(
+            sample["status"] == "passed" and set(sample["stages"]) == {"build", "reopen", "recovery"}
+            and all(stage["status"] == "passed" for stage in sample["stages"].values())
+            for sample in samples
+        ),
         "timing_variation": variation,
         "samples": samples,
         "limits": [

@@ -216,11 +216,16 @@ def run_sample(label: str, source: Path, binary: Path, operations: int, repeat: 
     manifest = {
         "label": label, "sha": REVISIONS[label], "source": str(source), "binary": str(binary),
         "binary_sha256": sha256(binary), "operations": operations, "repeat": repeat,
-        "mode": mode, "status": "running", "stages": {}, "pool": str(pool),
+        "mode": mode, "status": "running", "stages": {
+            stage: {"status": "not_executed", "reason": "prerequisite_not_completed"}
+            for stage in STAGES
+        }, "pool": str(pool),
     }
     write_json(sample / "manifest.json", manifest)
     if skip_reason or time.monotonic() >= deadline:
         manifest.update(status="not_executed", reason=skip_reason or "cohort_wall_time_budget")
+        for result in manifest["stages"].values():
+            result["reason"] = manifest["reason"]
     else:
         try:
             for stage in STAGES:
@@ -229,11 +234,16 @@ def run_sample(label: str, source: Path, binary: Path, operations: int, repeat: 
                 write_json(sample / "manifest.json", manifest)
                 if result["status"] != "passed":
                     manifest["status"] = result["status"]
+                    for remaining in STAGES[STAGES.index(stage) + 1:]:
+                        manifest["stages"][remaining]["reason"] = f"prerequisite_{stage}_{result['status']}"
                     break
             else:
                 manifest["status"] = "passed"
         except (OSError, ValueError, json.JSONDecodeError) as error:
             manifest.update(status="failed", reason=f"{type(error).__name__}: {error}")
+            manifest["stages"][stage] = {"status": "failed", "reason": manifest["reason"]}
+            for remaining in STAGES[STAGES.index(stage) + 1:]:
+                manifest["stages"][remaining]["reason"] = f"prerequisite_{stage}_failed"
     harness = pool / "harness"
     if harness.is_dir():
         try:
@@ -316,6 +326,16 @@ def main() -> int:
     if not shutil.which("strace") or not Path("/usr/bin/time").is_file():
         raise SystemExit("strace and GNU /usr/bin/time are required; no measurement fallback")
     args.output_root.mkdir(parents=True, exist_ok=False)
+    requested = {"cohort_complete": False, "samples": []}
+    for mode, repeats in (("timing", args.repeats), ("counts", args.counts_repeats)):
+        for repeat in range(1, repeats + 1):
+            for operations in args.sizes if mode == "timing" else args.counts_sizes:
+                for label in REVISIONS:
+                    requested["samples"].append({
+                        "sample": f"{operations:06d}-{mode}-{repeat:02d}-{label}",
+                        "label": label, "operations": operations, "repeat": repeat, "mode": mode,
+                    })
+    write_json(args.output_root / "requested.json", requested)
     write_json(args.output_root / "environment.json", environment(args))
     deadline = time.monotonic() + args.cohort_seconds
     halted = {}
@@ -329,6 +349,8 @@ def main() -> int:
                     if sample["status"] in {"failed", "incomplete"}:
                         halted[key] = "earlier_sample_failed_or_incomplete_under_same_budget"
                     write_json(args.output_root / "summary.json", aggregate(args.output_root))
+    requested["cohort_complete"] = True
+    write_json(args.output_root / "requested.json", requested)
     summary = aggregate(args.output_root)
     write_json(args.output_root / "summary.json", summary)
     if summary["status_counts"].get("failed", 0):

@@ -147,6 +147,45 @@ class EvidenceTests(unittest.TestCase):
             self.assertFalse(result["all_requested_samples_passed"])
             self.assertEqual(result["status_counts"], {"incomplete": 1})
 
+    def test_partial_stage_evidence_is_summarized_without_reading_skipped_driver(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sample = root / "samples" / "partial"
+            sample.mkdir(parents=True)
+            manifest = {
+                "label": "baseline", "operations": 256, "status": "incomplete", "mode": "timing",
+                "stages": {
+                    "build": {"status": "passed", "driver": {"latencies": {"append": {"median_ns": 7}}}},
+                    "reopen": {"status": "incomplete", "reason": "phase_wall_time_budget"},
+                    "recovery": {"status": "not_executed", "reason": "prerequisite_reopen_incomplete"},
+                },
+            }
+            (sample / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            result = aggregate(root)
+            self.assertFalse(result["all_requested_samples_passed"])
+            self.assertEqual(len(result["timing_variation"]), 1)
+            self.assertEqual(result["timing_variation"][0]["stage"], "build")
+
+    def test_cancelled_passed_prefix_cannot_make_requested_matrix_green(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            requests = [{"sample": label, "label": label, "operations": 256, "repeat": 1, "mode": "timing"} for label in ("baseline", "candidate")]
+            plan = {"cohort_complete": False, "samples": requests}
+            (root / "requested.json").write_text(json.dumps(plan), encoding="utf-8")
+            for index, request in enumerate(requests):
+                sample = root / "samples" / request["sample"]
+                sample.mkdir(parents=True)
+                manifest = {key: request[key] for key in ("label", "operations", "repeat", "mode")}
+                manifest.update(status="passed", stages={stage: {"status": "passed", "driver": {"latencies": {}}} for stage in ("build", "reopen", "recovery")})
+                (sample / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+                summary = aggregate(root)
+                self.assertFalse(summary["all_requested_samples_passed"])
+                if index == 0:
+                    self.assertEqual(summary["missing_requested_samples"], ["candidate"])
+            plan["cohort_complete"] = True
+            (root / "requested.json").write_text(json.dumps(plan), encoding="utf-8")
+            self.assertTrue(aggregate(root)["all_requested_samples_passed"])
+
 
 if __name__ == "__main__":
     unittest.main()
