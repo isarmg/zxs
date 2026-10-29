@@ -1,15 +1,16 @@
-# Publish only as ci.yml on the separate verification carrier; never a product ancestor.
-name: Namespace exact-build paired measurements
+# Verification-only carrier; publish as ci.yml on its separate verification branch.
+name: Final combined-candidate paired acceptance
 on:
   push:
-    branches: [verify/namespace-build-once-20261029]
+    branches: [verify/namespace-final-acceptance-20261029]
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: namespace-build-once-${{ github.ref }}
+  group: namespace-final-${{ github.ref }}
   cancel-in-progress: false
 env:
+  ZXS_BENCH_MODE: 'final'
   CARGO_NET_OFFLINE: 'true'
   CARGO_INCREMENTAL: '0'
   CARGO_BUILD_JOBS: '2'
@@ -18,7 +19,7 @@ env:
   CFLAGS: '-march=x86-64 -mtune=generic'
 jobs:
   build:
-    name: Build exact baseline and candidate once
+    name: Build both authenticated selected products once
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
@@ -33,73 +34,49 @@ jobs:
           sparse-checkout: |
             tools/namespace-adoption-bench
             test/engine/bench/namespace_adoption
+      - name: Resolve pinned identities before product checkout
+        id: inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 harness/tools/namespace-adoption-bench/artifacts.py resolve \
+            --mode "$ZXS_BENCH_MODE" --harness "$GITHUB_WORKSPACE/harness" > "$RUNNER_TEMP/namespace-selected-inputs.json"
+          python3 - <<'PYCODE'
+          import json, os, pathlib
+          value=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'namespace-selected-inputs.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+              for label, identity in value['products'].items():
+                  output.write(f"{label}_sha={identity['sha']}\n")
+          PYCODE
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          ref: e2f33d9882cf7263412d9370b6a703e0b216357d
+          ref: ${{ steps.inputs.outputs.baseline_sha }}
           path: baseline
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          ref: 99f02cb978bff53f28d1ad8414037a3f52d74cd2
+          ref: ${{ steps.inputs.outputs.candidate_sha }}
           path: candidate
-      - name: Run tooling boundary regressions for this exact carrier
+      - name: Run actual tooling boundary regressions
         run: |
           python3 harness/test/engine/bench/namespace_adoption/test_harness.py
-      - name: Authenticate products and install only the standalone measurement adapters
+          python3 harness/test/engine/bench/namespace_adoption/test_controller.py
+      - name: Authenticate products and install exact standalone adapters
         id: prepare
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/namespace-evidence"
+          cp "$RUNNER_TEMP/namespace-selected-inputs.json" "$RUNNER_TEMP/namespace-evidence/selected-inputs.json"
           measurement_deadline_unix=$(( $(date +%s) + 150 * 60 ))
           printf 'measurement_deadline_unix=%s\n' "$measurement_deadline_unix" >> "$GITHUB_OUTPUT"
-          printf 'ZXS_MEASUREMENT_DEADLINE_UNIX=%s\n' "$measurement_deadline_unix" >> "$GITHUB_ENV"
           printf 'CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu\n' >> "$GITHUB_ENV"
           printf 'CARGO_ENCODED_RUSTFLAGS=-C\x1ftarget-cpu=x86-64\n' >> "$GITHUB_ENV"
           printf 'CARGO_HOME=%s\n' "$(mktemp -d "$RUNNER_TEMP/namespace-cargo.XXXXXX")" >> "$GITHUB_ENV"
-          python3 - <<'PY'
-          import hashlib, json, os, pathlib, subprocess, tomllib
-          root = pathlib.Path.cwd()
-          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'namespace-evidence'
-          identities = {
-              'baseline': ('e2f33d9882cf7263412d9370b6a703e0b216357d','bee9d4686088a4af6c659a983c6e711f5f62d272'),
-              'candidate': ('99f02cb978bff53f28d1ad8414037a3f52d74cd2','96d02c531530729ede98b524af819198cbdb3c8a'),
-          }
-          records = {}
-          for name, (sha, tree) in identities.items():
-              product = root / name
-              def git(*args):
-                  return subprocess.check_output(['git', '-C', str(product), *args]).decode().strip()
-              assert git('rev-parse','HEAD') == sha
-              assert git('rev-parse','HEAD^{tree}') == tree
-              assert not git('status','--porcelain')
-              assert tomllib.loads((product/'rust-toolchain.toml').read_text())['toolchain']['channel'] == '1.99.0'
-              manifest = product/'src/engine/Cargo.toml'
-              original = manifest.read_bytes()
-              assert 'task1_adoption' not in original.decode()
-              source = root/'harness/test/engine/bench/namespace_adoption'/f'{name}.rs'
-              destination = product/'test/engine/bench/task1_adoption.rs'
-              destination.parent.mkdir(parents=True, exist_ok=True)
-              assert not destination.exists()
-              destination.write_bytes(source.read_bytes())
-              manifest.write_bytes(original + b'\n[[bin]]\nname="task1_adoption"\npath="../../test/engine/bench/task1_adoption.rs"\ntest=false\nbench=false\n')
-              changed = git('diff','--name-only').splitlines()
-              untracked = git('ls-files','--others','--exclude-standard').splitlines()
-              assert changed == ['src/engine/Cargo.toml'], changed
-              assert untracked == ['test/engine/bench/task1_adoption.rs'], untracked
-              records[name] = dict(sha=sha, tree=tree,
-                  adapter_sha256=hashlib.sha256(destination.read_bytes()).hexdigest(),
-                  manifest_before_sha256=hashlib.sha256(original).hexdigest(),
-                  manifest_after_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest(),
-                  catalog_blob=git('rev-parse','HEAD:compliance/rust-sources.json'),
-                  lock_blob=git('rev-parse','HEAD:Cargo.lock'),
-                  configuration_blob=git('rev-parse','HEAD:.cargo/config.toml'))
-          records['workflow_sha'] = os.environ['GITHUB_SHA']
-          records['runner'] = dict(os=os.environ['RUNNER_OS'], arch=os.environ['RUNNER_ARCH'])
-          records['scope'] = 'measurement-only adapters; no production/source receipt update'
-          (out/'input-identity.json').write_text(json.dumps(records,indent=2)+'\n')
-          PY
+          python3 harness/tools/namespace-adoption-bench/artifacts.py prepare \
+            --mode "$ZXS_BENCH_MODE" --harness "$GITHUB_WORKSPACE/harness" \
+            --workspace "$GITHUB_WORKSPACE" --evidence "$RUNNER_TEMP/namespace-evidence"
           uname -a > "$RUNNER_TEMP/namespace-evidence/uname.txt"
           lscpu > "$RUNNER_TEMP/namespace-evidence/lscpu.txt"
           free -b > "$RUNNER_TEMP/namespace-evidence/memory-before.txt"
@@ -142,55 +119,51 @@ jobs:
               selected[name] = artifacts
           (evidence / 'actual-engine-features.json').write_text(json.dumps(selected,indent=2)+'\n')
           PY
-      - name: Confirm no measurement changed production source or authoritative records
+      - name: Confirm source identity after compilation
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import hashlib, json, os, pathlib, subprocess
+          python3 - <<'PYCODE'
+          import json, os, pathlib, sys
           root=pathlib.Path.cwd()
+          sys.path.insert(0,str(root/'harness/tools/namespace-adoption-bench'))
+          import artifacts
           out=pathlib.Path(os.environ['RUNNER_TEMP'])/'namespace-evidence'
-          records=json.loads((out/'input-identity.json').read_text())
-          for name in ('baseline','candidate'):
-              def git(*args):
-                  return subprocess.check_output(['git','-C',str(root/name),*args]).decode().strip()
-              assert git('rev-parse','HEAD') == records[name]['sha']
-              assert hashlib.sha256((root/name/'src/engine/Cargo.toml').read_bytes()).hexdigest() == records[name]['manifest_after_sha256']
-              assert hashlib.sha256((root/name/'test/engine/bench/task1_adoption.rs').read_bytes()).hexdigest() == records[name]['adapter_sha256']
-              assert git('diff','--name-only').splitlines() == ['src/engine/Cargo.toml']
-              assert git('ls-files','--others','--exclude-standard').splitlines() == ['test/engine/bench/task1_adoption.rs']
-          (out/'source-unchanged.txt').write_text('Only declared standalone benchmark binary and manifest wiring differ.\n')
-          PY
-      - name: Seal binaries and complete build identity
+          selected=artifacts.selected_inputs(os.environ['ZXS_BENCH_MODE'],root/'harness')
+          original=json.loads((out/'input-identity.json').read_text())
+          for label,identity in selected['products'].items():
+              actual=artifacts.source_identity(root/label,root/'harness'/identity['adapter_path'],identity)
+              assert actual==original['products'][label]
+          (out/'source-unchanged.txt').write_text('Exact selected source, standalone adapter and manifest wiring unchanged.\n')
+          PYCODE
+      - name: Seal this run's exact binary identity
         id: seal
         shell: bash
         run: |
           set -euo pipefail
           manifest_sha256=$(python3 harness/tools/namespace-adoption-bench/artifacts.py seal \
-            --workspace "$GITHUB_WORKSPACE" --harness "$GITHUB_WORKSPACE/harness" \
-            --evidence "$RUNNER_TEMP/namespace-evidence" \
-            --bundle-dir "$RUNNER_TEMP/namespace-bundle" \
+            --mode "$ZXS_BENCH_MODE" --workspace "$GITHUB_WORKSPACE" --harness "$GITHUB_WORKSPACE/harness" \
+            --evidence "$RUNNER_TEMP/namespace-evidence" --bundle-dir "$RUNNER_TEMP/namespace-bundle" \
             --baseline-binary "$RUNNER_TEMP/namespace-target-baseline/x86_64-unknown-linux-gnu/release/task1_adoption" \
             --candidate-binary "$RUNNER_TEMP/namespace-target-candidate/x86_64-unknown-linux-gnu/release/task1_adoption")
           printf 'manifest_sha256=%s\n' "$manifest_sha256" >> "$GITHUB_OUTPUT"
-      - name: Upload sealed binaries for this run only
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: namespace-exact-build-${{ github.run_attempt }}
           path: ${{ runner.temp }}/namespace-bundle/
           if-no-files-found: error
           retention-days: 14
-      - name: Retain all raw build evidence
+      - name: Retain every available build record
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: namespace-build-evidence-${{ github.run_attempt }}
           path: ${{ runner.temp }}/namespace-evidence/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
   paired:
-    name: Pair (${{ matrix.files }} files, repetition ${{ matrix.pair }})
+    name: Final pair (${{ matrix.files }} files, repetition ${{ matrix.pair }})
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -216,29 +189,35 @@ jobs:
         with:
           name: namespace-exact-build-${{ github.run_attempt }}
           path: ${{ runner.temp }}/namespace-bundle
-      - name: Initialize bounded paired measurement
+      - name: Retain actual runner and observer identity
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/namespace-evidence"
-          command -v strace
           strace --version > "$RUNNER_TEMP/namespace-evidence/strace.txt"
           uname -a > "$RUNNER_TEMP/namespace-evidence/uname.txt"
           lscpu > "$RUNNER_TEMP/namespace-evidence/lscpu.txt"
           free -b > "$RUNNER_TEMP/namespace-evidence/memory-before.txt"
           df -B1 > "$RUNNER_TEMP/namespace-evidence/disk-before.txt"
-      - name: Verify exact artifact identity and actually execute this pair
+      - name: Validate observer contract on this exact measurement runner
+        if: matrix.pair == 3
+        continue-on-error: true
+        shell: bash
+        run: |
+          python3 -B harness/tools/namespace-adoption-bench/observer_probe.py \
+            --output "$RUNNER_TEMP/namespace-evidence/observer-probe" \
+            --deadline-unix "$ZXS_MEASUREMENT_DEADLINE_UNIX"
+      - name: Authenticate binaries and actually run the full requested pair
         shell: bash
         run: |
           set -euo pipefail
           python3 harness/tools/namespace-adoption-bench/run.py \
-            --bundle-dir "$RUNNER_TEMP/namespace-bundle" \
-            --audit-dir "$RUNNER_TEMP/namespace-evidence/artifact-audit" \
-            --output "$RUNNER_TEMP/namespace-evidence/results" \
-            --pool-parent "$RUNNER_TEMP/namespace-pools" \
-            --deadline-unix "$ZXS_MEASUREMENT_DEADLINE_UNIX" \
-            --sizes '${{ matrix.files }}' --pair-index '${{ matrix.pair }}'
-      - name: Retain every raw log, failure and partial measurement
+            --mode "$ZXS_BENCH_MODE" --trace-observer seccomp-bpf \
+            --observer-probe "$RUNNER_TEMP/namespace-evidence/observer-probe/probe.json" \
+            --bundle-dir "$RUNNER_TEMP/namespace-bundle" --audit-dir "$RUNNER_TEMP/namespace-evidence/artifact-audit" \
+            --output "$RUNNER_TEMP/namespace-evidence/results" --pool-parent "$RUNNER_TEMP/namespace-pools" \
+            --deadline-unix "$ZXS_MEASUREMENT_DEADLINE_UNIX" --sizes '${{ matrix.files }}' --pair-index '${{ matrix.pair }}'
+      - name: Retain full logs, partial results and observer evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:

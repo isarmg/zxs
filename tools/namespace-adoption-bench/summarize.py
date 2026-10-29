@@ -22,10 +22,11 @@ def trace_counts(path):
     return counts
 
 
-def audit_pair(summary, files, pair):
+def audit_pair(summary, files, pair, expected_mode='final'):
     expected_order = ['baseline', 'candidate'] if pair % 2 == 0 else ['candidate', 'baseline']
     errors = []
     expected = dict(files=files, sizes=[files], pair_index=pair, order=expected_order,
+                    validation_mode=expected_mode,
                     github_run_id=os.environ['GITHUB_RUN_ID'],
                     github_run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                     carrier_sha=os.environ['GITHUB_SHA'],
@@ -34,7 +35,8 @@ def audit_pair(summary, files, pair):
         if summary.get(field) != value:
             errors.append(f'{field}: expected {value!r}, observed {summary.get(field)!r}')
     identity = summary.get('artifact_identity', {})
-    if (identity.get('status') != 'verified' or identity.get('manifest_sha256') !=
+    if (identity.get('status') != 'verified' or identity.get('mode') != expected_mode or
+            identity.get('manifest_sha256') !=
             os.environ['ZXS_EXPECTED_MANIFEST_SHA256']):
         errors.append('artifact identity audit is not verified for the current manifest')
     runs = summary['runs']
@@ -53,6 +55,21 @@ def audit_pair(summary, files, pair):
             for phase in run['phases']:
                 if phase['status'] != 'completed' or phase['returncode'] != 0:
                     errors.append('completed run contains a noncompleted child')
+                if pair == 3:
+                    observer = phase.get('observer', {})
+                    mode = summary.get('trace_observer')
+                    if (mode not in ('plain', 'seccomp-bpf') or
+                            observer.get('requested_mode') != mode or observer.get('effective_mode') != mode or
+                            set(observer.get('syscalls', [])) != SYSCALLS or
+                            observer.get('full_argv') != phase.get('command')):
+                        errors.append('completed traced phase lacks its actual observer/argv/syscall identity')
+                    if mode == 'seccomp-bpf' and (
+                            observer.get('activation_status') != 'enabled_and_observed' or
+                            not observer.get('enabled_marker_count') or not observer.get('seccomp_event_count') or
+                            observer.get('fallback_diagnostics') or
+                            not run.get('observer_preflight', {}).get('unfiltered') or
+                            run.get('observer_probe_admission', {}).get('status') != 'verified'):
+                        errors.append('completed BPF phase lacks real activation or same-job contract admission')
     if summary['status'] == 'completed_measurements' and (
             len(runs) != 2 or any(run['status'] != 'completed' for run in runs)):
         errors.append('pair claims completion without both complete runs')
@@ -70,7 +87,8 @@ def main():
                   github_run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                   carrier_sha=os.environ['GITHUB_SHA'],
                   artifact_manifest_sha256=os.environ['ZXS_EXPECTED_MANIFEST_SHA256'],
-                  scope='fresh same-runner paired execution; no product adoption verdict',
+                  validation_mode='final',
+                  scope='final-mode fresh same-runner paired execution; no product adoption verdict',
                   metric_scope=dict(rchar='process bytes read through syscalls; not device I/O',
                                     read_bytes='Linux process storage read accounting',
                                     vmhwm_kb='process resident high-water mark; not allocation count',
@@ -143,8 +161,7 @@ def main():
         report['status'] = 'completed_measurements'
     elif 'failed' in statuses or report['build_result'] == 'failure':
         report['status'] = 'failed'
-    text = ('Fresh measurements of frozen baseline e2f33d9882cf7263412d9370b6a703e0b216357d '
-            'and candidate 99f02cb978bff53f28d1ad8414037a3f52d74cd2.\n\n' + '\n'.join(rows) +
+    text = ('Final-mode frozen identities are authenticated in each pair artifact.\n\n' + '\n'.join(rows) +
             '\n\nAll measurements require both complete implementations and their full semantic verification. '
             'Three untraced AB/BA/AB pairs and one separate traced BA pair per size. '
             'Raw partial phases remain in the pair artifacts. This is not an adoption verdict.\n')

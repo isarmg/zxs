@@ -10,18 +10,12 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tomllib
 
-PRODUCTS = {
-    'baseline': ('e2f33d9882cf7263412d9370b6a703e0b216357d',
-                 'bee9d4686088a4af6c659a983c6e711f5f62d272'),
-    'candidate': ('99f02cb978bff53f28d1ad8414037a3f52d74cd2',
-                  '96d02c531530729ede98b524af819198cbdb3c8a'),
-}
-ADAPTERS = {
-    'baseline': '3da2d4a68deba85d64a88a4e07e681ec371283f9874f920a810d0abd45e3dc9f',
-    'candidate': 'c2e05b8bc6e889e11c168197026cba334409007263186084f74fc8eec677a8c3',
-}
+MODES = ('final', 'observer-validation')
+HARNESS_FILES = ('artifacts.py', 'run.py', 'summarize.py', 'verification.yml', 'inputs.json',
+                 'observer_probe.py', 'observer-validation.yml', 'observer_compare.py')
 TARGET = 'x86_64-unknown-linux-gnu'
 RUST_FLAGS = '-C\x1ftarget-cpu=x86-64'
 C_FLAGS = '-march=x86-64 -mtune=generic'
@@ -46,6 +40,68 @@ def command(*args, cwd=None):
 
 def write_json(path, value):
     Path(path).write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
+
+
+def load_inputs(mode, path=None):
+    """Read the sole pinned product configuration; a pending final candidate rejects admission."""
+    require(mode in MODES, f'explicit validation mode required: {mode}')
+    path = Path(path) if path is not None else Path(__file__).with_name('inputs.json')
+    config = json.loads(path.read_text())
+    require(set(config) == {'schema', 'baseline', 'final_candidate', 'observer_validation_candidate'} and
+            config['schema'] == 'namespace-adoption-inputs-v1', 'unsupported pinned input configuration')
+    candidate = config['final_candidate' if mode == 'final' else 'observer_validation_candidate']
+    require(candidate is not None, f'{mode}: candidate SHA/tree/adapter identity is pending; execution forbidden')
+    products = dict(baseline=config['baseline'], candidate=candidate)
+    for label, identity in products.items():
+        require(isinstance(identity, dict) and
+                set(identity) == {'sha', 'tree', 'adapter_path', 'adapter_sha256'},
+                f'{label}: complete pinned source and adapter identity required')
+        for field, length in (('sha', 40), ('tree', 40), ('adapter_sha256', 64)):
+            require(isinstance(identity[field], str) and
+                    re.fullmatch(f'[0-9a-f]{{{length}}}', identity[field]) is not None,
+                    f'{label}: invalid {field}')
+        adapter = Path(identity['adapter_path'])
+        require(not adapter.is_absolute() and '..' not in adapter.parts and
+                adapter.parent == Path('test/engine/bench/namespace_adoption') and adapter.suffix == '.rs',
+                f'{label}: adapter must name a confined standalone Rust benchmark')
+    return products
+
+
+def selected_inputs(mode, harness):
+    config = harness / 'tools/namespace-adoption-bench/inputs.json'
+    products = load_inputs(mode, config)
+    for label, identity in products.items():
+        require(digest(harness / identity['adapter_path']) == identity['adapter_sha256'],
+                f'{label}: adapter does not match pinned bytes')
+    return dict(mode=mode, config_sha256=digest(config), products=products)
+
+
+def prepare_products(workspace, harness, evidence, mode):
+    selected = selected_inputs(mode, harness)
+    # Authenticate both clean checkouts before installing either standalone adapter.
+    for label, identity in selected['products'].items():
+        product = workspace / label
+        require(command('git', '-C', str(product), 'rev-parse', 'HEAD').strip() == identity['sha'] and
+                command('git', '-C', str(product), 'rev-parse', 'HEAD^{tree}').strip() == identity['tree'],
+                f'{label}: checkout does not match selected {mode} input')
+        require(not command('git', '-C', str(product), 'status', '--porcelain').strip(),
+                f'{label}: product checkout must be clean before adapter installation')
+    sources = {}
+    for label, identity in selected['products'].items():
+        product = workspace / label
+        adapter = harness / identity['adapter_path']
+        manifest = product / 'src/engine/Cargo.toml'
+        original = manifest.read_bytes()
+        require(b'task1_adoption' not in original, f'{label}: benchmark wiring already exists')
+        destination = product / 'test/engine/bench/task1_adoption.rs'
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open('xb') as output:
+            output.write(adapter.read_bytes())
+        manifest.write_bytes(original + WIRING)
+        sources[label] = source_identity(product, adapter, identity)
+    evidence.mkdir(parents=True, exist_ok=True)
+    write_json(evidence / 'input-identity.json', dict(selected=selected, products=sources,
+                                                   workflow_sha=os.environ['GITHUB_SHA']))
 
 
 def host_identity():
@@ -91,11 +147,11 @@ def build_environment():
     return environment
 
 
-def source_identity(product, adapter):
+def source_identity(product, adapter, expected):
     def git(*args):
         return command('git', '-C', str(product), *args).strip()
     label = product.name
-    sha, tree = PRODUCTS[label]
+    sha, tree = expected['sha'], expected['tree']
     require(git('rev-parse', 'HEAD') == sha and git('rev-parse', 'HEAD^{tree}') == tree,
             f'{label}: product SHA/tree mismatch')
     require(git('diff', 'HEAD', '--name-only').splitlines() == ['src/engine/Cargo.toml'],
@@ -108,12 +164,12 @@ def source_identity(product, adapter):
                                         'HEAD:src/engine/Cargo.toml'])
     require((product / 'src/engine/Cargo.toml').read_bytes() == original + WIRING,
             f'{label}: standalone manifest wiring differs')
-    require(digest(adapter) == ADAPTERS[label] and
-            digest(product / 'test/engine/bench/task1_adoption.rs') == ADAPTERS[label],
+    require(digest(adapter) == expected['adapter_sha256'] and
+            digest(product / 'test/engine/bench/task1_adoption.rs') == expected['adapter_sha256'],
             f'{label}: independently reviewed adapter bytes differ')
     inputs = ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml',
               'compliance/rust-sources.json', 'src/engine/Cargo.toml')
-    return dict(sha=sha, tree=tree, adapter_sha256=ADAPTERS[label],
+    return dict(sha=sha, tree=tree, adapter_sha256=expected['adapter_sha256'],
                 manifest_before_sha256=hashlib.sha256(original).hexdigest(),
                 inputs={name: dict(sha256=digest(product / name),
                                   source_blob=git('rev-parse', f'HEAD:{name}')) for name in inputs},
@@ -182,15 +238,20 @@ def elf_identity(binary):
     return elf
 
 
-def seal_bundle(workspace, harness, evidence, bundle_dir, binaries):
+def seal_bundle(workspace, harness, evidence, bundle_dir, binaries, mode):
+    selected = selected_inputs(mode, harness)
+    prepared = json.loads((evidence / 'input-identity.json').read_text())
+    require(prepared['selected'] == selected and prepared['workflow_sha'] == os.environ['GITHUB_SHA'],
+            'prepared products belong to different pinned inputs or carrier')
     bundle_dir.mkdir(parents=True, exist_ok=False)
     (bundle_dir / 'bin').mkdir()
     (bundle_dir / 'adapters').mkdir()
     source_records = {}
-    for label in PRODUCTS:
+    for label, identity in selected['products'].items():
         product = workspace / label
-        adapter = harness / 'test/engine/bench/namespace_adoption' / f'{label}.rs'
-        source = source_identity(product, adapter)
+        adapter = harness / identity['adapter_path']
+        source = source_identity(product, adapter, identity)
+        require(source == prepared['products'][label], f'{label}: prepared source identity changed during build')
         compiler = compiler_evidence(product, evidence, binaries[label])
         destination = bundle_dir / 'bin' / label
         shutil.copyfile(binaries[label], destination)
@@ -199,12 +260,15 @@ def seal_bundle(workspace, harness, evidence, bundle_dir, binaries):
         source_records[label] = dict(source=source, compiler=compiler,
                                      binary_sha256=digest(destination), elf=elf_identity(destination))
     shutil.copytree(evidence, bundle_dir / 'evidence')
-    manifest = dict(schema='namespace-adoption-build-once-v1',
+    manifest = dict(schema='namespace-adoption-build-once-v2', selected_inputs=selected,
                     scope='binary reuse only; every requested measurement executes anew',
                     workflow_sha=os.environ['GITHUB_SHA'], run_id=os.environ['GITHUB_RUN_ID'],
                     run_attempt=os.environ['GITHUB_RUN_ATTEMPT'], build_host=host_identity(),
                     harness={name: digest(harness / 'tools/namespace-adoption-bench' / name)
-                             for name in ('artifacts.py', 'run.py', 'summarize.py', 'verification.yml')},
+                             for name in HARNESS_FILES},
+                    tools=dict(python=sys.version,
+                               strace=command('strace', '--version'),
+                               readelf=command('readelf', '--version'), git=command('git', '--version')),
                     products=source_records,
                     evidence={str(path.relative_to(bundle_dir)): digest(path)
                               for path in sorted((bundle_dir / 'evidence').rglob('*')) if path.is_file()})
@@ -212,22 +276,29 @@ def seal_bundle(workspace, harness, evidence, bundle_dir, binaries):
     return digest(bundle_dir / 'manifest.json')
 
 
-def verify_bundle(bundle_dir, adapter_paths, audit_dir):
+def verify_bundle(bundle_dir, adapter_paths, audit_dir, *, mode):
     """Return authenticated executables; preserve a failure audit before propagating errors."""
     bundle_dir, audit_dir = Path(bundle_dir), Path(audit_dir)
     audit_dir.mkdir(parents=True, exist_ok=True)
-    audit = dict(status='failed', scope='artifact identity and runtime compatibility; no test-result reuse')
+    audit = dict(status='failed', mode=mode,
+                 scope='artifact identity and runtime compatibility; no test-result reuse')
     try:
+        directory = Path(__file__).resolve().parent
+        harness = directory.parents[1]
+        selected = selected_inputs(mode, harness)
+        audit['selected_inputs'] = selected
         audit['manifest_sha256'] = digest(bundle_dir / 'manifest.json')
         require(audit['manifest_sha256'] == os.environ['ZXS_EXPECTED_MANIFEST_SHA256'],
                 'manifest hash differs from this run\'s build-job output')
         manifest = json.loads((bundle_dir / 'manifest.json').read_text())
-        require(manifest['schema'] == 'namespace-adoption-build-once-v1', 'unsupported artifact schema')
+        require(manifest['schema'] == 'namespace-adoption-build-once-v2', 'unsupported artifact schema')
+        require(manifest['selected_inputs'] == selected,
+                'artifact mode or pinned source/adapter/config identity differs')
         require(manifest['workflow_sha'] == os.environ['GITHUB_SHA'] and
                 manifest['run_id'] == os.environ['GITHUB_RUN_ID'] and
                 manifest['run_attempt'] == os.environ['GITHUB_RUN_ATTEMPT'],
                 'artifact belongs to a different workflow commit/run/attempt')
-        directory = Path(__file__).resolve().parent
+        require(set(manifest['harness']) == set(HARNESS_FILES), 'incomplete harness identity')
         for name, expected in manifest['harness'].items():
             require(digest(directory / name) == expected, f'{name}: harness bytes differ from build job')
         audit['host'] = host_identity()
@@ -237,12 +308,15 @@ def verify_bundle(bundle_dir, adapter_paths, audit_dir):
             require(digest(bundle_dir / relative) == expected, f'{relative}: raw build evidence changed')
         binaries = {}
         audit['products'] = {}
-        require(set(manifest['products']) == set(PRODUCTS), 'product set differs')
-        for label, (sha, tree) in PRODUCTS.items():
+        require(set(manifest['products']) == set(selected['products']), 'product set differs')
+        for label, identity in selected['products'].items():
+            sha, tree = identity['sha'], identity['tree']
             entry = manifest['products'][label]
             require((entry['source']['sha'], entry['source']['tree']) == (sha, tree),
                     f'{label}: frozen product identity differs')
-            require(digest(adapter_paths[label]) == ADAPTERS[label] ==
+            require(Path(adapter_paths[label]).resolve() == (harness / identity['adapter_path']).resolve(),
+                    f'{label}: adapter path differs from selected input')
+            require(digest(adapter_paths[label]) == identity['adapter_sha256'] ==
                     digest(bundle_dir / 'adapters' / f'{label}.rs') == entry['source']['adapter_sha256'],
                     f'{label}: adapter bytes differ')
             binary = bundle_dir / 'bin' / label
@@ -265,26 +339,34 @@ def verify_bundle(bundle_dir, adapter_paths, audit_dir):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['seal', 'verify'])
+    parser.add_argument('action', choices=['resolve', 'prepare', 'seal', 'verify'])
+    parser.add_argument('--mode', choices=MODES, required=True)
     parser.add_argument('--workspace', type=Path)
     parser.add_argument('--harness', type=Path, required=True)
     parser.add_argument('--evidence', type=Path)
-    parser.add_argument('--bundle-dir', type=Path, required=True)
+    parser.add_argument('--bundle-dir', type=Path)
     parser.add_argument('--baseline-binary', type=Path)
     parser.add_argument('--candidate-binary', type=Path)
     parser.add_argument('--audit-dir', type=Path)
     args = parser.parse_args()
-    if args.mode == 'seal':
-        require(all((args.workspace, args.evidence, args.baseline_binary, args.candidate_binary)),
-                'seal requires workspace, evidence and both binary paths')
+    if args.action == 'resolve':
+        print(json.dumps(selected_inputs(args.mode, args.harness.resolve()), sort_keys=True))
+    elif args.action == 'prepare':
+        require(args.workspace is not None and args.evidence is not None,
+                'prepare requires workspace and evidence paths')
+        prepare_products(args.workspace.resolve(), args.harness.resolve(), args.evidence.resolve(), args.mode)
+    elif args.action == 'seal':
+        require(all((args.workspace, args.evidence, args.bundle_dir, args.baseline_binary, args.candidate_binary)),
+                'seal requires workspace, evidence, bundle-dir and both binary paths')
         print(seal_bundle(args.workspace.resolve(), args.harness.resolve(), args.evidence.resolve(),
                           args.bundle_dir.resolve(), {'baseline': args.baseline_binary,
-                                                      'candidate': args.candidate_binary}))
+                                                      'candidate': args.candidate_binary}, args.mode))
     else:
-        require(args.audit_dir is not None, 'verify requires audit-dir')
-        paths = {label: args.harness / 'test/engine/bench/namespace_adoption' / f'{label}.rs'
-                 for label in PRODUCTS}
-        verify_bundle(args.bundle_dir, paths, args.audit_dir)
+        require(args.audit_dir is not None and args.bundle_dir is not None,
+                'verify requires audit-dir and bundle-dir')
+        products = load_inputs(args.mode)
+        paths = {label: args.harness / identity['adapter_path'] for label, identity in products.items()}
+        verify_bundle(args.bundle_dir, paths, args.audit_dir, mode=args.mode)
 
 
 if __name__ == '__main__':
