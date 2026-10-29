@@ -3,7 +3,7 @@
 //! Reads admit under the engine mutex held by the caller: each resolves
 //! the file's repository, captures the exact current root, compares it with
 //! the request's observed root (409 on change), selects a bounded page and
-//! copies only that page's records. Version and merge selection use owned plans outside
+//! copies only that page's records. Version selection uses an owned plan outside
 //! the lock; other projections remain borrowed. JSON encoding is also unlocked.
 use super::*;
 use crate::backend_activity::utc_timestamp;
@@ -477,19 +477,10 @@ pub(in crate::engine_backend) fn branches(
     })
 }
 
-pub(in crate::engine_backend) struct MergePagePlan {
-    file_id: String,
-    history_tree_id: String,
-    history_root: String,
-    seed: HistoryCursorSeed,
-    backward: bool,
-    merges: storage_engine::file_history_pages::FileMergeReadPlan,
-}
-
-pub(in crate::engine_backend) fn prepare_merge_page(
+pub(in crate::engine_backend) fn merges(
     engine: &Engine,
     request: ReadHistoryMerges,
-) -> Result<MergePagePlan, ApiError> {
+) -> Result<HistoryMergesPage, ApiError> {
     let collection = request.0;
     let admitted = admit(engine, collection.file_id.as_str(), Some(&collection.root))?;
     let seed = seed(
@@ -514,28 +505,20 @@ pub(in crate::engine_backend) fn prepare_merge_page(
         }
         None => None,
     };
-    Ok(MergePagePlan {
-        file_id: admitted.scope.file_id().to_owned(),
-        history_tree_id: admitted.repo.history_tree_id.clone(),
-        history_root: admitted.root.as_str().to_owned(),
-        seed,
-        backward: collection
-            .cursor
-            .as_ref()
-            .is_some_and(|cursor| cursor.backward),
-        merges: admitted
-            .scope
-            .prepare_merge_page(boundary, collection.limit)
-            .map_err(error)?,
-    })
-}
-
-impl MergePagePlan {
-    pub(in crate::engine_backend) fn read(self) -> HistoryMergesPage {
-        let (selection, records) = self.merges.read();
-        let merges = records
-            .into_iter()
-            .map(|record| FileMergeSummary {
+    let scope = admitted.scope;
+    if let Some((key, _)) = &boundary {
+        scope.merge_record(key).map_err(error)?;
+    }
+    let selection = scope.select_merges(
+        boundary.as_ref().map(|(key, direction)| (key, *direction)),
+        collection.limit,
+    );
+    let merges = selection
+        .keys
+        .iter()
+        .map(|key| {
+            let record = scope.merge_record(key).map_err(error)?;
+            Ok(FileMergeSummary {
                 merge_id: record.merge_id,
                 sequence: record.sequence,
                 chosen_node_id: record.chosen_node_id,
@@ -546,15 +529,22 @@ impl MergePagePlan {
                 input_count: record.input_count,
                 parent_count: record.parent_count,
             })
-            .collect();
-        HistoryMergesPage {
-            file_id: self.file_id,
-            history_tree_id: self.history_tree_id,
-            history_root: self.history_root,
-            merges,
-            continuation: continuation(self.seed, &selection, self.backward),
-        }
-    }
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    Ok(HistoryMergesPage {
+        file_id: scope.file_id().to_owned(),
+        history_tree_id: admitted.repo.history_tree_id.clone(),
+        history_root: admitted.root.as_str().to_owned(),
+        merges,
+        continuation: continuation(
+            seed,
+            &selection,
+            collection
+                .cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.backward),
+        ),
+    })
 }
 
 fn indexed<T>(

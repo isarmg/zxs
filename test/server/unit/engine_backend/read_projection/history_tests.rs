@@ -136,7 +136,7 @@ fn version_page_finishes_captured_snapshot_but_rechecks_current_authorization() 
         b"second",
     );
     let old_page = backend
-        .finish_file_history_page(&identity, &file, old.read())
+        .finish_version_page(&identity, &file, old.read())
         .unwrap();
     let fresh = backend
         .file_version_page(
@@ -151,7 +151,7 @@ fn version_page_finishes_captured_snapshot_but_rechecks_current_authorization() 
     auth.logout(&token).unwrap();
     assert_eq!(
         backend
-            .finish_file_history_page(&identity, &file, pending.read())
+            .finish_version_page(&identity, &file, pending.read())
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
@@ -159,11 +159,7 @@ fn version_page_finishes_captured_snapshot_but_rechecks_current_authorization() 
     // Completion authorization precedes disclosure of a detached read failure.
     assert_eq!(
         backend
-            .finish_file_history_page(
-                &identity,
-                &file,
-                Err::<crate::VersionPage, _>(ApiError::invalid("detached failure"))
-            )
+            .finish_version_page(&identity, &file, Err(ApiError::invalid("detached failure")))
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
@@ -173,72 +169,6 @@ fn version_page_finishes_captured_snapshot_but_rechecks_current_authorization() 
             .file_version_page(
                 &identity,
                 crate::ReadVersionPage::parse("missing".into(), BTreeMap::new()).unwrap()
-            )
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::Unauthorized
-    );
-}
-
-#[test]
-fn empty_merge_page_finishes_captured_snapshot_and_rechecks_current_authorization() {
-    let (root, mut engine, repo, _) = fixture();
-    save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"first");
-    let file = engine.list_tree(&repo.main_branch_id).unwrap()[0]
-        .file_id
-        .clone();
-    let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
-    let capture = || {
-        let engine = backend.engine.lock().unwrap();
-        crate::engine_backend::current_protected_identity(&engine, &identity).unwrap();
-        let root = engine.history_root(&repo.history_tree_id).unwrap();
-        crate::engine_backend::file_manager::history_pages::prepare_merge_page(
-            &engine,
-            crate::ReadHistoryMerges::parse(
-                file.clone(),
-                BTreeMap::from([("history_root".into(), root.as_str().to_owned())]),
-            )
-            .unwrap(),
-        )
-        .unwrap()
-    };
-    let old = capture();
-    save_projection_file(
-        &mut backend.engine.lock().unwrap(),
-        &repo.main_branch_id,
-        "file.txt",
-        b"second",
-    );
-    assert!(backend.engine.try_lock().is_ok());
-    let old_page = backend
-        .finish_file_history_page(&identity, &file, Ok(old.read()))
-        .unwrap();
-    assert!(old_page.merges.is_empty());
-    let fresh = capture().read();
-    assert_ne!(old_page.history_root, fresh.history_root);
-    // The common completion boundary also rejects a no-longer-resolvable file.
-    assert_eq!(
-        backend
-            .finish_file_history_page(&identity, "missing", Ok(fresh))
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::FileNotFound
-    );
-    let pending = capture();
-    auth.logout(&token).unwrap();
-    assert_eq!(
-        backend
-            .finish_file_history_page(&identity, &file, Ok(pending.read()))
-            .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::Unauthorized
-    );
-    assert_eq!(
-        backend
-            .finish_file_history_page(
-                &identity,
-                &file,
-                Err::<crate::HistoryMergesPage, _>(ApiError::invalid("detached failure"))
             )
             .unwrap_err()
             .code,
