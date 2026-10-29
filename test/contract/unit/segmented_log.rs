@@ -209,7 +209,7 @@ fn tail_updates_rebind_the_newest_receipt_and_reseal_deterministically() {
 fn reattached_cold_indexes_bind_to_the_resident_log_or_fail_closed() {
     let mut decoded: crate::OperationLog = json_codec::from_value(
         json_codec::to_value(
-            &crate::OperationLog::from_records(
+            crate::OperationLog::from_records(
                 (0..OPERATION_SEGMENT_RECORDS as u64 + 2)
                     .map(receipt)
                     .collect(),

@@ -316,8 +316,8 @@ fn appended_events_reconstruct_missing_reused_directory_pages_and_read_back_all_
     // so a body missing on every member fails closed instead.
     let current_nodes = event_nodes(&actual);
     let reused_pages = event_nodes(&base)
-        .into_iter()
-        .filter_map(|(_, reference)| {
+        .into_values()
+        .filter_map(|reference| {
             (reference.kind() == crate::metadata_map::ReferenceKind::Page
                 && current_nodes.values().any(|kept| kept == &reference))
             .then(|| reference.hash().to_owned())
