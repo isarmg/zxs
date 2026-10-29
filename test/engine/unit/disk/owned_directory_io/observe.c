@@ -43,8 +43,11 @@ int fsync(int fd) {
     if (snprintf(phase_path, sizeof(phase_path), "%s/phase", root) >= (int)sizeof(phase_path)) abort();
     FILE *input = fopen(phase_path, "r");
     if (!input || !fgets(phase, sizeof(phase), input) || fclose(input)) abort();
+    const char *failure = getenv("ZXS_DIRECTORY_IO_FAILURE");
+    const char *failed_path = failure && !strcmp(failure, "child")
+        ? "metadata/objects/publication" : "metadata/objects";
     if (!injected && !strcmp(phase, "first") && !strcmp(kind, "dir") &&
-        !strcmp(relative, "metadata/objects")) {
+        !strcmp(relative, failed_path)) {
         char child[4096];
         if (snprintf(child, sizeof(child), "%s/metadata/objects/publication", root) >= (int)sizeof(child)) abort();
         struct stat created;

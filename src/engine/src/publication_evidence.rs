@@ -309,9 +309,10 @@ fn repair_member(
     hash: &str,
     bytes: &[u8],
 ) -> Result<()> {
-    let paths = existing_object_paths_at(root, member, kind, hash)?;
+    let address = ObjectAddress::parse(kind, hash)?;
+    let paths = address.existing_paths(root, member)?;
     if paths.is_empty() {
-        return root.write_atomic(&object_path(member, kind, hash), bytes, false);
+        return root.write_immutable_object(&address, bytes, false);
     }
     for path in paths {
         match root.optional_metadata(&path)? {
@@ -331,10 +332,10 @@ fn repair_member(
                 };
                 // Matching bytes may be the visible result of a previous
                 // repair whose directory sync failed. Complete its barrier.
-                root.write_atomic(&path, bytes, replace)?;
+                root.write_immutable_object(&address, bytes, replace)?;
             }
             None => {
-                root.write_atomic(&path, bytes, false)?;
+                root.write_immutable_object(&address, bytes, false)?;
             }
             Some(_) => {
                 return Err(Error::new(

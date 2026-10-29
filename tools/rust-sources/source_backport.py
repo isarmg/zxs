@@ -194,10 +194,29 @@ class _RustToken(NamedTuple):
     end: int
 
 
-def _identifier_byte(byte):
-    # Consume the entire UTF-8 envelope before validating it, so an ASCII
-    # mapping can never match a suffix or prefix of a Unicode identifier.
-    return byte >= 128 or byte == 95 or 48 <= byte <= 57 or 65 <= byte <= 90 or 97 <= byte <= 122
+def _unicode_character(data, index):
+    first = data[index]
+    if 0xc2 <= first <= 0xdf:
+        width = 2
+    elif 0xe0 <= first <= 0xef:
+        width = 3
+    elif 0xf0 <= first <= 0xf4:
+        width = 4
+    else:
+        width = 1
+    try:
+        return data[index:index + width].decode('utf-8'), width
+    except UnicodeDecodeError as error:
+        raise BackportError('Rust identifier is not UTF-8 at byte %d' % index) from error
+
+
+def _identifier_width(data, index):
+    """Consume complete XID continuation characters, never ASCII substrings."""
+    byte = data[index]
+    if byte < 128:
+        return int(byte == 95 or 48 <= byte <= 57 or 65 <= byte <= 90 or 97 <= byte <= 122)
+    character, width = _unicode_character(data, index)
+    return width if ('a' + character).isidentifier() else 0
 
 
 def _space_width(data, index):
@@ -270,11 +289,14 @@ def _rust_tokens(data, prose=False):
                 continue
         raw_ident = data.startswith(b'r#', index)
         at = index + 2 if raw_ident else index
-        if at < size and _identifier_byte(data[at]):
-            index = at + 1
-            while (index < size and _identifier_byte(data[index])
-                   and (data[index] < 128 or not _space_width(data, index))):
-                index += 1
+        width = _identifier_width(data, at) if at < size else 0
+        if width:
+            index = at + width
+            while index < size:
+                width = _identifier_width(data, index)
+                if not width:
+                    break
+                index += width
             name = data[at:index]
             kind = 'number' if 48 <= name[0] <= 57 else 'identifier'
             if kind == 'identifier' and not prose:
@@ -288,6 +310,11 @@ def _rust_tokens(data, prose=False):
             continue
         if data.startswith(b'::', index):
             index += 2
+        elif data[index] >= 128:
+            _, width = _unicode_character(data, index)
+            if not prose:
+                raise BackportError('unsupported Rust identifier token at byte %d' % index)
+            index += width
         else:
             index += 1
         tokens.append(_RustToken('punctuation', data[start:index], start, index))

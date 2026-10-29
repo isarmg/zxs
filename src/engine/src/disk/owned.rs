@@ -1,15 +1,35 @@
 //! Held filesystem resources, separate from serializable configuration and writer locks.
 use super::*;
-use platform_io::fs_safety::linux::DirectoryEntries;
+use platform_io::fs_safety::linux::{DirectoryEntries, FileIdentity};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
+
+/// Successful child-and-parent barriers in the immutable metadata-object tree.
+/// These names never move in the object protocol. Holding both descriptors
+/// prevents inode reuse from making a replaced edge match.
+struct DurableDirectory {
+    directory: Arc<File>,
+    parent: Arc<File>,
+}
+
+impl DurableDirectory {
+    fn binds(&self, directory: &File, parent: &File) -> Result<bool> {
+        Ok(FileIdentity::from_fd(self.directory.as_ref())? == FileIdentity::from_fd(directory)?
+            && FileIdentity::from_fd(self.parent.as_ref())? == FileIdentity::from_fd(parent)?)
+    }
+}
+
+const MAX_DIRECTORY_RECEIPTS: usize = 128;
 
 /// A path is an address below this held root, never a request to reopen the root.
 pub(crate) struct DiskRoot {
     path: PathBuf,
     directory: OpenAt2Root,
+    /// Dropping/reopening a root discards its proofs. Existing object directories
+    /// can be failed-creation leftovers, so first object write proves their chain.
+    durable_directories: Mutex<BTreeMap<PathBuf, DurableDirectory>>,
 }
 
 impl DiskRoot {
@@ -21,7 +41,11 @@ impl DiskRoot {
         let path = private.path().to_path_buf();
         let directory = OpenAt2Root::from_private_directory(private, MountPolicy::SameMount)
             .map_err(fs_error)?;
-        Ok(Self { path, directory })
+        Ok(Self {
+            path,
+            directory,
+            durable_directories: Mutex::new(BTreeMap::new()),
+        })
     }
 
     /// Admit a private descendant and retain that exact directory descriptor.
@@ -34,6 +58,7 @@ impl DiskRoot {
         Ok(Self {
             path: path.to_owned(),
             directory,
+            durable_directories: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -77,6 +102,11 @@ impl DiskRoot {
         if path == self.path {
             return Ok(directory);
         }
+        Self::validate_private_directory(&directory, path)?;
+        Ok(directory)
+    }
+
+    fn validate_private_directory(directory: &File, path: &Path) -> Result<()> {
         let metadata = directory.metadata()?;
         if metadata.uid() != rustix::process::geteuid().as_raw()
             || metadata.mode() & 0o7777 != 0o700
@@ -85,7 +115,7 @@ impl DiskRoot {
                 path.into(),
             )));
         }
-        Ok(directory)
+        Ok(())
     }
 
     pub(crate) fn entries(&self, path: &Path) -> Result<DirectoryEntries> {
@@ -235,6 +265,81 @@ impl DiskRoot {
         Ok(())
     }
 
+    fn durable_directory(&self, path: Option<&RelativePath>) -> Result<Arc<File>> {
+        let mut receipts = self
+            .durable_directories
+            .lock()
+            .expect("invariant: directory durability receipt lock poisoned");
+        self.ensure_directory(path, &mut receipts)
+    }
+
+    fn ensure_directory(
+        &self,
+        path: Option<&RelativePath>,
+        receipts: &mut BTreeMap<PathBuf, DurableDirectory>,
+    ) -> Result<Arc<File>> {
+        let Some(path) = path else {
+            return self.open_relative_directory(None).map(Arc::new);
+        };
+        let (parent_path, name) = path.split_parent();
+        // An existing parent may itself be an interrupted mkdir. Prove every
+        // edge from the held root, rather than recursing only on NotFound.
+        let parent = self.ensure_directory(parent_path.as_ref(), receipts)?;
+        let created = match rustix::fs::mkdirat(
+            parent.as_ref(),
+            name.as_os_str(),
+            rustix::fs::Mode::from_raw_mode(0o700),
+        ) {
+            Ok(()) => true,
+            Err(rustix::io::Errno::EXIST) => false,
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        };
+        let directory = File::from(
+            rustix::fs::openat2(
+                parent.as_ref(),
+                name.as_os_str(),
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+                rustix::fs::ResolveFlags::BENEATH
+                    | rustix::fs::ResolveFlags::NO_SYMLINKS
+                    | rustix::fs::ResolveFlags::NO_XDEV,
+            )
+            .map_err(std::io::Error::from)?,
+        );
+        Self::validate_private_directory(&directory, &self.path.join(path.as_path()))?;
+        if !created
+            && let Some(receipt) = receipts.get(path.as_path())
+            && receipt.binds(&directory, parent.as_ref())?
+        {
+            return Ok(Arc::clone(&receipt.directory));
+        }
+        // Never reuse an old proof after replacement or a failed barrier.
+        receipts.remove(path.as_path());
+        directory
+            .sync_all()
+            .map_err(|error| fs_error(platform_io::fs_safety::Error::Io(error)))?;
+        parent.sync_all()?;
+        let directory = Arc::new(directory);
+        // Evict only for an actual new proof, never a cache hit. Eviction drops
+        // an optimization: the next use rebuilds the affected ancestor proofs.
+        // Each receipt shares handles, not other receipts, so at most twice
+        // this many directory descriptors remain retained after the call.
+        if receipts.len() == MAX_DIRECTORY_RECEIPTS {
+            receipts.clear();
+        }
+        receipts.insert(
+            path.as_path().to_path_buf(),
+            DurableDirectory {
+                directory: Arc::clone(&directory),
+                parent,
+            },
+        );
+        Ok(directory)
+    }
+
     pub(crate) fn write_atomic(&self, path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
         let (parent, name) = self.relative(path)?.split_parent();
         self.private_relative_dir(parent.as_ref())?;
@@ -242,6 +347,29 @@ impl DiskRoot {
             self.open_relative_directory(parent.as_ref())?,
             path.parent()
                 .expect("invariant: a relative child has a parent")
+                .to_path_buf(),
+        )
+        .map_err(fs_error)?;
+        write_atomic_in(&directory, &name, bytes, replace)
+    }
+
+    /// Only the journal's validated address can select this fixed, nonmoving
+    /// object tree. Generic container/staging paths keep their own protocols.
+    pub(crate) fn write_immutable_object(
+        &self,
+        address: &crate::journal::ObjectAddress<'_>,
+        bytes: &[u8],
+        replace: bool,
+    ) -> Result<()> {
+        let path = address.path(&self.path);
+        let (parent, name) = self.relative(&path)?.split_parent();
+        let held = self.durable_directory(parent.as_ref())?;
+        // Duplicate this admitted descriptor for the writer, never reopen its
+        // diagnostic path after completing the edge's durability proof.
+        let directory = PrivateDirectory::from_directory(
+            held.try_clone()?,
+            path.parent()
+                .expect("invariant: immutable object has a parent")
                 .to_path_buf(),
         )
         .map_err(fs_error)?;

@@ -543,6 +543,7 @@ pub(crate) use test_support::{
 };
 
 mod object_storage;
+pub(crate) use object_storage::ObjectAddress;
 #[cfg(any(test, feature = "test-support"))]
 use object_storage::write_object_bytes;
 use object_storage::write_object_bytes_at;

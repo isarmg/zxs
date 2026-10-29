@@ -66,32 +66,15 @@ jobs:
           persist-credentials: false
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Verify fixed toolchain and build one engine libtest artifact
+      - name: Verify fixed toolchain
         run: |
           git rev-parse HEAD
           rustc --version
           cargo --version
-          cargo test --locked --offline -p storage-engine --lib --no-run \
-            --message-format=json > "$RUNNER_TEMP/r86-engine-build.jsonl"
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          records = [json.loads(line) for line in
-                     Path(os.environ['RUNNER_TEMP'], 'r86-engine-build.jsonl').read_text().splitlines()]
-          artifacts = [r['executable'] for r in records
-                       if r.get('reason') == 'compiler-artifact'
-                       and r['target']['name'] == 'storage_engine'
-                       and 'lib' in r['target']['kind']
-                       and r['profile']['test'] and r.get('executable')]
-          if len(artifacts) != 1 or [r['success'] for r in records if r.get('reason') == 'build-finished'] != [True]:
-              raise SystemExit('Expected exactly one current successful engine libtest artifact')
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write('R86_ENGINE_LIBTEST=' + artifacts[0] + '\n')
-          print('Exact engine libtest:', artifacts[0])
-          PY
-      - name: Reproduce directory creation error, same-resource retry and process reopen
-        run: bash test/engine/unit/disk/owned_directory_io/run.sh "$R86_ENGINE_LIBTEST"
-      - name: Preserve existing immutable object barriers with the same artifact
-        run: bash test/engine/unit/history_package/immutable_io/run.sh "$R86_ENGINE_LIBTEST"
+      - name: Run object and directory retry probes through the real workspace entry
+        run: python3 .github/scripts/check-history-object-io.py
       - name: Run complete engine tests
         run: cargo test --locked --offline -p storage-engine --lib
+      - name: Check affected Rust formatting
+        if: always()
+        run: cargo fmt --package storage-engine -- --check

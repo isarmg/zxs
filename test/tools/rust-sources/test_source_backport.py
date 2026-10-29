@@ -316,6 +316,11 @@ class Identifiers(unittest.TestCase):
             source = 'use' + space + 'futures_core::Stream;\n'
             with self.subTest(space=ascii(space)):
                 self.assertEqual(self.mapped(source)[0].decode(), source.replace('futures_core', 'futures'))
+        for source in ('/// See “futures_core::Stream”.\n', "/// See ‘futures_core::Stream’.\n"):
+            with self.subTest(source=source):
+                data, records = self.mapped(source)
+                self.assertEqual(data.decode(), source.replace('futures_core', 'futures'))
+                self.assertEqual(len(records), 1)
 
     def test_unsupported_source_tokens_and_macro_use_grammar_fail_explicitly(self):
         # Macro DSL imports are not Rust use trees. Stop for review rather
