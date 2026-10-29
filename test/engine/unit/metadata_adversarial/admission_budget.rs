@@ -66,19 +66,47 @@ fn deep_child(disk: &DiskConfig, name: &str, identity: u64) -> NamespaceIndexChi
 }
 
 fn has_depth_cause(error: &Error) -> bool {
-    let mut source: &(dyn std::error::Error + 'static) = error;
-    loop {
-        if let Some(cause) = source.downcast_ref::<Error>()
-            && cause.code() == ErrorCode::ObjectCorrupt
-            && cause.message() == "namespace index exceeds the depth bound"
-        {
-            return true;
+    let mut cause = error;
+    for (expected_code, expected_message) in [
+        (ErrorCode::StateInvalid, "invalid snapshot history"),
+        (
+            ErrorCode::HistoryPackageInvalid,
+            "commit entries are not in canonical namespace form",
+        ),
+    ] {
+        let Error::Context {
+            code,
+            message,
+            retryable: false,
+            source,
+        } = cause
+        else {
+            return false;
+        };
+        if *code != expected_code || message != expected_message {
+            return false;
         }
-        match source.source() {
-            Some(next) => source = next,
-            None => return false,
-        }
+        cause = source;
     }
+    matches!(
+        cause,
+        Error::Contract(storage_contract::Error::Message {
+            code: ErrorCode::ObjectCorrupt,
+            message,
+            retryable: false,
+        }) if message == "namespace index exceeds the depth bound"
+    )
+}
+
+#[test]
+fn namespace_read_limit_is_not_a_depth_rejection() {
+    let error = Error::new(ErrorCode::ResourceLimit, "adversarial namespace read cap")
+        .context(
+            ErrorCode::HistoryPackageInvalid,
+            "commit entries are not in canonical namespace form",
+        )
+        .context(ErrorCode::StateInvalid, "invalid snapshot history");
+    assert!(!has_depth_cause(&error));
 }
 
 fn save_counterexample(disk: &DiskConfig, snapshot: &Snapshot) {

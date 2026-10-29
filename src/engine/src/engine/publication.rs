@@ -431,13 +431,13 @@ impl Engine {
         }));
         result
     }
-    /// Replay a verified existing Publication onto every member. `receipt`
+    /// Replay a verified existing Publication onto every member. The stage
+    /// sequence carries the candidate hash fixed by its caller. `existing_receipt`
     /// resolves one member's PUBLICATION receipt: an already journaled frame is
     /// returned as is, otherwise the record is appended in `mode`.
     pub(super) fn complete_published_candidate(
         &mut self,
         c: &Candidate,
-        hash: &str,
         next: &State,
         publication: Publication,
         existing_receipt: impl Fn(&DiskConfig, &str) -> Option<Receipt> + Sync,
@@ -445,7 +445,7 @@ impl Engine {
         stages: &mut StageSequence,
     ) -> Result<()> {
         self.verify_candidate_membership(c)?;
-        if publication.candidate_hash != hash
+        if publication.candidate_hash != stages.candidate_hash()
             || publication.result.request_digest != c.request_digest
             || (publication.recovery.is_none()
                 && publication.finalize.accepts.len() != c.metadata_disk_ids.len())
@@ -456,6 +456,7 @@ impl Engine {
                 "stored publication does not bind this candidate",
             ));
         }
+        let hash = publication.candidate_hash.as_str();
         crate::container_storage::repair_historical_names(
             &self.config,
             &self.disk_resources,
@@ -559,7 +560,6 @@ impl Engine {
         if let Some(publication) = existing {
             return self.complete_published_candidate(
                 c,
-                hash,
                 next,
                 publication,
                 |_, _| None,

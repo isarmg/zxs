@@ -1414,14 +1414,48 @@ pub(crate) fn verify_publication_seal(
     p: &Publication,
     seal: &PublicationSeal,
 ) -> Result<()> {
-    let candidate = object_hash("candidate", c)?;
-    let publication = object_hash("publication", p)?;
-    let finalize = object_hash("finalize", &p.finalize)?;
+    let hashes = PublicationHashes::new(c, p)?;
+    if seal.candidate_hash != hashes.candidate || seal.publication_hash != hashes.publication {
+        return Err(Error::new(
+            storage_contract::ErrorCode::PublicationInvalid,
+            "synchronized publication receipts from every configured member are required",
+        ));
+    }
+    verify_publication_receipts(c, p, &seal.receipts, &hashes)
+}
+
+/// Computed digests for this call; receipt verification supplies their authority.
+struct PublicationHashes {
+    candidate: String,
+    publication: String,
+    finalize: String,
+}
+
+impl PublicationHashes {
+    fn new(candidate: &Candidate, publication: &Publication) -> Result<Self> {
+        Ok(Self {
+            candidate: object_hash("candidate", candidate)?,
+            publication: object_hash("publication", publication)?,
+            finalize: object_hash("finalize", &publication.finalize)?,
+        })
+    }
+}
+
+fn verify_publication_receipts(
+    c: &Candidate,
+    p: &Publication,
+    receipts: &[Receipt],
+    hashes: &PublicationHashes,
+) -> Result<()> {
+    let PublicationHashes {
+        candidate,
+        publication,
+        finalize,
+    } = hashes;
     let mut ids = c.metadata_disk_ids.clone();
     ids.sort();
     ids.dedup();
-    let mut actual = seal
-        .receipts
+    let mut actual = receipts
         .iter()
         .map(|r| r.disk_id.clone())
         .collect::<Vec<_>>();
@@ -1443,11 +1477,9 @@ pub(crate) fn verify_publication_seal(
             && (member_ids(&p.finalize.accepts) != ids || p.finalize.accepts.len() != ids.len()))
         || member_ids(&p.finalize_receipts) != ids
         || p.finalize_receipts.len() != ids.len()
-        || seal.receipts.len() != ids.len()
-        || seal.candidate_hash != candidate
-        || seal.publication_hash != publication
-        || p.candidate_hash != candidate
-        || p.finalize.candidate_hash != candidate
+        || receipts.len() != ids.len()
+        || &p.candidate_hash != candidate
+        || &p.finalize.candidate_hash != candidate
         || p.result.operation_id != c.operation_id
         || p.result.request_digest != c.request_digest
         || p.result.sequence != c.sequence
@@ -1464,7 +1496,7 @@ pub(crate) fn verify_publication_seal(
         recovery.verify(c, p)?;
     }
     let mut slots = std::collections::BTreeSet::new();
-    for r in &seal.receipts {
+    for r in receipts {
         let f = p
             .finalize_receipts
             .iter()
@@ -1491,13 +1523,7 @@ pub(crate) fn verify_publication_seal(
                 .find(|a| a.disk_id == r.disk_id)
                 .expect("member sets checked");
             if accept.slot_id != r.slot_id
-                || !receipt_binds(
-                    accept,
-                    RecordType::Accept,
-                    c.sequence,
-                    &candidate,
-                    &candidate,
-                )?
+                || !receipt_binds(accept, RecordType::Accept, c.sequence, candidate, candidate)?
             {
                 return Err(Error::new(
                     storage_contract::ErrorCode::PublicationInvalid,
@@ -1510,7 +1536,7 @@ pub(crate) fn verify_publication_seal(
             || r.slot_id != f.slot_id
             || f.record.previous_frame_hash != predecessor
             || r.record.previous_frame_hash != f.frame_hash
-            || !receipt_binds(f, RecordType::Finalize, c.sequence, &candidate, &finalize)?
+            || !receipt_binds(f, RecordType::Finalize, c.sequence, candidate, finalize)?
         {
             return Err(Error::new(
                 storage_contract::ErrorCode::PublicationInvalid,
@@ -1521,8 +1547,8 @@ pub(crate) fn verify_publication_seal(
             r,
             RecordType::Publication,
             c.sequence,
-            &candidate,
-            &publication,
+            candidate,
+            publication,
         )? {
             return Err(Error::new(
                 storage_contract::ErrorCode::PublicationInvalid,
@@ -1830,18 +1856,10 @@ fn verify_local_version_publication(
     }
     let local: LocalPublication = read_local_json(&directory.join("publication-proof.json"), read)?;
     let proof: CommitProof = read_local_json(&directory.join("commit-proof.json"), read)?;
-    let candidate_hash = object_hash("candidate", &local.candidate)?;
     let c = &local.candidate;
     let p = &local.publication;
-    verify_publication_seal(
-        c,
-        p,
-        &PublicationSeal {
-            candidate_hash: candidate_hash.clone(),
-            publication_hash: object_hash("publication", p)?,
-            receipts: local.publication_receipts.clone(),
-        },
-    )?;
+    let hashes = PublicationHashes::new(c, p)?;
+    verify_publication_receipts(c, p, &local.publication_receipts, &hashes)?;
     let root = directory.ancestors().nth(4).ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::PublicationInvalid,
@@ -1854,20 +1872,27 @@ fn verify_local_version_publication(
         None => loaded?,
     };
     verify_local_membership(root, c, &seal, read, metadata)?;
-    let finalize_hash = object_hash("finalize", &p.finalize)?;
-    if p.candidate_hash != candidate_hash
-        || proof.candidate_hash != candidate_hash
-        || object_hash("commit-proof", &proof)? != object_hash("commit-proof", &local.commit_proof)?
-        || proof.version_hash != object_hash("version", version)?
+    let invalid_binding = || {
+        Error::new(
+            storage_contract::ErrorCode::PublicationInvalid,
+            "local proof does not bind the version",
+        )
+    };
+    if proof.candidate_hash != hashes.candidate {
+        return Err(invalid_binding());
+    }
+    let proof_hash = object_hash("commit-proof", &proof)?;
+    if proof_hash != object_hash("commit-proof", &local.commit_proof)? {
+        return Err(invalid_binding());
+    }
+    let version_hash = object_hash("version", version)?;
+    if proof.version_hash != version_hash
         || seal.pool_id != c.pool_id
         || seal.disk_id != proof.disk_id
         || seal.slot_id != proof.slot_id
-        || object_hash("finalize", &proof.finalize)? != finalize_hash
+        || object_hash("finalize", &proof.finalize)? != hashes.finalize
     {
-        return Err(Error::new(
-            storage_contract::ErrorCode::PublicationInvalid,
-            "local proof does not bind the version",
-        ));
+        return Err(invalid_binding());
     }
     let evidence = c
         .versions
@@ -1879,7 +1904,7 @@ fn verify_local_version_publication(
                 "version is absent from candidate",
             )
         })?;
-    if object_hash("version", &evidence.version)? != object_hash("version", version)?
+    if object_hash("version", &evidence.version)? != version_hash
         || evidence.placement.route_slot_ids != proof.route_slot_ids
     {
         return Err(Error::new(
@@ -1901,7 +1926,7 @@ fn verify_local_version_publication(
                 "local payload receipt absent",
             )
         })?;
-    if receipt.proof_hash != object_hash("commit-proof", &proof)? {
+    if receipt.proof_hash != proof_hash {
         return Err(Error::new(
             storage_contract::ErrorCode::PublicationInvalid,
             "local receipt digest differs",
@@ -1925,6 +1950,10 @@ fn verify_local_version_publication(
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/replication_tests.rs"]
 mod replication_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/journal/publication_hash_reuse_tests.rs"]
+mod publication_hash_reuse_tests;
 
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/writer_lifecycle_tests.rs"]

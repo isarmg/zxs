@@ -234,7 +234,7 @@ pub(super) fn run_member_stage<T: Send>(
     started_at: Duration,
     tasks: Vec<MemberStage<'_>>,
     work: impl Fn(&mut MemberStage<'_>) -> TaskOutcome<T> + Sync,
-) -> std::result::Result<StageRun<T>, (StageFailure, StageTiming)> {
+) -> std::result::Result<StageRun<T>, Box<(StageFailure, StageTiming)>> {
     run_member_stage_with_limit(stage, started_at, tasks, MAX_STAGE_WORKERS, work)
 }
 
@@ -246,7 +246,7 @@ pub(super) fn run_member_stage_with_limit<T: Send>(
     tasks: Vec<MemberStage<'_>>,
     worker_limit: usize,
     work: impl Fn(&mut MemberStage<'_>) -> TaskOutcome<T> + Sync,
-) -> std::result::Result<StageRun<T>, (StageFailure, StageTiming)> {
+) -> std::result::Result<StageRun<T>, Box<(StageFailure, StageTiming)>> {
     let members = tasks.len();
     let requested_workers = members.min(worker_limit);
     let mut workers = requested_workers;
@@ -370,7 +370,7 @@ pub(super) fn run_member_stage_with_limit<T: Send>(
             );
             Ok(StageRun { values, timing })
         }
-        Some(primary) => Err((
+        Some(primary) => Err(Box::new((
             StageFailure {
                 stage,
                 primary,
@@ -378,7 +378,7 @@ pub(super) fn run_member_stage_with_limit<T: Send>(
                 failed,
             },
             timing,
-        )),
+        ))),
     }
 }
 

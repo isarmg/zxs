@@ -22,8 +22,8 @@ class MetadataAdversarialRunnerTests(unittest.TestCase):
         self.expected = RUNNER.EXPECTED_TESTS.read_text().splitlines()
         self.listing = "\n".join(f"{name}: test" for name in self.expected)
 
-    def test_fixed_inventory_has_36_unique_cases(self):
-        self.assertEqual(len(self.expected), 36)
+    def test_fixed_inventory_has_37_unique_cases(self):
+        self.assertEqual(len(self.expected), 37)
         self.assertEqual(self.expected, sorted(set(self.expected)))
 
     def test_complete_inventory_accepts_other_engine_tests_and_exact_selection(self):

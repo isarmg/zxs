@@ -72,15 +72,6 @@ impl HistoryState {
             Self::Unloaded | Self::Loaded(_) | Self::Stale { .. } | Self::Failed(_) => None,
         }
     }
-    pub(crate) fn stale_reason(&self) -> Option<StaleReason> {
-        match self {
-            Self::Stale { reason, .. } => Some(*reason),
-            Self::Unloaded | Self::Loading { .. } | Self::Loaded(_) | Self::Failed(_) => None,
-        }
-    }
-    pub(crate) fn is_stale(&self) -> bool {
-        self.stale_reason().is_some()
-    }
 }
 
 /// At most one auxiliary page is open; opening another replaces it.
@@ -196,9 +187,6 @@ impl History {
     }
     pub(crate) fn loading(&self) -> bool {
         self.state.is_loading()
-    }
-    pub(crate) fn stale(&self) -> bool {
-        self.state.is_stale()
     }
     /// Branches of the resident root. A page captured under another root is
     /// not consulted even if it is still allocated.

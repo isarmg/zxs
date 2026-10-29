@@ -1,4 +1,5 @@
 use super::*;
+use crate::files::history::state::HistoryState;
 use json_codec::json;
 
 fn published() -> Value {
@@ -31,7 +32,7 @@ fn publication_expires_the_observed_history_even_when_selection_identity_is_unch
         record_receipt(state, "original", published());
         state.with_untracked(|s| {
             assert_eq!(s.files.selected, selected);
-            assert!(s.files.history.stale());
+            assert!(matches!(s.files.history.state, HistoryState::Stale { .. }));
             assert!(s.files.history.root().is_none());
             assert!(
                 s.files.history.window().is_some(),
