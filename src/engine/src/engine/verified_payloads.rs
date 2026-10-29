@@ -194,24 +194,7 @@ fn verify_replica(
             "prepared version metadata differs",
         ));
     }
-    let checks = handle
-        .root
-        .read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
-    if blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ChecksumMismatch,
-            "checksum manifest digest differs",
-        ));
-    }
-    let manifest = ChecksumManifest::decode(&checks)?;
-    if manifest.logical_size != version.logical_size
-        || manifest.chunk_bytes != version.checksum_chunk_bytes
-    {
-        return Err(Error::new(
-            storage_contract::ErrorCode::ChecksumMismatch,
-            "checksum header differs from version",
-        ));
-    }
+    let manifest = read_checksum_manifest_at(&handle.root, &directory, version, &mut |_| Ok(()))?;
     let path =
         crate::container_storage::content_path_at(&handle.root, &directory, version, &mut |_| {
             Ok(())

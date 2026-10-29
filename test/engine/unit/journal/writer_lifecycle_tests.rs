@@ -194,6 +194,66 @@ fn real_enospc_blocks_engine_before_first_prepare_and_preserves_publication() {
 }
 
 #[test]
+fn real_enospc_on_one_of_three_members_fails_parallel_prepare_while_the_others_persist() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("system");
+    let config = Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}"))));
+    let mut engine = Engine::initialize(&root, config).unwrap();
+    let mut members = engine.members();
+    // The last member is claimed after the others, so they always run.
+    let full = members.remove(2);
+    let sequence = engine.next_slot;
+    engine.journals.get_mut(&full.disk_id).unwrap().file = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let operation = storage_contract::OperationId::generate();
+    let create = |engine: &mut Engine| {
+        engine.create_repository(
+            &storage_contract::RepositoryName::parse("full").unwrap(),
+            "P01",
+            3,
+            "admin",
+            operation,
+        )
+    };
+    let error = create(&mut engine).unwrap_err();
+    // A PREPARE-stage failure stays a plain failure, never IN_DOUBT.
+    assert_ne!(error.code(), storage_contract::ErrorCode::InDoubt);
+    assert!(error.source().is_some());
+    assert!(engine.is_read_only());
+    assert!(engine.state().repositories.is_empty());
+    assert_eq!(engine.next_slot, sequence + 1);
+    // The healthy members completed their PREPARE in the same stage.
+    for disk in &members {
+        let kinds: Vec<_> = scan(disk)
+            .unwrap()
+            .records
+            .iter()
+            .filter(|(record, _)| record.sequence == sequence)
+            .map(|(record, _)| record.record_type)
+            .collect();
+        assert_eq!(kinds, [RecordType::Prepare]);
+    }
+    assert!(
+        scan(&full)
+            .unwrap()
+            .records
+            .iter()
+            .all(|(record, _)| record.sequence < sequence)
+    );
+    drop(engine);
+    let mut recovered = Engine::open(&root).unwrap();
+    assert!(!recovered.is_read_only());
+    assert!(!recovered.state().operations.contains_key(&operation));
+    let repo = create(&mut recovered).unwrap();
+    assert_eq!(
+        create(&mut recovered).unwrap().repository_id,
+        repo.repository_id
+    );
+}
+
+#[test]
 fn full_recovery_keeps_historical_receipts_and_wire_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");

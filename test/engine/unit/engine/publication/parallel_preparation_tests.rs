@@ -262,3 +262,67 @@ fn lower_group_error_wins_over_higher_error_but_never_hides_a_panic() {
         });
     }
 }
+
+#[test]
+fn routes_outside_fan_out_envelope_keep_serial_copy_and_replay_capability() {
+    for copies in [3, 9] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("system");
+        let config =
+            Config::development((0..copies).map(|i| temp.path().join(format!("disk-{i}"))));
+        let mut engine = Engine::initialize(&root, config).unwrap();
+        let repository = engine
+            .create_repository(
+                &RepositoryName::parse("resource-envelope").unwrap(),
+                "P01",
+                copies,
+                "admin",
+                OperationId::generate(),
+            )
+            .unwrap();
+        let workspace = engine
+            .create_workspace(&repository.main_branch_id, "admin")
+            .unwrap();
+        let bytes = b"independent copies beyond the optimized route envelope";
+        engine
+            .stage_bytes(&workspace.workspace_id, "body.bin", bytes)
+            .unwrap();
+        let request = CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "bounded fan-out or original serial copy".into(),
+            request_digest: None,
+        };
+        let result = engine.commit_workspace(request.clone()).unwrap();
+        let report = engine.last_publication_stages().unwrap();
+        let payload = report
+            .stages
+            .iter()
+            .find(|stage| stage.stage == StageKind::PayloadCopy)
+            .unwrap();
+        assert_eq!(
+            payload.io.logical_bytes_completed,
+            bytes.len() as u64 * copies as u64
+        );
+        assert_eq!(
+            payload.io.payload_source_bytes_completed,
+            bytes.len() as u64 * if copies == 3 { 1 } else { copies as u64 }
+        );
+        let version = engine.state.versions.values().next().unwrap();
+        for disk in &engine.config.disks {
+            let directory = version_dir(disk, &version.history_tree_id, &version.version_id);
+            engine
+                .disk_resources
+                .get(disk)
+                .unwrap()
+                .verify_payload(&directory, version)
+                .unwrap();
+        }
+        drop(engine);
+        let mut reopened = Engine::open(&root).unwrap();
+        assert_eq!(reopened.commit_workspace(request).unwrap(), result);
+    }
+}

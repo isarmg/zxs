@@ -9,10 +9,13 @@ use std::{
     io::{Read, Write},
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 
+mod fan_out;
 mod mountinfo;
 mod owned;
+pub(crate) use fan_out::{FanOutTarget, fan_out_admitted, verified_fan_out_copy_at};
 pub(crate) use owned::{DiskHandle, DiskResources, DiskRoot};
 
 pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
@@ -357,25 +360,56 @@ pub(crate) fn full_copy(
 ) -> Result<(u64, ContentHash, ChecksumManifest)> {
     let source = open_regular(source)?;
     full_copy_to_path(source, destination, chunk_bytes, max_bytes, None)
-        .map(|(size, hash, checksums, _file)| (size, hash, checksums))
+        .map(|copy| (copy.size, copy.hash, copy.checksums))
         .map_err(CopyFailure::into_error)
 }
 
-/// Owns the freshly written, verified and synced output until installation.
+/// Source commitments verified against this exact version. This is evidence
+/// about the input bytes, not evidence that any target file is durable.
+#[derive(Debug)]
+struct VerifiedSourceSummary<'a> {
+    version: &'a FileVersion,
+    checksum_bytes: Vec<u8>,
+}
+
+/// Owns an independently written and synced output until installation. Only
+/// the copy paths combine source evidence with a successfully sealed file.
 #[derive(Debug)]
 pub(crate) struct VerifiedCopy<'a> {
     file: File,
-    version: &'a FileVersion,
-    checksums: ChecksumManifest,
+    summary: Arc<VerifiedSourceSummary<'a>>,
 }
 
 impl<'a> VerifiedCopy<'a> {
-    pub(crate) fn checksums(&self) -> &ChecksumManifest {
-        &self.checksums
+    pub(crate) fn checksum_bytes(&self) -> &[u8] {
+        &self.summary.checksum_bytes
     }
 
     pub(crate) fn into_parts(self) -> (&'a FileVersion, File) {
-        (self.version, self.file)
+        (self.summary.version, self.file)
+    }
+}
+
+/// The serial reader also serves callers that have no expected version.
+/// Retain its existing digest output, and retain the canonical encoding only
+/// when it was needed for source validation. Export-only verified callers
+/// must not encode a second time merely to discard the resulting copy.
+struct FullCopy<'a> {
+    size: u64,
+    hash: ContentHash,
+    checksums: ChecksumManifest,
+    file: File,
+    summary: Option<Arc<VerifiedSourceSummary<'a>>>,
+}
+
+impl<'a> FullCopy<'a> {
+    fn into_verified(self) -> VerifiedCopy<'a> {
+        VerifiedCopy {
+            file: self.file,
+            summary: self
+                .summary
+                .expect("invariant: expected version was verified by the serial reader"),
+        }
     }
 }
 
@@ -424,11 +458,7 @@ pub(crate) fn verified_full_copy<'a>(
         max_bytes,
         Some(version),
     )
-    .map(|(_, _, checksums, file)| VerifiedCopy {
-        file,
-        version,
-        checksums,
-    })
+    .map(FullCopy::into_verified)
 }
 
 pub(crate) fn verified_full_copy_at<'a>(
@@ -457,20 +487,16 @@ pub(crate) fn verified_full_copy_at<'a>(
         max_bytes,
         Some(version),
     )
-    .map(|(_, _, checksums, file)| VerifiedCopy {
-        file,
-        version,
-        checksums,
-    })
+    .map(FullCopy::into_verified)
 }
 
-fn full_copy_to_path(
+fn full_copy_to_path<'a>(
     source: File,
     destination: &Path,
     chunk_bytes: u32,
     max_bytes: u64,
-    expected: Option<&FileVersion>,
-) -> std::result::Result<(u64, ContentHash, ChecksumManifest, File), CopyFailure> {
+    expected: Option<&'a FileVersion>,
+) -> std::result::Result<FullCopy<'a>, CopyFailure> {
     let destination = absolute_path(destination)?;
     let parent = destination.parent().ok_or_else(|| {
         Error::new(
@@ -520,17 +546,18 @@ pub(crate) fn full_copy_held(
         max_bytes,
         None,
     )
+    .map(|copy| (copy.size, copy.hash, copy.checksums, copy.file))
     .map_err(CopyFailure::into_error)
 }
 
-fn full_copy_checked(
+fn full_copy_checked<'a>(
     source: File,
     directory: &File,
     destination_name: &EntryName,
     chunk_bytes: u32,
     max_bytes: u64,
-    expected: Option<&FileVersion>,
-) -> std::result::Result<(u64, ContentHash, ChecksumManifest, File), CopyFailure> {
+    expected: Option<&'a FileVersion>,
+) -> std::result::Result<FullCopy<'a>, CopyFailure> {
     let temporary = format!(".zxs-full-{}", new_id("req"));
     let mut target = File::from(
         rustix::fs::openat(
@@ -590,17 +617,27 @@ fn full_copy_checked(
             chunks,
         };
         // Bind the output to all published commitments before exposing its name.
-        if let Some(expected) = expected
-            && (size != expected.logical_size
-                || hash != expected.content_hash
-                || blake3::hash(&checksums.encode()?).to_hex().as_str()
-                    != expected.checksum_manifest_hash)
-        {
-            return Err(CopyFailure::Source(Error::new(
-                storage_contract::ErrorCode::SourceChanged,
-                "copied content differs from the published manifest",
-            )));
-        }
+        let summary = if let Some(expected) = expected {
+            let changed = || {
+                CopyFailure::Source(Error::new(
+                    storage_contract::ErrorCode::SourceChanged,
+                    "copied content differs from the published manifest",
+                ))
+            };
+            if size != expected.logical_size || hash != expected.content_hash {
+                return Err(changed());
+            }
+            let checksum_bytes = checksums.encode()?;
+            if blake3::hash(&checksum_bytes).to_hex().as_str() != expected.checksum_manifest_hash {
+                return Err(changed());
+            }
+            Some(Arc::new(VerifiedSourceSummary {
+                version: expected,
+                checksum_bytes,
+            }))
+        } else {
+            None
+        };
         target.set_permissions(fs::Permissions::from_mode(0o400))?;
         // Persist the complete bytes and final mode together before publishing
         // the name. The rename still needs its own parent-directory barrier.
@@ -614,10 +651,16 @@ fn full_copy_checked(
         )
         .map_err(std::io::Error::from)?;
         directory.sync_all()?;
-        Ok((size, hash, checksums))
+        Ok(FullCopy {
+            size,
+            hash,
+            checksums,
+            file: target,
+            summary,
+        })
     })();
     match result {
-        Ok((size, hash, checksums)) => Ok((size, hash, checksums, target)),
+        Ok(copy) => Ok(copy),
         Err(operation) => {
             match rustix::fs::unlinkat(directory, temporary.as_str(), rustix::fs::AtFlags::empty())
             {
@@ -655,7 +698,10 @@ pub(crate) fn open_payload_at(
     directory: &Path,
     version: &FileVersion,
 ) -> Result<(File, Vec<u8>, ChecksumManifest)> {
-    let checks = root.read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
+    let checks = root.read_bytes(
+        &directory.join("checksums.bin"),
+        checksum_manifest_size(version)?,
+    )?;
     let manifest = decode_checksum_manifest(&checks, version)?;
     let path =
         crate::container_storage::content_path_at(root, directory, version, &mut |_| Ok(()))?;
@@ -677,10 +723,35 @@ pub(crate) fn read_checksum_manifest_at(
 ) -> Result<ChecksumManifest> {
     let checks = root.read_bytes_observed(
         &directory.join("checksums.bin"),
-        MAX_CHECKSUM_MANIFEST,
+        checksum_manifest_size(version)?,
         observe,
     )?;
     decode_checksum_manifest(&checks, version)
+}
+
+/// Bound a persisted checksum read by the version's canonical encoding, not
+/// the format-wide maximum. Corrupt tiny replicas must not consume a large
+/// file's budget concurrently before their digest is rejected.
+pub(crate) fn checksum_manifest_size(version: &FileVersion) -> Result<usize> {
+    if !SUPPORTED_CHECKSUM_CHUNK_BYTES.contains(&version.checksum_chunk_bytes) {
+        return Err(Error::new(
+            ErrorCode::ChecksumFormatInvalid,
+            "unsupported checksum chunk size",
+        ));
+    }
+    version
+        .logical_size
+        .div_ceil(u64::from(version.checksum_chunk_bytes))
+        .checked_mul(32)
+        .and_then(|bytes| bytes.checked_add(CHECKSUM_HEADER_BYTES as u64))
+        .filter(|bytes| *bytes <= MAX_CHECKSUM_MANIFEST as u64)
+        .map(|bytes| bytes as usize)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::ResourceLimit,
+                "version checksum manifest exceeds the supported format limit",
+            )
+        })
 }
 
 fn decode_checksum_manifest(checks: &[u8], version: &FileVersion) -> Result<ChecksumManifest> {

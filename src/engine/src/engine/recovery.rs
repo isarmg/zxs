@@ -411,40 +411,34 @@ impl Engine {
                     .filter(|p| p.recovery.is_some())
                     .map(|p| p.result.clone());
                 if let Some(publication) = publication {
-                    self.complete_published_candidate(
+                    let mut stages = super::publication::StageSequence::new(&hash, members.len());
+                    let replayed = self.complete_published_candidate(
                         &candidate,
                         &hash,
                         &next,
                         publication,
-                        |engine, d, pub_hash| {
-                            if let Some(receipt) = rs.iter().find(|receipt| {
-                                receipt.disk_id == d.disk_id
-                                    && receipt.record.record_type == RecordType::Publication
-                                    && receipt.record.sequence == candidate.sequence
-                                    && receipt.record.object_hash == pub_hash
-                            }) {
-                                Ok(receipt.clone())
-                            } else {
-                                match mode {
-                                    RecoveryMode::CompletePending => engine
-                                        .append_recovered_journal(
-                                            d,
-                                            RecordType::Publication,
-                                            candidate.sequence,
-                                            &hash,
-                                            pub_hash,
-                                        ),
-                                    RecoveryMode::PreservePending => engine.append_journal(
-                                        d,
-                                        RecordType::Publication,
-                                        candidate.sequence,
-                                        &hash,
-                                        pub_hash,
-                                    ),
-                                }
-                            }
+                        |d, pub_hash| {
+                            rs.iter()
+                                .find(|receipt| {
+                                    receipt.disk_id == d.disk_id
+                                        && receipt.record.record_type == RecordType::Publication
+                                        && receipt.record.sequence == candidate.sequence
+                                        && receipt.record.object_hash == pub_hash
+                                })
+                                .cloned()
                         },
-                    )?;
+                        match mode {
+                            RecoveryMode::CompletePending => AppendMode::Recovery,
+                            RecoveryMode::PreservePending => AppendMode::Live,
+                        },
+                        &mut stages,
+                    );
+                    self.last_publication_stages = Some(stages.finish(if replayed.is_ok() {
+                        "replayed"
+                    } else {
+                        "replay-failed"
+                    }));
+                    replayed?;
                 } else {
                     self.complete_candidate(&candidate, &hash, &next, None)?;
                 }

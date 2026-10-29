@@ -164,6 +164,7 @@ impl OpenJournal {
             } else {
                 WriterState::Ready
             },
+            last_frame_bytes: 0,
             #[cfg(feature = "fault-injection")]
             fault: None,
         })
@@ -291,8 +292,10 @@ fn scan_frames(reader: impl Read) -> Result<Scan> {
         torn_tail: reader.torn_tail,
     })
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AppendMode {
+/// Live appends refuse a writer that needs recovery; recovery appends repair a
+/// torn tail first. Both share one frame format and one idempotent receipt rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AppendMode {
     Live,
     Recovery,
 }
@@ -316,6 +319,7 @@ pub(crate) struct JournalWriter {
     file: std::fs::File,
     records: Vec<(Record, String)>,
     state: WriterState,
+    last_frame_bytes: u64,
     #[cfg(feature = "fault-injection")]
     pub(crate) fault: Option<JournalFault>,
 }
@@ -370,6 +374,7 @@ impl JournalWriter {
             file: create_synced_journal(&directory)?,
             records: Vec::new(),
             state: WriterState::Ready,
+            last_frame_bytes: 0,
             #[cfg(feature = "fault-injection")]
             fault: None,
         })
@@ -425,17 +430,12 @@ impl JournalWriter {
     ) -> Result<Receipt> {
         self.append_mode(d, kind, sequence, candidate, object, AppendMode::Live)
     }
-    pub(crate) fn append_recovered(
-        &mut self,
-        d: &DiskConfig,
-        kind: RecordType,
-        sequence: u64,
-        candidate: &str,
-        object: &str,
-    ) -> Result<Receipt> {
-        self.append_mode(d, kind, sequence, candidate, object, AppendMode::Recovery)
+    /// Frame bytes written by the most recent successful append that reached
+    /// the file; an idempotent replay of an existing receipt reports zero.
+    pub(crate) fn last_frame_bytes(&self) -> u64 {
+        self.last_frame_bytes
     }
-    fn append_mode(
+    pub(crate) fn append_mode(
         &mut self,
         d: &DiskConfig,
         kind: RecordType,
@@ -458,6 +458,7 @@ impl JournalWriter {
                 && record.candidate_hash == candidate
                 && record.object_hash == object
         }) {
+            self.last_frame_bytes = 0;
             return Ok(Receipt {
                 disk_id: d.disk_id.clone(),
                 slot_id: d.slot_id.clone(),
@@ -512,6 +513,7 @@ impl JournalWriter {
         let hash = hash.to_hex().to_string();
         self.records.push((record.clone(), hash.clone()));
         self.state = WriterState::Ready;
+        self.last_frame_bytes = bytes.len() as u64;
         Ok(Receipt {
             disk_id: d.disk_id.clone(),
             slot_id: d.slot_id.clone(),
@@ -557,6 +559,20 @@ pub(crate) fn store_object_at<T: Serialize + ?Sized>(
     write_object_bytes_at(root, d, kind, &hash, &encode_metadata(value, MAX_METADATA)?)?;
     Ok(hash)
 }
+/// Successful logical immutable-object installs. An identical pre-existing
+/// object is compared and synced, not rewritten; this is not syscall I/O.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ObjectInstalls {
+    pub(crate) objects: u32,
+    pub(crate) bytes: u64,
+}
+impl ObjectInstalls {
+    pub(crate) fn record(&mut self, bytes: usize) {
+        self.objects += 1;
+        self.bytes += bytes as u64;
+    }
+}
+
 /// Frozen canonical bytes shared by size preflight and every replica write.
 /// Construction performs all serialization and hashing; installation retains
 /// atomic writes, immutable-byte collision checks and reader-size limits.
@@ -599,14 +615,19 @@ impl PreparedMetadataObject {
         members: &[DiskConfig],
     ) -> Result<String> {
         self.store_with(members, |disk| {
-            write_object_bytes_at(
-                &resources.get(disk)?.root,
-                disk,
-                self.kind,
-                &self.hash,
-                &self.bytes,
-            )
+            self.store_on(&resources.get(disk)?.root, disk)
         })
+    }
+    /// Install this object on one held disk root. Member stages call this from
+    /// their own task so that no shared resource lookup sits on the write path.
+    pub(crate) fn store_on(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<()> {
+        if self.bytes.len() > MAX_METADATA {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "serialized metadata exceeds reader limit",
+            ));
+        }
+        write_object_bytes_at(root, disk, self.kind, &self.hash, &self.bytes)
     }
     fn store_with(
         &self,

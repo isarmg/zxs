@@ -26,7 +26,10 @@ pub use observations::{DiskObservation, DiskObservationPlan, MetadataMemberProbe
 pub use operations::{OperationReadPlan, OperationRecord};
 pub(crate) mod provenance;
 mod publication;
+#[cfg(feature = "fault-injection")]
+pub use publication::MemberFault;
 pub(crate) use publication::{DetachedPublication, PublishedDependencyReuse};
+pub use publication::{PublicationStageReport, StageIo, StageKind, StageTiming};
 mod workspace_commit;
 #[cfg(test)]
 pub(crate) use workspace_commit::native_workspace_commit_completed;
@@ -106,9 +109,13 @@ pub struct Engine {
     /// cold index from recovery is still attached to the resident log.
     pub(crate) operation_locator_root: Option<crate::metadata_map::Reference>,
     recovery_warnings: RecoveryWarnings,
+    last_publication_stages: Option<Arc<PublicationStageReport>>,
     _locks: Vec<File>,
     #[cfg(feature = "fault-injection")]
     fault: Option<FaultInjection>,
+    /// Member-local faults, consumed inside their matching stage tasks.
+    #[cfg(feature = "fault-injection")]
+    member_faults: Vec<publication::ArmedMemberFault>,
 }
 #[cfg(feature = "fault-injection")]
 struct FaultInjection {
@@ -218,24 +225,24 @@ impl Engine {
         result
     }
 
-    pub(crate) fn append_recovered_journal(
-        &mut self,
-        disk: &DiskConfig,
-        kind: crate::journal::RecordType,
-        sequence: u64,
-        candidate: &str,
-        object: &str,
-    ) -> Result<crate::journal::Receipt> {
-        let journal = self
-            .journals
-            .get_mut(&disk.disk_id)
-            .expect("invariant: writable metadata member owns a journal");
-        let result = journal.append_recovered(disk, kind, sequence, candidate, object);
-        if journal.requires_reopen() {
+    /// Apply the journal failure fence for every member journal a stage wrote.
+    /// Equivalent to the per-append check in `append_journal`, evaluated once
+    /// the whole stage has returned and all member tasks are joined.
+    pub(crate) fn fence_failed_journals(&mut self, members: &[DiskConfig]) {
+        if members.iter().any(|disk| {
+            self.journals
+                .get(&disk.disk_id)
+                .is_some_and(crate::journal::JournalWriter::requires_reopen)
+        }) {
             self.blocked = true;
             self.metadata_integrity.invalidate();
         }
-        result
+    }
+
+    /// Stage report of the most recent completed publication in this process;
+    /// records what this engine did on these devices, not a throughput claim.
+    pub fn last_publication_stages(&self) -> Option<Arc<PublicationStageReport>> {
+        self.last_publication_stages.clone()
     }
 
     /// Detached filesystem work must keep the same OS lock descriptions alive
@@ -364,9 +371,12 @@ impl Engine {
             operation_locator_root: None,
             history_query_proof: Mutex::new(index::QueryProof::default()),
             recovery_warnings: RecoveryWarnings::default(),
+            last_publication_stages: None,
             _locks: locks,
             #[cfg(feature = "fault-injection")]
             fault: None,
+            #[cfg(feature = "fault-injection")]
+            member_faults: Vec::new(),
         };
         engine.rebuild_index()?;
         Ok(engine)
@@ -438,9 +448,12 @@ impl Engine {
             operation_locator_root: None,
             history_query_proof: Mutex::new(index::QueryProof::default()),
             recovery_warnings: RecoveryWarnings::default(),
+            last_publication_stages: None,
             _locks: locks,
             #[cfg(feature = "fault-injection")]
             fault: None,
+            #[cfg(feature = "fault-injection")]
+            member_faults: Vec::new(),
         };
         engine.seed_workspace_recovery()?;
         Ok(engine)
@@ -701,6 +714,26 @@ impl Engine {
             point: point.to_owned(),
             action: FaultAction::Pause(barrier),
         });
+    }
+    /// Arm one member-local fault inside a parallel publication stage. Replaces
+    /// only a fault for the same (stage, slot); other members can be armed too.
+    /// Typed, never parsed from requests or environment.
+    #[cfg(feature = "fault-injection")]
+    pub fn inject_member_fault_once(
+        &mut self,
+        stage: StageKind,
+        slot: &str,
+        fault: MemberFault,
+    ) -> Result<()> {
+        let disk_id = self.disk(slot)?.disk_id.clone();
+        self.member_faults
+            .retain(|armed| armed.stage != stage || armed.disk_id != disk_id);
+        self.member_faults.push(publication::ArmedMemberFault {
+            stage,
+            disk_id,
+            fault,
+        });
+        Ok(())
     }
     #[cfg(feature = "fault-injection")]
     pub(crate) fn failpoint(&mut self, point: &str) -> Result<()> {
