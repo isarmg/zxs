@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "baseline_sha": "e2f33d9882cf7263412d9370b6a703e0b216357d",
+  "reviewed_candidate_sha": "209f31a4122174129bcf40b56c0598ac61e66352",
+  "frozen_candidate_sha": "209f31a4122174129bcf40b56c0598ac61e66352",
+  "ten_thousand_review": null,
+  "profiles": ["small-selftest", "boundaries", "1000", "10000"]
+}

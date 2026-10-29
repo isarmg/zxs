@@ -1,0 +1,281 @@
+name: History growth frozen-candidate controller
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Selftest is bounded to 8 records; acceptance requires an authorized frozen plan
+        type: choice
+        options: [selftest, acceptance, '10000']
+        default: selftest
+        required: true
+      build_run_id:
+        description: Reuse the successful selftest build run; required for scale modes
+        type: string
+        default: ''
+      build_carrier_sha:
+        description: Exact carrier SHA of the reused selftest build run
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: history-growth-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUSTUP_TOOLCHAIN: '1.99.0'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  controller:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      baseline_sha: ${{ steps.select.outputs.baseline_sha }}
+      candidate_sha: ${{ steps.select.outputs.candidate_sha }}
+      matrix: ${{ steps.select.outputs.matrix }}
+      build_required: ${{ steps.select.outputs.build_required }}
+      build_run_id: ${{ steps.select.outputs.build_run_id }}
+      build_carrier_sha: ${{ steps.select.outputs.build_carrier_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check bounded controller and evidence tooling
+        run: |
+          python3 -m unittest discover -s test/history-scale-bench -p 'test_*.py' -v
+          python3 .github/scripts/check-workflows.py tools/history-scale-bench/workflow.yml
+          python3 tools/rust-sources/documentation.py verify
+      - name: Select only the authorized matrix before any build
+        id: select
+        env:
+          MODE: ${{ inputs.mode }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          BUILD_CARRIER_SHA: ${{ inputs.build_carrier_sha }}
+        run: |
+          python3 tools/history-scale-bench/controller.py \
+            --plan tools/history-scale-bench/acceptance-plan.json \
+            --mode "$MODE" --output selection.json --github-output "$GITHUB_OUTPUT" \
+            --build-run-id "$BUILD_RUN_ID" --build-carrier-sha "$BUILD_CARRIER_SHA"
+      - name: Require successful selftest before reusing its binaries
+        if: steps.select.outputs.build_required == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_RUN_ID: ${{ steps.select.outputs.build_run_id }}
+          BUILD_CARRIER_SHA: ${{ steps.select.outputs.build_carrier_sha }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > reuse-run.json
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, "tools/history-scale-bench")
+          from controller import validate_reuse_run
+          validate_reuse_run(json.loads(Path("reuse-run.json").read_text()), os.environ["BUILD_RUN_ID"], os.environ["BUILD_CARRIER_SHA"])
+          PY
+      - name: Fetch the original selftest selection
+        if: steps.select.outputs.build_required == 'false'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: history-growth-controller-${{ steps.select.outputs.build_run_id }}
+          run-id: ${{ steps.select.outputs.build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: reused-controller
+      - name: Fetch the original selftest evidence
+        if: steps.select.outputs.build_required == 'false'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: history-growth-small-selftest-${{ steps.select.outputs.build_run_id }}
+          run-id: ${{ steps.select.outputs.build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: reused-selftest
+      - name: Check all original micro lifecycle stages passed
+        if: steps.select.outputs.build_required == 'false'
+        env:
+          BUILD_RUN_ID: ${{ steps.select.outputs.build_run_id }}
+          BUILD_CARRIER_SHA: ${{ steps.select.outputs.build_carrier_sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, "tools/history-scale-bench")
+          from controller import load_plan, validate_reused_selftest
+          from summarize import read_json
+          selections = list(Path("reused-controller").rglob("selection.json"))
+          summaries = list(Path("reused-selftest").rglob("summary.json"))
+          if len(selections) != 1 or len(summaries) != 1:
+              raise ValueError("missing or ambiguous original selftest selection/summary")
+          validate_reused_selftest(read_json(selections[0].read_text()), read_json(summaries[0].read_text()),
+                                   os.environ["BUILD_RUN_ID"], os.environ["BUILD_CARRIER_SHA"],
+                                   load_plan(Path("tools/history-scale-bench/acceptance-plan.json"))["reviewed_candidate_sha"])
+          PY
+      - name: Retain selection and exact tools
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: history-growth-controller-${{ github.run_id }}
+          path: |
+            selection.json
+            reuse-run.json
+            tools/history-scale-bench/
+            test/history-scale-bench/
+          if-no-files-found: error
+          retention-days: 30
+
+  build:
+    needs: controller
+    if: needs.controller.outputs.build_required == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [baseline, candidate]
+    env:
+      SOURCE_SHA: ${{ matrix.label == 'baseline' && needs.controller.outputs.baseline_sha || needs.controller.outputs.candidate_sha }}
+      CANDIDATE_SHA: ${{ needs.controller.outputs.candidate_sha }}
+      ADAPTER: ${{ matrix.label == 'baseline' && 'history-scale-baseline' || 'history-scale-current' }}
+    steps:
+      - name: Checkout exact tools carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: carrier
+      - name: Checkout exact product source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isarmg/zxs
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          path: source
+      - name: Initialize isolated offline Cargo home
+        run: bash carrier/.github/scripts/initialize-cargo-home.sh
+      - name: Pin compiler and record build host
+        run: |
+          mkdir bundle
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup component add rustfmt --toolchain 1.99.0
+          rustc +1.99.0 --version --verbose > bundle/rustc.txt
+          cargo +1.99.0 --version > bundle/cargo.txt
+          lscpu --json > bundle/cpu.json
+          uname -a > bundle/kernel.txt
+          cp carrier/tools/history-scale-bench/driver.rs bundle/driver.formatted.rs
+          rustfmt +1.99.0 --edition 2024 bundle/driver.formatted.rs
+          rustfmt +1.99.0 --edition 2024 --check carrier/tools/history-scale-bench/driver.rs > bundle/rustfmt-check.log 2>&1
+      - name: Register the same ordinary binary
+        run: |
+          python3 carrier/tools/history-scale-bench/prepare.py --source source \
+            --candidate-sha "$CANDIDATE_SHA" > bundle/registration.json
+      - name: Build this version once for every selected scale
+        working-directory: source
+        run: |
+          cargo +1.99.0 tree --locked --offline -p perf-check -e normal,build,features --features "$ADAPTER" > ../bundle/features.txt
+          python3 - "$ADAPTER" <<'PY'
+          import json
+          from pathlib import Path
+          import subprocess
+          import sys
+          command = ["cargo", "+1.99.0", "build", "--locked", "--offline", "--release", "-p", "perf-check",
+                     "--bin", "history-scale-driver", "--features", sys.argv[1], "--message-format=json"]
+          Path("../bundle/build-command.json").write_text(json.dumps(command) + "\n")
+          with open("../bundle/build.jsonl", "w") as output, open("../bundle/build.stderr.log", "w") as errors:
+              subprocess.run(command, stdout=output, stderr=errors, check=True)
+          PY
+          cp target/native/release/history-scale-driver ../bundle/history-scale-driver
+          python3 ../carrier/tools/history-scale-bench/verify_build.py \
+            --input ../bundle/build.jsonl --source . \
+            --binary ../bundle/history-scale-driver --registration ../bundle/registration.json \
+            --build-command ../bundle/build-command.json \
+            --output ../bundle/provenance.json
+          git diff -- tools/perf-check/Cargo.toml > ../bundle/harness.patch
+      - name: Retain binary and complete build evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: history-growth-binary-${{ matrix.label }}-${{ github.run_id }}
+          path: bundle/
+          if-no-files-found: error
+          retention-days: 30
+
+  validation:
+    needs: [controller, build]
+    if: ${{ always() && needs.controller.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.controller.outputs.matrix) }}
+    steps:
+      - name: Checkout exact tools carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: carrier
+      - name: Checkout old source for provenance verification
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isarmg/zxs
+          ref: ${{ needs.controller.outputs.baseline_sha }}
+          persist-credentials: false
+          path: baseline-source
+      - name: Checkout candidate source for provenance verification
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isarmg/zxs
+          ref: ${{ needs.controller.outputs.candidate_sha }}
+          persist-credentials: false
+          path: candidate-source
+      - name: Download the single baseline build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: history-growth-binary-baseline-${{ needs.controller.outputs.build_run_id }}
+          path: binaries/baseline
+          run-id: ${{ needs.controller.outputs.build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download the single candidate build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: history-growth-binary-candidate-${{ needs.controller.outputs.build_run_id }}
+          path: binaries/candidate
+          run-id: ${{ needs.controller.outputs.build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install resource tools and fixed compiler metadata
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y strace time
+          rustup toolchain install 1.99.0 --profile minimal
+          chmod +x binaries/baseline/history-scale-driver binaries/candidate/history-scale-driver
+      - name: Run the gated profile with the original binaries
+        env:
+          PROFILE: ${{ matrix.profile }}
+          BUILD_RUN_ID: ${{ needs.controller.outputs.build_run_id }}
+          BUILD_CARRIER_SHA: ${{ needs.controller.outputs.build_carrier_sha }}
+        run: |
+          python3 carrier/tools/history-scale-bench/run.py \
+            --plan carrier/tools/history-scale-bench/acceptance-plan.json --profile "$PROFILE" \
+            --baseline-source baseline-source --candidate-source candidate-source \
+            --baseline-binary binaries/baseline/history-scale-driver \
+            --candidate-binary binaries/candidate/history-scale-driver \
+            --baseline-provenance binaries/baseline/provenance.json \
+            --candidate-provenance binaries/candidate/provenance.json \
+            --build-run-id "$BUILD_RUN_ID" --build-carrier-sha "$BUILD_CARRIER_SHA" \
+            --output-root "evidence/$PROFILE" \
+            --rss-mib 8192 --disk-mib 12288
+      - name: Retain all outcomes and raw evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: history-growth-${{ matrix.profile }}-${{ github.run_id }}
+          path: |
+            evidence/
+            !evidence/**/pool/**
+          if-no-files-found: error
+          retention-days: 30
