@@ -1,4 +1,5 @@
 use super::*;
+use crate::canonical_json;
 
 fn file(name: &str) -> NamespacePageEntry {
     NamespacePageEntry::File {
