@@ -183,24 +183,36 @@ fn authority(fixture: &Fixture) -> BTreeMap<PathBuf, Vec<u8>> {
     files
 }
 
-fn assert_error(error: &Error, damage: Damage) {
+fn assert_error(error: &Error, target: Target, damage: Damage) {
+    let cause = if matches!(target, Target::Namespace) {
+        // Namespace admission occurs in history projection after the raw
+        // snapshot is decoded; its context must retain the concrete cause.
+        assert_eq!(error.code(), ErrorCode::StateInvalid);
+        assert_eq!(error.message(), "invalid snapshot history");
+        match error {
+            Error::Context { source, .. } => source.as_ref(),
+            other => panic!("namespace rejection lost its history context: {other}"),
+        }
+    } else {
+        error
+    };
     match damage {
         Damage::Missing | Damage::Digest => {
-            assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
+            assert_eq!(cause.code(), ErrorCode::ObjectCorrupt);
             let reason = match damage {
                 Damage::Missing => "immutable object is missing",
                 Damage::Digest => "immutable object digest differs",
                 Damage::Truncated => unreachable!(),
             };
-            assert_eq!(error.message(), reason);
+            assert_eq!(cause.message(), reason);
         }
         Damage::Truncated => {
-            assert_eq!(error.code(), ErrorCode::InvalidJson);
+            assert_eq!(cause.code(), ErrorCode::InvalidJson);
             assert!(matches!(
-                error,
+                cause,
                 Error::Contract(storage_contract::Error::Json { .. })
             ));
-            assert!(std::error::Error::source(error).is_some());
+            assert!(std::error::Error::source(cause).is_some());
         }
     }
 }
@@ -213,7 +225,7 @@ fn rejects_and_preserves(target: Target) {
         let error = Engine::open(&fixture.root)
             .err()
             .unwrap_or_else(|| panic!("{target:?}/{fault:?}: invalid published closure opened"));
-        assert_error(&error, fault);
+        assert_error(&error, target, fault);
         assert_eq!(
             authority(&fixture),
             original_authority,

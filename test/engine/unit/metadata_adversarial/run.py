@@ -63,13 +63,16 @@ def main():
         log_name = f"{ordinal:03d}-{name.replace('::', '-')}.log"
         status = "failed"
         returncode = None
+        case_directory = (args.output / f"case-{ordinal:03d}").resolve()
+        case_directory.mkdir(parents=True, exist_ok=True)
         with (args.output / log_name).open("w") as log:
             log.write(json.dumps({"command": command}) + "\n")
             log.flush()
             try:
                 completed = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
                                            timeout=WALL_SECONDS, preexec_fn=limits,
-                                           env={**os.environ, "RUST_BACKTRACE": "1"})
+                                           env={**os.environ, "RUST_BACKTRACE": "1",
+                                                "ZXS_METADATA_ADVERSARIAL_CASE_DIR": str(case_directory)})
                 returncode = completed.returncode
                 status = "passed" if returncode == 0 else "failed"
             except subprocess.TimeoutExpired:

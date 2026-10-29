@@ -81,6 +81,28 @@ fn has_depth_cause(error: &Error) -> bool {
     }
 }
 
+fn save_counterexample(disk: &DiskConfig, snapshot: &Snapshot) {
+    let Some(directory) = std::env::var_os("ZXS_METADATA_ADVERSARIAL_CASE_DIR") else {
+        return;
+    };
+    let mut objects = BTreeMap::new();
+    for kind in ["namespace-page", "namespace-index", "state-page", "metadata-index",
+        "event-segment", "operation-segment"] {
+        for hash in object_storage::list_object_hashes(disk, kind).unwrap() {
+            let value: json_codec::Value = load_object(disk, kind, &hash).unwrap();
+            objects.insert(format!("{kind}/{hash}"), value);
+        }
+    }
+    let evidence = json_codec::json!({
+        "baseline":"13b664e9fd41a356ffb7ed982d21e97abb123626",
+        "entry":"journal::resolve_snapshot", "snapshot":snapshot, "objects":objects,
+        "expected":"ObjectCorrupt depth rejection before requesting namespace object 5",
+        "test_side_read_allowance":NAMESPACE_INDEX_DEPTH
+    });
+    std::fs::write(std::path::Path::new(&directory).join("admission-depth-input.json"),
+        canonical_json(&evidence).unwrap()).unwrap();
+}
+
 #[test]
 fn snapshot_admission_applies_namespace_depth_before_projection_reads() {
     let temp = tempfile::tempdir().unwrap();
@@ -109,6 +131,7 @@ fn snapshot_admission_applies_namespace_depth_before_projection_reads() {
     state.commits.get_mut(&commit).unwrap().namespace = CommitNamespace { root, entries: 2 };
     let snapshot_hash = store_snapshot(&config.disks, &state).unwrap();
     let snapshot: Snapshot = load_object(disk, "snapshot", &snapshot_hash).unwrap();
+    save_counterexample(disk, &snapshot);
     let attempted = Cell::new(0usize);
     let loaded = Cell::new(0usize);
     let error = resolve_snapshot(snapshot, |kind, hash| {
