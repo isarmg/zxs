@@ -148,7 +148,7 @@ Q 个成员完成中止不释放正常新写入：掉盘返回后还须把历史
 
 云工作区只做源码阅读、编辑和静态语法检查。正式自测、变异找反例、反例重放和逐档搜索在独立 GitHub Actions 验证载体执行。本文不以静态审阅代替运行日志；确切执行命令、提交、退出码和机器可读结果由验证产物提供。
 
-已核对最终行为版本的 [GitHub Actions 40824885678](https://github.com/isarmg/zxs/actions/runs/40824885678) 原始归档：工具提交 `23ed7105050108ba5dcd12dbd6eba306ec0e4d0b`，独立验证载体提交 `e27e6e5de55b4f2e3c3a268c1fe482c5606017e5`，Python 3.12.3、Ubuntu 24.04 x86_64。原始证据在 [最终运行目录](../../test/publication-model/evidence/run-40824885678)，包含 `selftests.log`、`actions.log`、`run-status.json`、`artifact-metadata.json`、`results/summary.json`、逐档结果与五项反例/重放 JSON。全部四轮执行均单独归档，没有用后轮日志覆盖前轮。
+已核对首阶段行为版本的 [GitHub Actions 40824885678](https://github.com/isarmg/zxs/actions/runs/40824885678) 原始归档：工具提交 `23ed7105050108ba5dcd12dbd6eba306ec0e4d0b`，独立验证载体提交 `e27e6e5de55b4f2e3c3a268c1fe482c5606017e5`，Python 3.12.3、Ubuntu 24.04 x86_64。原始证据在 [首阶段最终运行目录](../../test/publication-model/evidence/run-40824885678)，包含 `selftests.log`、`actions.log`、`run-status.json`、`artifact-metadata.json`、`results/summary.json`、逐档结果与五项反例/重放 JSON。首阶段四轮执行均单独归档，没有用后轮日志覆盖前轮。
 
 - 自测实际运行 39 项，日志为 `OK`，含转换窗口、恢复、独立性质敏感性、搜索预算和反例重放。
 - 正确模型 16 档中，8 档 `BoundedExhaustive`，8 档因状态预算截断为 `Inconclusive`。完成档位包含 N=1 单/双槽位、N=2 单/双副本、N=3 双副本完整发布、N=1 一次/两次崩溃，以及两次崩溃并允许一次外部故障；没有把 8 个未完成档位当成通过。
@@ -188,3 +188,31 @@ Actions 通过表示规定的小规模门槛、自测及变异敏感性通过；
 `results`、`events`、`state_versions` 及历史保护见证是跨崩溃保留的抽象逻辑历史，用于检验对外事实不回滚和业务效果不重复；它们不表示重启后的 RAM 被保留。恢复阶段的准入与可观察证据另行约束。模型没有逐字节重建真实 State、序列化格式、索引或生产幂等存储，因此不能用它证明这些具体实现正确。
 
 定向轨迹测试可以覆盖深层窗口，但不等于从根穷举。只有机器结果为 `BoundedExhaustive` 的档位完成所声明有限图；`Inconclusive` 不算通过，反例最短性只适用于完成到该深度的 BFS。软件模型不证明无限历史、实际掉电、真实设备同步实现或整个产品正确。
+
+## 见证与深层恢复验证补强
+
+首阶段的见证检查主要约束 mask 人数，不能独立保证转换没有捏造一个人数足够的 mask；恢复定向测试原先也没有逐边调用独立性质。这是模型验证强度的遗漏，不是已确认的生产缺陷。本轮在独立提交中补上：
+
+- `decision_evidence` 在决定见证首次建立时核对实际 ACCEPT 的完整字节、稳定字节、名称及目录同步，并检查固定 Q 和真实成员全集合。
+- `abort_evidence` 在中止观察见证建立时核对固定 Q 的完整无候选观察及实际日志，拒绝已有决定/发布/中止记录或损坏日志充当不存在。
+- `abort_resolution_evidence` 核对首次持久中止见证对应的真实 RECOVERY_RESOLUTION 和之前已建立的无候选见证；以后保留历史见证，不因后来损坏重判。
+- `test_witnesses.py` 用明确字段构造满 Q 但缺真实记录、各项耐久字段错误和伪造中止证据的负例，同时保留非前缀、失败返回但实际持久、读后掉盘和恢复中再次崩溃的合法对照。它们是独立性质的敏感性测试，不是假称可达的产品反例。
+- `test_recovery.py` 的 `take()` 和 `advance_publication()` 现在每条实际边均检查 `properties.check()`，并用人工坏后继证明助手不会跳过安全性质。
+
+首阶段多成员故障根搜索的最大触及深度为：N=2 故障恢复 17；N=3 的非前缀故障/恢复/两槽位分别 10/7/9；N=4 分别 8/6/9。它们均在 25,000 状态时截断，不能称为多成员恢复穷举。最大触及深度也不表示该深度层已经完整检查。
+
+### 选定合法前缀后的局部搜索
+
+`deep_search.explore_suffix()` 只从 `initial(config)` 沿提供的合法动作逐边检查，并保存每一步摘要，得到选定前缀的种子；不能直接注入任意 State。随后对该种子的全部启用后继进行 BFS，无动作过滤或额外剪枝，也不重置前缀已消耗的故障/崩溃预算。前缀和后缀资源、深度及计数分别记录，完整反例包含原始初态至违规的全部动作，可用现有 `replay()` 核对。
+
+运行入口为：
+
+```sh
+python3 test/publication-model/run_deep_validation.py --output /tmp/publication-model-deep-results
+```
+
+矩阵包含 N=2 的 ACCEPT 准备点、N=3/4 的非前缀 ACCEPT、恢复保留候选、恢复中止写入中断及单处 PUBLICATION。每档最多 20,000 状态、200,000 转移、20 步后缀、15 秒，另限制前缀长度及每步可枚举后继；原始 JSON 保存前缀来源、请求/完成长度、摘要重放、后缀检查阶段和实际深度。`LocalExhaustive` 仅表示该选定前缀后的可达图耗尽，绝不并入从根穷举的档数；所有资源/深度截断仍为 `Inconclusive`。最大总轨迹深度是触及量，不表示完成了该层全部路径。
+
+本轮新增自测及搜索尚待 GitHub Actions，不能继承首阶段的 39 项运行通过声明。
+
+历史 `results` 在抽象 `_apply()` 中参与抑制重复效果，`lost_binding` 变异显式设置 `duplicate=True` 来模拟重复发布。这验证的是该抽象及性质的敏感性，不能证明生产幂等收据或真实 State 重建实现不会重复。
