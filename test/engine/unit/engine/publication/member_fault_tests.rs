@@ -688,11 +688,9 @@ fn a_member_failure_during_prepare_is_reported_as_is_before_any_accept() {
         drop(engine);
         let mut engine = Engine::open(&fixture.root).unwrap();
         assert!(!engine.is_read_only(), "{case}");
-        assert!(
-            !engine
-                .state()
-                .operations
-                .contains_key(&request.operation_id),
+        assert_eq!(
+            engine.operation(request.operation_id).unwrap_err().code(),
+            ErrorCode::OperationNotFound,
             "{case}"
         );
         let published = engine.commit_workspace(request.clone()).unwrap();

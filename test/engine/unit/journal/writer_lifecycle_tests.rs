@@ -245,7 +245,10 @@ fn real_enospc_on_one_of_three_members_fails_parallel_prepare_while_the_others_p
     drop(engine);
     let mut recovered = Engine::open(&root).unwrap();
     assert!(!recovered.is_read_only());
-    assert!(!recovered.state().operations.contains_key(&operation));
+    assert_eq!(
+        recovered.operation(operation).unwrap_err().code(),
+        storage_contract::ErrorCode::OperationNotFound
+    );
     let repo = create(&mut recovered).unwrap();
     assert_eq!(
         create(&mut recovered).unwrap().repository_id,
