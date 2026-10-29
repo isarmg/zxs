@@ -1,218 +1,222 @@
-name: CI
+name: Generate reviewed R81 source receipts
 
 on:
   push:
-  pull_request:
+    branches: [verify/source-receipts-20261029-r81]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: '1'
+  CARGO_NET_OFFLINE: 'true'
   CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: '1'
 
 jobs:
-  static:
-    name: Static workflow and tooling regressions (no Rust)
+  generate:
+    name: Propose source receipts for the frozen R81 input
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check workflows, source governance and script regressions
-        run: bash .github/scripts/check.sh static
-
-  tests:
-    name: Tests (${{ matrix.suite }})
-    needs: static
-    runs-on: ubuntu-24.04
-    # Cold crypto runs include ten packaged/local-generated ring cases, including
-    # both release slow-test matrices; the measured run exceeded 30 minutes.
-    # Match the release verification budget without relaxing other shards.
-    timeout-minutes: ${{ matrix.suite == 'foundation-crypto' && 60 || 30 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
-    env:
-      ZXS_REQUIRE_BROWSER: '1'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+          ref: 1947377cb7fb59ca2fb8cf70436780472e0637cb
+          fetch-depth: 2
+      - name: Verify exact product identity and preserved R80 baseline
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/verify/source-receipts-20261029-r81'
+          test "$(git rev-parse HEAD)" = '1947377cb7fb59ca2fb8cf70436780472e0637cb'
+          test "$(git rev-parse HEAD^{tree})" = 'e88b31900ee5ab4a57bfd9aef4cd0fcb7e63d0dc'
+          test "$(git show -s --format=%P HEAD)" = 'e2f33d9882cf7263412d9370b6a703e0b216357d'
+          test 'e2f33d9882cf7263412d9370b6a703e0b216357d' = 'e2f33d9882cf7263412d9370b6a703e0b216357d'
+          test "$(git rev-parse HEAD:.github/workflows/ci.yml)" = '9be17b59e1d3cda42f30f5f51a71bebde9cbfc75'
+          test "$(git rev-parse HEAD:.github/workflows/release.yml)" = 'dc2a65ea3caa965f156c1ea11aca8fbdec95f85a'
+          test "$(git rev-parse HEAD:.github/workflows/smb-sdk.yml)" = 'dbfdfb2b495fd3e3f8dc69eec545c498389fa4d9'
+          test "$(git rev-parse HEAD:compliance/rust-sources.json)" = 'e46f114319b8fd45342d2cef476482369e04f11c'
+          test "$(git rev-parse HEAD:Cargo.lock)" = '5f0959ea647d9805611902df885d941695016fdd'
+          mkdir -p target/source-refresh
+          python3 - <<'IDENTITY'
+          import hashlib, json, os, pathlib, subprocess, tomllib
+          root = pathlib.Path('.')
+          out = root / 'target/source-refresh'
+          base = 'e2f33d9882cf7263412d9370b6a703e0b216357d'
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(message)
+          preserved = [
+              '.github/scripts/check-foundation-behaviour.py',
+              'docs/architecture/contour-invalidation.md',
+              'docs/architecture/foundation-ci.md',
+              'docs/validation/foundation-test-coverage-map.md',
+              'docs/validation/foundation-test-coverage.md',
+              'docs/validation/smb-write-admission.md',
+              'test/ci/fixtures/foundation-behaviour-tests.json',
+              'test/ci/fixtures/foundation-test-coverage.json',
+              'test/ci/test_foundation_behaviour.py',
+          ]
+          fixed = [
+              'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml',
+              '.github/workflows/ci.yml', '.github/workflows/release.yml',
+              '.github/workflows/smb-sdk.yml', 'compliance/rust-sources.json',
+          ]
+          unchanged = {p: (root / p).read_bytes() == git('show', base + ':' + p)
+                       for p in preserved + fixed}
+          require(all(unchanged.values()), 'frozen input changed protected baseline paths: ' +
+                  repr([p for p, same in unchanged.items() if not same]))
+          require(not git('status', '--porcelain'), 'frozen checkout is not clean')
+          toolchain = tomllib.loads((root / 'rust-toolchain.toml').read_text())
+          config = tomllib.loads((root / '.cargo/config.toml').read_text())
+          require(toolchain['toolchain']['channel'] == '1.99.0', 'unexpected toolchain')
+          require(config['net']['offline'] is True, 'Cargo offline mode changed')
+          require(config['source']['crates-io']['replace-with'] == 'unavailable-registry',
+                  'registry replacement changed')
+          require(config['source']['unavailable-registry']['directory'] == 'compliance/empty-registry',
+                  'empty registry path changed')
+          changed = [p.decode() for p in git('diff', '--name-only', '-z', base, 'HEAD').split(b'\0') if p]
+          identity = dict(
+              product_sha='1947377cb7fb59ca2fb8cf70436780472e0637cb', product_tree='e88b31900ee5ab4a57bfd9aef4cd0fcb7e63d0dc',
+              input_parent='e2f33d9882cf7263412d9370b6a703e0b216357d', authoritative_base=base,
+              workflow_commit=os.environ['GITHUB_SHA'], workflow_ref=os.environ['GITHUB_REF'],
+              run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+              product_ci_blob=git('rev-parse', 'HEAD:.github/workflows/ci.yml').decode().strip(),
+              catalog_blob=git('rev-parse', 'HEAD:compliance/rust-sources.json').decode().strip(),
+              lock_blob=git('rev-parse', 'HEAD:Cargo.lock').decode().strip(),
+              input_changed_paths=changed, protected_paths_unchanged=unchanged,
+              handoff_zip_sha256='86e5e12a2d0896b7b7ce3ccfa2df6ef10c5f8719fb0d48e69e149725f78c3dd1',
+              unverified_handoff_claim='00510a29: archive contains no Git history; not a verified commit identity',
+              input_manifest_sha256={p: hashlib.sha256((root / p).read_bytes()).hexdigest()
+                                     for p in ('src/engine/Cargo.toml', 'src/server/Cargo.toml')},
+              scope='Source generation, metadata verification and existing static regressions only; not full product CI.',
+          )
+          (out / 'input-identity.json').write_text(json.dumps(identity, indent=2) + '\n')
+          print(json.dumps(identity, indent=2))
+          IDENTITY
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
+      - name: Select and verify fixed repository toolchain
         run: |
+          set -euo pipefail
           rustup show active-toolchain
-          rustc --version
-          cargo --version
-      - name: Install WASM standard library for cross-target checks
-        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install system SQLite SDK for unbundled validation
-        if: matrix.suite == 'foundation-data'
+          rustc --version | tee target/source-refresh/rustc.txt
+          cargo --version | tee target/source-refresh/cargo.txt
+          grep -q '^rustc 1\.99\.0 ' target/source-refresh/rustc.txt
+          grep -q '^cargo 1\.99\.0 ' target/source-refresh/cargo.txt
+      - name: Generate current source and consumer records
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
-      - name: Enable sandboxed Chrome for browser future runtime checks
-        if: matrix.suite == 'foundation-language'
-        run: bash .github/scripts/prepare-browser-contract.sh
-      - name: Cache verified security scanner
-        if: matrix.suite == 'security'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            target/security-tools/bin/cargo-audit
-            target/security-tools/verified-build.json
-          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
-      - name: Run locked test suite
-        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
-      - name: Verify isolated system SQLite consumer
-        if: matrix.suite == 'foundation-data'
-        run: python3 .github/scripts/check-sqlite-system.py
-      - name: Retain exact foundation behaviour test evidence
-        if: always() && matrix.suite == 'foundation-async'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: foundation-behaviour-evidence
-          path: |
-            target/foundation-behaviour/logs/
-            target/foundation-behaviour/summary.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  web-production:
-    name: Production WASM build
-    needs: static
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain and WASM target
+          set -euo pipefail
+          python3 tools/rust-sources/manage.py refresh 2>&1 | tee target/source-refresh/manage-refresh.log
+          python3 tools/rust-sources/architecture.py refresh 2>&1 | tee target/source-refresh/architecture-refresh.log
+          python3 tools/rust-sources/documentation.py refresh 2>&1 | tee target/source-refresh/documentation-refresh.log
+      - name: Verify generated records without rewriting foundation inventory
         run: |
-          rustup show active-toolchain
-          rustup target add wasm32-unknown-unknown
-          rustc --version
-      - name: Cache locally compiled Rust build helpers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/rust-build-tools
-          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
-          restore-keys: |
-            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build production Web distribution
-        run: bash .github/scripts/check.sh web-production
-      - name: Retain production assets for checks in this run
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-dist
-          path: build/web/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain browser template contract fixture
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output/
-          if-no-files-found: error
-          retention-days: 7
-
-  browser-smoke:
-    name: Extracted release browser smoke (Chrome)
-    needs: web-production
-    runs-on: ubuntu-24.04
-    # Compile one release-profile graph for both product and browser harness.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: rustup show active-toolchain
-      - name: Fetch production Web assets from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: web-dist
-          path: build/web
-      - name: Fetch browser template contract fixture from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output
-      - name: Verify runner Chrome and ChromeDriver
-        run: |
-          chrome="$(command -v google-chrome)"
-          driver="$(command -v chromedriver)"
-          "$chrome" --version
-          "$driver" --version
-          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
-          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
-          test "$chrome_major" = "$driver_major"
-          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
-          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
-      - name: Install CJK fonts for the Chinese screenshot
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Build and exercise extracted release packages
-        env:
-          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
-          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
-        run: |
-          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
-          cargo test --locked --offline --release -p browser-smoke
-          bash .github/scripts/release-package.sh
-          bash .github/scripts/release-acceptance.sh
-          python3 .github/scripts/check-csr-browser.py
-          bash .github/scripts/release-assemble.sh
-      - name: Retain verified installation candidate (not a published release)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installation-candidate-linux-web
-          path: release-assets/*
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain template browser result and exact input identity
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-browser
-          path: target/csr-template-check/output/*json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain real Web file manager screenshot
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-screenshot
-          path: artifacts/web-file-manager.png
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain responsive Web viewport previews
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          python3 tools/rust-sources/manage.py verify --metadata 2>&1 | tee target/source-refresh/manage-verify-metadata.log
+          python3 tools/rust-sources/architecture.py verify 2>&1 | tee target/source-refresh/architecture-verify.log
+          python3 tools/rust-sources/documentation.py verify 2>&1 | tee target/source-refresh/documentation-verify.log
+          python3 tools/rust-sources/foundation_coverage.py --check 2>&1 | tee target/source-refresh/foundation-coverage-check.log
+          bash .github/scripts/check.sh static 2>&1 | tee target/source-refresh/static.log
+      - name: Record bounded generated proposal and protected-input verification
         if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p target/source-refresh
+          python3 - <<'GENERATED'
+          import base64, hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path('.')
+          out = root / 'target/source-refresh'
+          base = 'e2f33d9882cf7263412d9370b6a703e0b216357d'
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(message)
+          allowed = {
+              'compliance/rust-sources.json', 'docs/THIRD_PARTY_RUST_SOURCES.md',
+              'docs/architecture/foundation-consumers.md',
+              'docs/dependencies/code-generation.md', 'docs/dependencies/collections.md',
+              'docs/dependencies/concurrency.md', 'docs/dependencies/core-types.md',
+              'docs/dependencies/cryptography.md', 'docs/dependencies/data-storage.md',
+              'docs/dependencies/diagnostics.md', 'docs/dependencies/integrated.md',
+              'docs/dependencies/networking.md', 'docs/dependencies/platform.md',
+              'docs/dependencies/text-unicode.md', 'docs/dependencies/tooling.md',
+              'docs/dependencies/web-runtime.md',
+          }
+          preserved = [
+              '.github/scripts/check-foundation-behaviour.py',
+              'docs/architecture/contour-invalidation.md',
+              'docs/architecture/foundation-ci.md',
+              'docs/validation/foundation-test-coverage-map.md',
+              'docs/validation/foundation-test-coverage.md',
+              'docs/validation/smb-write-admission.md',
+              'test/ci/fixtures/foundation-behaviour-tests.json',
+              'test/ci/fixtures/foundation-test-coverage.json',
+              'test/ci/test_foundation_behaviour.py',
+          ]
+          fixed = [
+              'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml',
+              '.github/workflows/ci.yml', '.github/workflows/release.yml',
+              '.github/workflows/smb-sdk.yml',
+          ]
+          changed = [p.decode() for p in git('diff', 'HEAD', '--name-only', '-z').split(b'\0') if p]
+          unexpected = sorted(set(changed) - allowed)
+          untracked = [p.decode() for p in git('ls-files', '--others', '--exclude-standard', '-z').split(b'\0') if p]
+          removed = [p.decode() for p in git('diff', 'HEAD', '--name-only', '--diff-filter=D', '-z').split(b'\0') if p]
+          invalid_files = [p for p in changed if not (root / p).is_file() or (root / p).is_symlink()]
+          mode_changes = git('diff', 'HEAD', '--summary').decode().splitlines()
+          patch = git('diff', 'HEAD', '--binary')
+          (out / 'sourcegen.patch').write_bytes(patch)
+          unchanged = {p: (root / p).read_bytes() == git('show', 'HEAD:' + p)
+                       for p in preserved + fixed}
+          r80_baseline_unchanged = {p: (root / p).read_bytes() == git('show', base + ':' + p)
+                                    for p in preserved}
+          before = json.loads(git('show', 'HEAD:compliance/rust-sources.json'))
+          after = json.loads((root / 'compliance/rust-sources.json').read_bytes())
+          catalog_delta = sorted(k for k in before.keys() | after.keys() if before.get(k) != after.get(k))
+          source_identity_unchanged = all(before.get(k) == after.get(k) for k in before.keys() | after.keys()
+                                          if k not in {'manifests_sha256', 'resolutions'})
+          manifest = dict(
+              expected_product_sha='1947377cb7fb59ca2fb8cf70436780472e0637cb', expected_product_tree='e88b31900ee5ab4a57bfd9aef4cd0fcb7e63d0dc',
+              actual_product_sha=git('rev-parse', 'HEAD').decode().strip(),
+              actual_product_tree=git('rev-parse', 'HEAD^{tree}').decode().strip(),
+              input_parent='e2f33d9882cf7263412d9370b6a703e0b216357d', authoritative_base=base,
+              workflow_commit=os.environ['GITHUB_SHA'], run_id=os.environ['GITHUB_RUN_ID'],
+              run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+              changed_paths=changed, unexpected_paths=unexpected, untracked_paths=untracked,
+              removed_paths=removed, invalid_files=invalid_files, mode_changes=mode_changes,
+              patch_bytes=len(patch), patch_sha256=hashlib.sha256(patch).hexdigest(),
+              protected_inputs_unchanged=unchanged, r80_baseline_unchanged=r80_baseline_unchanged,
+              catalog_changed_top_level_keys=catalog_delta,
+              source_identity_and_immutable_receipts_unchanged=source_identity_unchanged,
+              automatic_integration=False, full_product_ci=False,
+              changed_files={p: hashlib.sha256((root / p).read_bytes()).hexdigest()
+                             for p in changed if (root / p).is_file() and not (root / p).is_symlink()},
+              acceptance='Diagnostic artifact unless the complete generator job succeeds and the patch is independently reviewed.',
+          )
+          (out / 'generated-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print(json.dumps(manifest, indent=2))
+          require(manifest['actual_product_sha'] == '1947377cb7fb59ca2fb8cf70436780472e0637cb', 'wrong product commit')
+          require(manifest['actual_product_tree'] == 'e88b31900ee5ab4a57bfd9aef4cd0fcb7e63d0dc', 'wrong product tree')
+          require(len(patch) <= 8 * 1024 * 1024, 'generated patch exceeds transfer budget')
+          require(not unexpected and not untracked and not removed and not invalid_files and not mode_changes,
+                  'unexpected generated paths, deletions, file types or mode changes; do not integrate')
+          require(all(unchanged.values()) and all(r80_baseline_unchanged.values()),
+                  'protected inputs or the nine R80 files changed; do not integrate')
+          require(source_identity_unchanged, 'source identities or immutable receipts changed; do not integrate')
+          print('ZXS_GENERATED_PATCH_BASE64_BEGIN')
+          print(base64.b64encode(patch).decode('ascii'))
+          print('ZXS_GENERATED_PATCH_BASE64_END')
+          GENERATED
+      - name: Retain proposal, exact input identity and verification logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: viewport-previews
-          path: artifacts/viewport-previews/
-          if-no-files-found: warn
+          name: r81-source-receipts-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: target/source-refresh/
+          if-no-files-found: error
           retention-days: 7
-
-  smb-sdk:
-    needs: static
-    uses: ./.github/workflows/smb-sdk.yml
