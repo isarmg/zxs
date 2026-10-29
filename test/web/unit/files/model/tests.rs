@@ -285,7 +285,10 @@ fn captured_http_outcomes_and_diagnostics_keep_separate_consumer_contracts() {
         let observation: Value = json_codec::from_str(observation).unwrap();
         let id = outcome["operation_id"].as_str().unwrap();
         assert!(outcome.get("current_health").is_none());
-        assert_eq!(FileOperation::from_receipt(id, &outcome).status(), save_status);
+        assert_eq!(
+            FileOperation::from_receipt(id, &outcome).status(),
+            save_status
+        );
         assert_eq!(operation_observation_status(&observation), Some(status));
         assert_eq!(
             FileOperation::from_receipt(id, &observation).status(),
