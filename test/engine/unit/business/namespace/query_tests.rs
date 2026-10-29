@@ -62,7 +62,11 @@ fn planted_tree<'a>(engine: &'a Engine, entries: &[Entry]) -> NamespaceTree<'a> 
     for object in objects.take() {
         object.store(&members).unwrap();
     }
-    NamespaceTree { engine, namespace }
+    NamespaceTree {
+        engine,
+        namespace,
+        members,
+    }
 }
 
 #[test]
@@ -238,12 +242,16 @@ fn temporary_appends_and_renames_stay_unordered_until_validation() {
 }
 
 fn published_fixture() -> (tempfile::TempDir, Engine, Repository) {
+    published_fixture_with_members(1)
+}
+
+fn published_fixture_with_members(count: usize) -> (tempfile::TempDir, Engine, Repository) {
     let temporary = tempfile::tempdir().unwrap();
-    let mut engine = Engine::initialize(
-        &temporary.path().join("system"),
-        Config::development([temporary.path().join("primary")]),
-    )
-    .unwrap();
+    let mut config = Config::development(
+        (0..count).map(|index| temporary.path().join(format!("member-{index}"))),
+    );
+    config.disks.sort_by(|a, b| b.disk_id.cmp(&a.disk_id));
+    let mut engine = Engine::initialize(&temporary.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Lookup").unwrap(),
@@ -273,6 +281,52 @@ fn published_fixture() -> (tempfile::TempDir, Engine, Repository) {
         })
         .unwrap();
     (temporary, engine, repo)
+}
+
+#[test]
+fn query_views_keep_sorted_members_across_initial_and_repeated_reads() {
+    let (temporary, engine, repo) = published_fixture_with_members(3);
+    drop(engine);
+    let engine = Engine::open(&temporary.path().join("system")).unwrap();
+    // The first lookup loads cold objects; subsequent consumers and views
+    // share the engine's existing bounded cache.
+    let head = &engine.state().branches[&repo.main_branch_id].head_commit_id;
+    for tree in [
+        engine.namespace_tree(&repo.main_branch_id).unwrap(),
+        engine
+            .namespace_tree_at(&repo.main_branch_id, head)
+            .unwrap(),
+        engine.commit_namespace(head).unwrap(),
+    ] {
+        assert_eq!(tree.members.len(), 3);
+        assert!(
+            tree.members
+                .windows(2)
+                .all(|pair| pair[0].disk_id < pair[1].disk_id)
+        );
+        for _ in 0..2 {
+            let file = tree.get("STRASSE/CAFE\u{301}.TXT").unwrap().unwrap();
+            assert_eq!(
+                tree.get_key("strasse/café.txt").unwrap(),
+                Some(file.clone())
+            );
+            assert_eq!(
+                tree.directory_page("strasse", None, 200).unwrap(),
+                Some(vec![file.clone()])
+            );
+            assert_eq!(tree.directory_totals("strasse").unwrap(), Some((1, 1)));
+            assert_eq!(tree.find_file(&file.file_id).unwrap(), Some(file));
+            let entries = tree.entries().unwrap();
+            let mut walked = Vec::new();
+            tree.walk(|entry| {
+                walked.push(entry.clone());
+                Ok(true)
+            })
+            .unwrap();
+            assert_eq!(walked, entries);
+            assert_eq!(tree.total_entries(), entries.len() as u64);
+        }
+    }
 }
 
 fn assert_published_matches_legacy(engine: &Engine, branch: &str) {
@@ -412,7 +466,7 @@ fn publication_rejects_lying_totals_and_dangling_namespace_roots() {
 
 #[test]
 fn query_views_keep_missing_foreign_and_migrated_branch_errors() {
-    let (_temporary, mut engine, repo) = published_fixture();
+    let (_temporary, mut engine, repo) = published_fixture_with_members(3);
     let other = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Other lookup").unwrap(),

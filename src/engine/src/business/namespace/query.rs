@@ -9,6 +9,19 @@ use super::*;
 pub struct NamespaceTree<'a> {
     engine: &'a Engine,
     namespace: storage_contract::CommitNamespace,
+    // The immutable engine borrow keeps this selected read scope current.
+    members: Vec<storage_contract::DiskConfig>,
+}
+
+impl crate::namespace::NamespaceSource for NamespaceTree<'_> {
+    fn node(
+        &self,
+        reference: &storage_contract::NamespaceReference,
+    ) -> Result<crate::namespace::NamespaceNode> {
+        self.engine
+            .segment_reader(&self.members)
+            .namespace_node(reference)
+    }
 }
 
 impl NamespaceTree<'_> {
@@ -23,15 +36,13 @@ impl NamespaceTree<'_> {
     /// Resolve an already normalized full path key. No Unicode work is needed
     /// on stored entries: pages record each component's lookup key.
     pub fn get_key(&self, key: &str) -> Result<Option<Entry>> {
-        self.engine.with_namespace_source(|source| {
-            crate::namespace::NamespaceView::new(&self.namespace, source).resolve_key(key)
-        })
+        crate::namespace::NamespaceView::new(&self.namespace, self).resolve_key(key)
     }
 
     /// Materialize the complete canonical entry list. Whole-tree by
     /// definition; point queries use `get`/`get_key` instead.
     pub fn entries(&self) -> Result<Vec<Entry>> {
-        self.engine.namespace_entries(&self.namespace)
+        crate::namespace::NamespaceView::new(&self.namespace, self).collect_entries()
     }
 
     /// One bounded page of a directory's direct children in component-key
@@ -44,42 +55,33 @@ impl NamespaceTree<'_> {
         after: Option<&str>,
         limit: usize,
     ) -> Result<Option<Vec<Entry>>> {
-        self.engine.with_namespace_source(|source| {
-            crate::namespace::NamespaceView::new(&self.namespace, source).directory_page_entries(
-                directory_key,
-                after,
-                limit,
-            )
-        })
+        crate::namespace::NamespaceView::new(&self.namespace, self).directory_page_entries(
+            directory_key,
+            after,
+            limit,
+        )
     }
 
     /// Recorded recursive totals `(entries, files)` of one directory (the
     /// empty key is the root). O(directory level), never a tree expansion.
     pub fn directory_totals(&self, directory_key: &str) -> Result<Option<(u64, u64)>> {
-        self.engine.with_namespace_source(|source| {
-            crate::namespace::NamespaceView::new(&self.namespace, source)
-                .directory_totals(directory_key)
-        })
+        crate::namespace::NamespaceView::new(&self.namespace, self).directory_totals(directory_key)
     }
 
     /// The first entry carrying `file_id` in canonical order: an early-stop
     /// walk for namespaces without a path hint (file-branch heads are tiny).
     pub fn find_file(&self, file_id: &str) -> Result<Option<Entry>> {
-        self.engine.with_namespace_source(|source| {
-            crate::namespace::NamespaceView::new(&self.namespace, source).find_file(file_id)
-        })
+        crate::namespace::NamespaceView::new(&self.namespace, self).find_file(file_id)
     }
 
     /// Stream every entry in canonical order without materializing the list;
     /// the callback returns whether to continue.
     pub fn walk(&self, mut visit: impl FnMut(&Entry) -> crate::Result<bool>) -> Result<()> {
-        self.engine.with_namespace_source(|source| {
-            crate::namespace::NamespaceView::new(&self.namespace, source).walk(|location, entry| {
-                visit(&crate::namespace::materialized_entry(
-                    location.clone(),
-                    entry,
-                ))
-            })
+        crate::namespace::NamespaceView::new(&self.namespace, self).walk(|location, entry| {
+            visit(&crate::namespace::materialized_entry(
+                location.clone(),
+                entry,
+            ))
         })
     }
 
@@ -99,6 +101,7 @@ impl Engine {
             .map(|commit| NamespaceTree {
                 engine: self,
                 namespace: commit.namespace.clone(),
+                members: self.members(),
             })
     }
 
@@ -109,6 +112,7 @@ impl Engine {
         Ok(NamespaceTree {
             engine: self,
             namespace,
+            members: self.members(),
         })
     }
 
@@ -119,6 +123,7 @@ impl Engine {
         Ok(NamespaceTree {
             engine: self,
             namespace,
+            members: self.members(),
         })
     }
 }
