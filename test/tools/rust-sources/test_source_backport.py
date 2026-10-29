@@ -248,6 +248,49 @@ class Identifiers(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(self.mapped(text), (text.encode(), []))
 
+    def test_nested_use_paths_preserve_local_module_segments(self):
+        for text in ('use crate::{futures_core::Thing};\n',
+                     'use self::{futures_core::Thing as Local};\n',
+                     'use super::{futures_core::{Thing, Other}};\n',
+                     'use outer::{a::{futures_core::Thing}};\n',
+                     'use outer::{futures_core, futures_core::Thing};\n',
+                     'use crate::{\n    futures_core::Thing,\n};\n',
+                     'use crate::r#futures_core::Thing;\n',
+                     'use crate::{r#futures_core::Thing};\n'):
+            with self.subTest(text=text):
+                self.assertEqual(self.mapped(text), (text.encode(), []))
+
+    def test_unicode_identifier_suffix_is_not_a_crate_token(self):
+        for text in ('αfutures_core::Thing;\n', 'futures_coreé::Thing;\n',
+                     'futures_core\u0301::Thing;\n', 'α::futures_core::Thing;\n',
+                     'use crate::{αfutures_core::Thing};\n'):
+            with self.subTest(text=text):
+                self.assertEqual(self.mapped(text), (text.encode(), []))
+
+    def test_root_use_groups_raw_identifiers_and_aliases_keep_their_scope(self):
+        for text, expected in (
+                ('use {outer::{futures_core::Thing}, futures_core::Stream};\n',
+                 'use {outer::{futures_core::Thing}, futures::Stream};\n'),
+                ('use {outer::{Thing as futures_core}, futures_core};\n',
+                 'use {outer::{Thing as futures_core}, futures};\n'),
+                ('use futures_core as futures_core;\n', 'use futures as futures_core;\n'),
+                ('use r#futures_core::Stream;\n', 'use r#futures::Stream;\n'),
+                ('::r#futures_core::ready!();\n', '::r#futures::ready!();\n'),
+                ('use futures_core /* root */ ::Stream;\n',
+                 'use futures /* root */ ::Stream;\n')):
+            with self.subTest(text=text):
+                data, records = self.mapped(text)
+                self.assertEqual(data.decode(), expected)
+                self.assertEqual(len(records), 1)
+
+    def test_comment_use_text_cannot_change_following_code_scope(self):
+        text = ('// use outer::{\n'
+                'use futures_core::Stream;\n'
+                '/* use crate::{ */ futures_core::ready!();\n')
+        data, records = self.mapped(text)
+        self.assertEqual(data.decode(), text.replace('futures_core', 'futures'))
+        self.assertEqual(len(records), 2)
+
     def test_quotes_in_comments_and_lifetimes_do_not_hide_code(self):
         text = "// don't \"\nfn f<'a>(x: &'a u8) { futures_core::ready!(x) }\n/* \" */ futures_core::x();\n"
         data, records = self.mapped(text)
@@ -480,6 +523,41 @@ class Apply(Synthetic):
         for file in row['files']:
             self.assertEqual(proof_routing.inverse_replacements(after[file["after"]], file), before[file['after']])
         self.assertEqual((self.out / 'receipt-id.txt').read_text().strip(), sha)
+
+    def test_plan_apply_and_receipt_verification_preserve_non_root_identifiers(self):
+        # New upstream hunks must keep local modules and complete Unicode tokens
+        # through the actual plan/apply and receipt verification functions.
+        preserved = ('use crate::{futures_core::Thing};\n'
+                     'use crate::{r#futures_core::Thing as Local};\n'
+                     'fn local_paths() {\n'
+                     '    let _ = αfutures_core::Thing;\n'
+                     '    let _ = futures_coreé::Thing;\n'
+                     '    let _ = futures_core\u0301::Thing;\n'
+                     '}\n').encode()
+        root_use = b'use {crate::{futures_core::Thing}, futures_core::Stream};\n'
+        (self.clone / 'src/lib.rs').write_bytes(FIXED + b'\n' + preserved + root_use)
+        git(self.clone, 'commit', '-qam', 'add local paths and a real crate root')
+        self.fix_sha = git(self.clone, 'rev-parse', 'HEAD')
+        document = self.plan()
+        sha, row = self.apply()
+        production = (self.root / OWNER / 'src/lib.rs').read_bytes()
+        self.assertIn(preserved, production)
+        self.assertIn(b'use {crate::{futures_core::Thing}, futures::Stream};\n', production)
+        self.assertIn(b'let _ = futures::task::Poll::Ready(());', production)
+        before = {item['local_path']: self.files[item['local_path']]
+                  for item in document['replay']['merged']}
+        after = {path: (self.root / path).read_bytes() for path in before}
+        stored = proof_maintenance._read(self.root, sha)
+        self.assertEqual(stored, row)
+        self.assertEqual(backport.check_replay(stored, before, after, self.catalog), after)
+        layout = backport.FlatLayout(self.root)
+        backport.check_mapping(layout, self.catalog, stored)
+        backport.check_regions(layout, self.catalog, stored, historical=self.files)
+        backport.check_clone(stored, self.clone)
+        current = backport.after_catalog(self.catalog, OWNER,
+                                         {path: (before[path], data) for path, data in after.items()})
+        current[legacy.KEY] = [sha]
+        backport.check_external_accounting(sha, stored, current, before, after)
 
     def test_replay_drift_in_each_input_is_named(self):
         self.plan()

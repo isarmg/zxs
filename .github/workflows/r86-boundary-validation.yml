@@ -1,0 +1,53 @@
+name: R86 boundary validation
+
+on:
+  push:
+    branches: [work/codex-r86-boundary-fixes-20261029]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r86-boundary-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  source-regressions:
+    name: Source mapping counterexamples
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Record exact source and run real mapping and receipt regressions
+        run: |
+          git rev-parse HEAD
+          python3 -m unittest discover -s test/tools/rust-sources -p 'test_source_backport.py' -v
+
+  source-governance:
+    name: Complete source replay and fixed HTTP consumers
+    needs: source-regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Verify pinned toolchain and add WASM target
+        run: |
+          rustc --version
+          cargo --version
+          rustup target add wasm32-unknown-unknown
+      - name: Verify complete source maintenance chain and regressions
+        run: bash .github/scripts/check.sh rust-sources
+      - name: Verify actual HTTP consumers and retained fixed backport
+        run: python3 .github/scripts/check-http-transport.py
