@@ -148,14 +148,17 @@ Q 个成员完成中止不释放正常新写入：掉盘返回后还须把历史
 
 云工作区只做源码阅读、编辑和静态语法检查。正式自测、变异找反例、反例重放和逐档搜索在独立 GitHub Actions 验证载体执行。本文不以静态审阅代替运行日志；确切执行命令、提交、退出码和机器可读结果由验证产物提供。
 
-已核对 [GitHub Actions 40824085650](https://github.com/isarmg/zxs/actions/runs/40824085650) 的原始归档：工具提交 `51b20bb5638526bce21f8a38d8e91fd5eb9aece8`，独立验证载体提交 `bcdbe160a1cab25df735af913f7536925e338afa`，Python 3.12.3。对应证据为 `test/publication-model/evidence/run-40824085650/` 内的 `selftests.log`、`actions.log`、`results/summary.json`、逐档结果与五项反例/重放 JSON。
+已核对最终行为版本的 [GitHub Actions 40824885678](https://github.com/isarmg/zxs/actions/runs/40824885678) 原始归档：工具提交 `23ed7105050108ba5dcd12dbd6eba306ec0e4d0b`，独立验证载体提交 `e27e6e5de55b4f2e3c3a268c1fe482c5606017e5`，Python 3.12.3、Ubuntu 24.04 x86_64。原始证据在 [最终运行目录](../../test/publication-model/evidence/run-40824885678)，包含 `selftests.log`、`actions.log`、`run-status.json`、`artifact-metadata.json`、`results/summary.json`、逐档结果与五项反例/重放 JSON。全部四轮执行均单独归档，没有用后轮日志覆盖前轮。
 
-- 自测实际运行 37 项，日志为 `OK`。
-- 正确模型 15 档中，7 档 `BoundedExhaustive`，8 档因状态预算截断为 `Inconclusive`。完成档位包含 N=1 单/双槽位、N=2 单/双副本、N=3 双副本完整发布及 N=1 一次/两次崩溃；没有把 8 个未完成档位当成通过。
+- 自测实际运行 39 项，日志为 `OK`，含转换窗口、恢复、独立性质敏感性、搜索预算和反例重放。
+- 正确模型 16 档中，8 档 `BoundedExhaustive`，8 档因状态预算截断为 `Inconclusive`。完成档位包含 N=1 单/双槽位、N=2 单/双副本、N=3 双副本完整发布、N=1 一次/两次崩溃，以及两次崩溃并允许一次外部故障；没有把 8 个未完成档位当成通过。
 - N=3 双副本完整发布穷举 84,915 状态、184,653 转移；N=4 对应档达到 250,000 状态、607,570 转移后截断。后者尚无完整穷举结论。
 - 五种故意破坏变体全部找到预期具名性质反例，并且反例重放均为 `valid=true`、`counterexample=true`。
+- N=1 两次崩溃、一次外部故障的档位穷举 44,347 状态、151,386 转移。较大故障组合仍未穷举；深层窗口的定向轨迹不能替代该结论。
 
-上述记录只适用于该工具提交。随后新增的 `normal_publication_seen` 修复和定向测试已完成独立静态审阅；最终版本须以新的 GitHub 验证记录为准，不能继承本轮运行通过声明。
+上述记录只适用于该工具提交及明确的抽象/资源边界。后续提交只集中说明文档、归档证据并更新 `model.py` 模块说明字符串；算法、性质、搜索、自测和 workflow 模板保持与被验证版本相同。文档集中提交为 `5ebe36f0209e558b6e07d81e7f853beb3eaebb66`，与行为修复分别提交。机器可读索引及原始文件 SHA256 见 [证据清单](../../test/publication-model/evidence/manifest.json)。
+
+Actions 通过表示规定的小规模门槛、自测及变异敏感性通过；它不表示每个大档都完成穷举。没有在云内运行模型或搜索，也没有运行本任务范围外的 Rust 产品测试、真实掉电验收或部署。
 
 变异至少包括 `shrunken_quorum`、`early_ack`、`omit_sync`、`timeout_rollback`、`lost_binding`。测试必须要求每项产生具体不变量反例，并由合法转换逐步重放；仅打开变异开关、测试为空或资源截断不构成变异验收通过。
 
