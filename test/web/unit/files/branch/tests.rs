@@ -32,15 +32,18 @@ fn invalid_names_never_become_branch_requests() {
 }
 #[test]
 fn branching_from_a_path_node_keeps_the_body_id_and_explicit_node_parent_separate() {
-    let model = super::super::model::Model {
+    let mut model = super::super::model::Model {
         selected: Some(crate::files::test_entries::entry(
             json_codec::json!({"file_id":"file","version_id":"ver-one","node_id":"fnode-rename"}),
         )),
-        file_history: crate::files::history::tests::history(
-            json_codec::json!({"nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename"}]}),
-        ),
         ..Default::default()
     };
+    model.history.install(crate::files::history::tests::window(
+        vec![crate::files::history::tests::node_wire(json_codec::json!({
+            "node_id":"fnode-rename","version_id":"ver-one","kind":"rename","previous_path":"old.txt"
+        }))],
+        json_codec::json!({}),
+    ));
     assert_eq!(
         file_source(&model, &Target::HistoryNode("fnode-rename".into())),
         Some(("ver-one".into(), Some("fnode-rename".into())))
@@ -48,6 +51,14 @@ fn branching_from_a_path_node_keeps_the_body_id_and_explicit_node_parent_separat
     assert_eq!(
         file_source(&model, &Target::CurrentFileVersion),
         Some(("ver-one".into(), Some("fnode-rename".into())))
+    );
+    assert!(file_source(&model, &Target::HistoryNode("not-resident".into())).is_none());
+    model
+        .history
+        .mark_stale(crate::files::history::state::StaleReason::RootChanged);
+    assert!(
+        file_source(&model, &Target::HistoryNode("fnode-rename".into())).is_none(),
+        "a stale page cannot source a branch"
     );
 }
 #[test]

@@ -18,7 +18,9 @@ use mutation_order::{MutationOrder, Position};
 
 mod page_tree;
 
+mod file_versions;
 mod ordered_walk;
+pub(crate) use file_versions::visit_file_versions;
 
 fn corrupt(reason: &'static str) -> Error {
     Error::new(ErrorCode::ObjectCorrupt, reason)

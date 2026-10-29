@@ -2177,7 +2177,7 @@
     "/api/file-manager/files/{file}/history": {
       "get": {
         "operationId": "getFileContainerHistory",
-        "description": "返回真实版本树和独立分支归属。尚未写入的分支继承父真实version_id，own_version_id=null，不新增虚假版本；current可指可见父版本。首次写入FULL才按真实source_version_ids接入版本树。文件已删除无当前条目时不返回当前内容投影字段。 repository_id与path必须一起提供，用精确逻辑路径解析此文件别名当前节点及分支；省略时优先实际归属路径，无法命中时采用确定的现存别名。不会把其他别名的分支或新HEAD当作此路径的当前节点。 nodes为统一图；versions继续只包含真实正文版本。重命名节点复用正文，node_id与version_id不可混用；当前节点按精确逻辑路径上下文判断。",
+        "description": "文件历史的一个有界节点窗口与当前上下文摘要。无 cursor/anchor 时读首页并由服务端捕获当前历史根；后续页、辅助读取和精确跳转都绑定同一根。anchor_node_id 定位该节点所在窗口并使其成为首个节点，与 cursor 互斥。repository_id 与 path 必须一起提供，用精确逻辑路径解析此文件别名的当前上下文；省略时沿确定性归属规则解析，并绑定进游标。主响应不再重复返回正文 versions 全集。不存在无界 all 模式或旧整包回退；每页先做当前认证／撤销和对象授权，再比较历史根。",
         "parameters": [
           {
             "name": "file",
@@ -2191,6 +2191,7 @@
             "name": "repository_id",
             "in": "query",
             "required": false,
+            "description": "与 path 成对的仓库上下文。",
             "schema": {
               "$ref": "#/components/schemas/RepositoryId"
             }
@@ -2199,9 +2200,49 @@
             "name": "path",
             "in": "query",
             "required": false,
+            "description": "与 repository_id 成对的精确逻辑路径。",
             "schema": {
               "type": "string",
               "minLength": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "本页节点记录上限，不是历史总量；字节预算可使实际页更短。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "前后翻页位置；不是授权凭据。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            }
+          },
+          {
+            "name": "anchor_node_id",
+            "in": "query",
+            "required": false,
+            "description": "精确跳转目标节点；与 cursor 互斥。",
+            "schema": {
+              "$ref": "#/components/schemas/FileNodeId"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "description": "来源页的准确历史根；省略时须由 cursor 携带。二者同时提供必须一致。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
             }
           }
         ],
@@ -2211,283 +2252,43 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "file_id": {
-                      "$ref": "#/components/schemas/FileId"
-                    },
-                    "path": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "description": "受PortablePath约束的磁盘相对路径；空字符串表示当前磁盘根目录。不得传系统绝对路径。"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "note": {
-                      "type": "string",
-                      "description": "当前备注最多128个UTF-8字节且不含控制字符，空字符串表示没有备注。响应原样输出已验证备注，不截断；本字符串schema只检查较宽的响应形状，不替代引擎读写校验，也不承诺旧格式可读。",
-                      "maxLength": 4096
-                    },
-                    "selected_branch_id": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/BranchId"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "versions": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "version_id": {
-                            "$ref": "#/components/schemas/VersionId"
-                          },
-                          "file_id": {
-                            "$ref": "#/components/schemas/FileId"
-                          },
-                          "source_version_ids": {
-                            "type": "array",
-                            "items": {
-                              "$ref": "#/components/schemas/VersionId"
-                            },
-                            "uniqueItems": true,
-                            "description": "内容创建时实际记录的全部父版本ID；每项仅指向本响应中同文件、同授权历史且事务序列严格更早的可见版本，保留多父并去重。箭头由父版本指向当前版本；空数组表示没有可验证的父版本。不得用列表排序、提交相邻或分支名称推断连线；缺失、跨文件、跨历史和非法循环边不返回。"
-                          },
-                          "branch_id": {
-                            "anyOf": [
-                              {
-                                "$ref": "#/components/schemas/BranchId"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "created_at": {
-                            "$ref": "#/components/schemas/UtcTimestamp"
-                          },
-                          "message": {
-                            "type": "string"
-                          },
-                          "size": {
-                            "$ref": "#/components/schemas/UInt64"
-                          },
-                          "sequence": {
-                            "$ref": "#/components/schemas/UInt64"
-                          },
-                          "current": {
-                            "type": "boolean"
-                          },
-                          "content_state": {
-                            "type": "string"
-                          },
-                          "content_hash": {
-                            "$ref": "#/components/schemas/Hash"
-                          },
-                          "note": {
-                            "type": "string",
-                            "description": "当前备注最多128个UTF-8字节且不含控制字符，空字符串表示没有备注。响应原样输出已验证备注，不截断；本字符串schema只检查较宽的响应形状，不替代引擎读写校验，也不承诺旧格式可读。",
-                            "maxLength": 4096
-                          },
-                          "download_name": {
-                            "type": "string"
-                          },
-                          "storage_name": {
-                            "type": "string"
-                          }
-                        },
-                        "additionalProperties": false,
-                        "required": [
-                          "version_id",
-                          "file_id",
-                          "source_version_ids",
-                          "branch_id",
-                          "created_at",
-                          "message",
-                          "size",
-                          "sequence",
-                          "current",
-                          "content_state",
-                          "content_hash",
-                          "note",
-                          "download_name",
-                          "storage_name"
-                        ],
-                        "description": "created_at为固定 YYYY-MM-DDTHH:mm:ssZ 的整秒 UTC 字符串。storage_name为不可变内部版本文件名；download_name使用当前所选视图中的逻辑名称（无当前条目时保留实体容器最后名）。source_version_ids提供真实内容谱系，响应排序不代表父子关系；普通保存连接实际前版，从待写入分支首次保存连接登记的源版；登记分支记录不增加本数组节点。"
-                      }
-                    },
-                    "branches": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/FileBranchView"
-                      }
-                    },
-                    "version_id": {
-                      "$ref": "#/components/schemas/VersionId"
-                    },
-                    "materialized": {
-                      "type": "boolean"
-                    },
-                    "content_state": {
-                      "type": "string"
-                    },
-                    "inherited": {
-                      "type": "boolean"
-                    },
-                    "own_version_id": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/VersionId"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "source_version_id": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/VersionId"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "visible_content_state": {
-                      "enum": [
-                        "LIVE",
-                        "AVAILABLE",
-                        "PURGED",
-                        "MIGRATED",
-                        "UNAVAILABLE"
-                      ]
-                    },
-                    "repository_id": {
-                      "$ref": "#/components/schemas/RepositoryId"
-                    },
-                    "nodes": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/FileHistoryNode"
-                      }
-                    },
-                    "node_id": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/FileNodeId"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "current_node_id": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/FileNodeId"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "merges": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/FileBranchMerge"
-                      }
-                    }
-                  },
-                  "additionalProperties": false,
-                  "required": [
-                    "file_id",
-                    "path",
-                    "note",
-                    "selected_branch_id",
-                    "versions",
-                    "branches"
-                  ],
-                  "dependentRequired": {
-                    "version_id": [
-                      "materialized",
-                      "content_state",
-                      "inherited",
-                      "own_version_id",
-                      "source_version_id",
-                      "visible_content_state"
-                    ]
-                  },
-                  "allOf": [
-                    {
-                      "if": {
-                        "required": [
-                          "version_id"
-                        ]
-                      },
-                      "then": {
-                        "allOf": [
-                          {
-                            "if": {
-                              "properties": {
-                                "materialized": {
-                                  "const": false
-                                }
-                              }
-                            },
-                            "then": {
-                              "properties": {
-                                "inherited": {
-                                  "const": true
-                                },
-                                "own_version_id": {
-                                  "type": "null"
-                                },
-                                "content_state": {
-                                  "const": "PENDING"
-                                },
-                                "source_version_id": {
-                                  "$ref": "#/components/schemas/VersionId"
-                                }
-                              }
-                            },
-                            "else": {
-                              "properties": {
-                                "inherited": {
-                                  "const": false
-                                },
-                                "own_version_id": {
-                                  "$ref": "#/components/schemas/VersionId"
-                                },
-                                "source_version_id": {
-                                  "type": "null"
-                                },
-                                "content_state": {
-                                  "not": {
-                                    "const": "PENDING"
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        ]
-                      }
-                    }
-                  ]
+                  "$ref": "#/components/schemas/FileHistoryPage"
                 }
               }
             }
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "INVALID_REQUEST：未知或重复参数、limit/offset 越界、cursor 与 anchor_node_id 同时出现、显式 history_root 与游标不一致或游标属于其他文件／查询；INVALID_CURSOR：游标格式无效。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "文件、历史或所指对象不存在，或不在当前授权范围内。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "HISTORY_CHANGED：请求绑定的历史根已不是当前根（本历史发生合法写入，含备注／标签／选择变化）。丢弃该根下全部页与游标，重新读首页或按节点精确跳转；已选动作输入保留但须重新确认。"
+          },
           "default": {
-            "description": "结构化错误；写操作结果不确定时按原operation_id查询，不能改key盲目重试。",
+            "description": "结构化错误；读取接口无副作用，可按原参数重试。",
             "content": {
               "application/json": {
                 "schema": {
@@ -5662,6 +5463,849 @@
           }
         }
       }
+    },
+    "/api/file-manager/files/{file}/history/nodes/{node}/parents": {
+      "get": {
+        "operationId": "getFileHistoryNodeParents",
+        "description": "单节点完整合法图父关系的窗口，按父节点 ID 升序；用于节点页 parents.status=more 的续读或窗口外父节点浏览。不存在无界 all 模式或旧整包回退；每页先做当前认证／撤销和对象授权，再比较历史根。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "node",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileNodeId"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "本页父边记录上限，不是历史总量；字节预算可使实际页更短。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "前后翻页位置；不是授权凭据。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "description": "来源页的准确历史根；省略时须由 cursor 携带。二者同时提供必须一致。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileHistoryParentsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "INVALID_REQUEST：未知或重复参数、limit/offset 越界、cursor 与 anchor_node_id 同时出现、显式 history_root 与游标不一致或游标属于其他文件／查询；INVALID_CURSOR：游标格式无效。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "文件、历史或所指对象不存在，或不在当前授权范围内。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "HISTORY_CHANGED：请求绑定的历史根已不是当前根（本历史发生合法写入，含备注／标签／选择变化）。丢弃该根下全部页与游标，重新读首页或按节点精确跳转；已选动作输入保留但须重新确认。"
+          },
+          "default": {
+            "description": "结构化错误；读取接口无副作用，可按原参数重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/nodes/{node}/fields/{field}": {
+      "get": {
+        "operationId": "getFileHistoryNodeField",
+        "description": "外置节点文本字段的有界 UTF-8 片段；field 是协议枚举，不是任意 JSON 路径。不存在无界 all 模式或旧整包回退；每页先做当前认证／撤销和对象授权，再比较历史根。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "node",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileNodeId"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "message",
+                "author"
+              ]
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "按原记录序号的起点。",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "max_bytes",
+            "in": "query",
+            "required": false,
+            "description": "本片最多 UTF-8 字节数；片段边界始终落在字符边界。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576,
+              "default": 65536
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "description": "来源页的准确历史根；省略时须由 cursor 携带。二者同时提供必须一致。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryFieldSlice"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "INVALID_REQUEST：未知或重复参数、limit/offset 越界、cursor 与 anchor_node_id 同时出现、显式 history_root 与游标不一致或游标属于其他文件／查询；INVALID_CURSOR：游标格式无效。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "文件、历史或所指对象不存在，或不在当前授权范围内。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "HISTORY_CHANGED：请求绑定的历史根已不是当前根（本历史发生合法写入，含备注／标签／选择变化）。丢弃该根下全部页与游标，重新读首页或按节点精确跳转；已选动作输入保留但须重新确认。"
+          },
+          "default": {
+            "description": "结构化错误；读取接口无副作用，可按原参数重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/branches": {
+      "get": {
+        "operationId": "getFileHistoryBranches",
+        "description": "该文件当前可展示分支的固定字段摘要页，按 branch_id 升序；保留继承、只读别名、准确头和当前选择语义。不存在无界 all 模式或旧整包回退；每页先做当前认证／撤销和对象授权，再比较历史根。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "本页分支记录上限，不是历史总量；字节预算可使实际页更短。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "前后翻页位置；不是授权凭据。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "description": "来源页的准确历史根；省略时须由 cursor 携带。二者同时提供必须一致。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileHistoryBranchesPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "INVALID_REQUEST：未知或重复参数、limit/offset 越界、cursor 与 anchor_node_id 同时出现、显式 history_root 与游标不一致或游标属于其他文件／查询；INVALID_CURSOR：游标格式无效。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "文件、历史或所指对象不存在，或不在当前授权范围内。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "HISTORY_CHANGED：请求绑定的历史根已不是当前根（本历史发生合法写入，含备注／标签／选择变化）。丢弃该根下全部页与游标，重新读首页或按节点精确跳转；已选动作输入保留但须重新确认。"
+          },
+          "default": {
+            "description": "结构化错误；读取接口无副作用，可按原参数重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/merges": {
+      "get": {
+        "operationId": "getFileHistoryMerges",
+        "description": "合并来源摘要页，按 (sequence DESC, merge_id ASC)。不存在无界 all 模式或旧整包回退；每页先做当前认证／撤销和对象授权，再比较历史根。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "本页合并记录上限，不是历史总量；字节预算可使实际页更短。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "前后翻页位置；不是授权凭据。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "description": "来源页的准确历史根；省略时须由 cursor 携带。二者同时提供必须一致。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileHistoryMergesPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "INVALID_REQUEST：未知或重复参数、limit/offset 越界、cursor 与 anchor_node_id 同时出现、显式 history_root 与游标不一致或游标属于其他文件／查询；INVALID_CURSOR：游标格式无效。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "文件、历史或所指对象不存在，或不在当前授权范围内。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "HISTORY_CHANGED：请求绑定的历史根已不是当前根（本历史发生合法写入，含备注／标签／选择变化）。丢弃该根下全部页与游标，重新读首页或按节点精确跳转；已选动作输入保留但须重新确认。"
+          },
+          "default": {
+            "description": "结构化错误；读取接口无副作用，可按原参数重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/merges/{merge}/inputs": {
+      "get": {
+        "operationId": "getFileHistoryMergeInputs",
+        "description": "单个合并的输入对，按原输入序号分片。不存在无界 all 模式或旧整包回退；每页先做当前认证／撤销和对象授权，再比较历史根。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "merge",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileMergeId"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "按原记录序号的起点。",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "本页输入记录上限，不是历史总量；字节预算可使实际页更短。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 200
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "description": "来源页的准确历史根；省略时须由 cursor 携带。二者同时提供必须一致。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileMergeInputsSlice"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "INVALID_REQUEST：未知或重复参数、limit/offset 越界、cursor 与 anchor_node_id 同时出现、显式 history_root 与游标不一致或游标属于其他文件／查询；INVALID_CURSOR：游标格式无效。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "文件、历史或所指对象不存在，或不在当前授权范围内。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "HISTORY_CHANGED：请求绑定的历史根已不是当前根（本历史发生合法写入，含备注／标签／选择变化）。丢弃该根下全部页与游标，重新读首页或按节点精确跳转；已选动作输入保留但须重新确认。"
+          },
+          "default": {
+            "description": "结构化错误；读取接口无副作用，可按原参数重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/merges/{merge}/parents": {
+      "get": {
+        "operationId": "getFileHistoryMergeParents",
+        "description": "单个合并保存的父关系，按原记录序号分片。不存在无界 all 模式或旧整包回退；每页先做当前认证／撤销和对象授权，再比较历史根。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "merge",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileMergeId"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "按原记录序号的起点。",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "本页父关系记录上限，不是历史总量；字节预算可使实际页更短。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 200
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "description": "来源页的准确历史根；省略时须由 cursor 携带。二者同时提供必须一致。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileMergeParentsSlice"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "INVALID_REQUEST：未知或重复参数、limit/offset 越界、cursor 与 anchor_node_id 同时出现、显式 history_root 与游标不一致或游标属于其他文件／查询；INVALID_CURSOR：游标格式无效。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "文件、历史或所指对象不存在，或不在当前授权范围内。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "HISTORY_CHANGED：请求绑定的历史根已不是当前根（本历史发生合法写入，含备注／标签／选择变化）。丢弃该根下全部页与游标，重新读首页或按节点精确跳转；已选动作输入保留但须重新确认。"
+          },
+          "default": {
+            "description": "结构化错误；读取接口无副作用，可按原参数重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/{file}/history": {
+      "get": {
+        "operationId": "getFileVersionHistory",
+        "description": "高级正文版本摘要页，按 (version_sequence ASC, version_id ASC)；严格校验参数，文件无正文版本时 404。不夹带完整来源数组。不存在无界 all 模式或旧整包回退；每页先做当前认证／撤销和对象授权，再比较历史根。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "本页正文版本记录上限，不是历史总量；字节预算可使实际页更短。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "前后翻页位置；不是授权凭据。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "description": "来源页的准确历史根；省略时须由 cursor 携带。二者同时提供必须一致。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileVersionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "INVALID_REQUEST：未知或重复参数、limit/offset 越界、cursor 与 anchor_node_id 同时出现、显式 history_root 与游标不一致或游标属于其他文件／查询；INVALID_CURSOR：游标格式无效。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "文件、历史或所指对象不存在，或不在当前授权范围内。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "HISTORY_CHANGED：请求绑定的历史根已不是当前根（本历史发生合法写入，含备注／标签／选择变化）。丢弃该根下全部页与游标，重新读首页或按节点精确跳转；已选动作输入保留但须重新确认。"
+          },
+          "default": {
+            "description": "结构化错误；读取接口无副作用，可按原参数重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/{file}/history/versions/{version}/sources": {
+      "get": {
+        "operationId": "getFileVersionSources",
+        "description": "正文版本真实 source_version_ids，按原记录序号分片。不存在无界 all 模式或旧整包回退；每页先做当前认证／撤销和对象授权，再比较历史根。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/VersionId"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "按原记录序号的起点。",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "本页来源记录上限，不是历史总量；字节预算可使实际页更短。",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 200
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "description": "来源页的准确历史根；省略时须由 cursor 携带。二者同时提供必须一致。",
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileVersionSourcesSlice"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "INVALID_REQUEST：未知或重复参数、limit/offset 越界、cursor 与 anchor_node_id 同时出现、显式 history_root 与游标不一致或游标属于其他文件／查询；INVALID_CURSOR：游标格式无效。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "文件、历史或所指对象不存在，或不在当前授权范围内。"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "HISTORY_CHANGED：请求绑定的历史根已不是当前根（本历史发生合法写入，含备注／标签／选择变化）。丢弃该根下全部页与游标，重新读首页或按节点精确跳转；已选动作输入保留但须重新确认。"
+          },
+          "default": {
+            "description": "结构化错误；读取接口无副作用，可按原参数重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7609,175 +8253,6 @@
         "additionalProperties": false,
         "description": "重命名形成的不可变文件路径节点。version_id复用真实正文，parent_node_ids连接内容或路径节点；创建路径节点不增加FileVersion或复制正文。"
       },
-      "FileHistoryNode": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "$ref": "#/components/schemas/FileNodeId"
-          },
-          "version_id": {
-            "$ref": "#/components/schemas/VersionId"
-          },
-          "file_id": {
-            "$ref": "#/components/schemas/FileId"
-          },
-          "kind": {
-            "enum": [
-              "content",
-              "rename",
-              "tags",
-              "merge"
-            ]
-          },
-          "parent_node_ids": {
-            "type": "array",
-            "uniqueItems": true,
-            "items": {
-              "$ref": "#/components/schemas/FileNodeId"
-            }
-          },
-          "path": {
-            "type": "string"
-          },
-          "previous_path": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "note": {
-            "type": "string"
-          },
-          "created_at": {
-            "$ref": "#/components/schemas/UtcTimestamp"
-          },
-          "sequence": {
-            "$ref": "#/components/schemas/UInt64"
-          },
-          "current": {
-            "type": "boolean"
-          },
-          "size": {
-            "$ref": "#/components/schemas/UInt64"
-          },
-          "content_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "download_name": {
-            "type": "string"
-          },
-          "storage_name": {
-            "type": "string"
-          },
-          "branch_id": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/BranchId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "source_version_ids": {
-            "type": "array",
-            "uniqueItems": true,
-            "items": {
-              "$ref": "#/components/schemas/VersionId"
-            }
-          },
-          "tags": {
-            "$ref": "#/components/schemas/FileNodeTags"
-          }
-        },
-        "required": [
-          "node_id",
-          "version_id",
-          "file_id",
-          "kind",
-          "parent_node_ids",
-          "path",
-          "previous_path",
-          "note",
-          "created_at",
-          "sequence",
-          "current"
-        ],
-        "additionalProperties": true,
-        "description": "统一不可变文件节点图：content实际正文，rename路径节点，tags/merge元数据节点。后三者复用version_id正文；parent_node_ids含安全的混合图边。tags为每个节点有效继承标签，旧source_version_ids仅表示正文谱系。",
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "kind": {
-                  "const": "content"
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "node_id": {
-                  "$ref": "#/components/schemas/VersionId"
-                },
-                "previous_path": {
-                  "type": "null"
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "kind": {
-                  "const": "rename"
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "node_id": {
-                  "$ref": "#/components/schemas/FilePathNodeId"
-                },
-                "previous_path": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "parent_node_ids": {
-                  "minItems": 1
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "kind": {
-                  "enum": [
-                    "tags",
-                    "merge"
-                  ]
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "node_id": {
-                  "$ref": "#/components/schemas/FileMetadataNodeId"
-                },
-                "previous_path": {
-                  "type": "null"
-                },
-                "parent_node_ids": {
-                  "minItems": 1
-                }
-              },
-              "required": [
-                "tags"
-              ]
-            }
-          }
-        ]
-      },
       "FileMetadataNodeId": {
         "type": "string",
         "pattern": "^fmeta_[0-9a-f]{32}(?![\\s\\S])"
@@ -9229,6 +9704,1362 @@
         ],
         "additionalProperties": false,
         "description": "按root-to-leaf顺序携带一条路径的实际JSON节点；只约束外形与1..65节点数。核心按根引用验证每步域哈希、位置前缀、路由、叶页界限和目标值，并拒绝多余或截断节点；schema不能证明成员关系。"
+      },
+      "HistoryRoot": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+        "description": "目标历史在当前已准入 State 的已发布 Candidate 历史目录中的准确 history-manifest 哈希。只标识一份确切已准入内容；不是授权、当前盘健康或未来操作成功凭据。"
+      },
+      "HistoryCursor": {
+        "type": "string",
+        "minLength": 2,
+        "maxLength": 32768,
+        "pattern": "^(?:[0-9a-f]{2})+(?![\\s\\S])",
+        "description": "无服务端缓存、非授权的续读位置：严格 JSON 的小写十六进制，绑定历史根、历史与文件身份、规范化查询摘要和排他边界键。服务端每次重新解析全部字段，不能改变作用域；跨文件游标为 400，根变化为 409 HISTORY_CHANGED。"
+      },
+      "HistoryBoundedText": {
+        "type": "object",
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "bytes",
+          "inline"
+        ],
+        "additionalProperties": false,
+        "description": "没有写入长度上限的节点文本（message、author）。bytes 为完整 UTF-8 字节数；仅当 bytes 不超过 256 时 inline 给出完整文本，否则为 null，须经字段分片读取。不截断、不以省略号冒充完整。"
+      },
+      "HistoryParentEdge": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "in_window": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "node_id",
+          "in_window"
+        ],
+        "additionalProperties": false,
+        "description": "已枚举的真实图父边。in_window=false 表示父节点在同一可读范围内但未驻留本页（未加载），不是根、丢失或损坏。"
+      },
+      "HistoryParentPreview": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "enum": [
+              "complete",
+              "more"
+            ]
+          },
+          "edges": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/components/schemas/HistoryParentEdge"
+            }
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "edges",
+          "cursor"
+        ],
+        "additionalProperties": false,
+        "description": "节点父集合状态：complete 且 edges 为空才表示该读取范围内没有父关系；more 必须携带父边续读游标，即使本页未给该节点分配边预算。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "complete"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "cursor": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "cursor": {
+                  "$ref": "#/components/schemas/HistoryCursor"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "HistoryNodeSummary": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "kind": {
+            "enum": [
+              "content",
+              "rename",
+              "tags",
+              "merge"
+            ]
+          },
+          "version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/UtcTimestamp"
+          },
+          "branch_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "previous_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string"
+          },
+          "tags": {
+            "$ref": "#/components/schemas/FileNodeTags"
+          },
+          "size": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "content_state": {
+            "enum": [
+              "LIVE",
+              "AVAILABLE",
+              "PURGED",
+              "MIGRATED"
+            ]
+          },
+          "download_name": {
+            "type": "string"
+          },
+          "storage_name": {
+            "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperationId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "author": {
+            "$ref": "#/components/schemas/HistoryBoundedText"
+          },
+          "message": {
+            "$ref": "#/components/schemas/HistoryBoundedText"
+          },
+          "parents": {
+            "$ref": "#/components/schemas/HistoryParentPreview"
+          },
+          "current": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "node_id",
+          "kind",
+          "version_id",
+          "sequence",
+          "created_at",
+          "branch_id",
+          "path",
+          "previous_path",
+          "note",
+          "tags",
+          "size",
+          "content_hash",
+          "content_state",
+          "download_name",
+          "storage_name",
+          "operation_id",
+          "author",
+          "message",
+          "parents",
+          "current"
+        ],
+        "additionalProperties": false,
+        "description": "有界节点摘要：只内联已有小字段上界覆盖的数据；正文节点 node_id 即真实 version_id，路径／标签／合并节点复用真实正文 version_id。current 只标记上下文当前节点，不随页内最新节点移动。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "content"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "node_id": {
+                  "$ref": "#/components/schemas/VersionId"
+                },
+                "previous_path": {
+                  "type": "null"
+                },
+                "operation_id": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "rename"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "node_id": {
+                  "$ref": "#/components/schemas/FilePathNodeId"
+                },
+                "previous_path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "operation_id": {
+                  "$ref": "#/components/schemas/OperationId"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "tags",
+                    "merge"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "node_id": {
+                  "$ref": "#/components/schemas/FileMetadataNodeId"
+                },
+                "previous_path": {
+                  "type": "null"
+                },
+                "operation_id": {
+                  "$ref": "#/components/schemas/OperationId"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "FileHistoryContext": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string"
+          },
+          "current_node_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileNodeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selected_branch_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VersionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "materialized": {
+            "type": "boolean"
+          },
+          "content_state": {
+            "enum": [
+              "PENDING",
+              "LIVE",
+              "AVAILABLE",
+              "PURGED",
+              "MIGRATED"
+            ]
+          },
+          "inherited": {
+            "type": "boolean"
+          },
+          "own_version_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VersionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_version_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VersionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "visible_content_state": {
+            "enum": [
+              "LIVE",
+              "AVAILABLE",
+              "PURGED",
+              "MIGRATED"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "note",
+          "current_node_id",
+          "selected_branch_id"
+        ],
+        "additionalProperties": false,
+        "description": "当前上下文的有界摘要，独立于本页节点。文件已删除但历史仍在时 path 为 null 且不含正文处置字段（字段缺失而不是 null）。",
+        "dependentRequired": {
+          "version_id": [
+            "materialized",
+            "content_state",
+            "inherited",
+            "own_version_id",
+            "source_version_id",
+            "visible_content_state"
+          ]
+        }
+      },
+      "FileHistoryPage": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "context": {
+            "$ref": "#/components/schemas/FileHistoryContext"
+          },
+          "nodes": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/HistoryNodeSummary"
+            }
+          },
+          "previous_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "anchor": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "node_id": {
+                    "$ref": "#/components/schemas/FileNodeId"
+                  },
+                  "in_page": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "node_id",
+                  "in_page"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200
+              },
+              "parent_edges": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "limit",
+              "parent_edges"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "file_id",
+          "repository_id",
+          "history_tree_id",
+          "history_root",
+          "context",
+          "nodes",
+          "previous_cursor",
+          "next_cursor",
+          "anchor",
+          "budget"
+        ],
+        "additionalProperties": false,
+        "description": "一个可替换节点窗口，按 (sequence DESC, node_id ASC)。完整编码不超过 4 MiB（MAX_HISTORY_PAGE_BYTES）；字节预算可使页短于 limit，但非末页必有 next_cursor。空 nodes 且两个游标均为 null 才表示真正没有历史。"
+      },
+      "FileHistoryParentsPage": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "parents": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "node_id": {
+                  "$ref": "#/components/schemas/FileNodeId"
+                }
+              },
+              "required": [
+                "node_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "previous_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "history_tree_id",
+          "history_root",
+          "node_id",
+          "parents",
+          "previous_cursor",
+          "next_cursor"
+        ],
+        "additionalProperties": false,
+        "description": "单节点完整合法图父关系的一个窗口，按父节点 ID 升序；高入度节点可持续续读。读到末页只证明后面没有更多。"
+      },
+      "FileBranchSummary": {
+        "type": "object",
+        "properties": {
+          "branch_id": {
+            "$ref": "#/components/schemas/BranchId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "head_commit_id": {
+            "$ref": "#/components/schemas/CommitId"
+          },
+          "fork_commit_id": {
+            "$ref": "#/components/schemas/CommitId"
+          },
+          "branch_kind": {
+            "const": "file"
+          },
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "archived",
+              "migrated",
+              "merged"
+            ]
+          },
+          "version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          },
+          "source_version_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VersionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "materialized": {
+            "type": "boolean"
+          },
+          "content_state": {
+            "enum": [
+              "PENDING",
+              "LIVE",
+              "AVAILABLE",
+              "PURGED",
+              "MIGRATED",
+              "UNAVAILABLE"
+            ]
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "inherited": {
+            "type": "boolean"
+          },
+          "own_version_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VersionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "visible_content_state": {
+            "enum": [
+              "LIVE",
+              "AVAILABLE",
+              "PURGED",
+              "MIGRATED",
+              "UNAVAILABLE"
+            ]
+          },
+          "file_node_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileNodeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileNodeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "read_only": {
+            "type": "boolean"
+          },
+          "alias_of": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "branch_id",
+          "history_tree_id",
+          "name",
+          "head_commit_id",
+          "fork_commit_id",
+          "branch_kind",
+          "file_id",
+          "generation",
+          "state",
+          "version_id",
+          "source_version_id",
+          "materialized",
+          "content_state",
+          "current",
+          "inherited",
+          "own_version_id",
+          "visible_content_state",
+          "node_id",
+          "read_only",
+          "alias_of",
+          "pending_count"
+        ],
+        "additionalProperties": false,
+        "description": "固定字段分支摘要；不复制任意大小的 pending_file_versions 映射，pending_count 给出其条目数。materialized=false 时 pending_count 至少为 1。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "materialized": {
+                  "const": false
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "inherited": {
+                  "const": true
+                },
+                "own_version_id": {
+                  "type": "null"
+                },
+                "content_state": {
+                  "const": "PENDING"
+                },
+                "pending_count": {
+                  "minimum": 1
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "inherited": {
+                  "const": false
+                },
+                "source_version_id": {
+                  "type": "null"
+                },
+                "content_state": {
+                  "not": {
+                    "const": "PENDING"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "FileHistoryBranchesPage": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "selected_branch_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branches": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/FileBranchSummary"
+            }
+          },
+          "previous_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "history_tree_id",
+          "history_root",
+          "selected_branch_id",
+          "branches",
+          "previous_cursor",
+          "next_cursor"
+        ],
+        "additionalProperties": false,
+        "description": "该文件当前可展示分支（排除 migrated）的摘要页，按 branch_id 升序。"
+      },
+      "FileMergeSummary": {
+        "type": "object",
+        "properties": {
+          "merge_id": {
+            "$ref": "#/components/schemas/FileMergeId"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "chosen_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "result_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "surviving_branch_id": {
+            "$ref": "#/components/schemas/BranchId"
+          },
+          "reused_node": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "input_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "parent_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "merge_id",
+          "sequence",
+          "chosen_node_id",
+          "result_node_id",
+          "surviving_branch_id",
+          "reused_node",
+          "operation_id",
+          "input_count",
+          "parent_count"
+        ],
+        "additionalProperties": false,
+        "description": "合并来源摘要；输入对与保存的父关系分别经 inputs／parents 按原序号续读，不内联无界数组。"
+      },
+      "FileHistoryMergesPage": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "merges": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/FileMergeSummary"
+            }
+          },
+          "previous_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "history_tree_id",
+          "history_root",
+          "merges",
+          "previous_cursor",
+          "next_cursor"
+        ],
+        "additionalProperties": false,
+        "description": "合并来源摘要页，按 (sequence DESC, merge_id ASC)。"
+      },
+      "FileMergeInputsSlice": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "merge_id": {
+            "$ref": "#/components/schemas/FileMergeId"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inputs": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "branch_id": {
+                  "$ref": "#/components/schemas/BranchId"
+                },
+                "node_id": {
+                  "$ref": "#/components/schemas/FileNodeId"
+                }
+              },
+              "required": [
+                "index",
+                "branch_id",
+                "node_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "history_tree_id",
+          "history_root",
+          "merge_id",
+          "offset",
+          "total",
+          "inputs",
+          "next_offset"
+        ],
+        "additionalProperties": false,
+        "description": "按原输入序号返回成对 {branch_id, node_id}，不拆分两个平行数组。next_offset 为 null 表示已到末尾。"
+      },
+      "FileMergeParentsSlice": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "merge_id": {
+            "$ref": "#/components/schemas/FileMergeId"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "parents": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "node_id": {
+                  "$ref": "#/components/schemas/FileNodeId"
+                }
+              },
+              "required": [
+                "index",
+                "node_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "history_tree_id",
+          "history_root",
+          "merge_id",
+          "offset",
+          "total",
+          "parents",
+          "next_offset"
+        ],
+        "additionalProperties": false,
+        "description": "按原记录序号读取合并时保存的父关系；与节点当前累计的图父关系分别表达。"
+      },
+      "FileVersionSourcesSlice": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sources": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "version_id": {
+                  "$ref": "#/components/schemas/VersionId"
+                }
+              },
+              "required": [
+                "index",
+                "version_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "history_tree_id",
+          "history_root",
+          "version_id",
+          "offset",
+          "total",
+          "sources",
+          "next_offset"
+        ],
+        "additionalProperties": false,
+        "description": "按原记录序号读取正文版本真实 source_version_ids，独立于图父边。"
+      },
+      "HistoryFieldSlice": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "field": {
+            "enum": [
+              "message",
+              "author"
+            ]
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "history_tree_id",
+          "history_root",
+          "node_id",
+          "field",
+          "total_bytes",
+          "offset",
+          "text",
+          "complete",
+          "next_offset"
+        ],
+        "additionalProperties": false,
+        "description": "外置字段的一个完整 UTF-8 片段；只有确实读到末尾才 complete=true。空字段为 total_bytes=0、text=\"\"、complete=true。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "complete": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "next_offset": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "next_offset": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        ]
+      },
+      "FileVersionSummary": {
+        "type": "object",
+        "properties": {
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          },
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "creation_primary_slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "logical_size": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "version_sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "checksum_chunk_bytes": {
+            "enum": [
+              65536,
+              262144,
+              1048576,
+              4194304
+            ]
+          },
+          "checksum_manifest_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "creation_name": {
+            "type": "string"
+          },
+          "storage_name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_as_full_checkpoint": {
+            "type": "boolean"
+          },
+          "source_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "history_tree_id",
+          "version_id",
+          "file_id",
+          "creation_primary_slot_id",
+          "logical_size",
+          "version_sequence",
+          "content_hash",
+          "checksum_chunk_bytes",
+          "checksum_manifest_hash",
+          "creation_name",
+          "storage_name",
+          "created_at",
+          "created_as_full_checkpoint",
+          "source_count"
+        ],
+        "additionalProperties": false,
+        "description": "正文版本摘要；完整来源数组改由 versions/{version}/sources 按序号读取，source_count 给出其长度。"
+      },
+      "FileVersionPage": {
+        "type": "object",
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "versions": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/FileVersionSummary"
+            }
+          },
+          "previous_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "history_tree_id",
+          "history_root",
+          "versions",
+          "previous_cursor",
+          "next_cursor"
+        ],
+        "additionalProperties": false,
+        "description": "高级正文版本页，按 (version_sequence ASC, version_id ASC)；不再返回完整正文版本数组。"
       }
     }
   }

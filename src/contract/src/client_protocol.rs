@@ -7,6 +7,21 @@ pub use operation::{OperationStatus, operation_status};
 /// Common JSON response cap, enforced while streaming and again when decoding.
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
+/// Complete encoded size of one bounded file-history page, including its
+/// shell, context summary and continuation cursors. Pages stop admitting
+/// records before this bound; it is a server encoding limit below the
+/// client receive limit, not a history retention or UI performance promise.
+pub const MAX_HISTORY_PAGE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Node texts without a persisted write limit (`message`, `author`) are
+/// inlined in a history page only when their UTF-8 length is within this
+/// bound; longer values are exposed by explicit bounded field reads.
+pub const MAX_INLINE_TEXT_BYTES: usize = 256;
+
+/// Encoded JSON business request limit shared by the server body reader and
+/// clients that assemble multi-item action requests (merge, tags).
+pub const MAX_JSON_REQUEST_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug, error_definition::Error)]
 #[error("{code}: {message}")]
 pub struct ResponseError {

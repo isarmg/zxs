@@ -488,17 +488,73 @@ impl Backend for PausedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
-    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+    ) -> Result<crate::FileHistoryPage, crate::ApiError> {
         self.enter();
         self.inner.file_history_snapshot(identity, request)
     }
-    fn file_history(
+    fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
-        file: &str,
-    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        request: crate::ReadNodeParents,
+    ) -> Result<crate::NodeParentsPage, crate::ApiError> {
         self.enter();
-        self.inner.file_history(identity, file)
+        self.inner.file_history_node_parents(identity, request)
+    }
+    fn file_history_branches(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadHistoryBranches,
+    ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
+        self.enter();
+        self.inner.file_history_branches(identity, request)
+    }
+    fn file_history_merges(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadHistoryMerges,
+    ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
+        self.enter();
+        self.inner.file_history_merges(identity, request)
+    }
+    fn file_history_merge_inputs(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadMergeInputs,
+    ) -> Result<crate::MergeInputsPage, crate::ApiError> {
+        self.enter();
+        self.inner.file_history_merge_inputs(identity, request)
+    }
+    fn file_history_merge_parents(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadMergeParents,
+    ) -> Result<crate::MergeParentsPage, crate::ApiError> {
+        self.enter();
+        self.inner.file_history_merge_parents(identity, request)
+    }
+    fn file_history_node_field(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadNodeField,
+    ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
+        self.enter();
+        self.inner.file_history_node_field(identity, request)
+    }
+    fn file_version_page(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadVersionPage,
+    ) -> Result<crate::VersionPage, crate::ApiError> {
+        self.enter();
+        self.inner.file_version_page(identity, request)
+    }
+    fn file_version_sources(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadVersionSources,
+    ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
+        self.enter();
+        self.inner.file_version_sources(identity, request)
     }
     fn topology_snapshot(
         &self,
@@ -789,6 +845,10 @@ impl Fixture {
     }
 }
 
+fn rooted_query() -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::from([("history_root".to_owned(), "0".repeat(64))])
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Request {
     Operation,
@@ -824,6 +884,13 @@ enum Request {
     TopologySnapshot,
     FileHistory,
     FileHistorySnapshot,
+    FileHistoryNodeParents,
+    FileHistoryBranches,
+    FileHistoryMerges,
+    FileHistoryMergeInputs,
+    FileHistoryMergeParents,
+    FileHistoryNodeField,
+    FileVersionSources,
     DefaultDirectoryBranch,
     Listing,
     DirectoryScopes,
@@ -1476,10 +1543,101 @@ impl Request {
             Self::FileHistorySnapshot => backend
                 .file_history_snapshot(
                     identity,
-                    crate::ReadFileHistory::parse("missing-file".into(), None, None).unwrap(),
+                    crate::ReadFileHistory::parse(
+                        "missing-file".into(),
+                        std::collections::BTreeMap::new(),
+                    )
+                    .unwrap(),
                 )
                 .map(|_| ()),
-            Self::FileHistory => backend.file_history(identity, "missing-file").map(|_| ()),
+            Self::FileHistory => backend
+                .file_version_page(
+                    identity,
+                    crate::ReadVersionPage::parse(
+                        "missing-file".into(),
+                        std::collections::BTreeMap::new(),
+                    )
+                    .unwrap(),
+                )
+                .map(|_| ()),
+            Self::FileHistoryNodeParents => backend
+                .file_history_node_parents(
+                    identity,
+                    crate::ReadNodeParents::parse(
+                        "missing-file".into(),
+                        "node".into(),
+                        rooted_query(),
+                    )
+                    .unwrap(),
+                )
+                .map(|_| ()),
+            Self::FileHistoryBranches => backend
+                .file_history_branches(
+                    identity,
+                    crate::ReadHistoryBranches::parse("missing-file".into(), rooted_query())
+                        .unwrap(),
+                )
+                .map(|_| ()),
+            Self::FileHistoryMerges => backend
+                .file_history_merges(
+                    identity,
+                    crate::ReadHistoryMerges::parse("missing-file".into(), rooted_query()).unwrap(),
+                )
+                .map(|_| ()),
+            Self::FileHistoryMergeInputs => backend
+                .file_history_merge_inputs(
+                    identity,
+                    crate::ReadMergeInputs(
+                        crate::backend_file_history::ReadIndexedSlice::parse(
+                            "missing-file".into(),
+                            "merge_id",
+                            "merge".into(),
+                            rooted_query(),
+                        )
+                        .unwrap(),
+                    ),
+                )
+                .map(|_| ()),
+            Self::FileHistoryMergeParents => backend
+                .file_history_merge_parents(
+                    identity,
+                    crate::ReadMergeParents(
+                        crate::backend_file_history::ReadIndexedSlice::parse(
+                            "missing-file".into(),
+                            "merge_id",
+                            "merge".into(),
+                            rooted_query(),
+                        )
+                        .unwrap(),
+                    ),
+                )
+                .map(|_| ()),
+            Self::FileHistoryNodeField => backend
+                .file_history_node_field(
+                    identity,
+                    crate::ReadNodeField::parse(
+                        "missing-file".into(),
+                        "node".into(),
+                        "message".into(),
+                        rooted_query(),
+                    )
+                    .unwrap(),
+                )
+                .map(|_| ()),
+            Self::FileVersionSources => backend
+                .file_version_sources(
+                    identity,
+                    crate::ReadVersionSources(
+                        crate::backend_file_history::ReadIndexedSlice::parse(
+                            "missing-file".into(),
+                            "version_id",
+                            "version".into(),
+                            rooted_query(),
+                        )
+                        .unwrap(),
+                    ),
+                )
+                .map(|_| ()),
             Self::TopologySnapshot => backend.topology_snapshot(identity).map(|_| ()),
             Self::PlacementSnapshot => backend
                 .placement_snapshot(identity, &fixture.version)
@@ -1675,6 +1833,13 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::HistoryGraph,
                 Request::FileHistory,
                 Request::FileHistorySnapshot,
+                Request::FileHistoryNodeParents,
+                Request::FileHistoryBranches,
+                Request::FileHistoryMerges,
+                Request::FileHistoryMergeInputs,
+                Request::FileHistoryMergeParents,
+                Request::FileHistoryNodeField,
+                Request::FileVersionSources,
                 Request::DiskDirectorySelect,
                 Request::DiskDirectoryCreate,
                 Request::InitializeDirectoryScope,
@@ -1912,6 +2077,13 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::TopologySnapshot,
         Request::FileHistory,
         Request::FileHistorySnapshot,
+        Request::FileHistoryNodeParents,
+        Request::FileHistoryBranches,
+        Request::FileHistoryMerges,
+        Request::FileHistoryMergeInputs,
+        Request::FileHistoryMergeParents,
+        Request::FileHistoryNodeField,
+        Request::FileVersionSources,
         Request::DefaultDirectoryBranch,
         Request::Listing,
         Request::DirectoryScopes,

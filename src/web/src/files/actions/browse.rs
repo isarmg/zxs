@@ -3,7 +3,6 @@ use super::disk_path;
 use crate::{
     api,
     files::{
-        history::FileHistory,
         model::{Disk, Navigation},
         page::{DirectoryKey, Entry, Page},
     },
@@ -274,7 +273,7 @@ fn request_page(state: RwSignal<State>, restarted: bool) {
                     .is_some_and(super::super::model::file_kind)
             })
         {
-            load_file_history(state);
+            super::history::refresh(state);
         }
     });
 }
@@ -337,80 +336,9 @@ pub(crate) fn select_entry(state: RwSignal<State>, entry: Entry) {
         s.page = crate::ui::Page::Details;
     });
     if super::super::model::file_kind(&entry) {
-        load_file_history(state);
+        super::history::load_first_page(state);
     }
 }
-pub(crate) fn load_file_history(state: RwSignal<State>) {
-    if !state.with_untracked(State::session_active) {
-        return;
-    }
-    let epoch = state.with_untracked(|s| s.session_epoch);
-    let (id, context) = state.with_untracked(|s| {
-        s.files
-            .selected
-            .as_ref()
-            .map(|entry| {
-                (
-                    entry.file_id().to_owned(),
-                    crate::files::model::file_context(entry),
-                )
-            })
-            .unwrap_or_default()
-    });
-    if id.is_empty() {
-        return;
-    }
-    let generation = state.with_untracked(|s| s.files.history_generation + 1);
-    state.update(|s| {
-        s.files.history_loading = true;
-        s.files.history_generation = generation;
-    });
-    spawn_local(async move {
-        let endpoint = format!(
-            "/api/file-manager/files/{}/history{}",
-            api::segment(&id),
-            context
-                .as_ref()
-                .map(|(repository, path)| format!(
-                    "?repository_id={}&path={}",
-                    api::segment(repository),
-                    api::segment(path)
-                ))
-                .unwrap_or_default()
-        );
-        let result = api::request("GET", &endpoint, None)
-            .await
-            .and_then(|value| FileHistory::parse(value, &id));
-        if !accept_read_response(state, epoch, &result)
-            || !state.with_untracked(|s| {
-                s.files.history_generation == generation
-                    && s.files
-                        .selected
-                        .as_ref()
-                        .is_some_and(|entry| entry.file_id() == id)
-            })
-        {
-            return;
-        }
-        match result {
-            Ok(history) => state.update(|s| {
-                let entry = s
-                    .files
-                    .selected
-                    .as_ref()
-                    .expect("invariant: accepted history still has its selected entry");
-                s.files.file_history = history.for_entry(entry).into();
-            }),
-            Err(error) => {
-                // A failed refresh must not re-enable controls for stale heads.
-                state.update(|s| s.files.file_history = Default::default());
-                fail_in(state, epoch, ErrorContext::Read(endpoint), error);
-            }
-        }
-        state.update(|s| s.files.history_loading = false);
-    });
-}
-
 #[cfg(test)]
 #[path = "../../../../../test/web/unit/files/actions/browse/tests.rs"]
 mod tests;

@@ -11,6 +11,9 @@ mod config;
 pub use config::ValidatedConfig;
 mod planning;
 pub(crate) use planning::PlanningContext;
+mod history_window;
+pub(crate) use history_window::HistoryCatalog;
+pub use history_window::HistoryRoot;
 mod index;
 pub use index::{IndexFailure, IndexFailureStage, IndexHealth};
 mod integrity_scrub;
@@ -92,6 +95,9 @@ pub struct Engine {
     pub(crate) blocked: bool,
     pub(crate) snapshot: Option<String>,
     published_state_base: Option<Arc<publication::PublishedStateBase>>,
+    /// The admitted history catalog bound to the current `state` allocation.
+    /// None until the first publication or recovery binds one.
+    pub(crate) history_catalog: Option<HistoryCatalog>,
     pub(crate) metadata_integrity: Arc<provenance::MetadataIntegrity>,
     integrity_scrub_schedule: Option<std::sync::Weak<integrity_scrub::ScheduleState>>,
     pub(crate) next_slot: u64,
@@ -353,6 +359,7 @@ impl Engine {
             blocked: false,
             snapshot: None,
             published_state_base: None,
+            history_catalog: None,
             metadata_integrity: Arc::new(provenance::MetadataIntegrity::default()),
             integrity_scrub_schedule: None,
             next_slot: 1,
@@ -427,6 +434,7 @@ impl Engine {
             blocked: false,
             snapshot: None,
             published_state_base: None,
+            history_catalog: None,
             metadata_integrity: Arc::new(provenance::MetadataIntegrity::default()),
             integrity_scrub_schedule: None,
             next_slot: 1,

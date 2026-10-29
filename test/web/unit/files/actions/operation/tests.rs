@@ -11,6 +11,35 @@ fn published() -> Value {
 }
 
 #[test]
+fn publication_expires_the_observed_history_even_when_selection_identity_is_unchanged() {
+    Owner::new().with(|| {
+        let mut initial = State {
+            authenticated: true,
+            ..Default::default()
+        };
+        initial.files.selected = Some(crate::files::test_entries::entry(
+            json!({"file_id":"file","version_id":"n1","node_id":"n1"}),
+        ));
+        initial
+            .files
+            .history
+            .install(crate::files::history::tests::chain(1));
+        let selected = initial.files.selected.clone();
+        let state = RwSignal::new(initial);
+        record_receipt(state, "original", published());
+        state.with_untracked(|s| {
+            assert_eq!(s.files.selected, selected);
+            assert!(s.files.history.stale());
+            assert!(s.files.history.root().is_none());
+            assert!(
+                s.files.history.window().is_some(),
+                "old data remains read-only while fresh reads run"
+            );
+        });
+    });
+}
+
+#[test]
 fn navigation_clears_the_local_review_but_preserves_original_operation_recovery() {
     use crate::files::{model::Navigation, review};
     Owner::new().with(|| {
@@ -22,9 +51,12 @@ fn navigation_clears_the_local_review_but_preserves_original_operation_recovery(
             s.management.storage = crate::management::Storage::Ready;
             s.files.writable = true;
             s.files.selected = Some(crate::files::test_entries::entry(json!({})));
-            s.files.checked_nodes.insert("node".into());
-            s.files.file_history = crate::files::history::tests::history(
-                json!({"nodes":[{"node_id":"node","tags":[]}]}),
+            s.files
+                .history
+                .install(crate::files::history::tests::chain(1));
+            assert_eq!(
+                crate::files::tags::check(&mut s.files, "n1", true),
+                crate::files::tags::Check::Changed
             );
         });
         crate::files::tags::start(state);
@@ -119,9 +151,12 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
                 s.files.selected = Some(crate::files::test_entries::entry(
                     json!({"file_id":"file", "name":"file.txt"}),
                 ));
-                s.files.checked_nodes.insert("node".into());
-                s.files.file_history = crate::files::history::tests::history(
-                    json!({"nodes":[{"node_id":"node", "tags":[]}]}),
+                s.files
+                    .history
+                    .install(crate::files::history::tests::chain(1));
+                assert_eq!(
+                    crate::files::tags::check(&mut s.files, "n1", true),
+                    crate::files::tags::Check::Changed
                 );
             });
             crate::files::tags::start(state);
@@ -143,7 +178,7 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
                 assert!(super::super::pending(s));
                 assert!(!super::super::write_allowed(s));
                 assert!(s.files.tag_edit.is_some());
-                assert!(s.files.checked_nodes.contains("node"));
+                assert!(s.files.checked_nodes.contains_key("n1"));
                 assert_eq!(
                     s.files.publications[&crate::files::review::Kind::Tags]
                         .operation_id
@@ -239,8 +274,10 @@ fn poll_projection_copies_only_unpolled_operation_ids_and_keeps_session_epoch() 
         session_epoch: 17,
         ..Default::default()
     };
-    state.files.file_history =
-        crate::files::history::tests::history(json!({"nodes":[{"note":"x".repeat(100_000)}]}));
+    state
+        .files
+        .history
+        .install(crate::files::history::tests::chain(200));
     state.monitor.history = json!({"samples":[{"extra":"y".repeat(100_000)}]}).into();
     state.files.operations = vec![
         FileOperation::unknown("pending"),

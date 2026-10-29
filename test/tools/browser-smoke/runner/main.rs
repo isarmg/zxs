@@ -26,6 +26,7 @@ mod error_feedback;
 mod file_pagination;
 mod file_rows;
 mod fixture;
+mod history_pages;
 use fixture::seed_files;
 mod fonts;
 mod integrity_scrub;
@@ -313,6 +314,7 @@ fn exercise(
     session_delivery::finish(current_history, true)?;
     assert_metadata_only(browser)?;
     metadata_edit(browser)?;
+    history_pages::run(browser)?;
     browser.click(&browser.button("History", "历史记录")?)?;
     wait_for("seeded file in activity history", || {
         if browser.script("return Array.from(document.querySelectorAll('.zxs-history-path')).some(e=>e.textContent.includes('browser-smoke.txt'))")? == true { Ok(()) } else { Err("history missing seeded file".into()) }

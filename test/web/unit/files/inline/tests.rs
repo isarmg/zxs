@@ -108,47 +108,67 @@ fn clearing_a_note_is_distinct_from_cancelling_a_name() {
     }
 }
 
+fn rename_window(note: &str) -> crate::files::history::HistoryWindow {
+    crate::files::history::tests::window(
+        vec![crate::files::history::tests::node_wire(json_codec::json!({
+            "node_id":"fnode-rename","version_id":"ver-one","kind":"rename",
+            "previous_path":"old/report.txt","path":"new/report.txt","note":note
+        }))],
+        json_codec::json!({}),
+    )
+}
+
 #[test]
 fn a_path_nodes_generated_caption_is_display_only_and_note_input_starts_from_metadata() {
     let mut state = State::default();
-    state.files.file_history = crate::files::history::tests::history(
-        json_codec::json!({"nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename","previous_path":"old/report.txt","path":"new/report.txt","note":""}]}),
-    );
+    state.files.history.install(rename_window(""));
     let target = Target::NodeNote("fnode-rename".into());
     assert_eq!(target.initial(&state), "");
+    let index = |state: &State| {
+        super::super::history_index::HistoryIndex::new(state.files.history.window().cloned())
+    };
     assert_eq!(
-        target.display(&super::super::history_index::HistoryIndex::new(
-            state.files.file_history.clone()
-        )),
+        target.display(&index(&state)),
         "Path changed old/report.txt → new/report.txt"
     );
     assert!(target.input_kind() == InputKind::Note);
-    crate::files::history::tests::update_metadata(&mut state.files.file_history, |value| {
-        value["nodes"][0]["note"] = "Reviewed rename".into()
-    });
-    assert_eq!(
-        target.display(&super::super::history_index::HistoryIndex::new(
-            state.files.file_history.clone()
-        )),
-        "Reviewed rename"
-    );
+    state
+        .files
+        .history
+        .install(rename_window("Reviewed rename"));
+    assert_eq!(target.display(&index(&state)), "Reviewed rename");
     assert_eq!(
         edit_value("", target.input_kind()),
         Edit::Save(String::new())
     );
+    assert_eq!(
+        Target::VersionNote("missing".into()).display(&index(&state)),
+        "No note"
+    );
 }
 #[test]
-fn legacy_notes_are_displayed_without_silent_truncation() {
-    let original = format!("{}\nlegacy", "文".repeat(60));
+fn file_and_version_notes_start_from_the_resident_page_and_fall_back_to_the_entry() {
+    let note = format!("{}ab", "文".repeat(42));
     let mut state = State::default();
-    state.files.file_history = crate::files::history::tests::history(json_codec::json!({
-        "note": original,
-        "versions": [{"version_id": "old", "note": original}],
-    }));
-    assert_eq!(Target::FileNote.initial(&state), original);
-    assert_eq!(Target::VersionNote("old".into()).initial(&state), original);
-    assert_eq!(edit_value(&original, InputKind::Note), Edit::Invalid);
-    assert_eq!(state.files.file_history["note"], original);
+    state.files.selected = Some(crate::files::test_entries::entry(
+        json_codec::json!({"note":"entry note"}),
+    ));
+    assert_eq!(Target::FileNote.initial(&state), "entry note");
+    let mut wire = crate::files::history::tests::window_wire(
+        vec![crate::files::history::tests::node_wire(
+            json_codec::json!({"note":note}),
+        )],
+        json_codec::json!({}),
+    );
+    wire["context"]["note"] = note.clone().into();
+    state
+        .files
+        .history
+        .install(crate::files::history::HistoryWindow::parse(wire, "file").unwrap());
+    assert_eq!(Target::FileNote.initial(&state), note);
+    assert_eq!(Target::VersionNote("n1".into()).initial(&state), note);
+    assert_eq!(Target::VersionNote("other".into()).initial(&state), "");
+    assert_eq!(edit_value(&note, InputKind::Note), Edit::Save(note));
 }
 #[test]
 fn directory_branch_rename_keeps_the_record_identity_and_shares_cancel_and_byte_rules() {
@@ -247,15 +267,25 @@ fn owned_navigation_invalidates_a_queued_editor_without_admitting_its_write() {
 }
 
 #[test]
-fn queued_edits_cannot_submit_after_session_navigation_alias_or_branch_changes() {
+fn queued_edits_cannot_submit_after_session_navigation_alias_branch_or_page_changes() {
     Owner::new().with(|| {
-        for change in ["epoch", "logout", "page", "slot", "directory", "repository", "directory_branch", "path", "branch", "version"] {
+        for change in ["epoch", "logout", "page", "slot", "directory", "repository", "directory_branch", "path", "branch", "version", "history_page", "history_stale"] {
             let mut initial = active_state();
             initial.files.selected = Some(crate::files::test_entries::entry(json_codec::json!({"entry_id":"same","file_id":"same","path":"docs/a","selected_branch_id":"main","version_id":"v1"})));
+            initial.files.history.install(crate::files::history::tests::chain(2));
             let state = RwSignal::new(initial);
             let draft = Draft::unobserved(state);
             draft.start("old context".into());
+            assert_eq!(state.with_untracked(|s| s.files.open_editors), 1);
             state.update(|s| match change {
+                "history_page" => s.files.history.install(crate::files::history::tests::window(
+                    vec![crate::files::history::tests::node("n1", 1, &[], &["n1"])],
+                    json_codec::json!({"previous_cursor":"aa"}),
+                )),
+                "history_stale" => crate::files::actions::history::mark_stale(
+                    s,
+                    crate::files::history::state::StaleReason::RootChanged,
+                ),
                 "epoch" => s.session_epoch += 1,
                 "logout" => s.session_transition = crate::ui::SessionTransition::LoggingOut,
                 "page" => s.page = crate::ui::Page::Files,
@@ -271,7 +301,19 @@ fn queued_edits_cannot_submit_after_session_navigation_alias_or_branch_changes()
             draft.submit(|| panic!("old editor must not submit into a new context"));
             assert!(!draft.editing.get_untracked());
             assert!(!draft.pending());
+            assert_eq!(state.with_untracked(|s| s.files.open_editors), 0, "{change}");
         }
+        // A refresh of the same page (same root, same first node) keeps the editor.
+        let mut initial = active_state();
+        initial.files.history.install(crate::files::history::tests::chain(2));
+        let state = RwSignal::new(initial);
+        let draft = Draft::unobserved(state);
+        draft.start("kept".into());
+        let mut refreshed = crate::files::history::tests::chain(2);
+        refreshed.nodes[0].note = "new note".into();
+        state.update(|s| s.files.history.install(refreshed));
+        draft.submit(|| Some("saved".into()));
+        assert!(draft.pending());
     });
 }
 
@@ -295,7 +337,7 @@ fn page_context_is_shared_and_only_invalidates_on_editor_ownership_changes() {
             first.with(|context| context.epoch)
         });
         assert_eq!(consumer.get(), 7);
-        state.update(|s| s.files.history_loading = true);
+        state.update(|s| s.files.checked_bytes = 1);
         assert_eq!(consumer.get(), 7);
         assert_eq!(runs.load(Ordering::Relaxed), 1);
         state.update(|s| s.session_epoch += 1);
@@ -368,7 +410,7 @@ fn scheduled_shared_context_effects_preserve_pending_drafts_and_follow_page_owne
     assert!(old_context != fresh_context);
     Executor::poll_local();
     fresh.start("new mounted draft".into());
-    state.update(|s| s.files.history_loading = true);
+    state.update(|s| s.files.checked_bytes = 1);
     Executor::poll_local();
     assert_eq!(fresh.value.get_untracked(), "new mounted draft");
     assert_eq!(fresh_context.with(|context| context.epoch), 7);

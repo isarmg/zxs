@@ -32,6 +32,12 @@ impl PublishedStateBase {
         self.state.ptr_eq(&std::sync::Arc::downgrade(state))
     }
 
+    /// The owner index captured with this publication; valid only for callers
+    /// that checked `names_captured_for` against the current State allocation.
+    pub(super) fn history_owners(&self) -> &crate::state_projection::DerivedOwners {
+        &self.history_owners
+    }
+
     fn matches(&self, engine: &crate::engine::PlanningContext<'_>, config_hash: &str) -> bool {
         !engine.blocked
             && self.metadata_epoch.matches(engine.metadata_integrity)
@@ -313,6 +319,13 @@ impl Engine {
         let previous = std::mem::replace(&mut self.state, std::sync::Arc::new(next));
         self.snapshot = Some(candidate.snapshot_hash.clone());
         self.update_index(&previous);
+        // The published catalog is this State's root identity for history reads.
+        // It is bound unconditionally: a root names admitted content, it is not
+        // the metadata-epoch reuse permit tracked by the base below.
+        self.history_catalog = Some(super::history_window::HistoryCatalog::published(
+            &self.state,
+            history_basis.clone(),
+        ));
         // Only the completed member publication establishes this proof. SQLite is
         // a disposable accelerator, not a dependency of the authoritative closure.
         self.published_state_base = metadata_epoch.matches(&self.metadata_integrity).then(|| {

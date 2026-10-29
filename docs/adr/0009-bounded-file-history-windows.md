@@ -1,6 +1,6 @@
 # 0009：有界文件历史窗口与完整历史分离
 
-状态：**提案（PROPOSED），尚未采纳或实现。** 建议采用下文 A：精确当前历史根上的可替换窗口。本文不改变当前 HTTP 响应、查询参数、历史保留、动作上限或恢复规则，不表示分页、资源保证或验收已经完成。端点和字段是供下一批协议评审的具体候选，不是已发布 API。
+状态：**已采纳方案 A（精确当前根上的可替换窗口）并实现。** 引擎选页、服务端有界协议、机器契约与 Web 驻留窗口已在同一批次落地，见文末“实现记录”与“Web 驻留窗口实现”。下文保留原提案的问题分析、不变项与验收边界作为设计依据；其中“当前”指提案时的整包实现，表中已删除的整包入口以删除线标注。真实浏览器驻留测量与跨浏览器验收尚未执行。
 
 ## 问题与真实消费者
 
@@ -9,14 +9,14 @@
 | 实际入口／消费者 | 现有依赖 | 窗口化必须一起处理的变化 |
 | --- | --- | --- |
 | [`file_manager.rs`](../../src/server/src/file_manager.rs)、[`backend_file_history.rs`](../../src/server/src/backend_file_history.rs) | 一份完整历史 DTO，只有文件 ID 和可选路径上下文 | 严格窗口请求、页 DTO、游标与错误；不留无参数全量分支 |
-| [`engine_backend/file_manager.rs`](../../src/server/src/engine_backend/file_manager.rs)、[`history_nodes.rs`](../../src/server/src/engine_backend/file_manager/history_nodes.rs) | 全部版本、提交、分支、节点及合并投影 | 在复制和编码前选页；不能调用旧全量函数后切片 |
+| [`engine_backend/file_manager.rs`](../../src/server/src/engine_backend/file_manager.rs)、~~`history_nodes.rs`~~（已删除，由 [`history_pages.rs`](../../src/server/src/engine_backend/file_manager/history_pages.rs) 取代） | 全部版本、提交、分支、节点及合并投影 | 在复制和编码前选页；不能调用旧全量函数后切片 |
 | Web [`actions/browse.rs`](../../src/web/src/files/actions/browse.rs)、[`model.rs`](../../src/web/src/files/model.rs) | 每次刷新替换整包；别名和备份条目覆盖当前节点 | 页面导航、请求取消、根变化、精确路径／备份身份与当前节点分开维护 |
 | [`history_index.rs`](../../src/web/src/files/history_index.rs)、[`version_tree.rs`](../../src/web/src/files/version_tree.rs) | 全图索引、布局、节点 DOM 与连线 DOM | 页内图和显式边界；索引、测量、布局及监听器随旧页释放 |
 | [`inline.rs`](../../src/web/src/files/inline.rs)、[`branch.rs`](../../src/web/src/files/branch.rs) | 从 `versions` 或 `nodes` 找备注和分支来源 | 统一节点摘要保留正文 ID、节点 ID及相应备注；编辑不能因换页静默丢失 |
 | [`detail.rs`](../../src/web/src/files/detail.rs) | 完整分支选择器；空 nodes 被解释成没有历史 | 独立分支页；区分空查询结果、尚未加载、末页和真正没有历史 |
 | [`merge/mod.rs`](../../src/web/src/files/merge/mod.rs)、[`merge/view.rs`](../../src/web/src/files/merge/view.rs) | 草稿复制全部分支和节点；结果可选文件任一历史节点；来源列表展开全部合并输入 | 分页节点／分支选择、紧凑选中项、分页来源记录；不把结果限制到当前页或参与分支祖先 |
 | [`tags/mod.rs`](../../src/web/src/files/tags/mod.rs) | 从整包取得全部已选节点、继承标签和分支头 | 保留跨页选择的精确身份与所需标签，逐项完整复核，不提交当前页子集 |
-| 高级 [`lib.rs::history`](../../src/server/src/lib.rs)、[`backend_read.rs::FileHistoryResponse`](../../src/server/src/backend_read.rs) | `GET /api/files/{file}/history` 仍返回完整正文版本，查询参数当前被忽略 | 同批替换为有界正文版本页，严格校验参数；不能留下第二个整包 HTTP 出口 |
+| 高级 [`lib.rs`](../../src/server/src/lib.rs) 的 `/api/files/{file}/history`、~~`backend_read.rs::FileHistoryResponse`~~（已删除，由 [`http_file_history.rs`](../../src/server/src/http_file_history.rs) 的正文版本页取代） | `GET /api/files/{file}/history` 仍返回完整正文版本，查询参数当前被忽略 | 同批替换为有界正文版本页，严格校验参数；不能留下第二个整包 HTTP 出口 |
 
 当前 Web 直接调用文件管理路由；源码中未发现 `storage-client` 的专用历史分页消费者，但这不能证明公开高级路由没有仓库外调用者。`Backend::file_history` 的测试代理、管理准入代理、SMB 测试和 `Engine::file_history` 的内部调用也须逐一盘点，不能把生产 HTTP 更换等同于删掉内部完整查询能力。
 
@@ -134,7 +134,7 @@
 现有回归是语义起点，不表示新方案通过：
 
 - [`backend_file_history.rs`](../../test/server/unit/backend_file_history.rs)：字段白名单、u64 文本、稀疏当前内容、严格原始 JSON 和成对路径上下文。
-- [`history_nodes_tests.rs`](../../test/server/unit/engine_backend/file_manager/history_nodes_tests.rs)：图投影、准确序号及 ID 并列顺序、错误传播、脱离目录的文件历史。
+- ~~`history_nodes_tests.rs`~~（随整包投影删除）：其图投影、准确序号及 ID 并列顺序、错误传播与脱离目录的文件历史场景，已由 [`file_history_pages_tests.rs`](../../test/engine/unit/business/file_history_pages_tests.rs) 和 [`history_pages_tests.rs`](../../test/server/unit/engine_backend/file_manager/history_pages_tests.rs) 以分页对完整 oracle 的形式覆盖。
 - [`history_query_tests.rs`](../../test/server/unit/engine_backend/file_manager/history_query_tests.rs)及 [`revocation_tests.rs`](../../test/server/unit/engine_backend/revocation_tests.rs)：当前准入、退出／撤权与全部读取代理。
 - [`read_projection/history_tests.rs`](../../test/server/unit/engine_backend/read_projection/history_tests.rs)：高级正文历史字段与锁外序列化；新正文页需要保持其事实语义。
 - Web [`model/tests.rs`](../../test/web/unit/files/model/tests.rs)、[`history_index/tests.rs`](../../test/web/unit/files/history_index/tests.rs)、[`version_tree/tests.rs`](../../test/web/unit/files/version_tree/tests.rs)、[`merge/tests.rs`](../../test/web/unit/files/merge/tests.rs)、[`tags/tests.rs`](../../test/web/unit/files/tags/tests.rs)：别名、备份、真实节点、标签继承、合并来源和选中目标完整性。
@@ -159,6 +159,62 @@
 - **内部调优**：各页记录默认值／最大值、B 的选取、游标具体编码和大小、边预览分配、冷扫描与索引取舍；须由字段最大编码推导和浏览器测量支持，不属于历史保留政策。
 - **不默认新增**：较小动作选择上限、旧快照保留服务、TTL、写入消息新上限、历史删除、持久格式迁移、部署、权限或凭据变化。
 
-只有上述决策和所有实际消费者一起落地并验证后，才能在主规范中删除“文件历史仍整包返回”的已知限制。本文只建立下一批的设计和验收边界。
+上述决策已在“实现记录”中给出；主规范已删除“文件历史仍整包返回”的已知限制。
 
 关联：[历史与分支](../06-history-and-branches.md)、[文件合并与标签](../design/file-merge-tags-backup.md)、[有界元数据根 ADR 0006](0006-bounded-metadata-roots.md)、[工程变更流程](../20-engineering.md)。
+
+## 实现记录
+
+本节记录引擎、服务端和机器契约的落地方式及其诚实边界；Web 部分见下一节。
+
+### 已决定的边界
+
+| 原待决事项 | 决定 |
+| --- | --- |
+| 产品行为 | 采纳 A：根变化即 `409 HISTORY_CHANGED`，不保存旧根快照或游标会话。已选动作输入保留但须重审，不自动更新 expected head；编辑中显式换页被拒绝 |
+| 读取能力 | `message`、`author` 外置并提供 `nodes/{node}/fields/{field}` 完整 UTF-8 分片读取；其余节点字段由既有上界（备注、标签、路径、ID）覆盖并内联。精确 ID 跳转（`anchor_node_id`）保留任意节点可达；未新增搜索 |
+| 内部调优 | 节点 50/200、父边 100/500、分支 100/500、合并 50/200、序号分片 200/1000、正文版本 100/500（默认／最大）；单页编码 B = 4 MiB；每节点父边预览 32、每页 2048；游标为严格 JSON 的小写十六进制，≤ 32768 字符。均为执行参数，不限制永久历史或可浏览总量 |
+| 不默认新增 | 未新增较小动作选择上限、旧快照服务、TTL、写入消息上限、历史删除、持久格式迁移、部署、权限或凭据变化 |
+
+### 精确根
+
+`Engine` 持有与当前 `Arc<State>` 分配绑定的 `HistoryCatalog`（[`history_window.rs`](../../src/engine/src/engine/history_window.rs)）：成功发布后为本次发布的历史目录 `MapRoot`，恢复后为准入候选的 `history_roots` 引用（按需经已认证对象读取，单目录备忘最多 256 项）。`Engine::history_root` 返回目标历史在该目录中的准确 `history-manifest` 哈希；目录缺失或与当前 State 不绑定时返回 `RECOVERY_REQUIRED`，不以零值、全池序号或热缓存回退。根绑定不依赖 metadata epoch：它命名已准入内容，不是写入免读许可。
+
+本地准备计划不属于已发布历史：两个持久计划写入者经专门的 `install_local_plan` 只更新 plans，在确认旧目录确实绑定后把同一目录重新绑定到 `Arc::make_mut` 的新分配，并保留有效派生索引。不能把该特许推广到任意 State 更新。准备、取消和冷重开保持历史根；实际发布仍换根。普通发布、已认证对象图、操作收据分段、冷索引和 locator 根沿现有发布／恢复边界维护。
+
+### 选页
+
+[`file_history_pages.rs`](../../src/engine/src/business/file_history_pages.rs) 的 `FileHistoryScope` 借用已准入 Engine、State 与派生归属索引。候选集合来自该文件的派生行（正文版本、路径节点、元数据节点、合并），不调用旧全量投影后切片；选择器最多保留 `limit+1` 个键。正文节点序号取首次发布它的提交序号，由可重建的 `first_commits` 与命名空间对象最早见证索引共同提供：追加时在读取共享页／索引前剪枝，提交移除／改写则重建两者；冷来源失败只传播错误，不缓存部分结果。独立完整 oracle 和宽目录单点追加页读取计数用于检查完整性与局部性。继承标签沿已准入的首父链求值而不建全祖先备忘；图父数组只借用后选页，版本摘要只复制来源计数，分支头／合并路径按需扫描，不建请求级全集映射。
+
+### 服务端
+
+请求类型与游标在边界解析一次；游标绑定根、历史、文件、规范化查询摘要和排他边界键，并在解码时绑定路径中的文件。每页在引擎锁内依次完成：当前身份复核 → 对象授权 → 精确根比较 → 选页与复制本页记录；锁外按字节预算逐条编码并直接拼接。预算截断时非末页必有后续游标，父边 `in_window` 按实际驻留节点重判。共享夹具 `test/fixtures/file-history-window.json` 由服务端真实编码器断言，Web 测试解码同一文件；机器契约的四个审阅夹具（节点页、分支页、合并页、合并输入片）由 HTTP 集成测试的真实响应捕获，并由 `contract-check` 按对应路由 schema 校验。
+
+原始查询先受 128 KiB／8 字段预算约束。父预览的续读允许改变合法 `limit`，这是对通用查询摘要绑定的明确例外；根、文件、节点与父边成员仍严格一致。正反向均检查真实边界，反向字节截断保留最近的规范后缀，不能跳过中间记录。字段在复制前预留外壳并按六倍最坏转义缩小片段；非法 UTF-8 偏移及不足容纳下一字符的预算明确拒绝，每个成功非末片都前进。
+
+响应租约沿捕获／编码、Body 和传输持有的有所有权字节块延续同一 backend slot；不能仅用 Body EOF 代表发送结束。当前生产 HTTP/1 vectored Queue 保留该块所有者，真实 TCP 写进度驱动现有 idle／total 期限并关闭停滞 socket；正常最后块释放撤销定时器。具体传输假设及实际 TCP 回归入口见[服务端组件](../components/server.md#文件历史有界读边界)。这些源代码测试接线不是运行验收结果。
+
+### 残留成本（不宣称 O(page)）
+
+- 单页**新增驻留**有界，但选页 CPU 仍随该文件历史规模增长（对派生行的冷扫描），分支页过滤全池分支；继承标签、命名空间无路径提示查找与合并来源扫描也有与历史／祖先规模相关的 CPU 成本，不保存全量请求级缓存。
+- 冷启动或重开后的首次历史读取按 State 及提交命名空间对象规模重建一次派生归属与首次发布索引；恢复后根按需从候选目录读取。完整 State 和该根的可重建索引不是页级预算。
+- 页大小上限由字段最大编码推导并有单测证明最大合法记录可放入最小页，但适合 DOM 的更小默认值未经真实浏览器测量。
+- `Engine::file_history` 的完整数组保留给引擎内部与测试调用方，不再是 HTTP 出口。
+
+## Web 驻留窗口实现
+
+本节记录浏览器侧（`src/web/src/files/`）对上文“浏览器有限保留窗口”的实现与其验证边界；服务端与引擎部分见本 ADR 其他章节及[组件文档](../components/web.md)。
+
+| 要求 | 实现位置 | 说明 |
+| --- | --- | --- |
+| 严格 wire 解码 | `history/wire.rs` | 主页、父节点页、分支页、合并页、输入片、字段片各一个 `deny_unknown_fields` DTO；根 64 位十六进制、游标 ≤32768、身份 ≤256、u64 文本、规范顺序、`in_window`／`current`／`more`+cursor／内联上界／`pending_count` 关系在边界核对一次，辅助页须与驻留 file/history/root 一致 |
+| 至多一页驻留 | `history/state.rs` `History` | 一个主页（替换式；替换期间旧页加一次解码暂存）、一个分支页、一个合并页、一个辅助面板（父节点页／输入片／字段片之一）；安装新页即丢弃旧页及派生索引、布局、observer |
+| 每种资源至多一个在途读取 | `history/state.rs` `HistoryReads`、`actions/history.rs` | 四个槽各持一个 `ReadCancellation`，新读取先中止旧读取；迟到响应须同时匹配会话代次、文件、精确上下文、历史代数、槽票据（主读取还须仍为同一 Loading） |
+| 根变化即失效 | `actions/history.rs::mark_stale` | 任一历史读取 409 或已发布动作使旧窗口失效：旧页至多只读，辅助读取取消，依赖窗口的写入入口禁用；最新刷新不附带旧根，刷新失败不恢复旧依据的可写控制 |
+| 草稿只存身份与有限数据 | `merge/mod.rs`、`tags/mod.rs` | 合并草稿：参与分支 ID+捕获头、所选节点 ID+一份 `NodeLabel`；标签草稿：`CheckedNode{node_id, branch, expected, tags, label}`；均记录捕获时的根，提交前核对仍为当前根，否则要求重审，不自动更新 expected head |
+| 动作请求 1 MiB 预算 | `tags/mod.rs::check` | 每次勾选前按固定预留（操作 ID、最长合法 repository/path、最大 add/remove）加各目标实际编码核对 `MAX_JSON_REQUEST_BYTES`，达界拒绝本次新增；提交前再按完整编码请求核对；所选列表每 50 项本地分页 |
+| 编辑与翻页 | `inline.rs`、`actions/history.rs::begin_main` | 编辑器上下文含窗口身份（根+首节点），页替换取消未提交编辑；有打开编辑器时显式翻页／锚定被拒绝并提示先完成或取消 |
+| 窗口外父节点 | `version_tree.rs` | 只对页内边布局；每节点至多一个“父节点未加载 · 跳转”桩（锚定首个缺失父节点）与一个“更多父节点”动作；完整父节点面板按父 ID 排序分页，不为未加载祖先创建 DOM |
+| 空页语义 | `detail.rs` | “尚无版本记录”仅在首页为空且无前后游标时显示；Unloaded／Loading／Failed／Stale 分别提示 |
+
+验证入口（不代表已执行）：宿主原生测试 `cargo test -p web-app --lib` 中的 `history/tests.rs`、`history/state_tests.rs`、`actions/history/tests.rs` 覆盖解码、替换、迟到与中止响应、过期根、编辑守卫、备份与别名上下文、跨页选择及动作字节预算。分支页为可替换前后导航，失败只由显式 Retry 重试，不以响应式效果无限重发。实际 `AbortController`、DOM 上界和根／页替换时旧 observer 释放由 `test/tools/browser-smoke/runner/history_pages` 场景验证；本节不宣称宿主、WASM 或浏览器验收已通过。

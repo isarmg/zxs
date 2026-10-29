@@ -1,11 +1,17 @@
 //! File-manager actions. Views call this facade; private modules separate reads,
 //! mutations and publication recovery without owning UI state.
 mod browse;
+pub(crate) mod history;
 mod mutation;
 mod operation;
 
 pub(crate) use browse::{
     change_page, go_directory, go_root, load_disks, load_entries, open_disk, search, select_entry,
+};
+pub(crate) use history::{
+    close_panel, history_anchor, history_page, load_first_page, load_history_branches,
+    load_history_merges, load_node_field, open_merge_sources_panel, open_parents_panel,
+    refresh as refresh_history,
 };
 pub(crate) use mutation::{
     create_branch, directory_branch, namespace, rename_directory_branch, rename_file_branch,

@@ -206,8 +206,13 @@ fn shared_branch_inputs() -> (State, Branch) {
     (state, branch)
 }
 
+/// Build the bounded branch page exactly as the engine backend does from one
+/// `BranchRecord`-equivalent capture, through the shared wire encoder.
 fn shared_history_wire(case: &str) -> Value {
-    use crate::backend_file_history::{FileHistoryResponse, FileHistorySnapshot, HistoryBranch};
+    use crate::backend_file_history::{
+        Continuation, CursorKind, FileBranchSummary, HistoryBranchesPage, HistoryCursorSeed,
+        PageBudget,
+    };
     let (mut state, mut branch) = shared_branch_inputs();
     if matches!(case, "merged-pending" | "empty-source") {
         state.commits.get_mut("head").unwrap().pending_file_versions = [
@@ -246,6 +251,7 @@ fn shared_history_wire(case: &str) -> Value {
         "full-selection" => Some("full-branch"),
         _ => panic!("unexpected shared branch fixture {case}"),
     };
+    let root = "c61d906894ffed82c4212168ad158ed1817aec73cda4ef3f43a9b44129634c64";
     let branches = if matches!(case, "no-selection" | "full-selection") {
         vec![]
     } else {
@@ -269,25 +275,50 @@ fn shared_history_wire(case: &str) -> Value {
             )
             .unwrap();
         storage_engine::test_support::replace_state(&mut engine, state.clone());
-        vec![HistoryBranch {
+        // The same facts the engine scope's `branch_record` derives: visible
+        // head entry, merged pending source, alias, read-only and node id.
+        let snapshot = capture(&engine, &branch).unwrap();
+        let file = snapshot.file.clone().expect("file branch");
+        let head = &state.commits[&branch.head_commit_id];
+        let pending_count = head
+            .pending_file_versions
+            .keys()
+            .chain(branch.pending_file_versions.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        vec![FileBranchSummary {
+            branch_id: branch.branch_id.clone(),
+            history_tree_id: branch.history_tree_id.clone(),
+            name: branch.name.clone(),
+            head_commit_id: branch.head_commit_id.clone(),
+            fork_commit_id: branch.fork_commit_id.clone(),
+            branch_kind: branch.branch_kind,
+            file_id: "file".into(),
+            file_node_id: branch.file_node_id.clone(),
+            generation: branch.generation,
+            state: branch.state,
+            content: file.content,
+            read_only: file.read_only,
+            alias_of: file.alias_of,
+            node_id: file.node_id,
             current: selected == Some(branch.branch_id.as_str()),
-            branch: capture(&engine, &branch).unwrap(),
+            pending_count,
         }]
     };
-    json_codec::to_value(FileHistoryResponse::from(FileHistorySnapshot {
+    let page = HistoryBranchesPage {
         file_id: "file".into(),
-        repository_id: "repository".into(),
-        path: None,
-        note: String::new(),
-        current_node_id: None,
+        history_tree_id: "history".into(),
+        history_root: root.into(),
         selected_branch_id: selected.map(str::to_owned),
-        versions: vec![],
-        nodes: vec![],
         branches,
-        merges: vec![],
-        content: None,
-    }))
-    .unwrap()
+        continuation: Continuation {
+            direction: crate::backend_file_history::PageDirection::Forward,
+            seed: HistoryCursorSeed::new(CursorKind::Branches, root, "history", "file", &json!({})),
+            more_before: false,
+            more_after: false,
+        },
+    };
+    json_codec::from_slice(page.encode(PageBudget::PROTOCOL).unwrap().body()).unwrap()
 }
 
 #[test]

@@ -1,0 +1,128 @@
+{
+  "deleted": {
+    "anchor": null,
+    "budget": {
+      "limit": 50,
+      "parent_edges": 2048
+    },
+    "context": {
+      "current_node_id": null,
+      "note": "",
+      "path": null,
+      "selected_branch_id": null
+    },
+    "file_id": "file",
+    "history_root": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "history_tree_id": "history",
+    "next_cursor": null,
+    "nodes": [],
+    "previous_cursor": null,
+    "repository_id": "repo"
+  },
+  "live": {
+    "anchor": {
+      "in_page": true,
+      "node_id": "fnode_00000000000000000000000000000002"
+    },
+    "budget": {
+      "limit": 2,
+      "parent_edges": 2048
+    },
+    "context": {
+      "content_state": "LIVE",
+      "current_node_id": "ver_00000000000000000000000000000003",
+      "inherited": false,
+      "materialized": true,
+      "note": "文件备注",
+      "own_version_id": "ver_00000000000000000000000000000003",
+      "path": "docs/报告.txt",
+      "selected_branch_id": "br_00000000000000000000000000000001",
+      "source_version_id": null,
+      "version_id": "ver_00000000000000000000000000000003",
+      "visible_content_state": "LIVE"
+    },
+    "file_id": "file",
+    "history_root": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "history_tree_id": "history",
+    "next_cursor": "7b2276223a312c226b696e64223a226e6f646573222c22726f6f74223a2263646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364222c22686973746f72795f6964223a22686973746f7279222c2266696c655f6964223a2266696c65222c2272657175657374223a2266326636383765653731393134646265626231313663343331633639346330333461363135323965383437663862666265623735303163633465343339313861222c226261636b77617264223a66616c73652c226b6579223a7b2273657175656e6365223a2237222c226e6f64655f6964223a22666e6f64655f3030303030303030303030303030303030303030303030303030303030303032227d7d",
+    "nodes": [
+      {
+        "author": {
+          "bytes": 5,
+          "inline": "admin"
+        },
+        "branch_id": "br_00000000000000000000000000000001",
+        "content_hash": "42f1d0a285aebbec81c29b9e334aaa322f6f24ac7d5f14c3b89aa50a9bc7b2d1",
+        "content_state": "LIVE",
+        "created_at": "2026-10-28T00:00:09Z",
+        "current": true,
+        "download_name": "报告.txt",
+        "kind": "content",
+        "message": {
+          "bytes": 300,
+          "inline": null
+        },
+        "node_id": "ver_00000000000000000000000000000003",
+        "note": "最新",
+        "operation_id": null,
+        "parents": {
+          "cursor": null,
+          "edges": [
+            {
+              "in_window": true,
+              "node_id": "fnode_00000000000000000000000000000002"
+            },
+            {
+              "in_window": false,
+              "node_id": "ver_00000000000000000000000000000001"
+            }
+          ],
+          "status": "complete"
+        },
+        "path": "docs/报告.txt",
+        "previous_path": null,
+        "sequence": "9",
+        "size": "18446744073709551615",
+        "storage_name": "v3_20261028T000009Z_00000003.txt",
+        "tags": [
+          "release"
+        ],
+        "version_id": "ver_00000000000000000000000000000003"
+      },
+      {
+        "author": {
+          "bytes": 5,
+          "inline": "admin"
+        },
+        "branch_id": "br_00000000000000000000000000000001",
+        "content_hash": "cd85637651ec7a557bddd61c5ddd1df21ad8bbbaf6c3c098482b3ed1c1014964",
+        "content_state": "PURGED",
+        "created_at": "2026-10-28T00:00:07Z",
+        "current": false,
+        "download_name": "报告.txt",
+        "kind": "rename",
+        "message": {
+          "bytes": 0,
+          "inline": ""
+        },
+        "node_id": "fnode_00000000000000000000000000000002",
+        "note": "",
+        "operation_id": "op_0000000000000000000000000000000a",
+        "parents": {
+          "cursor": "7b2276223a312c226b696e64223a22706172656e7473222c22726f6f74223a2263646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364222c22686973746f72795f6964223a22686973746f7279222c2266696c655f6964223a2266696c65222c2272657175657374223a2266326636383765653731393134646265626231313663343331633639346330333461363135323965383437663862666265623735303163633465343339313861222c226261636b77617264223a66616c73652c226b6579223a7b226e6f64655f6964223a22666e6f64655f3030303030303030303030303030303030303030303030303030303030303032222c226166746572223a6e756c6c7d7d",
+          "edges": [],
+          "status": "more"
+        },
+        "path": "docs/报告.txt",
+        "previous_path": "报告.txt",
+        "sequence": "7",
+        "size": "4",
+        "storage_name": "v2_20261028T000005Z_00000002.txt",
+        "tags": [],
+        "version_id": "ver_00000000000000000000000000000002"
+      }
+    ],
+    "previous_cursor": null,
+    "repository_id": "repo"
+  }
+}

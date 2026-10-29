@@ -1,25 +1,109 @@
 use super::*;
+use crate::files::history::tests::{node, node_wire, window, window_wire};
+use json_codec::json;
+
 #[test]
-fn obsolete_body_version_graph_fields_are_not_interpreted_as_nodes() {
-    let records = vec![
-        json_codec::json!({"file_id":"file","version_id":"old","created_at":"1970-01-01T00:00:01Z","source_version_ids":[]}),
-        json_codec::json!({"file_id":"file","node_id":"new","version_id":"body","created_at":2,"source_version_ids":["old"]}),
-    ];
-    let parsed = metadata(&records, "file");
-    assert_eq!(parsed.len(), 1);
+fn layout_input_uses_only_in_page_parent_edges_and_never_invents_nodes_for_stubs() {
+    let page = ["new", "old"];
+    let window = window(
+        vec![
+            node_wire(
+                json!({"node_id":"new","version_id":"new","sequence":"3","created_at":"1970-01-01T00:00:03Z",
+                "parents":{"status":"more","edges":[{"node_id":"old","in_window":true},{"node_id":"outside","in_window":false}],"cursor":"cc"}}),
+            ),
+            node("old", 1, &[], &page),
+        ],
+        json!({}),
+    );
+    let parsed = metadata(&window.nodes);
+    assert_eq!(parsed.len(), 2);
     assert_eq!(parsed[0].id, "new");
-    assert!(parsed[0].parents.is_empty());
-    assert!(parsed[0].created.is_empty());
+    assert_eq!(
+        parsed[0].parents,
+        ["old"],
+        "outside-window parents are not edges"
+    );
+    assert_eq!(parsed[0].created, "1970-01-01T00:00:03Z");
+    let tree = layout(&parsed);
+    assert_eq!(ids(&tree), BTreeSet::from(["new".into(), "old".into()]));
+    assert_eq!(tree.edges, vec![("old".into(), "new".into())]);
+    assert_eq!(
+        window.nodes[0].parents.outside_window().collect::<Vec<_>>(),
+        ["outside"]
+    );
+    assert!(window.nodes[0].parents.more());
+}
+
+#[test]
+fn outside_window_parents_collapse_to_one_stub_per_node_whose_jump_anchors_the_first_parent() {
+    let page = ["tip", "mid"];
+    let window = window(
+        vec![
+            node_wire(
+                json!({"node_id":"tip","version_id":"tip","sequence":"3","created_at":"1970-01-01T00:00:03Z",
+                "parents":{"status":"more","edges":[
+                    {"node_id":"a-old","in_window":false},{"node_id":"mid","in_window":true},{"node_id":"z-old","in_window":false}
+                ],"cursor":"cc"}}),
+            ),
+            node("mid", 1, &[], &page),
+        ],
+        json!({}),
+    );
+    let stub = ParentStub::of(&window.nodes[0]).unwrap();
+    assert_eq!(stub.jump.as_deref(), Some("a-old"));
+    assert_eq!(stub.outside, 2, "two missing parents, one stub");
+    assert!(stub.more);
+    assert!(
+        ParentStub::of(&window.nodes[1]).is_none(),
+        "complete in-page parents need no stub"
+    );
+    let only_more = window.nodes[0].clone();
+    let mut only_more = only_more;
+    only_more.parents.edges.retain(|edge| edge.in_window);
+    let stub = ParentStub::of(&only_more).unwrap();
+    assert!(stub.jump.is_none() && stub.more && stub.outside == 0);
+    // The jump issues an anchor request bound to the resident root.
+    Owner::new().with(|| {
+        let mut initial = State {
+            authenticated: true,
+            ..Default::default()
+        };
+        initial.files.selected = Some(crate::files::test_entries::entry(json!({
+            "file_id":"file","repository_id":"repo","repository_path":"docs/a.txt","path":"docs/a.txt","name":"a.txt"
+        })));
+        initial.files.history.install(window);
+        let state = RwSignal::new(initial);
+        let (_, endpoint) = actions::history::begin_main(
+            state,
+            &actions::history::MainRequest::Anchor("a-old".into()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            endpoint,
+            format!(
+                "/api/file-manager/files/file/history?repository_id=repo&path=docs%2Fa.txt&limit=50&anchor_node_id=a-old&history_root={}",
+                crate::files::history::tests::ROOT
+            )
+        );
+    });
 }
 
 #[test]
 fn rename_nodes_reuse_body_versions_but_keep_their_own_ancestry() {
-    let records = vec![
-        json_codec::json!({"file_id":"file","node_id":"ver-one","version_id":"ver-one","parent_node_ids":[],"kind":"content","created_at":"1970-01-01T00:00:01Z"}),
-        json_codec::json!({"file_id":"file","node_id":"fnode-rename","version_id":"ver-one","parent_node_ids":["ver-one"],"kind":"rename","created_at":"1970-01-01T00:00:02Z"}),
-        json_codec::json!({"file_id":"file","node_id":"ver-two","version_id":"ver-two","parent_node_ids":["fnode-rename"],"source_version_ids":["ver-one"],"kind":"content","created_at":"1970-01-01T00:00:03Z"}),
-    ];
-    let tree = layout(&metadata(&records, "file"));
+    let page = ["ver-two", "fnode-rename", "ver-one"];
+    let window = window(
+        vec![
+            node("ver-two", 3, &["fnode-rename"], &page),
+            node_wire(
+                json!({"node_id":"fnode-rename","version_id":"ver-one","kind":"rename","sequence":"2","created_at":"1970-01-01T00:00:02Z","previous_path":"old/a.txt",
+                "parents":{"status":"complete","edges":[{"node_id":"ver-one","in_window":true}],"cursor":null}}),
+            ),
+            node("ver-one", 1, &[], &page),
+        ],
+        json!({}),
+    );
+    let tree = layout(&metadata(&window.nodes));
     assert_eq!(
         tree.levels,
         vec![
@@ -35,24 +119,43 @@ fn rename_nodes_reuse_body_versions_but_keep_their_own_ancestry() {
             ("ver-one".into(), "fnode-rename".into())
         ]
     );
-    let model = Model {
-        file_history: crate::files::history::tests::history(
-            json_codec::json!({"node_id":"fnode-rename","version_id":"ver-one","inherited":true}),
-        ),
-        ..Default::default()
-    };
+    let mut wire = window_wire(
+        vec![node("fnode-rename", 2, &[], &["fnode-rename"])],
+        json!({"context":{"path":"docs/a.txt","note":"","current_node_id":"fnode-rename","selected_branch_id":null,
+            "version_id":"ver-one","materialized":false,"inherited":true,"own_version_id":null,
+            "source_version_id":"ver-one","content_state":"PENDING","visible_content_state":"LIVE"}}),
+    );
+    wire["nodes"][0]["current"] = true.into();
+    let mut model = Model::default();
+    model
+        .history
+        .install(crate::files::history::HistoryWindow::parse(wire, "file").unwrap());
     assert!(inherited_current(&model, "fnode-rename"));
     assert!(!inherited_current(&model, "ver-one"));
 }
 #[test]
 fn current_utc_history_nodes_sort_sibling_tips_by_time_then_identity() {
-    let records = vec![
-        json_codec::json!({"file_id":"file","node_id":"root","version_id":"root","parent_node_ids":[],"kind":"content","created_at":"2025-12-31T23:59:59Z"}),
-        json_codec::json!({"file_id":"file","node_id":"older-rename","version_id":"root","parent_node_ids":["root"],"kind":"rename","created_at":"2026-01-01T00:00:00Z"}),
-        json_codec::json!({"file_id":"file","node_id":"b-newer-body","version_id":"body","parent_node_ids":["root"],"kind":"content","created_at":"2026-01-01T01:00:00Z"}),
-        json_codec::json!({"file_id":"file","node_id":"a-newer-tags","version_id":"body","parent_node_ids":["root"],"kind":"tags","created_at":"2026-01-01T01:00:00Z"}),
+    let page = ["a-newer-tags", "b-newer-body", "older-rename", "root"];
+    let nodes = vec![
+        node_wire(
+            json!({"node_id":"b-newer-body","version_id":"b-newer-body","sequence":"4","created_at":"2026-01-01T01:00:00Z",
+            "parents":{"status":"complete","edges":[{"node_id":"root","in_window":true}],"cursor":null}}),
+        ),
+        node_wire(
+            json!({"node_id":"a-newer-tags","version_id":"b-newer-body","kind":"tags","sequence":"3","created_at":"2026-01-01T01:00:00Z",
+            "parents":{"status":"complete","edges":[{"node_id":"root","in_window":true}],"cursor":null}}),
+        ),
+        node_wire(
+            json!({"node_id":"older-rename","version_id":"root","kind":"rename","previous_path":"x","sequence":"2","created_at":"2026-01-01T00:00:00Z",
+            "parents":{"status":"complete","edges":[{"node_id":"root","in_window":true}],"cursor":null}}),
+        ),
+        node_wire(
+            json!({"node_id":"root","version_id":"root","sequence":"1","created_at":"2025-12-31T23:59:59Z"}),
+        ),
     ];
-    let tree = layout(&metadata(&records, "file"));
+    let _ = page;
+    let window = window(nodes, json!({}));
+    let tree = layout(&metadata(&window.nodes));
     assert_eq!(
         tree.levels,
         vec![
@@ -60,9 +163,9 @@ fn current_utc_history_nodes_sort_sibling_tips_by_time_then_identity() {
             vec!["root"]
         ]
     );
-    let mut reversed = records;
+    let mut reversed = metadata(&window.nodes);
     reversed.reverse();
-    assert_eq!(layout(&metadata(&reversed, "file")), tree);
+    assert_eq!(layout(&reversed), tree);
 }
 
 fn v(id: &str, created: u64, parents: &[&str]) -> Version {
@@ -343,102 +446,89 @@ fn orthogonal_turns_have_circular_arcs_and_short_runs_limit_both_corner_radii() 
     assert!(rounded_route(&[(0., 0.), (0., 1.)], f64::INFINITY).is_none());
 }
 #[test]
-fn metadata_ignores_notes_current_markers_and_foreign_file_records() {
-    let mut records = vec![
-        json_codec::json!({"file_id":"selected","node_id":"a","version_id":"a","created_at":"1970-01-01T00:00:01Z","parent_node_ids":[],"note":"initial"}),
-        json_codec::json!({"file_id":"other","node_id":"foreign","version_id":"foreign","created_at":"1970-01-01T00:00:00Z"}),
-        json_codec::json!({"file_id":"selected","node_id":"b","version_id":"b","created_at":"1970-01-01T00:00:02Z","parent_node_ids":["foreign","a","a",null]}),
-    ];
-    let before = metadata(&records, "selected");
-    records[0]["note"] = "typing stays mounted".into();
-    records[0]["current"] = true.into();
-    assert_eq!(metadata(&records, "selected"), before);
+fn metadata_ignores_notes_current_markers_and_self_or_duplicate_parents() {
+    let page = ["b", "a"];
+    let mut wire = window_wire(
+        vec![
+            node_wire(
+                json!({"node_id":"b","version_id":"b","sequence":"2","created_at":"1970-01-01T00:00:02Z",
+                "parents":{"status":"complete","edges":[{"node_id":"a","in_window":true},{"node_id":"foreign","in_window":false}],"cursor":null}}),
+            ),
+            node("a", 1, &[], &page),
+        ],
+        json!({}),
+    );
+    let before = metadata(&window(wire["nodes"].as_array().unwrap().clone(), json!({})).nodes);
+    wire["nodes"][1]["note"] = "typing stays mounted".into();
+    wire["context"]["current_node_id"] = "a".into();
+    wire["nodes"][1]["current"] = true.into();
+    let refreshed = crate::files::history::HistoryWindow::parse(wire, "file").unwrap();
+    assert_eq!(metadata(&refreshed.nodes), before);
     let tree = layout(&before);
     assert_eq!(tree.edges, vec![("a".into(), "b".into())]);
     assert_eq!(ids(&tree), BTreeSet::from(["a".into(), "b".into()]));
 }
-#[test]
-fn placeholder_records_never_create_tree_nodes_or_source_aliases() {
-    let records = vec![
-        json_codec::json!({"file_id":"selected","node_id":"source","version_id":"source","created_at":"1970-01-01T00:00:01Z"}),
-        json_codec::json!({"file_id":"selected","branch_id":"pending","materialized":false,"content_state":"PENDING","version_id":null,"source_version_id":"source"}),
-        json_codec::json!({"file_id":"selected","node_id":"not-real","version_id":"not-real","materialized":false,"parent_node_ids":["source"]}),
-        json_codec::json!({"file_id":"selected","node_id":"first-write","version_id":"first-write","materialized":true,"created_at":"1970-01-01T00:00:02Z","size":"0","parent_node_ids":["source"]}),
-    ];
-    let tree = layout(&metadata(&records, "selected"));
-    assert_eq!(
-        ids(&tree),
-        BTreeSet::from(["source".into(), "first-write".into()])
-    );
-    assert_eq!(tree.edges, vec![("source".into(), "first-write".into())]);
-}
+
 #[test]
 fn inherited_current_markers_do_not_change_real_version_identity_or_ancestry() {
-    let versions = vec![
-        json_codec::json!({"file_id":"file","node_id":"parent","version_id":"parent","created_at":"1970-01-01T00:00:01Z","current":true}),
-    ];
-    let mut model = Model {
-        file_history: crate::files::history::tests::history(
-            json_codec::json!({"node_id":"parent","version_id":"parent","materialized":false,"inherited":true,"own_version_id":null,"source_version_id":"parent","nodes":versions}),
-        ),
-        ..Default::default()
-    };
-    let before = metadata(history_nodes_ref(&model.file_history), "file");
+    let mut wire = window_wire(
+        vec![node("parent", 1, &[], &["parent"])],
+        json!({"context":{"path":"docs/a.txt","note":"","current_node_id":"parent","selected_branch_id":null,
+            "version_id":"parent","materialized":false,"inherited":true,"own_version_id":null,
+            "source_version_id":"parent","content_state":"PENDING","visible_content_state":"LIVE"}}),
+    );
+    wire["nodes"][0]["current"] = true.into();
+    let mut model = Model::default();
+    model
+        .history
+        .install(crate::files::history::HistoryWindow::parse(wire.clone(), "file").unwrap());
+    let before = metadata(&model.history.window().unwrap().nodes);
     assert!(inherited_current(&model, "parent"));
     assert!(!inherited_current(&model, "other"));
-    crate::files::history::tests::update_metadata(&mut model.file_history, |value| {
-        value["materialized"] = true.into();
-        value["inherited"] = false.into();
-        value["own_version_id"] = "parent".into();
-    });
+    wire["context"]["materialized"] = true.into();
+    wire["context"]["inherited"] = false.into();
+    wire["context"]["own_version_id"] = "parent".into();
+    wire["context"]["source_version_id"] = json_codec::Value::Null;
+    wire["context"]["content_state"] = "LIVE".into();
+    model
+        .history
+        .install(crate::files::history::HistoryWindow::parse(wire, "file").unwrap());
     assert!(!inherited_current(&model, "parent"));
-    assert_eq!(
-        metadata(history_nodes_ref(&model.file_history), "file"),
-        before
-    );
+    assert_eq!(metadata(&model.history.window().unwrap().nodes), before);
     assert_eq!(layout(&before).levels, vec![vec!["parent"]]);
 }
 
 #[test]
-fn history_identity_indexes_payloads_once_and_preserves_node_keys_on_note_refresh() {
+fn a_replaced_window_changes_the_tree_identity_and_keeps_it_for_note_refreshes() {
     Owner::new().with(|| {
-        let count = 128;
-        let nodes = (0..count)
-            .map(|i| json_codec::json!({"node_id":format!("node-{i}"),"note":"original"}))
-            .collect::<Vec<_>>();
-        // Previous per-node full-list projection copied n records for each of n nodes.
-        let baseline_payload_copies: usize = (0..count).map(|_| nodes.clone().len()).sum();
-        assert_eq!(baseline_payload_copies, count * count);
         let state = RwSignal::new(State::default());
-        state.update(|s| {
-            s.files.file_history =
-                crate::files::history::tests::history(json_codec::json!({"nodes":nodes}))
+        let identity = Memo::new(move |_| {
+            state.with(|s| s.files.history.window().map(|window| window.identity()))
         });
-        let history = Memo::new(move |_| state.with(|s| s.files.file_history.clone()));
-        INDEX_COPIES.with(|c| c.set(0));
-        let records = index_projection(history);
-        assert_eq!(records.with(BTreeMap::len), count);
-        assert_eq!(INDEX_COPIES.with(|c| c.get()), count);
-        let keys = records.with(|r| r.keys().cloned().collect::<Vec<_>>());
-        for i in 0..20 {
-            state.update(|s| {
-                s.notice = i.to_string();
-                s.files.checked_nodes.insert("node-1".into());
-            });
-            assert_eq!(records.with(BTreeMap::len), count);
-        }
-        assert_eq!(INDEX_COPIES.with(|c| c.get()), count);
-        state.update(|s| {
-            crate::files::history::tests::update_metadata(&mut s.files.file_history, |value| {
-                value["nodes"][0]["note"] = "updated".into()
-            })
-        });
-        assert_eq!(records.with(|r| r["node-0"]["note"].clone()), "updated");
-        assert_eq!(
-            records.with(|r| r.keys().cloned().collect::<Vec<_>>()),
-            keys
+        assert!(identity.get().is_none());
+        let page = ["n2", "n1"];
+        let first = window(
+            vec![node("n2", 2, &["n1"], &page), node("n1", 1, &[], &page)],
+            json!({}),
         );
-        assert_eq!(INDEX_COPIES.with(|c| c.get()), 2 * count);
+        state.update(|s| s.files.history.install(first.clone()));
+        let before = identity.get().unwrap();
+        // A refresh on the same root with the same first node (note edits,
+        // tag changes elsewhere) keeps the mounted tree.
+        let mut refreshed = first.clone();
+        refreshed.nodes[1].note = "edited".into();
+        state.update(|s| s.files.history.install(refreshed));
+        assert_eq!(identity.get().unwrap(), before);
+        // Paging replaces the tree.
+        state.update(|s| {
+            s.files.history.install(window(
+                vec![node("n1", 1, &[], &["n1"])],
+                json!({"previous_cursor":"aa"}),
+            ))
+        });
+        assert_ne!(identity.get().unwrap(), before);
+        state.update(|s| s.files.history.clear());
+        assert!(identity.get().is_none());
     });
 }
 

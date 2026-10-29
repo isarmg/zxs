@@ -22,7 +22,7 @@ mod integrity_scrub;
 mod operations;
 mod read_projection;
 mod wire;
-use wire::{current_entry_source, field};
+use wire::field;
 pub(crate) use wire::{error, error_response};
 
 pub(crate) fn report_recovery_warnings(engine: &mut Engine) {
@@ -1366,30 +1366,85 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
-    ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+    ) -> Result<crate::FileHistoryPage, crate::ApiError> {
         let engine = self
             .engine
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::file_history(&engine, request)
+        file_manager::history_pages::file_history(&engine, request)
     }
-    fn file_history(
+    fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
-        file: &str,
-    ) -> Result<Vec<storage_contract::FileVersion>, crate::ApiError> {
+        request: crate::ReadNodeParents,
+    ) -> Result<crate::NodeParentsPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        let versions = engine.file_history(file).map_err(error)?;
-        if versions.is_empty() {
-            return Err(ApiError::new(
-                ::http::StatusCode::NOT_FOUND,
-                storage_contract::ErrorCode::NotFound,
-                "file history not found",
-            ));
-        }
-        Ok(versions)
+        file_manager::history_pages::node_parents(&engine, request)
+    }
+    fn file_history_branches(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadHistoryBranches,
+    ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::history_pages::branches(&engine, request)
+    }
+    fn file_history_merges(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadHistoryMerges,
+    ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::history_pages::merges(&engine, request)
+    }
+    fn file_history_merge_inputs(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadMergeInputs,
+    ) -> Result<crate::MergeInputsPage, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::history_pages::merge_inputs(&engine, &request.0)
+    }
+    fn file_history_merge_parents(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadMergeParents,
+    ) -> Result<crate::MergeParentsPage, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::history_pages::merge_parents(&engine, &request.0)
+    }
+    fn file_history_node_field(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadNodeField,
+    ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::history_pages::node_field(&engine, request)
+    }
+    fn file_version_page(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadVersionPage,
+    ) -> Result<crate::VersionPage, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::history_pages::version_page(&engine, request)
+    }
+    fn file_version_sources(
+        &self,
+        identity: &crate::auth::Identity,
+        request: crate::ReadVersionSources,
+    ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::history_pages::version_sources(&engine, &request.0)
     }
     fn topology_snapshot(
         &self,

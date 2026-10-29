@@ -1,6 +1,9 @@
 //! Bound network drain without abandoning admitted blocking storage work.
 use http_routing::{
     Router,
+    extract::{ConnectInfo, Request, connect_info::Connected},
+    middleware::{Next, from_fn},
+    response::Response,
     serve::{Listener, ListenerExt},
 };
 use std::{
@@ -25,7 +28,7 @@ const NETWORK_GRACE: Duration = Duration::from_secs(5);
 #[derive(Default)]
 struct Connections {
     closed: bool,
-    sockets: BTreeMap<RawFd, std::net::TcpStream>,
+    sockets: BTreeMap<RawFd, Arc<std::net::TcpStream>>,
 }
 impl Connections {
     fn close(&mut self) {
@@ -56,13 +59,104 @@ struct DrainListener {
 
 struct DrainStream {
     stream: TcpStream,
-    cancel: Option<std::net::TcpStream>,
+    cancel: Option<Arc<std::net::TcpStream>>,
+    response_socket: Arc<std::net::TcpStream>,
+    write_progress: tokio::sync::watch::Sender<tokio::time::Instant>,
     key: RawFd,
     connections: Arc<Mutex<Connections>>,
 }
+
+/// Exact accepted socket identity; unlike a descriptor number this capability
+/// cannot accidentally shut down a later connection after descriptor reuse.
+#[derive(Clone)]
+pub(crate) struct ResponseConnection {
+    socket: Arc<std::net::TcpStream>,
+    write_progress: tokio::sync::watch::Sender<tokio::time::Instant>,
+}
+
+pub(crate) struct SendDeadline(tokio::task::JoinHandle<()>);
+impl Drop for SendDeadline {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+impl ResponseConnection {
+    pub(crate) fn shutdown(&self) {
+        if let Err(error) = self.socket.shutdown(Shutdown::Both)
+            && error.kind() != io::ErrorKind::NotConnected
+        {
+            tracing::warn!(error = ?error, "HTTP response deadline shutdown failed");
+        }
+    }
+    pub(crate) fn deadline(
+        &self,
+        limits: &crate::TransferLimits,
+        deadline: tokio::time::Instant,
+    ) -> SendDeadline {
+        let connection = self.clone();
+        let idle = limits.idle_timeout;
+        let started = tokio::time::Instant::now();
+        let mut progress = self.write_progress.subscribe();
+        SendDeadline(tokio::spawn(async move {
+            loop {
+                let next = ((*progress.borrow_and_update()).max(started) + idle).min(deadline);
+                tokio::select! {
+                    biased;
+                    _ = tokio::time::sleep_until(next) => {
+                        // A successful socket write may have raced this timer.
+                        if tokio::time::Instant::now() < ((*progress.borrow()).max(started) + idle).min(deadline) {
+                            continue;
+                        }
+                        connection.shutdown();
+                        return;
+                    }
+                    result = progress.changed() => { if result.is_err() { return; } }
+                }
+            }
+        }))
+    }
+}
+
+#[derive(Clone)]
+struct ConnectionInfo {
+    peer: SocketAddr,
+    response: ResponseConnection,
+}
+impl<F>
+    Connected<http_routing::serve::IncomingStream<'_, http_routing::serve::TapIo<DrainListener, F>>>
+    for ConnectionInfo
+where
+    F: FnMut(&mut DrainStream) + Send + 'static,
+{
+    fn connect_info(
+        stream: http_routing::serve::IncomingStream<
+            '_,
+            http_routing::serve::TapIo<DrainListener, F>,
+        >,
+    ) -> Self {
+        Self {
+            peer: *stream.remote_addr(),
+            response: ResponseConnection {
+                socket: stream.io().response_socket.clone(),
+                write_progress: stream.io().write_progress.clone(),
+            },
+        }
+    }
+}
+
+async fn connection_context(
+    ConnectInfo(info): ConnectInfo<ConnectionInfo>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    // Preserve the existing trusted-proxy/authentication peer contract.
+    request.extensions_mut().insert(ConnectInfo(info.peer));
+    request.extensions_mut().insert(info.response);
+    next.run(request).await
+}
 impl DrainStream {
-    // TapIo supplies the standard SocketAddr connect-info implementation while
-    // registering each connection before the HTTP library can spawn its task.
+    // TapIo registers each connection before the HTTP library can spawn its
+    // task; ConnectionInfo retains both its peer and response capability.
     fn register(&mut self) {
         let Some(socket) = self.cancel.take() else {
             return;
@@ -106,9 +200,20 @@ impl AsyncWrite for DrainStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write(cx, buf)
+        let result = Pin::new(&mut self.stream).poll_write(cx, buf);
+        if let Poll::Ready(Ok(written)) = &result
+            && *written > 0
+        {
+            self.write_progress
+                .send_replace(tokio::time::Instant::now());
+        }
+        result
     }
     fn is_write_vectored(&self) -> bool {
+        // TcpStream supports vectored writes. The current HTTP/1 server uses
+        // its default writev=None/pipeline_flush=false and therefore queues
+        // owner-backed Bytes until written, rather than flattening/copying
+        // them. History response leases rely on this exact transport path.
         self.stream.is_write_vectored()
     }
     fn poll_write_vectored(
@@ -116,7 +221,14 @@ impl AsyncWrite for DrainStream {
         cx: &mut Context<'_>,
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write_vectored(cx, bufs)
+        let result = Pin::new(&mut self.stream).poll_write_vectored(cx, bufs);
+        if let Poll::Ready(Ok(written)) = &result
+            && *written > 0
+        {
+            self.write_progress
+                .send_replace(tokio::time::Instant::now());
+        }
+        result
     }
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.stream).poll_flush(cx)
@@ -135,10 +247,12 @@ impl Listener for DrainListener {
             let (stream, address) = Listener::accept(&mut self.listener).await;
             let prepared = (|| {
                 let stream = stream.into_std()?;
-                let cancel = stream.try_clone()?;
+                let cancel = Arc::new(stream.try_clone()?);
                 let key = cancel.as_raw_fd();
                 Ok::<_, io::Error>(DrainStream {
                     stream: TcpStream::from_std(stream)?,
+                    response_socket: cancel.clone(),
+                    write_progress: tokio::sync::watch::channel(tokio::time::Instant::now()).0,
                     cancel: Some(cancel),
                     key,
                     connections: self.connections.clone(),
@@ -183,7 +297,8 @@ async fn serve_with_grace(
     let server = async move {
         http_routing::serve(
             listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
+            app.layer(from_fn(connection_context))
+                .into_make_service_with_connect_info::<ConnectionInfo>(),
         )
         .with_graceful_shutdown(async move {
             match stopped.await {

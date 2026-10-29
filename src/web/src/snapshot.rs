@@ -41,5 +41,13 @@ impl<T: Clone> DerefMut for Snapshot<T> {
         Arc::make_mut(&mut self.0)
     }
 }
+impl<T> Snapshot<T> {
+    /// Observe whether other readers still retain this allocation; tests use
+    /// it to prove that replaced pages are freed.
+    #[cfg(test)]
+    pub(crate) fn weak(&self) -> std::sync::Weak<T> {
+        Arc::downgrade(&self.0)
+    }
+}
 #[cfg(test)]
 thread_local! { pub(crate) static CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }

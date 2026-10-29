@@ -1,117 +1,260 @@
 use super::*;
+use json_codec::json;
+
+fn query(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+fn root() -> String {
+    "ef".repeat(32)
+}
+
+fn node_cursor(root: &str, backward: bool) -> String {
+    NodeCursor::encode(
+        &HistoryCursorSeed::new(CursorKind::Nodes, root, "history", "file", &json!({})),
+        backward,
+        NodeCursorKey {
+            sequence: 3,
+            node_id: "node".into(),
+        },
+    )
+    .unwrap()
+}
 
 #[test]
-fn history_wire_keeps_numeric_facts_sparse_disposition_and_field_whitelist() {
-    let data = Arc::new(HistoryVersionData {
-        version_id: "version".into(),
-        file_id: "file".into(),
-        source_version_ids: vec![],
-        branch_id: None,
-        created_at: "2026-01-01T00:00:00Z".into(),
-        message: String::new(),
-        size: u64::MAX,
-        content_state: None,
-        content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"body")),
-        note: String::new(),
-        download_name: "report.txt".into(),
-        storage_name: "stored".into(),
-    });
-    let snapshot = FileHistorySnapshot {
-        file_id: "file".into(),
-        repository_id: "repository".into(),
-        path: None,
-        note: String::new(),
-        current_node_id: None,
-        selected_branch_id: None,
-        versions: vec![HistoryVersion {
-            data: Arc::clone(&data),
-            sequence: u64::MAX,
-            current: false,
-        }],
-        nodes: vec![HistoryNode::Content {
-            version: HistoryVersion {
-                data,
-                sequence: 7,
-                current: true,
-            },
-            node_id: "version".into(),
-            kind: ContentNodeKind::Content,
-            tags: BTreeSet::new(),
-            parent_node_ids: vec![],
-            path: "report.txt".into(),
-            previous_path: None,
-        }],
-        branches: vec![],
-        merges: vec![],
-        content: None,
-    };
-    let wire = storage_contract::strict_json(
-        &json_codec::to_vec(&FileHistoryResponse::from(snapshot)).unwrap(),
+fn file_history_request_is_strict_about_fields_limits_cursors_and_anchors() {
+    let request = ReadFileHistory::parse("file".into(), BTreeMap::new()).unwrap();
+    assert_eq!(request.limit, limits::NODES_DEFAULT);
+    assert!(matches!(request.position, NodePosition::First));
+    assert!(request.root.is_none() && request.location.is_none());
+    for (key, value, message) in [
+        ("unused", "1", "unknown field unused"),
+        ("limit", "0", "limit must be between 1 and 200"),
+        ("limit", "201", "limit must be between 1 and 200"),
+        ("limit", "-1", "canonical unsigned decimal"),
+        ("limit", "01", "canonical unsigned decimal"),
+        (
+            "history_root",
+            "abc",
+            "history_root must be 64 lowercase hexadecimal digits",
+        ),
+        (
+            "repository_id",
+            "repo",
+            "repository_id and path must be supplied together",
+        ),
+        (
+            "path",
+            "x.txt",
+            "repository_id and path must be supplied together",
+        ),
+    ] {
+        let error = ReadFileHistory::parse("file".into(), query(&[(key, value)])).unwrap_err();
+        assert_eq!(
+            error.status,
+            ::http::StatusCode::BAD_REQUEST,
+            "{key}={value}"
+        );
+        assert!(
+            error.message.contains(message),
+            "{key}={value}: {}",
+            error.message
+        );
+    }
+    assert!(ReadFileHistory::parse(String::new(), BTreeMap::new()).is_err());
+    assert!(ReadFileHistory::parse("f".repeat(257), BTreeMap::new()).is_err());
+    let cursor = node_cursor(&root(), true);
+    let conflict = ReadFileHistory::parse(
+        "file".into(),
+        query(&[("cursor", &cursor), ("anchor_node_id", "node")]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        conflict.message,
+        "cursor and anchor_node_id are mutually exclusive"
+    );
+    let different_root = ReadFileHistory::parse(
+        "file".into(),
+        query(&[("cursor", &cursor), ("history_root", &"01".repeat(32))]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        different_root.message,
+        "history_root differs from the cursor's history root"
+    );
+    let same_root = ReadFileHistory::parse(
+        "file".into(),
+        query(&[("cursor", &cursor), ("history_root", &root())]),
     )
     .unwrap();
-    assert!(wire["selected_branch_id"].is_null());
-    assert!(wire["current_node_id"].is_null());
-    assert!(wire.get("version_id").is_none());
-    // The old Value projection overwrote sequence/current for its content node.
-    assert_eq!(wire["nodes"][0]["sequence"], "7");
-    assert_eq!(wire["nodes"][0]["current"], true);
-    assert_eq!(wire["versions"][0]["current"], false);
-    let version = &wire["versions"][0];
-    assert_eq!(version["sequence"], u64::MAX.to_string());
-    assert_eq!(version["size"], u64::MAX.to_string());
-    assert_eq!(version["content_state"], "LIVE");
-    assert_eq!(version["message"], "");
-    assert!(version["branch_id"].is_null());
-    assert_eq!(
-        version
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        vec![
-            "branch_id",
-            "content_hash",
-            "content_state",
-            "created_at",
-            "current",
-            "download_name",
-            "file_id",
-            "message",
-            "note",
-            "sequence",
-            "size",
-            "source_version_ids",
-            "storage_name",
-            "version_id",
-        ]
+    assert_eq!(same_root.root.unwrap().as_str(), root());
+    let from_cursor = ReadFileHistory::parse("file".into(), query(&[("cursor", &cursor)])).unwrap();
+    assert_eq!(from_cursor.root.as_ref().unwrap().as_str(), root());
+    assert!(matches!(from_cursor.position, NodePosition::Cursor(cursor) if cursor.backward));
+    let anchored = ReadFileHistory::parse(
+        "file".into(),
+        query(&[
+            ("anchor_node_id", "node"),
+            ("limit", "200"),
+            ("history_root", &root()),
+        ]),
+    )
+    .unwrap();
+    assert!(matches!(anchored.position, NodePosition::Anchor(id) if id.as_str() == "node"));
+    assert_eq!(anchored.limit, 200);
+    let bad_cursor = ReadFileHistory::parse("file".into(), query(&[("cursor", "zz")])).unwrap_err();
+    assert_eq!(bad_cursor.code, storage_contract::ErrorCode::InvalidCursor);
+    let located = ReadFileHistory::parse(
+        "file".into(),
+        query(&[("repository_id", "repo"), ("path", "Cafe\u{301}/FILE.txt")]),
+    )
+    .unwrap();
+    assert_eq!(located.location().unwrap().1.key(), "café/file.txt");
+    assert!(
+        ReadFileHistory::parse(
+            "file".into(),
+            query(&[("repository_id", "repo"), ("path", "../file.txt")])
+        )
+        .is_err()
     );
 }
 
 #[test]
-fn file_history_context_requires_a_paired_lookup_path() {
+fn sub_collection_requests_require_a_root_and_bound_their_limits_and_offsets() {
+    let error = ReadHistoryBranches::parse("file".into(), BTreeMap::new()).unwrap_err();
+    assert_eq!(error.message, "history_root is required (query or cursor)");
+    let branches =
+        ReadHistoryBranches::parse("file".into(), query(&[("history_root", &root())])).unwrap();
+    assert_eq!(branches.0.limit, limits::BRANCHES_DEFAULT);
     assert!(
-        ReadFileHistory::parse("file".into(), None, None)
-            .unwrap()
-            .location
-            .is_none()
-    );
-    for (repository, path) in [(Some("repo".into()), None), (None, Some("file.txt".into()))] {
-        assert!(ReadFileHistory::parse("file".into(), repository, path).is_err());
-    }
-    let request = ReadFileHistory::parse(
-        "file".into(),
-        Some("repo".into()),
-        Some("Cafe\u{301}/FILE.txt".into()),
-    )
-    .unwrap();
-    assert_eq!(request.location().unwrap().1.key(), "café/file.txt");
-    assert!(
-        ReadFileHistory::parse(
+        ReadHistoryBranches::parse(
             "file".into(),
-            Some("repo".into()),
-            Some("../file.txt".into())
+            query(&[("history_root", &root()), ("limit", "501")])
         )
         .is_err()
     );
+    let merges = ReadHistoryMerges::parse(
+        "file".into(),
+        query(&[("history_root", &root()), ("limit", "200")]),
+    )
+    .unwrap();
+    assert_eq!(merges.0.limit, 200);
+    assert!(
+        ReadHistoryMerges::parse(
+            "file".into(),
+            query(&[("history_root", &root()), ("limit", "201")])
+        )
+        .is_err()
+    );
+    let parents = ReadNodeParents::parse(
+        "file".into(),
+        "node".into(),
+        query(&[("history_root", &root())]),
+    )
+    .unwrap();
+    assert_eq!(parents.collection.limit, limits::PARENTS_DEFAULT);
+    assert_eq!(parents.node_id.as_str(), "node");
+    assert!(
+        ReadNodeParents::parse(
+            "file".into(),
+            String::new(),
+            query(&[("history_root", &root())])
+        )
+        .is_err()
+    );
+    let slice = ReadIndexedSlice::parse(
+        "file".into(),
+        "merge_id",
+        "merge".into(),
+        query(&[
+            ("history_root", &root()),
+            ("offset", "7"),
+            ("limit", "1000"),
+        ]),
+    )
+    .unwrap();
+    assert_eq!((slice.offset, slice.limit), (7, 1000));
+    assert!(
+        ReadIndexedSlice::parse(
+            "file".into(),
+            "merge_id",
+            "merge".into(),
+            query(&[("history_root", &root()), ("limit", "1001")])
+        )
+        .is_err()
+    );
+    assert!(
+        ReadIndexedSlice::parse(
+            "file".into(),
+            "merge_id",
+            "merge".into(),
+            query(&[("history_root", &root()), ("offset", "-1")])
+        )
+        .is_err()
+    );
+    assert!(
+        ReadIndexedSlice::parse(
+            "file".into(),
+            "merge_id",
+            "merge".into(),
+            query(&[("history_root", &root()), ("cursor", "00")])
+        )
+        .is_err()
+    );
+    let field = ReadNodeField::parse(
+        "file".into(),
+        "node".into(),
+        "author".into(),
+        query(&[("history_root", &root())]),
+    )
+    .unwrap();
+    assert_eq!(field.max_bytes, limits::FIELD_DEFAULT_BYTES);
+    assert_eq!(field.field, NodeFieldName::Author);
+    let unknown = ReadNodeField::parse(
+        "file".into(),
+        "node".into(),
+        "path".into(),
+        query(&[("history_root", &root())]),
+    )
+    .unwrap_err();
+    assert_eq!(unknown.status, ::http::StatusCode::NOT_FOUND);
+    assert_eq!(unknown.message, "unknown field");
+    assert!(
+        ReadNodeField::parse(
+            "file".into(),
+            "node".into(),
+            "message".into(),
+            query(&[("history_root", &root()), ("max_bytes", "0")])
+        )
+        .is_err()
+    );
+    assert!(
+        ReadNodeField::parse(
+            "file".into(),
+            "node".into(),
+            "message".into(),
+            query(&[("history_root", &root()), ("max_bytes", "1048577")])
+        )
+        .is_err()
+    );
+    let versions = ReadVersionPage::parse("file".into(), BTreeMap::new()).unwrap();
+    assert!(versions.root().is_none());
+    assert_eq!(versions.limit, limits::VERSIONS_DEFAULT);
+    assert!(ReadVersionPage::parse("file".into(), query(&[("limit", "501")])).is_err());
+    assert!(ReadVersionPage::parse("file".into(), query(&[("unused", "yes")])).is_err());
+    let rooted =
+        ReadVersionPage::parse("file".into(), query(&[("history_root", &root())])).unwrap();
+    assert_eq!(rooted.root().unwrap().as_str(), root());
+}
+
+#[test]
+fn unrooted_anchor_is_rejected_and_first_version_page_has_no_fake_root() {
+    let error =
+        ReadFileHistory::parse("file".into(), query(&[("anchor_node_id", "node")])).unwrap_err();
+    assert_eq!(error.message, "anchor_node_id requires history_root");
+    let first = ReadVersionPage::parse("file".into(), BTreeMap::new()).unwrap();
+    assert!(first.root.is_none());
 }

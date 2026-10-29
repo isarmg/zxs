@@ -120,7 +120,7 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 | `/api/workspaces/{workspace}/namespace-operations` | POST mkdir/rename/delete/delete_tree |
 | `/api/workspaces/{workspace}/seal`、`/commit`、`/abort` | POST 封存、原子发布、显式放弃 |
 | `/api/versions/{version}`、`/placement`、`/checksums`、`/content` | GET 元信息/路由/校验表/内容，内容支持 HEAD 与单段 Range |
-| `/api/files/{file}/history`、`/api/commits/{commit}` | GET 文件历史或提交 |
+| `/api/files/{file}/history`、`/history/versions/{version}/sources`、`/api/commits/{commit}` | GET 有界正文版本页、版本来源分片或提交 |
 | `/api/history-trees/{history}/graph`、`/merge-links` | GET 图、POST 仅关联的合并链接 |
 | `/api/history-trees/{history}/purge-plans`、`/split-plans`、`/historical-save-plans` | POST 预览，尚不执行变更 |
 | `/api/plans/{plan}`、`/commit`、`/cancel` | GET 已保存预览、POST 按摘要执行或取消 |
@@ -274,33 +274,37 @@ HTTP spool 必须由服务身份拥有且权限为 `0700`；现有目录不会�
 
 HTTP token 检查、授权后端和 managed 引擎准入读取[已提交鉴权快照](../architecture/auth-committed-snapshots.md)，不等待凭据写序列的 fsync。读写请求仍在引擎锁后复核当前会话，保留注销、改密、到期及不确定权威故障关闭；密码哈希与持久写仍有各自的有界阻塞任务准入。
 
-### 文件历史类型化读边界
+### 文件历史有界读边界
 
-`GET /api/file-manager/files/{file}/history` 通过 `ReadFileHistory` 和
-`Backend::file_history_snapshot` 读取，不再进入字符串／JSON action dispatcher。
-HTTP query 只接收 `repository_id`、`path`；二者成对解析，路径使用允许规范等价拼写的
-`LookupPath`，核心查询复用其 key。未知字段及静态格式错误在获得阻塞槽后、调用 Backend
-前拒绝；中间件仍先认证，合法请求在 AuthorizedBackend 和 Engine 锁内重新检查当前授权。
-阻塞任务独立持有准入许可和认证所有者，HTTP future 取消不提前释放其所需资源。
-此静态错误优先级不同于旧 dispatcher 在查询字段前先查询文件的顺序。
+文件历史按 [ADR 0009](../adr/0009-bounded-file-history-windows.md) 只提供有界页：主节点页
+`GET /api/file-manager/files/{file}/history` 及其 `nodes/{node}/parents`、
+`nodes/{node}/fields/{field}`、`branches`、`merges`、`merges/{merge}/inputs`、
+`merges/{merge}/parents`，以及高级正文版本页 `GET /api/files/{file}/history` 和
+`versions/{version}/sources`。路由处理在 `http_file_history.rs`，请求类型、游标和 wire
+投影在 `backend_file_history.rs` 及其 `cursors`／`wire` 子模块，引擎后端读取在
+`engine_backend/file_manager/history_pages.rs`，选页由引擎 `business/file_history_pages.rs`
+完成。没有无参数整包分支，也没有第二个整包 HTTP 出口。
 
-锁内只收集该文件的投影：版本数字保持 `u64`，内容节点与版本行共享不可变
-`Arc<HistoryVersionData>`，不再 clone／修改 JSON 对象。分支复用 `BranchSnapshot`，
-当前正文复用 `ContentDispositionSnapshot`；merge 映射没有共享记录句柄，因此只复制
-选中的 merge，并在响应层显式列出字段。锁外构造响应及序列化，整数文本编码仅属于 wire。
-当前条目保持借用，不复制整个 namespace／State。现有文件历史排序、首次 commit 扫描、
-节点路径 memoization 与图边过滤算法不变，未引入跨请求缓存或新的同步／fsync。
+- **请求边界**：原始查询在 percent 解码及 Map 分配前限制为 128 KiB／8 个字段，重复字段在提取时拒绝。
+  每个路由只接受登记的查询字段，未知字段与越界 limit/offset 在调用 Backend 前拒绝；游标解码为对应集合的类型、解析全部字段并
+  绑定路径中的文件，跨文件游标是 `400`。中间件先认证，AuthorizedBackend 和 Engine 锁内
+  再检查当前授权；阻塞任务独立持有准入许可与认证所有者。
+- **锁内**：解析文件归属与当前上下文、取得精确历史根并与请求观察到的根比较
+  （不同为 `409 HISTORY_CHANGED`），然后按稳定键选页，只复制本页记录。授权失败先于根比较，
+  不以冲突暴露未授权对象的变化。
+- **锁外**：已选记录按遍历方向逐条受限编码，在写入前检查余量，按 `MAX_HISTORY_PAGE_BYTES` 预留外壳与游标空间准入，
+  超额记录留给下一页；反向取最近的规范后缀。响应由已编码字节直接拼接，只有边标志改变的本页记录重新编码。字节截断后父边的
+  `in_window` 按实际驻留节点重新判定（每次翻转只多一个字节，已在预留中计入）。
+- **发送所有权**：同一普通 backend slot 覆盖捕获、编码、Body 与最后一个传输拥有的 `Bytes::from_owner` 块；每块最多 64 KiB，Body EOF 不提前归还许可。
+  `serve_with_grace` 注入准确 socket 能力及原有 peer ConnectInfo，`DrainStream` 的实际 `poll_write`／`poll_write_vectored` 成功推进空闲时钟；租约保留既有 idle／total 期限，停滞时关闭该 socket，最后块正常释放则撤销定时器，不关闭健康 keepalive。
+  此证明依赖当前产品唯一传输：Tokio TCP 支持 vectored write，默认 HTTP/1 builder 未启用 pipeline flush 或 writev=false，因此使用保留块所有者的 Queue；本地 transport 未启用 HTTP/2。未来增加 Flatten、TLS 包装或其他协议时必须重证实际 flush 所有权，不能只复用 Body 结论。无 socket 的嵌入式 Router 使用 Body 进度期限。
+- **类型与根**：内部信任边界产生的请求／游标；仅重新核对动态授权、精确根及真实边界成员。父预览游标特许改变合法页大小，其余集合绑定页大小；未提供根的精确节点跳转拒绝。仅本地计划安装保留准确已发布目录绑定，任意 State 更换不能获此特许。
 
-无当前路径、无备注、未选分支、历史版本无首次 commit 均保留原有缺省语义：
-路径／选择为 null、备注／message 为空串、无当前路径不输出当前正文属性。
-稀疏 content-state 缺席的展示值仍为 `LIVE`，显式状态仍使用其原 token。
-版本按原次序倒序，统一节点按 sequence 降序及 node ID 定序；不以展示顺序创造 ancestry。
-这是读模型迁移，不改变持久化 `Commit.kind`、事务格式、内容读取证明或授权规则。
-
-测试入口：`backend_file_history` 的无 core wire／query 单测、
-`file_manager::history_nodes` 的固定图与脱离当前 namespace 场景、真实 HTTP `history_query`、
-`authorized_backend` 的参数／结果／错误转发、排队撤权四路与无凭据矩阵，以及阻塞 panic／
-取消槽位测试。源代码接线不等于这些测试已经执行；执行结果由对应验证提交记录。
+测试入口：`backend_file_history` 的请求、游标与 wire 单测（含最大合法记录、截断、共享
+Web 窗口夹具 `test/fixtures/file-history-window.json`）、`engine_backend/file_manager`
+的页投影与授权矩阵、`http_shutdown` 的实际非读取 TCP／健康 keepalive 租约回归、真实 HTTP `history_query`／`history_pages` 集成，以及
+`authorized_backend` 的转发与撤权矩阵。源代码接线不等于这些测试已经执行；执行结果由
+对应验证提交记录。
 
 ### 活动历史投影边界
 

@@ -30,7 +30,7 @@ pub(super) fn metadata_edit(browser: &Browser) -> Result<()> {
     // history fixture, so horizontal position is meaningful at desktop widths.
     browser.script(r#"
         const original=window.fetch;
-        const probe=window.__zxsDetailRefresh={historyResponses:0,savedListingSeen:false,restore:()=>window.fetch=original};
+        const probe=window.__zxsDetailRefresh={historyResponses:0,savedListingSeen:false,roots:[],requests:[],restore:()=>window.fetch=original};
         window.fetch=async function(...args){
             const request=args[0],url=new URL(typeof request==='string'?request:request.url,location.href);
             const response=await original.apply(this,args);
@@ -40,11 +40,15 @@ pub(super) fn metadata_edit(browser: &Browser) -> Result<()> {
                 if(listing.selected_entry?.note==='browser metadata note')probe.savedListingSeen=true;
             }
             if(!/^\/api\/file-manager\/files\/[^/]+\/history$/.test(url.pathname))return response;
+            probe.requests.push(url.searchParams.get('history_root'));
             const history=await response.json();
+            probe.roots.push(history.history_root);
             const base=history.nodes.find(node=>node.version_id&&node.node_id);
             if(!base)throw new Error('real node required for detail refresh fixture');
             history.nodes.push(...Array.from({length:12},(_,index)=>({...base,node_id:'detail-refresh-tip-'+index,
-                parent_node_ids:[base.node_id],current:false,materialized:true,inherited:false,kind:'content'})));
+                version_id:'detail-refresh-tip-'+index,sequence:String(BigInt(base.sequence)+BigInt(index)+1n),
+                parents:{status:'complete',edges:[{node_id:base.node_id,in_window:true}],cursor:null},current:false,kind:'content'})));
+            history.nodes.sort((a,b)=>BigInt(a.sequence)===BigInt(b.sequence)?a.node_id.localeCompare(b.node_id):BigInt(a.sequence)>BigInt(b.sequence)?-1:1);
             probe.historyResponses++;
             return new Response(JSON.stringify(history),{status:200,headers:{'Content-Type':'application/json'}});
         };return true;
@@ -60,7 +64,7 @@ pub(super) fn metadata_edit(browser: &Browser) -> Result<()> {
             if browser.script(r#"
                 const probe=window.__zxsDetailRefresh,tree=document.querySelector('.zxs-version-tree-scroll');
                 tree.scrollLeft=tree.scrollWidth-tree.clientWidth;
-                probe.anchor={tree,canvas:tree.querySelector('.zxs-version-tree-canvas'),
+                probe.anchor={detail:document.querySelector('.zxs-entry-content'),root:probe.roots.at(-1),tree,canvas:tree.querySelector('.zxs-version-tree-canvas'),
                     node:tree.querySelector('.zxs-version-node'),control:tree.querySelector('.zxs-version-note-action'),
                     left:tree.scrollLeft,histories:probe.historyResponses};
                 return probe.anchor.left>100;
@@ -72,19 +76,20 @@ pub(super) fn metadata_edit(browser: &Browser) -> Result<()> {
             browser.keys(&input, "browser metadata note")?;
             browser.keys(&input, "\u{e007}")?;
             wait_for(
-                "file note transaction and selected-entry refresh preserve detail controls",
+                "file note transaction reads a fresh root and releases the previous tree owner",
                 || {
                     if browser.script(r#"
                     const probe=window.__zxsDetailRefresh,a=probe.anchor;
                     const note=Array.from(document.querySelectorAll('button')).find(e=>['Edit file note','编辑文件备注'].includes(e.getAttribute('aria-label')));
                     return probe.savedListingSeen&&probe.historyResponses>a.histories&&note&&!note.disabled
                         &&!document.querySelector('.zxs-inline-input')&&note.textContent.includes('browser metadata note')
-                        &&a.tree===document.querySelector('.zxs-version-tree-scroll')&&a.canvas.isConnected
-                        &&a.node.isConnected&&a.control.isConnected
-                        &&a.control===a.node.querySelector('.zxs-version-note-action')
-                        &&Math.abs(a.tree.scrollLeft-a.left)<=1;
+                        &&a.detail===document.querySelector('.zxs-entry-content')
+                        &&probe.roots.at(-1)!==a.root&&probe.requests.at(-1)===null
+                        &&a.tree!==document.querySelector('.zxs-version-tree-scroll')&&!a.canvas.isConnected
+                        &&!a.node.isConnected&&!a.control.isConnected
+                        &&document.querySelectorAll('.zxs-version-node').length===14;
                 "#)? == true { Ok(()) }
-                else { Err("metadata refresh replaced detail controls or reset history scrolling".into()) }
+                else { Err("metadata refresh did not install a fresh root or release the previous tree".into()) }
                 },
             )?;
             Ok(())
@@ -105,7 +110,7 @@ pub(super) fn metadata_edit(browser: &Browser) -> Result<()> {
         else { Err("persisted note or seeded version tree missing".into()) }
     })?;
     println!(
-        "PASS real metadata save/listing refresh preserves detail controls and wide-tree scroll; persisted note survives navigation (wide history is synthetic)"
+        "PASS real note save discovers a fresh root without HISTORY_CHANGED and releases old tree ownership; persisted note survives navigation (wide history is synthetic)"
     );
     Ok(())
 }

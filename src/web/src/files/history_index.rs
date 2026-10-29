@@ -1,77 +1,65 @@
-//! Page-owned lookup positions borrow records from the existing immutable snapshot.
-use super::{
-    history::{FileBranch, FileHistory},
-    model::{history_node_id, history_nodes_ref},
-};
+//! Page-owned lookup positions borrow records from the resident window. Only
+//! the resident page is indexed; a replaced page drops its index with it.
+use super::history::{FileBranch, HistoryNodeSummary, HistoryWindow};
 use crate::{snapshot::Snapshot, ui::State};
-use json_codec::Value;
 use std::collections::BTreeMap;
 use web_interface::prelude::*;
 
 #[derive(PartialEq)]
 pub(super) struct HistoryIndex {
-    pub(super) snapshot: Snapshot<FileHistory>,
+    /// The resident window, current or stale; none while unloaded/loading.
+    window: Option<Snapshot<HistoryWindow>>,
     nodes: BTreeMap<String, usize>,
-    branches: BTreeMap<String, usize>,
-    versions: BTreeMap<String, usize>,
 }
 
 impl HistoryIndex {
-    pub(super) fn new(snapshot: Snapshot<FileHistory>) -> Self {
-        let mut nodes = BTreeMap::new();
-        for (position, node) in history_nodes_ref(&snapshot).iter().enumerate() {
-            // Keep the same first-match semantics as the previous linear lookup.
-            nodes.entry(history_node_id(node)).or_insert(position);
-        }
-        let mut branches = BTreeMap::new();
-        for (position, branch) in snapshot.branches().iter().enumerate() {
-            branches.insert(branch.id().to_owned(), position);
-        }
-        let mut versions = BTreeMap::new();
-        for (position, version) in snapshot["versions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
-            if let Some(id) = version["version_id"].as_str() {
-                versions.entry(id.to_owned()).or_insert(position);
-            }
-        }
-        Self {
-            snapshot,
-            nodes,
-            branches,
-            versions,
-        }
+    pub(super) fn new(window: Option<Snapshot<HistoryWindow>>) -> Self {
+        let nodes = window
+            .as_deref()
+            .map(|window| {
+                window
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(position, node)| (node.node_id.clone(), position))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self { window, nodes }
     }
 
-    pub(super) fn node(&self, id: &str) -> Option<(usize, &Value)> {
+    pub(super) fn node(&self, id: &str) -> Option<(usize, &HistoryNodeSummary)> {
+        let window = self.window.as_deref()?;
         self.nodes
             .get(id)
-            .map(|&position| (position, &history_nodes_ref(&self.snapshot)[position]))
+            .map(|&position| (position, &window.nodes[position]))
     }
 
-    pub(super) fn version(&self, id: &str) -> Option<&Value> {
-        self.versions
-            .get(id)
-            .map(|&position| &self.snapshot["versions"][position])
+    /// Node identities of the resident page.
+    #[cfg(test)]
+    pub(super) fn node_ids(&self) -> impl Iterator<Item = &str> {
+        self.nodes.keys().map(String::as_str)
     }
+}
 
-    pub(super) fn branch(&self, id: &str) -> Option<&FileBranch> {
-        self.branches
-            .get(id)
-            .map(|&position| &self.snapshot.branches()[position])
-    }
+/// Branch lookups come from the resident branch page, never from the window.
+pub(super) fn branch<'a>(state: &'a State, id: &str) -> Option<&'a FileBranch> {
+    state.files.history.branch_page()?.branch(id)
 }
 
 #[derive(Clone, Copy)]
 struct SharedHistory(Memo<HistoryIndex>);
 
+fn resident(state: &State) -> Option<Snapshot<HistoryWindow>> {
+    state.files.history.window().cloned()
+}
+
 pub(super) fn provide(state: RwSignal<State>) {
-    let snapshot = Memo::new(move |_| state.with(|s| s.files.file_history.clone()));
+    // Snapshot equality is allocation identity: unrelated State updates and
+    // auxiliary pages do not rebuild the node index.
+    let window = Memo::new(move |_| state.with(resident));
     provide_context(SharedHistory(Memo::new(move |_| {
-        HistoryIndex::new(snapshot.get())
+        HistoryIndex::new(window.get())
     })));
 }
 

@@ -1,14 +1,14 @@
-//! File history ancestry, including body and path nodes, laid out once per identity/edge change. Notes never
-//! participate in layout keys, so refreshing metadata preserves active editors.
-use super::model::{
-    Model, history_node_id, history_nodes_ref, inherited_content, materialized, visible_content,
-};
+//! File history ancestry, including body and path nodes, laid out once per
+//! identity/edge change. A new published root replaces the entire tree owner;
+//! local editor text does not participate in layout keys.
+//!
+//! The layout input is the resident page only: edges between page nodes are
+//! drawn; parents outside the page are one stub per node with an anchor jump,
+//! never one DOM node per unloaded ancestor.
+use super::history::{HistoryNodeSummary, HistoryWindow, NodeField, NodeKind, state::AuxPanel};
+use super::model::Model;
 use super::{actions, branch, inline};
-use crate::{
-    format,
-    ui::{State, text},
-};
-use json_codec::Value;
+use crate::{format, snapshot::Snapshot, ui::State};
 use std::{
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
@@ -32,40 +32,25 @@ struct Layout {
     edges: Vec<(String, String)>,
 }
 
-fn metadata(records: &[Value], file_id: &str) -> Vec<Version> {
-    let mut versions = records
+/// Layout input from the resident page: in-page parent edges only. Parents
+/// outside the window are rendered as stubs by the node view, not as nodes.
+fn metadata(nodes: &[HistoryNodeSummary]) -> Vec<Version> {
+    let mut versions = nodes
         .iter()
-        .filter_map(|record| {
-            let id = record["node_id"].as_str().unwrap_or_default().to_owned();
-            let owner = text(record, &["file_id"]);
-            if id.is_empty()
-                || !(materialized(record)
-                    || (matches!(record["kind"].as_str(), Some("rename" | "tags" | "merge"))
-                        && visible_content(record)))
-                || (!owner.is_empty() && !file_id.is_empty() && owner != file_id)
-            {
-                return None;
-            }
-            let mut parents = record
-                .get("parent_node_ids")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .filter(|parent| !parent.is_empty() && *parent != id)
+        .map(|node| {
+            let mut parents = node
+                .parents
+                .in_window()
+                .filter(|parent| *parent != node.node_id)
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
             parents.sort();
             parents.dedup();
-            let created = record["created_at"]
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_default();
-            Some(Version {
-                id,
-                created,
+            Version {
+                id: node.node_id.clone(),
+                created: node.created_at.clone(),
                 parents,
-            })
+            }
         })
         .collect::<Vec<_>>();
     versions.sort();
@@ -86,11 +71,12 @@ fn newer_first(a: &Version, b: &Version) -> std::cmp::Ordering {
 /// This marker belongs to the selected branch projection, not the immutable
 /// parent version. Its tree node remains one real historical node.
 fn inherited_current(model: &Model, version: &str) -> bool {
-    (inherited_content(&model.file_history) && history_node_id(&model.file_history) == version)
-        || model
-            .selected
-            .as_ref()
-            .is_some_and(|entry| entry.inherited_content() && entry.node_id() == Some(version))
+    model.history.window().is_some_and(|window| {
+        window.context.inherited() && window.context.current_node_id.as_deref() == Some(version)
+    }) || model
+        .selected
+        .as_ref()
+        .is_some_and(|entry| entry.inherited_content() && entry.node_id() == Some(version))
 }
 
 /// Iterative Kosaraju traversal: each adjacency is visited once in each
@@ -707,42 +693,173 @@ fn observe(
     });
 }
 
-fn index_nodes(history: &Value) -> BTreeMap<String, Value> {
-    let mut index = BTreeMap::new();
-    for node in history_nodes_ref(history) {
-        // Preserve the previous first-match behavior for duplicate identities.
-        index.entry(history_node_id(node)).or_insert_with(|| {
-            #[cfg(test)]
-            INDEX_COPIES.with(|count| count.set(count.get() + 1));
-            node.clone()
-        });
+/// Paging controls above the tree. Replacing the page recreates the tree
+/// view (keyed by window identity), so observers of the old page are torn
+/// down with it rather than mutated in place.
+fn paging(state: RwSignal<State>) -> impl IntoView {
+    let cursors = Memo::new(move |_| {
+        state.with(|s| {
+            let window = s.files.history.window();
+            (
+                window.and_then(|window| window.previous_cursor.clone()),
+                window.and_then(|window| window.next_cursor.clone()),
+                s.files.history.loading() || s.files.history.root().is_none(),
+                s.files
+                    .history
+                    .window()
+                    .is_some_and(|window| !window.is_first_page()),
+            )
+        })
+    });
+    view! {
+        <Show when=move ||cursors.with(|(previous,next,_,later)|previous.is_some()||next.is_some()||*later)>
+        <div class="zxs-file-toolbar zxs-flow" aria-label=t("历史翻页","History pages")>
+            <button class="zxs-button" disabled=move ||cursors.with(|(previous,_,blocked,_)|previous.is_none()||*blocked) on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|{if let Some(cursor)=cursors.with_untracked(|(previous,_,_,_)|previous.clone()){actions::history_page(state,cursor);}}>{t("较新节点","Newer nodes")}</button>
+            <button class="zxs-button" disabled=move ||cursors.with(|(_,_,blocked,later)|*blocked||!*later) on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|actions::load_first_page(state)>{t("第一页","First page")}</button>
+            <button class="zxs-button" disabled=move ||cursors.with(|(_,next,blocked,_)|next.is_none()||*blocked) on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|{if let Some(cursor)=cursors.with_untracked(|(_,next,_,_)|next.clone()){actions::history_page(state,cursor);}}>{t("较早节点","Older nodes")}</button>
+        </div>
+        </Show>
     }
-    index
-}
-
-#[cfg(test)]
-thread_local! { static INDEX_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-
-fn index_projection(
-    history: Memo<crate::snapshot::Snapshot<super::history::FileHistory>>,
-) -> Memo<BTreeMap<String, Value>> {
-    Memo::new(move |_| history.with(|history| index_nodes(history)))
 }
 
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
-    let history = Memo::new(move |_| state.with(|s| s.files.file_history.clone()));
-    let selected_file = Memo::new(move |_| {
-        state.with(|s| {
-            s.files
-                .selected
-                .as_ref()
-                .map(|entry| entry.file_id().to_owned())
-                .unwrap_or_default()
+    // One tree per resident page: a new window identity unmounts the previous
+    // tree (its layout memo, measurement, observers and frame scheduler).
+    let identity = Memo::new(move |_| {
+        state.with(|s| s.files.history.window().map(|window| window.identity()))
+    });
+    view! {
+        {paging(state)}
+        {panel(state)}
+        <For each=move ||identity.get().into_iter() key=|identity|identity.clone() children=move |_|tree(state)/>
+    }
+}
+
+/// The single auxiliary panel: a node's complete parents or one fragment of
+/// an externalized text. Merge sources render in the provenance section.
+fn panel(state: RwSignal<State>) -> impl IntoView {
+    let panel = Memo::new(move |_| {
+        state.with(|s| match s.files.history.panel.as_ref() {
+            Some(AuxPanel::Parents { node_id, page }) => Some(PanelView::Parents {
+                node_id: node_id.clone(),
+                parents: page.parents.clone(),
+                previous: page.previous_cursor.clone(),
+                next: page.next_cursor.clone(),
+                resident: page
+                    .parents
+                    .iter()
+                    .filter(|parent| {
+                        s.files
+                            .history
+                            .window()
+                            .is_some_and(|window| window.contains(parent))
+                    })
+                    .cloned()
+                    .collect(),
+            }),
+            Some(AuxPanel::Field {
+                node_id,
+                field,
+                slice,
+            }) => Some(PanelView::Field {
+                node_id: node_id.clone(),
+                field: *field,
+                text: slice.text.clone(),
+                offset: slice.offset,
+                end: slice.offset + slice.text.len(),
+                total: slice.total_bytes,
+                complete: slice.complete,
+                next: slice.next_offset,
+            }),
+            Some(AuxPanel::MergeSources { .. }) | None => None,
         })
     });
-    let records = index_projection(history);
+    view! {
+        {move ||panel.get().map(|panel|match panel {
+            PanelView::Parents { node_id, parents, previous, next, resident } => {
+                let anchor_node=node_id.clone();let previous_node=node_id.clone();let next_node=node_id.clone();
+                view!{<div class="zxs-frame zxs-stack zxs-version-parents-panel" aria-label=t("完整父节点","Complete parents")>
+                    <div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{format!("{} · {}",t("父节点","Parents"),node_id)}</span>
+                        <button class="zxs-button" disabled=previous.is_none() on:click=move |_|{if let Some(cursor)=previous.clone(){actions::open_parents_panel(state,previous_node.clone(),Some(cursor));}}>{t("上一页","Previous")}</button>
+                        <button class="zxs-button" disabled=next.is_none() on:click=move |_|{if let Some(cursor)=next.clone(){actions::open_parents_panel(state,next_node.clone(),Some(cursor));}}>{t("下一页","Next")}</button>
+                        <button class="zxs-button" on:click=move |_|actions::close_panel(state)>{t("关闭","Close")}</button></div>
+                    <Show when={let empty=parents.is_empty();move ||empty}><p class="zxs-row">{t("此范围内没有更多父节点。","No further parents in this scope.")}</p></Show>
+                    {parents.iter().map(|parent|{let parent=parent.clone();let jump=parent.clone();let loaded=resident.contains(&parent);let _=&anchor_node;view!{<div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{parent.clone()}</span>{if loaded{view!{<span class="zxs-row">{t("已在当前页","On this page")}</span>}.into_any()}else{view!{<button class="zxs-button" on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|actions::history_anchor(state,jump.clone())>{t("跳转","Jump")}</button>}.into_any()}}</div>}}).collect_view()}
+                </div>}.into_any()
+            }
+            PanelView::Field { node_id, field, text, offset, end, total, complete, next } => {
+                let next_node=node_id.clone();
+                view!{<div class="zxs-frame zxs-stack zxs-version-field-panel" aria-label=t("节点字段","Node field")>
+                    <div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{format!("{} · {} · {}–{} / {total} {}",node_id,field_label(field),offset,end,t("字节","bytes"))}</span>
+                        <button class="zxs-button" disabled=next.is_none() on:click=move |_|{if let Some(offset)=next{actions::load_node_field(state,next_node.clone(),field,offset);}}>{t("继续读取","Read more")}</button>
+                        <button class="zxs-button" on:click=move |_|actions::close_panel(state)>{t("关闭","Close")}</button></div>
+                    <pre class="zxs-row zxs-version-field-text">{text}</pre>
+                    <p class="zxs-row">{if complete{t("已读取完整字段。","The complete field has been read.")}else{t("片段未结束；继续读取查看后续内容。","Fragment incomplete; read more to continue.")}}</p>
+                </div>}.into_any()
+            }
+        })}
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum PanelView {
+    Parents {
+        node_id: String,
+        parents: Vec<String>,
+        previous: Option<String>,
+        next: Option<String>,
+        resident: BTreeSet<String>,
+    },
+    Field {
+        node_id: String,
+        field: NodeField,
+        text: String,
+        offset: usize,
+        end: usize,
+        total: usize,
+        complete: bool,
+        next: Option<usize>,
+    },
+}
+
+fn field_label(field: NodeField) -> String {
+    match field {
+        NodeField::Message => t("提交消息", "Commit message"),
+        NodeField::Author => t("作者", "Author"),
+    }
+}
+
+/// Externalized texts (longer than the inline bound) are read on demand into
+/// the panel; inline texts are shown directly.
+fn text_row(
+    state: RwSignal<State>,
+    node_id: String,
+    field: NodeField,
+    text: super::history::BoundedText,
+) -> impl IntoView + 'static {
+    let label = field_label(field);
+    match text.inline {
+        Some(value) if value.is_empty() => None,
+        Some(value) => Some(
+            view! {<p class="zxs-row zxs-version-text">{format!("{label}: {value}")}</p>}
+                .into_any(),
+        ),
+        None => {
+            let bytes = text.bytes;
+            Some(view! {<p class="zxs-row zxs-version-text"><button class="zxs-button" type="button" on:click=move |_|actions::load_node_field(state,node_id.clone(),field,0)>{format!("{label} · {bytes} {} · {}",t("字节","bytes"),t("读取","Read"))}</button></p>}.into_any())
+        }
+    }
+}
+
+fn tree(state: RwSignal<State>) -> impl IntoView {
+    let window = Memo::new(move |_| state.with(|s| s.files.history.window().cloned()));
     let versions = Memo::new(move |_| {
-        history.with(|history| metadata(history_nodes_ref(history), &selected_file.get()))
+        window.with(|window| {
+            window
+                .as_deref()
+                .map(|window| metadata(&window.nodes))
+                .unwrap_or_default()
+        })
     });
     let tree = Memo::new(move |_| layout(&versions.get()));
     let geometry = RwSignal::new(Geometry::default());
@@ -762,7 +879,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 </svg>
                 <For each=move ||tree.with(|tree|tree.levels.iter().enumerate().map(|(depth,ids)|(depth,ids.clone())).collect::<Vec<_>>()) key=|level|level.0 children=move |(depth,_)| {
                     view!{<div class="zxs-version-tree-level" data-version-depth=depth.to_string()>
-                        <For each=move ||tree.with(|tree|tree.levels.get(depth).cloned().unwrap_or_default()) key=|id|id.clone() children=move |id|node(state,records,id)/>
+                        <For each=move ||tree.with(|tree|tree.levels.get(depth).cloned().unwrap_or_default()) key=|id|id.clone() children=move |id|node(state,window,id)/>
                     </div>}
                 }/>
             </div>
@@ -770,38 +887,117 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
     }
 }
 
+/// The resident record of one page node. The tree is keyed by page identity,
+/// so a node id resolves within the same page for the life of this view.
+fn record(window: &Option<Snapshot<HistoryWindow>>, id: &str) -> Option<HistoryNodeSummary> {
+    window.as_deref()?.node(id).cloned()
+}
+
+/// What one node shows for parents that are not on this page: at most one
+/// stub (jumping to the first missing parent) and at most one "more" action.
+/// No DOM node is created per unloaded ancestor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ParentStub {
+    node_id: String,
+    /// Anchor target of the stub: the first outside-window parent.
+    jump: Option<String>,
+    outside: usize,
+    more: bool,
+}
+impl ParentStub {
+    fn of(node: &HistoryNodeSummary) -> Option<Self> {
+        let mut outside = node.parents.outside_window();
+        let jump = outside.next().map(str::to_owned);
+        let count = outside.count() + usize::from(jump.is_some());
+        let more = node.parents.more();
+        (jump.is_some() || more).then(|| Self {
+            node_id: node.node_id.clone(),
+            jump,
+            outside: count,
+            more,
+        })
+    }
+}
+
+fn parent_stubs(state: RwSignal<State>, stub: ParentStub) -> impl IntoView + 'static {
+    let blocked = Signal::derive(move || {
+        state.with(|s| s.files.history.loading() || s.files.history.root().is_none())
+    });
+    let ParentStub {
+        node_id,
+        jump,
+        outside,
+        more,
+    } = stub;
+    view! {
+        <div class="zxs-version-parents zxs-flow zxs-flow--start" data-outside-parents=outside.to_string()>
+            {jump.map(|first|view!{<button class="zxs-button zxs-version-parent-stub" type="button" title=first.clone() disabled=move ||blocked.get() on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|actions::history_anchor(state,first.clone())>{format!("{} ({outside}) · {}",t("父节点未加载","Parent not loaded"),t("跳转","Jump"))}</button>})}
+            {more.then(||view!{<button class="zxs-button zxs-version-parent-more" type="button" disabled=move ||blocked.get() on:click=move |_|actions::open_parents_panel(state,node_id.clone(),None)>{t("更多父节点","More parents")}</button>})}
+        </div>
+    }
+}
+
 fn node(
     state: RwSignal<State>,
-    records: Memo<BTreeMap<String, Value>>,
+    window: Memo<Option<Snapshot<HistoryWindow>>>,
     version_id: String,
 ) -> impl IntoView {
     let id = StoredValue::new(version_id);
-    let version = Memo::new(move |_| {
-        records.with(|records| id.with_value(|id| records.get(id).cloned().unwrap_or(Value::Null)))
-    });
+    let version = Memo::new(move |_| window.with(|window| id.with_value(|id| record(window, id))));
     let can_modify = Signal::derive(move || {
         state.with(|s| s.files.writable && !super::model::selected_entry_read_only(&s.files))
     });
-    let disabled = Signal::derive(move || !can_modify.get() || !state.with(actions::write_allowed));
+    // Writes from a node need a current root: a stale page is read-only.
+    let disabled = Signal::derive(move || {
+        !can_modify.get()
+            || !state.with(|s| actions::write_allowed(s) && s.files.history.root().is_some())
+    });
     let inherited =
         Signal::derive(move || state.with(|s| inherited_current(&s.files, &id.get_value())));
-    let note_target = version.with_untracked(|node| {
-        if matches!(node["kind"].as_str(), Some("rename" | "tags" | "merge")) {
+    let summary = version.get_untracked();
+    let note_target = match summary.as_ref().map(|node| node.kind) {
+        Some(NodeKind::Rename | NodeKind::Tags | NodeKind::Merge) => {
             inline::Target::NodeNote(id.get_value())
-        } else {
-            inline::Target::VersionNote(text(node, &["version_id"]))
         }
+        Some(NodeKind::Content) | None => inline::Target::VersionNote(
+            summary
+                .as_ref()
+                .map(|node| node.version_id.clone())
+                .unwrap_or_default(),
+        ),
+    };
+    let stubs = summary
+        .as_ref()
+        .and_then(ParentStub::of)
+        .map(|stub| parent_stubs(state, stub));
+    let texts = summary.as_ref().map(|node| {
+        (
+            text_row(
+                state,
+                node.node_id.clone(),
+                NodeField::Message,
+                node.message.clone(),
+            ),
+            text_row(
+                state,
+                node.node_id.clone(),
+                NodeField::Author,
+                node.author.clone(),
+            ),
+        )
     });
     let (note, edit) = inline::version_note(state, note_target, id.get_value(), disabled);
     view! {
-        <article class="zxs-content-panel zxs-version-node zxs-frame zxs-stack zxs-stack--flush" data-version-id=id.get_value() data-node-id=id.get_value() data-body-version-id=move ||version.with(|node|text(node,&["version_id"])) data-node-kind=move ||version.with(|node|text(node,&["kind"]))
-            aria-label=move ||version.with(|v|if v["current"]==true{if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前版本","Current version")}}else{t("历史版本","Historical version")})>
+        <article class="zxs-content-panel zxs-version-node zxs-frame zxs-stack zxs-stack--flush" data-version-id=id.get_value() data-node-id=id.get_value() data-body-version-id=move ||version.with(|node|node.as_ref().map(|node|node.version_id.clone()).unwrap_or_default()) data-node-kind=move ||version.with(|node|node.as_ref().map(|node|node.kind.as_str()).unwrap_or_default())
+            aria-label=move ||version.with(|v|if v.as_ref().is_some_and(|v|v.current){if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前版本","Current version")}}else{t("历史版本","Historical version")})>
             <div class="zxs-version-date zxs-row" title=id.get_value()>
-                <Show when=move ||can_modify.get()><input class="zxs-node-checkbox" type="checkbox" aria-label=t("选择此节点","Select this node") disabled=move ||disabled.get()||state.with(|s|s.files.tag_edit.is_some()) prop:checked=move ||state.with(|s|s.files.checked_nodes.contains(&id.get_value())) on:change=move |event|super::tags::toggle(state,id.get_value(),event_target_checked(&event))/></Show>
-                <time>{move ||version.with(|v|v["created_at"].as_str().map(format::timestamp).unwrap_or_else(||t("未记录时间","Time not recorded")))}</time>
-                <Show when=move ||version.with(|v|v["current"]==true)><span class="zxs-version-current">{move ||if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前","Current")}}</span></Show>
+                <Show when=move ||can_modify.get()><input class="zxs-node-checkbox" type="checkbox" aria-label=t("选择此节点","Select this node") disabled=move ||disabled.get()||state.with(|s|s.files.tag_edit.is_some()) prop:checked=move ||state.with(|s|s.files.checked_nodes.contains_key(&id.get_value())) on:change=move |event|super::tags::toggle(state,id.get_value(),event_target_checked(&event))/></Show>
+                <time>{move ||version.with(|v|v.as_ref().map(|v|format::timestamp(&v.created_at)).unwrap_or_else(||t("未记录时间","Time not recorded")))}</time>
+                <Show when=move ||version.with(|v|v.as_ref().is_some_and(|v|v.current))><span class="zxs-version-current">{move ||if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前","Current")}}</span></Show>
             </div>
             {note}
+            {texts}
+            {stubs}
             <div class="zxs-version-actions zxs-flow zxs-flow--start">
                 {edit}
                 <Show when=move ||can_modify.get() fallback=move ||view!{<span class="zxs-row">{t("只读","Read only")}</span>}>

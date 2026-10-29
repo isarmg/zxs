@@ -270,6 +270,7 @@ pub(super) fn current_entry_source_resolved(
     engine: &Engine,
     branch: &str,
     entry: &storage_contract::Entry,
+
     context: Option<&storage_contract::FileContext>,
 ) -> Result<Option<String>, storage_engine::Error> {
     let Some(current) = engine.state().branches.get(branch) else {

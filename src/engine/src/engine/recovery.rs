@@ -112,6 +112,7 @@ impl Engine {
     pub(super) fn recover_mode(&mut self, mode: RecoveryMode) -> Result<()> {
         self.metadata_integrity.invalidate();
         self.published_state_base = None;
+        self.history_catalog = None;
         self.recovery_warnings = super::RecoveryWarnings::default();
         let members = self.members();
         let mut online = Vec::new();
@@ -330,6 +331,10 @@ impl Engine {
                         )?;
                     }
                     self.state = std::sync::Arc::new(next);
+                    self.history_catalog = Some(super::history_window::HistoryCatalog::recovered(
+                        &self.state,
+                        candidate.history_roots.clone(),
+                    ));
                 }
                 self.snapshot = Some(candidate.snapshot_hash);
                 continue;
@@ -457,6 +462,10 @@ impl Engine {
                     )?;
                 }
                 self.state = std::sync::Arc::new(next);
+                self.history_catalog = Some(super::history_window::HistoryCatalog::recovered(
+                    &self.state,
+                    candidate.history_roots.clone(),
+                ));
                 self.snapshot = Some(candidate.snapshot_hash);
             } else if let Some(p) = publication {
                 if p.candidate_hash != hash || p.result.operation_id != candidate.operation_id {
@@ -491,6 +500,10 @@ impl Engine {
                     )?;
                 }
                 self.state = std::sync::Arc::new(next);
+                self.history_catalog = Some(super::history_window::HistoryCatalog::recovered(
+                    &self.state,
+                    candidate.history_roots.clone(),
+                ));
                 self.snapshot = Some(candidate.snapshot_hash);
                 self.blocked = true;
             } else {

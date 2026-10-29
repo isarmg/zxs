@@ -60,7 +60,13 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `POST /api/file-manager/disks/{slot}/write-sessions` | 取得该盘目录当前文件分支的写会话；随后通过通用工作区接口上传 |
 | `POST /api/file-manager/disks/{slot}/directory-branches` | `{path,name,operation_id}`：登记命名目录分支，直接引用父子树；不提前创建文件分支、不复制正文、不创建占位文件、不自动选择 |
 | `POST /api/file-manager/disks/{slot}/directory-select` | 同结构请求；选择完整冻结目录子树，恢复成员、名称、层级及精确节点；不要求后代有同名文件分支 |
-| `GET /api/file-manager/files/{file}/history` | 文件容器备注、所选分支及历史图；versions仅正文，nodes包含正文和复用正文的重命名节点；可成对传入 repository_id/path 区分别名 |
+| `GET /api/file-manager/files/{file}/history` | 有界节点窗口与当前上下文摘要，绑定精确 `history_root`；`limit/cursor/anchor_node_id/history_root`，可成对传入 repository_id/path 区分别名 |
+| `GET /api/file-manager/files/{file}/history/nodes/{node}/parents` | 单节点完整图父关系的窗口，按父节点 ID 升序续读 |
+| `GET /api/file-manager/files/{file}/history/nodes/{node}/fields/{field}` | `message`／`author` 外置字段的 UTF-8 完整片段（offset/max_bytes） |
+| `GET /api/file-manager/files/{file}/history/branches` | 分支固定字段摘要页（含 `pending_count`，不复制 pending 映射），按 branch_id 升序 |
+| `GET /api/file-manager/files/{file}/history/merges` | 合并来源摘要页，按 (sequence DESC, merge_id ASC) |
+| `GET /api/file-manager/files/{file}/history/merges/{merge}/inputs` | 合并输入对，按原序号分片（offset/limit） |
+| `GET /api/file-manager/files/{file}/history/merges/{merge}/parents` | 合并时保存的父关系，按原序号分片 |
 | `POST /api/file-manager/files/{file}/branches` | 从选定版本登记公共文件分支；可传 source_node_id 固定路径节点来源，不复制正文或新增节点 |
 | `PATCH /api/file-manager/files/{file}/nodes/{node}` | 设置路径节点独立备注，最多128 UTF-8字节；不改正文备注或新增节点 |
 | `PATCH /api/file-manager/files/{file}/branches/{branch}` | 修改公共文件分支标签，最多128 UTF-8字节；同文件内规范化名称唯一，不增加版本或目录子树 |
@@ -90,7 +96,8 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `GET /api/versions/{version}/content` | 受授权的固定版本内容与 Range；可传 repository_id/path 按具体逻辑别名生成下载名称 |
 | `GET /api/versions/{version}` | 返回获授权版本描述及可信校验清单摘要 |
 | `GET /api/versions/{version}/checksums` | 返回该版本完整二进制校验清单，按当前认证及内容状态核验 |
-| `GET /api/files/{file}/history` | 文件和替换事件历史 |
+| `GET /api/files/{file}/history` | 正文版本摘要页，按 (version_sequence, version_id) 升序；`source_count` 代替完整来源数组 |
+| `GET /api/files/{file}/history/versions/{version}/sources` | 正文版本真实 `source_version_ids`，按原序号分片 |
 | `GET /api/commits/{commit}` | 提交及目录树信息 |
 | `POST /api/compare` | 比较版本或提交，不产生写入 |
 | `POST /api/history-trees/{history}/historical-save-plans` | 从历史元数据和工作区实际写入创建新分支计划，未写文件仍引用父版本 |
@@ -112,11 +119,21 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `POST /api/admin/disks/{disk}/drain` | 排空前检查和迁移任务 |
 | `POST /api/admin/disks/{disk}/eject` | 检查后安全卸载 |
 
-文件历史图只使用 `nodes` 以及每项的 `node_id`、`parent_node_ids` 和字符串 `created_at`。`versions` 保留为正文版本元数据，不作为缺失 `nodes` 时的兼容替代；前端不再把 `version_id`、`source_version_ids` 或数字时间戳解读为旧版图协议。缺失的图不会在客户端从正文列表推测重建。
+文件历史图只使用 `nodes` 以及每项的 `node_id`、`parents.edges` 和字符串 `created_at`。正文版本页不作为缺失 `nodes` 时的兼容替代；前端不再把 `version_id`、正文来源或数字时间戳解读为旧版图协议。缺失的图不会在客户端从正文列表推测重建。
 
-`GET /api/file-manager/files/{file}/history` 当前仍返回该文件的完整 `versions/nodes/branches/merges` 集合，没有历史窗口或游标分页。查询参数只接受成对的 `repository_id/path`；`limit`、`cursor` 及其他未知字段返回 `400 INVALID_REQUEST`，不能用它们缩小响应。目录列表分页不适用于此接口。
+文件历史按[ADR 0009](adr/0009-bounded-file-history-windows.md)采用“精确当前根上的可替换窗口”。主路由与全部辅助读取只返回有界页，不提供 `all=true`、旧整包回退或双格式解码；未知、重复参数和非法值返回 `400 INVALID_REQUEST`，游标格式错误返回 `400 INVALID_CURSOR`。
 
-共享 JSON 客户端协议的响应上限为 8 MiB；Web 在 `Content-Length` 预检、流式读取及 JSON 解码处执行检查，超限报告 `RESPONSE_TOO_LARGE`。这是客户端接收边界，不是此历史路由的服务端响应上限：服务端当前仍构造并序列化完整历史。图投影计算优化不会消除长历史的响应容量限制。高级 `GET /api/files/{file}/history` 也仍返回全量正文版本；本次查询字段校验不为它增加分页或容量保护。
+- **历史根**：`history_root` 是目标历史在当前已准入 State 的已发布历史目录中的准确 `history-manifest` 哈希（64 位小写十六进制）。首页由服务端捕获；续页、辅助读取和精确跳转必须携带来源页的根（查询参数或游标），二者同时提供必须一致。根不同返回 `409 HISTORY_CHANGED`：本历史的任何合法写入（含备注、标签、选择）都会改变根，无关历史的写入不会。冷启动从恢复所准入候选的历史目录读取同一根，不使用全池序号、热缓存或零值回退。
+- **授权次序**：每页先做当前认证／撤销及对象授权，再比较根；游标与根都不是授权凭据，也不证明当前盘健康。游标在请求边界解码、重新解析并绑定路径中的文件，跨文件或跨查询的游标为 `400`，不会以 `409` 暴露另一对象是否变化。
+- **节点页**：节点按 `(sequence DESC, node_id ASC)`，`limit` 默认 50、最多 200。每个节点给出 `parents.status`：`complete` 且边为空才表示该读取范围内没有父关系；`more` 必带绑定该节点的续读游标。父边标注 `in_window`，`false` 表示父节点存在但未驻留本页，不是根、丢失或损坏。`current` 只标记上下文当前节点。`anchor_node_id` 与 `cursor` 互斥，定位到使该节点成为页首的窗口。主响应不再重复正文 `versions` 全集。
+- **字段与关系**：`message`、`author` 没有写入长度上限，仅在不超过 256 UTF-8 字节时内联，否则经字段分片完整读取；分支页不复制 `pending_file_versions`，合并页只给计数，输入对、保存的父关系和正文来源按原序号分片，单节点高入度父集合可持续续读。
+- **字节预算**：每页完整编码（含外壳、上下文、游标与转义）不超过 `MAX_HISTORY_PAGE_BYTES` = 4 MiB，低于客户端 8 MiB 接收上限。服务端逐条编码已选记录，超出剩余预算的记录留给下一页，响应由已编码字节直接拼接；非末页必有后续游标，末页游标为 `null`，不存在空页携同一游标的循环。字节截断后的 `in_window` 按实际驻留节点重新判定。
+
+原始历史查询在解码前受 128 KiB／8 个字段的解析预算约束；之后仍严格拒绝未知或重复字段。节点、分支、合并和正文页的游标绑定页大小；父关系游标允许改变合法 `limit`，以便从节点预览继续展开，但始终绑定同一根、文件和节点并检查边界确实是该节点的父项。前后方向均可续读；字节不足时正向保留规范顺序前缀，反向保留离边界最近的后缀，不能跳过未返回项。
+
+字段 `offset` 是 UTF-8 字节边界，落在字符内部或 `max_bytes` 放不下下一个完整字符时返回 `400 INVALID_REQUEST`，不静默改写偏移或返回无进展片段。请求 `max_bytes` 默认 64 KiB、最多 1 MiB；服务端在复制前再以六倍最坏 JSON 转义及固定外壳预留缩小片段，故实际片段可以更短，客户端使用返回的 `next_offset`。准备／取消仅本地计划不改变已发布历史根；实际历史发布仍须重新读取最新根。
+
+共享 JSON 客户端协议的响应上限仍为 8 MiB；Web 在 `Content-Length` 预检、流式读取及 JSON 解码处执行检查，超限报告 `RESPONSE_TOO_LARGE`。历史页的服务端预算是独立且更小的编码上限，不以提高客户端上限换取容量。永久历史、节点、父关系、合并来源与操作收据不因分页裁剪，窗口驱逐只释放请求与浏览器工作集。
 
 文件分支登记回执固定创建时的可见父 ID、`inherited:true` 与 `own_version_id:null`；目录分支回执固定目录分支身份和父子树引用，不表示预先创建文件分支。之后首写不会改写原回执。当前内容状态通过读取接口查询，不能以当前状态回填旧操作结果。
 
@@ -214,6 +231,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `TRANSFER_TIMEOUT` | HTTP 正文空闲或总期限到达；响应头前为 408，已开始的正文终止为流错误 | 查询上传状态后重试；已有字节/操作记录保留，阻塞 I/O 可能仍在完成 |
 | `UPLOAD_INCOMPLETE` | 长度或有效范围未满足封存条件 | 补齐缺失范围，不能补零冒充完整上传 |
 | `LISTING_CHANGED` | 当前目录分页的业务快照或配置已改变，HTTP 409 | 丢弃旧游标并重新加载首页，不拼接不同快照 |
+| `HISTORY_CHANGED` | 文件历史页所绑定的精确历史根已不是当前根（本历史发生了合法写入，包括备注／标签／选择变化），HTTP 409 | 丢弃该根下的所有页与游标，重新读取首页或按节点 ID 精确跳转；已选动作输入保留但须重新确认，不自动更新 expected head |
 | `INVALID_CURSOR` | 事件游标超过当前发布序号，HTTP 400 | 核对游标所属服务及发布状态，再重新轮询；不按时间过期处理 |
 | `CONFIG_CONFLICT` / `CONFIG_INVARIANT_VIOLATION` | 配置与权威状态或协议常量冲突 | 进入配置核查，不自动改盘上状态或降低保护 |
 
@@ -318,7 +336,7 @@ HTTP 202 或任务已受理只表示操作登记，不表示正常保存成功�
 
 当前文件管理目录分页使用[第 15.2 节](#s15-02)的 `snapshot`、`next_cursor` 和 `previous_cursor`，不是固定旧 `commit_id` 的历史快照续读。游标绑定盘位、路径、搜索、页大小、排序及业务快照；业务状态或配置变化返回 `409 LISTING_CHANGED`，查询条件不匹配返回 `400 INVALID_REQUEST`。客户端须重新加载首页，不能拼接不同快照。
 
-目录游标只是无服务端缓存的翻页位置，不是授权凭据；当前没有账户绑定、签名或有效期字段，不提供防篡改令牌或 `PAGE_SNAPSHOT_EXPIRED` 语义。每页仍重新验证当前管理员及业务状态，不能依靠游标授权。搜索 `query` 最多 1024 个 UTF-8 字节，游标最多 32768 个 ASCII 字符；未知查询字段、重复字段、非法值和游标编码均明确拒绝。文件历史接口的全量响应及客户端 8 MiB 接收边界仍按第 15.2 节处理，不因目录分页而改变。
+目录游标只是无服务端缓存的翻页位置，不是授权凭据；当前没有账户绑定、签名或有效期字段，不提供防篡改令牌或 `PAGE_SNAPSHOT_EXPIRED` 语义。每页仍重新验证当前管理员及业务状态，不能依靠游标授权。搜索 `query` 最多 1024 个 UTF-8 字节，游标最多 32768 个 ASCII 字符；未知查询字段、重复字段、非法值和游标编码均明确拒绝。文件历史游标另按第 15.2 节绑定精确历史根，不与目录游标互换。
 
 当前 `GET /api/events?after={sequence}` 是已认证的事件轮询，`after` 为规范 UInt64 十进制字符串，省略时为 `"0"`。服务端按已发布 `sequence` 顺序返回其后的最多 1000 项；`next_cursor` 是最后返回的序号，没有新事件时保持输入值。超过当前发布序号的游标返回 `400 INVALID_CURSOR`。事件包含 `sequence/operation_id/kind/object_id`，没有事务内 `ordinal`、订阅连接、可配置页大小、事件窗口到期或快照续订协议。客户端可按序号去重并继续轮询；事件用于提示刷新，不能代替当前读取的认证和状态核验。
 
