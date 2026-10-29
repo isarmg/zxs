@@ -245,4 +245,28 @@ python3 test/publication-model/run_deep_validation.py --output /tmp/publication-
 
 六个既有测试文件保持原样，原 72 项自测包含有限小图、定向轨迹及故意破坏规则的敏感性检查，既有故障保护预算保留。`run_validation.py`、`run_deep_validation.py` 的根搜索／局部搜索矩阵不进入常规门禁，也不新增 CI job、并行清单或权限。旧证据中的模板摘要对应旧工具提交；本次例子改为真实固定来源，不重写旧摘要。
 
-集成接线与来源保留的针对性 GitHub 验证尚待执行；旧 `Inconclusive` 及抽象限制不因集成或快速自测而消除。
+### 集成提交与实际验证
+
+精确恢复提交为 `4e726896938590c831108ee31dbfd10705a55cf6`，直接父提交为产品基线 `209f31a4122174129bcf40b56c0598ac61e66352`；其工具、测试及本专题原文与获审阅来源 `47655937bbd1a3c8d6638e0260a793b63450bc29` 相同。接线提交为 `6a778a6374aeed236d15782e6d3bdd13907ae83c`，父提交为上述恢复提交。后续交付只归档日志和更新说明，不修改被测源码。
+
+[GitHub Actions 40854973138](https://github.com/isarmg/zxs/actions/runs/40854973138) 成功检出接线提交，独立 orphan 验证载体为 `e51ff147859745cd85c13f3b6586e2ad40261c8e`。来源步骤核对了父链、精确复制及原有模型／测试／证据未改变；产品源码、Cargo、工具链及产品工作流均无差异。针对性验证没有运行 Rust 编译，也没有运行两个搜索矩阵。
+
+实际命令与结果：
+
+- `python3 -m unittest discover -s test/ci -p test_check_suites.py -v`：44 项通过。
+- `bash .github/scripts/check.sh static`：完整常规门禁通过，其中 CI 回归 461 项、原模型自测 72 项（本次观测 0.210 秒）、性能工具测试 23 项均为 `OK`；来源治理、shell mock 和既有 Node 检查也成功。
+
+六项新增入口与失败语义回归均为 `ok`：
+
+| 测试类 | 实际测试方法 |
+| --- | --- |
+| `SuiteCoverageTests` | `test_publication_model_selftests_run_once_in_static_only` |
+| `SuiteCoverageTests` | `test_static_stops_when_publication_model_selftests_fail` |
+| `PublicationModelSelftestRunner` | `test_nonempty_success_is_successful` |
+| `PublicationModelSelftestRunner` | `test_zero_discovery_fails` |
+| `PublicationModelSelftestRunner` | `test_assertion_and_import_errors_fail` |
+| `PublicationModelSelftestRunner` | `test_discovery_exception_is_not_swallowed` |
+
+独立审阅核对了实际源码和日志，无剩余集成交付阻塞。完整日志、测试名字、精确提交、运行／artifact 元数据见 [集成记录](../../test/publication-model/evidence/integration-40854973138/result.json) 和 [原始 job 日志](../../test/publication-model/evidence/integration-40854973138/job.log)。[被测提交路径清单](../../test/publication-model/evidence/integration-40854973138/tested-paths.txt) 对应接线提交相对产品基线的 248 个路径；[完整交付路径清单](../../test/publication-model/evidence/integration-40854973138/delivery-paths.txt) 另含本轮归档。
+
+旧 8 档根搜索、6 档选定前缀后缀搜索仍为 `Inconclusive`；这些限制及历史 `results`／显式 `duplicate=True` 的抽象边界不因集成或快速自测而消除，不能据此宣称当前产品恢复实现安全已获证明。

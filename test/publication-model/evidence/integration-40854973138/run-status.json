@@ -1,0 +1,68 @@
+{
+  "conclusion": "success",
+  "databaseId": 40854973138,
+  "headSha": "e51ff147859745cd85c13f3b6586e2ad40261c8e",
+  "jobs": [
+    {
+      "completedAt": "2026-10-29T10:10:11Z",
+      "conclusion": "success",
+      "databaseId": 123383551913,
+      "name": "static-integration",
+      "startedAt": "2026-10-29T10:07:08Z",
+      "status": "completed",
+      "steps": [
+        {
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Checkout exact scoped integration",
+          "number": 2,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Verify parent baseline and unchanged reviewed sources",
+          "number": 3,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Named gate wiring and failure regressions",
+          "number": 4,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Run the actual normal static gate",
+          "number": 5,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Retain integration evidence",
+          "number": 6,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Post Checkout exact scoped integration",
+          "number": 12,
+          "status": "completed"
+        },
+        {
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 13,
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/isarmg/zxs/actions/runs/40854973138/job/123383551913"
+    }
+  ],
+  "status": "completed",
+  "url": "https://github.com/isarmg/zxs/actions/runs/40854973138"
+}
