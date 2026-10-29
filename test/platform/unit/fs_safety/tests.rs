@@ -715,6 +715,7 @@ fn atomic_io_barriers_and_failures() {
     fs::write(root.join(".inject"), b"").unwrap();
     let result = match mode.as_str() {
         "create" => AtomicFile::create(&directory, &destination, b"new"),
+        "recovery-intent" => AtomicFile::create_recovery_intent(&directory, &destination, b"new"),
         "replace" => AtomicFile::replace(&directory, &destination.as_relative(), b"new"),
         "replace-held" => {
             AtomicFile::replace_held(&directory, &destination.as_relative(), b"new").map(drop)
@@ -745,6 +746,13 @@ fn atomic_io_barriers_and_failures() {
             );
             assert!(!root.join("source").exists());
         }
+        "file-sync" if mode == "recovery-intent" => {
+            assert!(
+                matches!(result, Err(Error::PublishedDurabilityUnknown(ref error)) if error.raw_os_error() == Some(5))
+            );
+            assert_eq!(events, "file-sync\n");
+            assert_eq!(fs::read(root.join("destination")).unwrap(), b"new");
+        }
         "write" | "file-sync" => {
             assert!(matches!(result, Err(Error::Io(ref error)) if error.raw_os_error() == Some(5)));
             assert_eq!(
@@ -762,7 +770,14 @@ fn atomic_io_barriers_and_failures() {
             }
         }
         "publish" => {
-            assert_eq!(events, "file-sync\n");
+            assert_eq!(
+                events,
+                if mode == "recovery-intent" {
+                    "publish-conflict\n"
+                } else {
+                    "file-sync\n"
+                }
+            );
             if replaces {
                 assert!(
                     matches!(result, Err(Error::UnsafeFileType(ref path)) if path == std::path::Path::new("destination"))
@@ -787,6 +802,26 @@ fn atomic_io_barriers_and_failures() {
             .starts_with(".state-atomic-")
     }));
     println!("\nZXS_ATOMIC_IO_COMPLETE mode={mode} stage={stage}");
+}
+
+#[test]
+fn recovery_intent_creation_stays_on_held_owner_after_path_replacement() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state");
+    let directory = PrivateDirectory::create(&path).unwrap();
+    let moved = temp.path().join("held");
+    fs::rename(&path, &moved).unwrap();
+    let replacement = PrivateDirectory::create(&path).unwrap();
+    let name = EntryName::new("intent").unwrap();
+    AtomicFile::create_recovery_intent(&directory, &name, b"complete intent").unwrap();
+    assert_eq!(fs::read(moved.join("intent")).unwrap(), b"complete intent");
+    assert_eq!(fs::read_dir(replacement.path()).unwrap().count(), 0);
+    assert!(matches!(
+        AtomicFile::create_recovery_intent(&directory, &name, b"replacement"),
+        Err(Error::DestinationExists(_))
+    ));
+    assert_eq!(fs::read(moved.join("intent")).unwrap(), b"complete intent");
+    assert_eq!(fs::read_dir(moved).unwrap().count(), 1);
 }
 
 #[test]

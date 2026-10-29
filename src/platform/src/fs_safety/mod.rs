@@ -258,6 +258,23 @@ impl PrivateDirectory {
 pub struct AtomicFile;
 
 impl AtomicFile {
+    /// Publish complete recovery intent without replacing an existing entry,
+    /// then sync its file and held directory. Unlike ordinary atomic creation,
+    /// either barrier failure retains the published intent for reconciliation.
+    /// This does not establish that the operation described by the bytes ran.
+    ///
+    /// # Errors
+    /// Pre-publication failures clean staging and preserve any destination.
+    /// Post-publication barrier failures report unknown durability and retain
+    /// the destination. All filesystem and cleanup errors retain their sources.
+    pub fn create_recovery_intent(
+        directory: &PrivateDirectory,
+        destination: &EntryName,
+        bytes: &[u8],
+    ) -> Result<(), Error> {
+        unix::create_recovery_intent(directory, destination, bytes)
+    }
+
     pub fn create(
         directory: &PrivateDirectory,
         destination: &EntryName,

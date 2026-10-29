@@ -1,6 +1,17 @@
 //! Namespace type checks, workspace staging and recoverable commit submission.
 use super::*;
+use platform_io::fs_safety::{EntryName, PrivateDirectory};
 use smb_protocol::protocol::NamespaceOperation;
+
+#[cfg(not(test))]
+use platform_io::fs_safety::AtomicFile;
+#[cfg(test)]
+#[path = "../../../../test/server/unit/smb_rpc/namespace/persistence.rs"]
+mod persist;
+#[cfg(test)]
+use persist::AtomicFile;
+#[cfg(all(test, feature = "core"))]
+pub(super) use persist::{fail_before_record_write, fail_next_record_sync};
 
 // Only namespace admission uses this registry. It spans the operation lookup,
 // record lifetime and workspace submission without holding a mutex across I/O.
@@ -110,19 +121,26 @@ impl Session {
                     || error.code == storage_contract::ErrorCode::OperationNotFound => {}
             Err(error) => return Err(error),
         }
+        let record_name = EntryName::new(format!("{operation_id}.namespace.json"))
+            .expect("invariant: operation ID forms one namespace record name");
         let record = self
             .shared
-            .spool
-            .join(format!("{operation_id}.namespace.json"));
-        match fs::symlink_metadata(&record) {
-            Ok(_) => {
+            .budget
+            .directory
+            .path()
+            .join(record_name.as_path());
+        match self.shared.budget.directory.entry_metadata(&record_name) {
+            Ok(_)
+            | Err(platform_io::fs_safety::Error::UnsafeFileType(_))
+            | Err(platform_io::fs_safety::Error::MultipleLinks(_)) => {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::RecoveryRequired,
                     "namespace recovery evidence already exists for this operation",
                 ));
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(ApiError::io(error)),
+            Err(platform_io::fs_safety::Error::Io(error))
+                if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(namespace_record_error(error)),
         }
         let budget = self.shared.budget.reserve(
             &self.identity.principal,
@@ -161,7 +179,8 @@ impl Session {
             // fail, the workspace still has a recoverable association. A record
             // is not proof that staging or submission started; never replay it.
             write_namespace_record(
-                &record,
+                &self.shared.budget.directory,
+                &record_name,
                 &json!({
                     "format":"smb-protocol-namespace","principal":self.identity.principal,
                     "branch_id":self.branch,"kind":kind,"path":path,
@@ -317,48 +336,28 @@ impl Session {
     }
 }
 
-#[cfg(all(test, feature = "core"))]
-thread_local! {
-    static FAIL_NEXT_RECORD_SYNC: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+fn namespace_record_error(error: platform_io::fs_safety::Error) -> ApiError {
+    ApiError::new(
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+        storage_contract::ErrorCode::IoError,
+        "local storage operation failed",
+    )
+    .with_source(error)
 }
 
-#[cfg(all(test, feature = "core"))]
-pub(super) fn fail_next_record_sync(directory: bool) {
-    FAIL_NEXT_RECORD_SYNC.set(Some(directory));
-}
-
-fn sync_namespace_record(file: &File, _directory: bool) -> Result<(), ApiError> {
-    #[cfg(all(test, feature = "core"))]
-    if FAIL_NEXT_RECORD_SYNC.get() == Some(_directory) {
-        FAIL_NEXT_RECORD_SYNC.set(None);
-        return Err(ApiError::io(io::Error::other(
-            "injected namespace record sync failure",
-        )));
-    }
-    file.sync_all().map_err(ApiError::io)
-}
-
-fn write_namespace_record(path: &Path, value: &Value) -> Result<(), ApiError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| ApiError::invalid("namespace record parent missing"))?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".smb-namespace-")
-        .tempfile_in(parent)
-        .map_err(ApiError::io)?;
-    temporary
-        .write_all(
-            &json_codec::to_vec(value).expect("invariant: internal JSON serialization succeeds"),
-        )
-        .map_err(ApiError::io)?;
+fn write_namespace_record(
+    directory: &PrivateDirectory,
+    name: &EntryName,
+    value: &Value,
+) -> Result<(), ApiError> {
+    directory
+        .verify_identity()
+        .map_err(namespace_record_error)?;
     // Keep the complete intent available even if either sync fails. No core
     // commit may begin until both the file and its directory are durable.
     // A collision never replaces or removes another request's evidence.
-    let file = temporary
-        .persist_noclobber(path)
-        .map_err(|error| ApiError::io(error.error))?;
-    sync_namespace_record(&file, false)?;
-    sync_namespace_record(&File::open(parent).map_err(ApiError::io)?, true)
+    let bytes = json_codec::to_vec(value).expect("invariant: internal JSON serialization succeeds");
+    AtomicFile::create_recovery_intent(directory, name, &bytes).map_err(namespace_record_error)
 }
 
 #[cfg(test)]

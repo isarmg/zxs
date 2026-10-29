@@ -27,7 +27,9 @@ static int kind(int fd) {
     return S_ISREG(metadata.st_mode) && !strncmp(path, root, length)
         && path[length] == '/' &&
         (!strncmp(path + length + 1, ".state-atomic-", 14)
-         || !strcmp(path + length + 1, "source"));
+         || !strcmp(path + length + 1, "source")
+         || (!strcmp(getenv("ZXS_ATOMIC_MODE"), "recovery-intent")
+             && !strcmp(path + length + 1, "destination")));
 }
 
 static void record(const char *event) {
@@ -46,9 +48,15 @@ int fsync(int fd) {
         struct stat source, published;
         if (fstat(fd, &source)) abort();
         if (target == 1) {
-            /* A file barrier must precede publication of this exact inode. */
-            if (!stat(destination, &published) && source.st_ino == published.st_ino
-                && source.st_dev == published.st_dev) abort();
+            int same = !stat(destination, &published) && source.st_ino == published.st_ino
+                && source.st_dev == published.st_dev;
+            if (!strcmp(getenv("ZXS_ATOMIC_MODE"), "recovery-intent")) {
+                /* Recovery intent must already be available at its final name. */
+                if (!same) abort();
+            } else {
+                /* Ordinary publication must still follow this file barrier. */
+                if (same) abort();
+            }
             record("file-sync");
         } else {
             if (stat(destination, &published) || !S_ISREG(published.st_mode)) abort();
@@ -82,5 +90,15 @@ ssize_t write(int fd, const void *bytes, size_t count) {
         return -1;
     }
     ssize_t (*real_write)(int, const void *, size_t) = dlsym(RTLD_NEXT, "write");
-    return real_write(fd, bytes, count);
+    ssize_t result = real_write(fd, bytes, count);
+    if (kind(fd) == 1 && result >= 0
+        && !strcmp(getenv("ZXS_ATOMIC_MODE"), "recovery-intent")
+        && !strcmp(getenv("ZXS_ATOMIC_STAGE"), "publish")) {
+        char destination[4096];
+        snprintf(destination, sizeof(destination), "%s/destination", getenv("ZXS_ATOMIC_ROOT"));
+        int collision = open(destination, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (collision < 0 || close(collision)) abort();
+        record("publish-conflict");
+    }
+    return result;
 }

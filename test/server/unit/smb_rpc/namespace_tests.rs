@@ -2037,11 +2037,14 @@ impl Backend for PreparationFailure {
 
 #[test]
 fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
+    // These forwarded failures exercise orchestration, not actual fsync EIO;
+    // platform atomic-io.sh separately checks both real publication barriers.
     for (failure, directory_sync) in [
-        (Some(PreparationStage::Snapshot), false),
-        (Some(PreparationStage::Namespace), false),
-        (None, false),
-        (None, true),
+        (Some(PreparationStage::Snapshot), None),
+        (Some(PreparationStage::Namespace), None),
+        (None, None),
+        (None, Some(false)),
+        (None, Some(true)),
     ] {
         for abort_fails in [false, true] {
             let (_temp, original, _, branch) = fixture();
@@ -2066,7 +2069,11 @@ fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
             let mut session = session(shared, &branch);
             let operation_id = new_id("op");
             if failure.is_none() {
-                super::super::namespace::fail_next_record_sync(directory_sync);
+                if let Some(directory_sync) = directory_sync {
+                    super::super::namespace::fail_next_record_sync(directory_sync);
+                } else {
+                    super::super::namespace::fail_before_record_write();
+                }
             }
             let error = session
                 .dispatch(Request::Namespace {
@@ -2094,8 +2101,17 @@ fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
                 .join(format!("{operation_id}.namespace.json"));
             assert_eq!(
                 record_path.exists(),
+                (abort_fails && failure.is_some()) || directory_sync.is_some(),
+                "retain published evidence, but never invent a record after a pre-write failure"
+            );
+            assert_eq!(
+                session
+                    .shared
+                    .spool
+                    .join(format!("{operation_id}.budget.json"))
+                    .exists(),
                 abort_fails || failure.is_none(),
-                "an unresolved abort or failed record sync must retain evidence"
+                "only durable intent plus successful abort authorizes cleanup and refund"
             );
             if record_path.exists() {
                 let record: Value =
@@ -2208,6 +2224,36 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
         fs::read(record).unwrap(),
         b"existing evidence must not be altered"
     );
+    enum ExistingRecord {
+        Directory,
+        Symlink,
+        Hardlink,
+    }
+    for kind in [
+        ExistingRecord::Directory,
+        ExistingRecord::Symlink,
+        ExistingRecord::Hardlink,
+    ] {
+        let operation = new_id("op");
+        let record = shared.spool.join(format!("{operation}.namespace.json"));
+        let target = shared.spool.join(format!("{operation}.target"));
+        match kind {
+            ExistingRecord::Directory => fs::create_dir(&record).unwrap(),
+            ExistingRecord::Symlink => std::os::unix::fs::symlink(&target, &record).unwrap(),
+            ExistingRecord::Hardlink => {
+                fs::write(&target, b"retained linked evidence").unwrap();
+                fs::hard_link(&target, &record).unwrap();
+            }
+        }
+        assert_eq!(
+            session.dispatch(request(operation)).unwrap_err().code,
+            storage_contract::ErrorCode::RecoveryRequired
+        );
+        assert!(fs::symlink_metadata(&record).is_ok());
+        if matches!(kind, ExistingRecord::Hardlink) {
+            assert_eq!(fs::read(target).unwrap(), b"retained linked evidence");
+        }
+    }
     let active_operation = OperationId::generate();
     shared
         .namespace_operations

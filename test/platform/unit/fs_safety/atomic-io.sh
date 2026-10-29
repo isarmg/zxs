@@ -12,7 +12,7 @@ fixture="$(cd "$(dirname "$0")" && pwd)"
 temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
 cc -shared -fPIC -Wall -Wextra -Werror "$fixture/atomic_io.c" -ldl -o "$temporary/atomic-io.so"
-for mode in create replace replace-held public; do
+for mode in create replace replace-held public recovery-intent; do
   for stage in success write file-sync publish directory-sync; do
     [[ "$mode:$stage" != public:write ]] || continue
     root="$temporary/$mode-$stage"

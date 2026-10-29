@@ -405,49 +405,18 @@ fn atomic_write(
 ) -> Result<File, Error> {
     let name = entry_name(destination)?;
     validate_destination(directory, name)?;
-    let temporary = temporary_name()?;
-    let fd: OwnedFd = openat(
-        &directory.directory,
-        temporary.as_str(),
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::from_raw_mode(0o600),
-    )
-    .map_err(io::Error::from)?;
-    let mut file = File::from(fd);
+    let (temporary, mut file) = create_staging(directory)?;
     let mut cleanup = StagingCleanup {
         directory: &directory.directory,
         name: &temporary,
         armed: true,
     };
     let result = (|| {
-        if let Some((uid, gid)) = directory.administration_owner {
-            // Only the exclusive new temporary descriptor is re-owned. The
-            // destination inode is never chowned, chmodded, or followed.
-            rustix::fs::fchown(
-                &file,
-                Some(rustix::process::Uid::from_raw(uid)),
-                Some(rustix::process::Gid::from_raw(gid)),
-            )
-            .map_err(io::Error::from)?;
-        }
-        let identity = regular_single_link(&file, Path::new(&temporary))?;
-        file.write_all(bytes)?;
+        let identity = write_staging(directory, &mut file, &temporary, bytes)?;
         file.sync_all()?;
         validate_destination(directory, name)?;
         if create_only {
-            regular_single_link(&file, Path::new(&temporary))?;
-            let staged = statat(
-                &directory.directory,
-                temporary.as_str(),
-                AtFlags::SYMLINK_NOFOLLOW,
-            )
-            .map_err(io::Error::from)?;
-            if (identity.st_dev, identity.st_ino) != (staged.st_dev, staged.st_ino) {
-                return Err(Error::IdentityChanged(temporary.clone().into()));
-            }
-            // This exclusive staging descriptor has just completed its file barrier.
-            // Publish only; the shared tail verifies its inode and syncs the directory.
-            rename_no_replace(directory, OsStr::new(&temporary), name)?;
+            publish_staging(directory, &temporary, name, &file, &identity)?;
         } else {
             renameat(
                 &directory.directory,
@@ -458,18 +427,112 @@ fn atomic_write(
             .map_err(io::Error::from)?;
         }
         cleanup.armed = false;
-        let published = statat(&directory.directory, name, AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
-        if (identity.st_dev, identity.st_ino) != (published.st_dev, published.st_ino) {
-            return Err(Error::IdentityChanged(destination.as_path().to_path_buf()));
-        }
+        verify_published(directory, name, &identity)?;
         directory
             .directory
             .sync_all()
             .map_err(Error::PublishedDurabilityUnknown)
     })();
+    finish_staging(result, &mut cleanup)?;
+    Ok(file)
+}
+
+fn create_staging(directory: &PrivateDirectory) -> Result<(String, File), Error> {
+    let temporary = temporary_name()?;
+    let fd: OwnedFd = openat(
+        &directory.directory,
+        temporary.as_str(),
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    )
+    .map_err(io::Error::from)?;
+    Ok((temporary, File::from(fd)))
+}
+
+pub(super) fn create_recovery_intent(
+    directory: &PrivateDirectory,
+    destination: &EntryName,
+    bytes: &[u8],
+) -> Result<(), Error> {
+    let name = destination.as_os_str();
+    validate_destination(directory, name)?;
+    let (temporary, mut file) = create_staging(directory)?;
+    let mut cleanup = StagingCleanup {
+        directory: &directory.directory,
+        name: &temporary,
+        armed: true,
+    };
+    let result = (|| {
+        let identity = write_staging(directory, &mut file, &temporary, bytes)?;
+        validate_destination(directory, name)?;
+        publish_staging(directory, &temporary, name, &file, &identity)?;
+        cleanup.armed = false;
+        verify_published(directory, name, &identity)?;
+        file.sync_all().map_err(Error::PublishedDurabilityUnknown)?;
+        directory
+            .directory
+            .sync_all()
+            .map_err(Error::PublishedDurabilityUnknown)
+    })();
+    finish_staging(result, &mut cleanup)
+}
+
+fn write_staging(
+    directory: &PrivateDirectory,
+    file: &mut File,
+    temporary: &str,
+    bytes: &[u8],
+) -> Result<rustix::fs::Stat, Error> {
+    if let Some((uid, gid)) = directory.administration_owner {
+        // Only the exclusive new temporary descriptor is re-owned. The
+        // destination inode is never chowned, chmodded, or followed.
+        rustix::fs::fchown(
+            &*file,
+            Some(rustix::process::Uid::from_raw(uid)),
+            Some(rustix::process::Gid::from_raw(gid)),
+        )
+        .map_err(io::Error::from)?;
+    }
+    let identity = regular_single_link(&*file, Path::new(temporary))?;
+    file.write_all(bytes)?;
+    Ok(identity)
+}
+
+fn publish_staging(
+    directory: &PrivateDirectory,
+    temporary: &str,
+    name: &OsStr,
+    file: &File,
+    identity: &rustix::fs::Stat,
+) -> Result<(), Error> {
+    regular_single_link(file, Path::new(temporary))?;
+    let staged = statat(&directory.directory, temporary, AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(io::Error::from)?;
+    if (identity.st_dev, identity.st_ino) != (staged.st_dev, staged.st_ino) {
+        return Err(Error::IdentityChanged(temporary.into()));
+    }
+    rename_no_replace(directory, OsStr::new(temporary), name)
+}
+
+fn verify_published(
+    directory: &PrivateDirectory,
+    name: &OsStr,
+    identity: &rustix::fs::Stat,
+) -> Result<(), Error> {
+    let published = statat(&directory.directory, name, AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
+    if (identity.st_dev, identity.st_ino) != (published.st_dev, published.st_ino) {
+        return Err(Error::IdentityChanged(name.into()));
+    }
+    Ok(())
+}
+
+fn finish_staging(
+    result: Result<(), Error>,
+    cleanup: &mut StagingCleanup<'_>,
+) -> Result<(), Error> {
     match result {
-        Ok(()) => Ok(file),
+        Ok(()) => Ok(()),
         Err(operation) => match cleanup.cleanup() {
             Ok(()) => Err(operation),
             Err(cleanup) => Err(Error::Cleanup {
