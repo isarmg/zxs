@@ -426,7 +426,7 @@ fn historical_cold_point_read_rejects_changed_mirror_bytes_without_reconciliatio
     changed.created_at += 1;
     let paths = historical_manifest_paths(&engine, &workspace.workspace_id);
     for path in &paths {
-        write_json(path, &changed, false).unwrap();
+        write_json(path, &changed, true).unwrap();
     }
     let before = paths.each_ref().map(|path| fs::read(path).unwrap());
     let capacity = engine.workspace_capacity("admin");
@@ -463,7 +463,7 @@ fn historical_seed_quota_rejection_preserves_config_journals_and_manifests() {
             workspace.fencing_token += 1;
             let manifests = historical_manifest_paths(&engine, &workspace.workspace_id);
             for path in &manifests {
-                write_json(path, &workspace, false).unwrap();
+                write_json(path, &workspace, true).unwrap();
             }
             paths.extend(manifests);
         }
@@ -548,7 +548,7 @@ fn historical_published_sealed_mirrors_remain_resident_recovery_material() {
     let (root, engine, sealed, _plan) = completed_historical_binding_fixture();
     let paths = historical_manifest_paths(&engine, &sealed.workspace_id);
     for path in &paths {
-        write_json(path, &sealed, false).unwrap();
+        write_json(path, &sealed, true).unwrap();
     }
     let before = paths.each_ref().map(|path| fs::read(path).unwrap());
     drop(engine);
@@ -580,7 +580,7 @@ fn historical_unpublished_completion_mirrors_are_only_seed_hints() {
     completed.state = WorkspaceState::Committed;
     completed.fencing_token += 1;
     let paths = historical_manifest_paths(&engine, &workspace.workspace_id);
-    write_json(&paths[1], &completed, false).unwrap();
+    write_json(&paths[1], &completed, true).unwrap();
     let before = paths.each_ref().map(|path| fs::read(path).unwrap());
     let prepared = engine.prepare_recovery().unwrap();
     engine.seed_workspace_recovery(&prepared).unwrap();
