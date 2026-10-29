@@ -18,6 +18,10 @@ use mutation_order::{MutationOrder, Position};
 
 mod page_tree;
 
+#[cfg(test)]
+#[path = "../../../test/engine/unit/metadata_adversarial/namespace.rs"]
+mod metadata_adversarial_namespace;
+
 mod ordered_walk;
 
 fn corrupt(reason: &'static str) -> Error {

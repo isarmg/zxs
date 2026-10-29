@@ -97,3 +97,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/canonical_publication_fixture.rs"]
 mod canonical_publication_fixture;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/metadata_adversarial/recovery.rs"]
+mod metadata_adversarial_recovery;

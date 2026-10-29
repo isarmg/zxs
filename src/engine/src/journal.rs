@@ -9,6 +9,13 @@ pub(crate) const MAX_FRAME: usize = 16 * 1024 * 1024;
 const LOG_MAGIC: &[u8; 8] = b"ZXSLOG\0\0";
 const LOG_HEADER_BYTES: usize = 12;
 
+#[cfg(test)]
+#[path = "../../../test/engine/unit/metadata_adversarial/segments.rs"]
+mod metadata_adversarial_segments;
+#[cfg(test)]
+#[path = "../../../test/engine/unit/metadata_adversarial/budgets.rs"]
+mod metadata_adversarial_budgets;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serialization(rename_all = "UPPERCASE")]
 pub(crate) enum RecordType {
