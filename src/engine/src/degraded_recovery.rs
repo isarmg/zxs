@@ -8,6 +8,13 @@ use std::collections::BTreeSet;
 #[cfg(test)]
 use std::fs;
 
+mod observation;
+pub(crate) use observation::VerifiedPayloads;
+use observation::{
+    FrozenObservation, ObservedCopyState, ObservedSlot, ObservedVersion, SlotIdentity,
+    VersionPlacementObservation, admit_verified_payloads,
+};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct RecoveryPlan {
@@ -63,7 +70,7 @@ fn member_plan_path(disk: &DiskConfig, hash: &str) -> std::path::PathBuf {
         .join("metadata/recovery-plans")
         .join(format!("{hash}.json"))
 }
-fn observe(engine: &Engine, candidate: &Candidate) -> Result<Vec<Value>> {
+fn observe(engine: &Engine, candidate: &Candidate) -> Result<Vec<ObservedVersion>> {
     let mut out = Vec::new();
     for evidence in &candidate.versions {
         let mut slots = Vec::new();
@@ -79,7 +86,7 @@ fn observe(engine: &Engine, candidate: &Candidate) -> Result<Vec<Value>> {
                 &evidence.version.version_id,
             );
             let state = match handle.verify_payload(&dir, &evidence.version) {
-                Ok(_) => "COMPLETE_VERIFIED",
+                Ok(_) => ObservedCopyState::CompleteVerified,
                 Err(error) => {
                     // An inaccessible device or an arbitrary I/O failure is not permanent loss.
                     let content = crate::container_storage::content_path_at(
@@ -92,36 +99,41 @@ fn observe(engine: &Engine, candidate: &Candidate) -> Result<Vec<Value>> {
                         Err(Error::Filesystem(platform_io::fs_safety::Error::Io(io)))
                         | Err(Error::Contract(storage_contract::Error::Io {
                             source: io, ..
-                        })) if io.kind() == std::io::ErrorKind::NotFound => "MISSING",
+                        })) if io.kind() == std::io::ErrorKind::NotFound => {
+                            ObservedCopyState::Missing
+                        }
                         Err(source) => {
                             return Err(source.context(
                                 ErrorCode::RecoveryRequired,
                                 format!("cannot classify payload slot {slot}: {error}"),
                             ));
                         }
-                        Ok(_) => "CORRUPT",
+                        Ok(_) => ObservedCopyState::Corrupt,
                     }
                 }
             };
-            slots.push(json!({"slot_id":slot,"copy_level":disk.level,"disk_id":disk.disk_id,"binding_generation":disk.binding_generation.to_string(),"state":state}));
+            slots.push(ObservedSlot {
+                identity: SlotIdentity {
+                    slot_id: slot.clone(),
+                    copy_level: disk.level,
+                    disk_id: disk.disk_id.clone(),
+                    binding_generation: disk.binding_generation,
+                },
+                state,
+            });
         }
-        out.push(json!({"version_id":evidence.version.version_id,"primary_slot_id":evidence.placement.primary_slot_id,"target_copies":evidence.placement.target_copies,"required_slots":evidence.placement.route_slot_ids,"topology_generation":evidence.placement.topology_generation.to_string(),"slots":slots}));
+        out.push(ObservedVersion {
+            placement: VersionPlacementObservation {
+                version_id: evidence.version.version_id.clone(),
+                primary_slot_id: evidence.placement.primary_slot_id.clone(),
+                target_copies: evidence.placement.target_copies,
+                required_slots: evidence.placement.route_slot_ids.clone(),
+                topology_generation: evidence.placement.topology_generation,
+            },
+            slots,
+        });
     }
     Ok(out)
-}
-fn freeze_observation(mut observed: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
-    let mut details = Vec::new();
-    for version in &mut observed {
-        let id = version["version_id"].clone();
-        for slot in version["slots"].as_array_mut().expect("observed slots") {
-            if slot["state"] != "COMPLETE_VERIFIED" {
-                details
-                    .push(json!({"version_id":id,"slot_id":slot["slot_id"],"cause":slot["state"]}));
-                slot["state"] = json!("UNAVAILABLE");
-            }
-        }
-    }
-    (observed, details)
 }
 /// Search evidence on available held resources during read-only cold recovery.
 /// Required recovery locks, membership and seals are admitted separately.
@@ -208,17 +220,17 @@ fn exclude_publication(engine: &Engine, candidate: &Candidate, hash: &str) -> Re
     }
     Ok(())
 }
-fn require_permanent_loss(engine: &Engine, candidate: &Candidate, health: &[Value]) -> Result<()> {
+fn require_permanent_loss(
+    engine: &Engine,
+    candidate: &Candidate,
+    health: &FrozenObservation,
+) -> Result<()> {
     let mut unavailable = false;
     for version in &candidate.versions {
-        let state = health
-            .iter()
-            .find(|v| v["version_id"] == version.version.version_id)
-            .ok_or_else(|| required("health coverage missing"))?;
-        let slots = state["slots"]
-            .as_array()
-            .ok_or_else(|| required("health slots missing"))?;
-        if slots.iter().all(|s| s["state"] == "COMPLETE_VERIFIED") {
+        let complete = health
+            .version_is_complete(&version.version.version_id)
+            .expect("invariant: observations cover every candidate version");
+        if complete {
             continue;
         }
         // Use exactly the same source search as normal repair, including old
@@ -346,47 +358,8 @@ impl RecoveryProof {
                 return Err(bad());
             }
         }
-        if plan.version_protection.len() != c.versions.len() {
-            return Err(bad());
-        }
-        let mut expected = BTreeSet::new();
-        let mut below = false;
-        for version in &c.versions {
-            let observation = plan
-                .version_protection
-                .iter()
-                .find(|v| v["version_id"].as_str() == Some(version.version.version_id.as_str()))
-                .ok_or_else(bad)?;
-            let slots = observation["slots"].as_array().ok_or_else(bad)?;
-            if slots.len() != version.placement.route_slot_ids.len()
-                || observation["required_slots"] != json!(version.placement.route_slot_ids)
-                || observation["target_copies"] != json!(version.placement.target_copies)
-                || observation["primary_slot_id"] != json!(version.placement.primary_slot_id)
-            {
-                return Err(bad());
-            }
-            let mut slot_set = BTreeSet::new();
-            for slot in slots {
-                let id = slot["slot_id"].as_str().ok_or_else(bad)?;
-                if !slot_set.insert(id) || !version.placement.route_slot_ids.iter().any(|s| s == id)
-                {
-                    return Err(bad());
-                }
-                match slot["state"].as_str() {
-                    Some("COMPLETE_VERIFIED") => {
-                        expected.insert((version.version.version_id.clone(), id.to_string()));
-                    }
-                    Some("UNAVAILABLE") => below = true,
-                    _ => return Err(bad()),
-                }
-            }
-        }
-        let actual = p
-            .payload_receipts
-            .iter()
-            .map(|r| (r.version_id.clone(), r.slot_id.clone()))
-            .collect::<BTreeSet<_>>();
-        if !below || actual != expected || actual.len() != p.payload_receipts.len() {
+        let expected = admit_verified_payloads(plan, c)?;
+        if !expected.matches_receipts(&p.payload_receipts) {
             return Err(bad());
         }
         Ok(())
@@ -609,18 +582,9 @@ impl Engine {
             write_json(&plan_path(&self.root, &plan.recovery_id), &plan, false)?;
             return Ok(plan);
         }
-        let observed = observe(self, &candidate)?;
+        let observed = FrozenObservation::freeze(observe(self, &candidate)?);
         require_permanent_loss(self, &candidate, &observed)?;
-        let (version_protection, loss_details) = freeze_observation(observed);
-        if !version_protection.iter().any(|v| {
-            v["slots"]
-                .as_array()
-                .is_some_and(|s| s.iter().any(|s| s["state"] != "COMPLETE_VERIFIED"))
-        }) {
-            return Err(required(
-                "all original payloads remain healthy; finish the original normal publication",
-            ));
-        }
+        let (version_protection, loss_details) = observed.wire();
         let mut plan = RecoveryPlan {
             recovery_id: new_id("recovery"),
             digest: String::new(),
@@ -742,10 +706,11 @@ impl Engine {
             &candidate,
             &self.metadata_integrity,
         )?;
-        let (observed, loss_details) = freeze_observation(observe(self, &candidate)?);
+        let observed = FrozenObservation::freeze(observe(self, &candidate)?);
+        let (version_protection, loss_details) = observed.wire();
         if canonical_json(&members)? != canonical_json(&plan.members)?
             || canonical_json(&accepts)? != canonical_json(&plan.original_accepts)?
-            || canonical_json(&observed)? != canonical_json(&plan.version_protection)?
+            || canonical_json(&version_protection)? != canonical_json(&plan.version_protection)?
             || canonical_json(&loss_details)? != canonical_json(&plan.loss_details)?
         {
             return Err(Error::new(
@@ -753,7 +718,8 @@ impl Engine {
                 "recovery evidence changed after preview",
             ));
         }
-        require_permanent_loss(self, &candidate, &plan.version_protection)?;
+        require_permanent_loss(self, &candidate, &observed)?;
+        let verified_payloads = observed.verified_payloads();
         let member_disks = self.members();
         let history_objects = crate::history_package::bound_history_objects_at(
             &self.disk_resources,
@@ -768,17 +734,7 @@ impl Engine {
             .ok_or_else(|| required("candidate result missing"))?;
         result.commit_state = storage_contract::CommitState::PublishedDegraded;
         result.protection_at_publish = storage_contract::ProtectionAtPublish::BelowTarget;
-        result.current_health = if plan.version_protection.iter().any(|v| {
-            !v["slots"]
-                .as_array()
-                .expect("slots")
-                .iter()
-                .any(|s| s["state"] == "COMPLETE_VERIFIED")
-        }) {
-            storage_contract::CurrentHealth::Unavailable
-        } else {
-            storage_contract::CurrentHealth::Degraded
-        };
+        result.current_health = observed.current_health();
         result.result["recovery_id"] = json!(id);
         result.result["recovery_plan_digest"] = json!(plan.digest);
         result.result["isolation_generation"] = json!(plan.isolation_generation);
@@ -789,10 +745,13 @@ impl Engine {
             &candidate,
             &result,
             &next,
-            Some(RecoveryProof {
-                plan: plan.clone(),
-                reprotect: Vec::new(),
-            }),
+            Some(crate::metadata_budget::RecoveryBudget::new(
+                RecoveryProof {
+                    plan: plan.clone(),
+                    reprotect: Vec::new(),
+                },
+                &verified_payloads,
+            )),
             MAX_METADATA,
         )?;
         // All graph and combined proof checks precede any recovery writes.
@@ -845,18 +804,8 @@ impl Engine {
         self.failpoint("after_recovery_finalize")?;
         let mut payload_receipts = Vec::new();
         for evidence in &candidate.versions {
-            let health = plan
-                .version_protection
-                .iter()
-                .find(|v| v["version_id"] == evidence.version.version_id)
-                .ok_or_else(|| required("version health missing"))?;
             for slot in &evidence.placement.route_slot_ids {
-                if !health["slots"]
-                    .as_array()
-                    .expect("frozen slots")
-                    .iter()
-                    .any(|s| s["slot_id"] == *slot && s["state"] == "COMPLETE_VERIFIED")
-                {
+                if !verified_payloads.contains(&evidence.version.version_id, slot) {
                     continue;
                 }
                 let disk = self.disk(slot)?;

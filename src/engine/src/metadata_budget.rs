@@ -1,7 +1,26 @@
 //! Preflight the exact JSON shapes that publication will persist. Hash values
 //! occupy exactly 64 ASCII bytes; every other value comes from the real candidate.
 use crate::journal::RecordType;
-use crate::{degraded_recovery::RecoveryProof, disk::*, journal::*, *};
+use crate::{
+    degraded_recovery::{RecoveryProof, VerifiedPayloads},
+    disk::*,
+    journal::*,
+    *,
+};
+
+pub(crate) struct RecoveryBudget<'a> {
+    proof: RecoveryProof,
+    verified_payloads: &'a VerifiedPayloads,
+}
+
+impl<'a> RecoveryBudget<'a> {
+    pub(crate) fn new(proof: RecoveryProof, verified_payloads: &'a VerifiedPayloads) -> Self {
+        Self {
+            proof,
+            verified_payloads,
+        }
+    }
+}
 
 fn receipt(
     disk: &DiskConfig,
@@ -33,7 +52,7 @@ pub(crate) fn preflight_publication(
     candidate: &Candidate,
     result: &OperationResult,
     state: &State,
-    recovery: Option<RecoveryProof>,
+    recovery: Option<RecoveryBudget<'_>>,
     maximum: usize,
 ) -> Result<usize> {
     // Engine fixtures pass published states whose one-shot cold index was
@@ -55,7 +74,7 @@ pub(crate) fn preflight_bound_publication(
     candidate: &Candidate,
     result: &OperationResult,
     state: &State,
-    recovery: Option<RecoveryProof>,
+    recovery: Option<RecoveryBudget<'_>>,
     maximum: usize,
 ) -> Result<usize> {
     preflight_inner(
@@ -77,7 +96,7 @@ pub(crate) fn preflight_publication_prepared(
     candidate: &Candidate,
     result: &OperationResult,
     state: &State,
-    recovery: Option<RecoveryProof>,
+    recovery: Option<RecoveryBudget<'_>>,
     maximum: usize,
     prepared_graphs: Option<(&PreparedSnapshot, &crate::metadata_map::MapRoot)>,
 ) -> Result<usize> {
@@ -97,7 +116,7 @@ pub(crate) fn preflight_publication_prepared(
 }
 struct PreflightOptions<'a> {
     resources: &'a DiskResources,
-    recovery: Option<RecoveryProof>,
+    recovery: Option<RecoveryBudget<'a>>,
     maximum: usize,
     prepared_graphs: Option<(&'a PreparedSnapshot, &'a crate::metadata_map::MapRoot)>,
     bound_snapshot: bool,
@@ -112,11 +131,18 @@ fn preflight_inner(
 ) -> Result<usize> {
     let PreflightOptions {
         resources,
-        mut recovery,
+        recovery,
         maximum,
         prepared_graphs,
         bound_snapshot,
     } = options;
+    let (mut recovery, verified_payloads) = match recovery {
+        Some(RecoveryBudget {
+            proof,
+            verified_payloads,
+        }) => (Some(proof), Some(verified_payloads)),
+        None => (None, None),
+    };
     let mut largest = 0usize;
     let mut check = |bytes: Vec<u8>| {
         largest = largest.max(bytes.len());
@@ -159,21 +185,10 @@ fn preflight_inner(
     let mut payload_receipts = Vec::new();
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
-            if let Some(recovery) = &recovery {
-                let healthy = recovery
-                    .plan
-                    .version_protection
-                    .iter()
-                    .find(|v| v["version_id"] == evidence.version.version_id)
-                    .and_then(|v| v["slots"].as_array())
-                    .is_some_and(|slots| {
-                        slots
-                            .iter()
-                            .any(|s| s["slot_id"] == *slot && s["state"] == "COMPLETE_VERIFIED")
-                    });
-                if !healthy {
-                    continue;
-                }
+            if let Some(verified_payloads) = verified_payloads
+                && !verified_payloads.contains(&evidence.version.version_id, slot)
+            {
+                continue;
             }
             let disk = config
                 .disks

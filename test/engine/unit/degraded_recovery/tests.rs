@@ -1,5 +1,7 @@
 use super::*;
 use crate::r29_local_publication;
+#[path = "observation_tests.rs"]
+mod observation_tests;
 fn fixture(point: &str) -> (tempfile::TempDir, Engine, OperationId, Candidate) {
     fixture_with_history(point, 0)
 }
@@ -420,12 +422,17 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
     let (record, _) = scanned.records.last().unwrap();
     let publication: Publication = load_object(&disk, "publication", &record.object_hash).unwrap();
     let original = load_snapshot(&disk, &candidate.snapshot_hash).unwrap();
+    let verified_payloads =
+        admit_verified_payloads(&publication.recovery.as_ref().unwrap().plan, &candidate).unwrap();
     let bound = crate::metadata_budget::preflight_publication(
         &engine,
         &candidate,
         &publication.result,
         &original,
-        publication.recovery.clone(),
+        publication
+            .recovery
+            .clone()
+            .map(|proof| crate::metadata_budget::RecoveryBudget::new(proof, &verified_payloads)),
         MAX_METADATA,
     )
     .unwrap();
@@ -459,7 +466,13 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
             &candidate,
             &publication.result,
             &original,
-            publication.recovery.clone(),
+            publication
+                .recovery
+                .clone()
+                .map(|proof| crate::metadata_budget::RecoveryBudget::new(
+                    proof,
+                    &verified_payloads
+                )),
             bound
         )
         .unwrap(),
@@ -471,7 +484,13 @@ fn explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_af
             &candidate,
             &publication.result,
             &original,
-            publication.recovery.clone(),
+            publication
+                .recovery
+                .clone()
+                .map(|proof| crate::metadata_budget::RecoveryBudget::new(
+                    proof,
+                    &verified_payloads
+                )),
             bound - 1
         )
         .unwrap_err()
