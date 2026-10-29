@@ -277,11 +277,17 @@ class Identifiers(unittest.TestCase):
                 ('use r#futures_core::Stream;\n', 'use r#futures::Stream;\n'),
                 ('::r#futures_core::ready!();\n', '::r#futures::ready!();\n'),
                 ('use futures_core /* root */ ::Stream;\n',
-                 'use futures /* root */ ::Stream;\n')):
+                 'use futures /* root */ ::Stream;\n'),
+                ('use crate /* local */ ::{futures_core::Thing};\n'
+                 'use {outer::{a::{futures_core::Thing}}, /* root */ '
+                 '::futures_core::{Stream, task::Poll}, futures_core as fc};\n',
+                 'use crate /* local */ ::{futures_core::Thing};\n'
+                 'use {outer::{a::{futures_core::Thing}}, /* root */ '
+                 '::futures::{Stream, task::Poll}, futures as fc};\n')):
             with self.subTest(text=text):
                 data, records = self.mapped(text)
                 self.assertEqual(data.decode(), expected)
-                self.assertEqual(len(records), 1)
+                self.assertEqual(len(records), text.count('futures_core') - expected.count('futures_core'))
 
     def test_comment_use_text_cannot_change_following_code_scope(self):
         text = ('// use outer::{\n'
@@ -290,6 +296,40 @@ class Identifiers(unittest.TestCase):
         data, records = self.mapped(text)
         self.assertEqual(data.decode(), text.replace('futures_core', 'futures'))
         self.assertEqual(len(records), 2)
+
+    def test_prose_paths_literals_and_byte_columns_keep_their_contract(self):
+        text = ('// We use futures_core::Stream in examples.\n'
+                '/// See ["futures_core::Stream"].\n'
+                "/// See 'futures_core::Stream'.\n"
+                '/* α */ r#futures_core::ready!();\n'
+                'let _ = (b"futures_core::Thing", c"futures_core::Thing",\n'
+                '         br##"futures_core::Thing"##, cr#"futures_core::Thing"#);\n'
+                'm!(futures_core::ready!());\n')
+        expected = text.replace('futures_core::Stream', 'futures::Stream').replace(
+            'r#futures_core::ready!', 'r#futures::ready!').replace(
+            'm!(futures_core::ready!', 'm!(futures::ready!')
+        data, records = self.mapped(text)
+        self.assertEqual(data.decode(), expected)
+        self.assertEqual([(record['line'], record['column']) for record in records],
+                         [(1, 11), (2, 11), (3, 10), (4, 12), (7, 4)])
+        for space in ('\u0085', '\u200e', '\u200f', '\u2028', '\u2029'):
+            source = 'use' + space + 'futures_core::Stream;\n'
+            with self.subTest(space=ascii(space)):
+                self.assertEqual(self.mapped(source)[0].decode(), source.replace('futures_core', 'futures'))
+
+    def test_unsupported_source_tokens_and_macro_use_grammar_fail_explicitly(self):
+        # Macro DSL imports are not Rust use trees. Stop for review rather
+        # than making a namespace decision from their arbitrary token syntax.
+        for text, message in (
+                ('macro_rules! m { (use $path:path;) => { () } }\n', 'unsupported Rust use tree'),
+                ('use crate::{futures_core::Thing;\n', 'unsupported Rust use tree'),
+                ('let _ = ☃futures_core::Thing;\n', 'unsupported Rust identifier token'),
+                ('let _ = r###"futures_core::Thing;\n', 'unterminated Rust raw string'),
+                ('/* unterminated futures_core::Thing', 'unterminated Rust block comment')):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, message):
+                self.mapped(text)
+        with self.assertRaisesRegex(ValueError, 'Rust identifier is not UTF-8'):
+            backport.map_identifiers(b'\xfffutures_core::Thing;', self.MAP)
 
     def test_quotes_in_comments_and_lifetimes_do_not_hide_code(self):
         text = "// don't \"\nfn f<'a>(x: &'a u8) { futures_core::ready!(x) }\n/* \" */ futures_core::x();\n"

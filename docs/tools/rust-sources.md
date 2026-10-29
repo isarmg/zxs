@@ -90,6 +90,12 @@ schema 2 的 `source_backport.py` 从 origins、consolidation、layout 和 sourc
 失败计划和冲突保留在仓库外 `attempts/`；失败写入恢复原内容，恢复失败附加到原错误，
 不替换首要异常。该离线维护工具要求独占工作副本，不承诺与并行改写仓库的进程竞争安全。
 
+标识符映射按完整 token 和 `use` 树的继承前缀判断，保留 raw identifier 的 `r#`、
+别名、本地模块与 Unicode 标识符；注释中的路径单独处理，不把散文引号当 Rust 字面量。
+源码标识符必须属于运行该工具的 Python Unicode XID 支持集；不支持的 token、未闭合字面量
+或注释、无法解析的 `use` 树（包括宏 DSL 的 `use $…`）明确停止并要求审阅。
+该工具不解析任意宏 DSL 或执行 Rust 名称解析，映射表仍须绑定已登记的来源变更。
+
 当前实际回移为 hyper `97fff93e53f9e6a993f2d6a25d50883b7b8752a7`（#4222），
 收据 `c75e73b0b8aab76fc3934f6c72620127795b8c95ec7bc0f52d173664e477938d`。
 它保留 `http-transport@1.12.0` / `hyper@1.12.0` 来源和扫描身份；不将本地回移伪装成升级。
