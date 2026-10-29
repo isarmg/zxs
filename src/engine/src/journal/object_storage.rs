@@ -25,7 +25,6 @@ fn validate(kind: &str, hash: &str) -> Result<()> {
 }
 
 /// Parsed object coordinates, never an arbitrary disk-relative write path.
-/// The fixed kind/shard directories are not renamed by the object protocol.
 pub(crate) struct ObjectAddress<'a> {
     kind: &'a str,
     hash: &'a str,
@@ -210,6 +209,18 @@ pub(super) fn write_object_bytes_at(
     let address = ObjectAddress::parse(kind, hash)?;
     address.existing_paths(root, d)?;
     root.write_immutable_object(&address, bytes, false)
+}
+
+pub(super) fn write_object_bytes_in_batch(
+    batch: &mut crate::disk::ObjectInstallBatch<'_>,
+    d: &DiskConfig,
+    kind: &str,
+    hash: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    let address = ObjectAddress::parse(kind, hash)?;
+    address.existing_paths(batch.root(), d)?;
+    batch.write(&address, bytes, false)
 }
 
 #[cfg(test)]

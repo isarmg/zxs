@@ -86,23 +86,22 @@ fn retry_and_reuse(
     object.store_on(held, disk).unwrap();
     assert_eq!(fs::read(target).unwrap(), object.bytes());
     let log = events(root);
-    let parent = log
-        .find("retry dir metadata/objects success\n")
-        .expect("a visible directory from a failed create still owes its parent barrier");
-    let file = log
-        .find("retry file ")
-        .expect("the object file was really synced");
     assert!(
-        parent < file,
-        "complete ancestor durability before installing the object"
+        log.contains("retry dir metadata/objects success\n"),
+        "complete the owed parent barrier before the store returns success"
     );
+    assert!(log.contains("retry file "), "the object file was really synced");
     assert!(!log.contains("retry dir metadata/objects injected-EIO\n"));
 
     phase(root, "stable");
     object.store_on(held, disk).unwrap();
     let log = events(root);
-    assert!(!log.contains("stable dir metadata/objects success\n"));
-    assert!(!log.contains("stable dir metadata/objects/publication success\n"));
+    assert_eq!(log.matches("stable dir metadata/objects success\n").count(), 1);
+    assert_eq!(
+        log.matches("stable dir metadata/objects/publication success\n").count(),
+        1,
+        "an independent install cannot inherit the previous call's durability proof"
+    );
     assert!(
         log.contains("stable file "),
         "immutable same-byte comparison retains its file barrier"
@@ -205,13 +204,15 @@ fn directory_sync_parallel_in_isolated_child() {
     assert_eq!(
         log.matches("parallel dir metadata/objects success\n")
             .count(),
-        2,
-        "one owner proves objects itself and then its publication child once"
+        4,
+        "each independent install completes its own parent obligations"
     );
     phase(&root, "stable");
     object.store_on(&held, &disk).unwrap();
-    assert!(!events(&root).contains("stable dir metadata/objects success\n"));
-    assert!(!events(&root).contains("stable dir metadata/objects/publication success\n"));
+    assert_eq!(
+        events(&root).matches("stable dir metadata/objects success\n").count(),
+        1
+    );
     fs::write(root.join("completed"), b"parallel").unwrap();
     println!("\nZXS_DIRECTORY_IO_COMPLETE parallel");
 }
@@ -225,6 +226,7 @@ fn directory_sync_eviction_in_isolated_child() {
     fs::write(root.join("observe"), b"").unwrap();
     object.store_on(&held, &disk).unwrap();
     let mut shards = BTreeSet::new();
+    let mut batch = held.object_install_batch();
     for index in 0..4096 {
         let candidate = PreparedMetadataObject::new(
             "directory-probe",
@@ -233,14 +235,15 @@ fn directory_sync_eviction_in_isolated_child() {
         )
         .unwrap();
         if shards.insert(candidate.hash[..2].to_owned()) {
-            candidate.store_on(&held, &disk).unwrap();
+            candidate.store_in_batch(&mut batch, &disk).unwrap();
         }
-        if shards.len() > MAX_DIRECTORY_RECEIPTS {
+        assert!(batch.pending.len() <= MAX_PENDING_OBJECT_DIRECTORIES);
+        if shards.len() > MAX_PENDING_OBJECT_DIRECTORIES {
             break;
         }
     }
-    assert_eq!(shards.len(), MAX_DIRECTORY_RECEIPTS + 1);
-    assert!(held.durable_directories.lock().unwrap().len() <= MAX_DIRECTORY_RECEIPTS);
+    assert_eq!(shards.len(), MAX_PENDING_OBJECT_DIRECTORIES + 1);
+    batch.finish().unwrap();
     retry_and_reuse(&root, &held, &disk, &object, &target);
 }
 
@@ -277,9 +280,8 @@ fn directory_sync_engine_recovery_in_isolated_child() {
     assert_eq!(result.operation_id, operation);
     assert_eq!(result.commit_state, CommitState::Published);
     let log = events(&root);
-    let barrier = log.find("retry dir metadata/objects success\n").unwrap();
-    let file = log.find("retry file ").unwrap();
-    assert!(barrier < file);
+    assert!(log.contains("retry dir metadata/objects success\n"));
+    assert!(log.contains("retry file "));
     let receipt = canonical_json(&result).unwrap();
     drop(engine);
     phase(&root, "second-open");
@@ -350,4 +352,34 @@ fn directory_sync_aba_in_isolated_child() {
     assert_eq!(fs::read(target).unwrap(), new.bytes());
     fs::write(root.join("completed"), b"aba").unwrap();
     println!("\nZXS_DIRECTORY_IO_COMPLETE aba");
+}
+
+#[test]
+#[ignore = "requires owned_directory_io/run.sh isolated fsync interposer"]
+fn directory_sync_batch_in_isolated_child() {
+    let (root, disk, object, _) = fixture();
+    let held = DiskRoot::open(&root).unwrap();
+    object.store_on(&held, &disk).unwrap();
+    phase(&root, "batch");
+    fs::write(root.join("observe"), b"").unwrap();
+    let mut batch = held.object_install_batch();
+    for _ in 0..3 {
+        object.store_in_batch(&mut batch, &disk).unwrap();
+    }
+    assert!(!events(&root).contains("batch dir metadata/objects success\n"));
+    batch.finish().unwrap();
+    let log = events(&root);
+    assert_eq!(log.matches("batch dir metadata/objects success\n").count(), 1);
+    assert_eq!(
+        log.matches("batch dir metadata/objects/publication success\n").count(),
+        1
+    );
+    phase(&root, "independent");
+    object.store_on(&held, &disk).unwrap();
+    assert_eq!(
+        events(&root).matches("independent dir metadata/objects success\n").count(),
+        1
+    );
+    fs::write(root.join("completed"), b"batch").unwrap();
+    println!("\nZXS_DIRECTORY_IO_COMPLETE batch");
 }

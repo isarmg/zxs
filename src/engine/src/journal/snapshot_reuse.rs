@@ -18,13 +18,26 @@ impl PreparedSnapshot {
         members: &[DiskConfig],
         installs: &mut ObjectInstalls,
     ) -> Result<String> {
-        self.store_created(|object| {
-            for disk in members {
-                object.store_on(&resources.get(disk)?.root, disk)?;
-                installs.record(object.bytes.len());
+        let mut batches = members
+            .iter()
+            .map(|disk| Ok((disk, resources.get(disk)?.root.object_install_batch())))
+            .collect::<Result<Vec<_>>>()?;
+        let mut pending = ObjectInstalls::default();
+        let hash = self.store_created(|object| {
+            for (disk, batch) in &mut batches {
+                object.store_in_batch(batch, disk)?;
+                pending.record(object.bytes.len());
             }
             Ok(object.hash.clone())
-        })
+        })?;
+        for (_, batch) in batches {
+            batch.finish()?;
+        }
+        // The counters describe fully completed installs, not outstanding
+        // directory obligations. A failed finish contributes no pending count.
+        installs.objects += pending.objects;
+        installs.bytes += pending.bytes;
+        Ok(hash)
     }
     fn store_created(
         &self,
@@ -76,7 +89,12 @@ impl PreparedSnapshot {
         state: &State,
         installs: &mut ObjectInstalls,
     ) -> Result<String> {
-        self.store_with_read(
+        let mut batches = members
+            .iter()
+            .map(|disk| Ok((disk, resources.get(disk)?.root.object_install_batch())))
+            .collect::<Result<Vec<_>>>()?;
+        let mut pending = ObjectInstalls::default();
+        let hash = self.store_with_read(
             members,
             state,
             |disk, kind, hash, maximum| {
@@ -89,11 +107,21 @@ impl PreparedSnapshot {
                 )
             },
             |disk, kind, hash, bytes| {
-                write_object_bytes_at(&resources.get(disk)?.root, disk, kind, hash, bytes)?;
-                installs.record(bytes.len());
+                let (_, batch) = batches
+                    .iter_mut()
+                    .find(|(member, _)| member.disk_id == disk.disk_id)
+                    .expect("invariant: snapshot install uses one of its configured members");
+                object_storage::write_object_bytes_in_batch(batch, disk, kind, hash, bytes)?;
+                pending.record(bytes.len());
                 Ok(())
             },
-        )
+        )?;
+        for (_, batch) in batches {
+            batch.finish()?;
+        }
+        installs.objects += pending.objects;
+        installs.bytes += pending.bytes;
+        Ok(hash)
     }
     #[cfg(test)]
     fn store_with(
@@ -127,7 +155,8 @@ impl PreparedSnapshot {
             .iter()
             .map(|object| ((object.kind, object.hash.as_str()), object))
             .collect::<BTreeMap<_, _>>();
-        // This bounded, invocation-local set records completed barriers only;
+        // Deduplicate successful object writes within this invocation. The
+        // caller finishes any outstanding parent-directory batch before return;
         // exhaustion repeats work rather than dropping verification.
         let mut installed = BTreeSet::new();
         let mut fault = |error: &Error| {

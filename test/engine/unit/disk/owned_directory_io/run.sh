@@ -6,7 +6,7 @@ fixture="$(cd "$(dirname "$0")" && pwd)"
 temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
 prefix=disk::owned::directory_tests
-for name in directory_sync_retry_in_isolated_child directory_sync_first_failure_in_isolated_child directory_sync_reopen_in_isolated_child directory_sync_replacement_in_isolated_child directory_sync_parallel_in_isolated_child directory_sync_eviction_in_isolated_child directory_sync_engine_recovery_in_isolated_child directory_sync_aba_in_isolated_child; do
+for name in directory_sync_retry_in_isolated_child directory_sync_first_failure_in_isolated_child directory_sync_reopen_in_isolated_child directory_sync_replacement_in_isolated_child directory_sync_parallel_in_isolated_child directory_sync_eviction_in_isolated_child directory_sync_engine_recovery_in_isolated_child directory_sync_aba_in_isolated_child directory_sync_batch_in_isolated_child; do
   listed="$("$binary" --list --ignored --exact "$prefix::$name")"
   if [[ "$(grep -Fxc "$prefix::$name: test" <<< "$listed")" != 1 ]]; then
     echo "Missing exact directory I/O regression: $prefix::$name" >&2
@@ -62,7 +62,10 @@ for failure in aba-success aba-parent; do
   mkdir -m 700 "$root"
   run_child "$root" directory_sync_aba_in_isolated_child aba "$failure" || status=1
 done
+root="$temporary/batch"
+mkdir -m 700 "$root"
+run_child "$root" directory_sync_batch_in_isolated_child batch || status=1
 if [[ "$status" != 0 ]]; then
   exit "$status"
 fi
-echo 'ZXS_DIRECTORY_IO_MATRIX_COMPLETE child parent same-owner new-process replacement parallel eviction engine-recovery aba'
+echo 'ZXS_DIRECTORY_IO_MATRIX_COMPLETE child parent same-owner new-process replacement parallel eviction engine-recovery aba batch'

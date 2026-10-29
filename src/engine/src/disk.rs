@@ -16,7 +16,7 @@ mod fan_out;
 mod mountinfo;
 mod owned;
 pub(crate) use fan_out::{FanOutTarget, fan_out_admitted, verified_fan_out_copy_at};
-pub(crate) use owned::{DiskHandle, DiskResources, DiskRoot};
+pub(crate) use owned::{DiskHandle, DiskResources, DiskRoot, ObjectInstallBatch};
 
 pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
     e.into()

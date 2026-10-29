@@ -79,6 +79,7 @@ jobs:
 
   directory-regressions:
     name: Real directory sync retry and engine regressions
+    needs: rust-format
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:

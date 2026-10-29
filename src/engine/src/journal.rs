@@ -632,13 +632,27 @@ impl PreparedMetadataObject {
     /// Install this object on one held disk root. Member stages call this from
     /// their own task so that no shared resource lookup sits on the write path.
     pub(crate) fn store_on(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<()> {
+        self.check_reader_limit()?;
+        write_object_bytes_at(root, disk, self.kind, &self.hash, &self.bytes)
+    }
+
+    pub(crate) fn store_in_batch(
+        &self,
+        batch: &mut crate::disk::ObjectInstallBatch<'_>,
+        disk: &DiskConfig,
+    ) -> Result<()> {
+        self.check_reader_limit()?;
+        object_storage::write_object_bytes_in_batch(batch, disk, self.kind, &self.hash, &self.bytes)
+    }
+
+    fn check_reader_limit(&self) -> Result<()> {
         if self.bytes.len() > MAX_METADATA {
             return Err(Error::new(
                 storage_contract::ErrorCode::ResourceLimit,
                 "serialized metadata exceeds reader limit",
             ));
         }
-        write_object_bytes_at(root, disk, self.kind, &self.hash, &self.bytes)
+        Ok(())
     }
     fn store_with(
         &self,
