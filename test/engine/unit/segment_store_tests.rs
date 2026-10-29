@@ -4,6 +4,9 @@ use crate::engine::ValidatedConfig;
 use crate::journal::{object_path, store_object};
 use storage_contract::{Config, Event, SegmentedEvents};
 
+#[path = "namespace_adoption.rs"]
+mod namespace_adoption;
+
 #[test]
 fn cache_byte_limit_rejects_an_oversized_entry_without_evicting_valid_entries() {
     let mut cache = BoundedCache::new(8, 32);
