@@ -1,218 +1,206 @@
-name: CI
-
+# Verification carrier only; never replace the normal product workflow in main.
+name: Namespace cache acceptance evidence
 on:
   push:
-  pull_request:
+    branches: [verify/namespace-cache-adoption-20261029-r82]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: '1'
-  CARGO_INCREMENTAL: '0'
-
+  group: namespace-cache-adoption-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  static:
-    name: Static workflow and tooling regressions (no Rust)
+  cache:
+    name: Namespace cache (${{ matrix.width }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check workflows, source governance and script regressions
-        run: bash .github/scripts/check.sh static
-
-  tests:
-    name: Tests (${{ matrix.suite }})
-    needs: static
-    runs-on: ubuntu-24.04
-    # Cold crypto runs include ten packaged/local-generated ring cases, including
-    # both release slow-test matrices; the measured run exceeded 30 minutes.
-    # Match the release verification budget without relaxing other shards.
-    timeout-minutes: ${{ matrix.suite == 'foundation-crypto' && 60 || 30 }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
+        width: [1000, 10000, 100000]
     env:
-      ZXS_REQUIRE_BROWSER: '1'
+      CARGO_NET_OFFLINE: 'true'
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_RELEASE_DEBUG: '1'
+      CARGO_PROFILE_RELEASE_STRIP: none
+      RUST_BACKTRACE: '1'
+      FIXTURE_SHA: '7aa1a90a079e234cbc7875956e3039ed6e032b56'
+      FIXTURE_TREE: '86693b3a40a770f94a7e7b95759ddcf31aa4ccb7'
+      BASE_SHA: '13b664e9fd41a356ffb7ed982d21e97abb123626'
+      WIDTH: '${{ matrix.width }}'
+    defaults:
+      run:
+        shell: bash
+        working-directory: product
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Get verification runner only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ github.sha }}
+          path: control
           persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: |
-          rustup show active-toolchain
-          rustc --version
-          cargo --version
-      - name: Install WASM standard library for cross-target checks
-        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install system SQLite SDK for unbundled validation
-        if: matrix.suite == 'foundation-data'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
-      - name: Enable sandboxed Chrome for browser future runtime checks
-        if: matrix.suite == 'foundation-language'
-        run: bash .github/scripts/prepare-browser-contract.sh
-      - name: Cache verified security scanner
-        if: matrix.suite == 'security'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+          sparse-checkout: .github/scripts/namespace-cache-adoption-run.sh
+          sparse-checkout-cone-mode: false
+      - name: Get immutable fixture over product candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          path: |
-            target/security-tools/bin/cargo-audit
-            target/security-tools/verified-build.json
-          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
-      - name: Run locked test suite
-        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
-      - name: Verify isolated system SQLite consumer
-        if: matrix.suite == 'foundation-data'
-        run: python3 .github/scripts/check-sqlite-system.py
-      - name: Retain exact foundation behaviour test evidence
-        if: always() && matrix.suite == 'foundation-async'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: foundation-behaviour-evidence
-          path: |
-            target/foundation-behaviour/logs/
-            target/foundation-behaviour/summary.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  web-production:
-    name: Production WASM build
-    needs: static
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
+          ref: 7aa1a90a079e234cbc7875956e3039ed6e032b56
+          path: product
           persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain and WASM target
+          fetch-depth: 2
+      - name: Authenticate inputs and create bounded verification environment
         run: |
-          rustup show active-toolchain
-          rustup target add wasm32-unknown-unknown
-          rustc --version
-      - name: Cache locally compiled Rust build helpers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/rust-build-tools
-          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
-          restore-keys: |
-            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build production Web distribution
-        run: bash .github/scripts/check.sh web-production
-      - name: Retain production assets for checks in this run
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-dist
-          path: build/web/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain browser template contract fixture
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output/
-          if-no-files-found: error
-          retention-days: 7
-
-  browser-smoke:
-    name: Extracted release browser smoke (Chrome)
-    needs: web-production
-    runs-on: ubuntu-24.04
-    # Compile one release-profile graph for both product and browser harness.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: rustup show active-toolchain
-      - name: Fetch production Web assets from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: web-dist
-          path: build/web
-      - name: Fetch browser template contract fixture from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output
-      - name: Verify runner Chrome and ChromeDriver
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/namespace-cache-evidence-$WIDTH"
+          mkdir -p "$evidence" "$RUNNER_TEMP/cache-cargo-$WIDTH" "$RUNNER_TEMP/cache-fixtures-$WIDTH"
+          printf 'EVIDENCE=%s\nCARGO_HOME=%s\nCARGO_TARGET_DIR=%s\nTMPDIR=%s\n' \
+            "$evidence" "$RUNNER_TEMP/cache-cargo-$WIDTH" "$RUNNER_TEMP/cache-target-$WIDTH" \
+            "$RUNNER_TEMP/cache-fixtures-$WIDTH" >> "$GITHUB_ENV"
+          runner="$GITHUB_WORKSPACE/control/.github/scripts/namespace-cache-adoption-run.sh"
+          printf '3ed248ec2b4854e433d2aa5b670145e5e3bccb13e2c45dc81df2993be2c9d25e  %s\n' "$runner" | sha256sum -c -
+          cp "$runner" "$evidence/runner.sh"
+          sha256sum "$runner" > "$evidence/runner.sha256"
+          cat > "$RUNNER_TEMP/cache-identity-$WIDTH.py" <<'PY'
+          import hashlib, json, os, pathlib, subprocess, sys, tomllib
+          root = pathlib.Path.cwd()
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / ('namespace-cache-evidence-' + os.environ['WIDTH'])
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          fixture, tree, base = (os.environ[name] for name in ('FIXTURE_SHA', 'FIXTURE_TREE', 'BASE_SHA'))
+          assert os.environ['GITHUB_REF'] == 'refs/heads/verify/namespace-cache-adoption-20261029-r82'
+          assert git('rev-parse', 'HEAD').decode().strip() == fixture
+          assert git('rev-parse', 'HEAD^{tree}').decode().strip() == tree
+          assert git('show', '-s', '--format=%P', 'HEAD').decode().strip() == base
+          expected = {'test/engine/unit/segment_store_tests.rs', 'test/engine/unit/namespace_adoption.rs'}
+          assert set(git('diff', '--name-only', base, fixture).decode().splitlines()) == expected
+          assert not git('status', '--porcelain=v1', '--untracked-files=all')
+          assert tomllib.loads((root / 'rust-toolchain.toml').read_text())['toolchain']['channel'] == '1.99.0'
+          config = tomllib.loads((root / '.cargo/config.toml').read_text())
+          assert config['net']['offline'] is True
+          assert config['source']['crates-io']['replace-with'] == 'unavailable-registry'
+          assert config['source']['unavailable-registry']['directory'] == 'compliance/empty-registry'
+          rows = []
+          for item in git('ls-files', '-s', '-z').split(b'\0'):
+              if not item:
+                  continue
+              metadata, raw_path = item.split(b'\t', 1)
+              mode, blob, stage = metadata.decode().split()
+              assert stage == '0'
+              path = root / os.fsdecode(raw_path)
+              data = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
+              rows.append([os.fsdecode(raw_path), mode, blob, hashlib.sha256(data).hexdigest(), path.lstat().st_mode])
+          if sys.argv[1] == 'before':
+              (out / 'tracked-inputs.json').write_text(json.dumps(rows) + '\n')
+              (out / 'fixture.patch').write_bytes(git('diff', '--binary', base, fixture))
+              identity = dict(fixture_sha=fixture, fixture_tree=tree, base_sha=base,
+                  carrier_sha=os.environ['GITHUB_SHA'], run_id=os.environ['GITHUB_RUN_ID'],
+                  run_attempt=os.environ['GITHUB_RUN_ATTEMPT'], width=int(os.environ['WIDTH']),
+                  exact_changed_paths=sorted(expected), deployment=False,
+                  scope='cache fixture only; whole-process heap trace is not per-edit live peak')
+              (out / 'input-identity.json').write_text(json.dumps(identity, indent=2) + '\n')
+          else:
+              assert rows == json.loads((out / 'tracked-inputs.json').read_text())
+              (out / 'source-unchanged.json').write_text(json.dumps(dict(status='passed', files=len(rows))) + '\n')
+          PY
+          python3 "$RUNNER_TEMP/cache-identity-$WIDTH.py" before
+          df -h "$RUNNER_TEMP" | tee "$evidence/filesystem-before.txt"
+          free -b > "$evidence/memory-before.txt"
+      - name: Install official profiler and build exact fixture within setup budget
+        timeout-minutes: 35
         run: |
-          chrome="$(command -v google-chrome)"
-          driver="$(command -v chromedriver)"
-          "$chrome" --version
-          "$driver" --version
-          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
-          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
-          test "$chrome_major" = "$driver_major"
-          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
-          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
-      - name: Install CJK fonts for the Chinese screenshot
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/cache-build-$WIDTH.sh" <<'BUILD'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          test -z "$(find "$CARGO_HOME" -mindepth 1 -print -quit)"
+          sudo apt-get -o Acquire::Retries=0 update
+          sudo apt-get -o Acquire::Retries=0 install --no-install-recommends -y heaptrack
+          dpkg-query -W -f='${binary:Package}\t${Version}\n' | grep -E '^(heaptrack|libheaptrack)' > "$EVIDENCE/profiler-packages.txt"
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.99.0 -Vv > "$EVIDENCE/rustc.txt"
+          cargo +1.99.0 --version > "$EVIDENCE/cargo.txt"
+          grep -q '^rustc 1\.99\.0 ' "$EVIDENCE/rustc.txt"
+          grep -q '^cargo 1\.99\.0 ' "$EVIDENCE/cargo.txt"
+          uname -a > "$EVIDENCE/kernel.txt"
+          lscpu > "$EVIDENCE/cpu.txt"
+          python3 - <<'PYENV'
+          import json, os, pathlib
+          names = ('CARGO_NET_OFFLINE', 'CARGO_TERM_COLOR', 'CARGO_INCREMENTAL', 'CARGO_BUILD_JOBS',
+              'CARGO_PROFILE_RELEASE_DEBUG', 'CARGO_PROFILE_RELEASE_STRIP', 'CARGO_HOME',
+              'CARGO_TARGET_DIR', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUST_BACKTRACE', 'TMPDIR')
+          (pathlib.Path(os.environ['EVIDENCE']) / 'build-environment.json').write_text(
+              json.dumps({name: os.environ.get(name) for name in names}, indent=2) + '\n')
+          PYENV
+          cargo +1.99.0 metadata --locked --offline --format-version=1 > "$EVIDENCE/cargo-metadata.json"
+          cargo +1.99.0 test --locked --offline --release -p storage-engine --lib --no-run \
+            --message-format=json > "$EVIDENCE/build.jsonl" 2> "$EVIDENCE/build.stderr"
+          python3 - <<'PY'
+          import json, os, pathlib
+          out = pathlib.Path(os.environ['EVIDENCE'])
+          artifacts = []
+          for line in (out / 'build.jsonl').read_text().splitlines():
+              item = json.loads(line)
+              if (item['reason'] == 'compiler-artifact' and item['target']['name'] == 'storage_engine'
+                      and item['profile']['test'] and item['executable'] is not None):
+                  artifacts.append(item)
+          assert len(artifacts) == 1, artifacts
+          artifact = artifacts[0]
+          binary = pathlib.Path(artifact['executable']).resolve(strict=True)
+          metadata = json.loads((out / 'cargo-metadata.json').read_text())
+          engine = next(package for package in metadata['packages'] if package['name'] == 'storage-engine')
+          node = next(node for node in metadata['resolve']['nodes'] if node['id'] == engine['id'])
+          (out / 'actual-build.json').write_text(json.dumps(dict(artifact=artifact,
+              metadata_features=node['features'], profile_overrides=dict(debug='1', strip='none'),
+              note='Unit test artifact may unify fault-injection dev self-dependency; not production-no-feature evidence.'), indent=2) + '\n')
+          (out / 'binary-path.txt').write_text(str(binary) + '\n')
+          PY
+          BUILD
+          set +e
+          timeout --signal=TERM --kill-after=20s 1980s bash "$RUNNER_TEMP/cache-build-$WIDTH.sh" \
+            > "$EVIDENCE/setup-build.log" 2>&1
+          status=$?
+          set -e
+          cat "$EVIDENCE/setup-build.log"
+          printf '{"exit_code":%s,"budget_seconds":1980,"scope":"setup-and-build"}\n' "$status" > "$EVIDENCE/setup-build-status.json"
+          exit "$status"
+      - name: Execute one width and retain raw heap allocation trace
+        timeout-minutes: 46
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Build and exercise extracted release packages
-        env:
-          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
-          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
-        run: |
-          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
-          cargo test --locked --offline --release -p browser-smoke
-          bash .github/scripts/release-package.sh
-          bash .github/scripts/release-acceptance.sh
-          python3 .github/scripts/check-csr-browser.py
-          bash .github/scripts/release-assemble.sh
-      - name: Retain verified installation candidate (not a published release)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installation-candidate-linux-web
-          path: release-assets/*
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain template browser result and exact input identity
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-browser
-          path: target/csr-template-check/output/*json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain real Web file manager screenshot
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-screenshot
-          path: artifacts/web-file-manager.png
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain responsive Web viewport previews
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          binary=$(cat "$EVIDENCE/binary-path.txt")
+          ulimit -v 6291456
+          ulimit -f 2097152
+          ulimit -a > "$EVIDENCE/execution-resource-limits.txt"
+          bash "$GITHUB_WORKSPACE/control/.github/scripts/namespace-cache-adoption-run.sh" \
+            "$binary" "$EVIDENCE/execution" "$WIDTH"
+      - name: Verify unchanged source and checksum all retained evidence
         if: always()
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/cache-identity-$WIDTH.py" after
+          df -h "$RUNNER_TEMP" > "$EVIDENCE/filesystem-after.txt"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path(os.environ['EVIDENCE'])
+          rows = []
+          for path in sorted(root.rglob('*')):
+              if path.is_file() and path.name != 'evidence-sha256.json':
+                  digest = hashlib.sha256()
+                  with path.open('rb') as stream:
+                      for block in iter(lambda: stream.read(1024 * 1024), b''):
+                          digest.update(block)
+                  rows.append(dict(path=str(path.relative_to(root)), bytes=path.stat().st_size, sha256=digest.hexdigest()))
+          (root / 'evidence-sha256.json').write_text(json.dumps(rows, indent=2) + '\n')
+          PY
+      - name: Retain actual identities, named outcomes and profiler traces
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: viewport-previews
-          path: artifacts/viewport-previews/
-          if-no-files-found: warn
+          name: namespace-cache-${{ matrix.width }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/namespace-cache-evidence-${{ matrix.width }}/
+          if-no-files-found: error
           retention-days: 7
-
-  smb-sdk:
-    needs: static
-    uses: ./.github/workflows/smb-sdk.yml
+          compression-level: 0
