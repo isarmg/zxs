@@ -220,3 +220,26 @@ fn scrub_host_policy_flags_are_positive_and_daemon_defaults_are_periodic() {
         assert!(Args::try_parse_from(["zxs", flag, "0"]).is_err());
     }
 }
+
+#[test]
+fn payload_proof_budget_is_optional_and_parsed_as_nonzero() {
+    assert!(
+        Args::try_parse_from(["zxs"])
+            .unwrap()
+            .max_held_payload_files
+            .is_none()
+    );
+    for value in ["1", "3", "128", "512"] {
+        assert_eq!(
+            Args::try_parse_from(["zxs", "--max-held-payload-files", value])
+                .unwrap()
+                .max_held_payload_files
+                .unwrap()
+                .get(),
+            value.parse::<usize>().unwrap()
+        );
+    }
+    for value in ["0", "-1", "invalid", "18446744073709551616"] {
+        assert!(Args::try_parse_from(["zxs", "--max-held-payload-files", value]).is_err());
+    }
+}

@@ -240,3 +240,76 @@ fn parsed_path_composition_preserves_cached_component_keys_and_checks_new_budget
         Error::PathTooDeep
     );
 }
+
+#[test]
+fn retained_components_preserve_display_and_unicode_keys() {
+    let path = PortablePath::parse("Docs/Straße.txt").unwrap();
+    let component = path.file_component();
+    assert_eq!(component.as_str(), "Straße.txt");
+    assert_eq!(component.key(), "strasse.txt");
+    assert_eq!(
+        PortablePath::from(&component),
+        PortablePath::parse("Straße.txt").unwrap()
+    );
+    let parent = PortablePath::parse("Σ").unwrap();
+    let joined = parent.join_component(&component).unwrap();
+    assert_eq!(joined.as_str(), "Σ/Straße.txt");
+    assert_eq!(joined.key(), "σ/strasse.txt");
+    assert_eq!(joined, PortablePath::parse("Σ/Straße.txt").unwrap());
+    assert_eq!(PortableName::parse("Café").unwrap().key(), "café");
+    for invalid in ["", ".", "..", "a/b", "e\u{301}", "a\\b", "CON", " bad"] {
+        assert!(PortableName::parse(invalid).is_err(), "{invalid:?}");
+    }
+}
+
+#[test]
+fn component_composition_keeps_utf16_and_depth_budgets() {
+    let component = PortableName::parse(&"𐐀".repeat(60)).unwrap();
+    let exact = PortablePath::parse(&"x".repeat(79))
+        .unwrap()
+        .join_component(&component)
+        .unwrap();
+    assert_eq!(exact.as_str().encode_utf16().count(), 200);
+    assert_eq!(exact, PortablePath::parse(exact.as_str()).unwrap());
+    assert!(
+        PortablePath::parse(&"x".repeat(80))
+            .unwrap()
+            .join_component(&component)
+            .is_err()
+    );
+    let component = PortableName::parse("x").unwrap();
+    let parent = PortablePath::parse(&vec!["x"; 31].join("/")).unwrap();
+    let exact = parent.join_component(&component).unwrap();
+    assert_eq!(exact.as_str().split('/').count(), 32);
+    assert!(exact.join_component(&component).is_err());
+    assert!(PortableName::parse(&"x".repeat(201)).is_err());
+}
+
+#[test]
+fn owned_component_append_reuses_buffers_and_matches_borrowed_join() {
+    let mut parent = PortablePath::parse("Straße").unwrap();
+    parent.display.reserve(64);
+    parent.key.reserve(64);
+    let display = parent.display.as_ptr();
+    let key = parent.key.as_ptr();
+    let component = PortableName::parse("Café.txt").unwrap();
+    let expected = parent.join_component(&component).unwrap();
+    let appended = parent.append_component(&component).unwrap();
+    assert_eq!(appended, expected);
+    assert_eq!(appended.display.as_ptr(), display);
+    assert_eq!(appended.key.as_ptr(), key);
+
+    let component = PortableName::parse(&"𐐀".repeat(60)).unwrap();
+    for units in [79, 80] {
+        let parent = PortablePath::parse(&"x".repeat(units)).unwrap();
+        let joined = parent.join_component(&component);
+        let appended = parent.append_component(&component);
+        assert_eq!(appended, joined);
+    }
+    let component = PortableName::parse("x").unwrap();
+    for depth in [31, 32] {
+        let parent = PortablePath::parse(&vec!["x"; depth].join("/")).unwrap();
+        let joined = parent.join_component(&component);
+        assert_eq!(parent.append_component(&component), joined);
+    }
+}

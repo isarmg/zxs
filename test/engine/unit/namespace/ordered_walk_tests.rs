@@ -170,7 +170,7 @@ fn next_index_child_is_not_read_before_an_earlier_subtree_hit() {
             format: Default::default(),
             entries: vec![NamespacePageEntry::Directory {
                 entry_id: "entry_directory".into(),
-                name: "a".into(),
+                name: name_policy::PortableName::parse("a").unwrap(),
                 entries: 1,
                 files: 1,
                 subtree: subtree.root,

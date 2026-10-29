@@ -8,6 +8,30 @@ use unicode::UnicodeNormalization;
 pub mod profiling;
 mod unicode;
 mod unicode16;
+/// One validated creation name, retaining its fixed-Unicode lookup key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PortableName {
+    display: String,
+    key: String,
+}
+impl PortableName {
+    pub fn parse(name: &str) -> Result<Self> {
+        if name.contains('/') {
+            return Err(Error::InvalidPath);
+        }
+        let path = PortablePath::parse(name)?;
+        Ok(Self {
+            display: path.display,
+            key: path.key,
+        })
+    }
+    pub fn as_str(&self) -> &str {
+        &self.display
+    }
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
 /// A validated creation path and its fixed-Unicode lookup key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PortablePath {
@@ -34,6 +58,36 @@ impl PortablePath {
             .rsplit('/')
             .next()
             .expect("invariant: a portable path has a component")
+    }
+    /// Retain the already validated final component and its lookup key.
+    pub fn file_component(&self) -> PortableName {
+        PortableName {
+            display: self.file_name().to_owned(),
+            key: self
+                .key
+                .rsplit('/')
+                .next()
+                .expect("invariant: a portable path has a component")
+                .to_owned(),
+        }
+    }
+    /// Consume a traversal prefix, retaining its buffers after successful composition.
+    pub fn append_component(mut self, component: &PortableName) -> Result<Self> {
+        self.display.push('/');
+        self.display.push_str(component.as_str());
+        validate_path_budget(&self.display)?;
+        self.key.push('/');
+        self.key.push_str(component.key());
+        Ok(self)
+    }
+    /// Build an independent child path while keeping a directory listing's prefix.
+    pub fn join_component(&self, component: &PortableName) -> Result<Self> {
+        let display = format!("{}/{}", self.display, component.as_str());
+        validate_path_budget(&display)?;
+        Ok(Self {
+            display,
+            key: format!("{}/{}", self.key, component.key()),
+        })
     }
     /// Ancestors inherit component validity and cached lookup keys.
     pub fn parent(&self) -> Option<Self> {
@@ -71,6 +125,15 @@ impl PortablePath {
     }
     pub fn into_string(self) -> String {
         self.display
+    }
+}
+
+impl From<&PortableName> for PortablePath {
+    fn from(name: &PortableName) -> Self {
+        Self {
+            display: name.display.clone(),
+            key: name.key.clone(),
+        }
     }
 }
 

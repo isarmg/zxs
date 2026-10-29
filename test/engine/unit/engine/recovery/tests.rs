@@ -176,59 +176,111 @@ fn recovery_rejects_dangling_journal_paths_instead_of_an_empty_history() {
 
 #[test]
 fn recovery_repairs_exact_candidate_and_publication_replicas() {
-    for interrupted in [false, true] {
-        for kind in ["candidate", "publication"] {
-            for missing in [false, true] {
-                let temp = tempfile::tempdir().unwrap();
-                let root = temp.path().join("system");
-                let config = Config::development([
-                    temp.path().join("a"),
-                    temp.path().join("b"),
-                    temp.path().join("c"),
-                ]);
-                let mut engine = Engine::initialize(&root, config).unwrap();
-                if interrupted {
-                    engine.inject_fault_once("after_publication_3");
+    for mode in [RecoveryMode::CompletePending, RecoveryMode::PreservePending] {
+        for fault in [
+            None,
+            Some("after_publication_2"),
+            Some("after_publication_3"),
+        ] {
+            for kind in ["candidate", "publication"] {
+                for missing in [false, true] {
+                    let temp = tempfile::tempdir().unwrap();
+                    let root = temp.path().join("system");
+                    let config = Config::development([
+                        temp.path().join("a"),
+                        temp.path().join("b"),
+                        temp.path().join("c"),
+                    ]);
+                    let mut engine = Engine::initialize(&root, config).unwrap();
+                    if let Some(fault) = fault {
+                        engine.inject_fault_once(fault);
+                    }
+                    let result = engine.create_repository(
+                        &storage_contract::RepositoryName::parse("repo").unwrap(),
+                        "P01",
+                        3,
+                        "admin",
+                        storage_contract::OperationId::generate(),
+                    );
+                    assert_eq!(result.is_err(), fault.is_some());
+                    let members = engine.members();
+                    let record = scan(&members[0])
+                        .unwrap()
+                        .records
+                        .into_iter()
+                        .find(|(r, _)| r.record_type == RecordType::Publication)
+                        .unwrap()
+                        .0;
+                    let candidate: Candidate =
+                        load_object(&members[0], "candidate", &record.candidate_hash).unwrap();
+                    let expected = canonical_json(
+                        &load_snapshot(&members[0], &candidate.snapshot_hash).unwrap(),
+                    )
+                    .unwrap();
+                    let hash = if kind == "candidate" {
+                        record.candidate_hash
+                    } else {
+                        record.object_hash
+                    };
+                    let target = object_path(&members[0], kind, &hash);
+                    let original = std::fs::read(&target).unwrap();
+                    drop(engine);
+                    if missing {
+                        std::fs::remove_file(&target).unwrap();
+                    } else {
+                        std::fs::write(&target, b"corrupt").unwrap();
+                    }
+                    let recovered = Engine::open_mode(&root, mode, None).unwrap();
+                    assert_eq!(canonical_json(recovered.state()).unwrap(), expected);
+                    assert_eq!(std::fs::read(&target).unwrap(), original);
+                    for member in &members {
+                        let receipts = scan(member).unwrap().records;
+                        assert_eq!(
+                            receipts
+                                .iter()
+                                .filter(|(record, _)| {
+                                    record.record_type == RecordType::Publication
+                                        && record.sequence == candidate.sequence
+                                })
+                                .count(),
+                            1
+                        );
+                    }
                 }
-                let result = engine.create_repository(
-                    &storage_contract::RepositoryName::parse("repo").unwrap(),
-                    "P01",
-                    3,
-                    "admin",
-                    storage_contract::OperationId::generate(),
-                );
-                assert_eq!(result.is_err(), interrupted);
-                let members = engine.members();
-                let record = scan(&members[0])
-                    .unwrap()
-                    .records
-                    .into_iter()
-                    .find(|(r, _)| r.record_type == RecordType::Publication)
-                    .unwrap()
-                    .0;
-                let candidate: Candidate =
-                    load_object(&members[0], "candidate", &record.candidate_hash).unwrap();
-                let expected =
-                    canonical_json(&load_snapshot(&members[0], &candidate.snapshot_hash).unwrap())
-                        .unwrap();
-                let hash = if kind == "candidate" {
-                    record.candidate_hash
-                } else {
-                    record.object_hash
-                };
-                let target = object_path(&members[0], kind, &hash);
-                let original = std::fs::read(&target).unwrap();
-                drop(engine);
-                if missing {
-                    std::fs::remove_file(&target).unwrap();
-                } else {
-                    std::fs::write(&target, b"corrupt").unwrap();
-                }
-                let recovered = Engine::open(&root).unwrap();
-                assert_eq!(canonical_json(recovered.state()).unwrap(), expected);
-                assert_eq!(std::fs::read(&target).unwrap(), original);
             }
         }
+    }
+}
+
+#[test]
+fn prepared_publication_repair_rejects_unsafe_targets() {
+    use std::os::unix::fs::symlink;
+    for hardlink in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let config = Config::development([temp.path().join("disk")]);
+        let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
+        let members = engine.members();
+        let member = &members[0];
+        let held = &engine.disk_resources.get(member).unwrap().root;
+        let object = PreparedMetadataObject::new(
+            "publication",
+            &json_codec::json!({"data": "verified"}),
+            MAX_METADATA,
+        )
+        .unwrap();
+        object.store_on(held, member).unwrap();
+        let target = object_path(member, "publication", &object.hash);
+        std::fs::remove_file(&target).unwrap();
+        let external = temp.path().join("external");
+        std::fs::write(&external, b"untouched").unwrap();
+        if hardlink {
+            std::fs::hard_link(&external, &target).unwrap();
+        } else {
+            symlink(&external, &target).unwrap();
+        }
+        assert!(object.repair_on(held, member).is_err());
+        assert_eq!(std::fs::read(&external).unwrap(), b"untouched");
+        assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
     }
 }
 
@@ -498,13 +550,20 @@ fn bound_snapshot_repair_preserves_alternate_page_partition() {
 fn repair_cache_is_bounded_and_overflow_remains_uncached() {
     let mut repaired = BTreeSet::new();
     for n in 0..MAX_REPAIRED_PAGES {
-        remember_repaired_page(&mut repaired, &format!("{n:064x}"));
+        stage_repaired_page(&BTreeSet::new(), &mut repaired, format!("{n:064x}"));
     }
     let overflow = format!("{:064x}", MAX_REPAIRED_PAGES);
-    remember_repaired_page(&mut repaired, &overflow);
+    stage_repaired_page(&BTreeSet::new(), &mut repaired, overflow.clone());
     assert_eq!(repaired.len(), MAX_REPAIRED_PAGES);
     assert!(!repaired.contains(&overflow));
     assert!(repaired.contains(&format!("{:064x}", 0)));
+    let mut staged = BTreeSet::new();
+    stage_repaired_page(&repaired, &mut staged, overflow.clone());
+    assert!(staged.is_empty());
+    repaired.pop_first().unwrap();
+    stage_repaired_page(&repaired, &mut staged, overflow);
+    assert_eq!(staged.len(), 1);
+    assert_eq!(repaired.len() + staged.len(), MAX_REPAIRED_PAGES);
 }
 
 #[test]
@@ -542,7 +601,10 @@ fn failed_replica_repair_does_not_cache_page_success() {
         .code(),
         storage_contract::ErrorCode::UnsafePath
     );
-    assert!(!repaired.contains(&format!("state-page/{page}")));
+    assert!(
+        repaired.is_empty(),
+        "failed stages do not commit any page markers"
+    );
     std::fs::remove_dir(&target).unwrap();
     repair_snapshot_copies(
         &engine.disk_resources,
@@ -554,6 +616,58 @@ fn failed_replica_repair_does_not_cache_page_success() {
     .unwrap();
     assert!(repaired.contains(&format!("state-page/{page}")));
     assert_eq!(std::fs::read(&target).unwrap(), original);
+}
+
+#[test]
+fn failed_snapshot_root_repair_keeps_only_previous_page_markers() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::development([
+        temp.path().join("a"),
+        temp.path().join("b"),
+        temp.path().join("c"),
+    ]);
+    let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
+    let members = engine.members();
+    let mut state = State::default();
+    state
+        .file_notes
+        .insert("file_test".into(), "second page".into());
+    let hash = store_snapshot(&members, &state).unwrap();
+    let snapshot: Snapshot = load_object(&members[0], "snapshot", &hash).unwrap();
+    let page =
+        crate::journal::map_pages(&members[0], snapshot.maps.values().next().unwrap())[0].clone();
+    let prior = BTreeSet::from([format!("state-page/{page}")]);
+    let mut repaired = prior.clone();
+    let target = object_path(&members[2], "snapshot", &hash);
+    std::fs::remove_file(&target).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    assert_eq!(
+        repair_snapshot_copies(
+            &engine.disk_resources,
+            &members,
+            &members,
+            &hash,
+            &mut repaired
+        )
+        .unwrap_err()
+        .code(),
+        storage_contract::ErrorCode::UnsafePath,
+    );
+    assert_eq!(
+        repaired, prior,
+        "no newly installed page is cached before all phase barriers"
+    );
+    std::fs::remove_dir(&target).unwrap();
+    repair_snapshot_copies(
+        &engine.disk_resources,
+        &members,
+        &members,
+        &hash,
+        &mut repaired,
+    )
+    .unwrap();
+    assert!(repaired.len() > prior.len());
+    assert!(repaired.is_superset(&prior));
 }
 
 #[test]

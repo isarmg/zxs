@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 #[path = "verified_payloads.rs"]
 mod verified_payloads;
-use verified_payloads::{MAX_HELD_PAYLOAD_FILES, PayloadPreparation, VerifiedPayloadSet};
+use verified_payloads::{PayloadPreparation, VerifiedPayloadSet};
 #[path = "publication/stages.rs"]
 mod stages;
 use stages::TaskOutcome;
@@ -479,7 +479,7 @@ impl Engine {
             |task| {
                 let mut io = StageIo::default();
                 let value = (|| {
-                    publication_object.store_on(&task.handle.root, task.disk)?;
+                    publication_object.repair_on(&task.handle.root, task.disk)?;
                     io.objects_completed += 1;
                     io.logical_bytes_completed += publication_object.bytes().len() as u64;
                     match existing_receipt(task.disk, &pub_hash) {
@@ -1258,7 +1258,7 @@ impl crate::engine::PlanningContext<'_> {
                 let handle = self.disk_resources.get(disk)?;
                 match VerifiedExisting::read_at(&handle.root, &directory, &p.version) {
                     Ok(proof) => {
-                        if held < MAX_HELD_PAYLOAD_FILES {
+                        if held < self.config.max_held_payload_files().get() {
                             held += 1;
                             copies.push(Some(proof));
                         } else {

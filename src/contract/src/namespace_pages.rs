@@ -99,14 +99,14 @@ pub struct CommitNamespace {
 pub enum NamespacePageEntry {
     File {
         entry_id: String,
-        name: String,
+        name: name_policy::PortableName,
         file_id: String,
         version_id: String,
         size: u64,
     },
     Directory {
         entry_id: String,
-        name: String,
+        name: name_policy::PortableName,
         entries: u64,
         files: u64,
         subtree: NamespaceReference,
@@ -120,28 +120,36 @@ impl NamespacePageEntry {
     }
     pub fn name(&self) -> &str {
         match self {
+            Self::File { name, .. } | Self::Directory { name, .. } => name.as_str(),
+        }
+    }
+    pub fn component(&self) -> &name_policy::PortableName {
+        match self {
             Self::File { name, .. } | Self::Directory { name, .. } => name,
         }
     }
-    /// The component lookup key derived from the stored display name.
-    pub fn lookup_key(&self) -> String {
-        name_policy::lookup_key(self.name())
+    /// The lookup key retained when the stored component was admitted.
+    pub fn lookup_key(&self) -> &str {
+        self.component().key()
     }
     pub fn is_directory(&self) -> bool {
         matches!(self, Self::Directory { .. })
     }
 }
 #[derive(Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-struct WirePageEntry {
-    entry_id: String,
-    name: String,
-    lookup_key: String,
+#[serialization(
+    deny_unknown_fields,
+    bound(deserialize = "Text: Deserialize<'de>, Reference: Deserialize<'de>")
+)]
+struct WirePageEntry<Text, Reference> {
+    entry_id: Text,
+    name: Text,
+    lookup_key: Text,
     kind: crate::NamespaceEntryKind,
     #[serialization(default, skip_serializing_if = "Option::is_none")]
-    file_id: Option<String>,
+    file_id: Option<Text>,
     #[serialization(default, skip_serializing_if = "Option::is_none")]
-    version_id: Option<String>,
+    version_id: Option<Text>,
     #[serialization(
         default,
         skip_serializing_if = "Option::is_none",
@@ -161,7 +169,7 @@ struct WirePageEntry {
     )]
     files: Option<u64>,
     #[serialization(default, skip_serializing_if = "Option::is_none")]
-    subtree: Option<NamespaceReference>,
+    subtree: Option<Reference>,
 }
 impl Serialize for NamespacePageEntry {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
@@ -173,12 +181,12 @@ impl Serialize for NamespacePageEntry {
                 version_id,
                 size,
             } => WirePageEntry {
-                entry_id: entry_id.clone(),
-                name: name.clone(),
-                lookup_key: name_policy::lookup_key(name),
+                entry_id: entry_id.as_str(),
+                name: name.as_str(),
+                lookup_key: name.key(),
                 kind: crate::NamespaceEntryKind::File,
-                file_id: Some(file_id.clone()),
-                version_id: Some(version_id.clone()),
+                file_id: Some(file_id.as_str()),
+                version_id: Some(version_id.as_str()),
                 size: Some(*size),
                 entries: None,
                 files: None,
@@ -191,16 +199,16 @@ impl Serialize for NamespacePageEntry {
                 files,
                 subtree,
             } => WirePageEntry {
-                entry_id: entry_id.clone(),
-                name: name.clone(),
-                lookup_key: name_policy::lookup_key(name),
+                entry_id: entry_id.as_str(),
+                name: name.as_str(),
+                lookup_key: name.key(),
                 kind: crate::NamespaceEntryKind::Directory,
                 file_id: None,
                 version_id: None,
                 size: None,
                 entries: Some(*entries),
                 files: Some(*files),
-                subtree: Some(subtree.clone()),
+                subtree: Some(subtree),
             },
         };
         wire.serialize(serializer)
@@ -209,16 +217,9 @@ impl Serialize for NamespacePageEntry {
 impl<'de> Deserialize<'de> for NamespacePageEntry {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         use data_serialization::de::Error as DeError;
-        let wire = WirePageEntry::deserialize(deserializer)?;
-        // The stored display name must be one valid path component whose
-        // derived key equals the recorded lookup key.
-        if wire.name.contains('/') {
-            return Err(D::Error::custom("namespace entry name is not a component"));
-        }
-        let component = name_policy::PortablePath::parse(&wire.name).map_err(D::Error::custom)?;
-        if component.file_name() != wire.name
-            || name_policy::lookup_key(&wire.name) != wire.lookup_key
-        {
+        let wire = WirePageEntry::<String, NamespaceReference>::deserialize(deserializer)?;
+        let component = name_policy::PortableName::parse(&wire.name).map_err(D::Error::custom)?;
+        if component.key() != wire.lookup_key {
             return Err(D::Error::custom(
                 "entry lookup key differs from its display name",
             ));
@@ -238,7 +239,7 @@ impl<'de> Deserialize<'de> for NamespacePageEntry {
                     {
                         Ok(Self::File {
                             entry_id: wire.entry_id,
-                            name: wire.name,
+                            name: component,
                             file_id,
                             version_id,
                             size,
@@ -260,7 +261,7 @@ impl<'de> Deserialize<'de> for NamespacePageEntry {
                         subtree.validate().map_err(D::Error::custom)?;
                         Ok(Self::Directory {
                             entry_id: wire.entry_id,
-                            name: wire.name,
+                            name: component,
                             entries,
                             files,
                             subtree,

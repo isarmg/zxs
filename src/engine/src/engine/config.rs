@@ -9,6 +9,8 @@ use std::{
     sync::Arc,
 };
 
+pub(super) const DEFAULT_MAX_HELD_PAYLOAD_FILES: usize = 128;
+
 /// A pool configuration admitted at a file or public API boundary.
 /// Only root rebinding and restart-only limits can change after admission.
 ///
@@ -28,6 +30,7 @@ struct AdmittedConfig {
     config: Config,
     metadata_members: Box<[usize]>,
     workspace_limits: Option<super::RetainedWorkspaceLimits>,
+    max_held_payload_files: std::num::NonZeroUsize,
 }
 
 impl TryFrom<Config> for ValidatedConfig {
@@ -46,6 +49,8 @@ impl TryFrom<Config> for ValidatedConfig {
                 config,
                 metadata_members,
                 workspace_limits: None,
+                max_held_payload_files: std::num::NonZeroUsize::new(DEFAULT_MAX_HELD_PAYLOAD_FILES)
+                    .expect("invariant: default payload proof budget is nonzero"),
             }),
         })
     }
@@ -155,6 +160,14 @@ impl ValidatedConfig {
         }
         Arc::make_mut(&mut self.admitted).workspace_limits = limits;
         Ok(self)
+    }
+
+    pub(super) fn set_max_held_payload_files(&mut self, limit: std::num::NonZeroUsize) {
+        Arc::make_mut(&mut self.admitted).max_held_payload_files = limit;
+    }
+
+    pub(super) fn max_held_payload_files(&self) -> std::num::NonZeroUsize {
+        self.admitted.max_held_payload_files
     }
 
     pub(super) fn effective_workspace_limits(&self) -> super::RetainedWorkspaceLimits {

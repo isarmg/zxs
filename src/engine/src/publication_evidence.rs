@@ -260,13 +260,6 @@ fn encode_repair<T: data_serialization::Serialize>(
 }
 
 #[cfg(test)]
-pub(crate) fn repair_authenticated_object(
-    members: &[DiskConfig],
-    object: &AuthenticatedMetadataObject,
-) -> Result<()> {
-    repair_object_bytes(members, object.kind(), object.hash(), object.bytes())
-}
-
 pub(crate) fn repair_authenticated_object_at(
     resources: &DiskResources,
     members: &[DiskConfig],
@@ -302,7 +295,7 @@ fn repair_object_bytes_at(
     Ok(())
 }
 
-fn repair_member(
+pub(crate) fn repair_member(
     root: &DiskRoot,
     member: &DiskConfig,
     kind: &str,
@@ -310,15 +303,26 @@ fn repair_member(
     bytes: &[u8],
 ) -> Result<()> {
     let address = ObjectAddress::parse(kind, hash)?;
-    let paths = address.existing_paths(root, member)?;
+    let mut batch = root.object_install_batch();
+    repair_member_in_batch(&mut batch, member, &address, bytes)?;
+    batch.finish()
+}
+
+fn repair_member_in_batch(
+    batch: &mut ObjectInstallBatch<'_>,
+    member: &DiskConfig,
+    address: &ObjectAddress<'_>,
+    bytes: &[u8],
+) -> Result<()> {
+    let paths = address.existing_paths(batch.root(), member)?;
     if paths.is_empty() {
-        return root.write_immutable_object(&address, bytes, false);
+        return batch.write(address, bytes, false);
     }
     for path in paths {
-        match root.optional_metadata(&path)? {
+        match batch.root().optional_metadata(&path)? {
             Some(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
                 // Never replace an unsafe entry, even if a healthy replica exists.
-                let replace = match root.open_optional_regular(&path)? {
+                let replace = match batch.root().open_optional_regular(&path)? {
                     None => false,
                     Some(file) => match read_file_bytes(file, MAX_METADATA) {
                         Ok(existing) => existing != bytes,
@@ -332,10 +336,10 @@ fn repair_member(
                 };
                 // Matching bytes may be the visible result of a previous
                 // repair whose directory sync failed. Complete its barrier.
-                root.write_immutable_object(&address, bytes, replace)?;
+                batch.write(address, bytes, replace)?;
             }
             None => {
-                root.write_immutable_object(&address, bytes, false)?;
+                batch.write(address, bytes, false)?;
             }
             Some(_) => {
                 return Err(Error::new(
@@ -346,6 +350,61 @@ fn repair_member(
         }
     }
     Ok(())
+}
+
+// Recovery holds this many directory obligations across all members, not per member.
+const MAX_RECOVERY_OBJECT_DIRECTORIES: usize = ObjectInstallBatch::MAX_PENDING_DIRECTORIES;
+
+#[must_use = "finish all recovery object barriers before publishing or caching success"]
+pub(crate) struct RecoveryObjectRepairBatch<'a> {
+    members: Vec<(&'a DiskConfig, ObjectInstallBatch<'a>)>,
+    pending_directories: usize,
+}
+
+impl<'a> RecoveryObjectRepairBatch<'a> {
+    pub(crate) fn new(resources: &'a DiskResources, members: &'a [DiskConfig]) -> Result<Self> {
+        let members = members
+            .iter()
+            .map(|member| Ok((member, resources.get(member)?.root.object_install_batch())))
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            members,
+            pending_directories: 0,
+        })
+    }
+
+    pub(crate) fn repair(&mut self, object: &AuthenticatedMetadataObject) -> Result<()> {
+        let address = ObjectAddress::parse(object.kind(), object.hash())?;
+        let directories = address.directory_count();
+        assert!(
+            directories <= MAX_RECOVERY_OBJECT_DIRECTORIES,
+            "invariant: one object directory chain fits the recovery batch"
+        );
+        for index in 0..self.members.len() {
+            if self.pending_directories + directories > MAX_RECOVERY_OBJECT_DIRECTORIES {
+                self.flush()?;
+            }
+            let (member, batch) = &mut self.members[index];
+            let before = batch.pending_directories();
+            repair_member_in_batch(batch, member, &address, object.bytes())?;
+            self.pending_directories += batch.pending_directories() - before;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        for (_, batch) in &mut self.members {
+            let root = batch.root();
+            let pending = std::mem::replace(batch, root.object_install_batch());
+            pending.finish()?;
+        }
+        self.pending_directories = 0;
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> Result<()> {
+        self.flush()
+    }
 }
 
 #[cfg(test)]

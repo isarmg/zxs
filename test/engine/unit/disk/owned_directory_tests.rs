@@ -395,6 +395,70 @@ fn directory_sync_batch_in_isolated_child() {
             .count(),
         1
     );
+    let config = ValidatedConfig::try_from(Config::development([root.clone()])).unwrap();
+    let resources = DiskResources::open(&config, false).unwrap();
+    let authenticated = crate::journal::AuthenticatedMetadataObject::authenticate(
+        "publication",
+        &object.hash,
+        decode_strict(object.bytes()).unwrap(),
+    )
+    .unwrap();
+    phase(&root, "recovery-batch");
+    let mut recovery =
+        crate::publication_evidence::RecoveryObjectRepairBatch::new(&resources, &config.disks)
+            .unwrap();
+    for _ in 0..3 {
+        recovery.repair(&authenticated).unwrap();
+    }
+    assert!(!events(&root).contains("recovery-batch dir metadata/objects success\n"));
+    let parent = root.join("metadata/objects");
+    let directory = parent.join("publication");
+    let saved = root.join("recovery-batch-aba");
+    fs::rename(&directory, &saved).unwrap();
+    phase(&root, "recovery-removed");
+    held.directory(&parent).unwrap().sync_all().unwrap();
+    fs::rename(&saved, &directory).unwrap();
+    phase(&root, "recovery-finish");
+    recovery.finish().unwrap();
+    assert_eq!(
+        events(&root)
+            .matches("recovery-finish dir metadata/objects success\n")
+            .count(),
+        1
+    );
+
+    // Existing directories defer the injected parent EIO until the final finish.
+    let objects = vec![authenticated];
+    let mut repaired = BTreeSet::new();
+    phase(&root, "first");
+    let error = crate::history_package::repair_history_objects_at(
+        &resources,
+        &config.disks,
+        &objects,
+        &mut repaired,
+    )
+    .unwrap_err();
+    assert_eio(&error);
+    assert!(
+        repaired.is_empty(),
+        "a failed final barrier cannot publish cache markers"
+    );
+    assert_eq!(events(&root).matches("injected-EIO\n").count(), 1);
+    phase(&root, "recovery-retry");
+    crate::history_package::repair_history_objects_at(
+        &resources,
+        &config.disks,
+        &objects,
+        &mut repaired,
+    )
+    .unwrap();
+    assert_eq!(repaired.len(), 1);
+    assert_eq!(
+        events(&root)
+            .matches("recovery-retry dir metadata/objects success\n")
+            .count(),
+        1
+    );
     fs::write(root.join("completed"), b"batch").unwrap();
     println!("\nZXS_DIRECTORY_IO_COMPLETE batch");
 }

@@ -40,6 +40,16 @@ impl<'a> ObjectAddress<'a> {
         sharded_path(root, self.kind, self.hash)
     }
 
+    /// Includes the held root and every parent in the current object layout.
+    pub(crate) fn directory_count(&self) -> usize {
+        self.path(Path::new(""))
+            .parent()
+            .expect("invariant: object addresses have a directory parent")
+            .components()
+            .count()
+            + 1
+    }
+
     pub(crate) fn existing_paths(&self, root: &DiskRoot, d: &DiskConfig) -> Result<Vec<PathBuf>> {
         existing_paths(root, d, self.kind, self.hash)
     }

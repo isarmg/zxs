@@ -496,15 +496,6 @@ impl Engine {
                     &hash,
                     &candidate,
                 )?;
-                if let Some(publication) = &publication {
-                    repair_object_copies_at(
-                        &self.disk_resources,
-                        &members,
-                        "publication",
-                        &object_hash("publication", publication)?,
-                        publication,
-                    )?;
-                }
                 let recovered_result = publication
                     .as_ref()
                     .filter(|p| p.recovery.is_some())
@@ -653,9 +644,13 @@ fn retain_replayed_records(history: &mut Vec<(Record, String)>, tail: &[(Record,
 // Optimization only: bound hash storage independently of retained history.
 // Once full, uncached pages still receive the complete verification/repair.
 const MAX_REPAIRED_PAGES: usize = 16_384;
-fn remember_repaired_page(repaired: &mut BTreeSet<String>, hash: &str) {
-    if repaired.len() < MAX_REPAIRED_PAGES {
-        repaired.insert(hash.to_owned());
+fn stage_repaired_page(
+    repaired: &BTreeSet<String>,
+    staged: &mut BTreeSet<String>,
+    address: String,
+) {
+    if repaired.len() + staged.len() < MAX_REPAIRED_PAGES {
+        staged.insert(address);
     }
 }
 
@@ -671,6 +666,9 @@ fn repair_snapshot_copies(
     )?;
     let snapshot: Snapshot = json_codec::from_value(root.value().clone())?;
     validate_snapshot_schema(&snapshot)?;
+    let mut batch =
+        crate::publication_evidence::RecoveryObjectRepairBatch::new(resources, members)?;
+    let mut staged = BTreeSet::new();
     for reference in snapshot
         .maps
         .values()
@@ -686,11 +684,9 @@ fn repair_snapshot_copies(
             |object| {
                 // Domain participates in the key: a digest is not an object kind.
                 let address = format!("{}/{}", object.kind(), object.hash());
-                if !repaired_pages.contains(&address) {
-                    crate::publication_evidence::repair_authenticated_object_at(
-                        resources, members, &object,
-                    )?;
-                    remember_repaired_page(repaired_pages, &address);
+                if !repaired_pages.contains(&address) && !staged.contains(&address) {
+                    batch.repair(&object)?;
+                    stage_repaired_page(repaired_pages, &mut staged, address);
                     #[cfg(test)]
                     PAGE_REPAIR_COUNT.with(|count| count.set(count.get() + 1));
                 }
@@ -702,11 +698,9 @@ fn repair_snapshot_copies(
         let object =
             crate::publication_evidence::verified_graph_object_at(resources, sources, kind, hash)?;
         let address = format!("{}/{}", object.kind(), object.hash());
-        if !repaired_pages.contains(&address) {
-            crate::publication_evidence::repair_authenticated_object_at(
-                resources, members, &object,
-            )?;
-            remember_repaired_page(repaired_pages, &address);
+        if !repaired_pages.contains(&address) && !staged.contains(&address) {
+            batch.repair(&object)?;
+            stage_repaired_page(repaired_pages, &mut staged, address);
         }
         Ok(object)
     })?;
@@ -716,8 +710,11 @@ fn repair_snapshot_copies(
         "state-control-auth",
         snapshot.control_auth.hash(),
     )?;
-    crate::publication_evidence::repair_authenticated_object_at(resources, members, &auth)?;
-    crate::publication_evidence::repair_authenticated_object_at(resources, members, &root)
+    batch.repair(&auth)?;
+    batch.repair(&root)?;
+    batch.finish()?;
+    repaired_pages.extend(staged);
+    Ok(())
 }
 
 #[cfg(test)]

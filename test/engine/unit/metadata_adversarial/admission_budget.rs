@@ -52,7 +52,7 @@ fn deep_child(disk: &DiskConfig, name: &str, identity: u64) -> NamespaceIndexChi
         disk,
         vec![NamespacePageEntry::Directory {
             entry_id: format!("entry_{identity:032x}"),
-            name: name.into(),
+            name: name_policy::PortableName::parse(name).unwrap(),
             entries: 0,
             files: 0,
             subtree: empty,

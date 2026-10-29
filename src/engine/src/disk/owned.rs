@@ -339,9 +339,15 @@ impl DiskRoot {
     }
 }
 
-impl ObjectInstallBatch<'_> {
-    pub(crate) fn root(&self) -> &DiskRoot {
+impl<'a> ObjectInstallBatch<'a> {
+    pub(crate) const MAX_PENDING_DIRECTORIES: usize = MAX_PENDING_OBJECT_DIRECTORIES;
+
+    pub(crate) fn root(&self) -> &'a DiskRoot {
         self.root
+    }
+
+    pub(crate) fn pending_directories(&self) -> usize {
+        self.pending.len()
     }
 
     /// Install bytes now, retaining the actual directory obligations until

@@ -3,7 +3,7 @@ use super::*;
 fn file(name: &str) -> NamespacePageEntry {
     NamespacePageEntry::File {
         entry_id: format!("entry-{name}"),
-        name: name.into(),
+        name: name_policy::PortableName::parse(name).unwrap(),
         file_id: format!("file-{name}"),
         version_id: format!("ver-{name}"),
         size: 7,
@@ -12,7 +12,7 @@ fn file(name: &str) -> NamespacePageEntry {
 fn directory(name: &str) -> NamespacePageEntry {
     NamespacePageEntry::Directory {
         entry_id: format!("entry-{name}"),
-        name: name.into(),
+        name: name_policy::PortableName::parse(name).unwrap(),
         entries: 3,
         files: 2,
         subtree: NamespaceReference {
@@ -143,5 +143,45 @@ fn index_and_commit_namespace_round_trip_with_decimal_totals() {
         .validate()
         .is_err(),
         "uppercase hex is not a canonical object hash"
+    );
+}
+
+#[test]
+fn retained_component_keys_preserve_canonical_wire_bytes() {
+    let entry = file("Straße.txt");
+    let expected = r#"{"entry_id":"entry-Straße.txt","file_id":"file-Straße.txt","kind":"file","lookup_key":"strasse.txt","name":"Straße.txt","size":"7","version_id":"ver-Straße.txt"}"#;
+    assert_eq!(canonical_json(&entry).unwrap(), expected.as_bytes());
+    let decoded: NamespacePageEntry = json_codec::from_str(expected).unwrap();
+    assert_eq!(canonical_json(&decoded).unwrap(), expected.as_bytes());
+    assert_eq!(decoded.name(), "Straße.txt");
+    assert_eq!(decoded.lookup_key(), "strasse.txt");
+    assert!(std::ptr::eq(
+        decoded.lookup_key().as_ptr(),
+        decoded.component().key().as_ptr()
+    ));
+    assert!(std::ptr::eq(
+        decoded.lookup_key().as_ptr(),
+        decoded.lookup_key().as_ptr()
+    ));
+    let mut nfd = json_codec::to_value(file("Café.txt")).unwrap();
+    nfd["name"] = json_codec::json!("Cafe\u{301}.txt");
+    assert!(json_codec::from_value::<NamespacePageEntry>(nfd).is_err());
+}
+
+#[test]
+fn borrowed_page_entry_serialization_keeps_field_order_and_optional_omissions() {
+    assert_eq!(
+        json_codec::to_string(&file("a.txt")).unwrap(),
+        r#"{"entry_id":"entry-a.txt","name":"a.txt","lookup_key":"a.txt","kind":"file","file_id":"file-a.txt","version_id":"ver-a.txt","size":"7"}"#
+    );
+    let expected = format!(
+        r#"{{"entry_id":"entry-docs","name":"docs","lookup_key":"docs","kind":"directory","entries":"3","files":"2","subtree":{{"kind":"namespace-page","hash":"{}"}}}}"#,
+        "a".repeat(64),
+    );
+    let entry = directory("docs");
+    assert_eq!(json_codec::to_string(&entry).unwrap(), expected);
+    assert_eq!(
+        json_codec::from_str::<NamespacePageEntry>(&expected).unwrap(),
+        entry
     );
 }

@@ -70,13 +70,10 @@ fn validate_page_shape(page: &NamespacePage, canonical_bytes: usize) -> Result<(
     if page.entries.len() > 1 && canonical_bytes > NAMESPACE_PAGE_TARGET_BYTES {
         return Err(corrupt("namespace page exceeds the byte bound"));
     }
-    let mut previous: Option<String> = None;
+    let mut previous: Option<&str> = None;
     for entry in &page.entries {
         let key = entry.lookup_key();
-        if previous
-            .as_deref()
-            .is_some_and(|previous| previous >= key.as_str())
-        {
+        if previous.is_some_and(|previous| previous >= key) {
             return Err(corrupt("namespace page keys are not strictly increasing"));
         }
         previous = Some(key);
@@ -397,7 +394,7 @@ fn pack_directory(
         if current.is_empty() {
             return Ok(());
         }
-        let first_key = current[0].lookup_key();
+        let first_key = current[0].lookup_key().to_owned();
         let mut entries = 0u64;
         let mut files = 0u64;
         for entry in current.iter() {
@@ -495,7 +492,7 @@ fn pack_directory(
 enum DraftChild {
     File {
         entry_id: String,
-        name: String,
+        name: name_policy::PortableName,
         file_id: String,
         version_id: String,
         size: u64,
@@ -503,14 +500,14 @@ enum DraftChild {
     /// A directory not opened by this transaction; its subtree is shared.
     Sealed {
         entry_id: String,
-        name: String,
+        name: name_policy::PortableName,
         entries: u64,
         files: u64,
         subtree: NamespaceReference,
     },
     Open {
         entry_id: String,
-        name: String,
+        name: name_policy::PortableName,
         directory: DirectoryDraft,
     },
 }
@@ -657,7 +654,7 @@ impl DirectoryDraft {
             let mut entries = Vec::new();
             directory_children(&base.reference, source, &mut entries)?;
             for entry in entries {
-                let key = entry.lookup_key();
+                let key = entry.lookup_key().to_owned();
                 if self.original.contains_key(&key) || self.absent.contains(&key) {
                     continue;
                 }
@@ -690,24 +687,32 @@ impl DirectoryDraft {
         source: &(impl NamespaceSource + ?Sized),
     ) -> Result<Option<&mut DirectoryDraft>> {
         self.load_child(key, source)?;
+        if matches!(self.children.get(key), Some(DraftChild::Sealed { .. })) {
+            let (key, child) = self
+                .children
+                .remove_entry(key)
+                .expect("invariant: the sealed child is present");
+            let child = match child {
+                DraftChild::Sealed {
+                    entry_id,
+                    name,
+                    entries,
+                    files,
+                    subtree,
+                } => DraftChild::Open {
+                    entry_id,
+                    name,
+                    directory: DirectoryDraft::load(&subtree, entries, files),
+                },
+                DraftChild::File { .. } | DraftChild::Open { .. } => {
+                    unreachable!("invariant: only a sealed child is removed")
+                }
+            };
+            self.children.insert(key, child);
+        }
         let Some(child) = self.children.get_mut(key) else {
             return Ok(None);
         };
-        if let DraftChild::Sealed {
-            entry_id,
-            name,
-            entries,
-            files,
-            subtree,
-        } = child
-        {
-            let directory = DirectoryDraft::load(subtree, *entries, *files);
-            *child = DraftChild::Open {
-                entry_id: std::mem::take(entry_id),
-                name: std::mem::take(name),
-                directory,
-            };
-        }
         match child {
             DraftChild::Open { directory, .. } => Ok(Some(directory)),
             DraftChild::File { .. } => Ok(None),
@@ -791,7 +796,7 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
             if !display.is_empty() {
                 display.push('/');
             }
-            display.push_str(name);
+            display.push_str(name.as_str());
             current = current
                 .open_child(key, &self.source)?
                 .expect("invariant: the parent child is a directory");
@@ -813,7 +818,7 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
             leaf.to_owned(),
             DraftChild::File {
                 entry_id: entry.entry_id.clone(),
-                name: entry.name().to_owned(),
+                name: entry.location().file_component(),
                 file_id: entry.file_id.clone(),
                 version_id: entry.version_id.clone(),
                 size: entry.size,
@@ -833,7 +838,7 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
                     leaf.to_owned(),
                     DraftChild::Open {
                         entry_id: entry.entry_id.clone(),
-                        name: entry.name().to_owned(),
+                        name: entry.location().file_component(),
                         directory: DirectoryDraft::default(),
                     },
                 );
@@ -909,7 +914,7 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
                 ..
             } => DraftChild::File {
                 entry_id,
-                name: destination.name().to_owned(),
+                name: destination.location().file_component(),
                 file_id,
                 version_id,
                 size,
@@ -922,7 +927,7 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
                 ..
             } => DraftChild::Sealed {
                 entry_id,
-                name: destination.name().to_owned(),
+                name: destination.location().file_component(),
                 entries,
                 files,
                 subtree,
@@ -933,7 +938,7 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
                 ..
             } => DraftChild::Open {
                 entry_id,
-                name: destination.name().to_owned(),
+                name: destination.location().file_component(),
                 directory,
             },
         };
@@ -1023,9 +1028,9 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
             let keys: Vec<String> = draft.children.keys().cloned().collect();
             for child_key in keys {
                 let (name, file) = match draft.children.get(&child_key) {
-                    Some(DraftChild::File { name, .. }) => (name.clone(), true),
+                    Some(DraftChild::File { name, .. }) => (name.as_str().to_owned(), true),
                     Some(DraftChild::Sealed { name, .. } | DraftChild::Open { name, .. }) => {
-                        (name.clone(), false)
+                        (name.as_str().to_owned(), false)
                     }
                     None => continue,
                 };
@@ -1061,7 +1066,7 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
                     DraftChild::File { name, .. }
                     | DraftChild::Sealed { name, .. }
                     | DraftChild::Open { name, .. },
-                ) => name.clone(),
+                ) => name.as_str().to_owned(),
                 None => return Ok(Vec::new()),
             };
             prefix = if prefix.is_empty() {
@@ -1079,9 +1084,9 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
             return Ok(Vec::new());
         };
         let (name, file) = match child {
-            DraftChild::File { name, .. } => (name.clone(), true),
+            DraftChild::File { name, .. } => (name.as_str().to_owned(), true),
             DraftChild::Sealed { name, .. } | DraftChild::Open { name, .. } => {
-                (name.clone(), false)
+                (name.as_str().to_owned(), false)
             }
         };
         let display = if prefix.is_empty() {
@@ -1104,24 +1109,10 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
                 kind: storage_contract::NamespaceEntryKind::Directory,
             },
         )];
-        if let DraftChild::Sealed {
-            entry_id,
-            name,
-            subtree,
-            entries,
-            files,
-        } = child
-        {
-            let directory = DirectoryDraft::load(subtree, *entries, *files);
-            *child = DraftChild::Open {
-                entry_id: std::mem::take(entry_id),
-                name: std::mem::take(name),
-                directory,
-            };
-        }
-        if let DraftChild::Open { directory, .. } = child {
-            collect(directory, &display, source, &self.order, &mut descendants)?;
-        }
+        let directory = current
+            .open_child(leaf, source)?
+            .expect("invariant: a directory deletion resolves to a directory");
+        collect(directory, &display, source, &self.order, &mut descendants)?;
         descendants.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         out.extend(descendants.into_iter().map(|(_, deleted)| deleted));
         Ok(out)
@@ -1248,7 +1239,7 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
             if !display.is_empty() {
                 display.push('/');
             }
-            display.push_str(name);
+            display.push_str(name.as_str());
             if components.peek().is_some() {
                 current = current
                     .open_child(component, &self.source)?
@@ -1284,9 +1275,9 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
             let keys: Vec<String> = draft.children.keys().cloned().collect();
             for child_key in keys {
                 let (name, file) = match draft.children.get(&child_key) {
-                    Some(DraftChild::File { name, .. }) => (name.clone(), true),
+                    Some(DraftChild::File { name, .. }) => (name.as_str().to_owned(), true),
                     Some(DraftChild::Sealed { name, .. } | DraftChild::Open { name, .. }) => {
-                        (name.clone(), false)
+                        (name.as_str().to_owned(), false)
                     }
                     None => continue,
                 };
@@ -1311,7 +1302,7 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
                     DraftChild::File { name, .. }
                     | DraftChild::Sealed { name, .. }
                     | DraftChild::Open { name, .. },
-                ) => name.clone(),
+                ) => name.as_str().to_owned(),
                 None => return Ok(()),
             };
             prefix = if prefix.is_empty() {
@@ -1330,7 +1321,7 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceEditor<'s, S> {
         let name = match child {
             DraftChild::File { name, .. }
             | DraftChild::Sealed { name, .. }
-            | DraftChild::Open { name, .. } => name.clone(),
+            | DraftChild::Open { name, .. } => name.as_str().to_owned(),
         };
         let display = if prefix.is_empty() {
             name
@@ -1383,30 +1374,33 @@ pub(crate) fn build_from_entries(
 ) -> Result<CommitNamespace> {
     struct Pending {
         entry_id: String,
-        name: String,
+        name: name_policy::PortableName,
         children: Vec<NamespacePageEntry>,
     }
-    fn close(stack: &mut Vec<Pending>, out: &mut NamespaceObjects) -> Result<()> {
-        let closed = stack.pop().expect("invariant: close keeps the root frame");
+    fn close(
+        stack: &mut Vec<Pending>,
+        root: &mut Vec<NamespacePageEntry>,
+        out: &mut NamespaceObjects,
+    ) -> Result<()> {
+        let closed = stack
+            .pop()
+            .expect("invariant: close has a pending directory");
         let (subtree, entries, files) = pack_directory(&closed.children, out)?;
-        stack
-            .last_mut()
-            .expect("invariant: the root frame remains")
-            .children
-            .push(NamespacePageEntry::Directory {
-                entry_id: closed.entry_id,
-                name: closed.name,
-                entries,
-                files,
-                subtree,
-            });
+        let children = match stack.last_mut() {
+            Some(parent) => &mut parent.children,
+            None => root,
+        };
+        children.push(NamespacePageEntry::Directory {
+            entry_id: closed.entry_id,
+            name: closed.name,
+            entries,
+            files,
+            subtree,
+        });
         Ok(())
     }
-    let mut stack = vec![Pending {
-        entry_id: String::new(),
-        name: String::new(),
-        children: Vec::new(),
-    }];
+    let mut root = Vec::new();
+    let mut stack: Vec<Pending> = Vec::new();
     let mut path_stack: Vec<String> = Vec::new();
     // Component-wise order groups each directory with its complete subtree,
     // which full-path byte order does not guarantee.
@@ -1422,7 +1416,7 @@ pub(crate) fn build_from_entries(
             {
                 break;
             }
-            close(&mut stack, out)?;
+            close(&mut stack, &mut root, out)?;
             path_stack.pop();
         }
         // In component-wise order a directory's descendants immediately
@@ -1439,7 +1433,6 @@ pub(crate) fn build_from_entries(
         }
         let parent_display = stack
             .iter()
-            .skip(1)
             .map(|frame| frame.name.as_str())
             .collect::<Vec<_>>()
             .join("/");
@@ -1448,7 +1441,7 @@ pub(crate) fn build_from_entries(
             NamespaceEntryKind::Directory => {
                 stack.push(Pending {
                     entry_id: entry.entry_id.clone(),
-                    name: entry.name().to_owned(),
+                    name: entry.location().file_component(),
                     children: Vec::new(),
                 });
                 path_stack.push(
@@ -1459,28 +1452,27 @@ pub(crate) fn build_from_entries(
                 );
             }
             NamespaceEntryKind::File => {
-                stack
-                    .last_mut()
-                    .expect("invariant: the root frame remains")
-                    .children
-                    .push(NamespacePageEntry::File {
-                        entry_id: entry.entry_id.clone(),
-                        name: entry.name().to_owned(),
-                        file_id: entry.file_id.clone(),
-                        version_id: entry.version_id.clone(),
-                        size: entry.size,
-                    });
+                let children = match stack.last_mut() {
+                    Some(parent) => &mut parent.children,
+                    None => &mut root,
+                };
+                children.push(NamespacePageEntry::File {
+                    entry_id: entry.entry_id.clone(),
+                    name: entry.location().file_component(),
+                    file_id: entry.file_id.clone(),
+                    version_id: entry.version_id.clone(),
+                    size: entry.size,
+                });
             }
         }
     }
-    while stack.len() > 1 {
-        close(&mut stack, out)?;
+    while !stack.is_empty() {
+        close(&mut stack, &mut root, out)?;
         path_stack.pop();
     }
-    let root = stack.pop().expect("invariant: the root frame remains");
     // Component-wise input order already emits every level's children in
     // component-key order, matching the editor's sealed page order exactly.
-    let (reference, entries, _) = pack_directory(&root.children, out)?;
+    let (reference, entries, _) = pack_directory(&root, out)?;
     Ok(CommitNamespace {
         root: reference,
         entries,
@@ -1557,34 +1549,45 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceView<'s, S> {
     pub(crate) fn resolve_key(&self, key: &str) -> Result<Option<Entry>> {
         Ok(self
             .resolve_key_raw(key)?
-            .map(|(location, entry)| materialized_entry(location, &entry)))
+            .map(|(location, entry)| materialized_entry(location, entry.entry())))
     }
     fn resolve_key_raw(
         &self,
         key: &str,
-    ) -> Result<Option<(name_policy::PortablePath, NamespacePageEntry)>> {
+    ) -> Result<Option<(name_policy::PortablePath, LocatedChild)>> {
         if key.is_empty() {
             return Ok(None);
         }
         let mut reference = self.root.root.clone();
-        let mut display = String::new();
+        // A missing suffix remains absent even if its existing prefix exceeds the path budget.
+        let mut location: Option<Result<name_policy::PortablePath>> = None;
         let mut components = key.split('/').peekable();
         while let Some(component) = components.next() {
-            let Some(entry) = locate_child(&reference, component, self.source)? else {
+            let Some(child) = locate_child_ref(&reference, component, self.source)? else {
                 return Ok(None);
             };
-            if display.is_empty() {
-                display = entry.name().to_owned();
-            } else {
-                display = format!("{display}/{}", entry.name());
-            }
+            location = Some(match location {
+                Some(Ok(parent)) => {
+                    parent
+                        .append_component(child.entry().component())
+                        .map_err(|source| {
+                            Error::from(source).context(
+                                ErrorCode::ObjectCorrupt,
+                                "namespace path exceeds the portable path budget",
+                            )
+                        })
+                }
+                Some(Err(error)) => Err(error),
+                None => Ok(name_policy::PortablePath::from(child.entry().component())),
+            });
             if components.peek().is_none() {
-                let location = name_policy::PortablePath::parse(&display)
-                    .map_err(|_| corrupt("namespace path exceeds the portable path budget"))?;
-                return Ok(Some((location, entry)));
+                return Ok(Some((
+                    location.expect("invariant: a resolved child has a location")?,
+                    child,
+                )));
             }
-            match entry {
-                NamespacePageEntry::Directory { subtree, .. } => reference = subtree,
+            match child.entry() {
+                NamespacePageEntry::Directory { subtree, .. } => reference = subtree.clone(),
                 NamespacePageEntry::File { .. } => return Ok(None),
             }
         }
@@ -1678,11 +1681,11 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceView<'s, S> {
         let Some((location, entry)) = self.resolve_key_raw(key)? else {
             return Ok(());
         };
-        let materialized = materialized_entry(location.clone(), &entry);
+        let materialized = materialized_entry(location.clone(), entry.entry());
         if !visit(&location, &materialized)? {
             return Ok(());
         }
-        if let NamespacePageEntry::Directory { subtree, .. } = &entry {
+        if let NamespacePageEntry::Directory { subtree, .. } = entry.entry() {
             ordered_walk::walk(subtree, Some(&location), self.source, |location, entry| {
                 visit(location, &materialized_entry(location.clone(), entry))
             })?;
@@ -1724,11 +1727,11 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceView<'s, S> {
         let Some((location, entry)) = self.resolve_key_raw(key)? else {
             return Ok(out);
         };
-        let NamespacePageEntry::Directory { subtree, .. } = &entry else {
+        let NamespacePageEntry::Directory { subtree, .. } = entry.entry() else {
             return Ok(out);
         };
         let prefix = location.as_str().to_owned();
-        out.push(materialized_entry(location, &entry));
+        out.push(materialized_entry(location, entry.entry()));
         descend(subtree, &prefix, self.source, &mut out)?;
         Ok(out)
     }
@@ -1743,28 +1746,30 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceView<'s, S> {
         after: Option<&str>,
         limit: usize,
     ) -> Result<Option<Vec<Entry>>> {
-        let display = if directory_key.is_empty() {
-            String::new()
+        let (parent, reference) = if directory_key.is_empty() {
+            (None, self.root.root.clone())
         } else {
-            match self.resolve_key(directory_key)? {
-                Some(entry) if entry.kind == NamespaceEntryKind::Directory => {
-                    entry.path().to_owned()
-                }
-                _ => return Ok(None),
+            let Some((location, child)) = self.resolve_key_raw(directory_key)? else {
+                return Ok(None);
+            };
+            match child.entry() {
+                NamespacePageEntry::Directory { subtree, .. } => (Some(location), subtree.clone()),
+                NamespacePageEntry::File { .. } => return Ok(None),
             }
         };
-        let Some(children) = self.list_directory_page(directory_key, after, limit)? else {
-            return Ok(None);
-        };
+        let mut children = Vec::new();
+        collect_page(&reference, after, limit, self.source, &mut children)?;
         let mut out = Vec::with_capacity(children.len());
         for child in &children {
-            let path = if display.is_empty() {
-                child.name().to_owned()
-            } else {
-                format!("{display}/{}", child.name())
+            let location = match &parent {
+                Some(parent) => parent.join_component(child.component()).map_err(|source| {
+                    Error::from(source).context(
+                        ErrorCode::ObjectCorrupt,
+                        "namespace path exceeds the portable path budget",
+                    )
+                })?,
+                None => name_policy::PortablePath::from(child.component()),
             };
-            let location = name_policy::PortablePath::parse(&path)
-                .map_err(|_| corrupt("namespace path exceeds the portable path budget"))?;
             out.push(materialized_entry(location, child));
         }
         Ok(Some(out))
@@ -1856,20 +1861,42 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceView<'s, S> {
         Ok(entries)
     }
 }
+/// A bounded page owner and a position proven by its binary search.
+struct LocatedChild {
+    page: Arc<NamespacePage>,
+    position: usize,
+}
+impl LocatedChild {
+    fn entry(&self) -> &NamespacePageEntry {
+        &self.page.entries[self.position]
+    }
+}
+
 fn locate_child(
     reference: &NamespaceReference,
     component_key: &str,
     source: &(impl NamespaceSource + ?Sized),
 ) -> Result<Option<NamespacePageEntry>> {
+    Ok(locate_child_ref(reference, component_key, source)?.map(|child| child.entry().clone()))
+}
+fn locate_child_ref(
+    reference: &NamespaceReference,
+    component_key: &str,
+    source: &(impl NamespaceSource + ?Sized),
+) -> Result<Option<LocatedChild>> {
     let mut reference = reference.clone();
     loop {
         match source.node(&reference)? {
             NamespaceNode::Page(page) => {
-                return Ok(page
-                    .entries
-                    .binary_search_by(|entry| entry.lookup_key().as_str().cmp(component_key))
-                    .ok()
-                    .map(|found| page.entries[found].clone()));
+                return Ok(
+                    match page
+                        .entries
+                        .binary_search_by(|entry| entry.lookup_key().cmp(component_key))
+                    {
+                        Ok(position) => Some(LocatedChild { page, position }),
+                        Err(_) => None,
+                    },
+                );
             }
             NamespaceNode::Index(index) => {
                 let position = index
@@ -1898,7 +1925,7 @@ fn collect_page(
             let start = match after {
                 Some(after) => page
                     .entries
-                    .partition_point(|entry| entry.lookup_key().as_str() <= after),
+                    .partition_point(|entry| entry.lookup_key() <= after),
                 None => 0,
             };
             out.extend(
@@ -1988,16 +2015,13 @@ pub(crate) fn admit_namespace(
                 }
                 self.remaining -= 1;
                 let key = child.lookup_key();
-                if previous
-                    .as_deref()
-                    .is_some_and(|previous| previous >= key.as_str())
-                {
+                if previous.as_deref().is_some_and(|previous| previous >= key) {
                     return Err(corrupt(
                         "namespace directory keys are not unique and sorted",
                     ));
                 }
-                summary.first_key.get_or_insert_with(|| key.clone());
-                *previous = Some(key);
+                summary.first_key.get_or_insert_with(|| key.to_owned());
+                *previous = Some(key.to_owned());
                 let display = if prefix.is_empty() {
                     child.name().to_owned()
                 } else {

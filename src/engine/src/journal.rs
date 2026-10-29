@@ -636,6 +636,11 @@ impl PreparedMetadataObject {
         write_object_bytes_at(root, disk, self.kind, &self.hash, &self.bytes)
     }
 
+    /// Repair an existing publication replica from these already encoded bytes.
+    pub(crate) fn repair_on(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<()> {
+        crate::publication_evidence::repair_member(root, disk, self.kind, &self.hash, &self.bytes)
+    }
+
     pub(crate) fn store_in_batch(
         &self,
         batch: &mut crate::disk::ObjectInstallBatch<'_>,

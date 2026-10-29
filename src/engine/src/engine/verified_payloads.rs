@@ -1,5 +1,7 @@
 //! Owned, non-serializable evidence for the live prepare/decide path only.
 //! Recovery cannot construct a proof without reading the complete payload.
+#[cfg(test)]
+use super::super::config::DEFAULT_MAX_HELD_PAYLOAD_FILES;
 use crate::engine::provenance::MetadataIntegrity;
 use crate::file_stamp::FileStamp;
 use crate::{disk::*, journal::*, *};
@@ -59,7 +61,6 @@ pub(super) struct VerifiedPayloadSet {
     resources: Arc<DiskResources>,
     full_revalidation: bool,
 }
-pub(super) const MAX_HELD_PAYLOAD_FILES: usize = 128;
 // Thread-local counters isolate concurrently running tests. No release cost.
 #[cfg(test)]
 std::thread_local! {
@@ -134,7 +135,7 @@ impl PayloadPreparation {
                         )
                     })
             })?;
-        let full_revalidation = replicas > MAX_HELD_PAYLOAD_FILES / 4;
+        let full_revalidation = replicas > config.max_held_payload_files().get() / 4;
         let mut entries = Vec::new();
         if !full_revalidation {
             for evidence in &candidate.versions {

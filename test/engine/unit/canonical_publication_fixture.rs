@@ -114,7 +114,7 @@ fn split_page_fixture(
                 .iter()
                 .map(|entry| NamespacePageEntry::File {
                     entry_id: entry.entry_id.clone(),
-                    name: entry.path().to_owned(),
+                    name: entry.location().file_component(),
                     file_id: entry.file_id.clone(),
                     version_id: entry.version_id.clone(),
                     size: entry.size,

@@ -6,7 +6,7 @@ use storage_contract::{Config, Event, SegmentedEvents};
 
 #[test]
 fn cache_byte_limit_rejects_an_oversized_entry_without_evicting_valid_entries() {
-    let mut cache = BoundedCache::new(8, 32);
+    let mut cache = BoundedCache::<i32>::new(8, 32);
     cache.insert("oversized".into(), 1, 33);
     assert!(cache.entries.is_empty());
     assert_eq!(cache.bytes, 0);
@@ -160,4 +160,106 @@ fn event_pages_locate_segments_through_the_directory_and_never_expand_history() 
             .len(),
         events.tail().len() - 1
     );
+}
+
+#[test]
+fn namespace_cache_keys_preserve_kind_and_share_one_fifo_budget() {
+    let mut cache = BoundedCache::new(8, 32);
+    let page = NamespaceCacheKey::Page([b'a'; 64]);
+    let index = NamespaceCacheKey::Index([b'a'; 64]);
+    let next = NamespaceCacheKey::Page([b'b'; 64]);
+    cache.insert(page, 1, 16);
+    assert!(cache.get(&index).is_none());
+    cache.insert(index, 2, 16);
+    assert_eq!(cache.get(&page), Some(1));
+    assert_eq!(cache.get(&index), Some(2));
+    // Hits and duplicate insertion retain FIFO order and the original charge.
+    cache.insert(page, 3, 8);
+    assert_eq!(cache.bytes, 32);
+    assert_eq!(cache.get(&page), Some(1));
+    cache.insert(next, 4, 33);
+    assert_eq!(cache.get(&page), Some(1));
+    assert_eq!(cache.get(&index), Some(2));
+    cache.insert(next, 4, 16);
+    assert!(cache.get(&page).is_none());
+    assert_eq!(cache.get(&index), Some(2));
+    assert_eq!(cache.get(&next), Some(4));
+    assert_eq!(cache.bytes, 32);
+}
+
+#[test]
+fn namespace_cache_shares_authenticated_nodes_without_aliasing_kind_or_invalid_hashes() {
+    use crate::namespace::NamespaceNode;
+    use storage_contract::{NamespacePage, NamespaceRefKind, NamespaceReference};
+
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::development([temp.path().join("a"), temp.path().join("b")]);
+    for disk in &config.disks {
+        private_dir(&disk.root).unwrap();
+    }
+    let admitted = ValidatedConfig::try_from(config.clone()).unwrap();
+    let resources = DiskResources::open(&admitted, false).unwrap();
+    let page = NamespacePage {
+        format: Default::default(),
+        entries: Vec::new(),
+    };
+    let hashes: Vec<_> = config
+        .disks
+        .iter()
+        .map(|disk| store_object(disk, storage_contract::NAMESPACE_PAGE_KIND, &page).unwrap())
+        .collect();
+    assert_eq!(hashes[0], hashes[1]);
+    let reference = NamespaceReference {
+        kind: NamespaceRefKind::Page,
+        hash: hashes[0].clone(),
+    };
+    let caches = SegmentCaches::new();
+    let reader = SegmentReader {
+        resources: &resources,
+        members: &config.disks,
+        caches: &caches,
+    };
+    let NamespaceNode::Page(first) = reader.namespace_node(&reference).unwrap() else {
+        panic!("expected a namespace page");
+    };
+    for disk in &config.disks {
+        std::fs::remove_file(object_path(
+            disk,
+            storage_contract::NAMESPACE_PAGE_KIND,
+            &reference.hash,
+        ))
+        .unwrap();
+    }
+    let NamespaceNode::Page(cached) = reader.namespace_node(&reference).unwrap() else {
+        panic!("expected the cached namespace page");
+    };
+    assert!(Arc::ptr_eq(&first, &cached));
+    let other_kind = NamespaceReference {
+        kind: NamespaceRefKind::Index,
+        hash: reference.hash.clone(),
+    };
+    let Err(error) = reader.namespace_node(&other_kind) else {
+        panic!("a page cache entry must not satisfy an index reference");
+    };
+    assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
+    for hash in [
+        "a".repeat(63),
+        "a".repeat(65),
+        "A".repeat(64),
+        "g".repeat(64),
+    ] {
+        let invalid = NamespaceReference {
+            kind: NamespaceRefKind::Page,
+            hash,
+        };
+        let Err(error) = reader.namespace_node(&invalid) else {
+            panic!("an invalid namespace reference must be rejected");
+        };
+        assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
+        assert!(
+            error
+                .to_string()
+                .contains("invalid namespace object reference")
+        );
+    }
 }

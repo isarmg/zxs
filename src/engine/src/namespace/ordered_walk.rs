@@ -34,7 +34,10 @@ fn enqueue_cursor(
     prefix: Arc<Prefix>,
 ) {
     let component = match &node {
-        NamespaceNode::Page(page) => page.entries.get(position).map(|entry| entry.lookup_key()),
+        NamespaceNode::Page(page) => page
+            .entries
+            .get(position)
+            .map(|entry| entry.lookup_key().to_owned()),
         NamespaceNode::Index(index) => index
             .children
             .get(position)

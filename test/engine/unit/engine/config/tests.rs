@@ -334,3 +334,23 @@ fn admitted_config_serialization_matches_fixed_raw_config_bytes() {
     let decoded: ValidatedConfig = decode_strict(wire.as_bytes()).unwrap();
     assert_eq!(json_codec::to_vec(&decoded).unwrap(), wire.as_bytes());
 }
+
+#[test]
+fn payload_proof_budget_is_runtime_only_and_preserves_snapshot_policy() {
+    let config = Config::development(["/draft/only".into()]);
+    let mut admitted = ValidatedConfig::try_from(config).unwrap();
+    assert_eq!(admitted.max_held_payload_files().get(), 128);
+    let bytes = canonical_json(&admitted).unwrap();
+    let digest = object_hash("publication-config", &admitted).unwrap();
+    let snapshot = admitted.clone();
+    admitted.set_max_held_payload_files(std::num::NonZeroUsize::new(512).unwrap());
+    assert_eq!(admitted.max_held_payload_files().get(), 512);
+    assert_eq!(snapshot.max_held_payload_files().get(), 128);
+    assert_eq!(canonical_json(&admitted).unwrap(), bytes);
+    assert_eq!(
+        object_hash("publication-config", &admitted).unwrap(),
+        digest
+    );
+    let reopened: ValidatedConfig = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(reopened.max_held_payload_files().get(), 128);
+}

@@ -83,7 +83,8 @@ fn fixture_with_payload_and_members(
 }
 #[test]
 fn large_candidate_uses_bounded_full_revalidation_and_rejects_changes() {
-    let (_temp, mut engine, candidate) = fixture_with_files(MAX_HELD_PAYLOAD_FILES / 12 + 1);
+    let (_temp, mut engine, candidate) =
+        fixture_with_files(DEFAULT_MAX_HELD_PAYLOAD_FILES / 12 + 1);
     let proof = VerifiedPayloadSet::prepare(&engine, &candidate).unwrap();
     assert!(proof.full_revalidation);
     assert!(proof.entries.is_empty());
@@ -371,7 +372,7 @@ fn reference_prepare(engine: &Engine, candidate: &Candidate) -> Result<VerifiedP
         .iter()
         .map(|e| e.placement.route_slot_ids.len())
         .sum();
-    let full_revalidation = replicas > MAX_HELD_PAYLOAD_FILES / 4;
+    let full_revalidation = replicas > config.max_held_payload_files().get() / 4;
     let mut entries = Vec::new();
     for evidence in &candidate.versions {
         for slot in &evidence.placement.route_slot_ids {
@@ -399,8 +400,11 @@ fn verification_cost<T>(run: impl FnOnce() -> T) -> (T, (u64, u64)) {
 }
 #[test]
 fn preparation_hash_cost_matches_reference_at_proof_budget_boundary() {
-    let (_temp, engine, candidate) = fixture_with_files(MAX_HELD_PAYLOAD_FILES / 12 + 1);
-    for replicas in [MAX_HELD_PAYLOAD_FILES / 4, MAX_HELD_PAYLOAD_FILES / 4 + 1] {
+    let (_temp, engine, candidate) = fixture_with_files(DEFAULT_MAX_HELD_PAYLOAD_FILES / 12 + 1);
+    for replicas in [
+        DEFAULT_MAX_HELD_PAYLOAD_FILES / 4,
+        DEFAULT_MAX_HELD_PAYLOAD_FILES / 4 + 1,
+    ] {
         let mut candidate = candidate.clone();
         let last = candidate.versions.last_mut().unwrap();
         last.placement.route_slot_ids.truncate(replicas - 30);
@@ -420,7 +424,7 @@ fn preparation_hash_cost_matches_reference_at_proof_budget_boundary() {
 }
 #[test]
 fn large_preparation_rejects_corruption_like_reference() {
-    let (_temp, engine, candidate) = fixture_with_files(MAX_HELD_PAYLOAD_FILES / 12 + 1);
+    let (_temp, engine, candidate) = fixture_with_files(DEFAULT_MAX_HELD_PAYLOAD_FILES / 12 + 1);
     // Corrupt the final replica to prove the optimized pass visits all replicas.
     let evidence = candidate.versions.last().unwrap();
     let slot = evidence.placement.route_slot_ids.last().unwrap();
@@ -449,7 +453,7 @@ fn large_preparation_rejects_corruption_like_reference() {
 fn benchmark_large_preparation_hash_passes() {
     let payload = vec![0x5a; 1024 * 1024];
     let (_temp, engine, candidate) =
-        fixture_with_payload(MAX_HELD_PAYLOAD_FILES / 12 + 1, &payload);
+        fixture_with_payload(DEFAULT_MAX_HELD_PAYLOAD_FILES / 12 + 1, &payload);
     for round in 0..4 {
         for reference in if round % 2 == 0 {
             [true, false]
@@ -477,7 +481,7 @@ fn benchmark_large_preparation_hash_passes() {
 
 #[test]
 fn large_preparation_rechecks_disk_identity_after_last_replica() {
-    let (_temp, engine, candidate) = fixture_with_files(MAX_HELD_PAYLOAD_FILES / 12 + 1);
+    let (_temp, engine, candidate) = fixture_with_files(DEFAULT_MAX_HELD_PAYLOAD_FILES / 12 + 1);
     let epoch = engine.metadata_integrity.capture();
     let preparation = PayloadPreparation::new(
         &engine.config,
@@ -505,7 +509,7 @@ fn large_preparation_rechecks_disk_identity_after_last_replica() {
 }
 #[test]
 fn large_preparation_rejects_disk_change_before_hashing() {
-    let (_temp, engine, candidate) = fixture_with_files(MAX_HELD_PAYLOAD_FILES / 12 + 1);
+    let (_temp, engine, candidate) = fixture_with_files(DEFAULT_MAX_HELD_PAYLOAD_FILES / 12 + 1);
     let epoch = engine.metadata_integrity.capture();
     let preparation = PayloadPreparation::new(
         &engine.config,
@@ -652,14 +656,14 @@ fn existing_install_token_does_not_replace_decision_byte_verification() {
 
 #[test]
 fn existing_admission_above_descriptor_budget_uses_uncached_preparation() {
-    let (_temp, engine, candidate) = fixture_with_files(MAX_HELD_PAYLOAD_FILES / 3 + 1);
+    let (_temp, engine, candidate) = fixture_with_files(DEFAULT_MAX_HELD_PAYLOAD_FILES / 3 + 1);
     let prepared = existing_prepared(&engine, &candidate);
     assert!(
         prepared
             .iter()
             .map(|p| p.placement.route_slot_ids.len())
             .sum::<usize>()
-            > MAX_HELD_PAYLOAD_FILES
+            > DEFAULT_MAX_HELD_PAYLOAD_FILES
     );
     let mut next = engine.state().clone();
     next.sequence = engine.next_slot;
@@ -830,4 +834,30 @@ fn held_proof_lookup_keeps_the_first_matching_prepared_entry() {
         .validate_payload(&engine.config, &evidence.version, slot)
         .unwrap();
     proof.validate(&engine.config, &candidate).unwrap();
+}
+
+#[test]
+fn configured_budget_covers_existing_copy_and_final_proof_thresholds() {
+    let (_temp, mut engine, candidate) = fixture_with_files(11);
+    assert_eq!(engine.max_held_payload_files().get(), 128);
+    // 33 existing-body proofs, then 132 final-proof FDs. The two phases
+    // consume the same runtime cap at their different per-replica costs.
+    for limit in [1, 3, 32, 33, 128, 131, 132, 256] {
+        engine.set_max_held_payload_files(std::num::NonZeroUsize::new(limit).unwrap());
+        let prepared = existing_prepared(&engine, &candidate);
+        let mut next = engine.state().clone();
+        next.sequence = engine.next_slot;
+        let result = engine
+            .published_receipt(candidate.operation_id)
+            .unwrap()
+            .unwrap();
+        let detached = engine
+            .prepare_publication(next, prepared, Vec::new(), result, MAX_METADATA)
+            .unwrap();
+        let proof = &detached.verified;
+        assert_eq!(proof.full_revalidation, limit < 132, "limit {limit}");
+        assert_eq!(proof.entries.len(), if limit < 132 { 0 } else { 33 });
+        assert_eq!(proof.disks.len(), 3);
+        proof.validate(&engine.config, &candidate).unwrap();
+    }
 }

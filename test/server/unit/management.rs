@@ -974,6 +974,7 @@ async fn preset_web_setup_is_lazy_digest_bound_and_preserves_custom_configuratio
             ]),
             allow_development_setup: true,
             retained_workspace_limits: None,
+            max_held_payload_files: None,
             scrub_policy: crate::integrity_scrub::IntegrityScrubPolicy::default(),
         },
     )
@@ -1245,4 +1246,46 @@ fn below_baseline_runtime_limits_fail_in_background_without_blocking_management(
             .is_ok()
     );
     assert_eq!(std::fs::read(data.join("config.json")).unwrap(), config);
+}
+
+#[test]
+fn management_installs_and_reopens_with_the_same_payload_proof_budget() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("pool");
+    let management = root.path().join("management");
+    let engine = storage_engine::Engine::initialize(
+        &data,
+        storage_engine::Config::development([root.path().join("disk")]),
+    )
+    .unwrap();
+    let persisted = std::fs::read(data.join("config.json")).unwrap();
+    drop(AuthStore::initialize_management(&management, "admin", "a-long-test-password").unwrap());
+    let limit = std::num::NonZeroUsize::new(512).unwrap();
+    let (backend, auth) = open_service_with_options(
+        &data,
+        &management,
+        ManagementOptions {
+            max_held_payload_files: Some(limit),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let installed = backend.inner.engine_backend(engine);
+    installed.test_with_engine_locked(|engine| assert_eq!(engine.max_held_payload_files(), limit));
+    drop(installed);
+    *crate::lock(&backend.inner.auth) = Some(Arc::new(Mutex::new(auth)));
+    for _ in 0..2 {
+        backend.inner.recover_once().unwrap();
+        backend
+            .inner
+            .backend()
+            .unwrap()
+            .test_with_engine_locked(|engine| {
+                assert_eq!(engine.max_held_payload_files(), limit);
+            });
+        backend
+            .inner
+            .set(None, crate::StorageState::RecoveryRequired);
+    }
+    assert_eq!(std::fs::read(data.join("config.json")).unwrap(), persisted);
 }

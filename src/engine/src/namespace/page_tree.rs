@@ -136,7 +136,8 @@ impl TreeNode {
                 .entries
                 .first()
                 .expect("invariant: live index children are nonempty")
-                .lookup_key(),
+                .lookup_key()
+                .to_owned(),
             Some(Body::Index(children)) => children
                 .first()
                 .expect("invariant: live index children are nonempty")
@@ -192,7 +193,7 @@ impl TreeNode {
             Body::Page(page) => {
                 let at = page
                     .entries
-                    .binary_search_by(|entry| entry.lookup_key().as_str().cmp(key));
+                    .binary_search_by(|entry| entry.lookup_key().cmp(key));
                 match (at, value) {
                     (Ok(at), Some(value)) => {
                         page.sizes[at] = canonical_json(&value)?.len();
@@ -268,7 +269,7 @@ impl TreeNode {
                     let first_key = page
                         .entries
                         .first()
-                        .map(NamespacePageEntry::lookup_key)
+                        .map(|entry| entry.lookup_key().to_owned())
                         .unwrap_or_default();
                     let (entries, files) = entry_totals(&page.entries);
                     let reference = out.page(NamespacePage {

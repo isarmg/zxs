@@ -154,7 +154,10 @@ fn assert_shape(
             }
             let mut summary = ShapeSummary {
                 height: 1,
-                first_key: page.entries.first().map(NamespacePageEntry::lookup_key),
+                first_key: page
+                    .entries
+                    .first()
+                    .map(|entry| entry.lookup_key().to_owned()),
                 ..Default::default()
             };
             for entry in &page.entries {
@@ -350,7 +353,7 @@ fn legal_variable_length_names_split_on_bytes_before_entry_count() {
         let entry = file(&format!("f{tag:04}{}", "あ".repeat(78)), tag);
         let candidate = NamespacePageEntry::File {
             entry_id: entry.entry_id.clone(),
-            name: entry.name().into(),
+            name: entry.location().file_component(),
             file_id: entry.file_id.clone(),
             version_id: entry.version_id.clone(),
             size: entry.size,
@@ -597,7 +600,7 @@ fn deleting_from_sparse_wire_indexes_contracts_promoted_sealed_roots() {
                 format: Default::default(),
                 entries: vec![NamespacePageEntry::File {
                     entry_id: entry.entry_id.clone(),
-                    name: entry.name().into(),
+                    name: entry.location().file_component(),
                     file_id: entry.file_id.clone(),
                     version_id: entry.version_id.clone(),
                     size: entry.size,

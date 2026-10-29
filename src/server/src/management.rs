@@ -60,6 +60,7 @@ struct Inner {
     setup_configs: BTreeMap<String, PathBuf>,
     allow_development_setup: bool,
     retained_workspace_limits: Option<storage_engine::RetainedWorkspaceLimits>,
+    max_held_payload_files: Option<std::num::NonZeroUsize>,
 }
 pub struct ManagementBackend {
     // Fields drop in declaration order: join scrub before releasing Inner/auth.
@@ -78,6 +79,8 @@ pub struct ManagementOptions {
     pub allow_development_setup: bool,
     /// Immutable host policy, never loaded from an HTTP request or persisted to the pool.
     pub retained_workspace_limits: Option<storage_engine::RetainedWorkspaceLimits>,
+    /// Payload-proof FD cap only; None keeps the engine default of 128.
+    pub max_held_payload_files: Option<std::num::NonZeroUsize>,
 }
 
 /// Marks the old engine snapshot as a replica, never an automatic admission source.
@@ -149,6 +152,7 @@ pub fn open_service_with_disks(
             setup_configs: BTreeMap::new(),
             allow_development_setup,
             retained_workspace_limits: None,
+            max_held_payload_files: None,
         },
     )
 }
@@ -163,6 +167,7 @@ pub fn open_service_with_options(
         setup_configs,
         allow_development_setup,
         retained_workspace_limits,
+        max_held_payload_files,
     } = options;
     // Pure host validation must precede every system-state write. Baseline
     // comparison belongs to the background engine open, not startup disk I/O.
@@ -210,6 +215,7 @@ pub fn open_service_with_options(
             setup_configs,
             allow_development_setup,
             retained_workspace_limits,
+            max_held_payload_files,
         }),
     });
     Ok((backend, auth))
@@ -251,6 +257,13 @@ impl Drop for RecoveryPermit<'_> {
     }
 }
 impl Inner {
+    fn engine_backend(&self, mut engine: storage_engine::Engine) -> EngineBackend {
+        if let Some(limit) = self.max_held_payload_files {
+            engine.set_max_held_payload_files(limit);
+        }
+        EngineBackend::new(engine)
+    }
+
     fn set(&self, backend: Option<Arc<EngineBackend>>, status: StorageState) {
         {
             let mut state = self.state.lock().expect("service state lock poisoned");
@@ -472,7 +485,7 @@ impl Inner {
                     return Ok(());
                 }
             };
-            Arc::new(EngineBackend::new(engine))
+            Arc::new(self.engine_backend(engine))
         };
         let auth = crate::lock(&self.auth).clone().ok_or_else(|| {
             ApiError::new(
@@ -1402,7 +1415,7 @@ impl Backend for ManagementBackend {
             let mut snapshot = new_auth.snapshot()?;
             snapshot["sessions"] = json!({});
             crate::lock(&auth).replace_authority(new_auth);
-            EngineBackend::new(engine).replicate_auth(snapshot)
+            self.inner.engine_backend(engine).replicate_auth(snapshot)
         };
         let result = match command {
             SetupCommand::Initialize(request) => {
@@ -1451,7 +1464,7 @@ impl Backend for ManagementBackend {
                     };
                     let mut snapshot = snapshot;
                     snapshot["sessions"] = json!({});
-                    EngineBackend::new(engine).replicate_auth(snapshot)
+                    self.inner.engine_backend(engine).replicate_auth(snapshot)
                 };
                 if let Some(identity) = &identity {
                     setup.restore_authenticated(identity, request, restore)

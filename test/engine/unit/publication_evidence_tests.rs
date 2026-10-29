@@ -377,3 +377,108 @@ fn repair_rejects_unsafe_unreadable_entry_instead_of_replacing_it() {
     assert!(repair_object_copies(&members, "repository", &hash, &repo).is_err());
     assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
 }
+
+fn repair_batch_object(index: usize) -> AuthenticatedMetadataObject {
+    let value = json_codec::json!({"repair_batch_probe": index});
+    let hash = object_hash("state-page", &value).unwrap();
+    AuthenticatedMetadataObject::authenticate("state-page", &hash, value).unwrap()
+}
+
+#[test]
+fn recovery_object_batch_repairs_missing_and_corrupt_copies() {
+    let (_temp, engine, _repository) = fixture();
+    let members = engine.members();
+    let objects: Vec<_> = (0..4).map(repair_batch_object).collect();
+    for object in &objects {
+        repair_authenticated_object_at(&engine.disk_resources, &members, object).unwrap();
+        fs::remove_file(object_path(&members[0], object.kind(), object.hash())).unwrap();
+        fs::write(
+            object_path(&members[1], object.kind(), object.hash()),
+            b"corrupt",
+        )
+        .unwrap();
+    }
+    let mut batch = RecoveryObjectRepairBatch::new(&engine.disk_resources, &members).unwrap();
+    for object in &objects {
+        batch.repair(object).unwrap();
+    }
+    batch.finish().unwrap();
+    for member in &members {
+        for object in &objects {
+            assert_eq!(
+                fs::read(object_path(member, object.kind(), object.hash())).unwrap(),
+                object.bytes()
+            );
+        }
+    }
+}
+
+#[test]
+fn recovery_object_batch_bounds_all_members_together() {
+    let (_temp, engine, _repository) = fixture();
+    let members = engine.members();
+    let mut batch = RecoveryObjectRepairBatch::new(&engine.disk_resources, &members).unwrap();
+    let mut previous = 0;
+    let mut flushed = false;
+    for index in 0..200 {
+        batch.repair(&repair_batch_object(index)).unwrap();
+        let held: usize = batch
+            .members
+            .iter()
+            .map(|(_, member)| member.pending_directories())
+            .sum();
+        assert_eq!(held, batch.pending_directories);
+        assert!(held <= MAX_RECOVERY_OBJECT_DIRECTORIES);
+        flushed |= held < previous;
+        previous = held;
+    }
+    assert!(
+        flushed,
+        "the fixture must cross the global directory budget"
+    );
+    batch.finish().unwrap();
+}
+
+#[test]
+fn recovery_object_batch_rejects_replaced_directory_and_can_retry() {
+    let (_temp, engine, _repository) = fixture();
+    let members = engine.members();
+    let object = repair_batch_object(0);
+    let mut batch = RecoveryObjectRepairBatch::new(&engine.disk_resources, &members).unwrap();
+    batch.repair(&object).unwrap();
+    let directory = members[2].root.join("metadata/objects/state-page");
+    let saved = members[2].root.join("saved-state-page");
+    fs::rename(&directory, &saved).unwrap();
+    let replacement_leaf = object_path(&members[2], object.kind(), object.hash());
+    private_dir(replacement_leaf.parent().unwrap()).unwrap();
+    assert_eq!(
+        batch.finish().unwrap_err().code(),
+        storage_contract::ErrorCode::UnsafePath
+    );
+    fs::remove_dir(replacement_leaf.parent().unwrap()).unwrap();
+    fs::remove_dir(&directory).unwrap();
+    fs::rename(&saved, &directory).unwrap();
+    let mut retry = RecoveryObjectRepairBatch::new(&engine.disk_resources, &members).unwrap();
+    retry.repair(&object).unwrap();
+    retry.finish().unwrap();
+}
+
+#[test]
+fn recovery_object_batch_finishes_same_inode_aba() {
+    let (_temp, engine, _repository) = fixture();
+    let members = engine.members();
+    let object = repair_batch_object(0);
+    let mut batch = RecoveryObjectRepairBatch::new(&engine.disk_resources, &members).unwrap();
+    batch.repair(&object).unwrap();
+    let parent = members[2].root.join("metadata/objects");
+    let directory = parent.join("state-page");
+    let saved = members[2].root.join("saved-state-page");
+    fs::rename(&directory, &saved).unwrap();
+    fs::File::open(&parent).unwrap().sync_all().unwrap();
+    fs::rename(&saved, &directory).unwrap();
+    batch.finish().unwrap();
+    assert_eq!(
+        fs::read(object_path(&members[2], object.kind(), object.hash())).unwrap(),
+        object.bytes()
+    );
+}

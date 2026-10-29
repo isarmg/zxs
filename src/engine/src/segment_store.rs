@@ -5,6 +5,7 @@
 use crate::disk::DiskResources;
 use crate::publication_evidence::verified_graph_object_at;
 use crate::{DiskConfig, Error, Result};
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use storage_contract::{
@@ -18,14 +19,14 @@ const MAX_CACHED_OPERATION_SEGMENTS: usize = 8;
 const MAX_CACHED_LOCATOR_PAGE_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) const MAX_CACHED_NAMESPACE_BYTES: usize = 8 * 1024 * 1024;
 
-pub(crate) struct BoundedCache<V> {
-    entries: BTreeMap<String, (V, usize)>,
-    order: VecDeque<String>,
+pub(crate) struct BoundedCache<V, K = String> {
+    entries: BTreeMap<K, (V, usize)>,
+    order: VecDeque<K>,
     bytes: usize,
     max_entries: usize,
     max_bytes: usize,
 }
-impl<V: Clone> BoundedCache<V> {
+impl<V: Clone, K: Ord + Clone> BoundedCache<V, K> {
     pub(crate) fn new(max_entries: usize, max_bytes: usize) -> Self {
         Self {
             entries: BTreeMap::new(),
@@ -35,10 +36,13 @@ impl<V: Clone> BoundedCache<V> {
             max_bytes,
         }
     }
-    pub(crate) fn get(&self, hash: &str) -> Option<V> {
-        self.entries.get(hash).map(|(value, _)| value.clone())
+    pub(crate) fn get<Q: Ord + ?Sized>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+    {
+        self.entries.get(key).map(|(value, _)| value.clone())
     }
-    pub(crate) fn insert(&mut self, hash: String, value: V, bytes: usize) {
+    pub(crate) fn insert(&mut self, hash: K, value: V, bytes: usize) {
         // Oversized objects can still be served by the caller, but are never
         // retained beyond this cache's declared byte or entry budget.
         if bytes > self.max_bytes || self.max_entries == 0 {
@@ -63,11 +67,17 @@ impl<V: Clone> BoundedCache<V> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum NamespaceCacheKey {
+    Page([u8; 64]),
+    Index([u8; 64]),
+}
+
 pub(crate) struct SegmentCaches {
     events: Mutex<BoundedCache<Arc<Vec<storage_contract::Event>>>>,
     operations: Mutex<BoundedCache<Arc<Vec<OperationRecordEntry>>>>,
     locator_pages: Mutex<BoundedCache<Arc<json_codec::Value>>>,
-    namespace: Mutex<BoundedCache<crate::namespace::NamespaceNode>>,
+    namespace: Mutex<BoundedCache<crate::namespace::NamespaceNode, NamespaceCacheKey>>,
 }
 impl SegmentCaches {
     pub(crate) fn new() -> Self {
@@ -78,7 +88,9 @@ impl SegmentCaches {
             namespace: Mutex::new(BoundedCache::new(usize::MAX, MAX_CACHED_NAMESPACE_BYTES)),
         }
     }
-    fn lock<V>(cache: &Mutex<BoundedCache<V>>) -> std::sync::MutexGuard<'_, BoundedCache<V>> {
+    fn lock<V, K>(
+        cache: &Mutex<BoundedCache<V, K>>,
+    ) -> std::sync::MutexGuard<'_, BoundedCache<V, K>> {
         // Cache contents are non-authoritative copies: a panic while holding
         // the lock cannot corrupt state worse than an empty cache, so a
         // poisoned cache continues with its current entries.
@@ -266,7 +278,15 @@ impl SegmentReader<'_> {
         reference: &storage_contract::NamespaceReference,
     ) -> Result<crate::namespace::NamespaceNode> {
         reference.validate()?;
-        let address = format!("{}/{}", reference.kind.as_str(), reference.hash);
+        let hash = reference
+            .hash
+            .as_bytes()
+            .try_into()
+            .expect("invariant: a validated namespace hash has 64 bytes");
+        let address = match reference.kind {
+            storage_contract::NamespaceRefKind::Page => NamespaceCacheKey::Page(hash),
+            storage_contract::NamespaceRefKind::Index => NamespaceCacheKey::Index(hash),
+        };
         if let Some(node) = SegmentCaches::lock(&self.caches.namespace).get(&address) {
             return Ok(node);
         }

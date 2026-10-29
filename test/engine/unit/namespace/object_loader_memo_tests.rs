@@ -91,7 +91,7 @@ fn admission_node_memo_inserts_only_shape_valid_nodes_within_its_budget() {
     let mut objects = NamespaceObjects::new();
     let child = NamespacePageEntry::File {
         entry_id: "entry_000001".into(),
-        name: "file.txt".into(),
+        name: name_policy::PortableName::parse("file.txt").unwrap(),
         file_id: "file_000001".into(),
         version_id: "ver_000001".into(),
         size: 1,

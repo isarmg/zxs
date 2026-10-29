@@ -26,6 +26,9 @@ fn log_filter_from_env() -> std::result::Result<EnvFilter, LogFilterError> {
 #[derive(Parser)]
 #[command(name = "zxs", version, about = "ZXS storage and Web management daemon")]
 struct Args {
+    /// Retained payload-proof FD cap (default 128); excludes disk seals and transient I/O.
+    #[arg(long)]
+    max_held_payload_files: Option<std::num::NonZeroUsize>,
     /// Host retained-workspace record limit; supply all four limits or none.
     #[arg(long, requires_all = ["max_retained_workspaces_per_principal", "max_retained_workspace_metadata_bytes", "max_retained_workspace_metadata_bytes_per_principal"])]
     max_retained_workspaces: Option<std::num::NonZeroUsize>,
@@ -179,6 +182,7 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
     )?;
     let Args {
         root,
+        max_held_payload_files,
         management_root,
         setup_disks,
         setup_configs,
@@ -255,6 +259,7 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
             setup_configs: parse_setup_map(setup_configs, "--setup-config")?,
             allow_development_setup,
             retained_workspace_limits,
+            max_held_payload_files,
         },
     )?;
     storage_server::serve_with_shutdown(backend, auth, config, shutdown).await?;

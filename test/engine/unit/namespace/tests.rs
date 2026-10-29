@@ -368,7 +368,7 @@ fn verification_rejects_misordered_pages_and_lying_totals() {
     }
     let child = |name: &str, tag: usize| NamespacePageEntry::File {
         entry_id: format!("entry_{tag:06}"),
-        name: name.into(),
+        name: name_policy::PortableName::parse(name).unwrap(),
         file_id: format!("file_{tag:06}"),
         version_id: format!("ver_{tag:06}"),
         size: 1,
@@ -409,7 +409,7 @@ fn verification_rejects_misordered_pages_and_lying_totals() {
         format: storage_contract::NamespacePageFormat,
         entries: vec![NamespacePageEntry::Directory {
             entry_id: "entry_d1".into(),
-            name: "dir".into(),
+            name: name_policy::PortableName::parse("dir").unwrap(),
             entries: 5,
             files: 5,
             subtree: reference(NamespaceRefKind::Page, 3),
@@ -586,7 +586,7 @@ fn admission_rejects_forged_index_totals_at_every_level() {
                     format: Default::default(),
                     entries: vec![NamespacePageEntry::File {
                         entry_id: entry.entry_id,
-                        name: name.into(),
+                        name: name_policy::PortableName::parse(name).unwrap(),
                         file_id: entry.file_id,
                         version_id: entry.version_id,
                         size: entry.size,
@@ -715,7 +715,7 @@ fn page_decode_enforces_canonical_bytes_with_the_single_entry_exception() {
         .map(|n| {
             let entry = file(&format!("{n:04}{}", "a".repeat(196)), n);
             NamespacePageEntry::File {
-                name: entry.name().into(),
+                name: entry.location().file_component(),
                 entry_id: entry.entry_id,
                 file_id: entry.file_id,
                 version_id: entry.version_id,
@@ -744,7 +744,7 @@ fn page_decode_enforces_canonical_bytes_with_the_single_entry_exception() {
         format: Default::default(),
         entries: vec![NamespacePageEntry::File {
             entry_id: "entry_large".into(),
-            name: "large".into(),
+            name: name_policy::PortableName::parse("large").unwrap(),
             file_id: "file_large".into(),
             version_id: "v".repeat(NAMESPACE_PAGE_TARGET_BYTES),
             size: 0,
@@ -768,14 +768,14 @@ fn packing_counts_the_page_envelope_in_the_byte_bound() {
     let mut children = vec![
         NamespacePageEntry::File {
             entry_id: "entry_a".into(),
-            name: "a".into(),
+            name: name_policy::PortableName::parse("a").unwrap(),
             file_id: "file_a".into(),
             version_id: "ver_a".into(),
             size: 0,
         },
         NamespacePageEntry::File {
             entry_id: "entry_b".into(),
-            name: "b".into(),
+            name: name_policy::PortableName::parse("b").unwrap(),
             file_id: "file_b".into(),
             version_id: "ver_b".into(),
             size: 0,
@@ -834,7 +834,7 @@ fn admission_rejects_mixed_index_heights_but_accepts_sparse_balanced_trees() {
                     format: Default::default(),
                     entries: vec![NamespacePageEntry::File {
                         entry_id: format!("entry_{name}"),
-                        name: name.into(),
+                        name: name_policy::PortableName::parse(name).unwrap(),
                         file_id: format!("file_{name}"),
                         version_id: format!("ver_{name}"),
                         size: 0,
@@ -924,5 +924,120 @@ fn admission_allows_each_directory_its_own_index_height() {
         )
         .unwrap(),
         entries.len() as u64,
+    );
+}
+
+#[test]
+fn point_cursor_borrows_the_admitted_page_and_directory_listing_descends_once() {
+    let entries = [directory("Straße", 1), file("Straße/Café.txt", 2)];
+    let (root, objects) = fixture_namespace(&entries);
+    let missing = deny();
+    let source = DraftSource {
+        fresh: &objects,
+        base: &missing,
+    };
+    let child = locate_child_ref(&root.root, "strasse", &source)
+        .unwrap()
+        .unwrap();
+    let NamespaceNode::Page(page) = source.node(&root.root).unwrap() else {
+        panic!("fixture root is a page");
+    };
+    assert!(Arc::ptr_eq(&child.page, &page));
+    assert_eq!(child.entry().name(), "Straße");
+    let counting = CountingSource {
+        inner: &source,
+        reads: Cell::new(0),
+    };
+    let view = NamespaceView::new(&root, &counting);
+    let page = view
+        .directory_page_entries("strasse", None, 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(page, vec![entries[1].clone()]);
+    assert_eq!(
+        counting.reads.get(),
+        2,
+        "one root lookup and one child page"
+    );
+    assert_eq!(
+        view.resolve_key("strasse/café.txt").unwrap(),
+        Some(entries[1].clone())
+    );
+    assert!(
+        view.directory_page_entries("strasse/café.txt", None, 1)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn point_path_budget_failure_is_reported_only_for_a_resolved_path() {
+    let parent = "a".repeat(100);
+    let child = "b".repeat(100);
+    let mut objects = NamespaceObjects::new();
+    let leaf = objects
+        .page(NamespacePage {
+            format: Default::default(),
+            entries: vec![NamespacePageEntry::File {
+                entry_id: "entry-leaf".into(),
+                name: name_policy::PortableName::parse("leaf").unwrap(),
+                file_id: "file-leaf".into(),
+                version_id: "version-leaf".into(),
+                size: 0,
+            }],
+        })
+        .unwrap();
+    let middle = objects
+        .page(NamespacePage {
+            format: Default::default(),
+            entries: vec![NamespacePageEntry::Directory {
+                entry_id: "entry-child".into(),
+                name: name_policy::PortableName::parse(&child).unwrap(),
+                entries: 1,
+                files: 1,
+                subtree: leaf,
+            }],
+        })
+        .unwrap();
+    let root = CommitNamespace {
+        root: objects
+            .page(NamespacePage {
+                format: Default::default(),
+                entries: vec![NamespacePageEntry::Directory {
+                    entry_id: "entry-parent".into(),
+                    name: name_policy::PortableName::parse(&parent).unwrap(),
+                    entries: 2,
+                    files: 1,
+                    subtree: middle,
+                }],
+            })
+            .unwrap(),
+        entries: 3,
+    };
+    let missing = deny();
+    let source = DraftSource {
+        fresh: &objects,
+        base: &missing,
+    };
+    let view = NamespaceView::new(&root, &source);
+    let key = format!("{parent}/{child}");
+    assert!(view.find_key(&key).unwrap().is_some());
+    assert_eq!(
+        view.resolve_key(&key).unwrap_err().code(),
+        ErrorCode::ObjectCorrupt
+    );
+    assert_eq!(
+        view.resolve_key(&format!("{key}/leaf")).unwrap_err().code(),
+        ErrorCode::ObjectCorrupt
+    );
+    assert!(
+        view.resolve_key(&format!("{key}/absent"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        view.resolve_key(&format!("{key}/leaf/absent"))
+            .unwrap()
+            .is_none()
     );
 }

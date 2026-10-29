@@ -658,7 +658,9 @@ fn capture_namespace_names(
         crate::namespace::NamespaceView::new(namespace, source).walk(|location, entry| {
             if let storage_contract::NamespacePageEntry::File { file_id, name, .. } = entry {
                 if !state.file_names.contains_key(file_id) {
-                    state.file_names.insert(file_id.clone(), name.clone());
+                    state
+                        .file_names
+                        .insert(file_id.clone(), name.as_str().to_owned());
                 }
                 if !state.file_locations.contains_key(file_id) {
                     state

@@ -583,43 +583,27 @@ fn bound_history_objects_with(
     Ok(objects)
 }
 
-#[cfg(test)]
-pub(crate) fn repair_history_objects(
-    members: &[DiskConfig],
-    objects: &HistoryGraphObjects,
-    repaired: &mut BTreeSet<(String, String)>,
-) -> Result<()> {
-    repair_history_objects_with(objects, repaired, |object| {
-        crate::publication_evidence::repair_authenticated_object(members, object)
-    })
-}
-
 pub(crate) fn repair_history_objects_at(
     resources: &DiskResources,
     members: &[DiskConfig],
     objects: &HistoryGraphObjects,
     repaired: &mut BTreeSet<(String, String)>,
 ) -> Result<()> {
-    repair_history_objects_with(objects, repaired, |object| {
-        crate::publication_evidence::repair_authenticated_object_at(resources, members, object)
-    })
-}
-
-fn repair_history_objects_with(
-    objects: &HistoryGraphObjects,
-    repaired: &mut BTreeSet<(String, String)>,
-    mut repair: impl FnMut(&AuthenticatedMetadataObject) -> Result<()>,
-) -> Result<()> {
+    let mut batch =
+        crate::publication_evidence::RecoveryObjectRepairBatch::new(resources, members)?;
+    let mut staged = BTreeSet::new();
     // Resolver output is dependency-first, including child indexes before parents.
     for object in objects {
         let address = (object.kind().to_owned(), object.hash().to_owned());
-        if !repaired.contains(&address) {
-            repair(object)?;
-            if repaired.len() < 16_384 {
-                repaired.insert(address);
+        if !repaired.contains(&address) && !staged.contains(&address) {
+            batch.repair(object)?;
+            if repaired.len() + staged.len() < 16_384 {
+                staged.insert(address);
             }
         }
     }
+    batch.finish()?;
+    repaired.extend(staged);
     Ok(())
 }
 

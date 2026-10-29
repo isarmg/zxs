@@ -17,14 +17,14 @@ fn full_left_route(
             let entry = file(&format!("k{:06}", *next), *next);
             *next += 1;
             entries.push(NamespacePageEntry::File {
-                name: entry.name().into(),
+                name: entry.location().file_component(),
                 entry_id: entry.entry_id,
                 file_id: entry.file_id,
                 version_id: entry.version_id,
                 size: entry.size,
             });
         }
-        let first_key = entries[0].lookup_key();
+        let first_key = entries[0].lookup_key().to_owned();
         return NamespaceIndexChild {
             first_key,
             entries: count as u64,

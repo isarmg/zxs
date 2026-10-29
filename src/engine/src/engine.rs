@@ -591,6 +591,17 @@ impl Engine {
         }
         Ok(())
     }
+    /// Set this engine's retained payload-proof FD cap, not a process FD reservation.
+    /// Disk seals, transient I/O and other consumers remain outside this cap.
+    pub fn set_max_held_payload_files(&mut self, limit: std::num::NonZeroUsize) {
+        self.config.set_max_held_payload_files(limit);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn max_held_payload_files(&self) -> std::num::NonZeroUsize {
+        self.config.max_held_payload_files()
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
     }

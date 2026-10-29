@@ -532,7 +532,38 @@ fn paged_history_resolves_disjoint_replicas_without_read_repair() {
             );
         }
     }
-    repair_history_objects(&members, &selected, &mut BTreeSet::new()).unwrap();
+    let first = selected.first().unwrap();
+    crate::publication_evidence::repair_authenticated_object_at(
+        &engine.disk_resources,
+        &members,
+        first,
+    )
+    .unwrap();
+    let prior = BTreeSet::from([(first.kind().to_owned(), first.hash().to_owned())]);
+    let mut repaired = prior.clone();
+    let last = selected.last().unwrap();
+    crate::publication_evidence::repair_authenticated_object_at(
+        &engine.disk_resources,
+        &members,
+        last,
+    )
+    .unwrap();
+    let target = object_path(&members[2], last.kind(), last.hash());
+    fs::remove_file(&target).unwrap();
+    fs::create_dir(&target).unwrap();
+    assert_eq!(
+        repair_history_objects_at(&engine.disk_resources, &members, &selected, &mut repaired)
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::UnsafePath,
+    );
+    assert_eq!(
+        repaired, prior,
+        "failed history phase preserves only previous success markers"
+    );
+    fs::remove_dir(&target).unwrap();
+    repair_history_objects_at(&engine.disk_resources, &members, &selected, &mut repaired).unwrap();
+    assert_eq!(repaired.len(), selected.len());
     for member in &members {
         bound_history_objects(std::slice::from_ref(member), &candidate, Some(&admitted)).unwrap();
     }
