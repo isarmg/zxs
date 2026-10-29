@@ -1,4 +1,5 @@
 //! Acceptance of the documented composition and write-intent rules.
+use super::{NamespaceMutation, OperationContext};
 use crate::*;
 use std::{collections::BTreeMap, io::Read};
 fn fixture() -> (tempfile::TempDir, Engine, Repository) {
