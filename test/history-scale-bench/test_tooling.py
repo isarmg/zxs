@@ -238,6 +238,19 @@ class EvidenceTests(unittest.TestCase):
         with patch.object(Path, "read_text", side_effect=PermissionError(errno.EACCES, "status denied")), self.assertRaises(PermissionError):
             process_snapshot(5697)
 
+    def test_missing_rss_exit_race_requires_a_fresh_terminal_state(self):
+        for state in ("Z", "X", "disappeared"):
+            fresh = FileNotFoundError() if state == "disappeared" else f"State:\t{state} (exited)\n"
+            with self.subTest(state=state), patch.object(Path, "read_text", side_effect=["State:\tR (running)\n", fresh]):
+                snapshot = process_snapshot(3333)
+            self.assertFalse(snapshot["valid"])
+            self.assertEqual(snapshot["memory"], {})
+            self.assertIsNone(snapshot["io"])
+            self.assertEqual(snapshot["memory_error"]["state"], state)
+            self.assertEqual(snapshot["memory_error"]["initial_state"], "R")
+        with patch.object(Path, "read_text", side_effect=["State:\tR (running)\n", "State:\tS (sleeping)\n"]), self.assertRaisesRegex(ValueError, "VmRSS"):
+            process_snapshot(3333)
+
     def test_final_budget_counters_catch_exit_between_sampling_polls(self):
         mib = 1024 * 1024
         budget = SimpleNamespace(phase_seconds=600, rss_mib=8, disk_mib=12, cohort_disk_mib=24, minimum_free_mib=2)

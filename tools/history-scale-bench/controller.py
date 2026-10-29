@@ -72,18 +72,26 @@ def build_source(mode: str, run_id: str, carrier_sha: str, current_run: str, cur
     }
 
 
-def validate_reuse_run(run: dict, run_id: str, carrier_sha: str) -> None:
+def validate_reuse_run(run: dict, run_id: str, carrier_sha: str, *, require_success: bool = True) -> None:
     if str(run.get("id")) != positive_id(run_id) or run.get("head_sha") != commit_sha(carrier_sha):
         raise ValueError("reused build run identity mismatch")
     if run.get("path") != ".github/workflows/history-scale.yml" or run.get("event") != "workflow_dispatch":
         raise ValueError("reused build must come from the dedicated dispatched validation workflow")
-    if run.get("status") != "completed" or run.get("conclusion") != "success":
+    if run.get("status") != "completed" or (require_success and run.get("conclusion") != "success"):
         raise ValueError("binary reuse requires a successfully completed selftest run")
 
 
+def validate_build_jobs(run: dict, jobs: dict, run_id: str, carrier_sha: str) -> None:
+    validate_reuse_run(run, run_id, carrier_sha, require_success=False)
+    names = {"build (baseline)", "build (candidate)"}
+    selected = [row for row in jobs["jobs"] if row["name"] in names]
+    if len(selected) != 2 or {row["name"] for row in selected} != names or any(row["status"] != "completed" or row["conclusion"] != "success" for row in selected):
+        raise ValueError("both original binary build jobs must have succeeded")
+
+
 def validate_reused_selftest(selection: dict, summary: dict, run_id: str, carrier_sha: str, candidate_sha: str) -> None:
-    if selection.get("mode") != "selftest" or selection.get("build_required") is not True:
-        raise ValueError("reuse must reference the original selftest that built the binaries")
+    if selection.get("mode") != "selftest":
+        raise ValueError("reuse must reference a successful bounded selftest")
     if selection.get("build_run_id") != run_id or selection.get("build_carrier_sha") != carrier_sha:
         raise ValueError("selftest selection/build identity mismatch")
     if selection.get("baseline_sha") != BASELINE or selection.get("candidate_sha") != commit_sha(candidate_sha):
@@ -146,19 +154,21 @@ def main() -> None:
     parser.add_argument("--mode", choices=("selftest", "acceptance", "10000"), required=True)
     parser.add_argument("--build-run-id", default="")
     parser.add_argument("--build-carrier-sha", default="")
+    parser.add_argument("--selftest-run-id", default="")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     selected = select(load_plan(args.plan), args.mode)
     selected.update(build_source(args.mode, args.build_run_id, args.build_carrier_sha,
                                  os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_SHA"]))
+    selected["selftest_run_id"] = positive_id(os.environ["GITHUB_RUN_ID"] if args.mode == "selftest" else (args.selftest_run_id or selected["build_run_id"]))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x", encoding="utf-8") as destination:
         json.dump(selected, destination, indent=2, sort_keys=True)
         destination.write("\n")
     if args.github_output is not None:
         with args.github_output.open("a", encoding="utf-8") as destination:
-            for name in ("baseline_sha", "candidate_sha", "matrix", "build_required", "build_run_id", "build_carrier_sha"):
+            for name in ("baseline_sha", "candidate_sha", "matrix", "build_required", "build_run_id", "build_carrier_sha", "selftest_run_id"):
                 value = selected[name]
                 destination.write(f"{name}={json.dumps(value) if isinstance(value, (dict, bool)) else value}\n")
     print(json.dumps(selected, sort_keys=True))
