@@ -80,7 +80,7 @@ pub(crate) fn poll(state: RwSignal<State>) {
         spawn_local(async move {
             let result = api::request(
                 "GET",
-                &format!("/api/operations/{}", api::segment(&id)),
+                &format!("/api/operations/{}/outcome", api::segment(&id)),
                 None,
             )
             .await;

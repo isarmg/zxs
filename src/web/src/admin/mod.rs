@@ -154,6 +154,7 @@ fn accept(m: &mut Model, contract: &Contract, value: Value) {
         }
         Contract::Inspect
         | Contract::Operation { .. }
+        | Contract::OperationOutcome { .. }
         | Contract::Repository { .. }
         | Contract::Branch { .. }
         | Contract::MergeLink { .. }
@@ -162,8 +163,8 @@ fn accept(m: &mut Model, contract: &Contract, value: Value) {
     m.result = json_codec::to_string_pretty(&value).expect("invariant: JSON values serialize");
     // Only a query of the original operation can settle an earlier write.
     let settled = match contract {
-        Contract::Inspect | Contract::Plan { .. } => false,
-        Contract::Operation { id } => {
+        Contract::Inspect | Contract::Operation { .. } | Contract::Plan { .. } => false,
+        Contract::OperationOutcome { id } => {
             m.uncertain_operation
                 .as_ref()
                 .and_then(UncertainOperation::id)
@@ -179,7 +180,7 @@ fn accept(m: &mut Model, contract: &Contract, value: Value) {
     };
     if settled {
         m.uncertain_operation = None;
-        if matches!(contract, Contract::Operation { .. }) {
+        if matches!(contract, Contract::OperationOutcome { .. }) {
             m.plan = Value::Null;
             m.acknowledged = false;
         }
@@ -271,7 +272,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     <p>{t("唯一账户管理全部存储。数据盘不可写时，存储操作禁用。账号设置可修改密码；文件内容请使用 SMB。","The sole account manages all storage. Storage changes require writable data storage. Change the password in account settings; use SMB for file contents.")}</p>
     <nav class="zxs-flow">{[(Kind::Repository,"仓库 Repository"),(Kind::Smb,"SMB 绑定 Binding"),(Kind::Policy,"路径副本规则 Path copy rule"),(Kind::Rule,"主盘规则 Placement"),(Kind::Branch,"历史分支 Branch"),(Kind::Link,"合并连线 Link"),(Kind::Purge,"清理预览 Purge"),(Kind::Split,"拆分预览 Split"),(Kind::Save,"历史保存预览 Historical save"),(Kind::Inspect,"检查 / 查询 Inspect")].into_iter().map(move |(kind,label)|view!{<button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.busy||s.admin_console.uncertain_operation.is_some()) on:click=move |_|select(state,kind)>{label}</button>}).collect_view()}</nav>
     <p role="alert">{move ||state.with(|s|s.admin_console.error.clone())}</p>
-    <Show when=move ||state.with(|s|s.admin_console.uncertain_operation.is_some())><p role="alert">{t("结果未确认，禁止重复修改。请查询原操作结果，不要改用新操作 ID 重发；无法查询时请在服务器本地核实。","Outcome unknown; do not repeat mutations. Check the original operation instead of resending under a new ID. Verify locally on the server if its outcome cannot be queried.")}</p><p>{move ||state.with(|s|s.admin_console.uncertain_operation.as_ref().map(|operation| operation.label().to_owned()))}</p><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,false)||s.admin_console.uncertain_operation.as_ref().and_then(UncertainOperation::id).is_none()) on:click=move |_|{let Some(id)=state.with_untracked(|s|s.admin_console.uncertain_operation.as_ref().and_then(UncertainOperation::id).map(str::to_owned)) else {return};execute(state,request::operation(&id))}>{t("查询原操作","Check original operation")}</button></Show>
+    <Show when=move ||state.with(|s|s.admin_console.uncertain_operation.is_some())><p role="alert">{t("结果未确认，禁止重复修改。请查询原操作结果，不要改用新操作 ID 重发；无法查询时请在服务器本地核实。","Outcome unknown; do not repeat mutations. Check the original operation instead of resending under a new ID. Verify locally on the server if its outcome cannot be queried.")}</p><p>{move ||state.with(|s|s.admin_console.uncertain_operation.as_ref().map(|operation| operation.label().to_owned()))}</p><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,false)||s.admin_console.uncertain_operation.as_ref().and_then(UncertainOperation::id).is_none()) on:click=move |_|{let Some(id)=state.with_untracked(|s|s.admin_console.uncertain_operation.as_ref().and_then(UncertainOperation::id).map(str::to_owned)) else {return};execute(state,request::operation_outcome(&id))}>{t("查询原操作","Check original operation")}</button></Show>
     <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Policy)><p>{t("此表单仅创建或修改无稳定文件／目录身份绑定的现行路径规则，只影响后续版本，不回填历史。稳定文件／目录规则请使用对应的「备份设置」；文件保留设置请显式配置该文件。这些备份设置会为仍可用的历史正文补足副本。","This form only creates or updates current path-only rules without a stable file/directory scope. Changes affect future versions only and do not backfill history. Use the file or directory's Backup settings for stable scoped rules, or the file's Backup settings for retained settings. Saving backup settings also backfills copies for available historical content.")}</p></Show>
     {move ||{let kind=state.with(|s|s.admin_console.kind); let fields:Vec<(&'static str,&'static str)>=match kind{
         Kind::Repository=>vec![("name","名称 Name"),("slot","主盘槽位 Primary slot"),("copies","份数（含主盘；1 份无冗余） Copies including primary; 1 has no redundancy")],

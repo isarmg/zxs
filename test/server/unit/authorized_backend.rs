@@ -162,17 +162,32 @@ fn recorded_slice<T>(
 }
 
 impl Backend for RecordingBackend {
+    fn operation_outcome(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+        self.record(
+            "operation_outcome",
+            Some(identity),
+            json!({"operation_id":operation_id}),
+        )?;
+        Ok(recorded_operation(operation_id, "operation_outcome").into())
+    }
     fn operation(
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
+    ) -> Result<crate::OperationObservation, ApiError> {
         self.record(
             "operation",
             Some(identity),
             json!({"operation_id":operation_id}),
         )?;
-        Ok(recorded_operation(operation_id, "operation"))
+        Ok(crate::OperationObservation {
+            outcome: recorded_operation(operation_id, "operation").into(),
+            health: None,
+        })
     }
     fn commit_workspace(
         &self,
@@ -1471,10 +1486,18 @@ impl Fixture {
         let operation_id = "op_00000000000000000000000000000000".parse().unwrap();
         vec![
             (
+                "operation_outcome",
+                backend.operation_outcome(identity, operation_id).map(|result| {
+                    assert_eq!(result, recorded_operation(operation_id, "operation_outcome").into());
+                    result.result
+                }),
+            ),
+            (
                 "operation",
                 backend.operation(identity, operation_id).map(|result| {
-                    assert_eq!(result, recorded_operation(operation_id, "operation"));
-                    result.result
+                    assert_eq!(result.outcome, recorded_operation(operation_id, "operation").into());
+                    assert!(result.health.is_none());
+                    result.outcome.result
                 }),
             ),
             (
@@ -2227,6 +2250,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
     let mut generation = upload.clone();
     generation["generation"] = 37.into();
     let arguments = [
+        json!({"operation_id":"op_00000000000000000000000000000000"}),
         json!({"operation_id":"op_00000000000000000000000000000000"}),
         json!({"operation_id":"op_00000000000000000000000000000000", "workspace_id":"workspace", "expected_head":"head", "fencing_token":41, "message":"commit", "request_digest":"digest"}),
         json!({"action": "status", "input": {"probe": 3}, "bootstrap": "bootstrap-probe"}),

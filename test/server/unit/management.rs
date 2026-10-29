@@ -49,11 +49,12 @@ fn managed_readiness_exposes_real_index_failure_without_rejecting_published_oper
             .tail_record(operation)
             .unwrap()
             .result
-            .clone(),
+            .clone()
+            .into(),
     )
     .unwrap();
     assert_eq!(
-        projection_failure::receipt_without_observation_time(&receipt)["commit_state"],
+        projection_failure::receipt_outcome(&receipt)["commit_state"],
         "PUBLISHED"
     );
     assert_eq!(

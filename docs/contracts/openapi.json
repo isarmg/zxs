@@ -282,7 +282,7 @@
     "/api/operations/{operation}": {
       "get": {
         "operationId": "getContentSaveOperation",
-        "description": "本附件只覆盖 content_save 结果变体，其他操作类型待补。",
+        "description": "显式管理员诊断：固定发布结果与实际健康观察分离；pending 或没有可观察作用域时 current_health=null。",
         "parameters": [
           {
             "name": "operation",
@@ -295,11 +295,11 @@
         ],
         "responses": {
           "200": {
-            "description": "当前处理状态、固定结果和当前健康。",
+            "description": "确定结果或处理中状态，及明确的 NotObserved/null 或 Checked 健康观察。",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SaveOperation"
+                  "$ref": "#/components/schemas/OperationObservation"
                 }
               }
             }
@@ -1745,9 +1745,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -1758,8 +1755,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -1952,9 +1948,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -1965,8 +1958,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -2092,9 +2084,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -2105,8 +2094,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -2416,9 +2404,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -2429,8 +2414,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -2538,9 +2522,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -2551,8 +2532,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -2667,9 +2647,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -2680,8 +2657,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -2785,9 +2761,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -2798,8 +2771,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -3642,9 +3614,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -3655,8 +3624,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -4295,9 +4263,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -4308,8 +4273,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -4418,9 +4382,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -4431,8 +4392,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -4532,9 +4492,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -4545,8 +4502,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -4656,9 +4612,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -4669,8 +4622,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -4772,9 +4724,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -4785,8 +4734,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -4944,9 +4892,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -4957,8 +4902,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -5115,9 +5059,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -5128,8 +5069,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -5397,9 +5337,6 @@
                           "type": "null"
                         }
                       ]
-                    },
-                    "current_health": {
-                      "$ref": "#/components/schemas/CurrentHealth"
                     }
                   },
                   "additionalProperties": false,
@@ -5410,8 +5347,7 @@
                     "state",
                     "commit_state",
                     "result",
-                    "error",
-                    "current_health"
+                    "error"
                   ]
                 }
               }
@@ -6306,6 +6242,44 @@
           }
         }
       }
+    },
+    "/api/operations/{operation}/outcome": {
+      "get": {
+        "operationId": "getOperationOutcome",
+        "description": "Web/SMB 结果核对使用的 outcome-only 查询；保留认证、主体绑定与永久幂等语义，不枚举内容、不读磁盘副本、不采样时钟。",
+        "parameters": [
+          {
+            "name": "operation",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OperationId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "原操作确定结果或处理中状态，无 current_health 和 checked_at。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationOutcome"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化调用错误；原业务结果必须查询 operation。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6911,9 +6885,6 @@
                 "type": "null"
               }
             ]
-          },
-          "current_health": {
-            "$ref": "#/components/schemas/CurrentHealth"
           }
         },
         "required": [
@@ -6923,8 +6894,7 @@
           "state",
           "commit_state",
           "result",
-          "error",
-          "current_health"
+          "error"
         ],
         "additionalProperties": false,
         "allOf": [
@@ -7057,7 +7027,8 @@
               }
             }
           }
-        ]
+        ],
+        "description": "即时内容保存回执和 outcome 查询：仅表达原操作发布结果，不读取当前内容健康，不携带检查时刻。"
       },
       "MemberReceipt": {
         "type": "object",
@@ -11060,6 +11031,481 @@
         ],
         "additionalProperties": false,
         "description": "高级正文版本页，按 (version_sequence ASC, version_id ASC)；不再返回完整正文版本数组。"
+      },
+      "SaveOperationObservation": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "operation_kind": {
+            "const": "content_save"
+          },
+          "request_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "state": {
+            "enum": [
+              "processing",
+              "in_doubt",
+              "completed",
+              "failed"
+            ]
+          },
+          "commit_state": {
+            "enum": [
+              "STAGING",
+              "SEALED",
+              "PREPARED",
+              "DECIDING",
+              "DECIDED",
+              "PROTECTED",
+              "PUBLISHED",
+              "ACKED",
+              "RECOVERING",
+              "RECOVERY_REQUIRED",
+              "IN_DOUBT",
+              "PUBLISHED_DEGRADED",
+              "ABORTED"
+            ]
+          },
+          "result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SaveResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Error"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current_health": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CurrentHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "operation_kind",
+          "request_digest",
+          "state",
+          "commit_state",
+          "result",
+          "error",
+          "current_health"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "completed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "result": {
+                  "$ref": "#/components/schemas/SaveResult"
+                },
+                "error": {
+                  "type": "null"
+                },
+                "commit_state": {
+                  "enum": [
+                    "PUBLISHED",
+                    "ACKED",
+                    "PUBLISHED_DEGRADED"
+                  ]
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "result": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "failed"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "error": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "commit_state": {
+                  "const": "ABORTED"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "error": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "processing"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "commit_state": {
+                  "enum": [
+                    "STAGING",
+                    "SEALED",
+                    "PREPARED",
+                    "DECIDING",
+                    "DECIDED",
+                    "PROTECTED",
+                    "RECOVERING"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "in_doubt"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "commit_state": {
+                  "enum": [
+                    "IN_DOUBT",
+                    "RECOVERY_REQUIRED"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "commit_state": {
+                  "const": "PUBLISHED_DEGRADED"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "result": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SaveResult"
+                    },
+                    {
+                      "properties": {
+                        "outcome": {
+                          "const": "COMMITTED_DEGRADED"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "not": {
+                    "const": "completed"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "current_health": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ],
+        "description": "显式诊断查询：固定发布结果与当前健康分离。current_health 为 null 表示尚未观察或没有可观察作用域，不代表 HEALTHY；对象表示实际检查及其 UTC 时刻。"
+      },
+      "GenericOperation": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "operation_kind": {
+            "type": "string",
+            "not": {
+              "const": "content_save"
+            }
+          },
+          "request_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "state": {
+            "enum": [
+              "completed",
+              "in_doubt"
+            ]
+          },
+          "commit_state": {
+            "enum": [
+              "STAGING",
+              "SEALED",
+              "PREPARED",
+              "DECIDING",
+              "DECIDED",
+              "PROTECTED",
+              "PUBLISHED",
+              "ACKED",
+              "RECOVERING",
+              "RECOVERY_REQUIRED",
+              "IN_DOUBT",
+              "PUBLISHED_DEGRADED",
+              "ABORTED"
+            ]
+          },
+          "protection_at_publish": {
+            "enum": [
+              "NOT_APPLICABLE",
+              "TARGET_MET",
+              "BELOW_TARGET",
+              "UNCONFIRMED"
+            ]
+          },
+          "publication_sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "result": {},
+          "error": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "operation_id",
+          "operation_kind",
+          "request_digest",
+          "state",
+          "commit_state",
+          "protection_at_publish",
+          "publication_sequence",
+          "result",
+          "error"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "commit_state": {
+                  "enum": [
+                    "PUBLISHED",
+                    "ACKED"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "state": {
+                  "const": "completed"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "state": {
+                  "const": "in_doubt"
+                }
+              }
+            }
+          }
+        ],
+        "description": "非 content_save 的当前 HTTP 发布投影。operation_kind 与 result 保持开放，不改变持久化 OperationResult；当前健康不属于回执。"
+      },
+      "GenericOperationObservation": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "operation_kind": {
+            "type": "string",
+            "not": {
+              "const": "content_save"
+            }
+          },
+          "request_digest": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "state": {
+            "enum": [
+              "completed",
+              "in_doubt"
+            ]
+          },
+          "commit_state": {
+            "enum": [
+              "STAGING",
+              "SEALED",
+              "PREPARED",
+              "DECIDING",
+              "DECIDED",
+              "PROTECTED",
+              "PUBLISHED",
+              "ACKED",
+              "RECOVERING",
+              "RECOVERY_REQUIRED",
+              "IN_DOUBT",
+              "PUBLISHED_DEGRADED",
+              "ABORTED"
+            ]
+          },
+          "protection_at_publish": {
+            "enum": [
+              "NOT_APPLICABLE",
+              "TARGET_MET",
+              "BELOW_TARGET",
+              "UNCONFIRMED"
+            ]
+          },
+          "publication_sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "result": {},
+          "error": {
+            "type": "null"
+          },
+          "current_health": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CurrentHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "operation_kind",
+          "request_digest",
+          "state",
+          "commit_state",
+          "protection_at_publish",
+          "publication_sequence",
+          "result",
+          "error",
+          "current_health"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "commit_state": {
+                  "enum": [
+                    "PUBLISHED",
+                    "ACKED"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "state": {
+                  "const": "completed"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "state": {
+                  "const": "in_doubt"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "commit_state": {
+                  "not": {
+                    "enum": [
+                      "PUBLISHED",
+                      "ACKED",
+                      "PUBLISHED_DEGRADED"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "current_health": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ],
+        "description": "非内容操作的显式诊断投影；current_health=null 为 NotObserved，有对象时才为实际 Checked。"
+      },
+      "OperationOutcome": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SaveOperation"
+          },
+          {
+            "$ref": "#/components/schemas/GenericOperation"
+          }
+        ]
+      },
+      "OperationObservation": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SaveOperationObservation"
+          },
+          {
+            "$ref": "#/components/schemas/GenericOperationObservation"
+          }
+        ]
       }
     }
   }

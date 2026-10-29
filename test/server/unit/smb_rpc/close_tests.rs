@@ -29,12 +29,19 @@ struct CloseFailure {
 impl Backend for CloseFailure {
     fn operation(
         &self,
+        _identity: &Identity,
+        _operation_id: storage_contract::OperationId,
+    ) -> Result<crate::OperationObservation, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn operation_outcome(
+        &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
+    ) -> Result<storage_contract::OperationOutcome, ApiError> {
         if self.enabled.load(Ordering::SeqCst) {
             if matches!(self.failure, Failure::PendingOperation) {
-                return Ok(storage_contract::OperationResult {
+                return Ok(storage_contract::OperationOutcome {
                     operation_id,
                     kind: "workspace.commit".into(),
                     commit_id: None,
@@ -42,7 +49,6 @@ impl Backend for CloseFailure {
                     branch_id: None,
                     commit_state: storage_contract::CommitState::Prepared,
                     protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
-                    current_health: storage_contract::CurrentHealth::Healthy,
                     request_digest: "0".repeat(64),
                     sequence: 0,
                     result: json!({}),
@@ -56,7 +62,7 @@ impl Backend for CloseFailure {
                 ));
             }
         }
-        self.inner.operation(identity, operation_id)
+        self.inner.operation_outcome(identity, operation_id)
     }
     fn require_native_workspace_commit_completion(
         &self,
@@ -966,7 +972,7 @@ fn lost_close_reply_retains_original_published_operation_without_resubmitting() 
     );
     let uploads = backend.uploads.load(Ordering::SeqCst);
     let result = backend
-        .operation(&identity(&shared), operation.parse().unwrap())
+        .operation_outcome(&identity(&shared), operation.parse().unwrap())
         .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     assert_eq!(result["commit_state"], "PUBLISHED");

@@ -33,7 +33,7 @@ fn mkdir_fixture(
             operation_id: json_codec::from_value(input["operation_id"].clone()).unwrap(),
         },
     )
-    .and_then(operation_wire)
+    .and_then(|result| operation_wire(result.into()))
 }
 
 #[test]
@@ -496,5 +496,5 @@ fn directory_mutation(
         identity,
         crate::tests::disk_directory_request(body, action),
     )
-    .and_then(operation_wire)
+    .and_then(|result| operation_wire(result.into()))
 }

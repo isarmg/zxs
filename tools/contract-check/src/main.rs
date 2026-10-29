@@ -264,7 +264,7 @@ fn semantics(name: &str, value: &Value) -> Result {
             }
         }
         "SaveResult" => validate_result(value)?,
-        "SaveOperation" if !value["result"].is_null() => {
+        "SaveOperation" | "SaveOperationObservation" if !value["result"].is_null() => {
             validate_result(&value["result"])?;
             require(
                 (value["result"]["outcome"] == "COMMITTED_DEGRADED")

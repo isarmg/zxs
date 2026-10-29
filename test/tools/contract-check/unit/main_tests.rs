@@ -5,6 +5,191 @@ fn checked_in_contracts_and_document_examples_are_consistent() {
 }
 
 #[test]
+fn operation_outcome_and_observation_vectors_use_distinct_strict_schemas() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let mut core = read(&root.join("core.schema.json")).unwrap();
+    let mut api = read(&root.join("openapi.json")).unwrap();
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    for name in [
+        "SaveOperation",
+        "SaveOperationObservation",
+        "GenericOperation",
+        "GenericOperationObservation",
+    ] {
+        core["$ref"] = format!("#/$defs/{name}").into();
+        api["$ref"] = format!("#/components/schemas/{name}").into();
+        let core_schema = validator(&core).unwrap();
+        let api_schema = validator(&api).unwrap();
+        let mut cases = 0;
+        for group in ["positive", "negative"] {
+            for case in array(&vectors[group])
+                .unwrap()
+                .iter()
+                .filter(|case| case["schema"] == name)
+            {
+                cases += 1;
+                let shape_valid = group == "positive" || case["layer"] == "semantic";
+                let value = &case["value"];
+                assert_eq!(core_schema.is_valid(value), shape_valid, "{}", case["name"]);
+                assert_eq!(api_schema.is_valid(value), shape_valid, "{}", case["name"]);
+                if shape_valid {
+                    assert_eq!(
+                        semantics(name, value).is_ok(),
+                        group == "positive",
+                        "{}",
+                        case["name"]
+                    );
+                }
+            }
+        }
+        assert!(cases > 0, "missing fixed cases for {name}");
+    }
+}
+
+#[test]
+fn operation_get_routes_separate_outcome_polling_from_explicit_observation() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let api = read(&root.join("openapi.json")).unwrap();
+    for (route, name) in [
+        ("/api/operations/{operation}/outcome", "OperationOutcome"),
+        ("/api/operations/{operation}", "OperationObservation"),
+    ] {
+        assert_eq!(
+            api["paths"][route]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            format!("#/components/schemas/{name}")
+        );
+    }
+    let mut immediate = 0;
+    for path in object(&api["paths"]).unwrap().values() {
+        for method in ["post", "put", "patch", "delete"] {
+            let Some(responses) = path.get(method).and_then(|item| item.get("responses")) else {
+                continue;
+            };
+            for response in object(responses).unwrap().values() {
+                let shape = &response["content"]["application/json"]["schema"];
+                if shape["properties"].get("operation_id").is_some() {
+                    immediate += 1;
+                    assert!(shape["properties"].get("current_health").is_none());
+                    assert!(shape["properties"].get("checked_at").is_none());
+                }
+            }
+        }
+    }
+    assert!(immediate >= 16, "missing direct mutation response shapes");
+}
+
+#[test]
+fn checked_health_does_not_rewrite_the_outcome_or_publication_proof() {
+    use storage_contract::client_protocol::{
+        OperationStatus, operation_observation_status, operation_status,
+    };
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let mut core = read(&root.join("core.schema.json")).unwrap();
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    let original = array(&vectors["positive"])
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "completed")
+        .unwrap()["value"]
+        .clone();
+    assert!(original.get("current_health").is_none());
+    assert_eq!(
+        operation_status(&original),
+        Some(OperationStatus::Published)
+    );
+    core["$ref"] = "#/$defs/SaveOperationObservation".into();
+    let schema = validator(&core).unwrap();
+    for state in ["HEALTHY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"] {
+        let mut observed = original.clone();
+        observed["current_health"] = json!({"state":state,"checked_at":"2026-10-18T00:00:00Z"});
+        assert!(schema.is_valid(&observed));
+        semantics("SaveOperationObservation", &observed).unwrap();
+        assert_eq!(observed["result"], original["result"]);
+        assert_eq!(operation_status(&observed), None);
+        assert_eq!(
+            operation_observation_status(&observed),
+            Some(OperationStatus::Published)
+        );
+    }
+}
+
+#[test]
+fn generic_diagnostic_health_requires_a_published_operation() {
+    use storage_contract::client_protocol::{OperationStatus, operation_observation_status};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let mut core = read(&root.join("core.schema.json")).unwrap();
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    let original = array(&vectors["positive"])
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "generic-not-observed")
+        .unwrap()["value"]
+        .clone();
+    core["$ref"] = "#/$defs/GenericOperationObservation".into();
+    let schema = validator(&core).unwrap();
+    for commit in [
+        "STAGING",
+        "SEALED",
+        "PREPARED",
+        "DECIDING",
+        "DECIDED",
+        "PROTECTED",
+        "RECOVERING",
+        "RECOVERY_REQUIRED",
+        "IN_DOUBT",
+        "ABORTED",
+    ] {
+        let mut observed = original.clone();
+        observed["state"] = "in_doubt".into();
+        observed["commit_state"] = commit.into();
+        observed["protection_at_publish"] = "UNCONFIRMED".into();
+        let expected = if commit == "ABORTED" {
+            OperationStatus::Rejected
+        } else {
+            OperationStatus::Unknown
+        };
+        assert!(schema.is_valid(&observed), "{commit}");
+        assert_eq!(operation_observation_status(&observed), Some(expected));
+        observed["current_health"] = json!({"state":"UNKNOWN","checked_at":"2026-10-18T00:00:00Z"});
+        assert!(
+            !schema.is_valid(&observed),
+            "fabricated observation for {commit}"
+        );
+        assert_eq!(operation_observation_status(&observed), None);
+    }
+    for (commit, state, protection, status) in [
+        (
+            "PUBLISHED",
+            "completed",
+            "NOT_APPLICABLE",
+            OperationStatus::Published,
+        ),
+        (
+            "ACKED",
+            "completed",
+            "NOT_APPLICABLE",
+            OperationStatus::Published,
+        ),
+        (
+            "PUBLISHED_DEGRADED",
+            "in_doubt",
+            "BELOW_TARGET",
+            OperationStatus::Degraded,
+        ),
+    ] {
+        let mut observed = original.clone();
+        observed["state"] = state.into();
+        observed["commit_state"] = commit.into();
+        observed["protection_at_publish"] = protection.into();
+        observed["current_health"] =
+            json!({"state":"UNAVAILABLE","checked_at":"2026-10-18T00:00:00Z"});
+        assert!(schema.is_valid(&observed), "{commit}");
+        assert_eq!(operation_observation_status(&observed), Some(status));
+    }
+}
+
+#[test]
 fn persisted_operation_vectors_agree_with_both_schemas_and_rust_decoding() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
     let mut core = read(&root.join("core.schema.json")).unwrap();

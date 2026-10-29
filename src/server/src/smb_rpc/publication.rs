@@ -99,7 +99,7 @@ pub(super) fn finish_publication(
     identity: &Identity,
     branch: &str,
     writer: &mut Writer,
-    result: storage_contract::OperationResult,
+    result: storage_contract::OperationOutcome,
 ) -> Result<Value, ApiError> {
     shared.backend.require_native_workspace_commit_completion(
         identity,
@@ -334,7 +334,7 @@ impl Session {
         match self
             .shared
             .backend
-            .operation(&self.identity, writer.operation_id)
+            .operation_outcome(&self.identity, writer.operation_id)
         {
             Ok(result) if result.commit_state == storage_contract::CommitState::Published => {
                 return finish_publication(
@@ -395,7 +395,13 @@ impl Session {
                 request_digest: None,
             },
         )?;
-        finish_publication(&self.shared, &self.identity, &self.branch, writer, result)
+        finish_publication(
+            &self.shared,
+            &self.identity,
+            &self.branch,
+            writer,
+            result.into(),
+        )
     }
 
     /// Unlike Flush, Close always consumes the handle. A failed publication
