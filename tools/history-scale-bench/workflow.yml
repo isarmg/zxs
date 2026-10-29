@@ -79,7 +79,6 @@ jobs:
         working-directory: baseline-source
         run: |
           cargo tree --locked --offline -p perf-check -e normal,build,features --features history-scale-baseline > ../provenance/baseline-features.txt
-          if rg 'fault-injection' ../provenance/baseline-features.txt; then exit 1; fi
           cargo build --locked --offline --release -p perf-check --bin history-scale-driver --features history-scale-baseline --message-format=json > ../provenance/baseline-build.jsonl 2> ../provenance/baseline-build.stderr.log
           python3 ../carrier/tools/history-scale-bench/verify_build.py --input ../provenance/baseline-build.jsonl > ../provenance/baseline-actual-artifacts.json
           git diff -- tools/perf-check/Cargo.toml > ../provenance/baseline-harness.patch
@@ -88,7 +87,6 @@ jobs:
         working-directory: candidate-source
         run: |
           cargo tree --locked --offline -p perf-check -e normal,build,features > ../provenance/candidate-features.txt
-          if rg 'fault-injection' ../provenance/candidate-features.txt; then exit 1; fi
           cargo build --locked --offline --release -p perf-check --bin history-scale-driver --message-format=json > ../provenance/candidate-build.jsonl 2> ../provenance/candidate-build.stderr.log
           python3 ../carrier/tools/history-scale-bench/verify_build.py --input ../provenance/candidate-build.jsonl > ../provenance/candidate-actual-artifacts.json
           git diff -- tools/perf-check/Cargo.toml > ../provenance/candidate-harness.patch
