@@ -367,12 +367,11 @@ pub(crate) fn read_map(
     let mut entries = Map::new();
     visit_objects(reference, load, |object| {
         if object.kind() == "state-page" {
-            for (key, value) in object
-                .value()
-                .as_object()
-                .expect("invariant: visited leaf passed PageShape")
-            {
-                if entries.insert(key.clone(), value.clone()).is_some() {
+            let Value::Object(page) = object.into_value() else {
+                unreachable!("invariant: visited leaf passed PageShape");
+            };
+            for (key, value) in page {
+                if entries.insert(key, value).is_some() {
                     return Err(invalid("duplicate metadata entity in graph"));
                 }
             }
@@ -381,6 +380,10 @@ pub(crate) fn read_map(
     })?;
     Ok(entries)
 }
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/metadata_map/read_map_tests.rs"]
+mod read_map_tests;
 
 /// Streaming dependency-first traversal. Full recovery never substitutes a
 /// re-encoded layout, and only one path of bounded objects is retained at once.

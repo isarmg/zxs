@@ -726,6 +726,9 @@ impl AuthenticatedMetadataObject {
     pub(crate) fn value(&self) -> &json_codec::Value {
         &self.value
     }
+    pub(crate) fn into_value(self) -> json_codec::Value {
+        self.value
+    }
     pub(crate) fn canonical_len(&self) -> usize {
         self.prepared.bytes.len()
     }
