@@ -87,7 +87,7 @@ fn save_counterexample(disk: &DiskConfig, snapshot: &Snapshot) {
     };
     let mut objects = BTreeMap::new();
     for kind in ["namespace-page", "namespace-index", "state-page", "metadata-index",
-        "event-segment", "operation-segment"] {
+        "event-segment", "operation-segment", "state-control-auth"] {
         for hash in object_storage::list_object_hashes(disk, kind).unwrap() {
             let value: json_codec::Value = load_object(disk, kind, &hash).unwrap();
             objects.insert(format!("{kind}/{hash}"), value);
