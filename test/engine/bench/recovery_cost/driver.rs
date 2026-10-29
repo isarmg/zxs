@@ -180,7 +180,9 @@ fn verify(engine: &Engine, branch: &str, files: usize, root: &Path) -> Result<()
     let mut commits = std::collections::BTreeSet::new();
     let mut previous_commit: Option<String> = None;
     for (index, (id, event)) in ids.iter().zip(&events).enumerate() {
-        let receipt = engine.published_receipt(*id)?.expect("invariant: retained receipt exists");
+        let receipt = engine
+            .published_receipt(*id)?
+            .expect("invariant: retained receipt exists");
         let kind = if index == 0 {
             "repository.create"
         } else {
@@ -238,9 +240,16 @@ fn verify(engine: &Engine, branch: &str, files: usize, root: &Path) -> Result<()
     for version in engine.state().versions.values() {
         let mut content = engine.open_content(&version.version_id)?;
         let mut bytes = Vec::new();
-        content.file.by_ref().take(version.logical_size + 1).read_to_end(&mut bytes)?;
+        content
+            .file
+            .by_ref()
+            .take(version.logical_size + 1)
+            .read_to_end(&mut bytes)?;
         assert_eq!(bytes.len() as u64, version.logical_size);
-        assert!(actual_bodies.insert(bytes), "each retained generated body is unique");
+        assert!(
+            actual_bodies.insert(bytes),
+            "each retained generated body is unique"
+        );
     }
     assert_eq!(actual_bodies, expected_bodies);
     let count = ids.len();
@@ -322,7 +331,10 @@ fn main() -> Result<()> {
             for id in ids {
                 writeln!(output, "{id}")?;
             }
-            std::fs::write(root.join("expected-state.json"), json_codec::to_vec(engine.state())?)?;
+            std::fs::write(
+                root.join("expected-state.json"),
+                json_codec::to_vec(engine.state())?,
+            )?;
         }
         "read" => {
             let engine = Engine::open(&state)?;
@@ -343,9 +355,8 @@ fn main() -> Result<()> {
                 json_codec::json!({"commits":engine.state().commits.len()}),
             )?;
             // Exact State comparison is outside the Engine::open timing/counters.
-            let expected: storage_contract::State = json_codec::from_slice(
-                &std::fs::read(root.join("expected-state.json"))?,
-            )?;
+            let expected: storage_contract::State =
+                json_codec::from_slice(&std::fs::read(root.join("expected-state.json"))?)?;
             assert_eq!(engine.state(), &expected);
         }
         "verify" => {

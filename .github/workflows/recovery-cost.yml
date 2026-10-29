@@ -41,7 +41,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          ref: d2e4f54a68ba2b9d5c7ad73f926a9d0ce33e3af9
+          ref: 505cbfb524e9a2a4150a229cd2fd90f1acd8bed9
           path: candidate
       - name: Authenticate products and install only the standalone measurement adapters
         shell: bash
@@ -56,7 +56,7 @@ jobs:
           out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'recovery-evidence'
           identities = {
               'baseline': ('99f02cb978bff53f28d1ad8414037a3f52d74cd2','96d02c531530729ede98b524af819198cbdb3c8a'),
-              'candidate': ('d2e4f54a68ba2b9d5c7ad73f926a9d0ce33e3af9','4a706673ee2c272706d346b11221543108b04352'),
+              'candidate': ('505cbfb524e9a2a4150a229cd2fd90f1acd8bed9','d3c8b81371e5153c10230c32e7b7c3ccc5c506c8'),
           }
           records = {}
           for name, (sha, tree) in identities.items():
@@ -98,6 +98,7 @@ jobs:
           df -B1 > "$RUNNER_TEMP/recovery-evidence/disk-before.txt"
           command -v strace
           strace --version > "$RUNNER_TEMP/recovery-evidence/strace.txt"
+          rustup component add rustfmt --toolchain 1.99.0
           python3 -m py_compile harness/tools/recovery-cost/run.py
           rustfmt +1.99.0 --edition 2024 --emit stdout harness/test/engine/bench/recovery_cost/driver.rs > "$RUNNER_TEMP/recovery-evidence/driver-formatted.rs"
       - name: Build both fixed Rust 1.99 release adapters without development features
@@ -189,13 +190,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          ref: d2e4f54a68ba2b9d5c7ad73f926a9d0ce33e3af9
+          ref: 505cbfb524e9a2a4150a229cd2fd90f1acd8bed9
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
       - name: Verify pinned compiler and format affected files
         run: |
           mkdir -p evidence
           rustc +1.99.0 --version --verbose > evidence/rustc.txt
+          rustup component add rustfmt --toolchain 1.99.0
           rustfmt +1.99.0 --edition 2024 --check src/engine/src/namespace.rs src/engine/src/segment_store.rs src/engine/src/history_package.rs src/engine/src/history_package/manifest.rs src/engine/src/history_package/state_read.rs test/engine/unit/namespace/object_loader_memo_tests.rs test/engine/unit/history_package/admitted_projection_tests.rs > evidence/format.log 2>&1
       - name: Execute new scope and binding regressions
         if: always()
