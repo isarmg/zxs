@@ -7,6 +7,7 @@ signals, timeouts, zero discovered cases and missing evidence are failures.
 """
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compile-messages", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--only", help="Run exactly this fully qualified Rust test")
+    parser.add_argument("--replay-input", type=Path)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     binaries = []
@@ -54,6 +57,8 @@ def main():
     (args.output / "test-list.txt").write_text(listing.stdout)
     names = sorted(line.removesuffix(": test") for line in listing.stdout.splitlines()
                    if "metadata_adversarial" in line and line.endswith(": test"))
+    if args.only:
+        names = [name for name in names if name == args.only]
     if not names:
         raise RuntimeError("no metadata adversarial tests were wired into the binary")
     results = []
@@ -65,14 +70,17 @@ def main():
         returncode = None
         case_directory = (args.output / f"case-{ordinal:03d}").resolve()
         case_directory.mkdir(parents=True, exist_ok=True)
+        environment = {**os.environ, "RUST_BACKTRACE": "1",
+                       "ZXS_METADATA_ADVERSARIAL_CASE_DIR": str(case_directory)}
+        if args.replay_input:
+            environment["ZXS_METADATA_ADVERSARIAL_REPLAY_INPUT"] = str(args.replay_input.resolve())
         with (args.output / log_name).open("w") as log:
             log.write(json.dumps({"command": command}) + "\n")
             log.flush()
             try:
                 completed = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
                                            timeout=WALL_SECONDS, preexec_fn=limits,
-                                           env={**os.environ, "RUST_BACKTRACE": "1",
-                                                "ZXS_METADATA_ADVERSARIAL_CASE_DIR": str(case_directory)})
+                                           env=environment)
                 returncode = completed.returncode
                 status = "passed" if returncode == 0 else "failed"
             except subprocess.TimeoutExpired:
@@ -87,6 +95,8 @@ def main():
                           "wall_seconds": WALL_SECONDS, "file_bytes": 256 * 1024 * 1024},
                "tests": results, "passed": sum(r["status"] == "passed" for r in results),
                "failed": sum(r["status"] != "passed" for r in results)}
+    if args.replay_input:
+        summary["replay_input_sha256"] = hashlib.sha256(args.replay_input.read_bytes()).hexdigest()
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return 1 if summary["failed"] else 0
 
