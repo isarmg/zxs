@@ -65,7 +65,7 @@ enum Shape {
     ControlAuth,
     History(String),
     Snapshot(u64),
-    SegmentBody,
+    SegmentBody(crate::journal::SegmentShape),
     NamespaceNode,
 }
 
@@ -348,22 +348,14 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
         // Sealed/tail segment bodies are reachable through directory leaf
         // values rather than radix references; cover them explicitly. The
         // directory pages were already verified by the radix walk above, and
-        // a sealed body can be shared by many snapshots: each object is
-        // verified and counted once, and re-read only for traversal.
-        crate::journal::visit_segment_objects(&snapshot, |kind, hash| {
-            let address = (kind, hash.to_owned());
-            if self.verified.contains_key(&address) {
-                return self.read_graph_object(kind, hash);
-            }
-            let object = self.graph_object(kind, hash)?;
-            if matches!(
-                kind,
-                storage_contract::EVENT_SEGMENT_KIND | storage_contract::OPERATION_SEGMENT_KIND
-            ) {
-                self.verified.insert(address, Shape::SegmentBody);
-            }
-            Ok(object)
-        })?;
+        // a sealed body can be shared by many snapshots. Retain only its
+        // authenticated shape; each directory entry still checks that shape.
+        crate::journal::visit_segment_objects_with(
+            &snapshot,
+            self,
+            |scan, kind, hash| scan.read_graph_object(kind, hash),
+            |scan, kind, hash| scan.segment_shape(kind, hash),
+        )?;
         // Commit values reference immutable namespace graphs that the radix
         // walk stores but never decodes; verify every reachable page and
         // index once per address, like the shared segment bodies above.
@@ -392,6 +384,21 @@ impl<O: FnMut(usize) -> Result<()>, P: FnMut(&IntegrityScrubReport)> MemberScan<
         self.verified
             .insert(address, Shape::Snapshot(snapshot.sequence));
         Ok(())
+    }
+
+    fn segment_shape(
+        &mut self,
+        kind: &'static str,
+        hash: &str,
+    ) -> Result<crate::journal::SegmentShape> {
+        (self.observe)(0)?;
+        let address = (kind, hash.to_owned());
+        if let Some(Shape::SegmentBody(shape)) = self.verified.get(&address) {
+            return Ok(*shape);
+        }
+        let shape = crate::journal::SegmentShape::read(&self.graph_object(kind, hash)?)?;
+        self.verified.insert(address, Shape::SegmentBody(shape));
+        Ok(shape)
     }
 
     fn page(&mut self, hash: &str) -> Result<&PageShape> {

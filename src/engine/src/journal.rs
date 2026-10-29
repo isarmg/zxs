@@ -1111,6 +1111,66 @@ fn directory_entries<T: data_serialization::de::DeserializeOwned>(
     Ok(entries)
 }
 
+/// Fixed-size facts obtained only by decoding an authenticated segment body.
+/// Directory declarations alone cannot construct this proof.
+#[derive(Clone, Copy)]
+pub(crate) struct SegmentShape(SegmentBodyShape);
+
+#[derive(Clone, Copy)]
+enum SegmentBodyShape {
+    Events { first_sequence: u64 },
+    Operations { first_sequence: u64, records: u64 },
+}
+
+impl SegmentShape {
+    pub(crate) fn read(object: &AuthenticatedMetadataObject) -> Result<Self> {
+        use storage_contract::{EVENT_SEGMENT_KIND, EVENT_SEGMENT_SPAN, OPERATION_SEGMENT_KIND};
+        match object.kind() {
+            EVENT_SEGMENT_KIND => {
+                let segment: storage_contract::EventSegment =
+                    json_codec::from_value(object.value().clone())?;
+                if segment.events.is_empty() || segment.events.len() > EVENT_SEGMENT_SPAN {
+                    return Err(Error::new(
+                        ErrorCode::ObjectCorrupt,
+                        "event segment differs from its directory entry",
+                    ));
+                }
+                Ok(Self(SegmentBodyShape::Events {
+                    first_sequence: segment.events[0].sequence,
+                }))
+            }
+            OPERATION_SEGMENT_KIND => {
+                let segment: storage_contract::OperationSegment =
+                    json_codec::from_value(object.value().clone())?;
+                if segment.records.is_empty() {
+                    return Err(Error::new(
+                        ErrorCode::ObjectCorrupt,
+                        "operation segment differs from its directory entry",
+                    ));
+                }
+                Ok(Self(SegmentBodyShape::Operations {
+                    first_sequence: segment.records[0].result.sequence,
+                    records: segment.records.len() as u64,
+                }))
+            }
+            _ => Err(Error::new(
+                ErrorCode::ObjectCorrupt,
+                "expected a segment body",
+            )),
+        }
+    }
+
+    fn matches_event(self, entry: &storage_contract::EventDirectoryEntry) -> bool {
+        matches!(self.0, SegmentBodyShape::Events { first_sequence }
+            if first_sequence == entry.first_sequence)
+    }
+
+    fn matches_operation(self, entry: &storage_contract::OperationDirectoryEntry) -> bool {
+        matches!(self.0, SegmentBodyShape::Operations { first_sequence, records }
+            if first_sequence == entry.first_sequence && records == entry.records)
+    }
+}
+
 /// Visit every sealed/tail segment object referenced by this snapshot's
 /// events and operation_log directories, verifying each body against its
 /// typed directory entry. Shape-level: full cross-segment admission belongs
@@ -1119,18 +1179,30 @@ pub(crate) fn visit_segment_objects(
     snapshot: &Snapshot,
     mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<()> {
-    use storage_contract::{EVENT_SEGMENT_KIND, EVENT_SEGMENT_SPAN, OPERATION_SEGMENT_KIND};
-    let events = crate::metadata_map::read_map(&snapshot.events, &mut load)?;
+    visit_segment_objects_with(
+        snapshot,
+        &mut load,
+        |load, kind, hash| load(kind, hash),
+        |load, kind, hash| SegmentShape::read(&load(kind, hash)?),
+    )
+}
+
+/// Share the directory traversal while allowing a scrub member to retain only
+/// authenticated body facts. Every reference still checks its own declaration.
+pub(crate) fn visit_segment_objects_with<C>(
+    snapshot: &Snapshot,
+    context: &mut C,
+    mut load: impl FnMut(&mut C, &'static str, &str) -> Result<AuthenticatedMetadataObject>,
+    mut segment: impl FnMut(&mut C, &'static str, &str) -> Result<SegmentShape>,
+) -> Result<()> {
+    use storage_contract::{EVENT_SEGMENT_KIND, OPERATION_SEGMENT_KIND};
+    let events =
+        crate::metadata_map::read_map(&snapshot.events, |kind, hash| load(context, kind, hash))?;
     for entry in directory_entries::<storage_contract::EventDirectoryEntry>(
         events,
         "invalid event directory entry",
     )? {
-        let segment: storage_contract::EventSegment =
-            json_codec::from_value(load(EVENT_SEGMENT_KIND, &entry.hash)?.value().clone())?;
-        if segment.events.is_empty()
-            || segment.events.len() > EVENT_SEGMENT_SPAN
-            || segment.events[0].sequence != entry.first_sequence
-        {
+        if !segment(context, EVENT_SEGMENT_KIND, &entry.hash)?.matches_event(&entry) {
             return Err(Error::new(
                 ErrorCode::ObjectCorrupt,
                 "event segment differs from its directory entry",
@@ -1141,17 +1213,12 @@ pub(crate) fn visit_segment_objects(
         .maps
         .get("operation_log")
         .ok_or_else(|| Error::new(ErrorCode::ObjectCorrupt, "snapshot map schema differs"))?;
-    let log = crate::metadata_map::read_map(log, &mut load)?;
+    let log = crate::metadata_map::read_map(log, |kind, hash| load(context, kind, hash))?;
     for entry in directory_entries::<storage_contract::OperationDirectoryEntry>(
         log,
         "invalid operation directory entry",
     )? {
-        let segment: storage_contract::OperationSegment =
-            json_codec::from_value(load(OPERATION_SEGMENT_KIND, &entry.hash)?.value().clone())?;
-        if segment.records.is_empty()
-            || segment.records.len() as u64 != entry.records
-            || segment.records[0].result.sequence != entry.first_sequence
-        {
+        if !segment(context, OPERATION_SEGMENT_KIND, &entry.hash)?.matches_operation(&entry) {
             return Err(Error::new(
                 ErrorCode::ObjectCorrupt,
                 "operation segment differs from its directory entry",

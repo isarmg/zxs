@@ -24,6 +24,23 @@ fn receipt(sequence: u64) -> OperationRecordEntry {
     }
 }
 
+#[test]
+fn segment_shape_decodes_every_record_before_retaining_facts() {
+    let segment = OperationSegment {
+        format: Default::default(),
+        records: vec![receipt(1), receipt(2)],
+    };
+    for field in ["operation_id", "unknown_field"] {
+        let mut value = json_codec::to_value(&segment).unwrap();
+        value["records"][1]["result"][field] = "invalid".into();
+        let hash = object_hash(OPERATION_SEGMENT_KIND, &value).unwrap();
+        let object =
+            AuthenticatedMetadataObject::authenticate(OPERATION_SEGMENT_KIND, &hash, value)
+                .unwrap();
+        assert!(SegmentShape::read(&object).is_err());
+    }
+}
+
 fn read_receipts(records: Vec<OperationRecordEntry>, sequence: u64) -> Result<json_codec::Value> {
     let locators = records
         .iter()
