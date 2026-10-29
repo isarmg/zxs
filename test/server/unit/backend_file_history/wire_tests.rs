@@ -630,24 +630,29 @@ fn lazy_wire_budget_stops_before_later_candidates_and_caps_first_record_allocati
             serializer.serialize_str(self.text)
         }
     }
-    let visits = Cell::new(0);
-    let candidates = (0..500).map(|_| Counted {
-        visits: &visits,
-        text: "12345678",
-    });
-    let admitted = prepare_records(
-        PageBudget::with_max_bytes(21),
-        0,
-        candidates,
-        crate::backend_file_history::PageDirection::Forward,
-    )
-    .unwrap();
-    assert_eq!(admitted.len(), 2);
-    assert_eq!(
-        visits.get(),
-        3,
-        "stop immediately after the first candidate that cannot fit"
-    );
+    // Two quoted strings plus their comma occupy exactly 21 bytes. With one
+    // more byte, the next comma fits and serialization rejects the third record;
+    // exact exhaustion rejects that comma before serializing another record.
+    for (max_bytes, serialized) in [(22, 3), (21, 2)] {
+        let visits = Cell::new(0);
+        let candidates = (0..500).map(|_| Counted {
+            visits: &visits,
+            text: "12345678",
+        });
+        let admitted = prepare_records(
+            PageBudget::with_max_bytes(max_bytes),
+            0,
+            candidates,
+            crate::backend_file_history::PageDirection::Forward,
+        )
+        .unwrap();
+        assert_eq!(admitted.len(), 2);
+        assert_eq!(
+            visits.get(),
+            serialized,
+            "stop immediately when the next candidate cannot fit at budget {max_bytes}"
+        );
+    }
     let mut writer = BoundedWriter {
         bytes: Vec::new(),
         limit: 127,
