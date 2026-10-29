@@ -1,4 +1,5 @@
 use super::*;
+use crate::files::history::state::HistoryState;
 use crate::files::history::tests::{ROOT, chain, window_wire};
 use crate::files::test_entries::entry;
 use json_codec::json;
@@ -193,7 +194,7 @@ fn history_changed_marks_the_resident_page_stale_and_closes_write_entries_withou
             |_, _| panic!("a stale response installs nothing"),
         );
         state.with_untracked(|s| {
-            assert!(s.files.history.stale());
+            assert!(matches!(s.files.history.state, HistoryState::Stale { .. }));
             assert!(crate::files::model::history_root(&s.files).is_none());
             assert!(s.files.history.branch_page().is_none());
             assert_eq!(s.files.history.window().unwrap().nodes.len(), 2);
@@ -233,7 +234,7 @@ fn a_main_continuation_that_lost_its_root_keeps_the_previous_page_as_stale() {
             Err(injected(storage_contract::ErrorCode::HistoryChanged, 409)),
         );
         state.with_untracked(|s| {
-            assert!(s.files.history.stale());
+            assert!(matches!(s.files.history.state, HistoryState::Stale { .. }));
             assert_eq!(s.files.history.window().unwrap().nodes.len(), 2);
         });
     });

@@ -54,7 +54,7 @@ fn stale_root_keeps_the_window_readable_but_closes_root_bound_pages() {
     history.branches = Some(branch_page(vec![], None));
     let generation = history.generation;
     history.mark_stale(StaleReason::RootChanged);
-    assert!(history.stale());
+    assert!(matches!(history.state, HistoryState::Stale { .. }));
     assert!(
         history.loaded().is_none(),
         "a stale page is not a write basis"
@@ -63,7 +63,13 @@ fn stale_root_keeps_the_window_readable_but_closes_root_bound_pages() {
     assert_eq!(history.window().unwrap().nodes.len(), 2);
     assert!(history.branch_page().is_none() && history.branches.is_none());
     assert_eq!(history.generation, generation + 1);
-    assert_eq!(history.state.stale_reason(), Some(StaleReason::RootChanged));
+    assert!(matches!(
+        history.state,
+        HistoryState::Stale {
+            reason: StaleReason::RootChanged,
+            ..
+        }
+    ));
     // Marking stale without a resident page leaves nothing to display.
     let mut empty = History::default();
     empty.mark_stale(StaleReason::RootChanged);
