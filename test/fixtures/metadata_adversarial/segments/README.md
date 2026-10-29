@@ -1,0 +1,33 @@
+# 事件段、回执段与定位器对抗语料
+
+固定基线为 `13b664e9fd41a356ffb7ed982d21e97abb123626`。语料生成器位于
+`test/engine/unit/metadata_adversarial/segments_support.rs`，回归入口为相邻
+`segments.rs`。这里保存变异配方和种子，避免保存重复的约 1 MiB 填充串；
+所有对象均由正常编码与对象域哈希助手生成，语义坏对象重新计算真实地址。
+
+预期独立来自 ADR 0011 与 `docs/architecture/namespace-roots-and-segmented-logs.md`
+§3.2、§3.3、§4。事件和回执的发布序号允许相等与跳号；定位器值是全局回执
+ordinal，不是发布 sequence。回执封段字节阈值只累计记录的规范 JSON 字节，
+不计段包装。有效对照覆盖以上合法情况，避免把合法语义误报为缺陷。
+
+每个语义回归进入真实 `resolve_snapshot`，经过真实 radix 读取、对象认证、
+段解析和 `AdmittedState` 完整准入。磁盘回归先安装可成功读取的小型有效快照，
+再对临时成员的引用段做字节损坏、截断或删除；随后调用真实 `load_snapshot`，
+核验具体错误、解析来源与剩余权威对象逐字节保留。测试仅改临时目录。
+
+`corpus.json` 给出最大输入、固定种子与精确变异。64 个组合每例输出种子、
+状态、case 编号与开关。重放命令（由独立 GitHub 验证 workflow 执行）：
+
+```sh
+cargo +1.99.0 test --offline --locked -p storage-engine --lib metadata_adversarial_segments -- --nocapture --test-threads=1
+```
+
+失败缩减：先按测试名与输出的 case 编号定位，保持该 case 的最终状态和变异
+开关；将图缩成一条事件、两条回执，保留被违反的边界。跨段缺陷保留第一个
+合法封段和一条尾记录（事件 1024+1，回执 256+1）；阈值缺陷保留一条 ASCII
+padding 记录，按规范字节数减到首次触发点；定位器缺陷保留一个错误绑定和
+必需的真实回执。每次缩减后正常重算所有被改对象、radix 根与快照的哈希，
+通过相同入口检查原错误；不能关闭认证或只凭另一个验证器来判定预期。
+
+本语料不证明操作系统掉电恢复、全部运行期查询缓存行为或无限输入安全。
+执行通过、失败与未执行状态以 GitHub 原始日志为准，本目录不维护验收结论。
