@@ -714,9 +714,9 @@ fn paging(state: RwSignal<State>) -> impl IntoView {
     view! {
         <Show when=move ||cursors.with(|(previous,next,_,later)|previous.is_some()||next.is_some()||*later)>
         <div class="zxs-file-toolbar zxs-flow" aria-label=t("历史翻页","History pages")>
-            <button class="zxs-button" disabled=move ||cursors.with(|(previous,_,blocked,_)|previous.is_none()||*blocked) on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|{if let Some(cursor)=cursors.with_untracked(|(previous,_,_,_)|previous.clone()){actions::history_page(state,cursor);}}>{t("较新节点","Newer nodes")}</button>
-            <button class="zxs-button" disabled=move ||cursors.with(|(_,_,blocked,later)|*blocked||!*later) on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|actions::load_first_page(state)>{t("第一页","First page")}</button>
-            <button class="zxs-button" disabled=move ||cursors.with(|(_,next,blocked,_)|next.is_none()||*blocked) on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|{if let Some(cursor)=cursors.with_untracked(|(_,next,_,_)|next.clone()){actions::history_page(state,cursor);}}>{t("较早节点","Older nodes")}</button>
+            <button class="zxs-button" disabled=move ||cursors.with(|(previous,_,blocked,_)|previous.is_none()||*blocked) on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|{if let Some(cursor)=cursors.with_untracked(|(previous,_,_,_)|previous.clone()){actions::history_page(state,cursor);}}>{t("较新节点","Newer nodes")}</button>
+            <button class="zxs-button" disabled=move ||cursors.with(|(_,_,blocked,later)|*blocked||!*later) on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|actions::load_first_page(state)>{t("第一页","First page")}</button>
+            <button class="zxs-button" disabled=move ||cursors.with(|(_,next,blocked,_)|next.is_none()||*blocked) on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|{if let Some(cursor)=cursors.with_untracked(|(_,next,_,_)|next.clone()){actions::history_page(state,cursor);}}>{t("较早节点","Older nodes")}</button>
         </div>
         </Show>
     }
@@ -784,7 +784,7 @@ fn panel(state: RwSignal<State>) -> impl IntoView {
                         <button class="zxs-button" disabled=next.is_none() on:click=move |_|{if let Some(cursor)=next.clone(){actions::open_parents_panel(state,next_node.clone(),Some(cursor));}}>{t("下一页","Next")}</button>
                         <button class="zxs-button" on:click=move |_|actions::close_panel(state)>{t("关闭","Close")}</button></div>
                     <Show when={let empty=parents.is_empty();move ||empty}><p class="zxs-row">{t("此范围内没有更多父节点。","No further parents in this scope.")}</p></Show>
-                    {parents.iter().map(|parent|{let parent=parent.clone();let jump=parent.clone();let loaded=resident.contains(&parent);let _=&anchor_node;view!{<div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{parent.clone()}</span>{if loaded{view!{<span class="zxs-row">{t("已在当前页","On this page")}</span>}.into_any()}else{view!{<button class="zxs-button" on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|actions::history_anchor(state,jump.clone())>{t("跳转","Jump")}</button>}.into_any()}}</div>}}).collect_view()}
+                    {parents.iter().map(|parent|{let parent=parent.clone();let jump=parent.clone();let loaded=resident.contains(&parent);let _=&anchor_node;view!{<div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{parent.clone()}</span>{if loaded{view!{<span class="zxs-row">{t("已在当前页","On this page")}</span>}.into_any()}else{view!{<button class="zxs-button" on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|actions::history_anchor(state,jump.clone())>{t("跳转","Jump")}</button>}.into_any()}}</div>}}).collect_view()}
                 </div>}.into_any()
             }
             PanelView::Field { node_id, field, text, offset, end, total, complete, next } => {
@@ -931,7 +931,7 @@ fn parent_stubs(state: RwSignal<State>, stub: ParentStub) -> impl IntoView + 'st
     } = stub;
     view! {
         <div class="zxs-version-parents zxs-flow zxs-flow--start" data-outside-parents=outside.to_string()>
-            {jump.map(|first|view!{<button class="zxs-button zxs-version-parent-stub" type="button" title=first.clone() disabled=move ||blocked.get() on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|actions::history_anchor(state,first.clone())>{format!("{} ({outside}) · {}",t("父节点未加载","Parent not loaded"),t("跳转","Jump"))}</button>})}
+            {jump.map(|first|view!{<button class="zxs-button zxs-version-parent-stub" type="button" title=first.clone() disabled=move ||blocked.get() on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event) on:click=move |_|actions::history_anchor(state,first.clone())>{format!("{} ({outside}) · {}",t("父节点未加载","Parent not loaded"),t("跳转","Jump"))}</button>})}
             {more.then(||view!{<button class="zxs-button zxs-version-parent-more" type="button" disabled=move ||blocked.get() on:click=move |_|actions::open_parents_panel(state,node_id.clone(),None)>{t("更多父节点","More parents")}</button>})}
         </div>
     }

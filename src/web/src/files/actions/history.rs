@@ -167,9 +167,9 @@ pub(crate) fn navigation_allowed(state: RwSignal<State>) -> bool {
     true
 }
 
-/// A navigation click must reach the edit guard before the input's ordinary
-/// blur-to-cancel behavior runs. Keep focus on the editor for that click.
-pub(crate) fn preserve_editor_focus(state: RwSignal<State>, event: &web_sys::MouseEvent) {
+/// Pointer navigation must reach the edit guard before ordinary blur-to-cancel.
+/// Preserve focus for mouse, touch and pen; keyboard activation keeps its click guard.
+pub(crate) fn preserve_editor_focus(state: RwSignal<State>, event: &web_sys::PointerEvent) {
     if state.with_untracked(|s| s.files.open_editors > 0) {
         event.prevent_default();
     }

@@ -494,7 +494,7 @@ impl<'a> FileHistoryScope<'a> {
         self.base_parents(node).iter().chain(
             self.merges()
                 .filter(move |event| event.result_node_id == node)
-                .flat_map(|event| {
+                .flat_map(move |event| {
                     event
                         .parent_node_ids
                         .iter()

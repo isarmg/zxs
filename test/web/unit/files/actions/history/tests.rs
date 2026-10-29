@@ -1,5 +1,5 @@
 use super::*;
-use crate::files::history::tests::{ROOT, chain, window, window_wire};
+use crate::files::history::tests::{ROOT, chain, window_wire};
 use crate::files::test_entries::entry;
 use json_codec::json;
 

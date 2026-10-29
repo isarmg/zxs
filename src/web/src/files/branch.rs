@@ -26,19 +26,19 @@ pub(super) fn paging(state: RwSignal<State>) -> impl IntoView {
     view! {
         <div class="zxs-file-toolbar zxs-flow" aria-label=t("分支分页", "Branch pages")>
             <button class="zxs-button" disabled=move ||paging.with(|(previous,_,busy)|previous.is_none()||*busy)
-                on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event)
+                on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event)
                 on:click=move |_|if let Some(cursor)=paging.with_untracked(|(previous,_,_)|previous.clone()){actions::load_history_branches(state,Some(cursor));}>
                 {t("上一页分支", "Previous branches")}
             </button>
             <button class="zxs-button" disabled=move ||paging.with(|(_,next,busy)|next.is_none()||*busy)
-                on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event)
+                on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event)
                 on:click=move |_|if let Some(cursor)=paging.with_untracked(|(_,next,_)|next.clone()){actions::load_history_branches(state,Some(cursor));}>
                 {t("下一页分支", "Next branches")}
             </button>
             <Show when=move ||error.with(Option::is_some)>
                 <span class="zxs-row zxs-inline-error" role="status">{move ||error.get().unwrap_or_default()}</span>
                 <button class="zxs-button" disabled=move ||paging.with(|(_,_,busy)|*busy)
-                    on:mousedown=move |event|actions::history::preserve_editor_focus(state,&event)
+                    on:pointerdown=move |event|actions::history::preserve_editor_focus(state,&event)
                     on:click=move |_|{let cursor=state.with_untracked(|s|s.files.history.branch_cursor.clone());actions::load_history_branches(state,cursor);}>
                     {t("重试分支读取", "Retry branches")}
                 </button>
