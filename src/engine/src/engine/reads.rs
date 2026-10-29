@@ -235,6 +235,11 @@ pub struct RangeContent {
     pub lease: ReadLease,
 }
 
+struct AuthenticatedReplicas {
+    first: (std::fs::File, Vec<u8>, ChecksumManifest),
+    fallback_files: Vec<std::fs::File>,
+}
+
 impl Engine {
     /// Does no filesystem access and reads no payload bytes.
     pub fn prepare_content(&self, version_id: &str) -> Result<ContentReadPlan> {
@@ -331,8 +336,8 @@ impl ContentReadPlan {
         }
     }
 
-    fn authenticated_replicas(&self) -> Result<Vec<(std::fs::File, Vec<u8>, ChecksumManifest)>> {
-        let mut replicas = Vec::new();
+    fn authenticated_replicas(&self) -> Result<AuthenticatedReplicas> {
+        let mut replicas: Option<AuthenticatedReplicas> = None;
         let mut first_error: Option<Error> = None;
         for disk in &self.disks {
             let candidate = (|| {
@@ -352,33 +357,38 @@ impl ContentReadPlan {
                 handle.open_payload(&dir, &self.version)
             })();
             match candidate {
-                Ok(candidate) => replicas.push(candidate),
+                Ok(candidate) => match &mut replicas {
+                    Some(replicas) => replicas.fallback_files.push(candidate.0),
+                    None => {
+                        replicas = Some(AuthenticatedReplicas {
+                            first: candidate,
+                            fallback_files: Vec::new(),
+                        });
+                    }
+                },
                 Err(error) => {
                     first_error.get_or_insert(error);
                 }
             }
         }
-        if replicas.is_empty() {
-            Err(match first_error {
-                Some(error) => error.context(
-                    storage_contract::ErrorCode::ContentUnavailable,
-                    "no authenticated replica is available",
-                ),
-                None => Error::new(
-                    storage_contract::ErrorCode::ContentUnavailable,
-                    "version placement has no replica routes",
-                ),
-            })
-        } else {
-            Ok(replicas)
-        }
+        replicas.ok_or_else(|| match first_error {
+            Some(error) => error.context(
+                storage_contract::ErrorCode::ContentUnavailable,
+                "no authenticated replica is available",
+            ),
+            None => Error::new(
+                storage_contract::ErrorCode::ContentUnavailable,
+                "version placement has no replica routes",
+            ),
+        })
     }
     /// Authenticate the checksum manifest without reading the payload. Consumers
     /// must verify each complete checksum chunk before exposing any of its bytes.
     pub fn open(self) -> Result<RangeContent> {
-        let mut replicas = self.authenticated_replicas()?.into_iter();
-        let (file, _, manifest) = replicas.next().expect("nonempty replicas");
-        let fallback_files = replicas.map(|(file, _, _)| file).collect();
+        let AuthenticatedReplicas {
+            first: (file, _, manifest),
+            fallback_files,
+        } = self.authenticated_replicas()?;
         Ok(RangeContent {
             fallback_files,
             file,
@@ -390,7 +400,7 @@ impl ContentReadPlan {
     }
     pub fn checksums(self) -> Result<Vec<u8>> {
         self.authenticated_replicas()
-            .map(|replicas| replicas.into_iter().next().expect("nonempty replicas").1)
+            .map(|replicas| replicas.first.1)
     }
 }
 

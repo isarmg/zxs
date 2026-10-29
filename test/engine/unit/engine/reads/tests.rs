@@ -47,6 +47,120 @@ fn committed_fixture() -> (tempfile::TempDir, Engine, String) {
 }
 
 #[test]
+fn content_plan_keeps_first_success_and_all_fallback_inodes_in_route_order() {
+    use std::os::unix::fs::MetadataExt;
+
+    for skip_first in [false, true] {
+        let (_temp, engine, id) = committed_fixture();
+        let plan = engine.prepare_content(&id).unwrap();
+        let paths: Vec<_> = plan
+            .disks
+            .iter()
+            .map(|disk| {
+                let directory = version_dir(disk, &plan.version.history_tree_id, &id);
+                crate::container_storage::content_path(&directory, &plan.version).unwrap()
+            })
+            .collect();
+        assert_eq!(paths.len(), 3);
+        if skip_first {
+            fs::remove_file(&paths[0]).unwrap();
+        }
+        let selected = &paths[usize::from(skip_first)..];
+        let identities: Vec<_> = selected
+            .iter()
+            .map(|path| {
+                let metadata = fs::metadata(path).unwrap();
+                (metadata.dev(), metadata.ino())
+            })
+            .collect();
+        let reads = Arc::clone(&engine.reads);
+        let mut opened = plan.open().unwrap();
+        assert_eq!(opened.fallback_files.len(), selected.len() - 1);
+        assert_eq!(reads.lock().unwrap()[&id], 1);
+        for path in selected {
+            fs::remove_file(path).unwrap();
+            fs::write(path, b"replaced").unwrap();
+        }
+        drop(engine);
+        for (file, identity) in std::iter::once(&mut opened.file)
+            .chain(&mut opened.fallback_files)
+            .zip(identities)
+        {
+            let metadata = file.metadata().unwrap();
+            assert_eq!((metadata.dev(), metadata.ino()), identity);
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"original");
+        }
+        drop(opened);
+        assert!(reads.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn content_plan_authenticates_later_manifests_before_retaining_fallbacks() {
+    let (_temp, engine, id) = committed_fixture();
+    let plan = engine.prepare_content(&id).unwrap();
+    let directory = version_dir(&plan.disks[1], &plan.version.history_tree_id, &id);
+    let checks = directory.join("checksums.bin");
+    fs::remove_file(&checks).unwrap();
+    fs::write(checks, b"damaged").unwrap();
+    let opened = plan.open().unwrap();
+    assert_eq!(opened.fallback_files.len(), 1);
+}
+
+#[test]
+fn content_and_checksums_scan_later_publication_faults_after_success() {
+    for checksums_only in [false, true] {
+        let (_temp, engine, id) = committed_fixture();
+        let plan = engine.prepare_content(&id).unwrap();
+        let first_directory = version_dir(&plan.disks[0], &plan.version.history_tree_id, &id);
+        let expected = fs::read(first_directory.join("checksums.bin")).unwrap();
+        let epoch = engine.metadata_integrity.capture();
+        fs::remove_file(plan.disks.last().unwrap().root.join("disk.json")).unwrap();
+        if checksums_only {
+            assert_eq!(plan.checksums().unwrap(), expected);
+        } else {
+            let opened = plan.open().unwrap();
+            assert_eq!(opened.fallback_files.len(), 1);
+        }
+        assert!(!epoch.matches(&engine.metadata_integrity));
+        assert!(engine.reads.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn content_and_checksums_keep_first_failure_and_release_failed_plan_leases() {
+    for checksums_only in [false, true] {
+        let (_temp, engine, id) = committed_fixture();
+        let plan = engine.prepare_content(&id).unwrap();
+        let first_directory = version_dir(&plan.disks[0], &plan.version.history_tree_id, &id);
+        let checks = first_directory.join("checksums.bin");
+        fs::remove_file(&checks).unwrap();
+        fs::write(checks, b"damaged").unwrap();
+        for disk in &plan.disks[1..] {
+            fs::remove_file(disk.root.join("disk.json")).unwrap();
+        }
+        let error = if checksums_only {
+            plan.checksums().unwrap_err()
+        } else {
+            plan.open().err().unwrap()
+        };
+        assert_eq!(error.code(), ErrorCode::ContentUnavailable);
+        let Error::Context { source, .. } = error else {
+            panic!("expected the first replica error as the unavailable source");
+        };
+        assert_eq!(source.code(), ErrorCode::ChecksumMismatch);
+        assert!(
+            source
+                .to_string()
+                .contains("checksum manifest digest differs")
+        );
+        assert!(engine.reads.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn live_reads_and_detached_plan_keep_the_admitted_disks_after_root_replacement() {
     use std::os::unix::fs::PermissionsExt;
     let (_temp, engine, version) = committed_fixture();
