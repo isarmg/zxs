@@ -73,6 +73,13 @@ fn admission_node_memo_keeps_domains_separate_and_rejects_invalid_references() {
         kind: NamespaceRefKind::Page,
         hash: "invalid".into(),
     };
+    let cached = source.node(&root.root).unwrap();
+    source
+        .nodes
+        .as_ref()
+        .unwrap()
+        .borrow_mut()
+        .insert("namespace-page/invalid".into(), cached, 1);
     assert!(source.node(&invalid).is_err());
     assert_eq!(reads.get(), 2);
     source.node(&root.root).unwrap();

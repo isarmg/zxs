@@ -36,7 +36,11 @@ fn admitted_directory_projection_reuses_facts_only_for_its_snapshot() {
     })
     .unwrap();
     assert!(!objects.is_empty());
-    assert!(reads.get("history-manifest").is_some_and(|count| *count > 0));
+    assert!(
+        reads
+            .get("history-manifest")
+            .is_some_and(|count| *count > 0)
+    );
     assert!(reads.get("state-page").is_some_and(|count| *count > 0));
 
     // Another admission must independently read and validate the namespace;
