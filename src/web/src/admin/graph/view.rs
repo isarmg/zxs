@@ -170,7 +170,7 @@ pub(super) fn inspector(state: RwSignal<State>, model: RwSignal<Model>) -> impl 
             }).collect_view()}</div>
             <Show when=move || model.with(|m| m.detail_read.cancellation.is_some())><p>{t("正在读取详情…", "Loading detail…")}</p></Show>
             <Show when=move || detail.with(Option::is_some)>
-                <h4>{t("当前详情片段", "Current detail page")}</h4>
+                <h3>{t("当前详情片段", "Current detail page")}</h3>
                 <pre>{move || detail_output.get()}</pre>
                 <button class="zxs-button" disabled=move || model.with(|m| m.stale || m.detail_read.cancellation.is_some() || m.detail.as_ref().is_none_or(|detail| !detail.has_next()))
                     on:click=move |_| { if let Some(request) = model.with_untracked(|m| m.detail.as_ref().and_then(|detail| detail.next())) { load_detail(state, model, request); } }>{t("下一段详情", "Next detail page")}</button>
