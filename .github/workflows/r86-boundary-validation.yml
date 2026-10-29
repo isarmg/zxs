@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: r86-boundary-${{ github.ref }}
+  group: r86-boundary-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 env:
@@ -18,6 +18,20 @@ env:
   CARGO_INCREMENTAL: '0'
 
 jobs:
+  rust-format:
+    name: Affected Rust format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify fixed formatter and affected package
+        run: |
+          git rev-parse HEAD
+          rustc --version
+          cargo fmt --package storage-engine -- --check
+
   source-regressions:
     name: Source mapping counterexamples
     runs-on: ubuntu-24.04

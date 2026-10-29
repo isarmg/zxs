@@ -203,7 +203,8 @@ fn directory_sync_parallel_in_isolated_child() {
     });
     let log = events(&root);
     assert_eq!(
-        log.matches("parallel dir metadata/objects success\n").count(),
+        log.matches("parallel dir metadata/objects success\n")
+            .count(),
         2,
         "one owner proves objects itself and then its publication child once"
     );

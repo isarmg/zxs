@@ -119,12 +119,7 @@ pub(crate) fn existing_object_paths_at(
     ObjectAddress::parse(kind, hash)?.existing_paths(root, d)
 }
 
-fn existing_paths(
-    root: &DiskRoot,
-    d: &DiskConfig,
-    kind: &str,
-    hash: &str,
-) -> Result<Vec<PathBuf>> {
+fn existing_paths(root: &DiskRoot, d: &DiskConfig, kind: &str, hash: &str) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     if let Some(directory) = kind_directory(root, d, kind)? {
         // Reject old-format evidence rather than silently creating a second

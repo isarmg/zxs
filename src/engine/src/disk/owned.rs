@@ -16,8 +16,10 @@ struct DurableDirectory {
 
 impl DurableDirectory {
     fn binds(&self, directory: &File, parent: &File) -> Result<bool> {
-        Ok(FileIdentity::from_fd(self.directory.as_ref())? == FileIdentity::from_fd(directory)?
-            && FileIdentity::from_fd(self.parent.as_ref())? == FileIdentity::from_fd(parent)?)
+        Ok(
+            FileIdentity::from_fd(self.directory.as_ref())? == FileIdentity::from_fd(directory)?
+                && FileIdentity::from_fd(self.parent.as_ref())? == FileIdentity::from_fd(parent)?,
+        )
     }
 }
 
