@@ -147,6 +147,8 @@ pub(crate) async fn commit(
     request: Request,
 ) -> Result<Json<json_codec::Value>, ApiError> {
     let body = crate::with_id(crate::json_body(request).await?, "workspace_id", id.clone())?;
+    let spool = state.spool_budget.clone();
+    let claims = state.upload_claims.clone();
     let permit = state
         .backend_slots
         .clone()
@@ -155,12 +157,45 @@ pub(crate) async fn commit(
     crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
         .run(move |backend| {
             let command = public_commit(&id, body)?;
-            backend
-                .commit_workspace_public(&identity, command)
-                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
+            let result = backend.commit_workspace_public(&identity, command)?;
+            retire_committed_copy(backend, &identity, &id, None, &spool, &claims);
+            crate::operation_wire::operation_wire(result.into())
         })
         .await
         .map(Json)
+}
+
+pub(crate) fn retire_committed_copy(
+    backend: &dyn crate::Backend,
+    identity: &Identity,
+    workspace: &str,
+    item: Option<&str>,
+    spool: &crate::http_spool::HttpSpool,
+    claims: &std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+) {
+    let Some(budget) = spool.retirement_budget() else {
+        return;
+    };
+    if !budget.has_candidates(workspace, item) {
+        return;
+    }
+    let result = backend
+        .http_spool_workspace(identity, workspace)
+        .and_then(|proof| match proof {
+            Some(workspace) => match item {
+                Some(item) => budget.retire_item(&workspace, item, claims),
+                None => budget.retire_workspace(&workspace, claims),
+            },
+            None => {
+                budget.resolve_workspace_failure(workspace, item);
+                Ok(())
+            }
+        });
+    if let Err(error) = result {
+        // The publication result is already authoritative. This local cache
+        // failure belongs to health/recovery, never to the commit outcome.
+        budget.note_workspace_failure(workspace, item, &error);
+    }
 }
 
 pub(crate) async fn seal(

@@ -19,6 +19,17 @@ for grow in 0 1; do
   done
 done
 
+for barrier in first second; do
+  root="$temporary/http-retirement-$barrier"
+  mkdir -m 700 "$root"
+  echo "HTTP retirement barrier=$barrier"
+  env LD_PRELOAD="$temporary/budget-io-eio.so" \
+    ZXS_SMB_BUDGET_FAULT_ROOT="$root" ZXS_SMB_BUDGET_FAULT_STAGE=directory-sync \
+    ZXS_HTTP_RETIREMENT_BARRIER="$barrier" \
+    "$binary" --ignored --exact --nocapture \
+    spool_budget::tests::retirement::real_retirement_directory_sync_failure_preserves_published_authority_and_charge
+done
+
 for test in \
   smb_rpc::budget::tests::real_cleanup_directory_sync_failure_keeps_charge_and_blocks_admission \
   smb_rpc::tests::cleanup_tests::real_close_directory_sync_failure_keeps_published_outcome_and_consumes_handle; do

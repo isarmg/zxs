@@ -11,7 +11,7 @@ use platform_io::fs_safety::{
 #[cfg(test)]
 use std::fs;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -21,6 +21,7 @@ use std::{
 /// not a claim about filesystem allocation, compression or sparse extents.
 pub(crate) const METADATA_ALLOWANCE: u64 = 64 * 1024;
 const MAX_METADATA: u64 = 16 * 1024;
+mod retirement;
 
 #[derive(Clone, Debug)]
 pub struct SpoolLimits {
@@ -52,7 +53,7 @@ impl SpoolLimits {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Owner {
     data_file: String,
@@ -74,8 +75,88 @@ struct Ledger {
     unknown: u64,
     accounts: BTreeMap<String, u64>,
     reserved: u64,
+    metadata: BTreeMap<String, MetadataReference>,
+    references: BTreeMap<String, BTreeSet<String>>,
+    current_by_workspace: BTreeMap<String, BTreeSet<String>>,
+    maintenance_issues: BTreeSet<String>,
+}
+#[derive(Clone, PartialEq, Eq)]
+enum MetadataReference {
+    Owner(Owner),
+    Upload(UploadRecord),
+}
+impl MetadataReference {
+    fn data_file(&self) -> &str {
+        match self {
+            Self::Owner(owner) => &owner.data_file,
+            Self::Upload(record) => &record.data_file,
+        }
+    }
 }
 impl Ledger {
+    fn current_names(&self, workspace: &str, item: Option<&str>) -> Vec<String> {
+        let Some(names) = self.current_by_workspace.get(workspace) else {
+            return Vec::new();
+        };
+        match item {
+            Some(item) => {
+                let name = format!("{}.json", crate::uploads::key(workspace, item));
+                if names.contains(&name) {
+                    vec![name]
+                } else {
+                    Vec::new()
+                }
+            }
+            None => names.iter().cloned().collect(),
+        }
+    }
+    fn remove_current(&mut self, name: &str, reference: &MetadataReference) {
+        if let MetadataReference::Upload(record) = reference
+            && name == retirement::current_name(record)
+        {
+            if let Some(names) = self.current_by_workspace.get_mut(&record.workspace_id) {
+                names.remove(name);
+                if names.is_empty() {
+                    self.current_by_workspace.remove(&record.workspace_id);
+                }
+            }
+            self.maintenance_issues.remove(name);
+        }
+    }
+
+    fn record_metadata(&mut self, name: String, reference: MetadataReference) {
+        if let Some(previous) = self.metadata.remove(&name) {
+            self.remove_current(&name, &previous);
+            let names = self
+                .references
+                .get_mut(previous.data_file())
+                .expect("invariant: indexed metadata has its reference set");
+            names.remove(&name);
+            if names.is_empty() {
+                self.references.remove(previous.data_file());
+            }
+        }
+        self.references
+            .entry(reference.data_file().to_owned())
+            .or_default()
+            .insert(name.clone());
+        if let MetadataReference::Upload(record) = &reference
+            && record.state == crate::uploads::UploadState::Complete
+            && name == retirement::current_name(record)
+        {
+            self.current_by_workspace
+                .entry(record.workspace_id.clone())
+                .or_default()
+                .insert(name.clone());
+        }
+        self.metadata.insert(name, reference);
+    }
+
+    fn maintenance_failure(&mut self, name: &str, error: &ApiError) {
+        if self.maintenance_issues.insert(name.to_owned()) {
+            tracing::warn!(error = ?error, "HTTP copy maintenance failed; copy remains charged");
+        }
+    }
     fn rebuild_totals(&mut self) -> Result<(), ApiError> {
         self.total = 0;
         self.unknown = 0;
@@ -236,6 +317,7 @@ impl SpoolBudget {
         let mut files = BTreeMap::new();
         let mut owners = BTreeMap::new();
         let mut covered_metadata = BTreeMap::new();
+        let mut ledger = Ledger::default();
         // Inventory, never cleanup. Corrupt/unrecognized regular files remain
         // charged as unknown rather than being silently discarded or ignored.
         for entry in directory.entries().map_err(inventory_error)? {
@@ -267,6 +349,8 @@ impl SpoolBudget {
                         if name != format!("{}.owner.json", owner.data_file) {
                             return Err(invalid_state("spool ownership filename mismatch"));
                         }
+                        ledger
+                            .record_metadata(name.clone(), MetadataReference::Owner(owner.clone()));
                         covered_metadata.insert(name, owner.data_file.clone());
                         set_owner(&mut owners, owner.data_file, owner.principal)?;
                     }
@@ -277,6 +361,10 @@ impl SpoolBudget {
             } else if name.contains(".json") {
                 match metadata::<UploadRecord>(&directory, &entry) {
                     Ok(record) => {
+                        ledger.record_metadata(
+                            name.clone(),
+                            MetadataReference::Upload(record.clone()),
+                        );
                         covered_metadata.insert(name, record.data_file.clone());
                         set_owner(&mut owners, record.data_file, record.principal)?;
                     }
@@ -286,7 +374,6 @@ impl SpoolBudget {
                 }
             }
         }
-        let mut ledger = Ledger::default();
         // A durable owner record with a missing data file still costs metadata.
         for (name, principal) in owners {
             let bytes = files.get(&name).copied().unwrap_or(0);
@@ -460,6 +547,9 @@ pub(crate) struct Reservation {
     settlement_failed: bool,
 }
 impl Reservation {
+    pub(crate) fn record_upload(&self, name: String, record: &UploadRecord) {
+        lock(&self.budget.ledger).record_metadata(name, MetadataReference::Upload(record.clone()));
+    }
     pub(crate) fn directory(&self) -> &Arc<PrivateDirectory> {
         &self.budget.directory
     }
@@ -540,6 +630,14 @@ impl Reservation {
         })();
         if result.is_err() {
             self.block_admission();
+        } else {
+            lock(&self.budget.ledger).record_metadata(
+                format!("{}.owner.json", self.name),
+                MetadataReference::Owner(Owner {
+                    data_file: self.name.clone(),
+                    principal: self.principal.clone(),
+                }),
+            );
         }
         result
     }

@@ -637,7 +637,7 @@ impl crate::Backend for UnusedBackend {
 
 fn application(root: &Path, store: AuthStore) -> (Router, Arc<Mutex<AuthStore>>) {
     let config = crate::ServerConfig::loopback(root);
-    let spool = crate::http_spool::HttpSpool::open_blocking(&config);
+    let spool = crate::http_spool::HttpSpool::open_blocking(&config, &UnusedBackend);
     let runtime = crate::ManagementRuntime::start(Arc::new(UnusedBackend), store, &config).unwrap();
     let auth = runtime.auth.clone();
     let app = crate::router_shared(

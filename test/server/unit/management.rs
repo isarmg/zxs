@@ -1289,3 +1289,50 @@ fn management_installs_and_reopens_with_the_same_payload_proof_budget() {
     }
     assert_eq!(std::fs::read(data.join("config.json")).unwrap(), persisted);
 }
+
+#[test]
+fn http_spool_activation_tracks_ready_installation_not_unchanged_observations() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("pool");
+    let engine = storage_engine::Engine::initialize(
+        &data,
+        storage_contract::Config::development([root.path().join("disk")]),
+    )
+    .unwrap();
+    let (backend, _auth) = open_service(&data, &root.path().join("management")).unwrap();
+    let mut activation = backend
+        .http_spool_activation(&crate::InternalHttpSpoolRetirement(()))
+        .unwrap();
+    let engine = std::sync::Arc::new(crate::engine_backend::EngineBackend::new(engine));
+    assert!(!activation.has_changed().unwrap());
+    backend
+        .inner
+        .set(Some(engine.clone()), StorageState::ReadOnly);
+    assert!(!activation.has_changed().unwrap());
+    backend.inner.set(Some(engine.clone()), StorageState::Ready);
+    assert!(activation.has_changed().unwrap());
+    activation.borrow_and_update();
+    backend.inner.set(Some(engine.clone()), StorageState::Ready);
+    backend.inner.observe_storage_once();
+    assert!(!activation.has_changed().unwrap());
+    backend.inner.set(Some(engine), StorageState::ReadOnly);
+    backend.inner.observe_storage_once();
+    assert!(activation.has_changed().unwrap());
+    activation.borrow_and_update();
+    backend.inner.observe_storage_once();
+    assert!(!activation.has_changed().unwrap());
+    backend.inner.state.lock().unwrap().observed_at =
+        std::time::Instant::now() - std::time::Duration::from_secs(16);
+    assert!(backend.inner.available_backend().unwrap().is_none());
+    backend.inner.observe_storage_once();
+    assert!(activation.has_changed().unwrap());
+    activation.borrow_and_update();
+    backend.inner.observe_storage_once();
+    assert!(!activation.has_changed().unwrap());
+    // The subscription owns only notification state, not a recovered engine.
+    let state = backend.inner.state.lock().unwrap();
+    assert_eq!(
+        std::sync::Arc::strong_count(state.backend.as_ref().unwrap()),
+        1
+    );
+}

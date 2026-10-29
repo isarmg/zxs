@@ -18,8 +18,59 @@ use std::{
 const DEADLINE: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
-struct Probe(AtomicUsize);
+struct Probe(AtomicUsize, Option<Activation>);
+enum Notifications {
+    Live,
+    Absent,
+    Closed,
+}
+struct Activation {
+    notifications: Notifications,
+    corrupt: std::sync::atomic::AtomicBool,
+    ready: std::sync::atomic::AtomicBool,
+    changed: tokio::sync::watch::Sender<()>,
+    attempted: tokio::sync::Semaphore,
+}
 impl Backend for Probe {
+    fn qualify_http_spool_copy(
+        &self,
+        _: &crate::InternalHttpSpoolRetirement,
+        _: &crate::HttpSpoolCandidate,
+    ) -> Result<crate::HttpSpoolQualification, ApiError> {
+        let Some(activation) = &self.1 else {
+            return Ok(crate::HttpSpoolQualification::Retain);
+        };
+        activation.attempted.add_permits(1);
+        if activation.corrupt.load(Ordering::SeqCst) {
+            return Err(ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                storage_contract::ErrorCode::RecoveryRequired,
+                "corrupt retirement proof",
+            ));
+        }
+        if activation.ready.load(Ordering::SeqCst) {
+            Ok(crate::HttpSpoolQualification::Retain)
+        } else {
+            Ok(crate::HttpSpoolQualification::Unavailable)
+        }
+    }
+    fn http_spool_activation(
+        &self,
+        _: &crate::InternalHttpSpoolRetirement,
+    ) -> Option<tokio::sync::watch::Receiver<()>> {
+        self.1
+            .as_ref()
+            .and_then(|activation| match activation.notifications {
+                Notifications::Live => Some(activation.changed.subscribe()),
+                Notifications::Absent => None,
+                Notifications::Closed => {
+                    let (sender, receiver) = tokio::sync::watch::channel(());
+                    drop(sender);
+                    Some(receiver)
+                }
+            })
+    }
+
     fn operation_outcome(
         &self,
         _: &crate::auth::Identity,
@@ -731,6 +782,7 @@ async fn stalled_real_inventory_keeps_management_responsive_and_uploads_pending(
     }
     let status = json_body(response(&app, "GET", "/api/management/status", None).await).await;
     assert_eq!(status["auxiliary"]["http_uploads"], "pending");
+    assert!(status["auxiliary"]["http_upload_maintenance"]["unresolved"].is_null());
     assert!(!status.to_string().contains(root.path().to_str().unwrap()));
     let login = app
         .clone()
@@ -808,6 +860,11 @@ async fn stalled_real_inventory_keeps_management_responsive_and_uploads_pending(
         json_body(response(&app, "GET", "/api/management/status", None).await).await["auxiliary"]["http_uploads"],
         "ready"
     );
+    assert_eq!(
+        json_body(response(&app, "GET", "/api/management/status", None).await).await["auxiliary"]["http_upload_maintenance"]
+            ["unresolved"],
+        0
+    );
     // Unknown retained bytes remain charged; readiness never creates capacity.
     let error = spool
         .budget()
@@ -845,7 +902,9 @@ async fn failed_inventory_and_panicked_job_become_terminal_unavailable() {
         if failure == "panic" {
             startup.run_with(|| panic!("injected startup panic")).await;
         } else {
-            startup.run(config.clone().admit().unwrap()).await;
+            startup
+                .run(config.clone().admit().unwrap(), Arc::new(Probe::default()))
+                .await;
         }
         assert_eq!(state.status(), "unavailable", "{failure}");
         assert_eq!(
@@ -922,7 +981,7 @@ async fn dropping_unstarted_token_performs_no_inventory() {
     let root = crate::tests::private_tempdir();
     let config = ServerConfig::loopback(root.path());
     let (state, startup) = HttpSpool::pending();
-    let future = startup.run(config.clone().admit().unwrap());
+    let future = startup.run(config.clone().admit().unwrap(), Arc::new(Probe::default()));
     drop(future);
     assert_eq!(state.status(), "pending");
     assert!(!config.spool_dir.exists());
@@ -942,4 +1001,300 @@ fn poisoned_spool_state_is_an_invariant_failure_not_unavailable() {
     );
     assert!(std::panic::catch_unwind(|| spool.status()).is_err());
     assert!(std::panic::catch_unwind(|| spool.budget()).is_err());
+}
+
+#[tokio::test]
+async fn retirement_waits_for_activation_and_cancelled_owner_never_publishes() {
+    enum Outcome {
+        Activate,
+        Cancel,
+        Corrupt,
+        Embedded,
+        NoActivation,
+        ClosedActivation,
+    }
+    for outcome in [
+        Outcome::Activate,
+        Outcome::Cancel,
+        Outcome::Corrupt,
+        Outcome::Embedded,
+        Outcome::NoActivation,
+        Outcome::ClosedActivation,
+    ] {
+        let root = crate::tests::private_tempdir();
+        let config = ServerConfig::loopback(root.path());
+        config.prepare_spool().unwrap();
+        let hash = blake3::hash(b"abc").to_hex().to_string();
+        let record = crate::uploads::UploadRecord {
+            workspace_id: "ws".into(),
+            item_id: "item".into(),
+            principal: "admin".into(),
+            path: "file".into(),
+            generation: 1,
+            logical_size: 3,
+            content_hash: Some(hash.parse().unwrap()),
+            persisted_bytes: 3,
+            persisted_hash: hash,
+            state: crate::uploads::UploadState::Complete,
+            data_file: "copy.data".into(),
+        };
+        {
+            use platform_io::fs_safety::{EntryName, PayloadOpenMode, PrivateDirectory};
+            use std::io::Write;
+            let directory = PrivateDirectory::open_trusted(&config.spool_dir).unwrap();
+            let mut payload = directory
+                .open_payload(
+                    &EntryName::new(record.data_file.clone()).unwrap(),
+                    PayloadOpenMode::CreateNew,
+                )
+                .unwrap();
+            payload.write_all(b"abc").unwrap();
+            payload.sync_all().unwrap();
+        }
+        crate::uploads::persist(&config.spool_dir, &record).unwrap();
+        let probe = Arc::new(Probe(
+            AtomicUsize::new(0),
+            Some(Activation {
+                notifications: match outcome {
+                    Outcome::NoActivation => Notifications::Absent,
+                    Outcome::ClosedActivation => Notifications::Closed,
+                    Outcome::Activate | Outcome::Cancel | Outcome::Corrupt | Outcome::Embedded => {
+                        Notifications::Live
+                    }
+                },
+                corrupt: std::sync::atomic::AtomicBool::new(matches!(outcome, Outcome::Corrupt)),
+                ready: std::sync::atomic::AtomicBool::new(false),
+                changed: tokio::sync::watch::channel(()).0,
+                attempted: tokio::sync::Semaphore::new(0),
+            }),
+        ));
+        if matches!(outcome, Outcome::Embedded) {
+            let spool = HttpSpool::open_blocking(&config, probe.as_ref());
+            assert_eq!(spool.status(), "ready");
+            assert!(spool.retirement_budget().is_some());
+            assert_eq!(
+                std::fs::read(config.spool_dir.join("copy.data")).unwrap(),
+                b"abc"
+            );
+            assert!(
+                crate::uploads::load(&config.spool_dir, "ws", "item")
+                    .unwrap()
+                    .is_some()
+            );
+            continue;
+        }
+        let (spool, startup) = HttpSpool::pending();
+        let job = tokio::spawn(startup.run(config.clone().admit().unwrap(), probe.clone()));
+        let activation = probe.1.as_ref().unwrap();
+        tokio::time::timeout(DEADLINE, activation.attempted.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        if matches!(
+            outcome,
+            Outcome::Corrupt | Outcome::NoActivation | Outcome::ClosedActivation
+        ) {
+            tokio::time::timeout(DEADLINE, job).await.unwrap().unwrap();
+            assert_eq!(spool.status(), "ready");
+            assert!(spool.retirement_budget().is_some());
+            if matches!(outcome, Outcome::Corrupt) {
+                let budget = spool.budget().unwrap();
+                assert_eq!(spool.maintenance_issues(), Some(1));
+                assert!(budget.retire_startup(probe.as_ref()).unwrap());
+                assert_eq!(spool.maintenance_issues(), Some(1));
+                let auth = AuthStore::initialize(
+                    &root.path().join("auth"),
+                    "admin",
+                    "a-long-test-password",
+                )
+                .unwrap();
+                let runtime =
+                    crate::ManagementRuntime::start(probe.clone(), auth, &config).unwrap();
+                let app = crate::router_shared(
+                    runtime.backend,
+                    runtime.auth,
+                    config.clone().admit().unwrap(),
+                    runtime.telemetry,
+                    spool.clone(),
+                )
+                .unwrap();
+                let status =
+                    json_body(response(&app, "GET", "/api/management/status", None).await).await;
+                assert_eq!(status["auxiliary"]["http_uploads"], "ready");
+                assert_eq!(
+                    status["auxiliary"]["http_upload_maintenance"]["unresolved"],
+                    1
+                );
+                assert!(!status.to_string().contains("copy.data"));
+                activation.corrupt.store(false, Ordering::SeqCst);
+                activation.ready.store(true, Ordering::SeqCst);
+                assert!(budget.retire_startup(probe.as_ref()).unwrap());
+                assert_eq!(spool.maintenance_issues(), Some(0));
+                let status =
+                    json_body(response(&app, "GET", "/api/management/status", None).await).await;
+                assert_eq!(
+                    status["auxiliary"]["http_upload_maintenance"]["unresolved"],
+                    0
+                );
+            }
+            assert_eq!(
+                std::fs::read(config.spool_dir.join("copy.data")).unwrap(),
+                b"abc"
+            );
+            assert!(
+                crate::uploads::load(&config.spool_dir, "ws", "item")
+                    .unwrap()
+                    .is_some()
+            );
+            continue;
+        }
+        assert_eq!(spool.status(), "pending");
+        assert!(!job.is_finished());
+        if matches!(outcome, Outcome::Cancel) {
+            job.abort();
+            assert!(job.await.unwrap_err().is_cancelled());
+            activation.ready.store(true, Ordering::SeqCst);
+            activation.changed.send_replace(());
+            assert_eq!(spool.status(), "pending");
+        } else {
+            activation.ready.store(true, Ordering::SeqCst);
+            activation.changed.send_replace(());
+            tokio::time::timeout(DEADLINE, job).await.unwrap().unwrap();
+            assert_eq!(spool.status(), "ready");
+            assert!(activation.attempted.try_acquire().is_ok());
+        }
+        assert!(
+            config
+                .spool_dir
+                .join(format!("{}.json", crate::uploads::key("ws", "item")))
+                .is_file()
+        );
+    }
+}
+
+#[test]
+fn candidate_requires_exact_complete_committed_tuple_without_reading_full_body() {
+    use storage_contract::{StagedFile, Workspace, WorkspacePurpose, WorkspaceState};
+    let hash = blake3::hash(b"abc").to_hex().to_string();
+    let candidate = crate::HttpSpoolCandidate {
+        record: crate::uploads::UploadRecord {
+            workspace_id: "ws".into(),
+            item_id: "item".into(),
+            principal: "admin".into(),
+            path: "file".into(),
+            generation: 1,
+            logical_size: 3,
+            content_hash: Some(hash.parse().unwrap()),
+            persisted_bytes: 3,
+            persisted_hash: hash,
+            state: crate::uploads::UploadState::Complete,
+            data_file: "copy.data".into(),
+        },
+    };
+    let workspace = Workspace {
+        workspace_id: "ws".into(),
+        purpose: WorkspacePurpose::Normal,
+        branch_id: "branch".into(),
+        principal: "admin".into(),
+        base_head: "head".into(),
+        fencing_token: 1,
+        files: std::collections::BTreeMap::from([(
+            "item".into(),
+            StagedFile {
+                item_id: "item".into(),
+                path: name_policy::PortablePath::parse("file").unwrap(),
+                source_path: "/not-opened-by-tuple-qualification".into(),
+                size: 3,
+                content_hash: candidate.record.content_hash.unwrap(),
+                dirty_generation: 1,
+                base_version_id: None,
+            },
+        )]),
+        selected_file_branches: Default::default(),
+        selected_file_contexts: Default::default(),
+        selected_directory_branches: Default::default(),
+        directory_selection_generations: Default::default(),
+        file_selection_generations: Default::default(),
+        namespace_operations: Vec::new(),
+        created_at: 1,
+        state: WorkspaceState::Committed,
+    };
+    assert_eq!(candidate.workspace_id(), "ws");
+    assert!(candidate.matches(&workspace));
+    enum Mismatch {
+        Open,
+        Aborted,
+        Hash,
+        Generation,
+        ZeroGeneration,
+        Item,
+        Principal,
+        Incomplete,
+    }
+    for mismatch in [
+        Mismatch::Open,
+        Mismatch::Aborted,
+        Mismatch::Hash,
+        Mismatch::Generation,
+        Mismatch::ZeroGeneration,
+        Mismatch::Item,
+        Mismatch::Principal,
+        Mismatch::Incomplete,
+    ] {
+        let mut workspace = workspace.clone();
+        let mut candidate = crate::HttpSpoolCandidate {
+            record: candidate.record.clone(),
+        };
+        match mismatch {
+            Mismatch::Open => workspace.state = WorkspaceState::Open,
+            Mismatch::Aborted => workspace.state = WorkspaceState::Aborted,
+            Mismatch::Hash => {
+                workspace.files.get_mut("item").unwrap().content_hash =
+                    "0".repeat(64).parse().unwrap()
+            }
+            Mismatch::Generation => workspace.files.get_mut("item").unwrap().dirty_generation = 2,
+            Mismatch::ZeroGeneration => {
+                candidate.record.generation = 0;
+                workspace.files.get_mut("item").unwrap().dirty_generation = 0;
+            }
+            Mismatch::Item => workspace.files.get_mut("item").unwrap().item_id = "other".into(),
+            Mismatch::Principal => workspace.principal = "other".into(),
+            Mismatch::Incomplete => {
+                candidate.record.state = crate::uploads::UploadState::Incomplete
+            }
+        }
+        assert!(!candidate.matches(&workspace));
+    }
+}
+
+#[tokio::test]
+async fn management_status_reports_uncertain_inventory_as_recovery_required() {
+    let root = crate::tests::private_tempdir();
+    let mut config = ServerConfig::loopback(root.path());
+    config.http_spool_limits.recovery_reserve_bytes = 1;
+    let backend = Arc::new(Probe::default());
+    let spool = HttpSpool::open_blocking(&config, backend.as_ref());
+    let budget = spool.budget().unwrap();
+    let reservation = budget.reserve("admin", "retained.data", 3).unwrap();
+    reservation.persist_owner().unwrap();
+    reservation.block_admission();
+    drop(reservation);
+    let auth =
+        AuthStore::initialize(&root.path().join("auth"), "admin", "a-long-test-password").unwrap();
+    let runtime = crate::ManagementRuntime::start(backend, auth, &config).unwrap();
+    let app = crate::router_shared(
+        runtime.backend,
+        runtime.auth,
+        config.admit().unwrap(),
+        runtime.telemetry,
+        spool.clone(),
+    )
+    .unwrap();
+    assert_eq!(spool.status(), "recovery_required");
+    assert_eq!(
+        json_body(response(&app, "GET", "/api/management/status", None).await).await["auxiliary"]["http_uploads"],
+        "recovery_required"
+    );
+    assert!(budget.reserve("admin", "another.data", 0).is_err());
 }

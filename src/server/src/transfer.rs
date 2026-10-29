@@ -35,6 +35,8 @@ pub(crate) async fn upload_status(
     ApiPath((workspace, item)): ApiPath<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
     state.http_spool()?;
+    let spool = state.spool_budget.clone();
+    let claims = state.upload_claims.clone();
     let read_permit = state.read_slots.acquire()?;
     let backend_permit = state
         .backend_slots
@@ -46,6 +48,14 @@ pub(crate) async fn upload_status(
             // Both quotas cover authorization, engine status and local spool reads.
             // Keep them until actual work ends, even if the requester disconnects.
             let published = backend.published_upload_status(&identity, &workspace, &item)?;
+            crate::http_workspace::retire_committed_copy(
+                backend,
+                &identity,
+                &workspace,
+                Some(&item),
+                &spool,
+                &claims,
+            );
             if let Some(record) = uploads::load(&state.config.spool_dir, &workspace, &item)? {
                 if record.principal != identity.principal {
                     return Err(ApiError::forbidden());
@@ -372,12 +382,13 @@ async fn upload_inner(
         .filter(|previous| generation > previous.generation)
     {
         let previous = previous.clone();
-        let ownership = (admission.clone(), staged_file.clone());
+        // Tuple order settles the file before releasing the claim and permit.
+        let ownership = (staged_file.clone(), admission.clone());
         tokio::task::spawn_blocking(move || {
             // Capture the whole owner, not only the staged-file tuple field:
             // cancellation must retain the per-item claim and transfer slot too.
             let _ownership = ownership;
-            _ownership.1.retain_generation(&previous)
+            _ownership.0.retain_generation(&previous)
         })
         .await
         .map_err(ApiError::join)??;

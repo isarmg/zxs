@@ -36,7 +36,17 @@ static int targeted(int fd, const char *stage) {
 }
 
 int fsync(int fd) {
-    if (targeted(fd, "file-sync") || targeted(fd, "directory-sync")) {
+    int directory = targeted(fd, "directory-sync");
+    if (directory) {
+        static int first_retirement_sync_passed;
+        const char *barrier = getenv("ZXS_HTTP_RETIREMENT_BARRIER");
+        if (barrier && !strcmp(barrier, "second") && !first_retirement_sync_passed) {
+            first_retirement_sync_passed = 1;
+            int (*real_fsync)(int) = dlsym(RTLD_NEXT, "fsync");
+            return real_fsync(fd);
+        }
+    }
+    if (targeted(fd, "file-sync") || directory) {
         errno = EIO;
         return -1;
     }

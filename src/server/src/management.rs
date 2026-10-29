@@ -54,6 +54,7 @@ struct Inner {
     stopping: AtomicBool,
     recovery_worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     generation: AtomicU64,
+    http_spool_activation: tokio::sync::watch::Sender<()>,
     disk_observation: Mutex<Option<(std::time::Instant, Vec<crate::DiskSample>)>>,
     capabilities: Mutex<crate::Capabilities>,
     setup_disks: BTreeMap<String, PathBuf>,
@@ -209,6 +210,7 @@ pub fn open_service_with_options(
             stopping: AtomicBool::new(false),
             recovery_worker: Mutex::new(None),
             generation: AtomicU64::new(0),
+            http_spool_activation: tokio::sync::watch::channel(()).0,
             disk_observation: Mutex::new(None),
             capabilities: Mutex::new(crate::Capabilities::unavailable()),
             setup_disks,
@@ -267,6 +269,12 @@ impl Inner {
     fn set(&self, backend: Option<Arc<EngineBackend>>, status: StorageState) {
         {
             let mut state = self.state.lock().expect("service state lock poisoned");
+            let installed = match (&state.backend, &backend) {
+                (Some(previous), Some(next)) => !Arc::ptr_eq(previous, next),
+                (None, Some(_)) => true,
+                (_, None) => false,
+            };
+            let was_ready = state.effective_status() == StorageState::Ready;
             state.backend = backend;
             state.status = if self.stopping.load(Ordering::SeqCst) {
                 StorageState::Unavailable
@@ -276,6 +284,12 @@ impl Inner {
             state.observed_at = std::time::Instant::now();
             state.admitted = !self.stopping.load(Ordering::SeqCst)
                 && matches!(status, StorageState::Ready | StorageState::ReadOnly);
+            if state.status == StorageState::Ready
+                && state.backend.is_some()
+                && (installed || !was_ready)
+            {
+                self.http_spool_activation.send_replace(());
+            }
         }
     }
     fn recover(self: &Arc<Self>) -> Result<(), ApiError> {
@@ -565,10 +579,25 @@ impl Inner {
             }
         }
     }
-    fn backend(&self) -> Result<Arc<EngineBackend>, ApiError> {
+    fn available_backend(&self) -> Result<Option<Arc<EngineBackend>>, ApiError> {
         self.ensure_running()?;
         let state = crate::lock(&self.state);
-        state.backend.as_ref().filter(|_|state.admitted && state.status!=StorageState::Unavailable && state.observed_at.elapsed()<std::time::Duration::from_secs(15)).cloned().ok_or_else(||ApiError::new(::http::StatusCode::SERVICE_UNAVAILABLE,storage_contract::ErrorCode::StorageUnavailable,"storage is unavailable; inspect /api/system/storage and retry after correcting the fault"))
+        Ok(state
+            .backend
+            .as_ref()
+            .filter(|_| {
+                state.admitted
+                    && state.status != StorageState::Unavailable
+                    && state.observed_at.elapsed() < std::time::Duration::from_secs(15)
+            })
+            .cloned())
+    }
+    fn backend(&self) -> Result<Arc<EngineBackend>, ApiError> {
+        self.available_backend()?.ok_or_else(|| ApiError::new(
+            ::http::StatusCode::SERVICE_UNAVAILABLE,
+            storage_contract::ErrorCode::StorageUnavailable,
+            "storage is unavailable; inspect /api/system/storage and retry after correcting the fault",
+        ))
     }
     /// Keep the engine lease inside one sample. The observer's idle interval
     /// must not look like an in-flight storage operation to recovery admission.
@@ -590,8 +619,8 @@ impl Inner {
                     .as_ref()
                     .is_some_and(|current| Arc::ptr_eq(current, backend))
             {
+                let previous = state.effective_status();
                 state.observed_at = std::time::Instant::now();
-                let previous = state.status;
                 state.status = match &health {
                     Ok(_) => StorageState::Ready,
                     Err(error)
@@ -605,6 +634,9 @@ impl Inner {
                     }
                     Err(_) => StorageState::Unavailable,
                 };
+                if state.status == StorageState::Ready && previous != StorageState::Ready {
+                    self.http_spool_activation.send_replace(());
+                }
                 if state.status != previous
                     && let Err(error) = &health
                 {
@@ -630,6 +662,33 @@ impl Inner {
     }
 }
 impl Backend for ManagementBackend {
+    fn http_spool_workspace(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+    ) -> Result<Option<storage_contract::Workspace>, ApiError> {
+        self.inner
+            .backend()?
+            .http_spool_workspace(identity, workspace)
+    }
+
+    fn qualify_http_spool_copy(
+        &self,
+        token: &crate::InternalHttpSpoolRetirement,
+        candidate: &crate::HttpSpoolCandidate,
+    ) -> Result<crate::HttpSpoolQualification, ApiError> {
+        match self.inner.available_backend()? {
+            Some(backend) => backend.qualify_http_spool_copy(token, candidate),
+            None => Ok(crate::HttpSpoolQualification::Unavailable),
+        }
+    }
+    fn http_spool_activation(
+        &self,
+        _: &crate::InternalHttpSpoolRetirement,
+    ) -> Option<tokio::sync::watch::Receiver<()>> {
+        Some(self.inner.http_spool_activation.subscribe())
+    }
+
     fn operation(
         &self,
         identity: &Identity,

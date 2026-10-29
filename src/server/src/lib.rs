@@ -442,6 +442,28 @@ impl<'a> VerifiedContentFile<'a> {
 /// this request. It is not a user identity and has no public dispatch action.
 pub struct InternalDiskObservation(());
 
+/// Capability for retiring exact committed HTTP staging copies during startup.
+pub struct InternalHttpSpoolRetirement(());
+
+/// Local-copy qualification; unavailable storage can be retried on activation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HttpSpoolQualification {
+    Eligible,
+    Retain,
+    Unavailable,
+}
+
+/// An inventoried local copy; only the spool inventory can construct candidates.
+pub struct HttpSpoolCandidate {
+    pub(crate) record: uploads::UploadRecord,
+}
+impl HttpSpoolCandidate {
+    /// Workspace to point-read before checking the candidate's exact tuple.
+    pub fn workspace_id(&self) -> &str {
+        &self.record.workspace_id
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CommitWorkspace {
     pub workspace_id: String,
@@ -453,6 +475,31 @@ pub struct CommitWorkspace {
 }
 
 pub trait Backend: Send + Sync {
+    /// Authenticated committed workspace proof for local staging retirement.
+    fn http_spool_workspace(
+        &self,
+        _identity: &Identity,
+        _workspace: &str,
+    ) -> Result<Option<storage_contract::Workspace>, ApiError> {
+        Ok(None)
+    }
+
+    /// Opt-in proof that this exact local copy belongs to a committed workspace.
+    fn qualify_http_spool_copy(
+        &self,
+        _: &InternalHttpSpoolRetirement,
+        _: &HttpSpoolCandidate,
+    ) -> Result<HttpSpoolQualification, ApiError> {
+        Ok(HttpSpoolQualification::Retain)
+    }
+    /// Coalesced engine activations, not periodic health samples.
+    fn http_spool_activation(
+        &self,
+        _: &InternalHttpSpoolRetirement,
+    ) -> Option<tokio::sync::watch::Receiver<()>> {
+        None
+    }
+
     fn operation_outcome(
         &self,
         identity: &Identity,
@@ -1014,6 +1061,15 @@ impl AuthorizedBackend {
     }
 }
 impl Backend for AuthorizedBackend {
+    fn http_spool_workspace(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+    ) -> Result<Option<storage_contract::Workspace>, ApiError> {
+        self.backend
+            .http_spool_workspace(&self.current(identity)?, workspace)
+    }
+
     fn operation(
         &self,
         identity: &Identity,
@@ -2020,7 +2076,7 @@ pub fn router(
     config: ServerConfig,
 ) -> Result<Router, ApiError> {
     let config = config.admit()?;
-    let spool_budget = http_spool::HttpSpool::open_blocking(&config);
+    let spool_budget = http_spool::HttpSpool::open_blocking(&config, backend.as_ref());
     let runtime = ManagementRuntime::start(backend, auth, &config)?;
     router_shared(
         runtime.backend,
@@ -2308,6 +2364,7 @@ pub async fn serve_with_shutdown(
     }
     let config = config.admit()?;
     let (spool_budget, spool_startup) = http_spool::HttpSpool::pending();
+    let spool_backend = Arc::clone(&backend);
     // Skip further startup if the runtime has already delivered a stop signal.
     // Signals still awaiting reactor dispatch are handled by shutdown.wait()
     // below; this snapshot is not an atomic cutoff at OS signal arrival.
@@ -2359,7 +2416,7 @@ pub async fn serve_with_shutdown(
     // shutdown, dropping it closes SMB and abandons late spool publication;
     // started blocking inventory remains joined by runtime teardown.
     let auxiliary = async move {
-        tokio::join!(spool_startup.run(spool_config), bridge);
+        tokio::join!(spool_startup.run(spool_config, spool_backend), bridge);
     };
     service_lifecycle::run_with_management(http, auxiliary, shutdown.wait(), management_shutdown)
         .await?;
@@ -2748,6 +2805,7 @@ async fn management_status(State(state): State<AppState>) -> Json<Value> {
         "storage":backend_status::StorageStatusResponse::from(state.backend.management_status()),
         "auxiliary": {
             "http_uploads": state.spool_budget.status(),
+            "http_upload_maintenance": {"unresolved": state.spool_budget.maintenance_issues()},
             "web_assets": if state.config.web_dir.is_none() { "not_configured" }
                 else if state.web_assets_available { "ready" } else { "unavailable" }
         }}),

@@ -959,3 +959,53 @@ fn typed_plan_commit_retains_published_failure_evidence_and_resumes_cleanup_on_r
         published
     );
 }
+
+#[test]
+fn authenticated_http_retirement_requires_current_admission_and_committed_workspace() {
+    let (_root, mut engine, repo, owner) = fixture();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, &owner.principal)
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "file", b"abc")
+        .unwrap();
+    let backend = EngineBackend::new(engine);
+    assert!(
+        backend
+            .http_spool_workspace(&owner, &workspace.workspace_id)
+            .unwrap()
+            .is_none()
+    );
+    backend
+        .commit_workspace(
+            &owner,
+            CommitWorkspace {
+                workspace_id: workspace.workspace_id.clone(),
+                operation_id: storage_contract::OperationId::generate(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "retirement proof".into(),
+                request_digest: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        backend
+            .http_spool_workspace(&owner, &workspace.workspace_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        storage_contract::WorkspaceState::Committed
+    );
+    let invalid = Identity {
+        admission_session: Some("unknown-session".into()),
+        ..owner
+    };
+    assert_eq!(
+        backend
+            .http_spool_workspace(&invalid, &workspace.workspace_id)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+}

@@ -339,6 +339,50 @@ impl EngineBackend {
 }
 
 impl Backend for EngineBackend {
+    fn http_spool_workspace(
+        &self,
+        identity: &Identity,
+        workspace: &str,
+    ) -> Result<Option<storage_contract::Workspace>, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        if engine.is_read_only() {
+            return Err(ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::RecoveryRequired,
+                "storage recovery must complete before staging retirement",
+            ));
+        }
+        let workspace = workspace_authorize(&engine, &current, workspace)?;
+        Ok(
+            (workspace.state == storage_contract::WorkspaceState::Committed)
+                .then(|| workspace.into_owned()),
+        )
+    }
+
+    fn qualify_http_spool_copy(
+        &self,
+        _: &crate::InternalHttpSpoolRetirement,
+        candidate: &crate::HttpSpoolCandidate,
+    ) -> Result<crate::HttpSpoolQualification, ApiError> {
+        use crate::HttpSpoolQualification;
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        if engine.is_read_only() {
+            return Ok(HttpSpoolQualification::Unavailable);
+        }
+        match engine.workspace_view(candidate.workspace_id()) {
+            Ok(workspace) => Ok(if candidate.matches(&workspace) {
+                HttpSpoolQualification::Eligible
+            } else {
+                HttpSpoolQualification::Retain
+            }),
+            Err(source) if source.code == storage_contract::ErrorCode::WorkspaceNotFound => {
+                Ok(HttpSpoolQualification::Retain)
+            }
+            Err(source) => Err(error(source)),
+        }
+    }
+
     fn operation(
         &self,
         identity: &Identity,

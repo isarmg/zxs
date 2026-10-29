@@ -2,6 +2,8 @@ use super::*;
 use crate::uploads::{self, StagedFile};
 use platform_io::fs_safety::PayloadOpenMode;
 use std::os::unix::fs::MetadataExt;
+#[path = "retirement.rs"]
+mod retirement;
 
 fn limits(account: u64, total: u64) -> SpoolLimits {
     SpoolLimits {

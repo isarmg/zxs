@@ -368,7 +368,7 @@ async fn recovery_preview_http_parses_ids_before_lifecycle_and_keeps_auth_preced
 
     let fixture = Fixture::new("recovery_preview");
     let config = crate::ServerConfig::loopback(&fixture.backend.inner.management_root);
-    let spool = crate::http_spool::HttpSpool::open_blocking(&config);
+    let spool = crate::http_spool::HttpSpool::open_blocking(&config, fixture.backend.as_ref());
     let telemetry = crate::telemetry::Telemetry::start(
         fixture.backend.clone(),
         &fixture._root.path().join("telemetry"),

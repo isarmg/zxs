@@ -33,7 +33,7 @@ impl<'de> Deserialize<'de> for UploadState {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct UploadRecord {
     pub workspace_id: String,
@@ -170,7 +170,10 @@ impl StagedFile {
             self.directory
                 .verify_identity()
                 .map_err(crate::upload_fs_error)?;
-            retain_generation_held(&self.directory, record)
+            retain_generation_held(&self.directory, record).map(|()| {
+                self.reservation
+                    .record_upload(retained_name(record), record)
+            })
         })();
         if result.is_err() {
             self.block_admission();
@@ -207,7 +210,9 @@ pub(crate) fn persist_staged(record: &UploadRecord, staged: &StagedFile) -> Resu
             .verify_identity()
             .map_err(crate::upload_fs_error)?;
         let name = format!("{}.json", key(&record.workspace_id, &record.item_id));
-        persist_held(&staged.directory, &name, record)
+        persist_held(&staged.directory, &name, record)?;
+        staged.reservation.record_upload(name, record);
+        Ok(())
     })();
     if result.is_err() {
         // A failed cleanup or directory sync can leave extra/uncertain metadata.
@@ -340,12 +345,7 @@ fn retain_generation_held(
     directory: &PrivateDirectory,
     record: &UploadRecord,
 ) -> Result<(), ApiError> {
-    let name = format!(
-        "retained-{}-{}-{}.json",
-        key(&record.workspace_id, &record.item_id),
-        record.generation,
-        blake3::hash(record.data_file.as_bytes()).to_hex()
-    );
+    let name = retained_name(record);
     persist_held(directory, &name, record)?;
     #[cfg(test)]
     {
@@ -360,6 +360,14 @@ fn retain_generation_held(
         }
     }
     Ok(())
+}
+pub(crate) fn retained_name(record: &UploadRecord) -> String {
+    format!(
+        "retained-{}-{}-{}.json",
+        key(&record.workspace_id, &record.item_id),
+        record.generation,
+        blake3::hash(record.data_file.as_bytes()).to_hex()
+    )
 }
 
 pub(crate) struct ExistingPrefix {
