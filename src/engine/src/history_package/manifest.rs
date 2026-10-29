@@ -103,6 +103,14 @@ impl HistoryManifest {
         history_id: &str,
         source: &dyn crate::namespace::NamespaceSource,
     ) -> Result<Self> {
+        Ok(Self::admit_state(state, history_id, source)?.0)
+    }
+
+    pub(super) fn admit_state(
+        state: &State,
+        history_id: &str,
+        source: &dyn crate::namespace::NamespaceSource,
+    ) -> Result<(Self, BTreeSet<String>)> {
         // Projection walks directory entries, so admit external graphs first.
         let directory_ids = Self::validate_namespaces(
             state
@@ -113,7 +121,7 @@ impl HistoryManifest {
         )?;
         let manifest = Self::project_with_directories(state, history_id, &directory_ids)?;
         manifest.validate_contents(source, &directory_ids)?;
-        Ok(manifest)
+        Ok((manifest, directory_ids))
     }
 
     /// Build the history projection; reference validation belongs to its caller.
@@ -148,7 +156,7 @@ impl HistoryManifest {
         Self::project_with_directories(state, history_id, &directory_ids)
     }
 
-    fn project_with_directories(
+    pub(super) fn project_with_directories(
         state: &State,
         history_id: &str,
         directory_ids: &BTreeSet<String>,

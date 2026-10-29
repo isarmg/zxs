@@ -9,6 +9,8 @@ use storage_contract::NamespaceOperation;
 mod composition_path_tests;
 #[path = "depth_bound_tests.rs"]
 mod depth_bound_tests;
+#[path = "object_loader_memo_tests.rs"]
+mod object_loader_memo_tests;
 #[path = "ordered_walk_tests.rs"]
 mod ordered_walk_tests;
 #[path = "page_local_tests.rs"]

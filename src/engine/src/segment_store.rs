@@ -16,9 +16,9 @@ use storage_contract::{
 const MAX_CACHED_EVENT_SEGMENTS: usize = 8;
 const MAX_CACHED_OPERATION_SEGMENTS: usize = 8;
 const MAX_CACHED_LOCATOR_PAGE_BYTES: usize = 2 * 1024 * 1024;
-const MAX_CACHED_NAMESPACE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_CACHED_NAMESPACE_BYTES: usize = 8 * 1024 * 1024;
 
-struct BoundedCache<V> {
+pub(crate) struct BoundedCache<V> {
     entries: BTreeMap<String, (V, usize)>,
     order: VecDeque<String>,
     bytes: usize,
@@ -26,7 +26,7 @@ struct BoundedCache<V> {
     max_bytes: usize,
 }
 impl<V: Clone> BoundedCache<V> {
-    fn new(max_entries: usize, max_bytes: usize) -> Self {
+    pub(crate) fn new(max_entries: usize, max_bytes: usize) -> Self {
         Self {
             entries: BTreeMap::new(),
             order: VecDeque::new(),
@@ -35,10 +35,10 @@ impl<V: Clone> BoundedCache<V> {
             max_bytes,
         }
     }
-    fn get(&self, hash: &str) -> Option<V> {
+    pub(crate) fn get(&self, hash: &str) -> Option<V> {
         self.entries.get(hash).map(|(value, _)| value.clone())
     }
-    fn insert(&mut self, hash: String, value: V, bytes: usize) {
+    pub(crate) fn insert(&mut self, hash: String, value: V, bytes: usize) {
         // Oversized objects can still be served by the caller, but are never
         // retained beyond this cache's declared byte or entry budget.
         if bytes > self.max_bytes || self.max_entries == 0 {
