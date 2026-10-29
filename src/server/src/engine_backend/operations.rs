@@ -8,15 +8,32 @@ pub(super) fn authorized_record(
     identity: &Identity,
     operation_id: storage_contract::OperationId,
 ) -> Result<OperationRecord, ApiError> {
-    let lookup = engine
-        .operation_lookup(operation_id)
-        .map_err(super::error)?;
+    find_authorized_record(engine, identity, operation_id)?.ok_or_else(|| {
+        ApiError::new(
+            ::http::StatusCode::NOT_FOUND,
+            storage_contract::ErrorCode::OperationNotFound,
+            "operation is not registered",
+        )
+    })
+}
+
+pub(super) fn find_authorized_record(
+    engine: &Engine,
+    identity: &Identity,
+    operation_id: storage_contract::OperationId,
+) -> Result<Option<OperationRecord>, ApiError> {
+    let Some(lookup) = engine
+        .find_operation_lookup(operation_id)
+        .map_err(super::error)?
+    else {
+        return Ok(None);
+    };
     if lookup.owner() != identity.principal {
         return Err(ApiError::forbidden());
     }
     let record = lookup.into_record().map_err(super::error)?;
     authorize_record(engine, identity, &record)?;
-    Ok(record)
+    Ok(Some(record))
 }
 
 pub(super) fn authorize_record(

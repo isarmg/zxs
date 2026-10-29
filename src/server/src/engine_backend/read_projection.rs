@@ -108,7 +108,18 @@ pub(super) fn lookup_current(
     tree.get_key(path.key()).map_err(error)
 }
 
-impl DirectorySnapshot {
+pub(super) enum DirectoryRead {
+    Captured(DirectorySnapshot),
+    Page(DirectoryPagePlan),
+}
+
+/// At most one count-bounded namespace page. No engine or snapshot root escapes.
+pub(super) struct DirectoryPagePlan {
+    commit_id: String,
+    children: Vec<storage_contract::Entry>,
+}
+
+impl DirectoryRead {
     pub(super) fn capture(
         engine: &Engine,
         request: crate::ReadDirectory<'_>,
@@ -159,26 +170,26 @@ impl DirectorySnapshot {
             }
         }
         match selection {
-            crate::DirectorySelection::Capture => Ok(Self {
+            crate::DirectorySelection::Capture => Ok(Self::Captured(DirectorySnapshot {
                 commit_id: snapshot.commit_id.clone(),
                 entries: Vec::new(),
                 more: false,
-            }),
+            })),
             crate::DirectorySelection::Page { after, .. } => {
-                Self::page(&snapshot.commit_id, &tree, key, after)
+                DirectoryPagePlan::capture(&snapshot.commit_id, &tree, key, after).map(Self::Page)
             }
         }
     }
+}
 
-    fn page(
+impl DirectoryPagePlan {
+    fn capture(
         commit_id: &str,
         tree: &storage_engine::NamespaceTree<'_>,
         key: &str,
         after: Option<&str>,
     ) -> Result<Self, ApiError> {
-        use smb_protocol::protocol::{
-            MAX_DIRECTORY_PAGE_BYTES, MAX_DIRECTORY_PAGE_ENTRIES, Response,
-        };
+        use smb_protocol::protocol::MAX_DIRECTORY_PAGE_ENTRIES;
         let prefix = if key.is_empty() {
             String::new()
         } else {
@@ -193,8 +204,18 @@ impl DirectorySnapshot {
             .directory_page(key, after, MAX_DIRECTORY_PAGE_ENTRIES + 1)
             .map_err(error)?
             .unwrap_or_default();
-        let mut page = Self {
+        Ok(Self {
             commit_id: commit_id.into(),
+            children,
+        })
+    }
+
+    pub(super) fn finish(self) -> Result<DirectorySnapshot, ApiError> {
+        use smb_protocol::protocol::{
+            MAX_DIRECTORY_PAGE_BYTES, MAX_DIRECTORY_PAGE_ENTRIES, Response,
+        };
+        let mut page = DirectorySnapshot {
+            commit_id: self.commit_id,
             entries: Vec::new(),
             more: false,
         };
@@ -206,7 +227,7 @@ impl DirectorySnapshot {
         })
         .expect("invariant: internal JSON serialization succeeds")
         .len();
-        for entry in children {
+        for entry in self.children {
             let extra = json_codec::to_vec(&entry)
                 .expect("invariant: internal JSON serialization succeeds")
                 .len()

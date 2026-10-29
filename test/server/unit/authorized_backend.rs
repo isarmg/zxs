@@ -166,13 +166,15 @@ impl Backend for RecordingBackend {
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+    ) -> Result<Option<storage_contract::OperationOutcome>, ApiError> {
         self.record(
             "operation_outcome",
             Some(identity),
             json!({"operation_id":operation_id}),
         )?;
-        Ok(recorded_operation(operation_id, "operation_outcome").into())
+        Ok(Some(
+            recorded_operation(operation_id, "operation_outcome").into(),
+        ))
     }
     fn operation(
         &self,
@@ -1488,6 +1490,7 @@ impl Fixture {
             (
                 "operation_outcome",
                 backend.operation_outcome(identity, operation_id).map(|result| {
+                    let result = result.unwrap();
                     assert_eq!(result, recorded_operation(operation_id, "operation_outcome").into());
                     result.result
                 }),

@@ -155,6 +155,16 @@ async fn operation_id_boundary_preserves_error_codes_and_canonical_wire() {
         ("Zero", "op_00000000000000000000000000000000"),
         ("NonV4", "op_ffffffffffffffffffffffffffffffff"),
     ] {
+        let (status, missing) = send(
+            &app,
+            Some(&token),
+            "GET",
+            &format!("/api/operations/{operation}/outcome"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(missing["error"]["code"], "OPERATION_NOT_FOUND");
         let body =
             json!({"name":name,"primary_slot_id":"P01","target_copies":1,"operation_id":operation});
         let created = success(

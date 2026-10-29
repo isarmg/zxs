@@ -225,7 +225,10 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
             )
             .is_err()
     );
-    let (members, snapshot, _) = engine.pending_operation_snapshot(operation).unwrap();
+    let (members, snapshot, _) = engine
+        .pending_operation_snapshot(operation)
+        .unwrap()
+        .unwrap();
     for field in ["repositories", "commits"] {
         for hash in crate::journal::map_pages(&members[0], &snapshot.maps[field]) {
             for disk in &members {
@@ -415,8 +418,10 @@ fn pending_lookup_consumes_captured_evidence_without_a_second_journal_read() {
 fn pending_lookup_checks_receipt_binding_after_owner_discovery() {
     for change_sequence in [false, true] {
         let (_root, engine, operation) = pending_lookup_fixture();
-        let (members, mut snapshot, mut candidate) =
-            engine.pending_operation_snapshot(operation).unwrap();
+        let (members, mut snapshot, mut candidate) = engine
+            .pending_operation_snapshot(operation)
+            .unwrap()
+            .unwrap();
         if change_sequence {
             candidate.sequence += 1;
             snapshot.sequence = candidate.sequence;
@@ -446,4 +451,68 @@ fn pending_lookup_checks_receipt_binding_after_owner_discovery() {
             ErrorCode::ObjectCorrupt
         );
     }
+}
+
+#[test]
+fn optional_operation_lookup_distinguishes_absence_from_unreadable_evidence() {
+    let (_root, engine, _) = fixture();
+    let absent = storage_contract::OperationId::generate();
+    assert!(engine.find_operation_lookup(absent).unwrap().is_none());
+    assert_eq!(engine.operation_owner(absent).unwrap(), None);
+    assert_eq!(
+        engine.operation_lookup(absent).err().unwrap().code(),
+        ErrorCode::OperationNotFound
+    );
+
+    let (_root, engine, operation) = pending_lookup_fixture();
+    assert!(engine.find_operation_lookup(operation).unwrap().is_some());
+    for disk in engine.members() {
+        fs::write(log_path(&disk), b"invalid journal frame").unwrap();
+    }
+    assert_eq!(
+        engine
+            .find_operation_lookup(operation)
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::LogCorrupt
+    );
+    assert_eq!(
+        engine.operation_owner(operation).unwrap_err().code(),
+        ErrorCode::LogCorrupt
+    );
+}
+
+#[test]
+fn accepted_candidate_without_its_receipt_is_not_authoritative_absence() {
+    let (_root, engine, operation) = pending_lookup_fixture();
+    let (members, _, mut candidate) = engine
+        .pending_operation_snapshot(operation)
+        .unwrap()
+        .unwrap();
+    let missing_receipt = storage_contract::OperationId::generate();
+    candidate.operation_id = missing_receipt;
+    let hash = PreparedMetadataObject::new("candidate", &candidate, crate::disk::MAX_METADATA)
+        .unwrap()
+        .store(&members)
+        .unwrap();
+    for disk in &members {
+        fs::remove_file(log_path(disk)).unwrap();
+        JournalWriter::create(disk)
+            .unwrap()
+            .append(disk, RecordType::Accept, candidate.sequence, &hash, &hash)
+            .unwrap();
+    }
+    assert_eq!(
+        engine
+            .find_operation_lookup(missing_receipt)
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::OperationNotFound
+    );
+    assert_eq!(
+        engine.operation_owner(missing_receipt).unwrap_err().code(),
+        ErrorCode::OperationNotFound
+    );
 }

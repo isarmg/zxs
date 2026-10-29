@@ -700,7 +700,7 @@ impl Backend for ManagementBackend {
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+    ) -> Result<Option<storage_contract::OperationOutcome>, ApiError> {
         self.inner
             .backend()?
             .operation_outcome(identity, operation_id)

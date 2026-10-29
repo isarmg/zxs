@@ -688,7 +688,7 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
     let mut after = None;
     let mut seen = Vec::new();
     loop {
-        let page = DirectorySnapshot::page(&head, &tree, "", after.as_deref()).unwrap();
+        let page = directory_page(&head, &tree, "", after.as_deref()).unwrap();
         assert!(page.entries.len() <= MAX_DIRECTORY_PAGE_ENTRIES);
         assert!(
             json_codec::to_vec(&Response::Ok {
@@ -731,8 +731,7 @@ fn directory_byte_bound_applies_to_utf8_and_long_paths_before_the_count_limit() 
     }
     let head = plant_head_namespace(&mut engine, &repo, &entries);
     let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
-    let page =
-        DirectorySnapshot::page(&head, &tree, &name_policy::path_key(&parent), None).unwrap();
+    let page = directory_page(&head, &tree, &name_policy::path_key(&parent), None).unwrap();
     assert!(page.more);
     assert!(page.entries.len() < MAX_DIRECTORY_PAGE_ENTRIES);
     assert!(
@@ -1364,4 +1363,194 @@ fn owned_directory_scope_sort_preserves_tie_breaks_and_current_flags() {
     };
     crate::engine_backend::directory_scopes::sort(&mut empty);
     crate::engine_backend::directory_scopes::sort_choices(&mut []);
+}
+
+fn directory_page(
+    commit: &str,
+    tree: &storage_engine::NamespaceTree<'_>,
+    key: &str,
+    after: Option<&str>,
+) -> Result<DirectorySnapshot, ApiError> {
+    DirectoryPagePlan::capture(commit, tree, key, after)?.finish()
+}
+
+fn capture_directory_page(engine: &Engine, branch: &str) -> DirectoryPagePlan {
+    match DirectoryRead::capture(
+        engine,
+        crate::ReadDirectory {
+            branch,
+            entry_id: branch,
+            path: None,
+            selection: crate::DirectorySelection::Page {
+                commit: None,
+                after: None,
+            },
+        },
+    )
+    .unwrap()
+    {
+        DirectoryRead::Page(plan) => plan,
+        DirectoryRead::Captured(_) => panic!("page request returned capture-only result"),
+    }
+}
+
+#[test]
+fn detached_directory_page_owns_only_capped_entries_and_preserves_encoded_bytes() {
+    use smb_protocol::protocol::{MAX_DIRECTORY_PAGE_BYTES, MAX_DIRECTORY_PAGE_ENTRIES, Response};
+    let (_root, mut engine, repo, _) = fixture();
+    let entries: Vec<_> = (0..300)
+        .map(|index| directory_entry(index, format!("f{index:05}-{}", "界".repeat(60))))
+        .collect();
+    let head = plant_head_namespace(&mut engine, &repo, &entries);
+    // Independent whole-envelope oracle: trim a count-bounded prefix until
+    // the original false-valued response envelope fits, then mark continuation.
+    let mut expected = DirectorySnapshot {
+        commit_id: head,
+        entries: entries[..MAX_DIRECTORY_PAGE_ENTRIES].to_vec(),
+        more: false,
+    };
+    while json_codec::to_vec(&Response::Ok {
+        result: json_codec::to_value(&expected).unwrap(),
+    })
+    .unwrap()
+    .len()
+        > MAX_DIRECTORY_PAGE_BYTES
+    {
+        expected.entries.pop().unwrap();
+    }
+    expected.more = expected.entries.len() < entries.len();
+    let plan = capture_directory_page(&engine, &repo.main_branch_id);
+    assert_eq!(plan.children.len(), MAX_DIRECTORY_PAGE_ENTRIES + 1);
+    drop(engine);
+    let page = plan.finish().unwrap();
+    assert_eq!(
+        json_codec::to_vec(&page).unwrap(),
+        json_codec::to_vec(&expected).unwrap()
+    );
+    assert!(page.more);
+    assert!(page.entries.len() <= MAX_DIRECTORY_PAGE_ENTRIES);
+}
+
+#[test]
+fn detached_directory_page_keeps_snapshot_and_checks_current_authority_before_result() {
+    let (root, mut engine, repo, _) = fixture();
+    save_projection_file(&mut engine, &repo.main_branch_id, "before.txt", b"first");
+    let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
+    let plan = capture_directory_page(&backend.engine.lock().unwrap(), &repo.main_branch_id);
+    let old_commit = plan.commit_id.clone();
+    save_projection_file(
+        &mut backend.engine.lock().unwrap(),
+        &repo.main_branch_id,
+        "after.txt",
+        b"second",
+    );
+    let page = backend
+        .finish_directory_page(&identity, &repo.main_branch_id, plan.finish())
+        .unwrap();
+    assert_eq!(page.commit_id, old_commit);
+    assert_eq!(
+        page.entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["before.txt"]
+    );
+    let pending = capture_directory_page(&backend.engine.lock().unwrap(), &repo.main_branch_id);
+    auth.logout(&token).unwrap();
+    assert_eq!(
+        backend
+            .finish_directory_page(&identity, &repo.main_branch_id, pending.finish())
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+    assert_eq!(
+        backend
+            .finish_directory_page(
+                &identity,
+                &repo.main_branch_id,
+                Err(ApiError::limit("budget failure"))
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+}
+
+#[test]
+fn detached_directory_completion_rechecks_share_generation_and_branch_migration() {
+    let (_root, engine, repo, identity) = fixture();
+    let backend = EngineBackend::new(engine);
+    let mut bound = identity.clone();
+    bound.smb_binding = Some(crate::auth::SmbBinding {
+        repository_id: repo.repository_id.clone(),
+        branch_id: repo.main_branch_id.clone(),
+        generation: repo.smb_binding_generation,
+    });
+    backend
+        .authorize_current(&bound, &repo.main_branch_id)
+        .unwrap();
+    let plan = capture_directory_page(&backend.engine.lock().unwrap(), &repo.main_branch_id);
+    {
+        let mut engine = backend.engine.lock().unwrap();
+        let mut state = engine.state().clone();
+        state
+            .repositories
+            .get_mut(&repo.repository_id)
+            .unwrap()
+            .smb_binding_generation += 1;
+        storage_engine::test_support::replace_state(&mut engine, state);
+    }
+    assert_eq!(
+        backend
+            .finish_directory_page(&bound, &repo.main_branch_id, plan.finish())
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::SmbRebindRequired
+    );
+    let plan = capture_directory_page(&backend.engine.lock().unwrap(), &repo.main_branch_id);
+    {
+        let mut engine = backend.engine.lock().unwrap();
+        let mut state = engine.state().clone();
+        state.branches.get_mut(&repo.main_branch_id).unwrap().state =
+            storage_contract::BranchState::Migrated;
+        storage_engine::test_support::replace_state(&mut engine, state);
+    }
+    assert_eq!(
+        backend
+            .finish_directory_page(&identity, &repo.main_branch_id, plan.finish())
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::TreeMoved
+    );
+    assert_eq!(
+        backend
+            .finish_directory_page(
+                &identity,
+                &repo.main_branch_id,
+                Err(ApiError::limit("budget failure"))
+            )
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::TreeMoved
+    );
+}
+
+#[test]
+fn detached_directory_budget_failure_is_preserved_for_current_authority() {
+    let (_root, engine, repo, identity) = fixture();
+    let backend = EngineBackend::new(engine);
+    // Exercise the byte-budget error directly without admitting an oversized
+    // stored record or changing namespace validation for this test.
+    let mut oversized = directory_entry(0, "file.txt".into());
+    oversized.entry_id = "x".repeat(smb_protocol::protocol::MAX_DIRECTORY_PAGE_BYTES);
+    let plan = DirectoryPagePlan {
+        commit_id: "captured".into(),
+        children: vec![oversized],
+    };
+    let error = backend
+        .finish_directory_page(&identity, &repo.main_branch_id, plan.finish())
+        .unwrap_err();
+    assert_eq!(error.code, ApiError::limit("unused").code);
+    assert_eq!(error.message, "directory entry exceeds page byte budget");
 }

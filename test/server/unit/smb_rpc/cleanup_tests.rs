@@ -42,6 +42,7 @@ fn completed_close_unchanged_close_and_abort_explicitly_clean_their_spool() {
                 backend
                     .operation_outcome(&client.identity, operation)
                     .unwrap()
+                    .unwrap()
                     .commit_state,
                 storage_contract::CommitState::Published
             );
@@ -115,6 +116,7 @@ fn published_close_cleanup_failure_keeps_receipt_not_a_false_detached_record() {
             backend
                 .operation_outcome(&client.identity, operation)
                 .unwrap()
+                .unwrap()
                 .commit_state,
             storage_contract::CommitState::Published
         );
@@ -177,6 +179,7 @@ fn real_close_directory_sync_failure_keeps_published_outcome_and_consumes_handle
         backend
             .operation_outcome(&client.identity, operation)
             .unwrap()
+            .unwrap()
             .commit_state,
         storage_contract::CommitState::Published
     );
@@ -225,6 +228,7 @@ fn completed_namespace_cleans_only_its_evidence_and_budget() {
     assert_eq!(
         backend
             .operation_outcome(&client.identity, operation)
+            .unwrap()
             .unwrap()
             .commit_state,
         storage_contract::CommitState::Published
@@ -305,6 +309,7 @@ fn live_cleanup_rejects_replaced_payload_and_preserves_both_files() {
     assert_eq!(
         backend
             .operation_outcome(&client.identity, operation)
+            .unwrap()
             .unwrap()
             .commit_state,
         storage_contract::CommitState::Published

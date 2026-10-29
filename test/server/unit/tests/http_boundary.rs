@@ -418,7 +418,7 @@ impl Backend for PanickingBackend {
         &self,
         _: &crate::auth::Identity,
         _: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationOutcome, crate::ApiError> {
+    ) -> Result<Option<storage_contract::OperationOutcome>, crate::ApiError> {
         panic!("private operation outcome lookup panic detail")
     }
     fn operation(

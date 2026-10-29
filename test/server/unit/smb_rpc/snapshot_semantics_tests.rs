@@ -69,7 +69,7 @@ impl Backend for NamespaceAfterWorkspace {
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+    ) -> Result<Option<storage_contract::OperationOutcome>, ApiError> {
         self.inner.operation_outcome(identity, operation_id)
     }
     fn require_native_workspace_commit_completion(
@@ -859,8 +859,8 @@ fn namespace_preconditions_use_workspace_base_after_concurrent_head_changes() {
             backend
                 .inner
                 .operation_outcome(&session.identity, operation_id.parse().unwrap())
-                .and_then(crate::operation_wire::operation_wire)
-                .is_err()
+                .unwrap()
+                .is_none()
         );
     }
 }

@@ -78,6 +78,18 @@ impl EngineBackend {
         page
     }
 
+    fn finish_directory_page(
+        &self,
+        identity: &Identity,
+        branch: &str,
+        page: Result<crate::DirectorySnapshot, ApiError>,
+    ) -> Result<crate::DirectorySnapshot, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        repo_for_branch(&engine, branch)?;
+        page
+    }
+
     pub fn new(mut engine: Engine) -> Self {
         report_recovery_warnings(&mut engine);
         Self {
@@ -398,11 +410,11 @@ impl Backend for EngineBackend {
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+    ) -> Result<Option<storage_contract::OperationOutcome>, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
-        let record = operations::authorized_record(&engine, &current, operation_id)?;
-        Ok(record.into_result().into())
+        let record = operations::find_authorized_record(&engine, &current, operation_id)?;
+        Ok(record.map(|record| record.into_result().into()))
     }
 
     fn commit_workspace(
@@ -1756,7 +1768,14 @@ impl Backend for EngineBackend {
     ) -> Result<crate::DirectorySnapshot, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        crate::DirectorySnapshot::capture(&engine, request)
+        let branch = request.branch;
+        match read_projection::DirectoryRead::capture(&engine, request)? {
+            read_projection::DirectoryRead::Captured(snapshot) => Ok(snapshot),
+            read_projection::DirectoryRead::Page(plan) => {
+                drop(engine);
+                self.finish_directory_page(identity, branch, plan.finish())
+            }
+        }
     }
 
     fn authorize_workspace_selection(

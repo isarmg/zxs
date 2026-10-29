@@ -42,7 +42,7 @@ impl Backend for TestBackend {
         &self,
         _: &crate::auth::Identity,
         _: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationOutcome, crate::ApiError> {
+    ) -> Result<Option<storage_contract::OperationOutcome>, crate::ApiError> {
         unreachable!("this test backend does not query operation outcomes")
     }
     fn operation(
@@ -1345,7 +1345,7 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             &self,
             _: &crate::auth::Identity,
             _: storage_contract::OperationId,
-        ) -> Result<storage_contract::OperationOutcome, crate::ApiError> {
+        ) -> Result<Option<storage_contract::OperationOutcome>, crate::ApiError> {
             unreachable!("this test backend does not query operation outcomes")
         }
         fn operation(

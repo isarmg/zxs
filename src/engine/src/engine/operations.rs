@@ -238,13 +238,9 @@ impl Engine {
     }
 
     pub fn operation_owner(&self, id: OperationId) -> Result<Option<String>> {
-        match self.operation_lookup(id) {
-            Ok(lookup) => Ok(Some(lookup.owner().to_owned())),
-            Err(error) if error.code() == storage_contract::ErrorCode::OperationNotFound => {
-                Ok(None)
-            }
-            Err(error) => Err(error),
-        }
+        Ok(self
+            .find_operation_lookup(id)?
+            .map(|lookup| lookup.owner().to_owned()))
     }
 
     /// Published records are metadata-only. An uncertain decision reads only
@@ -258,6 +254,13 @@ impl Engine {
     /// Resident published receipts stay borrowed until the authorized caller
     /// consumes the lookup; pending evidence is read and hash-verified once.
     pub fn operation_lookup(&self, id: OperationId) -> Result<OperationLookup<'_>> {
+        self.find_operation_lookup(id)?
+            .ok_or_else(operation_not_found)
+    }
+
+    /// Find authoritative operation evidence, distinguishing absence from a
+    /// failed evidence read. A present lookup still requires owner admission.
+    pub fn find_operation_lookup(&self, id: OperationId) -> Result<Option<OperationLookup<'_>>> {
         let members = self.members();
         let entry = crate::segment_store::ReceiptLookup {
             state: &self.state,
@@ -266,21 +269,23 @@ impl Engine {
         }
         .find_view(id)?;
         if let Some(entry) = entry {
-            return Ok(OperationLookup {
+            return Ok(Some(OperationLookup {
                 entry,
                 pending: None,
-            });
+            }));
         }
-        let (members, snapshot, candidate) = self.pending_operation_snapshot(id)?;
+        let Some((members, snapshot, candidate)) = self.pending_operation_snapshot(id)? else {
+            return Ok(None);
+        };
         let entry = snapshot_receipt(self, &members, &snapshot, id, false)?
             .ok_or_else(operation_not_found)?;
-        Ok(OperationLookup {
+        Ok(Some(OperationLookup {
             entry: Cow::Owned(entry),
             pending: Some(PendingBinding {
                 request_digest: candidate.request_digest,
                 sequence: candidate.sequence,
             }),
-        })
+        }))
     }
 
     /// Capture this immediately after authorizing `record`, in the same Engine
@@ -357,9 +362,9 @@ impl Engine {
     fn pending_operation_snapshot(
         &self,
         id: OperationId,
-    ) -> Result<(Vec<DiskConfig>, Snapshot, Candidate)> {
+    ) -> Result<Option<(Vec<DiskConfig>, Snapshot, Candidate)>> {
         if !self.blocked {
-            return Err(operation_not_found());
+            return Ok(None);
         }
         let members = self.trusted_evidence_members();
         let mut first_error = None;
@@ -408,10 +413,13 @@ impl Engine {
                         "snapshot sequence differs",
                     ));
                 }
-                return Ok((members, snapshot, candidate));
+                return Ok(Some((members, snapshot, candidate)));
             }
         }
-        Err(first_error.unwrap_or_else(operation_not_found))
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(None),
+        }
     }
 }
 

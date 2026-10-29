@@ -355,7 +355,7 @@ impl Session {
             .backend
             .operation_outcome(&self.identity, writer.operation_id)
         {
-            Ok(result) if result.commit_state == storage_contract::CommitState::Published => {
+            Ok(Some(result)) if result.commit_state == storage_contract::CommitState::Published => {
                 return finish_publication(
                     &self.shared,
                     &self.identity,
@@ -364,16 +364,14 @@ impl Session {
                     result,
                 );
             }
-            Ok(_) => {
+            Ok(Some(_)) => {
                 return Err(ApiError::new(
                     ::http::StatusCode::SERVICE_UNAVAILABLE,
                     storage_contract::ErrorCode::RecoveryRequired,
                     "SMB save outcome must be reconciled before retrying",
                 ));
             }
-            Err(error)
-                if error.code == storage_contract::ErrorCode::NotFound
-                    || error.code == storage_contract::ErrorCode::OperationNotFound => {}
+            Ok(None) => {}
             Err(error) => return Err(error),
         }
         writer

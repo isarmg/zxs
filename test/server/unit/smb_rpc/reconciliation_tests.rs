@@ -47,6 +47,7 @@ fn terminal_mirror_failure_retains_active_and_detached_smb_work_after_publicatio
         assert!(failure.message.contains(&operation.to_string()));
         let receipt = backend
             .operation_outcome(&client.identity, operation)
+            .unwrap()
             .unwrap();
         assert_eq!(
             receipt.commit_state,
@@ -241,6 +242,7 @@ fn explicit_abort_after_completed_publication_does_not_erase_lost_reply_receipt(
     );
     let receipt = backend
         .operation_outcome(&client.identity, operation)
+        .unwrap()
         .unwrap();
     assert_eq!(
         receipt.commit_state,
@@ -268,6 +270,7 @@ fn explicit_abort_after_completed_publication_does_not_erase_lost_reply_receipt(
     assert!(!source.with_extension("budget.json").exists());
     let retained = backend
         .operation_outcome(&client.identity, operation)
+        .unwrap()
         .unwrap();
     assert_eq!(retained.commit_state, receipt.commit_state);
     assert_eq!(retained.sequence, receipt.sequence);
@@ -308,7 +311,7 @@ fn failed_publication_reconciliation_retries_without_restaging_or_second_version
             );
             let published = backend
                 .operation_outcome(&one.identity, operation_id)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|outcome| crate::operation_wire::operation_wire(outcome.unwrap()))
                 .unwrap();
             assert_eq!(published["commit_state"], "PUBLISHED");
             assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);

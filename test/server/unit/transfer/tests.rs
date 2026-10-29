@@ -703,7 +703,7 @@ impl crate::Backend for RetainedGenerationBackend {
         &self,
         _: &crate::auth::Identity,
         _: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationOutcome, crate::ApiError> {
+    ) -> Result<Option<storage_contract::OperationOutcome>, crate::ApiError> {
         unreachable!("test does not query operation outcomes")
     }
     fn operation(

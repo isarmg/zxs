@@ -14,6 +14,7 @@ enum Failure {
     Upload,
     PendingOperation,
     UnknownOperation,
+    MissingHistory,
     Abort,
 }
 
@@ -38,10 +39,17 @@ impl Backend for CloseFailure {
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+    ) -> Result<Option<storage_contract::OperationOutcome>, ApiError> {
         if self.enabled.load(Ordering::SeqCst) {
+            if matches!(self.failure, Failure::MissingHistory) {
+                return Err(ApiError::new(
+                    ::http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::NotFound,
+                    "history not found",
+                ));
+            }
             if matches!(self.failure, Failure::PendingOperation) {
-                return Ok(storage_contract::OperationOutcome {
+                return Ok(Some(storage_contract::OperationOutcome {
                     operation_id,
                     kind: "workspace.commit".into(),
                     commit_id: None,
@@ -52,7 +60,7 @@ impl Backend for CloseFailure {
                     request_digest: "0".repeat(64),
                     sequence: 0,
                     result: json!({}),
-                });
+                }));
             }
             if matches!(self.failure, Failure::UnknownOperation) {
                 return Err(ApiError::new(
@@ -801,11 +809,56 @@ fn close_vfs(client: &Client, opened: &OpenResult, fd: OwnedFd) -> io::Result<()
 }
 
 #[test]
+fn namespace_history_lookup_failure_does_not_start_staging() {
+    let (_temp, mut shared, backend, branch) = fixture();
+    let injected = Arc::new(CloseFailure {
+        inner: shared.backend.clone(),
+        failure: Failure::MissingHistory,
+        enabled: AtomicBool::new(true),
+        uploads: AtomicUsize::new(0),
+        commits: AtomicUsize::new(0),
+        aborts: AtomicUsize::new(0),
+    });
+    Arc::get_mut(&mut shared).unwrap().backend = injected.clone();
+    let mut session = session(shared.clone(), &branch);
+    let operation = storage_contract::OperationId::generate();
+    let error = session
+        .namespace(
+            smb_protocol::protocol::NamespaceOperation::Mkdir,
+            "not-created".into(),
+            None,
+            false,
+            operation,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::NotFound);
+    assert_eq!(error.message, "history not found");
+    assert_eq!(injected.uploads.load(Ordering::SeqCst), 0);
+    assert_eq!(injected.commits.load(Ordering::SeqCst), 0);
+    assert_eq!(injected.aborts.load(Ordering::SeqCst), 0);
+    assert!(
+        !shared
+            .spool
+            .join(format!("{operation}.namespace.json"))
+            .exists()
+    );
+    assert!(
+        backend
+            .operation_outcome(&session.identity, operation)
+            .unwrap()
+            .is_none()
+    );
+    assert!(session.writer_locks.is_empty());
+    assert!(shared.namespace_operations.lock().unwrap().is_empty());
+}
+
+#[test]
 fn failed_vfs_close_detaches_only_its_writer_and_keeps_both_sessions_usable() {
     for failure in [
         Failure::Upload,
         Failure::PendingOperation,
         Failure::UnknownOperation,
+        Failure::MissingHistory,
         Failure::Abort,
     ] {
         let (_temp, mut shared, _backend, _branch) = fixture();
@@ -848,6 +901,7 @@ fn failed_vfs_close_detaches_only_its_writer_and_keeps_both_sessions_usable() {
         let expected_code = match failure {
             Failure::Upload => "FORBIDDEN",
             Failure::PendingOperation | Failure::UnknownOperation => "RECOVERY_REQUIRED",
+            Failure::MissingHistory => "NOT_FOUND",
             Failure::Abort => "WORKSPACE_BUSY",
         };
         assert_eq!(remote(&error).code.to_string(), expected_code);
@@ -882,7 +936,7 @@ fn failed_vfs_close_detaches_only_its_writer_and_keeps_both_sessions_usable() {
         );
         if matches!(
             failure,
-            Failure::PendingOperation | Failure::UnknownOperation
+            Failure::PendingOperation | Failure::UnknownOperation | Failure::MissingHistory
         ) {
             assert_eq!(injected.uploads.load(Ordering::SeqCst), before.0);
         }
@@ -974,7 +1028,7 @@ fn lost_close_reply_retains_original_published_operation_without_resubmitting() 
     let uploads = backend.uploads.load(Ordering::SeqCst);
     let result = backend
         .operation_outcome(&identity(&shared), operation.parse().unwrap())
-        .and_then(crate::operation_wire::operation_wire)
+        .and_then(|outcome| crate::operation_wire::operation_wire(outcome.unwrap()))
         .unwrap();
     assert_eq!(result["commit_state"], "PUBLISHED");
     assert_eq!(fs::read(&retained).unwrap(), b"new");

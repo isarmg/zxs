@@ -500,11 +500,13 @@ pub trait Backend: Send + Sync {
         None
     }
 
+    /// Metadata-only outcome lookup. `None` proves the operation is absent;
+    /// authorization and evidence failures remain errors, including missing scope.
     fn operation_outcome(
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationOutcome, ApiError>;
+    ) -> Result<Option<storage_contract::OperationOutcome>, ApiError>;
     fn operation(
         &self,
         identity: &Identity,
@@ -1082,7 +1084,7 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+    ) -> Result<Option<storage_contract::OperationOutcome>, ApiError> {
         self.backend
             .operation_outcome(&self.current(identity)?, operation_id)
     }

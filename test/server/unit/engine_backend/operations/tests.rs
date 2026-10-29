@@ -314,14 +314,20 @@ fn outcome_lookup_does_not_start_health_or_depend_on_current_payloads() {
     *backend.operation_health_hook.lock().unwrap() = Some(Arc::new(|| {
         panic!("outcome-only lookup started full-content health checking");
     }));
-    let before = backend.operation_outcome(&identity, operation_id).unwrap();
+    let before = backend
+        .operation_outcome(&identity, operation_id)
+        .unwrap()
+        .unwrap();
     {
         let engine = backend.engine.lock().unwrap();
         for disk in &engine.config().disks {
             std::fs::remove_dir_all(disk.root.join("histories")).unwrap();
         }
     }
-    let after = backend.operation_outcome(&identity, operation_id).unwrap();
+    let after = backend
+        .operation_outcome(&identity, operation_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(before, after);
     let wire = crate::operation_wire::operation_wire(after).unwrap();
     assert!(wire.get("current_health").is_none());
@@ -361,20 +367,53 @@ fn outcome_lookup_rechecks_current_identity_and_owner() {
             .code,
         storage_contract::ErrorCode::Forbidden
     );
+    assert!(
+        backend
+            .operation_outcome(&identity, OperationId::generate())
+            .unwrap()
+            .is_none()
+    );
+    auth.logout(&token).unwrap();
     assert_eq!(
         backend
             .operation_outcome(&identity, OperationId::generate())
             .unwrap_err()
             .code,
-        storage_contract::ErrorCode::OperationNotFound
+        storage_contract::ErrorCode::Unauthorized
     );
-    auth.logout(&token).unwrap();
     assert_eq!(
         backend
             .operation_outcome(&identity, operation_id)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
+    );
+}
+
+#[test]
+fn existing_receipt_with_missing_history_is_not_an_absent_operation() {
+    let (_root, backend, _auth, _token, identity, operation_id) = fixture();
+    let outcome = backend
+        .operation_outcome(&identity, operation_id)
+        .unwrap()
+        .unwrap();
+    let history = outcome.history_tree_id.unwrap();
+    {
+        let mut engine = backend.engine.lock().unwrap();
+        let mut state = engine.state().clone();
+        assert!(state.histories.remove_discard(&history));
+        storage_engine::test_support::replace_state(&mut engine, state);
+    }
+    let error = backend
+        .operation_outcome(&identity, operation_id)
+        .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::NotFound);
+    assert_eq!(error.message, "history not found");
+    assert!(
+        backend
+            .operation_outcome(&identity, OperationId::generate())
+            .unwrap()
+            .is_none()
     );
 }
 
@@ -447,7 +486,10 @@ fn accepted_pending_operation_has_an_outcome_and_no_checked_health() {
                 .is_err()
         );
     }
-    let pending = backend.operation_outcome(&identity, operation_id).unwrap();
+    let pending = backend
+        .operation_outcome(&identity, operation_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(pending.commit_state, storage_contract::CommitState::InDoubt);
     assert_eq!(
         pending.protection_at_publish,
@@ -512,14 +554,20 @@ fn outcome_and_diagnostic_500_file_measurement() {
         assert_eq!(engine.state().versions.len(), FILES);
         (engine.config().disks.len(), engine.state().sequence)
     };
-    let expected = backend.operation_outcome(&identity, operation_id).unwrap();
+    let expected = backend
+        .operation_outcome(&identity, operation_id)
+        .unwrap()
+        .unwrap();
     println!(
         "operation_measurement files={FILES} file_bytes={FILE_BYTES} total_bytes={} replicas={copies} repetitions={REPETITIONS}",
         FILES * FILE_BYTES
     );
     for repetition in 1..=REPETITIONS {
         let started = std::time::Instant::now();
-        let outcome = backend.operation_outcome(&identity, operation_id).unwrap();
+        let outcome = backend
+            .operation_outcome(&identity, operation_id)
+            .unwrap()
+            .unwrap();
         let outcome_elapsed = started.elapsed();
         let started = std::time::Instant::now();
         let observed = backend.operation(&identity, operation_id).unwrap();

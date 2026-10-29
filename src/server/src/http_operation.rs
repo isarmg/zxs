@@ -53,7 +53,14 @@ pub(crate) async fn operation_outcome(
         .run(move |backend| {
             let operation = operation_id(&id)?;
             backend
-                .operation_outcome(&identity, operation)
+                .operation_outcome(&identity, operation)?
+                .ok_or_else(|| {
+                    ApiError::new(
+                        ::http::StatusCode::NOT_FOUND,
+                        storage_contract::ErrorCode::OperationNotFound,
+                        "operation is not registered",
+                    )
+                })
                 .and_then(crate::operation_wire::operation_wire)
         })
         .await

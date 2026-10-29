@@ -108,15 +108,13 @@ impl Session {
             .backend
             .operation_outcome(&self.identity, operation_id)
         {
-            Ok(_) => {
+            Ok(Some(_)) => {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::OperationIdConflict,
                     "query the existing operation instead of replaying namespace",
                 ));
             }
-            Err(error)
-                if error.code == storage_contract::ErrorCode::NotFound
-                    || error.code == storage_contract::ErrorCode::OperationNotFound => {}
+            Ok(None) => {}
             Err(error) => return Err(error),
         }
         let record_name = EntryName::new(format!("{operation_id}.namespace.json"))
