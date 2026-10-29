@@ -227,11 +227,31 @@ pub(crate) trait NamespaceSource {
 }
 pub(crate) struct LoaderSource<F>(pub(crate) F);
 /// A source over an authenticated metadata-object loader (members, evidence
-/// reads or a package directory): each node authenticates before decoding.
-pub(crate) struct ObjectLoaderSource<F>(pub(crate) std::cell::RefCell<F>);
+/// reads or a package directory): each loaded node authenticates before decoding.
+pub(crate) struct ObjectLoaderSource<F> {
+    load: std::cell::RefCell<F>,
+    nodes: Option<std::cell::RefCell<crate::segment_store::BoundedCache<NamespaceNode>>>,
+}
 impl<F> ObjectLoaderSource<F> {
     pub(crate) fn new(load: F) -> Self {
-        Self(std::cell::RefCell::new(load))
+        Self {
+            load: std::cell::RefCell::new(load),
+            nodes: None,
+        }
+    }
+    /// Share authenticated, shape-validated nodes only within this admission.
+    /// Every graph walk still validates its own path, depth and recorded counts.
+    /// The shared byte budget charges canonical bytes, not active heap size.
+    pub(crate) fn memoized(load: F) -> Self {
+        Self {
+            load: std::cell::RefCell::new(load),
+            nodes: Some(std::cell::RefCell::new(
+                crate::segment_store::BoundedCache::new(
+                    usize::MAX,
+                    crate::segment_store::MAX_CACHED_NAMESPACE_BYTES,
+                ),
+            )),
+        }
     }
 }
 impl<F> NamespaceSource for ObjectLoaderSource<F>
@@ -240,8 +260,23 @@ where
 {
     fn node(&self, reference: &NamespaceReference) -> Result<NamespaceNode> {
         reference.validate()?;
-        let object = (self.0.borrow_mut())(reference.kind.as_str(), &reference.hash)?;
-        NamespaceNode::decode(reference, object.value(), object.canonical_len())
+        let address = self
+            .nodes
+            .as_ref()
+            .map(|_| format!("{}/{}", reference.kind.as_str(), reference.hash));
+        if let Some((nodes, address)) = self.nodes.as_ref().zip(address.as_ref())
+            && let Some(node) = nodes.borrow().get(address)
+        {
+            return Ok(node);
+        }
+        let object = (self.load.borrow_mut())(reference.kind.as_str(), &reference.hash)?;
+        let node = NamespaceNode::decode(reference, object.value(), object.canonical_len())?;
+        if let Some((nodes, address)) = self.nodes.as_ref().zip(address) {
+            nodes
+                .borrow_mut()
+                .insert(address, node.clone(), object.canonical_len());
+        }
+        Ok(node)
     }
 }
 impl<F: Fn(&NamespaceReference) -> Result<NamespaceNode>> NamespaceSource for LoaderSource<F> {

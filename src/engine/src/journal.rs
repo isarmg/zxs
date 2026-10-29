@@ -1009,7 +1009,7 @@ pub(crate) fn resolve_admitted_snapshot(
     let raw = resolve_raw_snapshot(snapshot, &mut load)?;
     // Admission reads each commit's namespace through the same authenticated
     // object loader that produced the snapshot's own pages.
-    let source = crate::namespace::ObjectLoaderSource::new(&mut load);
+    let source = crate::namespace::ObjectLoaderSource::memoized(&mut load);
     crate::history_package::AdmittedState::admit(raw, &source)
 }
 fn resolve_raw_snapshot(

@@ -15,14 +15,25 @@ impl RawState {
     }
 }
 
-pub(crate) struct AdmittedState(State);
+pub(crate) struct AdmittedState {
+    state: State,
+    directory_ids: BTreeMap<String, BTreeSet<String>>,
+}
 
 impl AdmittedState {
     pub(crate) fn state(&self) -> &State {
-        &self.0
+        &self.state
     }
     pub(crate) fn into_state(self) -> State {
-        self.0
+        self.state
+    }
+    /// Reuse only the directory identities admitted with this exact State.
+    pub(super) fn history_projection(&self, history_id: &str) -> Result<HistoryManifest> {
+        let directories = self
+            .directory_ids
+            .get(history_id)
+            .expect("invariant: an admitted history retains its directory identities");
+        HistoryManifest::project_with_directories(&self.state, history_id, directories)
     }
 }
 
@@ -33,8 +44,11 @@ impl AdmittedState {
         raw: RawState,
         source: &dyn crate::namespace::NamespaceSource,
     ) -> Result<Self> {
-        validate(&raw.0, source)?;
-        Ok(Self(raw.0))
+        let directory_ids = validate(&raw.0, source)?;
+        Ok(Self {
+            state: raw.0,
+            directory_ids,
+        })
     }
 }
 
@@ -114,7 +128,10 @@ history_coverage! {
     history_boundaries => boundary_marks,
 }
 
-fn validate(state: &State, source: &dyn crate::namespace::NamespaceSource) -> Result<()> {
+fn validate(
+    state: &State,
+    source: &dyn crate::namespace::NamespaceSource,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
     // Event polling seeks by sequence while preserving log order. Writers
     // append increasing publication slots; recovery must establish the same
     // premise for decoded bytes. Sealed bodies were verified nondecreasing by
@@ -196,13 +213,16 @@ fn validate(state: &State, source: &dyn crate::namespace::NamespaceSource) -> Re
         }
     }
     let mut covered = HistoryCoverage::default();
+    let mut directory_ids = BTreeMap::new();
     for (id, history) in state.histories.iter() {
         if id != &history.history_tree_id {
             return Err(invalid("snapshot history identity differs from its key"));
         }
-        let manifest = HistoryManifest::from_state(state, id, source)
+        let (manifest, directories) = HistoryManifest::admit_state(state, id, source)
             .map_err(|error| error.context(ErrorCode::StateInvalid, "invalid snapshot history"))?;
         covered.include(&manifest)?;
+        directory_ids.insert(id.clone(), directories);
     }
-    covered.finish(state)
+    covered.finish(state)?;
+    Ok(directory_ids)
 }

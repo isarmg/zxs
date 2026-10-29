@@ -13,6 +13,8 @@ mod depth_bound_tests;
 mod ordered_walk_tests;
 #[path = "page_local_tests.rs"]
 mod page_local_tests;
+#[path = "object_loader_memo_tests.rs"]
+mod object_loader_memo_tests;
 
 fn missing(_: &NamespaceReference) -> Result<NamespaceNode> {
     Err(Error::new(

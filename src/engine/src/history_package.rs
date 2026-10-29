@@ -535,9 +535,8 @@ fn bound_history_objects_with(
     let (catalog, catalog_objects) = resolve_catalog(&candidate.history_roots, &mut load)?;
     let mut objects = Vec::new();
     let mut seen = BTreeSet::new();
-    let state = admitted.map(AdmittedState::state);
-    if let Some(state) = state
-        && catalog.keys().ne(state.histories.keys())
+    if let Some(admitted) = admitted
+        && catalog.keys().ne(admitted.state().histories.keys())
     {
         return Err(Error::new(
             ErrorCode::ObjectCorrupt,
@@ -553,14 +552,9 @@ fn bound_history_objects_with(
                 "bound history identity differs",
             ));
         }
-        match state {
-            Some(state) => {
-                let expected = {
-                    let source = crate::namespace::ObjectLoaderSource::new(|kind, hash: &str| {
-                        load(kind, hash)
-                    });
-                    HistoryManifest::project_state(state, id, &source)?
-                };
+        match admitted {
+            Some(admitted) => {
+                let expected = admitted.history_projection(id)?;
                 if canonical_json(&expected)? != canonical_json(&manifest)? {
                     return Err(Error::new(
                         storage_contract::ErrorCode::ObjectCorrupt,
@@ -569,8 +563,9 @@ fn bound_history_objects_with(
                 }
             }
             None => {
-                let source =
-                    crate::namespace::ObjectLoaderSource::new(|kind, hash: &str| load(kind, hash));
+                let source = crate::namespace::ObjectLoaderSource::memoized(|kind, hash: &str| {
+                    load(kind, hash)
+                });
                 manifest.validate(&source)?;
             }
         }

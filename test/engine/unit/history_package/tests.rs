@@ -5,6 +5,9 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
 };
 
+#[path = "admitted_projection_tests.rs"]
+mod admitted_projection_tests;
+
 #[test]
 fn retained_policy_manifests_require_bindings_and_unique_current_scopes() {
     let temp = tempfile::tempdir().unwrap();
