@@ -1,218 +1,298 @@
-name: CI
+# Verification-only workflow. Substitute every __PLACEHOLDER__ before publishing.
+# Current authoritative baseline: SHA 508ce7acd7e4e163d5ada090b36b547dedc8588c,
+# tree 93b166d944a1975fdce483e67cb01c5ae044f618. If root adopts the pending A
+# fixture artifact first, replace BOTH BASE placeholders with that reviewed
+# successor's identities. Never use the standalone ws2/fc16 catalog as BASE.
+# PRODUCT is the full A + HTTP backport candidate, not the stale standalone ws2 tree.
+# This workflow has no write permission, push, deployment, or automatic adoption.
+name: Verify frozen HTTP backport integration and propose source records
 
 on:
   push:
-  pull_request:
+    branches: [verify/http-backport-records-20261029-r83]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: '1'
+  CARGO_NET_OFFLINE: 'true'
   CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: '2'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  RUST_BACKTRACE: '1'
+  ZXS_PRODUCT_SHA: '6014c64d8f906326609bfaab9f6be2c6f1c2cbe8'
+  ZXS_PRODUCT_TREE: 'd9f75dd64d4bbed50516778f9ccf6c17447a9b6e'
+  ZXS_PRODUCT_PARENT_SHA: 'dd2625546d9e2298a5df40fd759a88459ad8d9e9'
+  ZXS_BASE_SHA: 'dd2625546d9e2298a5df40fd759a88459ad8d9e9'
+  ZXS_BASE_TREE: '96434c7d1deb00ea08f3a0c609a3a0ee79be4637'
+  ZXS_BACKPORT_RECEIPT: c75e73b0b8aab76fc3934f6c72620127795b8c95ec7bc0f52d173664e477938d
 
 jobs:
-  static:
-    name: Static workflow and tooling regressions (no Rust)
+  sourcegen-and-proof:
+    name: Generate bounded proposal and verify exact HTTP receipt and consumers
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check workflows, source governance and script regressions
-        run: bash .github/scripts/check.sh static
-
-  tests:
-    name: Tests (${{ matrix.suite }})
-    needs: static
-    runs-on: ubuntu-24.04
-    # Cold crypto runs include ten packaged/local-generated ring cases, including
-    # both release slow-test matrices; the measured run exceeded 30 minutes.
-    # Match the release verification budget without relaxing other shards.
-    timeout-minutes: ${{ matrix.suite == 'foundation-crypto' && 60 || 30 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
-    env:
-      ZXS_REQUIRE_BROWSER: '1'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+          ref: 6014c64d8f906326609bfaab9f6be2c6f1c2cbe8
+          fetch-depth: 0
+      - name: Authenticate full integration and immutable baseline before executing repository tools
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/verify/http-backport-records-20261029-r83'
+          test "$(git rev-parse HEAD)" = "$ZXS_PRODUCT_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$ZXS_PRODUCT_TREE"
+          test "$(git show -s --format=%P HEAD)" = "$ZXS_PRODUCT_PARENT_SHA"
+          test "$(git rev-parse "$ZXS_BASE_SHA^{tree}")" = "$ZXS_BASE_TREE"
+          git merge-base --is-ancestor "$ZXS_BASE_SHA" "$ZXS_PRODUCT_SHA"
+          test -z "$(git status --porcelain)"
+          mkdir -p target/ws2-sourcegen
+          python3 - <<'IDENTITY'
+          import gzip, hashlib, json, os, pathlib, subprocess, tomllib
+          root = pathlib.Path('.')
+          out = root / 'target/ws2-sourcegen'
+          base, product = os.environ['ZXS_BASE_SHA'], os.environ['ZXS_PRODUCT_SHA']
+          receipt_id = os.environ['ZXS_BACKPORT_RECEIPT']
+          receipt_path = 'compliance/proof-maintenance/' + receipt_id + '.json.gz'
+          owner = 'src/foundation/networking/http-transport'
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(message)
+          def paths(*args):
+              return [p.decode() for p in git(*args).split(b'\0') if p]
+          def sha(data):
+              return hashlib.sha256(data).hexdigest()
+          catalog_bytes = (root / 'compliance/rust-sources.json').read_bytes()
+          require(catalog_bytes == git('show', base + ':compliance/rust-sources.json'),
+                  'input must retain the FULL authoritative integration catalog, not the stale ws2 catalog')
+          catalog = json.loads(catalog_bytes)
+          manifests = catalog['manifests_sha256']
+          require(all(sha((root / p).read_bytes()) == value for p, value in manifests.items()),
+                  'input manifest bytes differ from current R81-or-successor catalog; do not overwrite its hashes')
+          changed = paths('diff', '--name-only', '-z', base, product)
+          require(not any(p == 'Cargo.toml' or p.endswith('/Cargo.toml') for p in changed),
+                  'full integration unexpectedly changed a Cargo manifest')
+          fixed = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml',
+                   '.github/scripts/check-foundation-behaviour.py',
+                   'test/ci/fixtures/foundation-behaviour-tests.json',
+                   'test/ci/test_foundation_behaviour.py',
+                   'tools/rust-sources/workspaces.json']
+          fixed += paths('ls-tree', '-r', '--name-only', '-z', base, '--', '.github/workflows')
+          protected = {p: (root / p).read_bytes() == git('show', base + ':' + p) for p in fixed}
+          require(all(protected.values()), 'normal workflows/locks/toolchain/retained inventory changed: ' +
+                  repr([p for p, same in protected.items() if not same]))
+          changed_compliance = {p for p in changed if p.startswith('compliance/')}
+          require(changed_compliance <= {'compliance/external-tests/foundation.json', receipt_path},
+                  'preexisting provenance, legal material, or immutable receipts changed: ' + repr(changed_compliance))
+          added_compliance = set(paths('diff', '--name-only', '--diff-filter=A', '-z', base, product, '--', 'compliance'))
+          require(added_compliance == {receipt_path}, 'only the reviewed c75e receipt may be added')
+          raw = (root / receipt_path).read_bytes()
+          require(sha(raw) == receipt_id, 'immutable backport compressed digest differs')
+          row = json.loads(gzip.decompress(raw))
+          require(row['schema'] == 2 and row['consumer_tests']['executed'] == {},
+                  'receipt format or historical execution evidence changed')
+          expected_before = dict(package=catalog['packages'][owner],
+                                 merges=[p for p in catalog['merges'] if p['directory'] == owner],
+                                 external=catalog['external_tests'][owner])
+          require(row['before'] == expected_before, 'receipt before does not match authoritative full-root catalog')
+          require(catalog['legacy_proof_maintenance_receipts'][-1] == row['parent'],
+                  'backport is not the immediate registered successor')
+          for entry in row['files']:
+              require(sha((root / entry['after']).read_bytes()) == entry['after_sha256'],
+                      'input backport live bytes differ: ' + entry['after'])
+          require(row['after']['package']['name'] == 'http-transport' and
+                  row['after']['package']['version'] == '1.12.0' and
+                  row['after']['package']['upstream']['name'] == 'hyper', 'upstream reset or identity drift')
+          toolchain = tomllib.loads((root / 'rust-toolchain.toml').read_text())
+          config = tomllib.loads((root / '.cargo/config.toml').read_text())
+          require(toolchain['toolchain']['channel'] == '1.99.0', 'wrong toolchain')
+          require(config['net']['offline'] is True and
+                  config['source']['crates-io']['replace-with'] == 'unavailable-registry' and
+                  config['source']['unavailable-registry']['directory'] == 'compliance/empty-registry',
+                  'offline/local-dependency policy changed')
+          identity = dict(product_sha=product, product_tree=os.environ['ZXS_PRODUCT_TREE'],
+                          product_parent=os.environ['ZXS_PRODUCT_PARENT_SHA'], authoritative_base=base,
+                          authoritative_base_tree=os.environ['ZXS_BASE_TREE'],
+                          workflow_sha=os.environ['GITHUB_SHA'], workflow_ref=os.environ['GITHUB_REF'],
+                          run_id=os.environ['GITHUB_RUN_ID'], run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                          input_catalog_sha256=sha(catalog_bytes), input_manifest_sha256=manifests,
+                          protected_inputs=protected, receipt_sha256=receipt_id,
+                          historical_receipt_executed=row['consumer_tests']['executed'],
+                          input_changed_paths=changed, automatic_integration=False, deployment=False)
+          (out / 'input-identity.json').write_text(json.dumps(identity, indent=2) + '\n')
+          print(json.dumps(identity, indent=2))
+          IDENTITY
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
+      - name: Verify pinned toolchain and install its WASM standard library
         run: |
+          set -euo pipefail
           rustup show active-toolchain
-          rustc --version
-          cargo --version
-      - name: Install WASM standard library for cross-target checks
-        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install system SQLite SDK for unbundled validation
-        if: matrix.suite == 'foundation-data'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
-      - name: Enable sandboxed Chrome for browser future runtime checks
-        if: matrix.suite == 'foundation-language'
-        run: bash .github/scripts/prepare-browser-contract.sh
-      - name: Cache verified security scanner
-        if: matrix.suite == 'security'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            target/security-tools/bin/cargo-audit
-            target/security-tools/verified-build.json
-          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
-      - name: Run locked test suite
-        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
-      - name: Verify isolated system SQLite consumer
-        if: matrix.suite == 'foundation-data'
-        run: python3 .github/scripts/check-sqlite-system.py
-      - name: Retain exact foundation behaviour test evidence
-        if: always() && matrix.suite == 'foundation-async'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: foundation-behaviour-evidence
-          path: |
-            target/foundation-behaviour/logs/
-            target/foundation-behaviour/summary.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  web-production:
-    name: Production WASM build
-    needs: static
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain and WASM target
-        run: |
-          rustup show active-toolchain
+          rustc --version | tee target/ws2-sourcegen/rustc.txt
+          cargo --version | tee target/ws2-sourcegen/cargo.txt
+          grep -q '^rustc 1\.99\.0 ' target/ws2-sourcegen/rustc.txt
+          grep -q '^cargo 1\.99\.0 ' target/ws2-sourcegen/cargo.txt
           rustup target add wasm32-unknown-unknown
-          rustc --version
-      - name: Cache locally compiled Rust build helpers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/rust-build-tools
-          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
-          restore-keys: |
-            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build production Web distribution
-        run: bash .github/scripts/check.sh web-production
-      - name: Retain production assets for checks in this run
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-dist
-          path: build/web/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain browser template contract fixture
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output/
-          if-no-files-found: error
-          retention-days: 7
-
-  browser-smoke:
-    name: Extracted release browser smoke (Chrome)
-    needs: web-production
-    runs-on: ubuntu-24.04
-    # Compile one release-profile graph for both product and browser harness.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: rustup show active-toolchain
-      - name: Fetch production Web assets from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: web-dist
-          path: build/web
-      - name: Fetch browser template contract fixture from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output
-      - name: Verify runner Chrome and ChromeDriver
+          rustfmt +1.99.0 --edition 2024 --config skip_children=true --check test/architecture/http-transport/backport.rs
+      - name: Generate current records using the actual immutable-chain adapter
         run: |
-          chrome="$(command -v google-chrome)"
-          driver="$(command -v chromedriver)"
-          "$chrome" --version
-          "$driver" --version
-          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
-          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
-          test "$chrome_major" = "$driver_major"
-          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
-          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
-      - name: Install CJK fonts for the Chinese screenshot
+          set -euo pipefail
+          python3 tools/rust-sources/manage.py refresh 2>&1 | tee target/ws2-sourcegen/manage-refresh.log
+          python3 tools/rust-sources/foundation_coverage.py --write 2>&1 | tee target/ws2-sourcegen/coverage-write.log
+          python3 tools/rust-sources/architecture.py refresh 2>&1 | tee target/ws2-sourcegen/architecture-refresh.log
+          python3 tools/rust-sources/documentation.py refresh 2>&1 | tee target/ws2-sourcegen/documentation-refresh.log
+      - name: Guard the exact generated delta and save proposal before any local verification commit
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Build and exercise extracted release packages
-        env:
-          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
-          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
+          set -euo pipefail
+          python3 - <<'PROPOSAL'
+          from copy import deepcopy
+          import base64, gzip, hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path('.')
+          out = root / 'target/ws2-sourcegen'
+          owner = 'src/foundation/networking/http-transport'
+          receipt_id = os.environ['ZXS_BACKPORT_RECEIPT']
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(message)
+          def paths(*args):
+              return [p.decode() for p in git(*args).split(b'\0') if p]
+          def sha(data):
+              return hashlib.sha256(data).hexdigest()
+          allowed = {
+              'compliance/rust-sources.json', 'docs/THIRD_PARTY_RUST_SOURCES.md',
+              'test/ci/fixtures/foundation-test-coverage.json',
+              'docs/validation/foundation-test-coverage-map.md',
+              'docs/architecture/foundation-consumers.md',
+              'docs/dependencies/code-generation.md', 'docs/dependencies/collections.md',
+              'docs/dependencies/concurrency.md', 'docs/dependencies/core-types.md',
+              'docs/dependencies/cryptography.md', 'docs/dependencies/data-storage.md',
+              'docs/dependencies/diagnostics.md', 'docs/dependencies/integrated.md',
+              'docs/dependencies/networking.md', 'docs/dependencies/platform.md',
+              'docs/dependencies/text-unicode.md', 'docs/dependencies/tooling.md',
+              'docs/dependencies/web-runtime.md',
+          }
+          changed = paths('diff', 'HEAD', '--name-only', '-z')
+          unexpected = sorted(set(changed) - allowed)
+          untracked = paths('ls-files', '--others', '--exclude-standard', '-z')
+          removed = paths('diff', 'HEAD', '--name-only', '--diff-filter=D', '-z')
+          invalid = [p for p in changed if not (root / p).is_file() or (root / p).is_symlink()]
+          modes = git('diff', 'HEAD', '--summary').decode().splitlines()
+          require(not unexpected and not untracked and not removed and not invalid and not modes,
+                  'generator changed unauthorized paths/types/modes: ' + repr((unexpected, untracked, removed, invalid, modes)))
+          require('compliance/rust-sources.json' in changed, 'source registration was not generated')
+          before = json.loads(git('show', 'HEAD:compliance/rust-sources.json'))
+          after = json.loads((root / 'compliance/rust-sources.json').read_bytes())
+          receipt_path = 'compliance/proof-maintenance/' + receipt_id + '.json.gz'
+          raw = (root / receipt_path).read_bytes()
+          require(sha(raw) == receipt_id and raw == git('show', 'HEAD:' + receipt_path), 'immutable receipt rewritten')
+          row = json.loads(gzip.decompress(raw))
+          require(row['consumer_tests']['executed'] == {}, 'historical receipt execution record rewritten')
+          expected = deepcopy(before)
+          expected['packages'][owner] = row['after']['package']
+          merged = {p['origin_directory']: p for p in row['after']['merges']}
+          expected['merges'] = [merged[p['origin_directory']] if p['directory'] == owner else p
+                                for p in before['merges']]
+          expected['external_tests'][owner] = row['after']['external']
+          mapping = 'compliance/external-tests/foundation.json'
+          expected['external_test_mappings_sha256'][mapping] = sha((root / mapping).read_bytes())
+          expected['legacy_proof_maintenance_receipts'] = before['legacy_proof_maintenance_receipts'] + [receipt_id]
+          require(after == expected,
+                  'generated catalog must be exact HTTP successor only; R81 manifest hashes, resolutions, identities and other owners cannot change')
+          require(after['manifests_sha256'] == before['manifests_sha256'], 'R81-or-successor manifest receipts overwritten')
+          require(all(sha((root / p).read_bytes()) == value for p, value in after['manifests_sha256'].items()),
+                  'generated manifests do not describe actual full integration')
+          # The 18-path rule also protects ALL receipt/NOTICE/origin/license,
+          # external mapping, source/test, Cargo and workflow bytes from generation.
+          patch = git('diff', 'HEAD', '--binary')
+          require(len(patch) <= 8 * 1024 * 1024, 'proposal exceeds 8 MiB review/transfer budget')
+          (out / 'sourcegen.patch').write_bytes(patch)
+          (out / 'allowed-outputs.json').write_text(json.dumps(sorted(allowed), indent=2) + '\n')
+          (out / 'changed-paths.json').write_text(json.dumps(changed, indent=2) + '\n')
+          manifest = dict(product_sha=os.environ['ZXS_PRODUCT_SHA'], product_tree=os.environ['ZXS_PRODUCT_TREE'],
+                          product_parent=os.environ['ZXS_PRODUCT_PARENT_SHA'],
+                          authoritative_base=os.environ['ZXS_BASE_SHA'], base_tree=os.environ['ZXS_BASE_TREE'],
+                          workflow_sha=os.environ['GITHUB_SHA'], run_id=os.environ['GITHUB_RUN_ID'],
+                          run_attempt=os.environ['GITHUB_RUN_ATTEMPT'], changed_paths=changed,
+                          patch_sha256=sha(patch), patch_bytes=len(patch),
+                          files_sha256={p: sha((root / p).read_bytes()) for p in changed},
+                          catalog_delta='exact c75e HTTP successor; all other keys/owners unchanged',
+                          immutable_receipt_sha256=receipt_id, historical_executed={},
+                          automatic_integration=False, full_product_ci=False,
+                          acceptance='Diagnostic proposal until every job step passes and the exact patch is independently reviewed.')
+          (out / 'generated-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          print(json.dumps(manifest, indent=2))
+          print('ZXS_GENERATED_PATCH_BASE64_BEGIN')
+          print(base64.b64encode(patch).decode())
+          print('ZXS_GENERATED_PATCH_BASE64_END')
+          PROPOSAL
+      - name: Run recomputed-plan/receipt proof invalidations and normal source gate
         run: |
-          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
-          cargo test --locked --offline --release -p browser-smoke
-          bash .github/scripts/release-package.sh
-          bash .github/scripts/release-acceptance.sh
-          python3 .github/scripts/check-csr-browser.py
-          bash .github/scripts/release-assemble.sh
-      - name: Retain verified installation candidate (not a published release)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installation-candidate-linux-web
-          path: release-assets/*
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain template browser result and exact input identity
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-browser
-          path: target/csr-template-check/output/*json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain real Web file manager screenshot
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-screenshot
-          path: artifacts/web-file-manager.png
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain responsive Web viewport previews
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          python3 -m unittest discover -s test/tools/rust-sources -p 'test_source_backport.py' -v 2>&1 | tee target/ws2-sourcegen/backport-negative.log
+          python3 -m unittest discover -s test/tools/rust-sources -p 'test_legacy_http_maintenance*.py' -v 2>&1 | tee target/ws2-sourcegen/maintenance-negative.log
+          bash .github/scripts/check.sh rust-sources 2>&1 | tee target/ws2-sourcegen/rust-sources.log
+          python3 tools/rust-sources/source_backport.py verify --receipt "$ZXS_BACKPORT_RECEIPT" 2>&1 | tee target/ws2-sourcegen/receipt-replay.log
+      - name: Execute the 30-test HTTP gate and real native consumers
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/check-http-transport.py 2>&1 | tee target/ws2-sourcegen/http-transport.log
+          grep -F '30 transport/routing/readiness/upgrade/state/shutdown tests' target/ws2-sourcegen/http-transport.log
+          cargo check --locked --offline -p storage-engine -p storage-server -p storage-rescue 2>&1 | tee target/ws2-sourcegen/native-check.log
+          cargo test --locked --offline -p storage-client -p storage-server 2>&1 | tee target/ws2-sourcegen/native-consumers.log
+      - name: Freeze only the reviewed output set into a runner-local verification commit
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ZXS_PRODUCT_SHA"
+          python3 - <<'FREEZE'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path('target/ws2-sourcegen')
+          manifest = json.loads((out / 'generated-manifest.json').read_bytes())
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          changed = [p.decode() for p in git('diff', 'HEAD', '--name-only', '-z').split(b'\0') if p]
+          if changed != manifest['changed_paths']:
+              raise SystemExit('validation changed the generated output set')
+          for path, sha in manifest['files_sha256'].items():
+              if hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest() != sha:
+                  raise SystemExit('validation changed generated bytes: ' + path)
+          if git('ls-files', '--others', '--exclude-standard'):
+              raise SystemExit('validation created untracked source files')
+          subprocess.run(['git', 'add', '--', *changed], check=True)
+          tree = git('write-tree').decode().strip()
+          stamp = git('show', '-s', '--format=%aI', os.environ['ZXS_PRODUCT_SHA']).decode().strip()
+          env = dict(os.environ, GIT_AUTHOR_NAME='ZXS source verification', GIT_AUTHOR_EMAIL='noreply@openai.com',
+                     GIT_COMMITTER_NAME='ZXS source verification', GIT_COMMITTER_EMAIL='noreply@openai.com',
+                     GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp)
+          candidate = subprocess.check_output(['git', 'commit-tree', tree, '-p', os.environ['ZXS_PRODUCT_SHA'],
+                                               '-m', 'Verification-only generated HTTP source records'], env=env).decode().strip()
+          subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', 'checkout', '--detach', candidate], check=True)
+          if git('status', '--porcelain'):
+              raise SystemExit('runner-local verification candidate is not clean')
+          identity = dict(candidate_sha=candidate, candidate_tree=tree,
+                          parent=os.environ['ZXS_PRODUCT_SHA'], runner_local_only=True,
+                          published=False, generated_patch_sha256=manifest['patch_sha256'])
+          (out / 'verification-candidate.json').write_text(json.dumps(identity, indent=2) + '\n')
+          print(json.dumps(identity, indent=2))
+          FREEZE
+      - name: Clean-copy replay of the committed complete proposal
+        run: |
+          set -euo pipefail
+          python3 tools/rust-sources/source_backport.py verify --receipt "$ZXS_BACKPORT_RECEIPT" --clean-copy 2>&1 | tee target/ws2-sourcegen/clean-copy.log
+          test -z "$(git status --porcelain)"
+          printf '%s\n' 'All scoped checks passed. No push, deployment, receipt rewrite, or automatic adoption performed.' > target/ws2-sourcegen/scoped-success.txt
+      - name: Retain proposal and exact input/candidate identities with all available logs
         if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: viewport-previews
-          path: artifacts/viewport-previews/
-          if-no-files-found: warn
+          name: ws2-sourcegen-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: target/ws2-sourcegen/
+          if-no-files-found: error
           retention-days: 7
-
-  smb-sdk:
-    needs: static
-    uses: ./.github/workflows/smb-sdk.yml
