@@ -8,7 +8,7 @@ pub(crate) fn append(
     object: &str,
 ) -> Result<Receipt> {
     private_dir(log_path(d).parent().expect("journal parent"))?;
-    let mut writer = OpenJournal::scan(d)?.into_writer()?;
+    let mut writer = OpenJournal::scan(d)?.into_writable()?.writer;
     writer.repair_torn_tail()?;
     writer.append(d, kind, sequence, candidate, object)
 }

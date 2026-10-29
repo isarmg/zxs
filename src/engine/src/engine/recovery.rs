@@ -276,9 +276,9 @@ impl Engine {
             let opened = opened_journals
                 .remove(&disk.disk_id)
                 .expect("scanned online journal");
-            scanned_journals.insert(disk.disk_id.clone(), opened.scan.records.clone());
-            self.journals
-                .insert(disk.disk_id.clone(), opened.into_writer()?);
+            let WritableJournal { writer, history } = opened.into_writable()?;
+            scanned_journals.insert(disk.disk_id.clone(), history);
+            self.journals.insert(disk.disk_id.clone(), writer);
         }
         // Recovery holds the pool writer locks. Immutable page replicas repaired
         // in this invocation need not be decoded and compared again for each

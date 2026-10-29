@@ -123,6 +123,10 @@ pub(crate) struct OpenJournal {
     #[cfg(feature = "fault-injection")]
     opening_fault: Option<OpeningFault>,
 }
+pub(crate) struct WritableJournal {
+    pub writer: JournalWriter,
+    pub history: Vec<(Record, String)>,
+}
 impl OpenJournal {
     #[cfg(test)]
     pub(crate) fn scan(d: &DiskConfig) -> Result<Self> {
@@ -147,7 +151,7 @@ impl OpenJournal {
             opening_fault: None,
         })
     }
-    pub(crate) fn into_writer(self) -> Result<JournalWriter> {
+    pub(crate) fn into_writable(self) -> Result<WritableJournal> {
         let file = match self.file {
             Some(file) => {
                 // A surviving leaf may come from a failed creation before its directory fence.
@@ -161,12 +165,14 @@ impl OpenJournal {
             }
             None => create_synced_journal(&self.directory)?,
         };
-        let mut records = self.scan.records;
-        let start = records.last().map_or(0, |(last, _)| {
-            records.partition_point(|(record, _)| record.sequence < last.sequence)
+        let history = self.scan.records;
+        let start = history.last().map_or(0, |(last, _)| {
+            history.partition_point(|(record, _)| record.sequence < last.sequence)
         });
-        let records = records.split_off(start);
-        Ok(JournalWriter {
+        // Recovery retains the original scan for checkpoint creation; only the
+        // current decision slot also belongs to the live writer.
+        let records = history[start..].to_vec();
+        let writer = JournalWriter {
             file,
             records,
             state: if self.scan.torn_tail {
@@ -177,7 +183,8 @@ impl OpenJournal {
             last_frame_bytes: 0,
             #[cfg(feature = "fault-injection")]
             fault: None,
-        })
+        };
+        Ok(WritableJournal { writer, history })
     }
 }
 

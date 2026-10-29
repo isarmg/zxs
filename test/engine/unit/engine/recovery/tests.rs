@@ -1342,8 +1342,10 @@ fn replay_receipts_survive_multiple_tail_slot_advances_for_checkpoint() {
         .unwrap();
     drop(writer);
     let opened = OpenJournal::scan(&disk).unwrap();
-    let mut replayed = opened.scan.records.clone();
-    let mut writer = opened.into_writer().unwrap();
+    let WritableJournal {
+        mut writer,
+        history: mut replayed,
+    } = opened.into_writable().unwrap();
     for sequence in 1..=4 {
         let candidate = if sequence == 1 {
             "a".repeat(64)

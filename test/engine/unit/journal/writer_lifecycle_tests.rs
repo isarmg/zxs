@@ -52,6 +52,50 @@ fn held_writer_preserves_golden_bytes_and_idempotent_current_receipts() {
 }
 
 #[test]
+fn writable_handoff_moves_full_scan_and_copies_only_current_slot() {
+    let temp = tempfile::tempdir().unwrap();
+    let disk = disk(&temp);
+    let mut writer = JournalWriter::create(&disk).unwrap();
+    for sequence in 1..=40 {
+        put(&mut writer, &disk, RecordType::Prepare, sequence);
+        put(&mut writer, &disk, RecordType::Accept, sequence);
+    }
+    drop(writer);
+    let bytes = std::fs::read(log_path(&disk)).unwrap();
+    let opened = OpenJournal::scan(&disk).unwrap();
+    let allocation = opened.scan.records.as_ptr();
+    let expected = canonical_json(&opened.scan.records).unwrap();
+    let WritableJournal {
+        mut writer,
+        history,
+    } = opened.into_writable().unwrap();
+    assert_eq!(history.as_ptr(), allocation);
+    assert_eq!(canonical_json(&history).unwrap(), expected);
+    assert_eq!(history.len(), 80);
+    assert_eq!(writer.records().len(), 2);
+    assert_eq!(
+        canonical_json(writer.records()).unwrap(),
+        canonical_json(&history[78..]).unwrap()
+    );
+    assert_eq!(
+        put(&mut writer, &disk, RecordType::Accept, 40).frame_hash,
+        history[79].1
+    );
+    assert_eq!(std::fs::read(log_path(&disk)).unwrap(), bytes);
+    assert_eq!(
+        put(&mut writer, &disk, RecordType::Prepare, 41)
+            .record
+            .previous_frame_hash,
+        history[79].1
+    );
+    assert_eq!(writer.records().len(), 1);
+    assert_eq!(history.len(), 80);
+    let scanned = scan(&disk).unwrap();
+    assert_eq!(scanned.records.len(), 81);
+    assert_eq!(canonical_json(&scanned.records[..80]).unwrap(), expected);
+}
+
+#[test]
 fn scanned_journal_keeps_its_parent_for_creation_and_sync_after_root_rebinding() {
     for existing in [false, true] {
         let temp = tempfile::tempdir().unwrap();
@@ -69,7 +113,7 @@ fn scanned_journal_keeps_its_parent_for_creation_and_sync_after_root_rebinding()
         put(&mut replacement, &disk, RecordType::Prepare, 99);
         let replacement_bytes = std::fs::read(log_path(&disk)).unwrap();
 
-        let mut original = opened.into_writer().unwrap();
+        let mut original = opened.into_writable().unwrap().writer;
         put(&mut original, &disk, RecordType::Accept, 1);
         assert_eq!(std::fs::read(log_path(&disk)).unwrap(), replacement_bytes);
         let records = scan_at(&held, &disk).unwrap().records;
@@ -135,7 +179,7 @@ fn failed_write_or_sync_requires_explicit_recovery_before_retry() {
         );
         // Scan alone is read-only, including a damaged suffix.
         assert_eq!(std::fs::read(log_path(&disk)).unwrap(), bytes);
-        let mut writer = opened.into_writer().unwrap();
+        let mut writer = opened.into_writable().unwrap().writer;
         writer.repair_torn_tail().unwrap();
         let receipt = put(&mut writer, &disk, RecordType::Accept, 1);
         assert!(
@@ -434,7 +478,7 @@ fn leftover_created_leaf_requires_both_opening_durability_fences() {
 
         let mut opened = OpenJournal::scan(&disk).unwrap();
         opened.opening_fault = Some(OpeningFault::DirectorySync);
-        let error = opened.into_writer().err().unwrap();
+        let error = opened.into_writable().err().unwrap();
         assert!(error.source().is_some());
         assert!(scan(&disk).unwrap().records.is_empty());
 
