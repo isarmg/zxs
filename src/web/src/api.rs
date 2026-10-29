@@ -331,6 +331,13 @@ async fn read_body_inner(
 }
 
 async fn decode(fetched: Fetched) -> Result<Value, Error> {
+    decode_with(fetched, response::decode).await
+}
+
+async fn decode_with<T>(
+    fetched: Fetched,
+    decode: impl FnOnce(u16, &[u8]) -> Result<T, Error>,
+) -> Result<T, Error> {
     let status = fetched.response.status();
     if status == 401 && fetched.revoke_on_unauthorized {
         CREDENTIALS.with(|saved| saved.borrow_mut().revoke(fetched.credential_generation));
@@ -372,7 +379,7 @@ async fn decode(fetched: Fetched) -> Result<Value, Error> {
             error.with_status(status)
         }
     })?;
-    response::decode(status, &bytes)
+    decode(status, &bytes)
 }
 
 pub async fn request(method: &str, path: &str, body: Option<Value>) -> Result<Value, Error> {
@@ -384,6 +391,15 @@ pub(crate) async fn cancellable_get(
     cancellation: ReadCancellation,
 ) -> Result<Value, Error> {
     cancellable_request("GET", path, None, cancellation).await
+}
+
+pub(crate) async fn cancellable_get_with<T>(
+    path: &str,
+    cancellation: ReadCancellation,
+    decode: impl FnOnce(u16, &[u8]) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let fetched = fetch_authorized("GET", path, None, None, Some(cancellation)).await?;
+    decode_with(fetched, decode).await
 }
 
 pub(crate) async fn cancellable_request(

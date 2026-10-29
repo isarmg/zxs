@@ -2012,7 +2012,7 @@ async fn authentication_applies_to_direct_content_graph_and_write_paths() {
                 repo["main_branch_id"].as_str().unwrap()
             ),
             format!(
-                "/api/history-trees/{}/graph",
+                "/api/history-trees/{}/graph?collection=commits",
                 repo["history_tree_id"].as_str().unwrap()
             ),
             format!("/api/versions/{version}/content"),

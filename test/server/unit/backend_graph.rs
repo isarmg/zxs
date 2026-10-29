@@ -1,114 +1,244 @@
 use super::*;
-use storage_contract::{BranchKind, BranchState, HistoryState, OperationId};
+use storage_contract::history_graph::{GraphItems, HistorySummary};
+
+fn query(fields: &[(&str, &str)]) -> BTreeMap<String, String> {
+    fields
+        .iter()
+        .map(|(key, value)| ((*key).into(), (*value).into()))
+        .collect()
+}
+#[test]
+fn graph_queries_reject_unknown_fields_and_wrong_cursor_scope() {
+    assert!(ReadHistoryGraph::page("history".into(), BTreeMap::new()).is_err());
+    assert!(
+        ReadHistoryGraph::page(
+            "history".into(),
+            query(&[("collection", "commits"), ("all", "true")])
+        )
+        .is_err()
+    );
+    for limit in ["0", "129", "18446744073709551616"] {
+        assert!(
+            ReadHistoryGraph::page(
+                "history".into(),
+                query(&[("collection", "commits"), ("limit", limit)])
+            )
+            .is_err()
+        );
+    }
+    let token = cursor(
+        "history",
+        &"a".repeat(64),
+        GraphCollection::Commits,
+        PageLimit::new(50).unwrap(),
+        GraphKey::Commit {
+            sequence: 7,
+            commit_id: "commit".into(),
+        },
+    )
+    .unwrap();
+    let request = ReadHistoryGraph::page(
+        "history".into(),
+        query(&[("collection", "commits"), ("cursor", &token)]),
+    )
+    .unwrap();
+    assert_eq!(request.root.unwrap().as_str(), "a".repeat(64));
+    assert!(matches!(
+        request.selection,
+        GraphRead::Page {
+            after: Some(GraphKey::Commit { sequence: 7, .. }),
+            ..
+        }
+    ));
+    for (history, collection, limit) in [
+        ("other", "commits", "50"),
+        ("history", "branches", "50"),
+        ("history", "commits", "49"),
+    ] {
+        assert!(
+            ReadHistoryGraph::page(
+                history.into(),
+                query(&[
+                    ("collection", collection),
+                    ("limit", limit),
+                    ("cursor", &token)
+                ])
+            )
+            .is_err()
+        );
+    }
+    for token in ["xx".to_owned(), "a".repeat(32_770)] {
+        assert!(
+            ReadHistoryGraph::page(
+                "history".into(),
+                query(&[("collection", "commits"), ("cursor", &token)])
+            )
+            .is_err()
+        );
+    }
+}
 
 #[test]
-fn graph_wire_retains_raw_branch_and_boundary_fields_and_canonical_bytes() {
-    for populated in [false, true] {
-        let operation: OperationId = "op_00000000000000000000000000000000".parse().unwrap();
-        let commit = Arc::new(Commit {
-            commit_id: "root".into(),
-            history_tree_id: "history".into(),
-            kind: "open-extension".into(),
-            parent_commit_ids: vec![],
-            tree_id: "tree".into(),
-            sequence: u64::MAX,
-            operation_id: operation,
-            author: "owner".into(),
-            message: "root".into(),
-            namespace: crate::fixture_commit_namespace(0),
-            namespace_deletions: None,
-            pending_file_versions: BTreeMap::new(),
-            provenance: None,
-        });
-        let history = HistoryTree {
+fn graph_cursor_key_and_root_are_boundary_checked() {
+    for (root, key) in [
+        (
+            "a".repeat(63),
+            GraphKey::Commit {
+                sequence: 1,
+                commit_id: "commit".into(),
+            },
+        ),
+        (
+            "a".repeat(64),
+            GraphKey::Id {
+                id: "branch".into(),
+            },
+        ),
+        (
+            "a".repeat(64),
+            GraphKey::Commit {
+                sequence: 1,
+                commit_id: String::new(),
+            },
+        ),
+    ] {
+        let token = cursor(
+            "history",
+            &root,
+            GraphCollection::Commits,
+            PageLimit::new(50).unwrap(),
+            key,
+        )
+        .unwrap();
+        assert!(
+            ReadHistoryGraph::page(
+                "history".into(),
+                query(&[("collection", "commits"), ("cursor", &token)])
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn graph_auxiliary_requests_require_root_and_closed_field_names() {
+    let root = "a".repeat(64);
+    assert!(
+        ReadHistoryGraph::history_field("history".into(), "provenance".into(), BTreeMap::new())
+            .is_err()
+    );
+    assert!(
+        ReadHistoryGraph::commit_field(
+            "history".into(),
+            "commit".into(),
+            "namespace".into(),
+            query(&[("history_root", &root)])
+        )
+        .is_err()
+    );
+    assert!(
+        ReadHistoryGraph::commit_field(
+            "history".into(),
+            "commit".into(),
+            "message".into(),
+            query(&[("history_root", &root), ("limit", "3")])
+        )
+        .is_err()
+    );
+    let request = ReadHistoryGraph::commit_field(
+        "history".into(),
+        "commit".into(),
+        "message".into(),
+        query(&[("history_root", &root), ("offset", "8")]),
+    )
+    .unwrap();
+    assert!(matches!(
+        request.selection,
+        GraphRead::Text {
+            offset: 8,
+            target: TextTarget::Commit {
+                field: CommitField::Message,
+                ..
+            },
+            ..
+        }
+    ));
+    assert!(
+        ReadHistoryGraph::commit_pending(
+            "history".into(),
+            "commit".into(),
+            query(&[("history_root", &root), ("after", "")])
+        )
+        .is_err()
+    );
+    assert!(
+        ReadHistoryGraph::deletions(
+            "history".into(),
+            "commit".into(),
+            query(&[("history_root", &root), ("offset", "-1")])
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn graph_response_encodes_shared_wire_and_retains_explicit_empty_collection() {
+    let response = HistoryGraphResponse::Graph(GraphPage {
+        history: HistorySummary {
             history_tree_id: "history".into(),
             repository_id: "repository".into(),
             root_commit_id: "root".into(),
-            main_branch_id: populated.then(|| "branch".into()),
+            main_branch_id: None,
             generation: u64::MAX,
-            state: HistoryState::Archived,
-            provenance: populated.then(|| "origin".into()),
-        };
-        let branch = Branch {
-            branch_id: "branch".into(),
+            state: storage_contract::HistoryState::Archived,
+            provenance: None,
+        },
+        history_root: "a".repeat(64),
+        items: GraphItems::Commits(Vec::new()),
+        next_cursor: None,
+    });
+    let encoded = response.encode().unwrap();
+    let value: json_codec::Value = json_codec::from_slice(encoded.body()).unwrap();
+    assert_eq!(value["history"]["generation"], u64::MAX.to_string());
+    assert_eq!(value["items"]["collection"], "commits");
+    assert_eq!(value["items"]["records"], json_codec::json!([]));
+    assert!(value["next_cursor"].is_null());
+}
+
+#[test]
+fn graph_auxiliary_wire_preserves_absent_and_empty_text() {
+    for text in [None, Some(String::new())] {
+        let response = HistoryGraphResponse::Text(TextPage {
             history_tree_id: "history".into(),
-            name: "branch".into(),
-            head_commit_id: "root".into(),
-            fork_commit_id: "root".into(),
-            branch_kind: BranchKind::File,
-            file_id: populated.then(|| "file".into()),
-            file_node_id: populated.then(|| "node".into()),
-            pending_file_versions: if populated {
-                BTreeMap::from([("file".into(), "source".into())])
-            } else {
-                BTreeMap::new()
+            history_root: "a".repeat(64),
+            target: TextTarget::History {
+                field: HistoryField::Provenance,
             },
-            generation: u64::MAX,
-            state: BranchState::Migrated,
-        };
-        let link = MergeLink {
-            merge_link_id: "link".into(),
-            history_tree_id: "history".into(),
-            source_branch_id: "source".into(),
-            source_commit_id: "source-commit".into(),
-            target_branch_id: "branch".into(),
-            target_commit_id: "root".into(),
-            author: "owner".into(),
-            operation_id: operation,
-        };
-        let boundary = HistoryBoundary {
-            boundary_id: "boundary".into(),
-            history_tree_id: "history".into(),
-            local_commit_id: "root".into(),
-            local_branch_id: populated.then(|| "branch".into()),
-            relation: "external-provenance".into(),
-            external_history_tree_id: "external-history".into(),
-            external_commit_id: "external-commit".into(),
-            source_merge_link_id: populated.then(|| "link".into()),
-        };
-        let expected = storage_contract::HistoryGraph {
-            history: history.clone(),
-            commits: vec![commit.as_ref().clone()],
-            branches: vec![branch.clone()],
-            merge_links: vec![link.clone()],
-            boundary_marks: vec![boundary.clone()],
-        };
-        let response = HistoryGraphResponse::from(HistoryGraphSnapshot {
-            history,
-            commits: vec![commit],
-            branches: vec![branch],
-            merge_links: vec![link],
-            boundary_marks: vec![boundary],
+            total_bytes: 0,
+            offset: 0,
+            text: text.clone(),
+            next_offset: None,
         });
-        assert_eq!(
-            storage_contract::canonical_json(&response).unwrap(),
-            storage_contract::canonical_json(&expected).unwrap()
-        );
-        let value = json_codec::to_value(response).unwrap();
-        assert_eq!(value.as_object().unwrap().len(), 5);
-        assert_eq!(value["history"]["generation"], u64::MAX.to_string());
-        assert_eq!(value["branches"][0]["generation"], u64::MAX.to_string());
-        assert_eq!(value["commits"][0]["kind"], "open-extension");
-        assert_eq!(
-            value["branches"][0].get("pending_file_versions").is_some(),
-            populated
-        );
-        for field in [
-            "materialized",
-            "inherited",
-            "read_only",
-            "alias_of",
-            "content_state",
-        ] {
-            assert!(value["branches"][0].get(field).is_none());
-        }
-        assert_eq!(
-            value["boundary_marks"][0]["external_history_tree_id"],
-            "external-history"
-        );
-        assert_eq!(
-            value["boundary_marks"][0]["local_branch_id"].is_null(),
-            !populated
-        );
+        let value: TextPage = json_codec::from_slice(response.encode().unwrap().body()).unwrap();
+        assert_eq!(value.text, text);
+        assert_eq!(value.total_bytes, 0);
     }
+}
+
+#[test]
+fn merge_link_mutation_wire_remains_full_record() {
+    let link = storage_contract::MergeLink {
+        merge_link_id: "link".into(),
+        history_tree_id: "history".into(),
+        source_branch_id: "source".into(),
+        source_commit_id: "source-commit".into(),
+        target_branch_id: "target".into(),
+        target_commit_id: "target-commit".into(),
+        author: "owner".into(),
+        operation_id: storage_contract::OperationId::generate(),
+    };
+    assert_eq!(
+        json_codec::to_value(MergeLinkRecord::from(link.clone())).unwrap(),
+        json_codec::to_value(link).unwrap()
+    );
 }

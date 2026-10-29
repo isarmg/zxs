@@ -14,6 +14,7 @@ pub(crate) mod file_publication;
 mod file_requests;
 mod file_tags;
 mod history;
+pub mod history_graph_pages;
 mod namespace;
 mod repository;
 mod workspace;

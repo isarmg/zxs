@@ -919,8 +919,9 @@ impl Backend for PanickingBackend {
     fn history_graph(
         &self,
         _identity: &crate::auth::Identity,
-        _id: &str,
-    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        _request: crate::ReadHistoryGraph,
+        _control: &crate::GraphReadControl,
+    ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         panic!("private history graph panic detail")
     }
     fn commit_snapshot(
@@ -1258,7 +1259,11 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             Some(json!({"name":"Side","operation_id":"op_00000000000000000000000000000000"})),
         ),
         ("GET", "/api/commits/commit", None),
-        ("GET", "/api/history-trees/history/graph", None),
+        (
+            "GET",
+            "/api/history-trees/history/graph?collection=commits",
+            None,
+        ),
         ("GET", "/api/events?after=17", None),
         ("GET", "/api/file-manager/history?ignored=true", None),
         ("GET", "/api/backup-topologies/default", None),

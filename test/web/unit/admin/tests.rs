@@ -55,6 +55,7 @@ fn edited_plan_inputs_require_a_new_preview_before_commit_or_cancel() {
             fields: [(key.into(), original.into())].into_iter().collect(),
             plan: json_codec::json!({"plan_id":"plan-a", "digest":"reviewed", "state":"ready"}),
             result: "previous plan preview".into(),
+            graph_history: Some("history-old".into()),
             acknowledged: true,
             ..Default::default()
         };
@@ -63,6 +64,7 @@ fn edited_plan_inputs_require_a_new_preview_before_commit_or_cancel() {
         assert!(model.plan.is_null(), "{kind:?} retained its previous plan");
         assert!(!model.acknowledged);
         assert!(model.result.is_empty());
+        assert!(model.graph_history.is_none());
         // Even a queued acknowledgment cannot make the previous target usable.
         model.acknowledged = true;
         for commit in [true, false] {

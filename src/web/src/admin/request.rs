@@ -36,7 +36,7 @@ pub(super) enum QueryKind {
     Plan,
 }
 
-pub(super) const QUERIES: [(&str, QueryKind); 14] = [
+pub(super) const QUERIES: [(&str, QueryKind); 13] = [
     (
         "Repositories",
         QueryKind::Inspect {
@@ -101,14 +101,6 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
             prefix: "/api/files",
             key: Some("id"),
             suffix: "/history",
-        },
-    ),
-    (
-        "History graph",
-        QueryKind::Inspect {
-            prefix: "/api/history-trees",
-            key: Some("id"),
-            suffix: "/graph",
         },
     ),
     (

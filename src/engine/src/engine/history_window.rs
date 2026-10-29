@@ -155,7 +155,7 @@ impl Engine {
         history_id: &str,
     ) -> Result<HistoryRoot> {
         let members = self.members();
-        let (value, _) = crate::metadata_map::read_proof(reference, history_id, |kind, hash| {
+        let value = crate::metadata_map::lookup(reference, history_id, |kind, hash| {
             crate::publication_evidence::verified_graph_object_observed_at(
                 &self.disk_resources,
                 &members,

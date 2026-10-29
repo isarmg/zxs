@@ -131,8 +131,9 @@ pub use backend_activity::{
 mod backend_events;
 pub use backend_events::EventPage;
 mod backend_graph;
-pub use backend_graph::HistoryGraphSnapshot;
+pub use backend_graph::{GraphRead, GraphReadControl, HistoryGraphResponse, ReadHistoryGraph};
 mod backend_branch;
+mod http_graph;
 pub use backend_branch::{BranchSnapshot, ContentDispositionSnapshot, FileBranchSnapshot};
 mod backend_directory_selection;
 pub use backend_directory_selection::{
@@ -911,8 +912,9 @@ pub trait Backend: Send + Sync {
     fn history_graph(
         &self,
         identity: &Identity,
-        history: &str,
-    ) -> Result<HistoryGraphSnapshot, ApiError>;
+        request: ReadHistoryGraph,
+        control: &GraphReadControl,
+    ) -> Result<HistoryGraphResponse, ApiError>;
     fn commit_snapshot(
         &self,
         identity: &Identity,
@@ -1640,9 +1642,11 @@ impl Backend for AuthorizedBackend {
     fn history_graph(
         &self,
         identity: &crate::auth::Identity,
-        id: &str,
-    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
-        self.backend.history_graph(&self.current(identity)?, id)
+        request: crate::ReadHistoryGraph,
+        control: &crate::GraphReadControl,
+    ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
+        self.backend
+            .history_graph(&self.current(identity)?, request, control)
     }
     fn commit_snapshot(
         &self,
@@ -2032,6 +2036,7 @@ struct AppState {
     password_slots: Arc<tokio::sync::Semaphore>,
     authorization_slots: Arc<tokio::sync::Semaphore>,
     backend_slots: Arc<tokio::sync::Semaphore>,
+    graph_slots: Arc<tokio::sync::Semaphore>,
     management_slots: Arc<tokio::sync::Semaphore>,
     upload_slots: Arc<transfer_limits::Admission>,
     read_slots: Arc<transfer_limits::Admission>,
@@ -2158,6 +2163,7 @@ fn router_shared(
         password_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         authorization_slots: Arc::new(tokio::sync::Semaphore::new(8)),
         backend_slots: Arc::new(tokio::sync::Semaphore::new(HTTP_BACKEND_SLOTS)),
+        graph_slots: Arc::new(tokio::sync::Semaphore::new(2)),
         management_slots: Arc::new(tokio::sync::Semaphore::new(2)),
         upload_slots: transfer_limits::Admission::new(&config.http_transfer_limits),
         read_slots: transfer_limits::Admission::new(&config.http_transfer_limits),
@@ -2255,7 +2261,35 @@ fn router_shared(
             get(http_file_history::version_sources),
         )
         .route("/api/commits/{commit}", get(commit_info))
-        .route("/api/history-trees/{history}/graph", get(graph))
+        .route("/api/history-trees/{history}/graph", get(http_graph::graph))
+        .route(
+            "/api/history-trees/{history}/graph/history/fields/{field}",
+            get(http_graph::history_field),
+        )
+        .route(
+            "/api/history-trees/{history}/graph/commits/{id}/fields/{field}",
+            get(http_graph::commit_field),
+        )
+        .route(
+            "/api/history-trees/{history}/graph/merge-links/{id}/fields/{field}",
+            get(http_graph::merge_link_field),
+        )
+        .route(
+            "/api/history-trees/{history}/graph/boundaries/{id}/fields/{field}",
+            get(http_graph::boundary_field),
+        )
+        .route(
+            "/api/history-trees/{history}/graph/commits/{id}/pending",
+            get(http_graph::commit_pending),
+        )
+        .route(
+            "/api/history-trees/{history}/graph/branches/{id}/pending",
+            get(http_graph::branch_pending),
+        )
+        .route(
+            "/api/history-trees/{history}/graph/commits/{id}/deletions",
+            get(http_graph::deletions),
+        )
         .route(
             "/api/history-trees/{history}/merge-links",
             post(http_merge_link::create),
@@ -2729,26 +2763,6 @@ async fn commit_info(
             backend
                 .commit_snapshot(&identity, &commit)
                 .map(commit_wire::CommitResponse::from)
-        })
-        .await
-        .map(Json)
-}
-async fn graph(
-    State(state): State<AppState>,
-    http_routing::Extension(identity): http_routing::Extension<Identity>,
-    ApiPath(history): ApiPath<String>,
-    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<backend_graph::HistoryGraphResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
-            backend
-                .history_graph(&identity, &history)
-                .map(backend_graph::HistoryGraphResponse::from)
         })
         .await
         .map(Json)

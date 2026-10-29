@@ -597,10 +597,11 @@ impl Backend for PausedBackend {
     fn history_graph(
         &self,
         identity: &crate::auth::Identity,
-        id: &str,
-    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        request: crate::ReadHistoryGraph,
+        control: &crate::GraphReadControl,
+    ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         self.enter();
-        self.inner.history_graph(identity, id)
+        self.inner.history_graph(identity, request, control)
     }
     fn commit_snapshot(
         &self,
@@ -1657,7 +1658,17 @@ impl Request {
             Self::ActivityHistorySnapshot => backend.activity_history(identity).map(|_| ()),
             Self::EventPage => backend.event_page(identity, u64::MAX).map(|_| ()),
             Self::HistoryGraph => backend
-                .history_graph(identity, &fixture.repo.history_tree_id)
+                .history_graph(
+                    identity,
+                    crate::ReadHistoryGraph::page(
+                        fixture.repo.history_tree_id.clone(),
+                        std::collections::BTreeMap::from([("collection".into(), "commits".into())]),
+                    )
+                    .unwrap(),
+                    &crate::GraphReadControl::until(
+                        std::time::Instant::now() + std::time::Duration::from_secs(60),
+                    ),
+                )
                 .map(|_| ()),
             Self::CommitSnapshot => backend
                 .commit_snapshot(identity, &fixture.workspace.base_head)

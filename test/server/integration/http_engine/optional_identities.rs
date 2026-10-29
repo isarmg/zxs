@@ -874,6 +874,26 @@ async fn typed_resolve_keeps_complete_version_wire_and_static_error_priority() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+fn inline_commit_graph_record(raw: &Value) -> Value {
+    let mut expected = raw.clone();
+    for field in ["kind", "tree_id", "author", "message"] {
+        let text = raw[field].as_str().unwrap();
+        assert!(text.len() <= storage_contract::client_protocol::MAX_INLINE_TEXT_BYTES);
+        expected[field] = json!({"kind":"inline","text":text});
+    }
+    if let Some(text) = raw["provenance"].as_str() {
+        assert!(text.len() <= storage_contract::client_protocol::MAX_INLINE_TEXT_BYTES);
+        expected["provenance"] = json!({"kind":"inline","text":text});
+    } else {
+        assert!(raw["provenance"].is_null());
+    }
+    assert!(raw.get("pending_file_versions").is_none());
+    assert!(raw.get("namespace_deletions").is_none());
+    expected["pending_file_versions"] = json!("0");
+    expected["namespace_deletions"] = Value::Null;
+    expected
+}
+
 #[tokio::test]
 async fn typed_commit_snapshot_matches_graph_records_and_keeps_missing_errors() {
     let (_root, app, _, old_commit, new_commit) = fixture();
@@ -886,12 +906,12 @@ async fn typed_commit_snapshot_matches_graph_records_and_keeps_missing_errors() 
         &app,
         &token,
         "GET",
-        &format!("/api/history-trees/{history}/graph"),
+        &format!("/api/history-trees/{history}/graph?collection=commits"),
         None,
     )
     .await;
     for id in [old_commit, new_commit] {
-        let expected = graph["commits"]
+        let expected = graph["items"]["records"]
             .as_array()
             .unwrap()
             .iter()
@@ -905,9 +925,10 @@ async fn typed_commit_snapshot_matches_graph_records_and_keeps_missing_errors() 
             None,
         )
         .await;
-        assert_eq!(actual, *expected);
+        let projected = inline_commit_graph_record(&actual);
+        assert_eq!(projected, *expected);
         assert_eq!(
-            storage_contract::canonical_json_value(&actual).unwrap(),
+            storage_contract::canonical_json_value(&projected).unwrap(),
             storage_contract::canonical_json_value(expected).unwrap()
         );
         assert!(actual["kind"].is_string());
@@ -920,7 +941,7 @@ async fn typed_commit_snapshot_matches_graph_records_and_keeps_missing_errors() 
 }
 
 #[tokio::test]
-async fn typed_history_graph_keeps_scope_sequence_order_and_raw_branch_shape() {
+async fn typed_history_graph_keeps_scope_sequence_order_and_bounded_branch_shape() {
     let (_root, app, branch, old_commit, _) = fixture();
     let token = login(&app, "admin", "integration-test-password").await;
     let repositories = success(&app, &token, "GET", "/api/repositories", None).await;
@@ -938,18 +959,42 @@ async fn typed_history_graph_keeps_scope_sequence_order_and_raw_branch_shape() {
     )
     .await;
     let other=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Other graph","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let rejected = send(
+        &app,
+        Some(&token),
+        "GET",
+        &format!(
+            "/api/history-trees/{history}/graph?collection=commits&history_tree_id=missing&unused=yes"
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(rejected.0, StatusCode::BAD_REQUEST);
     let graph = success(
         &app,
         &token,
         "GET",
-        &format!("/api/history-trees/{history}/graph?history_tree_id=missing&unused=yes"),
+        &format!("/api/history-trees/{history}/graph?collection=commits"),
         None,
     )
     .await;
-    assert_eq!(graph.as_object().unwrap().len(), 5);
+    assert_eq!(graph.as_object().unwrap().len(), 4);
     assert_eq!(graph["history"]["history_tree_id"], history);
-    assert_eq!(graph["boundary_marks"], json!([]));
-    let commits = graph["commits"].as_array().unwrap();
+    assert_eq!(graph["items"]["collection"], "commits");
+    assert!(graph["next_cursor"].is_null());
+    let boundaries = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/history-trees/{history}/graph?collection=boundary_marks"),
+        None,
+    )
+    .await;
+    assert_eq!(boundaries["history_root"], graph["history_root"]);
+    assert_eq!(boundaries["items"]["collection"], "boundary_marks");
+    assert_eq!(boundaries["items"]["records"], json!([]));
+    assert!(boundaries["next_cursor"].is_null());
+    let commits = graph["items"]["records"].as_array().unwrap();
     let sequences = commits
         .iter()
         .map(|commit| {
@@ -962,10 +1007,23 @@ async fn typed_history_graph_keeps_scope_sequence_order_and_raw_branch_shape() {
         let id = commit["commit_id"].as_str().unwrap();
         assert_eq!(
             *commit,
-            success(&app, &token, "GET", &format!("/api/commits/{id}"), None).await
+            inline_commit_graph_record(
+                &success(&app, &token, "GET", &format!("/api/commits/{id}"), None).await
+            )
         );
     }
-    let branches = graph["branches"].as_array().unwrap();
+    let branch_page = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/history-trees/{history}/graph?collection=branches"),
+        None,
+    )
+    .await;
+    assert_eq!(branch_page["history_root"], graph["history_root"]);
+    assert_eq!(branch_page["items"]["collection"], "branches");
+    assert!(branch_page["next_cursor"].is_null());
+    let branches = branch_page["items"]["records"].as_array().unwrap();
     assert!(branches.iter().any(|item| item["branch_id"] == branch));
     assert!(
         branches
@@ -987,7 +1045,7 @@ async fn typed_history_graph_keeps_scope_sequence_order_and_raw_branch_shape() {
         &app,
         Some(&token),
         "GET",
-        "/api/history-trees/missing/graph",
+        "/api/history-trees/missing/graph?collection=commits",
         None,
     )
     .await;
@@ -1639,7 +1697,7 @@ async fn typed_default_directory_http_preserves_empty_and_initialized_views() {
         &app,
         &token,
         "GET",
-        &format!("/api/history-trees/{history}/graph"),
+        &format!("/api/history-trees/{history}/graph?collection=commits"),
         None,
     )
     .await;
@@ -1905,7 +1963,7 @@ async fn typed_directory_rename_preserves_public_receipt_and_name_error_priority
         &app,
         &token,
         "GET",
-        &format!("/api/history-trees/{history}/graph"),
+        &format!("/api/history-trees/{history}/graph?collection=commits"),
         None,
     )
     .await;
@@ -2022,7 +2080,7 @@ async fn typed_archive_http_keeps_raw_receipt_and_rejects_active_workspace() {
         &app,
         &token,
         "GET",
-        &format!("/api/history-trees/{history}/graph"),
+        &format!("/api/history-trees/{history}/graph?collection=commits"),
         None,
     )
     .await;
@@ -2144,7 +2202,7 @@ async fn typed_branch_creation_keeps_receipt_snapshot_and_boundary_errors() {
         &token,
         "GET",
         &format!(
-            "/api/history-trees/{}/graph",
+            "/api/history-trees/{}/graph?collection=commits",
             repo["history_tree_id"].as_str().unwrap()
         ),
         None,
@@ -2278,7 +2336,7 @@ async fn typed_merge_link_http_reuses_graph_wire_and_permanent_receipt() {
     let token = login(&app, "admin", "integration-test-password").await;
     let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Links","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}))).await;
     let history = repo["history_tree_id"].as_str().unwrap();
-    let graph_uri = format!("/api/history-trees/{history}/graph");
+    let graph_uri = format!("/api/history-trees/{history}/graph?collection=commits");
     let graph = success(&app, &token, "GET", &graph_uri, None).await;
     let root_commit = graph["history"]["root_commit_id"].clone();
     let side=success(&app,&token,"POST",&format!("/api/repositories/{}/branches",repo["repository_id"].as_str().unwrap()),Some(json!({"name":"side","source_commit_id":root_commit,"operation_id":storage_contract::OperationId::generate()}))).await;
@@ -2296,8 +2354,19 @@ async fn typed_merge_link_http_reuses_graph_wire_and_permanent_receipt() {
     ] {
         assert_eq!(created[field], body[field]);
     }
-    let graph = success(&app, &token, "GET", &graph_uri, None).await;
-    assert_eq!(graph["merge_links"][0], created);
+    let graph = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/history-trees/{history}/graph?collection=merge_links"),
+        None,
+    )
+    .await;
+    assert_eq!(graph["items"]["collection"], "merge_links");
+    assert!(graph["next_cursor"].is_null());
+    let mut expected = created.clone();
+    expected["author"] = json!({"kind":"inline","text":created["author"]});
+    assert_eq!(graph["items"]["records"], json!([expected]));
     assert_eq!(
         success(&app, &token, "POST", &uri, Some(body.clone())).await,
         created

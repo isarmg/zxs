@@ -1584,8 +1584,9 @@ impl crate::Backend for RetryProbe {
     fn history_graph(
         &self,
         _identity: &crate::auth::Identity,
-        _id: &str,
-    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        _request: crate::ReadHistoryGraph,
+        _control: &crate::GraphReadControl,
+    ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn commit_snapshot(

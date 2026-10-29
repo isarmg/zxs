@@ -15,6 +15,7 @@ struct RecordingBackend {
     calls: Mutex<Vec<Recorded>>,
     fail: AtomicBool,
     file: std::fs::File,
+    graph_gates: Mutex<std::collections::VecDeque<GraphGate>>,
 }
 
 fn sentinel_error(method: &str) -> ApiError {
@@ -1178,14 +1179,46 @@ impl Backend for RecordingBackend {
     fn history_graph(
         &self,
         identity: &crate::auth::Identity,
-        id: &str,
-    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        request: crate::ReadHistoryGraph,
+        control: &crate::GraphReadControl,
+    ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
+        let gate = self.graph_gates.lock().unwrap().pop_front();
+        if let Some(gate) = gate {
+            gate.started.send(()).unwrap();
+            gate.release
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            let result = control.checkpoint();
+            gate.finished
+                .send(result.as_ref().map(|()| ()).map_err(|error| error.code()))
+                .unwrap();
+            result.map_err(|source| {
+                ApiError::new(
+                    ::http::StatusCode::REQUEST_TIMEOUT,
+                    source.code(),
+                    source.message(),
+                )
+                .with_source(source)
+            })?;
+        } else {
+            control.checkpoint().unwrap();
+        }
+        let crate::GraphRead::Page {
+            collection,
+            after,
+            limit,
+        } = request.selection()
+        else {
+            panic!("recording graph fixture expects a page request");
+        };
         self.record(
             "history_graph",
             Some(identity),
-            json!({"history_tree_id":id}),
+            json!({"history_tree_id":request.history_id(), "collection":collection, "after":after, "limit":limit.get()}),
         )?;
-        Ok(recorded_graph(id))
+        Ok(crate::HistoryGraphResponse::Graph(recorded_graph(
+            request.history_id(),
+        )))
     }
     fn commit_snapshot(
         &self,
@@ -1461,6 +1494,7 @@ impl Fixture {
             calls: Mutex::new(vec![]),
             fail: AtomicBool::new(false),
             file: source.file.try_clone().unwrap(),
+            graph_gates: Mutex::new(std::collections::VecDeque::new()),
         });
         let auth = Arc::new(Mutex::new(auth));
         let backend = AuthorizedBackend {
@@ -1946,11 +1980,31 @@ impl Fixture {
             ),
             (
                 "history_graph",
-                backend.history_graph(identity, "history").map(|graph| {
-                    assert_eq!(graph.history.generation, u64::MAX);
-                    assert_eq!(graph.commits[0].commit_id, "commit");
-                    json!({"returned_by":"history_graph"})
-                }),
+                backend
+                    .history_graph(
+                        identity,
+                        crate::ReadHistoryGraph::page(
+                            "history".into(),
+                            std::collections::BTreeMap::from([
+                                ("collection".into(), "commits".into()),
+                            ]),
+                        )
+                        .unwrap(),
+                        &crate::GraphReadControl::until(
+                            std::time::Instant::now() + std::time::Duration::from_secs(60),
+                        ),
+                    )
+                    .map(|response| {
+                        let crate::HistoryGraphResponse::Graph(graph) = response else {
+                            panic!("expected graph page")
+                        };
+                        assert_eq!(graph.history.generation, u64::MAX);
+                        let storage_contract::history_graph::GraphItems::Commits(commits) = graph.items else {
+                            panic!("expected commits")
+                        };
+                        assert_eq!(commits[0].commit_id, "commit");
+                        json!({"returned_by":"history_graph"})
+                    }),
             ),
             (
                 "commit_snapshot",
@@ -2328,7 +2382,7 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"version_id":"version"}),
         json!({}),
         json!({"after":"17"}),
-        json!({"history_tree_id":"history"}),
+        json!({"history_tree_id":"history","collection":"commits","after":null,"limit":50}),
         json!({"commit_id":"commit"}),
         json!({"branch_id":"branch","path":"File.txt","key":"file.txt","commit_id":"commit"}),
         json!({"id":"branch"}),
@@ -2626,9 +2680,12 @@ fn recorded_commit(commit: &str) -> Arc<storage_contract::Commit> {
     })
 }
 
-fn recorded_graph(id: &str) -> crate::HistoryGraphSnapshot {
-    crate::HistoryGraphSnapshot {
-        history: storage_contract::HistoryTree {
+fn recorded_graph(id: &str) -> storage_contract::history_graph::GraphPage {
+    use storage_contract::history_graph::{
+        CommitSummary, GraphItems, GraphPage, HistorySummary, TextSummary,
+    };
+    GraphPage {
+        history: HistorySummary {
             history_tree_id: id.into(),
             repository_id: "repository".into(),
             root_commit_id: "commit".into(),
@@ -2637,10 +2694,31 @@ fn recorded_graph(id: &str) -> crate::HistoryGraphSnapshot {
             state: storage_contract::HistoryState::Active,
             provenance: None,
         },
-        commits: vec![recorded_commit("commit")],
-        branches: vec![],
-        merge_links: vec![],
-        boundary_marks: vec![],
+        history_root: "ab".repeat(32),
+        items: GraphItems::Commits(vec![CommitSummary {
+            commit_id: "commit".into(),
+            history_tree_id: id.into(),
+            kind: TextSummary::Inline {
+                text: "snapshot".into(),
+            },
+            parent_commit_ids: vec![],
+            tree_id: TextSummary::Inline {
+                text: "tree".into(),
+            },
+            sequence: 1,
+            operation_id: storage_contract::OperationId::generate(),
+            author: TextSummary::Inline {
+                text: "author".into(),
+            },
+            message: TextSummary::Inline {
+                text: "snapshot fixture".into(),
+            },
+            namespace: crate::fixture_commit_namespace(0),
+            namespace_deletions: None,
+            pending_file_versions: 0,
+            provenance: None,
+        }]),
+        next_cursor: None,
     }
 }
 
@@ -2678,4 +2756,168 @@ fn recorded_merge_link(operation_id: storage_contract::OperationId) -> storage_c
         author: "author".into(),
         operation_id,
     }
+}
+
+struct GraphGate {
+    started: tokio::sync::oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+    finished: tokio::sync::oneshot::Sender<Result<(), storage_contract::ErrorCode>>,
+}
+
+fn graph_route_fixture(
+    fixture: &Fixture,
+) -> (
+    Router,
+    Arc<tokio::sync::Semaphore>,
+    Arc<tokio::sync::Semaphore>,
+) {
+    let backend: Arc<dyn Backend> = Arc::new(AuthorizedBackend {
+        backend: fixture.probe.clone(),
+        auth: crate::lock(&fixture.auth).reader(),
+    });
+    let config = ServerConfig::loopback(fixture._root.path())
+        .admit()
+        .unwrap();
+    let graph_slots = Arc::new(tokio::sync::Semaphore::new(2));
+    let backend_slots = Arc::new(tokio::sync::Semaphore::new(HTTP_BACKEND_SLOTS));
+    let state = AppState {
+        auth_reader: crate::lock(&fixture.auth).reader(),
+        spool_budget: http_spool::HttpSpool::open_blocking(&config, backend.as_ref()),
+        telemetry: telemetry::Telemetry::start(
+            backend.clone(),
+            &fixture._root.path().join("graph-telemetry"),
+        )
+        .unwrap(),
+        backend,
+        auth: Arc::clone(&fixture.auth),
+        config: Arc::clone(&config),
+        login_admission: Arc::new(http_auth::LoginAdmission::default()),
+        password_attempts: Arc::new(Mutex::new(HashMap::new())),
+        #[cfg(feature = "core")]
+        setup_attempts: Arc::new(Mutex::new(HashMap::new())),
+        #[cfg(feature = "core")]
+        recovery_attempts: Arc::new(Mutex::new(HashMap::new())),
+        password_slots: Arc::new(tokio::sync::Semaphore::new(4)),
+        authorization_slots: Arc::new(tokio::sync::Semaphore::new(8)),
+        backend_slots: Arc::clone(&backend_slots),
+        graph_slots: Arc::clone(&graph_slots),
+        management_slots: Arc::new(tokio::sync::Semaphore::new(2)),
+        upload_slots: transfer_limits::Admission::new(&config.http_transfer_limits),
+        read_slots: transfer_limits::Admission::new(&config.http_transfer_limits),
+        upload_claims: Arc::new(Mutex::new(Default::default())),
+        static_etags: Arc::new(BTreeMap::new()),
+        web_assets_available: false,
+    };
+    let app = Router::new()
+        .route(
+            "/api/history-trees/{history}/graph",
+            get(crate::http_graph::graph),
+        )
+        .layer(http_routing::Extension(fixture.identity.clone()))
+        .with_state(state);
+    (app, graph_slots, backend_slots)
+}
+
+#[tokio::test]
+async fn graph_route_cancellation_retains_capacity_until_worker_checkpoint() {
+    use service_stack::ServiceExt;
+    use std::time::Duration;
+    let fixture = Fixture::new();
+    let (app, graph_slots, backend_slots) = graph_route_fixture(&fixture);
+    let mut requests = Vec::new();
+    let mut releases = Vec::new();
+    let mut finishes = Vec::new();
+    for _ in 0..2 {
+        let (started, start) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let (finished, finish) = tokio::sync::oneshot::channel();
+        fixture
+            .probe
+            .graph_gates
+            .lock()
+            .unwrap()
+            .push_back(GraphGate {
+                started,
+                release: released,
+                finished,
+            });
+        let request = app.clone().oneshot(graph_request());
+        requests.push(tokio::spawn(async move { request.await.unwrap() }));
+        releases.push(release);
+        finishes.push(finish);
+        tokio::time::timeout(Duration::from_secs(5), start)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(graph_slots.available_permits(), 0);
+    assert_eq!(backend_slots.available_permits(), HTTP_BACKEND_SLOTS - 2);
+    let cancelled = requests.remove(0);
+    cancelled.abort();
+    assert!(cancelled.await.unwrap_err().is_cancelled());
+    let overloaded = app.clone().oneshot(graph_request()).await.unwrap();
+    assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(graph_slots.available_permits(), 0);
+    assert_eq!(backend_slots.available_permits(), HTTP_BACKEND_SLOTS - 2);
+    releases.remove(0).send(()).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), finishes.remove(0))
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(storage_contract::ErrorCode::RequestTimeout),
+    );
+    let released_scan =
+        tokio::time::timeout(Duration::from_secs(5), graph_slots.clone().acquire_owned())
+            .await
+            .unwrap()
+            .unwrap();
+    let released_backend = tokio::time::timeout(
+        Duration::from_secs(5),
+        backend_slots
+            .clone()
+            .acquire_many_owned((HTTP_BACKEND_SLOTS - 1) as u32),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    drop((released_scan, released_backend));
+    let resumed = app.clone().oneshot(graph_request()).await.unwrap();
+    assert_eq!(resumed.status(), ::http::StatusCode::OK);
+    let bytes = http_routing::body::to_bytes(resumed.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let response: storage_contract::history_graph::GraphPage =
+        json_codec::from_slice(&bytes).unwrap();
+    drop(bytes);
+    assert_eq!(response.history.history_tree_id, "history");
+    releases.remove(0).send(()).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), finishes.remove(0))
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(())
+    );
+    let response = tokio::time::timeout(Duration::from_secs(5), requests.remove(0))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.status(), ::http::StatusCode::OK);
+    http_routing::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    let all_scans = graph_slots.clone().try_acquire_many_owned(2).unwrap();
+    let all_backends = backend_slots
+        .clone()
+        .try_acquire_many_owned(HTTP_BACKEND_SLOTS as u32)
+        .unwrap();
+    drop((all_scans, all_backends));
+}
+
+fn graph_request() -> http_routing::http::Request<http_routing::body::Body> {
+    http_routing::http::Request::builder()
+        .uri("/api/history-trees/history/graph?collection=commits")
+        .body(http_routing::body::Body::empty())
+        .unwrap()
 }

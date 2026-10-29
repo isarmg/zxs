@@ -1263,9 +1263,12 @@ impl Backend for ManagementBackend {
     fn history_graph(
         &self,
         identity: &crate::auth::Identity,
-        id: &str,
-    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
-        self.inner.backend()?.history_graph(identity, id)
+        request: crate::ReadHistoryGraph,
+        control: &crate::GraphReadControl,
+    ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
+        self.inner
+            .backend()?
+            .history_graph(identity, request, control)
     }
     fn commit_snapshot(
         &self,

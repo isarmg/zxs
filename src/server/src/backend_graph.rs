@@ -1,132 +1,369 @@
-//! Owned metadata and shared immutable commit records for one history read.
-use data_serialization::Serialize;
-use std::{collections::BTreeMap, sync::Arc};
-use storage_contract::{Branch, Commit, HistoryBoundary, HistoryTree, MergeLink};
+//! Typed, root-bound requests and bounded responses for history inspection.
+use crate::{
+    ApiError,
+    backend_file_history::{HistoryRootText, QueryFields, RequestId, required_root},
+};
+use data_serialization::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
+use storage_contract::history_graph::{
+    BoundaryField, CommitField, DeletionsPage, GraphCollection, GraphKey, GraphPage, HistoryField,
+    MergeLinkField, PageLimit, PendingPage, PendingTarget, TextLimit, TextPage, TextTarget,
+};
 
-#[derive(Debug)]
-pub struct HistoryGraphSnapshot {
-    pub history: HistoryTree,
-    pub commits: Vec<Arc<Commit>>,
-    pub branches: Vec<Branch>,
-    pub merge_links: Vec<MergeLink>,
-    pub boundary_marks: Vec<HistoryBoundary>,
+/// A request-local stop signal. It never releases a running worker's permit.
+pub struct GraphReadControl {
+    cancelled: Arc<AtomicBool>,
+    deadline: Instant,
 }
-#[derive(Serialize)]
-pub(crate) struct HistoryGraphResponse {
-    history: HistoryRecord,
-    commits: Vec<crate::commit_wire::CommitResponse>,
-    branches: Vec<BranchRecord>,
-    merge_links: Vec<MergeLinkRecord>,
-    boundary_marks: Vec<BoundaryRecord>,
+pub(crate) struct GraphReadWait(Arc<AtomicBool>);
+impl Drop for GraphReadWait {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
-impl From<HistoryGraphSnapshot> for HistoryGraphResponse {
-    fn from(snapshot: HistoryGraphSnapshot) -> Self {
-        let HistoryGraphSnapshot {
+impl GraphReadControl {
+    pub fn until(deadline: Instant) -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            deadline,
+        }
+    }
+    pub(crate) fn wait_owner(&self) -> GraphReadWait {
+        GraphReadWait(Arc::clone(&self.cancelled))
+    }
+    pub fn checkpoint(&self) -> storage_contract::Result<()> {
+        if self.cancelled.load(Ordering::Relaxed) || Instant::now() >= self.deadline {
+            return Err(storage_contract::Error::new(
+                storage_contract::ErrorCode::RequestTimeout,
+                "history inspection was cancelled or its deadline expired",
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub struct ReadHistoryGraph {
+    history: RequestId,
+    root: Option<HistoryRootText>,
+    selection: GraphRead,
+}
+pub enum GraphRead {
+    Page {
+        collection: GraphCollection,
+        after: Option<GraphKey>,
+        limit: PageLimit,
+    },
+    Text {
+        target: TextTarget,
+        offset: usize,
+        limit: TextLimit,
+    },
+    Pending {
+        target: PendingTarget,
+        after: Option<String>,
+        limit: PageLimit,
+    },
+    Deletions {
+        commit_id: String,
+        offset: usize,
+        limit: PageLimit,
+    },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct GraphCursor {
+    v: u8,
+    history_tree_id: String,
+    history_root: String,
+    collection: GraphCollection,
+    limit: usize,
+    key: GraphKey,
+}
+
+fn enum_field<T: std::str::FromStr<Err = storage_contract::Error>>(
+    text: String,
+) -> Result<T, ApiError> {
+    text.parse().map_err(ApiError::contract_input)
+}
+fn bounded_id(name: &'static str, value: String) -> Result<String, ApiError> {
+    Ok(RequestId::parse(name, value)?.into_string())
+}
+fn limit_value(query: &mut QueryFields, default: usize) -> Result<usize, ApiError> {
+    match query.take("limit") {
+        Some(value) => storage_contract::parse_u64_decimal(&value)
+            .map_err(ApiError::contract_input)
+            .and_then(|value| usize::try_from(value).map_err(ApiError::invalid_source)),
+        None => Ok(default),
+    }
+}
+
+impl ReadHistoryGraph {
+    pub fn history_id(&self) -> &str {
+        self.history.as_str()
+    }
+    pub fn root(&self) -> Option<&str> {
+        self.root.as_ref().map(HistoryRootText::as_str)
+    }
+    pub fn selection(&self) -> &GraphRead {
+        &self.selection
+    }
+    #[cfg(feature = "core")]
+    pub(crate) fn into_parts(self) -> (String, Option<HistoryRootText>, GraphRead) {
+        (self.history.into_string(), self.root, self.selection)
+    }
+    pub fn page(history: String, query: BTreeMap<String, String>) -> Result<Self, ApiError> {
+        let history = RequestId::parse("history", history)?;
+        let mut query = QueryFields::strict(query, &["collection", "limit", "cursor"])?;
+        let collection = enum_field(
+            query
+                .take("collection")
+                .ok_or_else(|| ApiError::invalid("collection is required"))?,
+        )?;
+        let limit =
+            PageLimit::new(limit_value(&mut query, 50)?).map_err(ApiError::contract_input)?;
+        let cursor = query
+            .take("cursor")
+            .map(|value| crate::backend_file_history::cursors::decode::<GraphCursor>(&value))
+            .transpose()?;
+        let (root, after) = match cursor {
+            Some(cursor) => {
+                if cursor.v != 1
+                    || cursor.history_tree_id != history.as_str()
+                    || cursor.collection != collection
+                    || cursor.limit != limit.get()
+                {
+                    return Err(ApiError::invalid(
+                        "cursor does not match the history graph query",
+                    ));
+                }
+                let key = match (collection, cursor.key) {
+                    (
+                        GraphCollection::Commits,
+                        GraphKey::Commit {
+                            sequence,
+                            commit_id,
+                        },
+                    ) => GraphKey::Commit {
+                        sequence,
+                        commit_id: bounded_id("commit_id", commit_id)?,
+                    },
+                    (
+                        GraphCollection::Branches
+                        | GraphCollection::MergeLinks
+                        | GraphCollection::BoundaryMarks,
+                        GraphKey::Id { id },
+                    ) => GraphKey::Id {
+                        id: bounded_id("id", id)?,
+                    },
+                    (GraphCollection::Commits, GraphKey::Id { .. })
+                    | (
+                        GraphCollection::Branches
+                        | GraphCollection::MergeLinks
+                        | GraphCollection::BoundaryMarks,
+                        GraphKey::Commit { .. },
+                    ) => {
+                        return Err(ApiError::invalid(
+                            "cursor key does not match its collection",
+                        ));
+                    }
+                };
+                (
+                    Some(HistoryRootText::parse(&cursor.history_root)?),
+                    Some(key),
+                )
+            }
+            None => (None, None),
+        };
+        Ok(Self {
             history,
-            commits,
-            branches,
-            merge_links,
-            boundary_marks,
-        } = snapshot;
-        Self {
-            history: history.into(),
-            commits: commits
-                .into_iter()
-                .map(crate::commit_wire::CommitResponse::from)
-                .collect(),
-            branches: branches.into_iter().map(BranchRecord::from).collect(),
-            merge_links: merge_links.into_iter().map(MergeLinkRecord::from).collect(),
-            boundary_marks: boundary_marks
-                .into_iter()
-                .map(BoundaryRecord::from)
-                .collect(),
-        }
+            root,
+            selection: GraphRead::Page {
+                collection,
+                after,
+                limit,
+            },
+        })
+    }
+    fn text(
+        history: String,
+        target: TextTarget,
+        query: BTreeMap<String, String>,
+    ) -> Result<Self, ApiError> {
+        let mut query = QueryFields::strict(query, &["history_root", "offset", "limit"])?;
+        Ok(Self {
+            history: RequestId::parse("history", history)?,
+            root: Some(required_root(query.root()?)?),
+            selection: GraphRead::Text {
+                target,
+                offset: query.offset()?,
+                limit: TextLimit::new(limit_value(&mut query, 16_384)?)
+                    .map_err(ApiError::contract_input)?,
+            },
+        })
+    }
+    pub fn history_field(
+        history: String,
+        field: String,
+        query: BTreeMap<String, String>,
+    ) -> Result<Self, ApiError> {
+        Self::text(
+            history,
+            TextTarget::History {
+                field: enum_field::<HistoryField>(field)?,
+            },
+            query,
+        )
+    }
+    pub fn commit_field(
+        history: String,
+        id: String,
+        field: String,
+        query: BTreeMap<String, String>,
+    ) -> Result<Self, ApiError> {
+        Self::text(
+            history,
+            TextTarget::Commit {
+                id: bounded_id("commit_id", id)?,
+                field: enum_field::<CommitField>(field)?,
+            },
+            query,
+        )
+    }
+    pub fn merge_link_field(
+        history: String,
+        id: String,
+        field: String,
+        query: BTreeMap<String, String>,
+    ) -> Result<Self, ApiError> {
+        Self::text(
+            history,
+            TextTarget::MergeLink {
+                id: bounded_id("merge_link_id", id)?,
+                field: enum_field::<MergeLinkField>(field)?,
+            },
+            query,
+        )
+    }
+    pub fn boundary_field(
+        history: String,
+        id: String,
+        field: String,
+        query: BTreeMap<String, String>,
+    ) -> Result<Self, ApiError> {
+        Self::text(
+            history,
+            TextTarget::Boundary {
+                id: bounded_id("boundary_id", id)?,
+                field: enum_field::<BoundaryField>(field)?,
+            },
+            query,
+        )
+    }
+    fn pending(
+        history: String,
+        target: PendingTarget,
+        query: BTreeMap<String, String>,
+    ) -> Result<Self, ApiError> {
+        let mut query = QueryFields::strict(query, &["history_root", "after", "limit"])?;
+        Ok(Self {
+            history: RequestId::parse("history", history)?,
+            root: Some(required_root(query.root()?)?),
+            selection: GraphRead::Pending {
+                target,
+                after: query
+                    .take("after")
+                    .map(|value| bounded_id("file_id", value))
+                    .transpose()?,
+                limit: PageLimit::new(limit_value(&mut query, 128)?)
+                    .map_err(ApiError::contract_input)?,
+            },
+        })
+    }
+    pub fn commit_pending(
+        history: String,
+        id: String,
+        query: BTreeMap<String, String>,
+    ) -> Result<Self, ApiError> {
+        Self::pending(
+            history,
+            PendingTarget::Commit {
+                id: bounded_id("commit_id", id)?,
+            },
+            query,
+        )
+    }
+    pub fn branch_pending(
+        history: String,
+        id: String,
+        query: BTreeMap<String, String>,
+    ) -> Result<Self, ApiError> {
+        Self::pending(
+            history,
+            PendingTarget::Branch {
+                id: bounded_id("branch_id", id)?,
+            },
+            query,
+        )
+    }
+    pub fn deletions(
+        history: String,
+        id: String,
+        query: BTreeMap<String, String>,
+    ) -> Result<Self, ApiError> {
+        let mut query = QueryFields::strict(query, &["history_root", "offset", "limit"])?;
+        Ok(Self {
+            history: RequestId::parse("history", history)?,
+            root: Some(required_root(query.root()?)?),
+            selection: GraphRead::Deletions {
+                commit_id: bounded_id("commit_id", id)?,
+                offset: query.offset()?,
+                limit: PageLimit::new(limit_value(&mut query, 128)?)
+                    .map_err(ApiError::contract_input)?,
+            },
+        })
     }
 }
 
-#[derive(Serialize)]
-struct HistoryRecord {
-    history_tree_id: String,
-    repository_id: String,
-    root_commit_id: String,
-    main_branch_id: Option<String>,
-    #[serialization(with = "storage_contract::u64_string")]
-    generation: u64,
-    state: storage_contract::HistoryState,
-    provenance: Option<String>,
+#[derive(Debug, Serialize)]
+#[serialization(untagged)]
+pub enum HistoryGraphResponse {
+    Graph(GraphPage),
+    Text(TextPage),
+    Pending(PendingPage),
+    Deletions(DeletionsPage),
 }
-impl From<HistoryTree> for HistoryRecord {
-    fn from(record: HistoryTree) -> Self {
-        let HistoryTree {
-            history_tree_id,
-            repository_id,
-            root_commit_id,
-            main_branch_id,
-            generation,
-            state,
-            provenance,
-        } = record;
-        Self {
-            history_tree_id,
-            repository_id,
-            root_commit_id,
-            main_branch_id,
-            generation,
-            state,
-            provenance,
-        }
+impl HistoryGraphResponse {
+    pub(crate) fn encode(&self) -> Result<crate::backend_file_history::EncodedPage, ApiError> {
+        crate::backend_file_history::encode_bounded(self)
     }
 }
-
-#[derive(Serialize)]
-struct BranchRecord {
-    branch_id: String,
-    history_tree_id: String,
-    name: String,
-    head_commit_id: String,
-    fork_commit_id: String,
-    branch_kind: storage_contract::BranchKind,
-    #[serialization(skip_serializing_if = "Option::is_none")]
-    file_id: Option<String>,
-    #[serialization(skip_serializing_if = "Option::is_none")]
-    file_node_id: Option<String>,
-    #[serialization(skip_serializing_if = "BTreeMap::is_empty")]
-    pending_file_versions: BTreeMap<String, String>,
-    #[serialization(with = "storage_contract::u64_string")]
-    generation: u64,
-    state: storage_contract::BranchState,
-}
-impl From<Branch> for BranchRecord {
-    fn from(record: Branch) -> Self {
-        let Branch {
-            branch_id,
-            history_tree_id,
-            name,
-            head_commit_id,
-            fork_commit_id,
-            branch_kind,
-            file_id,
-            file_node_id,
-            pending_file_versions,
-            generation,
-            state,
-        } = record;
-        Self {
-            branch_id,
-            history_tree_id,
-            name,
-            head_commit_id,
-            fork_commit_id,
-            branch_kind,
-            file_id,
-            file_node_id,
-            pending_file_versions,
-            generation,
-            state,
-        }
-    }
+#[cfg(any(feature = "core", test))]
+pub(crate) fn cursor(
+    history: &str,
+    root: &str,
+    collection: GraphCollection,
+    limit: PageLimit,
+    key: GraphKey,
+) -> Result<String, ApiError> {
+    crate::backend_file_history::cursors::encode(&GraphCursor {
+        v: 1,
+        history_tree_id: history.to_owned(),
+        history_root: root.to_owned(),
+        collection,
+        limit: limit.get(),
+        key,
+    })
 }
 
+// The mutation endpoint retains its complete, unchanged merge-link result.
 #[derive(Serialize)]
 pub(crate) struct MergeLinkRecord {
     merge_link_id: String,
@@ -138,9 +375,9 @@ pub(crate) struct MergeLinkRecord {
     author: String,
     operation_id: storage_contract::OperationId,
 }
-impl From<MergeLink> for MergeLinkRecord {
-    fn from(record: MergeLink) -> Self {
-        let MergeLink {
+impl From<storage_contract::MergeLink> for MergeLinkRecord {
+    fn from(record: storage_contract::MergeLink) -> Self {
+        let storage_contract::MergeLink {
             merge_link_id,
             history_tree_id,
             source_branch_id,
@@ -159,42 +396,6 @@ impl From<MergeLink> for MergeLinkRecord {
             target_commit_id,
             author,
             operation_id,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct BoundaryRecord {
-    boundary_id: String,
-    history_tree_id: String,
-    local_commit_id: String,
-    local_branch_id: Option<String>,
-    relation: String,
-    external_history_tree_id: String,
-    external_commit_id: String,
-    source_merge_link_id: Option<String>,
-}
-impl From<HistoryBoundary> for BoundaryRecord {
-    fn from(record: HistoryBoundary) -> Self {
-        let HistoryBoundary {
-            boundary_id,
-            history_tree_id,
-            local_commit_id,
-            local_branch_id,
-            relation,
-            external_history_tree_id,
-            external_commit_id,
-            source_merge_link_id,
-        } = record;
-        Self {
-            boundary_id,
-            history_tree_id,
-            local_commit_id,
-            local_branch_id,
-            relation,
-            external_history_tree_id,
-            external_commit_id,
-            source_merge_link_id,
         }
     }
 }

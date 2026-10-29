@@ -640,8 +640,9 @@ impl Backend for BackendProbe {
     fn history_graph(
         &self,
         _identity: &crate::auth::Identity,
-        _id: &str,
-    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        _request: crate::ReadHistoryGraph,
+        _control: &crate::GraphReadControl,
+    ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
@@ -1215,7 +1216,7 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/repositories"),
     ("POST", "/api/history-trees/history/merge-links"),
     ("GET", "/api/commits/commit"),
-    ("GET", "/api/history-trees/history/graph"),
+    ("GET", "/api/history-trees/history/graph?collection=commits"),
     ("GET", "/api/events?after=17"),
     ("GET", "/api/file-manager/history?ignored=true"),
     ("GET", "/api/backup-topologies/default"),

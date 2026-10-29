@@ -1,4 +1,5 @@
 //! Storage administration for the sole authenticated account.
+mod graph;
 mod request;
 mod response;
 use crate::{
@@ -42,6 +43,7 @@ pub(crate) struct Model {
     plan: Value,
     acknowledged: bool,
     uncertain_operation: Option<UncertainOperation>,
+    graph_history: Option<String>,
 }
 impl Default for Model {
     fn default() -> Self {
@@ -54,6 +56,7 @@ impl Default for Model {
             plan: Value::Null,
             acknowledged: false,
             uncertain_operation: None,
+            graph_history: None,
         }
     }
 }
@@ -74,6 +77,7 @@ impl Model {
         self.plan = Value::Null;
         self.acknowledged = false;
         self.result.clear();
+        self.graph_history = None;
     }
 }
 fn permitted(state: &State, storage: bool) -> bool {
@@ -248,6 +252,7 @@ fn select(state: RwSignal<State>, kind: Kind) {
         s.admin_console.acknowledged = false;
         s.admin_console.error.clear();
         s.admin_console.result.clear();
+        s.admin_console.graph_history = None;
     });
 }
 
@@ -261,12 +266,32 @@ fn query(state: RwSignal<State>, kind: QueryKind) {
     if !allowed(state, false) {
         return;
     }
+    state.update(|s| s.admin_console.graph_history = None);
     match state.with_untracked(|s| request::query(kind, &s.admin_console.fields)) {
         Ok(request) => execute(state, request),
         Err(error) => state.update(|s| s.admin_console.error = error.to_string()),
     }
 }
+fn inspect_graph(state: RwSignal<State>) {
+    if !allowed(state, false) {
+        return;
+    }
+    state.update(|s| {
+        let history = s.admin_console.fields.get("id");
+        match history {
+            Some(history) if !history.trim().is_empty() => {
+                s.admin_console.graph_history = Some(history.clone());
+                s.admin_console.error.clear();
+                s.admin_console.result.clear();
+            }
+            Some(_) | None => {
+                s.admin_console.error = request::InputError::Required("id").to_string();
+            }
+        }
+    });
+}
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
+    let graph_history = Memo::new(move |_| state.with(|s| s.admin_console.graph_history.clone()));
     view! {<section class="zxs-flow" aria-label="Administration">
     <h2>{t("日常管理","Daily administration")}</h2>
     <p>{t("唯一账户管理全部存储。数据盘不可写时，存储操作禁用。账号设置可修改密码；文件内容请使用 SMB。","The sole account manages all storage. Storage changes require writable data storage. Change the password in account settings; use SMB for file contents.")}</p>
@@ -287,7 +312,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         Kind::Inspect=>vec![("repository","仓库 ID"),("id","操作 / 计划 / 策略 / 拓扑 ID")]};fields.into_iter().map(move |(key,label)|field(state,key,label)).collect_view()}}
     <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Smb)>{toggle(state,"enabled","启用 SMB Enabled")}</Show>
     <Show when=move ||state.with(|s|s.admin_console.kind!=Kind::Inspect)><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||s.admin_console.uncertain_operation.is_some()) on:click=move |_|submit(state)>"保存配置 / 创建预览 Save configuration / Create preview"</button></Show>
-    <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Inspect)>{request::QUERIES.into_iter().map(move |(label,kind)|view!{<button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.busy) on:click=move |_|query(state,kind)>{label}</button>}).collect_view()}</Show>
+    <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Inspect)>{request::QUERIES.into_iter().map(move |(label,kind)|view!{<button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.busy) on:click=move |_|query(state,kind)>{label}</button>}).collect_view()}<button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.busy) on:click=move |_|inspect_graph(state)>{t("历史图","History graph")}</button></Show>
+    {move ||graph_history.get().map(move |history|graph::view(state,history))}
     <pre>{move ||state.with(|s|s.admin_console.result.clone())}</pre>
     <Show when=move ||state.with(|s|s.admin_console.plan.is_object())><h3>"计划预览 Plan review"</h3><pre>{move ||state.with(|s|json_codec::to_string_pretty(&s.admin_console.plan).expect("invariant: JSON values serialize"))}</pre><label><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.acknowledged) disabled=move ||state.with(|s|s.admin_console.busy) on:change=move |ev|state.update(|s|s.admin_console.acknowledged=event_target_checked(&ev))/>{t("我已审阅此计划及永久删除等后果，确认执行所示摘要对应的计划。","I reviewed this plan and its consequences, including permanent deletion where applicable, and confirm this exact digest.")}</label><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||!s.admin_console.acknowledged||s.admin_console.uncertain_operation.is_some()) on:click=move |_|plan_action(state,true)>"提交所示计划 Commit reviewed plan"</button><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||s.admin_console.uncertain_operation.is_some()) on:click=move |_|plan_action(state,false)>"取消计划 Cancel plan"</button></Show>
     </section>}

@@ -34,7 +34,8 @@ mod state_projection;
 mod wire;
 pub use business::{
     FileBranchMergeRequest, FileNodeProjectionRequest, FileNodeSummary, FileNodeTagsUpdateRequest,
-    NamespaceTree, PreparedUpload, UploadPreparation, file_history_pages, validate_branch_name,
+    NamespaceTree, PreparedUpload, UploadPreparation, file_history_pages, history_graph_pages,
+    validate_branch_name,
 };
 pub use degraded_recovery::RecoveryPlan;
 pub use disk::{offline_check, offline_export};

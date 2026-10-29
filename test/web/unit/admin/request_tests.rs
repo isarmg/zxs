@@ -322,11 +322,6 @@ fn fixed_inspections_and_identity_queries_keep_get_encoding_and_contracts() {
             "/api/files/id%2F!/history",
             Contract::Inspect,
         ),
-        (
-            "History graph",
-            "/api/history-trees/id%2F!/graph",
-            Contract::Inspect,
-        ),
         ("Policy", "/api/policies/id%2F!", Contract::Inspect),
         (
             "Placement rule",

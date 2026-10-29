@@ -583,8 +583,9 @@ impl Backend for TestBackend {
     fn history_graph(
         &self,
         _identity: &crate::auth::Identity,
-        _id: &str,
-    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        _request: crate::ReadHistoryGraph,
+        _control: &crate::GraphReadControl,
+    ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn commit_snapshot(
@@ -1846,9 +1847,10 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         fn history_graph(
             &self,
             identity: &crate::auth::Identity,
-            id: &str,
-        ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
-            self.delegate.history_graph(identity, id)
+            request: crate::ReadHistoryGraph,
+            control: &crate::GraphReadControl,
+        ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
+            self.delegate.history_graph(identity, request, control)
         }
         fn commit_snapshot(
             &self,

@@ -42,7 +42,7 @@ pub(crate) fn decode<C: data_serialization::de::DeserializeOwned>(
         .map_err(|source| invalid_cursor("invalid history cursor").with_source(source))
 }
 
-fn encode<C: Serialize>(cursor: &C) -> Result<String, ApiError> {
+pub(crate) fn encode<C: Serialize>(cursor: &C) -> Result<String, ApiError> {
     let bytes =
         json_codec::to_vec(cursor).expect("invariant: internal JSON serialization succeeds");
     let mut encoded = String::with_capacity(bytes.len() * 2);

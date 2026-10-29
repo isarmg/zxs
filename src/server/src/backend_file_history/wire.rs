@@ -176,6 +176,12 @@ fn bounded_encoded(value: impl Serialize, limit: usize) -> Result<Option<Vec<u8>
     }
 }
 
+/// Encode a bounded DTO once, retaining the same transport lease as list pages.
+pub(crate) fn encode_bounded(value: impl Serialize) -> Result<EncodedPage, ApiError> {
+    let body = bounded_encoded(value, MAX_HISTORY_PAGE_BYTES)?.ok_or_else(budget_error)?;
+    Ok(EncodedPage { body, admitted: 1 })
+}
+
 fn budget_error() -> ApiError {
     ApiError::limit("history response record or envelope exceeds its byte budget")
 }

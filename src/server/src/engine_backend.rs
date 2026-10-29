@@ -1615,15 +1615,10 @@ impl Backend for EngineBackend {
     fn history_graph(
         &self,
         identity: &crate::auth::Identity,
-        id: &str,
-    ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
-        repo_for_history(&engine, id)?;
-        let mut snapshot = graph::capture(&engine, id);
-        drop(engine);
-        snapshot.commits.sort_by_key(|commit| commit.sequence);
-        Ok(snapshot)
+        request: crate::ReadHistoryGraph,
+        control: &crate::GraphReadControl,
+    ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
+        graph::read(self, identity, request, control)
     }
     fn commit_snapshot(
         &self,

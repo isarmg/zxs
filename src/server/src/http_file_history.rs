@@ -10,8 +10,8 @@ use http_routing::response::Response;
 /// One maximal cursor plus its escaped context fits comfortably; pages have
 /// at most seven fields, and no endpoint accepts a repeated field.
 pub(crate) struct HistoryQuery {
-    query: BTreeMap<String, String>,
-    connection: Option<crate::http_shutdown::ResponseConnection>,
+    pub(crate) query: BTreeMap<String, String>,
+    pub(crate) connection: Option<crate::http_shutdown::ResponseConnection>,
 }
 impl<S: Send + Sync> http_routing::extract::FromRequestParts<S> for HistoryQuery {
     type Rejection = ApiError;

@@ -34,6 +34,34 @@ fn proof(
 }
 
 #[test]
+fn lookup_and_proof_visit_the_same_authenticated_path() {
+    let logical = map(500);
+    let mut encoder = Encoder::new(MAX_METADATA);
+    let root = encoder
+        .map_root(logical.clone(), ProofMeasure::Plain)
+        .unwrap();
+    let objects = authenticated(encoder.finish());
+    for key in [logical.keys().next().unwrap().as_str(), "absent"] {
+        let mut proof_reads = Vec::new();
+        let (expected, _) = read_proof(root.reference(), key, |kind, hash| {
+            proof_reads.push((kind.to_owned(), hash.to_owned()));
+            let object = &objects[&(kind.into(), hash.into())];
+            AuthenticatedMetadataObject::authenticate(kind, hash, object.value().clone())
+        })
+        .unwrap();
+        let mut lookup_reads = Vec::new();
+        let actual = lookup(root.reference(), key, |kind, hash| {
+            lookup_reads.push((kind.to_owned(), hash.to_owned()));
+            let object = &objects[&(kind.into(), hash.into())];
+            AuthenticatedMetadataObject::authenticate(kind, hash, object.value().clone())
+        })
+        .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(lookup_reads, proof_reads);
+    }
+}
+
+#[test]
 fn dirty_insert_remove_growth_and_collapse_match_full_bytes_without_global_lookup() {
     let mut logical = map(4096);
     let mut encoder = Encoder::new(MAX_METADATA);
