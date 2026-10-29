@@ -176,12 +176,7 @@ impl Engine {
     /// and does not move history admission ahead of file/repository resolution.
     /// This lookup grants no authorization.
     pub fn file_history_owner(&self, file_id: &str) -> Option<&str> {
-        let owners = self
-            .history_catalog
-            .as_ref()
-            .filter(|catalog| catalog.binds(&self.state))
-            .and_then(|catalog| self.captured_history_owners(catalog));
-        let version = match owners {
+        let version = match self.available_history_owners() {
             Some(owners) => self
                 .state
                 .versions
@@ -194,6 +189,16 @@ impl Engine {
                 .find(|version| version.file_id == file_id)?,
         };
         Some(&version.history_tree_id)
+    }
+
+    /// Borrow only an already captured derivation of this exact State; no I/O.
+    pub(crate) fn available_history_owners(
+        &self,
+    ) -> Option<&crate::state_projection::DerivedOwners> {
+        self.history_catalog
+            .as_ref()
+            .filter(|catalog| catalog.binds(&self.state))
+            .and_then(|catalog| self.captured_history_owners(catalog))
     }
 
     fn captured_history_owners<'a>(

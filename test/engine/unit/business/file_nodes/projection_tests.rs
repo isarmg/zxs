@@ -393,3 +393,74 @@ fn batch_counts_one_merge_scan_and_one_tag_walk_without_cross_request_cache() {
         BTreeSet::from(["new".into()])
     );
 }
+
+#[test]
+fn ancestry_uses_one_lazy_scan_and_only_exact_state_owner_membership() {
+    let mut state = State::default();
+    body(&mut state, "body", "file");
+    path(&mut state, "first", &["body", "body"]);
+    path(&mut state, "second", &["first"]);
+    merge(&mut state, "a", "second", &["second", "body", "body"]);
+    merge(&mut state, "b", "second", &["first", "body"]);
+    for n in 0..64 {
+        let id = format!("foreign-{n}");
+        merge(&mut state, &id, "foreign-node", &["foreign-parent"]);
+        state.file_branch_merges.get_mut(&id).unwrap().file_id = "foreign".into();
+    }
+    let (_root, mut engine) = engine_with_state(state);
+    let nodes = ["second", "first", "body", "second"];
+    let expected = nodes.map(|id| node_parents(&engine.state, id));
+
+    MERGE_EVENT_VISITS.set(0);
+    let mut ancestry = FileAncestry::new(&engine, "file");
+    assert!(ancestry.projection.is_none());
+    assert_eq!(MERGE_EVENT_VISITS.get(), 0);
+    for (node, expected) in nodes.iter().zip(&expected) {
+        assert_eq!(ancestry.parents(node), *expected);
+    }
+    assert_eq!(MERGE_EVENT_VISITS.get(), 66);
+    drop(ancestry);
+    assert!(engine.available_history_owners().is_none());
+
+    // An unread catalog reference binds the fixture; owner construction needs
+    // no namespace I/O because this dependency-only fixture has no commits.
+    engine.history_catalog = Some(crate::engine::HistoryCatalog::recovered(
+        &engine.state,
+        json_codec::from_value(json_codec::json!({
+            "kind": "state-page", "hash": "a".repeat(64)
+        }))
+        .unwrap(),
+    ));
+    assert!(engine.available_history_owners().is_none());
+    MERGE_EVENT_VISITS.set(0);
+    let mut cold = FileAncestry::new(&engine, "file");
+    assert_eq!(cold.parents("second"), expected[0]);
+    assert_eq!(MERGE_EVENT_VISITS.get(), 66);
+    drop(cold);
+    assert!(engine.available_history_owners().is_none());
+    engine.history_owners().unwrap();
+    assert!(engine.available_history_owners().is_some());
+    MERGE_EVENT_VISITS.set(0);
+    let mut ancestry = FileAncestry::new(&engine, "file");
+    for (node, expected) in nodes.iter().zip(&expected) {
+        assert_eq!(ancestry.parents(node), *expected);
+    }
+    assert_eq!(MERGE_EVENT_VISITS.get(), 2);
+    drop(ancestry);
+
+    // A new State allocation must not reuse the old file bucket, even when
+    // the sequence is unchanged. The new request sees its newly added edge.
+    merge(
+        std::sync::Arc::make_mut(&mut engine.state),
+        "c",
+        "second",
+        &["new-parent"],
+    );
+    assert!(engine.available_history_owners().is_none());
+    let expected = node_parents(&engine.state, "second");
+    MERGE_EVENT_VISITS.set(0);
+    let mut ancestry = FileAncestry::new(&engine, "file");
+    assert_eq!(ancestry.parents("second"), expected);
+    assert_eq!(ancestry.parents("second"), expected);
+    assert_eq!(MERGE_EVENT_VISITS.get(), 67);
+}

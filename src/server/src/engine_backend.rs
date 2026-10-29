@@ -1233,7 +1233,10 @@ impl Backend for EngineBackend {
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::listing::entries(&engine, request)
+        let mut snapshot = file_manager::listing::entries(&engine, request)?;
+        drop(engine);
+        directory_scopes::sort_choices(&mut snapshot.directory_branches);
+        Ok(snapshot)
     }
     fn mutate_disk_directory(
         &self,
@@ -1345,7 +1348,10 @@ impl Backend for EngineBackend {
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        directory_scopes::capture(&engine, request)
+        let mut snapshot = directory_scopes::capture(&engine, request)?;
+        drop(engine);
+        directory_scopes::sort(&mut snapshot);
+        Ok(snapshot)
     }
     fn default_directory_branch(
         &self,

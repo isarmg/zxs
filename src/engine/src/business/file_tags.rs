@@ -12,7 +12,13 @@ struct TagChange {
     advance: bool,
 }
 
-fn belongs_to_branch(state: &State, branch: &str, head: &str, source: &str) -> bool {
+fn belongs_to_branch(
+    state: &State,
+    ancestry: &mut file_nodes::FileAncestry<'_>,
+    branch: &str,
+    head: &str,
+    source: &str,
+) -> bool {
     if state
         .file_metadata_nodes
         .get(source)
@@ -31,7 +37,7 @@ fn belongs_to_branch(state: &State, branch: &str, head: &str, source: &str) -> b
             return true;
         }
         if visited.insert(node.clone()) {
-            todo.extend(file_nodes::node_parents(state, &node));
+            todo.extend(ancestry.parents(&node));
         }
     }
     false
@@ -80,6 +86,8 @@ impl Engine {
                 // Complete preflight before any branch, context or tree advances.
                 let mut seen = BTreeSet::new();
                 let mut changes = Vec::new();
+                // Planning has changed only counters/physical names; the graph is still the published graph.
+                let mut ancestry = file_nodes::FileAncestry::new(engine, file);
                 for target in targets {
                     if !seen.insert((target.branch_id.clone(),target.source_node_id.clone())) {
                         return Err(Error::new(storage_contract::ErrorCode::InvalidRequest, "duplicate tag target"));
@@ -96,7 +104,7 @@ impl Engine {
                         return Err(Error::new(storage_contract::ErrorCode::FileBranchConflict, "tag target head changed"));
                     }
                     let version = file_nodes::node_version(state,file,&target.source_node_id)?;
-                    if !belongs_to_branch(state,&target.branch_id,&head,&target.source_node_id) {
+                    if !belongs_to_branch(state,&mut ancestry,&target.branch_id,&head,&target.source_node_id) {
                         return Err(Error::new(storage_contract::ErrorCode::FileNodeNotFound, "tag target node is outside the selected branch"));
                     }
                     let old = file_nodes::node_tags(state,&target.source_node_id);
@@ -113,6 +121,7 @@ impl Engine {
                         advance: head == target.source_node_id,
                     });
                 }
+                drop(ancestry);
                 let mut results = Vec::new();
                 for TagChange { target, history, version, tags, changed, advance } in changes {
                     if !changed {

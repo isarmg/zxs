@@ -1144,3 +1144,215 @@ mod create_repository_tests;
 
 #[path = "merge_link_tests.rs"]
 mod merge_link_tests;
+
+#[test]
+fn directory_scope_order_agrees_across_full_summary_listing_and_selection() {
+    use crate::{DirectoryBranchFilter, DirectoryBranchProjection, DirectoryScopeRows};
+    let (root, mut engine, repo, _) = fixture();
+    for path in ["folder/a.txt", "folder/b.txt"] {
+        save_projection_file(&mut engine, &repo.main_branch_id, path, b"content");
+    }
+    let path = name_policy::LookupPath::parse("folder").unwrap();
+    for name in ["zeta", "alpha"] {
+        engine
+            .create_directory_branches(
+                &repo.repository_id,
+                Some(&path),
+                &storage_contract::BranchName::parse(name).unwrap(),
+                "owner",
+                storage_contract::OperationId::generate(),
+            )
+            .unwrap();
+    }
+    let mut expected = engine
+        .state()
+        .directory_branches
+        .values()
+        .filter(|branch| branch.repository_id == repo.repository_id && branch.path == "folder")
+        .map(|branch| {
+            (
+                std::cmp::Reverse(branch.sequence),
+                branch.directory_branch_id.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    expected.sort();
+    let expected = expected.into_iter().map(|(_, id)| id).collect::<Vec<_>>();
+    assert!(expected.len() >= 3);
+    // Deliberately request the opposite of display order. Selection must keep it.
+    let sources = expected
+        .iter()
+        .rev()
+        .map(|id| crate::DirectorySelectionSourceInput {
+            directory_branch_id: id.clone(),
+            expected_tree_id: engine.state().directory_branches[id].head_tree_id.clone(),
+        })
+        .collect();
+    let selection = crate::ReadDirectorySelection::parse(
+        repo.repository_id.clone(),
+        "folder",
+        sources,
+        Vec::new(),
+    )
+    .unwrap();
+    let (backend, _auth, _token, identity) = authenticated_backend(engine, root.path());
+    let filter = DirectoryBranchFilter::Directory(path);
+    for projection in [
+        DirectoryBranchProjection::Full,
+        DirectoryBranchProjection::Summary,
+    ] {
+        let snapshot = backend
+            .directory_scopes(
+                &identity,
+                crate::ReadDirectoryScopes {
+                    repository_id: &repo.repository_id,
+                    filter: &filter,
+                    projection,
+                },
+            )
+            .unwrap();
+        let ids = match snapshot.branches {
+            DirectoryScopeRows::Full(branches) => branches
+                .into_iter()
+                .map(|row| row.branch.directory_branch_id)
+                .collect::<Vec<_>>(),
+            DirectoryScopeRows::Summary(branches) => branches
+                .into_iter()
+                .map(|row| row.directory_branch_id)
+                .collect::<Vec<_>>(),
+        };
+        assert_eq!(ids, expected);
+    }
+    let listing = backend
+        .listing(
+            &identity,
+            crate::ReadListing::parse(
+                "P01".into(),
+                BTreeMap::from([
+                    ("path".into(), "Projection/folder".into()),
+                    ("limit".into(), "1".into()),
+                ]),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        listing
+            .directory_branches
+            .iter()
+            .map(|row| &row.directory_branch_id)
+            .collect::<Vec<_>>(),
+        expected.iter().collect::<Vec<_>>()
+    );
+    assert_eq!(listing.entries.len(), 1);
+    assert!(listing.next_cursor.is_some());
+    let selected = backend.directory_selection(&identity, selection).unwrap();
+    assert_eq!(
+        selected
+            .branches
+            .iter()
+            .map(|row| &row.summary.directory_branch_id)
+            .collect::<Vec<_>>(),
+        expected.iter().rev().collect::<Vec<_>>()
+    );
+    let missing =
+        DirectoryBranchFilter::Directory(name_policy::LookupPath::parse("missing").unwrap());
+    for projection in [
+        DirectoryBranchProjection::Full,
+        DirectoryBranchProjection::Summary,
+    ] {
+        let snapshot = backend
+            .directory_scopes(
+                &identity,
+                crate::ReadDirectoryScopes {
+                    repository_id: &repo.repository_id,
+                    filter: &missing,
+                    projection,
+                },
+            )
+            .unwrap();
+        match snapshot.branches {
+            DirectoryScopeRows::Full(rows) => assert!(rows.is_empty()),
+            DirectoryScopeRows::Summary(rows) => assert!(rows.is_empty()),
+        }
+        let Err(error) = backend.directory_scopes(
+            &identity,
+            crate::ReadDirectoryScopes {
+                repository_id: "missing",
+                filter: &filter,
+                projection,
+            },
+        ) else {
+            panic!("missing repository admitted");
+        };
+        assert_eq!(error.code, storage_contract::ErrorCode::NotFound);
+    }
+}
+
+#[test]
+fn owned_directory_scope_sort_preserves_tie_breaks_and_current_flags() {
+    use crate::{
+        DirectoryBranchChoice, DirectoryScopeBranch, DirectoryScopeRows, DirectoryScopesSnapshot,
+    };
+    let (_root, mut engine, repo, _) = fixture();
+    save_projection_file(
+        &mut engine,
+        &repo.main_branch_id,
+        "folder/file.txt",
+        b"content",
+    );
+    let template = engine.state().directory_branches.values().next().unwrap();
+    // Synthetic observations exercise equal sequences independently of publish IDs.
+    let branches = [(7, "z"), (6, "older"), (7, "a")]
+        .into_iter()
+        .map(|(sequence, id)| {
+            let mut branch = template.clone();
+            branch.sequence = sequence;
+            branch.directory_branch_id = id.into();
+            DirectoryScopeBranch {
+                branch,
+                current: id == "z",
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut choices = branches
+        .iter()
+        .map(|row| DirectoryBranchChoice::capture(&row.branch, row.current))
+        .collect::<Vec<_>>();
+    let mut full = DirectoryScopesSnapshot {
+        repository_id: repo.repository_id,
+        branches: DirectoryScopeRows::Full(branches),
+    };
+    drop(engine);
+    crate::engine_backend::directory_scopes::sort(&mut full);
+    crate::engine_backend::directory_scopes::sort_choices(&mut choices);
+    let DirectoryScopeRows::Full(rows) = full.branches else {
+        panic!("full projection changed kind");
+    };
+    let ids = rows
+        .iter()
+        .map(|row| row.branch.directory_branch_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["a", "z", "older"]);
+    assert_eq!(
+        choices
+            .iter()
+            .map(|row| row.directory_branch_id.as_str())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    assert_eq!(
+        rows.iter().map(|row| row.current).collect::<Vec<_>>(),
+        [false, true, false]
+    );
+    assert_eq!(
+        choices.iter().map(|row| row.current).collect::<Vec<_>>(),
+        [false, true, false]
+    );
+    let mut empty = DirectoryScopesSnapshot {
+        repository_id: "empty".into(),
+        branches: DirectoryScopeRows::Full(Vec::new()),
+    };
+    crate::engine_backend::directory_scopes::sort(&mut empty);
+    crate::engine_backend::directory_scopes::sort_choices(&mut []);
+}

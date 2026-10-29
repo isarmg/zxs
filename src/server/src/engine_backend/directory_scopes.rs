@@ -29,7 +29,7 @@ pub(super) fn matching<'a>(
         }
         None => None,
     };
-    let mut branches = state
+    let branches = state
         .directory_branches
         .values()
         .filter(|branch| {
@@ -42,12 +42,6 @@ pub(super) fn matching<'a>(
                 })
         })
         .collect::<Vec<_>>();
-    branches.sort_by_key(|branch| {
-        (
-            std::cmp::Reverse(branch.sequence),
-            branch.directory_branch_id.as_str(),
-        )
-    });
     Ok(branches)
 }
 pub(super) fn capture(
@@ -81,4 +75,30 @@ pub(super) fn capture(
         repository_id: repo.repository_id.clone(),
         branches,
     })
+}
+
+/// Order already captured observations; no engine or authorization grant is retained.
+pub(super) fn sort(snapshot: &mut DirectoryScopesSnapshot) {
+    match &mut snapshot.branches {
+        DirectoryScopeRows::Full(branches) => branches.sort_by(|left, right| {
+            (
+                std::cmp::Reverse(left.branch.sequence),
+                &left.branch.directory_branch_id,
+            )
+                .cmp(&(
+                    std::cmp::Reverse(right.branch.sequence),
+                    &right.branch.directory_branch_id,
+                ))
+        }),
+        DirectoryScopeRows::Summary(branches) => sort_choices(branches),
+    }
+}
+
+pub(super) fn sort_choices(branches: &mut [DirectoryBranchChoice]) {
+    branches.sort_by(|left, right| {
+        (std::cmp::Reverse(left.sequence), &left.directory_branch_id).cmp(&(
+            std::cmp::Reverse(right.sequence),
+            &right.directory_branch_id,
+        ))
+    });
 }

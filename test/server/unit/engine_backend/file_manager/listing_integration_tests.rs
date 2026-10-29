@@ -14,7 +14,8 @@ pub(super) fn listing_json(engine: &AdmissionEngine, input: &Value) -> Result<Va
         );
     }
     let request = crate::ReadListing::parse(input["slot_id"].as_str().unwrap().into(), query)?;
-    let snapshot = listing::entries(engine, request)?;
+    let mut snapshot = listing::entries(engine, request)?;
+    crate::engine_backend::directory_scopes::sort_choices(&mut snapshot.directory_branches);
     Ok(json_codec::to_value(crate::backend_listing::ListingResponse::from(snapshot)).unwrap())
 }
 
@@ -378,12 +379,13 @@ fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_with
     )
     .unwrap_err();
     assert_eq!(stale.code, storage_contract::ErrorCode::ListingChanged);
-    let snapshot = listing::entries(
+    let mut snapshot = listing::entries(
         &engine,
         crate::ReadListing::parse("P01".into(), Default::default()).unwrap(),
     )
     .unwrap();
     drop(engine);
+    crate::engine_backend::directory_scopes::sort_choices(&mut snapshot.directory_branches);
     let wire =
         json_codec::to_value(crate::backend_listing::ListingResponse::from(snapshot)).unwrap();
     assert_eq!(

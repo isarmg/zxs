@@ -369,3 +369,68 @@ fn pending_file_labels_preserve_first_write_and_batches_keep_branch_snapshots_in
         BTreeSet::from(["review".into(), "shared".into()])
     );
 }
+
+#[test]
+fn ancestry_shortcuts_do_not_scan_merge_events() {
+    let (_root, mut engine, _) = setup();
+    let state = std::sync::Arc::make_mut(&mut engine.state);
+    state.file_path_nodes.insert(
+        "source".into(),
+        FilePathNode {
+            node_id: "source".into(),
+            history_tree_id: "history".into(),
+            file_id: "file".into(),
+            version_id: "body".into(),
+            parent_node_ids: vec![],
+            branch_id: "branch".into(),
+            path: "new".into(),
+            previous_path: "old".into(),
+            operation_id: OperationId::generate(),
+            author: "admin".into(),
+            sequence: 1,
+            created_at: 1,
+        },
+    );
+    state.file_branch_merges.insert(
+        "merge".into(),
+        FileBranchMerge {
+            merge_id: "merge".into(),
+            history_tree_id: "history".into(),
+            file_id: "file".into(),
+            input_branch_ids: vec![],
+            input_node_ids: vec![],
+            chosen_node_id: "source".into(),
+            result_node_id: "source".into(),
+            surviving_branch_id: "branch".into(),
+            reused_node: true,
+            parent_node_ids: vec!["parent".into()],
+            operation_id: OperationId::generate(),
+            sequence: 1,
+        },
+    );
+    let mut ancestry = file_nodes::FileAncestry::new(&engine, "file");
+    file_nodes::MERGE_EVENT_VISITS.set(0);
+    assert!(belongs_to_branch(
+        &engine.state,
+        &mut ancestry,
+        "branch",
+        "head",
+        "source"
+    ));
+    assert!(belongs_to_branch(
+        &engine.state,
+        &mut ancestry,
+        "other",
+        "head",
+        "head"
+    ));
+    assert_eq!(file_nodes::MERGE_EVENT_VISITS.get(), 0);
+    assert!(!belongs_to_branch(
+        &engine.state,
+        &mut ancestry,
+        "other",
+        "source",
+        "absent"
+    ));
+    assert_eq!(file_nodes::MERGE_EVENT_VISITS.get(), 1);
+}

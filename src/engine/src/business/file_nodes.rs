@@ -18,7 +18,7 @@ pub struct FileNodeSummary {
 
 #[cfg(test)]
 thread_local! {
-    static MERGE_EVENT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static MERGE_EVENT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TAG_NODE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -108,6 +108,42 @@ pub(crate) fn node_tags(state: &State, node: &str) -> BTreeSet<String> {
         current = parent;
     }
     BTreeSet::new()
+}
+
+/// Lazy parent lookup for a mutation's read-only ancestry preflight.
+/// Drop before changing graph records; this borrows the published graph, not the candidate.
+pub(super) struct FileAncestry<'a> {
+    engine: &'a Engine,
+    file: &'a str,
+    projection: Option<NodeProjection<'a>>,
+}
+
+impl<'a> FileAncestry<'a> {
+    pub(super) fn new(engine: &'a Engine, file: &'a str) -> Self {
+        Self {
+            engine,
+            file,
+            projection: None,
+        }
+    }
+
+    pub(super) fn parents(&mut self, node: &str) -> Vec<String> {
+        let engine = self.engine;
+        let file = self.file;
+        self.projection
+            .get_or_insert_with(|| match engine.available_history_owners() {
+                Some(owners) => NodeProjection::from_merge_events(
+                    &engine.state,
+                    owners
+                        .file_rows(file)
+                        .into_iter()
+                        .flat_map(|rows| rows.merges.keys())
+                        .map(|id| &engine.state.file_branch_merges[id]),
+                ),
+                None => NodeProjection::new(&engine.state),
+            })
+            .parents(node)
+    }
 }
 
 /// A call-local, immutable-state projection. Never reuse this across publications:

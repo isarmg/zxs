@@ -3,7 +3,7 @@ use super::*;
 use json_codec::json;
 use std::collections::BTreeSet;
 
-fn reaches(state: &State, start: &str, needle: &str) -> bool {
+fn reaches(ancestry: &mut super::file_nodes::FileAncestry<'_>, start: &str, needle: &str) -> bool {
     let mut queue = vec![start.to_owned()];
     let mut seen = BTreeSet::new();
     while let Some(node) = queue.pop() {
@@ -11,7 +11,7 @@ fn reaches(state: &State, start: &str, needle: &str) -> bool {
             return true;
         }
         if seen.insert(node.clone()) {
-            queue.extend(super::file_nodes::node_parents(state, &node));
+            queue.extend(ancestry.parents(&node));
         }
     }
     false
@@ -70,7 +70,9 @@ impl Engine {
                 parents.insert(chosen_node.into());
                 let result = if reused { chosen_node.to_owned() } else { new_id("fmeta") };
                 let edges = if reused {
-                    parents.into_iter().filter(|parent| parent!=&result && !reaches(state,parent,&result)).collect::<Vec<_>>()
+                    // No graph record has changed since planning cloned the published State.
+                    let mut ancestry = super::file_nodes::FileAncestry::new(engine, file);
+                    parents.into_iter().filter(|parent| parent!=&result && !reaches(&mut ancestry,parent,&result)).collect::<Vec<_>>()
                 } else { parents.into_iter().collect::<Vec<_>>() };
                 if !reused {
                     state.file_metadata_nodes.insert(result.clone(), FileMetadataNode {
@@ -118,3 +120,7 @@ impl Engine {
             })
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/business/file_merges/ancestry_tests.rs"]
+mod ancestry_tests;
