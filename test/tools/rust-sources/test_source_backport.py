@@ -53,6 +53,8 @@ FIXED = BASE.replace(b'    2\n}', b'    let _ = futures_core::task::Poll::Ready(
 REGION = BASE[BASE.index(b'mod tests'):]
 LOCAL = BASE[:BASE.index(b'mod tests')].replace(b'futures_core', b'futures').replace(
     b'    1\n}', b'    1 // local\n}') + b'include!("../../../../test/foundation/web/unit/src/lib/tests_11.rs");\n'
+LITERAL_FORMS = ('"x"', 'r#"x"#', 'b"x"', 'br##"x"##', 'c"x"', 'cr###"x"###', "'x'", "b'x'")
+LITERAL_SUFFIXES = ('futures_core', 'αfutures_core', 'futures_coreé', 'futures_core\u0301')
 
 
 def enc(data):
@@ -247,6 +249,147 @@ class Identifiers(unittest.TestCase):
                      "let c = '\"'; let s = \"futures_core::x\";\n", 'let s = "a\nfutures_core::b";\n'):
             with self.subTest(text=text):
                 self.assertEqual(self.mapped(text), (text.encode(), []))
+
+    def test_nested_use_paths_preserve_local_module_segments(self):
+        for text in ('use crate::{futures_core::Thing};\n',
+                     'use self::{futures_core::Thing as Local};\n',
+                     'use super::{futures_core::{Thing, Other}};\n',
+                     'use outer::{a::{futures_core::Thing}};\n',
+                     'use outer::{futures_core, futures_core::Thing};\n',
+                     'use crate::{\n    futures_core::Thing,\n};\n',
+                     'use crate::r#futures_core::Thing;\n',
+                     'use crate::{r#futures_core::Thing};\n'):
+            with self.subTest(text=text):
+                self.assertEqual(self.mapped(text), (text.encode(), []))
+
+    def test_unicode_identifier_suffix_is_not_a_crate_token(self):
+        for text in ('αfutures_core::Thing;\n', 'futures_coreé::Thing;\n',
+                     'futures_core\u0301::Thing;\n', 'α::futures_core::Thing;\n',
+                     'use crate::{αfutures_core::Thing};\n'):
+            with self.subTest(text=text):
+                self.assertEqual(self.mapped(text), (text.encode(), []))
+
+    def test_literal_suffixes_are_part_of_the_literal_token(self):
+        # Rust macros may receive any IDENTIFIER_OR_KEYWORD literal suffix.
+        # Its trailing :: does not turn that suffix into a crate path root.
+        for literal in LITERAL_FORMS:
+            for suffix in (*LITERAL_SUFFIXES, 'use'):
+                text = 'm!(' + literal + suffix + '::Thing);\n'
+                with self.subTest(literal=literal, suffix=suffix):
+                    self.assertEqual(self.mapped(text), (text.encode(), []))
+
+    def test_literal_suffix_boundary_keeps_separated_crate_paths(self):
+        for literal in LITERAL_FORMS:
+            for gap in (' ', '\n', '/* separate token */'):
+                text = 'm!(' + literal + 'futures_core' + gap + 'futures_core::Thing);\n'
+                expected = 'm!(' + literal + 'futures_core' + gap + 'futures::Thing);\n'
+                with self.subTest(literal=literal, gap=gap):
+                    data, records = self.mapped(text)
+                    self.assertEqual(data.decode(), expected)
+                    self.assertEqual(len(records), 1)
+
+    def test_adjacent_suffixed_literals_do_not_expose_literal_bodies(self):
+        for literal in LITERAL_FORMS:
+            for suffix in ('b', 'futures_core', 'αfutures_core', 'use'):
+                for following in ('"futures_core::Thing"',
+                                  '"futures_core::Thing"futures_core::Tail',
+                                  "'a'futures_core::Thing"):
+                    prefix = 'm!(' + literal + suffix + following
+                    with self.subTest(literal=literal, suffix=suffix, following=following):
+                        source = prefix + ', futures_core::Thing);\n'
+                        data, records = self.mapped(source)
+                        self.assertEqual(data.decode(), prefix + ', futures::Thing);\n')
+                        self.assertEqual(len(records), 1)
+
+    def test_literal_suffix_stops_before_raw_marker_and_non_start_tokens(self):
+        for literal in LITERAL_FORMS:
+            # The non-raw suffix ends at r; # and the following identifier
+            # remain independent macro tokens, as in the local Rust parser.
+            source = 'm!(' + literal + 'r#futures_core::Thing);\n'
+            with self.subTest(literal=literal, boundary='raw marker'):
+                data, records = self.mapped(source)
+                self.assertEqual(data.decode(), source.replace('futures_core', 'futures'))
+                self.assertEqual(len(records), 1)
+            source = 'm!(' + literal + '123 futures_core::Thing);\n'
+            with self.subTest(literal=literal, boundary='number'):
+                data, records = self.mapped(source)
+                self.assertEqual(data.decode(), source.replace('futures_core', 'futures'))
+                self.assertEqual(len(records), 1)
+            with self.subTest(literal=literal, boundary='combining start'):
+                with self.assertRaisesRegex(ValueError, 'unsupported Rust identifier token'):
+                    self.mapped('m!(' + literal + '\u0301futures_core::Thing);\n')
+            with self.subTest(literal=literal, boundary='invalid UTF-8 suffix'):
+                with self.assertRaisesRegex(ValueError, 'Rust identifier is not UTF-8'):
+                    backport.map_identifiers(('m!(' + literal).encode() + b'\xfffutures_core::Thing);', self.MAP)
+
+    def test_root_use_groups_raw_identifiers_and_aliases_keep_their_scope(self):
+        for text, expected in (
+                ('use {outer::{futures_core::Thing}, futures_core::Stream};\n',
+                 'use {outer::{futures_core::Thing}, futures::Stream};\n'),
+                ('use {outer::{Thing as futures_core}, futures_core};\n',
+                 'use {outer::{Thing as futures_core}, futures};\n'),
+                ('use futures_core as futures_core;\n', 'use futures as futures_core;\n'),
+                ('use r#futures_core::Stream;\n', 'use r#futures::Stream;\n'),
+                ('::r#futures_core::ready!();\n', '::r#futures::ready!();\n'),
+                ('use futures_core /* root */ ::Stream;\n',
+                 'use futures /* root */ ::Stream;\n'),
+                ('use crate /* local */ ::{futures_core::Thing};\n'
+                 'use {outer::{a::{futures_core::Thing}}, /* root */ '
+                 '::futures_core::{Stream, task::Poll}, futures_core as fc};\n',
+                 'use crate /* local */ ::{futures_core::Thing};\n'
+                 'use {outer::{a::{futures_core::Thing}}, /* root */ '
+                 '::futures::{Stream, task::Poll}, futures as fc};\n')):
+            with self.subTest(text=text):
+                data, records = self.mapped(text)
+                self.assertEqual(data.decode(), expected)
+                self.assertEqual(len(records), text.count('futures_core') - expected.count('futures_core'))
+
+    def test_comment_use_text_cannot_change_following_code_scope(self):
+        text = ('// use outer::{\n'
+                'use futures_core::Stream;\n'
+                '/* use crate::{ */ futures_core::ready!();\n')
+        data, records = self.mapped(text)
+        self.assertEqual(data.decode(), text.replace('futures_core', 'futures'))
+        self.assertEqual(len(records), 2)
+
+    def test_prose_paths_literals_and_byte_columns_keep_their_contract(self):
+        text = ('// We use futures_core::Stream in examples.\n'
+                '/// See ["futures_core::Stream"].\n'
+                "/// See 'futures_core::Stream'.\n"
+                '/* α */ r#futures_core::ready!();\n'
+                'let _ = (b"futures_core::Thing", c"futures_core::Thing",\n'
+                '         br##"futures_core::Thing"##, cr#"futures_core::Thing"#);\n'
+                'm!(futures_core::ready!());\n')
+        expected = text.replace('futures_core::Stream', 'futures::Stream').replace(
+            'r#futures_core::ready!', 'r#futures::ready!').replace(
+            'm!(futures_core::ready!', 'm!(futures::ready!')
+        data, records = self.mapped(text)
+        self.assertEqual(data.decode(), expected)
+        self.assertEqual([(record['line'], record['column']) for record in records],
+                         [(1, 11), (2, 11), (3, 10), (4, 12), (7, 4)])
+        for space in ('\u0085', '\u200e', '\u200f', '\u2028', '\u2029'):
+            source = 'use' + space + 'futures_core::Stream;\n'
+            with self.subTest(space=ascii(space)):
+                self.assertEqual(self.mapped(source)[0].decode(), source.replace('futures_core', 'futures'))
+        for source in ('/// See “futures_core::Stream”.\n', "/// See ‘futures_core::Stream’.\n"):
+            with self.subTest(source=source):
+                data, records = self.mapped(source)
+                self.assertEqual(data.decode(), source.replace('futures_core', 'futures'))
+                self.assertEqual(len(records), 1)
+
+    def test_unsupported_source_tokens_and_macro_use_grammar_fail_explicitly(self):
+        # Macro DSL imports are not Rust use trees. Stop for review rather
+        # than making a namespace decision from their arbitrary token syntax.
+        for text, message in (
+                ('macro_rules! m { (use $path:path;) => { () } }\n', 'unsupported Rust use tree'),
+                ('use crate::{futures_core::Thing;\n', 'unsupported Rust use tree'),
+                ('let _ = ☃futures_core::Thing;\n', 'unsupported Rust identifier token'),
+                ('let _ = r###"futures_core::Thing;\n', 'unterminated Rust raw string'),
+                ('/* unterminated futures_core::Thing', 'unterminated Rust block comment')):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, message):
+                self.mapped(text)
+        with self.assertRaisesRegex(ValueError, 'Rust identifier is not UTF-8'):
+            backport.map_identifiers(b'\xfffutures_core::Thing;', self.MAP)
 
     def test_quotes_in_comments_and_lifetimes_do_not_hide_code(self):
         text = "// don't \"\nfn f<'a>(x: &'a u8) { futures_core::ready!(x) }\n/* \" */ futures_core::x();\n"
@@ -480,6 +623,68 @@ class Apply(Synthetic):
         for file in row['files']:
             self.assertEqual(proof_routing.inverse_replacements(after[file["after"]], file), before[file['after']])
         self.assertEqual((self.out / 'receipt-id.txt').read_text().strip(), sha)
+
+    def test_plan_apply_and_receipt_verification_preserve_non_root_identifiers(self):
+        # New upstream hunks must keep local modules and complete Unicode tokens
+        # through the actual plan/apply and receipt verification functions.
+        preserved = ('use crate::{futures_core::Thing};\n'
+                     'use crate::{r#futures_core::Thing as Local};\n'
+                     'fn local_paths() {\n'
+                     '    let _ = αfutures_core::Thing;\n'
+                     '    let _ = futures_coreé::Thing;\n'
+                     '    let _ = futures_core\u0301::Thing;\n'
+                     '}\n').encode()
+        root_use = b'use {crate::{futures_core::Thing}, futures_core::Stream};\n'
+        fixed = FIXED.replace(b'    3\n}', preserved + root_use + b'    3\n}', 1)
+        (self.clone / 'src/lib.rs').write_bytes(fixed)
+        git(self.clone, 'commit', '-qam', 'add local paths and a real crate root')
+        self.fix_sha = git(self.clone, 'rev-parse', 'HEAD')
+        document = self.plan()
+        sha, row = self.apply()
+        production = (self.root / OWNER / 'src/lib.rs').read_bytes()
+        self.assertIn(preserved, production)
+        self.assertIn(b'use {crate::{futures_core::Thing}, futures::Stream};\n', production)
+        self.assertIn(b'let _ = futures::task::Poll::Ready(());', production)
+        before = {item['local_path']: self.files[item['local_path']]
+                  for item in document['replay']['merged']}
+        after = {path: (self.root / path).read_bytes() for path in before}
+        stored = proof_maintenance._read(self.root, sha)
+        self.assertEqual(stored, row)
+        self.assertEqual(backport.check_replay(stored, before, after, self.catalog), after)
+        layout = backport.FlatLayout(self.root)
+        backport.check_mapping(layout, self.catalog, stored)
+        backport.check_regions(layout, self.catalog, stored, historical=self.files)
+        backport.check_clone(stored, self.clone)
+        current = backport.after_catalog(self.catalog, OWNER,
+                                         {path: (before[path], data) for path, data in after.items()})
+        current[legacy.KEY] = [sha]
+        backport.check_external_accounting(sha, stored, current, before, after)
+
+    def test_plan_apply_and_replay_preserve_literal_suffixes(self):
+        preserved = (''.join('m!(' + literal + suffix + '::Thing);\n'
+                             for literal in LITERAL_FORMS for suffix in (*LITERAL_SUFFIXES, 'use'))
+                     + 'm!("x"b"futures_core::Thing");\n'
+                     + "m!('x'futures_core'a'futures_core::Thing);\n").encode()
+        actual_path = b'm!("x"futures_core futures_core::Thing);\n'
+        fixed = FIXED.replace(b'    3\n}', preserved + actual_path + b'    3\n}', 1)
+        (self.clone / 'src/lib.rs').write_bytes(fixed)
+        git(self.clone, 'commit', '-qam', 'add macro literal suffixes and a separate crate path')
+        self.fix_sha = git(self.clone, 'rev-parse', 'HEAD')
+        document = self.plan()
+        sha, row = self.apply()
+        production = (self.root / OWNER / 'src/lib.rs').read_bytes()
+        self.assertIn(preserved, production)
+        self.assertIn(b'm!("x"futures_core futures::Thing);\n', production)
+        self.assertIn(b'let _ = futures::task::Poll::Ready(());', production)
+        before = {item['local_path']: self.files[item['local_path']]
+                  for item in document['replay']['merged']}
+        after = {path: (self.root / path).read_bytes() for path in before}
+        stored = proof_maintenance._read(self.root, sha)
+        self.assertEqual(stored, row)
+        self.assertEqual(backport.check_replay(stored, before, after, self.catalog), after)
+        backport.check_mapping(backport.FlatLayout(self.root), self.catalog, stored)
+        backport.check_regions(backport.FlatLayout(self.root), self.catalog, stored, historical=self.files)
+        backport.check_clone(stored, self.clone)
 
     def test_replay_drift_in_each_input_is_named(self):
         self.plan()

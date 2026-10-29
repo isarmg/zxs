@@ -29,6 +29,7 @@ import tarfile
 import tempfile
 import time
 import traceback
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -181,25 +182,97 @@ def resolve(merged, conflicts, chosen):
 
 # ------------------------------------------------------ identifier mapping --
 
-RAW_STRING = re.compile(rb'(?<![A-Za-z0-9_])[bc]?r(#*)"')
-STRING = re.compile(rb'(?<![A-Za-z0-9_])[bc]?"')
+# These match only at the current complete token boundary, including a quote
+# immediately after the preceding literal's identifier suffix.
+RAW_STRING = re.compile(rb'[bc]?r(#*)"')
+STRING = re.compile(rb'[bc]?"')
 CHAR = re.compile(rb"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|[^\n])|[\xc0-\xf7][\x80-\xbf]{1,3}|[^'\\\n])'")
-USE_OR_EXTERN = re.compile(rb'(?:\buse\s+(?:::\s*)?(?:\{\s*(?:[^;{}]*,\s*)?)?|\bextern\s+crate\s+)$')
 
 
-def literal_spans(data):
-    """Byte spans of Rust string and char literals.
+class _RustToken(NamedTuple):
+    kind: str
+    text: bytes
+    start: int
+    end: int
 
-    Comments are skipped while scanning (their quotes are prose) but are not
-    masked: crate paths in docs and commented code name the same crate.
+
+def _unicode_character(data, index):
+    first = data[index]
+    if 0xc2 <= first <= 0xdf:
+        width = 2
+    elif 0xe0 <= first <= 0xef:
+        width = 3
+    elif 0xf0 <= first <= 0xf4:
+        width = 4
+    else:
+        width = 1
+    try:
+        return data[index:index + width].decode('utf-8'), width
+    except UnicodeDecodeError as error:
+        raise BackportError('Rust identifier is not UTF-8 at byte %d' % index) from error
+
+
+def _identifier_width(data, index):
+    """Consume complete XID continuation characters, never ASCII substrings."""
+    byte = data[index]
+    if byte < 128:
+        return int(byte == 95 or 48 <= byte <= 57 or 65 <= byte <= 90 or 97 <= byte <= 122)
+    character, width = _unicode_character(data, index)
+    return width if ('a' + character).isidentifier() else 0
+
+
+def _identifier_end(data, index):
+    end = index
+    while end < len(data):
+        width = _identifier_width(data, end)
+        if not width:
+            break
+        end += width
+    return end
+
+
+def _literal_suffix_end(data, index):
+    """A suffix is a complete non-raw identifier, including keyword spellings."""
+    end = _identifier_end(data, index)
+    # The whole-token check also proves identifier start, so a digit or a
+    # combining mark cannot be swallowed as the start of a literal suffix.
+    if end != index and data[index:end].decode('utf-8').isidentifier():
+        return end
+    return index
+
+
+def _space_width(data, index):
+    if data[index] in b' \t\r\n\x0b\x0c':
+        return 1
+    # Non-ASCII Pattern_White_Space, including Rust's LTR/RTL marks.
+    for space in (b'\xc2\x85', b'\xe2\x80\x8e', b'\xe2\x80\x8f',
+                  b'\xe2\x80\xa8', b'\xe2\x80\xa9'):
+        if data.startswith(space, index):
+            return len(space)
+    return 0
+
+
+def _rust_tokens(data, prose=False):
+    """Token boundaries needed for path roots, plus independently scanned comments.
+
+    This is not a Rust expression parser. Identifiers use Python's Unicode XID
+    support; a source token outside that supported set is rejected explicitly.
+    Comment prose keeps its historical path rewriting without carrying import
+    state into code or treating prose quotes as Rust literals.
     """
-    spans, index, size = [], 0, len(data)
+    tokens, comments, index, size = [], [], 0, len(data)
     while index < size:
-        if data.startswith(b'//', index):
+        start = index
+        space = _space_width(data, index)
+        if space:
+            index += space
+            continue
+        if not prose and data.startswith(b'//', index):
             end = data.find(b'\n', index)
             index = size if end < 0 else end
+            comments.append((start, index))
             continue
-        if data.startswith(b'/*', index):
+        if not prose and data.startswith(b'/*', index):
             depth, index = 1, index + 2
             while index < size and depth:
                 if data.startswith(b'/*', index):
@@ -208,68 +281,183 @@ def literal_spans(data):
                     depth, index = depth - 1, index + 2
                 else:
                     index += 1
+            if depth:
+                raise BackportError('unterminated Rust block comment')
+            comments.append((start, index))
             continue
-        raw = RAW_STRING.match(data, index)
+        raw = None if prose else RAW_STRING.match(data, index)
         if raw:
             close = data.find(b'"' + raw[1], raw.end())
-            end = size if close < 0 else close + 1 + len(raw[1])
-            spans.append((index, end))
-            index = end
+            if close < 0:
+                raise BackportError('unterminated Rust raw string')
+            index = _literal_suffix_end(data, close + 1 + len(raw[1]))
+            tokens.append(_RustToken('literal', b'', start, index))
             continue
-        string = STRING.match(data, index)
+        string = None if prose else STRING.match(data, index)
         if string:
             end = string.end()
             while end < size and data[end] != 0x22:
                 end += 2 if data[end] == 0x5c else 1
-            end = min(end + 1, size)
-            spans.append((index, end))
-            index = end
+            if end >= size:
+                raise BackportError('unterminated Rust string')
+            index = _literal_suffix_end(data, end + 1)
+            tokens.append(_RustToken('literal', b'', start, index))
             continue
-        if data[index] == 0x27:
-            char = CHAR.match(data, index)
+        if not prose and (data[index] == 0x27 or data.startswith(b"b'", index)):
+            char = CHAR.match(data, index + (data[index] == 0x62))
             if char:
-                spans.append(char.span())
-                index = char.end()
+                index = _literal_suffix_end(data, char.end())
+                tokens.append(_RustToken('literal', b'', start, index))
                 continue
+        raw_ident = data.startswith(b'r#', index)
+        at = index + 2 if raw_ident else index
+        end = _identifier_end(data, at)
+        if end != at:
+            index = end
+            name = data[at:index]
+            kind = 'number' if 48 <= name[0] <= 57 else 'identifier'
+            if kind == 'identifier' and not prose:
+                try:
+                    supported = name.decode('utf-8').isidentifier()
+                except UnicodeDecodeError as error:
+                    raise BackportError('Rust identifier is not UTF-8 at byte %d' % at) from error
+                if not supported:
+                    raise BackportError('unsupported Rust identifier token at byte %d' % at)
+            tokens.append(_RustToken(kind, data[start:index], start, index))
+            continue
+        if data.startswith(b'::', index):
+            index += 2
+        elif data[index] >= 128:
+            _, width = _unicode_character(data, index)
+            if not prose:
+                raise BackportError('unsupported Rust identifier token at byte %d' % index)
+            index += width
+        else:
+            index += 1
+        tokens.append(_RustToken('punctuation', data[start:index], start, index))
+    return tokens, comments
+
+
+def _use_roots(tokens, strict):
+    """Parse use trees, carrying the enclosing path prefix through each group."""
+    roots, covered, index = set(), set(), 0
+    while index < len(tokens):
+        if tokens[index].text != b'use':
+            index += 1
+            continue
+        begin, index = index, index + 1
+        local, groups, root, state = set(), [], True, 'tree'
+        while index < len(tokens):
+            token = tokens[index]
+            text = token.text
+            if state in ('tree', 'group', 'segment'):
+                if text == b'}' and state == 'group':
+                    groups.pop()
+                    state = 'done'
+                elif text == b'::' and state != 'segment':
+                    root, state = True, 'absolute'
+                elif text == b'{':
+                    groups.append(root)
+                    state = 'group'
+                elif token.kind == 'identifier' or text == b'*':
+                    if root and token.kind == 'identifier':
+                        local.add(index)
+                    root, state = False, 'path' if text != b'*' else 'done'
+                else:
+                    break
+            elif state == 'absolute':
+                if text == b'{':
+                    groups.append(root)
+                    state = 'group'
+                elif token.kind == 'identifier':
+                    local.add(index)
+                    root, state = False, 'path'
+                else:
+                    break
+            elif state == 'path':
+                if text == b'::':
+                    state = 'segment'
+                elif text == b'as':
+                    state = 'alias'
+                else:
+                    state = 'done'
+                    continue
+            elif state == 'alias':
+                if token.kind != 'identifier':
+                    break
+                state = 'done'
+            else:
+                if text == b',' and groups:
+                    root, state = groups[-1], 'group'
+                elif text == b'}' and groups:
+                    groups.pop()
+                elif text == b';' and not groups:
+                    roots.update(local)
+                    covered.update(range(begin, index + 1))
+                    index += 1
+                    break
+                else:
+                    break
+            index += 1
+        else:
+            # An import in prose can be an incomplete example. It cannot
+            # authorize rewriting tokens by the expression-path fallback.
+            index = len(tokens)
+        if index and tokens[index - 1].text == b';' and not groups:
+            continue
+        if strict:
+            raise BackportError('unsupported Rust use tree at byte %d' % tokens[begin].start)
+        if index == len(tokens) and not groups and state in ('path', 'done'):
+            roots.update(local)
+            covered.update(range(begin, index))
+            continue
+        # A prose phrase such as "we use crate::Type in examples" is not a
+        # use item. Leave its ordinary path roots available to the fallback.
+        while index < len(tokens) and tokens[index].text != b';':
+            index += 1
         index += 1
-    return spans
+    return roots, covered
 
 
-def _crate_root(data, start, end):
-    """A crate name starts a path (`name::`, `::name::`) or is named by use/extern crate."""
-    window = data[max(0, start - 4096):start]
-    prefix = window.rstrip()
-    if prefix.endswith(b'.'):
+def _crate_root(tokens, index, prose=False):
+    """Expression/type path roots and extern crate names outside parsed use trees."""
+    before = tokens[index - 1] if index else None
+    if before is not None and (before.text == b'.' or (not prose and before.text == b"'")):
         return False
-    if prefix.endswith(b'::'):
-        left = prefix[:-2].rstrip()[-1:]
-        # `module::name`, `Type>::name`, `call()::name`: a nested segment, not a crate.
-        if left and (left.isalnum() or left in b'_>)'):
+    if before is not None and before.text == b'::' and index >= 2:
+        left = tokens[index - 2]
+        if left.kind in ('identifier', 'literal', 'number') or left.text in (b'>', b')', b']'):
             return False
-    return data[end:end + 64].lstrip().startswith(b'::') or bool(USE_OR_EXTERN.search(window))
+    return ((index + 1 < len(tokens) and tokens[index + 1].text == b'::')
+            or (index >= 2 and tokens[index - 2].text == b'extern' and before.text == b'crate'))
 
 
 def map_identifiers(data, identifier_map):
     """Rewrite crate-name path roots outside literals; return bytes and every replacement."""
     if not identifier_map:
         return data, []
-    targets = {entry['from']: entry['to'] for entry in identifier_map}
-    alternatives = b'|'.join(re.escape(name.encode()) for name in sorted(targets, key=lambda n: (-len(n), n)))
-    pattern = re.compile(rb'(?<![A-Za-z0-9_])(?:' + alternatives + rb')(?![A-Za-z0-9_])')
-    spans, span = literal_spans(data), 0
+    targets = {entry['from'].encode(): entry['to'] for entry in identifier_map}
+    tokens, comments = _rust_tokens(data)
+    streams = [(tokens, 0, True)]
+    streams += [(_rust_tokens(data[start:end], prose=True)[0], start, False) for start, end in comments]
+    changes = []
+    for tokens, offset, strict in streams:
+        roots, imports = _use_roots(tokens, strict)
+        for index, token in enumerate(tokens):
+            raw = token.text.startswith(b'r#')
+            name = token.text[2:] if raw else token.text
+            if token.kind != 'identifier' or name not in targets:
+                continue
+            root = index in roots if index in imports else _crate_root(tokens, index, prose=not strict)
+            if root:
+                changes.append((offset + token.start + (2 if raw else 0), offset + token.end, name.decode()))
     out, last, records = [], 0, []
-    for match in pattern.finditer(data):
-        start, end = match.span()
-        while span < len(spans) and spans[span][1] <= start:
-            span += 1
-        if (span < len(spans) and spans[span][0] <= start) or not _crate_root(data, start, end):
-            continue
-        name = match[0].decode()
-        out += [data[last:start], targets[name].encode()]
+    for start, end, name in sorted(changes):
+        out += [data[last:start], targets[name.encode()].encode()]
         last = end
         records.append({'line': data.count(b'\n', 0, start) + 1,
                         'column': start - (data.rfind(b'\n', 0, start) + 1) + 1,
-                        'from': name, 'to': targets[name]})
+                        'from': name, 'to': targets[name.encode()]})
     out.append(data[last:])
     return b''.join(out), records
 

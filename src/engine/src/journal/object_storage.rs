@@ -23,6 +23,27 @@ fn validate(kind: &str, hash: &str) -> Result<()> {
     }
     Ok(())
 }
+
+/// Parsed object coordinates, never an arbitrary disk-relative write path.
+pub(crate) struct ObjectAddress<'a> {
+    kind: &'a str,
+    hash: &'a str,
+}
+
+impl<'a> ObjectAddress<'a> {
+    pub(crate) fn parse(kind: &'a str, hash: &'a str) -> Result<Self> {
+        validate(kind, hash)?;
+        Ok(Self { kind, hash })
+    }
+
+    pub(crate) fn path(&self, root: &Path) -> PathBuf {
+        sharded_path(root, self.kind, self.hash)
+    }
+
+    pub(crate) fn existing_paths(&self, root: &DiskRoot, d: &DiskConfig) -> Result<Vec<PathBuf>> {
+        existing_paths(root, d, self.kind, self.hash)
+    }
+}
 fn flat_path(d: &DiskConfig, kind: &str, hash: &str) -> PathBuf {
     d.root
         .join("metadata/objects")
@@ -31,8 +52,10 @@ fn flat_path(d: &DiskConfig, kind: &str, hash: &str) -> PathBuf {
 }
 pub(crate) fn object_path(d: &DiskConfig, kind: &str, hash: &str) -> PathBuf {
     // All I/O entry points validate before using this pure path constructor.
-    d.root
-        .join("metadata/objects")
+    sharded_path(&d.root, kind, hash)
+}
+fn sharded_path(root: &Path, kind: &str, hash: &str) -> PathBuf {
+    root.join("metadata/objects")
         .join(kind)
         .join(hash.get(..2).unwrap_or(hash))
         .join(format!("{hash}.json"))
@@ -92,7 +115,10 @@ pub(crate) fn existing_object_paths_at(
     kind: &str,
     hash: &str,
 ) -> Result<Vec<PathBuf>> {
-    validate(kind, hash)?;
+    ObjectAddress::parse(kind, hash)?.existing_paths(root, d)
+}
+
+fn existing_paths(root: &DiskRoot, d: &DiskConfig, kind: &str, hash: &str) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     if let Some(directory) = kind_directory(root, d, kind)? {
         // Reject old-format evidence rather than silently creating a second
@@ -180,9 +206,21 @@ pub(super) fn write_object_bytes_at(
     hash: &str,
     bytes: &[u8],
 ) -> Result<()> {
-    write_object_bytes_with_at(root, d, kind, hash, bytes, |path, bytes| {
-        root.write_atomic(path, bytes, false)
-    })
+    let address = ObjectAddress::parse(kind, hash)?;
+    address.existing_paths(root, d)?;
+    root.write_immutable_object(&address, bytes, false)
+}
+
+pub(super) fn write_object_bytes_in_batch(
+    batch: &mut crate::disk::ObjectInstallBatch<'_>,
+    d: &DiskConfig,
+    kind: &str,
+    hash: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    let address = ObjectAddress::parse(kind, hash)?;
+    address.existing_paths(batch.root(), d)?;
+    batch.write(&address, bytes, false)
 }
 
 #[cfg(test)]
@@ -197,6 +235,7 @@ pub(super) fn write_object_bytes_with(
     write_object_bytes_with_at(&DiskRoot::open(&d.root)?, d, kind, hash, bytes, publish)
 }
 
+#[cfg(test)]
 fn write_object_bytes_with_at(
     root: &DiskRoot,
     d: &DiskConfig,
@@ -205,9 +244,10 @@ fn write_object_bytes_with_at(
     bytes: &[u8],
     publish: impl FnOnce(&Path, &[u8]) -> Result<()>,
 ) -> Result<()> {
-    existing_object_paths_at(root, d, kind, hash)?;
+    let address = ObjectAddress::parse(kind, hash)?;
+    address.existing_paths(root, d)?;
     // The immutable writer validates existing bytes and completes durability.
-    publish(&object_path(d, kind, hash), bytes)
+    publish(&address.path(&d.root), bytes)
 }
 /// Inventory both layouts, rejecting unexpected entries rather than claiming
 /// absence when unreadable evidence could contain a publication.

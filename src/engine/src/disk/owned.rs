@@ -1,10 +1,28 @@
 //! Held filesystem resources, separate from serializable configuration and writer locks.
 use super::*;
-use platform_io::fs_safety::linux::DirectoryEntries;
+use platform_io::fs_safety::linux::{DirectoryEntries, FileIdentity};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+
+struct PendingDirectory {
+    directory: Arc<File>,
+    /// The atomic object writer already synchronizes its leaf shard. Every
+    /// directory also used as a parent needs this batch's own final barrier.
+    parent: bool,
+}
+
+const MAX_PENDING_OBJECT_DIRECTORIES: usize = 128;
+
+/// Unfinished directory obligations for one explicit object-install batch.
+/// Nothing in this value certifies durability for a later batch or call.
+/// Dropping after an error only releases handles; it never hides a sync error.
+#[must_use = "finish the object-install batch before publishing its objects"]
+pub(crate) struct ObjectInstallBatch<'a> {
+    root: &'a DiskRoot,
+    pending: BTreeMap<PathBuf, PendingDirectory>,
+}
 
 /// A path is an address below this held root, never a request to reopen the root.
 pub(crate) struct DiskRoot {
@@ -77,6 +95,11 @@ impl DiskRoot {
         if path == self.path {
             return Ok(directory);
         }
+        Self::validate_private_directory(&directory, path)?;
+        Ok(directory)
+    }
+
+    fn validate_private_directory(directory: &File, path: &Path) -> Result<()> {
         let metadata = directory.metadata()?;
         if metadata.uid() != rustix::process::geteuid().as_raw()
             || metadata.mode() & 0o7777 != 0o700
@@ -85,7 +108,7 @@ impl DiskRoot {
                 path.into(),
             )));
         }
-        Ok(directory)
+        Ok(())
     }
 
     pub(crate) fn entries(&self, path: &Path) -> Result<DirectoryEntries> {
@@ -248,6 +271,26 @@ impl DiskRoot {
         write_atomic_in(&directory, &name, bytes, replace)
     }
 
+    pub(crate) fn object_install_batch(&self) -> ObjectInstallBatch<'_> {
+        ObjectInstallBatch {
+            root: self,
+            pending: BTreeMap::new(),
+        }
+    }
+
+    /// One self-contained install: complete its fresh directory obligations
+    /// before the caller can append a journal record or report success.
+    pub(crate) fn write_immutable_object(
+        &self,
+        address: &crate::journal::ObjectAddress<'_>,
+        bytes: &[u8],
+        replace: bool,
+    ) -> Result<()> {
+        let mut batch = self.object_install_batch();
+        batch.write(address, bytes, replace)?;
+        batch.finish()
+    }
+
     pub(crate) fn write_json<T: Serialize + ?Sized>(
         &self,
         path: &Path,
@@ -293,6 +336,137 @@ impl DiskRoot {
             .map_err(std::io::Error::from)?,
         );
         Ok(file)
+    }
+}
+
+impl ObjectInstallBatch<'_> {
+    pub(crate) fn root(&self) -> &DiskRoot {
+        self.root
+    }
+
+    /// Install bytes now, retaining the actual directory obligations until
+    /// finish. Callers propagate errors and discard the unfinished batch.
+    pub(crate) fn write(
+        &mut self,
+        address: &crate::journal::ObjectAddress<'_>,
+        bytes: &[u8],
+        replace: bool,
+    ) -> Result<()> {
+        let path = address.path(self.root.path());
+        let (parent, name) = self.root.relative(&path)?.split_parent();
+        let parent = parent.expect("invariant: object addresses have a directory parent");
+        let depth = parent.as_path().components().count() + 1;
+        if self.pending.len().saturating_add(depth) > MAX_PENDING_OBJECT_DIRECTORIES {
+            // Complete this bounded sub-batch before beginning another. The
+            // next object registers its entire current ancestor chain anew.
+            self.flush()?;
+        }
+        let held = self.prepare_directory(&parent)?;
+        let directory = PrivateDirectory::from_directory(
+            held.try_clone()?,
+            path.parent()
+                .expect("invariant: immutable object has a parent")
+                .to_path_buf(),
+        )
+        .map_err(fs_error)?;
+        write_atomic_in(&directory, &name, bytes, replace)
+    }
+
+    fn remember(&mut self, path: &Path, directory: Arc<File>) -> Result<Arc<File>> {
+        if let Some(pending) = self.pending.get(path) {
+            if FileIdentity::from_fd(pending.directory.as_ref())?
+                != FileIdentity::from_fd(directory.as_ref())?
+            {
+                return Err(Error::new(
+                    ErrorCode::UnsafePath,
+                    "metadata object directory changed during installation",
+                ));
+            }
+            return Ok(Arc::clone(&pending.directory));
+        }
+        self.pending.insert(
+            path.to_path_buf(),
+            PendingDirectory {
+                directory: Arc::clone(&directory),
+                parent: false,
+            },
+        );
+        Ok(directory)
+    }
+
+    fn prepare_directory(&mut self, path: &RelativePath) -> Result<Arc<File>> {
+        let mut relative = PathBuf::new();
+        let root = Arc::new(self.root.open_relative_directory(None)?);
+        let mut parent = self.remember(&relative, root)?;
+        for component in path.as_path().components() {
+            self.pending
+                .get_mut(&relative)
+                .expect("invariant: an opened parent is registered in this batch")
+                .parent = true;
+            relative.push(component.as_os_str());
+            let created = match rustix::fs::mkdirat(
+                parent.as_ref(),
+                component.as_os_str(),
+                rustix::fs::Mode::from_raw_mode(0o700),
+            ) {
+                Ok(()) => true,
+                Err(rustix::io::Errno::EXIST) => false,
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            };
+            let directory = File::from(
+                rustix::fs::openat2(
+                    parent.as_ref(),
+                    component.as_os_str(),
+                    rustix::fs::OFlags::RDONLY
+                        | rustix::fs::OFlags::DIRECTORY
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                    rustix::fs::ResolveFlags::BENEATH
+                        | rustix::fs::ResolveFlags::NO_SYMLINKS
+                        | rustix::fs::ResolveFlags::NO_XDEV,
+                )
+                .map_err(std::io::Error::from)?,
+            );
+            DiskRoot::validate_private_directory(&directory, &self.root.path.join(&relative))?;
+            if created {
+                // Preserve the original newly-created child -> parent barriers
+                // and their error sources before installing any object bytes.
+                directory
+                    .sync_all()
+                    .map_err(|error| fs_error(platform_io::fs_safety::Error::Io(error)))?;
+                parent.sync_all()?;
+            }
+            parent = self.remember(&relative, Arc::new(directory))?;
+        }
+        Ok(parent)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        let mut directories: Vec<_> = self.pending.iter().collect();
+        directories.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+        let mut synced = BTreeSet::new();
+        for (path, pending) in directories {
+            let current = self.root.directory(&self.root.path.join(path))?;
+            let identity = FileIdentity::from_fd(pending.directory.as_ref())?;
+            if identity != FileIdentity::from_fd(current)? {
+                return Err(Error::new(
+                    ErrorCode::UnsafePath,
+                    "metadata object directory changed before its final barrier",
+                ));
+            }
+            if pending.parent && synced.insert((identity.device, identity.inode)) {
+                // Matching identity is not a proof that this name never moved:
+                // even a same-inode ABA owes this batch's fresh parent barrier.
+                pending.directory.sync_all()?;
+            }
+        }
+        self.pending.clear();
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> Result<()> {
+        self.flush()
     }
 }
 
@@ -384,3 +558,7 @@ impl DiskResources {
         self.disks.get(&disk.disk_id)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/disk/owned_directory_tests.rs"]
+mod directory_tests;

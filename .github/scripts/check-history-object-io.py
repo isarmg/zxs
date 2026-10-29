@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run isolated existing-object durability tests from Cargo's exact libtest artifact."""
+"""Run isolated object/directory durability tests from Cargo's exact libtest artifact."""
 import json
 from pathlib import Path
 import subprocess
@@ -32,6 +32,10 @@ def main():
         raise ValueError(f"expected one storage-engine libtest artifact, got {artifacts}")
     subprocess.run(
         ["bash", "test/engine/unit/history_package/immutable_io/run.sh", artifacts[0]],
+        cwd=ROOT, check=True,
+    )
+    subprocess.run(
+        ["bash", "test/engine/unit/disk/owned_directory_io/run.sh", artifacts[0]],
         cwd=ROOT, check=True,
     )
 
