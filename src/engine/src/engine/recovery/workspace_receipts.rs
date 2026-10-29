@@ -16,6 +16,45 @@ pub(super) struct PublishedReceiptRoot {
 }
 
 impl PreparedRecovery {
+    pub(in crate::engine) fn visit_workspace_plans(
+        &self,
+        engine: &Engine,
+        mut visit: impl FnMut(Plan) -> Result<()>,
+    ) -> Result<()> {
+        let Some(root) = &self.published_receipts else {
+            return Ok(());
+        };
+        let plans = root
+            .snapshot
+            .maps
+            .get("plans")
+            .expect("invariant: admitted snapshot schema includes plans");
+        crate::metadata_map::visit_objects(
+            plans,
+            |kind, hash| {
+                crate::publication_evidence::verified_graph_object_at(
+                    &engine.disk_resources,
+                    &self.online,
+                    kind,
+                    hash,
+                )
+            },
+            |object| {
+                if object.kind() == "state-page" {
+                    for value in object
+                        .value()
+                        .as_object()
+                        .expect("invariant: visited plan leaf passed PageShape")
+                        .values()
+                    {
+                        visit(json_codec::from_value(value.clone())?)?;
+                    }
+                }
+                Ok(())
+            },
+        )
+    }
+
     pub(in crate::engine) fn workspace_receipt(
         &self,
         engine: &Engine,

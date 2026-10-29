@@ -214,6 +214,48 @@ impl Engine {
         canonical: &[u8],
         retention: WorkspaceRetention,
     ) -> Result<WorkspaceAdmission> {
+        let admission = self.check_workspace_metadata_budget(candidate, canonical, retention)?;
+        let limits = self.effective_workspace_limits();
+        let budget = &self.workspace_budget;
+        let old = budget.records.get(&candidate.workspace_id);
+        let previous = usize::from(old.is_some_and(|old| !old.retention.is_cold()));
+        let next = usize::from(!retention.is_cold());
+        let principal = budget
+            .principals
+            .get(&candidate.principal)
+            .copied()
+            .unwrap_or_default();
+        if budget.resident - previous + next > limits.max_retained_workspaces {
+            return Err(workspace_budget_exhausted("global record count"));
+        }
+        if principal.resident - previous + next > limits.max_retained_workspaces_per_principal {
+            return Err(workspace_budget_exhausted("principal record count"));
+        }
+        Ok(admission)
+    }
+
+    pub(super) fn check_workspace_record_counts(&self) -> Result<()> {
+        let limits = self.effective_workspace_limits();
+        if self.workspace_budget.resident > limits.max_retained_workspaces {
+            return Err(workspace_budget_exhausted("global record count"));
+        }
+        if self
+            .workspace_budget
+            .principals
+            .values()
+            .any(|usage| usage.resident > limits.max_retained_workspaces_per_principal)
+        {
+            return Err(workspace_budget_exhausted("principal record count"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_workspace_metadata_budget(
+        &self,
+        candidate: &Workspace,
+        canonical: &[u8],
+        retention: WorkspaceRetention,
+    ) -> Result<WorkspaceAdmission> {
         let limits = self.effective_workspace_limits();
         let budget = &self.workspace_budget;
         let old = budget.records.get(&candidate.workspace_id);
@@ -225,8 +267,6 @@ impl Engine {
         }
         let charge = self.workspace_metadata_charge(candidate, canonical.len())?;
         let old_charge = old.map_or(0, |old| old.bytes);
-        let was_resident = usize::from(old.is_some_and(|old| !old.retention.is_cold()));
-        let resident = usize::from(!retention.is_cold());
         let principal = budget
             .principals
             .get(&candidate.principal)
@@ -240,30 +280,18 @@ impl Engine {
             .bytes
             .checked_sub(old_charge)
             .and_then(|bytes| bytes.checked_add(charge));
-        let exhausted = if budget.resident - was_resident + resident
-            > limits.max_retained_workspaces
-        {
-            Some("global record count")
-        } else if principal.resident - was_resident + resident
-            > limits.max_retained_workspaces_per_principal
-        {
-            Some("principal record count")
-        } else if bytes.is_none_or(|bytes| bytes > limits.max_retained_workspace_metadata_bytes) {
-            Some("global metadata bytes")
-        } else if principal_bytes
-            .is_none_or(|bytes| bytes > limits.max_retained_workspace_metadata_bytes_per_principal)
-        {
-            Some("principal metadata bytes")
-        } else {
-            None
-        };
+        let exhausted =
+            if bytes.is_none_or(|bytes| bytes > limits.max_retained_workspace_metadata_bytes) {
+                Some("global metadata bytes")
+            } else if principal_bytes.is_none_or(|bytes| {
+                bytes > limits.max_retained_workspace_metadata_bytes_per_principal
+            }) {
+                Some("principal metadata bytes")
+            } else {
+                None
+            };
         if let Some(dimension) = exhausted {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ResourceLimit,
-                format!(
-                    "workspace evidence {dimension} budget exhausted; all metadata and recovery evidence remain retained"
-                ),
-            ));
+            return Err(workspace_budget_exhausted(dimension));
         }
         Ok(WorkspaceAdmission {
             id: candidate.workspace_id.clone(),
@@ -318,3 +346,12 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/workspace_budget_helpers.rs"]
 mod tests;
+
+fn workspace_budget_exhausted(dimension: &str) -> Error {
+    Error::new(
+        ErrorCode::ResourceLimit,
+        format!(
+            "workspace evidence {dimension} budget exhausted; all metadata and recovery evidence remain retained"
+        ),
+    )
+}

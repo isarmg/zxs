@@ -509,9 +509,8 @@ impl Engine {
                     "workspace fencing token exhausted",
                 )
             })?;
-            self.persist_workspace(&workspace)?;
-            self.workspaces
-                .insert(workspace.workspace_id.clone(), workspace);
+            self.persist_completed_workspace(&workspace)?;
+            self.install_workspace(workspace);
         }
         Ok(result)
     }

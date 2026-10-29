@@ -419,3 +419,281 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
     );
     assert_eq!(engine.state.versions.len(), version_count);
 }
+
+fn retirement_fixture() -> (tempfile::TempDir, Engine, Repository, String) {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = Config::development([root.path().join("primary")]);
+    config.max_retained_workspaces = 1;
+    config.max_retained_workspaces_per_principal = 1;
+    let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("historical retirement").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let source = engine.state.branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    (root, engine, repo, source)
+}
+
+fn retirement_plan(
+    engine: &mut Engine,
+    repo: &Repository,
+    source: &str,
+    name: &str,
+) -> (Workspace, Plan, StagedFile) {
+    let workspace = engine
+        .create_historical_workspace(&repo.main_branch_id, source, "admin")
+        .unwrap();
+    let staged = engine
+        .stage_bytes(
+            &workspace.workspace_id,
+            "retained.txt",
+            b"historical retirement bytes",
+        )
+        .unwrap();
+    let plan = engine
+        .create_historical_save_plan(
+            &repo.history_tree_id,
+            HistoricalSaveOptions {
+                source_commit_id: source.into(),
+                name: name.into(),
+                workspace_id: Some(workspace.workspace_id.clone()),
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    (workspace, plan, staged)
+}
+
+#[test]
+fn published_historical_workspaces_release_records_without_losing_bytes_or_replay() {
+    let (root, mut engine, repo, source) = retirement_fixture();
+    let mut saved = Vec::new();
+    let mut previous_bytes = 0;
+    for index in 0..4 {
+        let (workspace, plan, staged) =
+            retirement_plan(&mut engine, &repo, &source, &format!("retired {index}"));
+        let operation = OperationId::generate();
+        let result = engine
+            .commit_historical_save_plan(&plan.plan_id, "admin", operation)
+            .unwrap();
+        let capacity = engine.workspace_capacity("admin");
+        assert_eq!(capacity.principal.records.used, 0);
+        assert_eq!(capacity.principal.cold_records, index + 1);
+        assert!(capacity.principal.metadata_bytes.used > previous_bytes);
+        previous_bytes = capacity.principal.metadata_bytes.used;
+        assert!(!engine.workspaces.contains_key(&workspace.workspace_id));
+        assert_eq!(staged.source_path.extension().unwrap(), "full");
+        assert_eq!(
+            std::fs::read(&staged.source_path).unwrap(),
+            b"historical retirement bytes"
+        );
+        saved.push((workspace, plan, staged, result));
+        drop(engine);
+        engine = Engine::open(&root.path().join("system")).unwrap();
+        assert_eq!(engine.workspace_capacity("admin"), capacity);
+        for (workspace, plan, staged, result) in &saved {
+            let retained = engine.workspace(&workspace.workspace_id).unwrap();
+            assert_eq!(retained.state, WorkspaceState::Committed);
+            assert_eq!(retained.fencing_token, workspace.fencing_token + 1);
+            assert!(!engine.workspaces.contains_key(&workspace.workspace_id));
+            assert_eq!(
+                std::fs::read(&staged.source_path).unwrap(),
+                b"historical retirement bytes"
+            );
+            assert_eq!(
+                engine
+                    .commit_historical_save_plan(&plan.plan_id, "admin", result.operation_id)
+                    .unwrap(),
+                *result
+            );
+        }
+    }
+}
+
+#[test]
+fn published_historical_abort_stays_cold_while_unpublished_work_consumes_the_limit() {
+    let (root, mut engine, repo, source) = retirement_fixture();
+    let (workspace, plan, staged) = retirement_plan(&mut engine, &repo, &source, "published");
+    let result = engine
+        .commit_historical_save_plan(&plan.plan_id, "admin", OperationId::generate())
+        .unwrap();
+    let unpublished = engine
+        .create_historical_workspace(&repo.main_branch_id, &source, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(
+            &unpublished.workspace_id,
+            "unpublished.txt",
+            b"not published",
+        )
+        .unwrap();
+    engine
+        .abort_workspace(&unpublished.workspace_id, "admin")
+        .unwrap();
+    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
+    for _ in 0..2 {
+        engine
+            .abort_workspace(&workspace.workspace_id, "admin")
+            .unwrap();
+    }
+    let closed = engine.workspace(&workspace.workspace_id).unwrap();
+    assert_eq!(closed.state, WorkspaceState::Aborted);
+    assert_eq!(closed.fencing_token, workspace.fencing_token + 3);
+    let capacity = engine.workspace_capacity("admin");
+    assert_eq!(capacity.principal.cold_records, 1);
+    drop(engine);
+    let mut engine = Engine::open(&root.path().join("system")).unwrap();
+    assert_eq!(engine.workspace_capacity("admin"), capacity);
+    assert_eq!(
+        canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        canonical_json(&closed).unwrap()
+    );
+    assert!(engine.workspaces.contains_key(&unpublished.workspace_id));
+    assert_eq!(
+        std::fs::read(&staged.source_path).unwrap(),
+        b"historical retirement bytes"
+    );
+    assert_eq!(
+        engine
+            .commit_historical_save_plan(&plan.plan_id, "admin", result.operation_id)
+            .unwrap(),
+        result
+    );
+    engine
+        .abort_workspace(&workspace.workspace_id, "admin")
+        .unwrap();
+    assert_eq!(
+        engine
+            .workspace(&workspace.workspace_id)
+            .unwrap()
+            .fencing_token,
+        closed.fencing_token + 1
+    );
+    assert_eq!(engine.workspace_capacity("admin"), capacity);
+}
+
+#[test]
+fn failed_historical_completion_mirror_does_not_release_resident_quota() {
+    let (_root, mut engine, repo, source) = retirement_fixture();
+    let (workspace, plan, staged) = retirement_plan(&mut engine, &repo, &source, "mirror failure");
+    let manifest = engine
+        .root
+        .join("workspaces")
+        .join(&workspace.workspace_id)
+        .join("workspace.json");
+    let retained = manifest.with_extension("retained");
+    std::fs::rename(&manifest, &retained).unwrap();
+    std::fs::create_dir(&manifest).unwrap();
+    let operation = OperationId::generate();
+    assert!(
+        engine
+            .commit_historical_save_plan(&plan.plan_id, "admin", operation)
+            .is_err()
+    );
+    let result = engine.published_receipt(operation).unwrap().unwrap();
+    assert_eq!(result.kind, "history.historical_save");
+    let capacity = engine.workspace_capacity("admin");
+    assert_eq!(capacity.principal.records.used, 1);
+    assert_eq!(capacity.principal.cold_records, 0);
+    assert!(engine.workspaces.contains_key(&workspace.workspace_id));
+    assert_eq!(
+        std::fs::read(&staged.source_path).unwrap(),
+        b"historical retirement bytes"
+    );
+    std::fs::remove_dir(&manifest).unwrap();
+    std::fs::rename(retained, manifest).unwrap();
+}
+
+#[test]
+fn cold_historical_workspace_remains_a_full_payload_recovery_source() {
+    use std::io::{Read, Seek};
+    use std::os::unix::fs::MetadataExt;
+    let (root, mut engine, repo, source) = retirement_fixture();
+    let (workspace, plan, staged) = retirement_plan(&mut engine, &repo, &source, "recoverable");
+    let result = engine
+        .commit_historical_save_plan(&plan.plan_id, "admin", OperationId::generate())
+        .unwrap();
+    let branch = result.branch_id.as_ref().unwrap();
+    let version_id = engine.list_tree(branch).unwrap()[0].version_id.clone();
+    let version = engine.state.versions[&version_id].clone();
+    let placement = engine.state.placements[&version_id].clone();
+    engine
+        .abort_workspace(&workspace.workspace_id, "admin")
+        .unwrap();
+    for slot in &placement.route_slot_ids {
+        let disk = engine.disk(slot).unwrap();
+        let held = engine.disk_resources.get(disk).unwrap();
+        let directory = crate::disk::version_dir(disk, &version.history_tree_id, &version_id);
+        let body = crate::container_storage::content_path_at(
+            &held.root,
+            &directory,
+            &version,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        std::fs::remove_file(body).unwrap();
+    }
+    drop(engine);
+    let engine = Engine::open(&root.path().join("system")).unwrap();
+    assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 1);
+    assert!(!engine.workspaces.contains_key(&workspace.workspace_id));
+    let recovery = engine
+        .pending_payload_source(&version, &placement)
+        .unwrap()
+        .unwrap();
+    let mut recovered_source = recovery.open().unwrap();
+    assert_eq!(
+        recovered_source.metadata().unwrap().ino(),
+        std::fs::metadata(&staged.source_path).unwrap().ino(),
+    );
+    let mut actual = Vec::new();
+    recovered_source.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, b"historical retirement bytes");
+    let members = engine.members();
+    let hash = crate::journal::scan(&members[0])
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|(record, _)| {
+            record.sequence == result.sequence
+                && record.record_type == crate::journal::RecordType::Accept
+        })
+        .unwrap()
+        .0
+        .candidate_hash;
+    let candidate: crate::journal::Candidate = crate::publication_evidence::verified_object_at(
+        &engine.disk_resources,
+        &members,
+        "candidate",
+        &hash,
+    )
+    .unwrap();
+    engine.repair_pending_payloads(&candidate).unwrap();
+    for slot in &placement.route_slot_ids {
+        let disk = engine.disk(slot).unwrap();
+        let directory = crate::disk::version_dir(disk, &version.history_tree_id, &version_id);
+        let mut body = engine
+            .disk_resources
+            .get(disk)
+            .unwrap()
+            .verify_payload(&directory, &version)
+            .unwrap();
+        body.rewind().unwrap();
+        let mut repaired = Vec::new();
+        body.read_to_end(&mut repaired).unwrap();
+        assert_eq!(repaired, b"historical retirement bytes");
+    }
+    assert_eq!(
+        std::fs::read(staged.source_path).unwrap(),
+        b"historical retirement bytes"
+    );
+}

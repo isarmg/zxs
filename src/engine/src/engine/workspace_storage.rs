@@ -11,6 +11,9 @@ use std::{
     sync::Arc,
 };
 
+mod historical;
+use historical::HistoricalWorkspaceCandidate;
+
 enum WorkspaceLocation {
     System(DiskRoot),
     Primary(DiskRoot),
@@ -56,12 +59,13 @@ impl WorkspaceSource<'_> {
 enum WorkspaceRead<'a> {
     Seed(&'a super::recovery::PreparedRecovery),
     Published,
+    Cold(WorkspaceRetention),
     RecoveryHint,
 }
 
 impl WorkspaceRead<'_> {
     fn authoritative(self) -> bool {
-        matches!(self, Self::Published)
+        matches!(self, Self::Published | Self::Cold(_))
     }
 }
 
@@ -250,9 +254,7 @@ impl Engine {
         let locations = self.workspace_locations()?;
         self.workspaces.clear();
         self.reset_workspace_budget();
-        // The accounting index is bounded by all admitted metadata bytes, not
-        // active record count. No decoded cold manifests or complete path list
-        // survive this iteration; each ID is reconciled before admitting another.
+        let mut historical = std::collections::BTreeMap::new();
         for location in &locations {
             let directory = location.directory();
             let entries = match location.root().entries(&directory) {
@@ -285,19 +287,62 @@ impl Engine {
                 if paths.is_empty() {
                     continue;
                 }
-                let loaded = self.read_workspace_mirrors(id, &paths, &locations, admission)?;
-                let admission = self.check_workspace_budget(
+                let loaded =
+                    self.read_workspace_mirrors(id, &paths, &locations, admission, None)?;
+                let charge = self.check_workspace_metadata_budget(
                     &loaded.workspace,
                     &loaded.canonical,
                     loaded.retention,
                 )?;
-                self.account_workspace(admission);
-                if !loaded.retention.is_cold() {
-                    self.workspaces.insert(id.into(), loaded.workspace);
+                self.account_workspace(charge);
+                if loaded.workspace.purpose == WorkspacePurpose::HistoricalBranch {
+                    historical.insert(
+                        id.to_owned(),
+                        HistoricalWorkspaceCandidate::new(&loaded.workspace, &loaded.canonical),
+                    );
+                } else if !loaded.retention.is_cold() {
+                    self.workspaces.insert(id.to_owned(), loaded.workspace);
                 }
             }
         }
-        Ok(())
+        if !historical.is_empty() {
+            let mut observe = |plan: &Plan| -> Result<()> {
+                if let Some(id) = plan.input["workspace_id"].as_str()
+                    && let Some(candidate) = historical.get_mut(id)
+                {
+                    candidate.observe(plan)?;
+                }
+                Ok(())
+            };
+            match admission {
+                WorkspaceRead::Seed(prepared) => {
+                    prepared.visit_workspace_plans(self, |plan| observe(&plan))?;
+                }
+                WorkspaceRead::Published => {
+                    for plan in self.state.plans.values() {
+                        observe(plan)?;
+                    }
+                }
+                WorkspaceRead::Cold(_) | WorkspaceRead::RecoveryHint => {
+                    unreachable!("invariant: bulk loading uses seed or published admission");
+                }
+            }
+        }
+        for (id, candidate) in historical {
+            let paths = workspace_paths(&locations, &id)?;
+            let loaded =
+                self.read_workspace_mirrors(&id, &paths, &locations, admission, Some(&candidate))?;
+            let charge = self.check_workspace_metadata_budget(
+                &loaded.workspace,
+                &loaded.canonical,
+                loaded.retention,
+            )?;
+            self.account_workspace(charge);
+            if !loaded.retention.is_cold() {
+                self.workspaces.insert(id, loaded.workspace);
+            }
+        }
+        self.check_workspace_record_counts()
     }
 
     fn read_workspace_mirrors(
@@ -306,6 +351,7 @@ impl Engine {
         paths: &[WorkspaceSource<'_>],
         locations: &[WorkspaceLocation],
         admission: WorkspaceRead<'_>,
+        historical: Option<&HistoricalWorkspaceCandidate>,
     ) -> Result<LoadedWorkspace> {
         let authoritative = admission.authoritative();
         let mut healthy = Vec::new();
@@ -324,24 +370,46 @@ impl Engine {
             ));
         }
         let damaged = healthy.len() != paths.len();
+        let historical_purpose = healthy[0].purpose == WorkspacePurpose::HistoricalBranch;
+        if let Some(candidate) = historical
+            && blake3::hash(&canonical_json(&healthy[0])?) != candidate.fingerprint
+        {
+            return Err(recovery_required(
+                "historical workspace changed during admission",
+            ));
+        }
         let original_state = healthy[0].state;
         let original_fence = healthy[0].fencing_token;
         let terminal_mirrors = healthy.iter().all(|workspace| {
-            workspace.purpose == WorkspacePurpose::Normal
-                && matches!(
-                    workspace.state,
-                    WorkspaceState::Committed | WorkspaceState::Aborted
-                )
-                && workspace.state == original_state
+            matches!(
+                workspace.state,
+                WorkspaceState::Committed | WorkspaceState::Aborted
+            ) && workspace.state == original_state
                 && workspace.fencing_token == original_fence
         });
+        let cold = matches!(admission, WorkspaceRead::Cold(_));
+        let reconcile = if historical_purpose {
+            historical.is_some_and(HistoricalWorkspaceCandidate::has_completion) || cold
+        } else {
+            authoritative
+        };
         let mut published_terminal = terminal_mirrors;
-        if authoritative && healthy.len() == 2 {
+        if authoritative && !historical_purpose && healthy.len() == 2 {
             self.reconcile_completion_contexts(&mut healthy)?;
         }
-        if authoritative {
+        if reconcile {
+            let historical_published = if let Some(candidate) = historical {
+                Some(candidate.reconcile_mirrors(&mut healthy)?)
+            } else if historical_purpose {
+                Some(true)
+            } else {
+                None
+            };
             for workspace in &mut healthy {
-                let published = self.reconcile_workspace_receipt(workspace)?;
+                let published = match historical_published {
+                    Some(published) => published,
+                    None => self.reconcile_workspace_receipt(workspace)?,
+                };
                 published_terminal &= published
                     && workspace.state == original_state
                     && workspace.fencing_token == original_fence;
@@ -351,13 +419,24 @@ impl Engine {
                     ));
                 }
             }
-        } else if matches!(admission, WorkspaceRead::RecoveryHint) {
+        } else if historical_purpose || matches!(admission, WorkspaceRead::RecoveryHint) {
             published_terminal = false;
         }
+        if authoritative
+            && historical.is_some()
+            && !reconcile
+            && damaged
+            && healthy[0].state == WorkspaceState::Committed
+        {
+            return Err(recovery_required(
+                "surviving committed manifest lacks a bound receipt",
+            ));
+        }
+        let require_equal = reconcile || (authoritative && historical.is_some());
         let selected = healthy.remove(0);
         let canonical = canonical_json(&selected)?;
         for other in &healthy {
-            if authoritative
+            if require_equal
                 || matches!(admission, WorkspaceRead::RecoveryHint)
                 || (selected.state == other.state && selected.fencing_token == other.fencing_token)
             {
@@ -368,7 +447,7 @@ impl Engine {
             }
             let mut left = selected.clone();
             let mut right = other.clone();
-            if !authoritative {
+            if !require_equal {
                 // Only a possible commit completion may await journal
                 // evidence. An abort or arbitrary newer fence is not a
                 // reason to let recovery publish a pending decision.
@@ -399,6 +478,7 @@ impl Engine {
         }
         if let WorkspaceRead::Seed(prepared) = admission
             && terminal_mirrors
+            && !historical_purpose
         {
             published_terminal = self.seed_terminal_publication(&selected, paths, prepared)?;
         }
@@ -442,6 +522,13 @@ impl Engine {
             }
             _ => WorkspaceRetention::Resident,
         };
+        if let WorkspaceRead::Cold(admitted) = admission
+            && retention != admitted
+        {
+            return Err(recovery_required(
+                "cold workspace evidence changed; reopen for reconciliation",
+            ));
+        }
         Ok(LoadedWorkspace {
             workspace: selected,
             canonical,
@@ -463,15 +550,13 @@ impl Engine {
     ) -> Result<Workspace> {
         let locations = self.workspace_locations()?;
         let paths = workspace_paths(&locations, id)?;
-        let loaded =
-            self.read_workspace_mirrors(id, &paths, &locations, WorkspaceRead::Published)?;
-        // A cold point read is a disk boundary, not permission to replace the
-        // admitted accounting/identity with different but syntactically valid data.
-        if loaded.retention != admitted {
-            return Err(recovery_required(
-                "cold workspace evidence changed; reopen for reconciliation",
-            ));
-        }
+        let loaded = self.read_workspace_mirrors(
+            id,
+            &paths,
+            &locations,
+            WorkspaceRead::Cold(admitted),
+            None,
+        )?;
         Ok(loaded.workspace)
     }
 
@@ -558,7 +643,7 @@ impl Engine {
         let locations = self.workspace_locations()?;
         let paths = workspace_paths(&locations, id)?;
         let loaded =
-            self.read_workspace_mirrors(id, &paths, &locations, WorkspaceRead::RecoveryHint)?;
+            self.read_workspace_mirrors(id, &paths, &locations, WorkspaceRead::RecoveryHint, None)?;
         if workspace_mirrors(&paths) != Some(mirrors)
             || blake3::hash(&loaded.canonical) != fingerprint
         {
@@ -571,10 +656,9 @@ impl Engine {
 
     pub(crate) fn persist_completed_workspace(&mut self, workspace: &Workspace) -> Result<()> {
         let canonical = encode_metadata(workspace, MAX_METADATA)?;
-        let retention = if workspace.purpose == WorkspacePurpose::Normal
-            && !self
-                .commit_preparation
-                .load(std::sync::atomic::Ordering::Acquire)
+        let retention = if !self
+            .commit_preparation
+            .load(std::sync::atomic::Ordering::Acquire)
             && !self
                 .upload_preparations
                 .lock()
@@ -902,56 +986,6 @@ impl Engine {
                 {
                     return Err(recovery_required(
                         "workspace receipt conflicts with retained fence or state",
-                    ));
-                }
-                completion = Some(next);
-            }
-        }
-        if workspace.purpose == WorkspacePurpose::HistoricalBranch
-            && workspace.state != WorkspaceState::Aborted
-        {
-            for plan in self.state.plans.values().filter(|plan| {
-                plan.kind == "historical_save"
-                    && plan.state == PlanState::Completed
-                    && plan.principal == workspace.principal
-                    && plan.input["workspace_id"].as_str() == Some(workspace.workspace_id.as_str())
-                    && plan.input["source_commit_id"].as_str() == Some(workspace.base_head.as_str())
-            }) {
-                let fence = std::num::NonZeroU64::new(
-                    storage_contract::parse_u64_decimal(
-                        plan.input["workspace_fencing_token"]
-                            .as_str()
-                            .ok_or_else(|| {
-                                recovery_required("historical workspace plan lacks fencing token")
-                            })?,
-                    )
-                    .map_err(|source| {
-                        Error::from(source).context(
-                            ErrorCode::RecoveryRequired,
-                            "invalid historical workspace fencing token",
-                        )
-                    })?,
-                )
-                .ok_or_else(|| recovery_required("historical workspace fencing token is zero"))?;
-                let fence = fence.get();
-                let next = fence
-                    .checked_add(1)
-                    .ok_or_else(|| recovery_required("workspace fencing generation exhausted"))?;
-                let mut frozen = workspace.clone();
-                frozen.fencing_token = fence;
-                if plan.input["sealed_manifest_hash"].as_str()
-                    != Some(crate::wire::manifest_hash(&frozen)?.as_str())
-                {
-                    continue;
-                }
-                if !matches!(
-                    workspace.state,
-                    WorkspaceState::Sealed | WorkspaceState::Committed
-                ) || !(workspace.fencing_token == fence || workspace.fencing_token == next)
-                    || completion.is_some_and(|other| other != next)
-                {
-                    return Err(recovery_required(
-                        "historical workspace plan conflicts with retained fence or state",
                     ));
                 }
                 completion = Some(next);

@@ -47,7 +47,14 @@ fn historical_completion_rejects_invalid_persisted_fence_instead_of_leaving_work
         .commit_historical_save_plan(&plan.plan_id, "admin", OperationId::generate())
         .unwrap();
     let mut recovered = sealed.clone();
-    assert!(engine.reconcile_workspace_receipt(&mut recovered).unwrap());
+    let mut candidate = historical::HistoricalWorkspaceCandidate::new(
+        &recovered,
+        &canonical_json(&recovered).unwrap(),
+    );
+    candidate
+        .observe(&engine.state.plans[&plan.plan_id])
+        .unwrap();
+    assert!(candidate.reconcile(&mut recovered).unwrap());
     assert_eq!(recovered.state, WorkspaceState::Committed);
     for invalid in [
         json!(null),
@@ -64,9 +71,15 @@ fn historical_completion_rejects_invalid_persisted_fence_instead_of_leaving_work
             .unwrap()
             .input["workspace_fencing_token"] = invalid.clone();
         let mut recovered = sealed.clone();
-        let error = engine
-            .reconcile_workspace_receipt(&mut recovered)
-            .unwrap_err();
+        let mut check = || -> Result<bool> {
+            let mut candidate = historical::HistoricalWorkspaceCandidate::new(
+                &recovered,
+                &canonical_json(&recovered)?,
+            );
+            candidate.observe(&engine.state.plans[&plan.plan_id])?;
+            candidate.reconcile(&mut recovered)
+        };
+        let error = check().unwrap_err();
         assert_eq!(error.code(), ErrorCode::RecoveryRequired, "{invalid}");
         assert_eq!(recovered.state, sealed.state);
         assert_eq!(recovered.fencing_token, sealed.fencing_token);
@@ -241,6 +254,7 @@ fn workspace_scan_reads_the_admitted_private_base_after_path_replacement() {
             &paths,
             &locations,
             WorkspaceRead::Published,
+            None,
         )
         .unwrap();
     assert_eq!(loaded.canonical, canonical_json(&workspace).unwrap());
@@ -346,4 +360,235 @@ fn workspace_recovery_does_not_adopt_a_mirror_on_an_unadmitted_replacement() {
         engine.blocked,
         "missing members do not shrink the write barrier"
     );
+}
+
+fn historical_storage_fixture() -> (tempfile::TempDir, Engine, Repository, String) {
+    let root = tempfile::tempdir().unwrap();
+    let config = Config::development([root.path().join("primary")]);
+    let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("historical mirrors").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let source = engine.state.branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    (root, engine, repo, source)
+}
+
+fn historical_manifest_paths(engine: &Engine, id: &str) -> [PathBuf; 2] {
+    [
+        engine
+            .root
+            .join("workspaces")
+            .join(id)
+            .join("workspace.json"),
+        engine.config.disks[0]
+            .root
+            .join("staging/workspaces")
+            .join(id)
+            .join("workspace.json"),
+    ]
+}
+
+#[test]
+fn historical_cold_point_read_rejects_changed_mirror_bytes_without_reconciliation_writes() {
+    let (_root, mut engine, repo, source) = historical_storage_fixture();
+    let workspace = engine
+        .create_historical_workspace(&repo.main_branch_id, &source, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "file", b"historical mirror bytes")
+        .unwrap();
+    let plan = engine
+        .create_historical_save_plan(
+            &repo.history_tree_id,
+            crate::HistoricalSaveOptions {
+                source_commit_id: source,
+                name: "published historical mirror".into(),
+                workspace_id: Some(workspace.workspace_id.clone()),
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    engine
+        .commit_historical_save_plan(&plan.plan_id, "admin", OperationId::generate())
+        .unwrap();
+    let mut changed = engine.workspace(&workspace.workspace_id).unwrap();
+    assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 1);
+    changed.created_at += 1;
+    let paths = historical_manifest_paths(&engine, &workspace.workspace_id);
+    for path in &paths {
+        write_json(path, &changed, false).unwrap();
+    }
+    let before = paths.each_ref().map(|path| fs::read(path).unwrap());
+    let capacity = engine.workspace_capacity("admin");
+    assert_eq!(
+        engine
+            .workspace(&workspace.workspace_id)
+            .unwrap_err()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(paths.each_ref().map(|path| fs::read(path).unwrap()), before);
+    assert_eq!(engine.workspace_capacity("admin"), capacity);
+}
+
+#[test]
+fn historical_seed_quota_rejection_preserves_config_journals_and_manifests() {
+    for exhaust_bytes in [false, true] {
+        let (_root, mut engine, repo, source) = historical_storage_fixture();
+        let mut paths = vec![engine.root.join("config.json")];
+        paths.extend(engine.config.disks.iter().map(crate::journal::log_path));
+        for index in 0..2 {
+            let mut workspace = engine
+                .create_historical_workspace(&repo.main_branch_id, &source, "admin")
+                .unwrap();
+            engine
+                .stage_bytes(
+                    &workspace.workspace_id,
+                    &format!("file-{index}"),
+                    b"unpublished historical bytes",
+                )
+                .unwrap();
+            workspace = engine.workspace(&workspace.workspace_id).unwrap();
+            workspace.state = WorkspaceState::Committed;
+            workspace.fencing_token += 1;
+            let manifests = historical_manifest_paths(&engine, &workspace.workspace_id);
+            for path in &manifests {
+                write_json(path, &workspace, false).unwrap();
+            }
+            paths.extend(manifests);
+        }
+        let mut config = engine.config().clone();
+        if exhaust_bytes {
+            config.max_retained_workspace_metadata_bytes = 1;
+            config.max_retained_workspace_metadata_bytes_per_principal = 1;
+        } else {
+            config.max_retained_workspaces = 1;
+            config.max_retained_workspaces_per_principal = 1;
+        }
+        engine.config = super::super::ValidatedConfig::try_from(config).unwrap();
+        let before: Vec<_> = paths.iter().map(|path| fs::read(path).unwrap()).collect();
+        let prepared = engine.prepare_recovery().unwrap();
+        let error = engine.seed_workspace_recovery(&prepared).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ResourceLimit);
+        assert_eq!(
+            paths
+                .iter()
+                .map(|path| fs::read(path).unwrap())
+                .collect::<Vec<_>>(),
+            before
+        );
+    }
+}
+
+fn completed_historical_binding_fixture() -> (tempfile::TempDir, Engine, Workspace, Plan) {
+    let (root, mut engine, repo, source) = historical_storage_fixture();
+    let workspace = engine
+        .create_historical_workspace(&repo.main_branch_id, &source, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "file", b"binding bytes")
+        .unwrap();
+    let plan = engine
+        .create_historical_save_plan(
+            &repo.history_tree_id,
+            crate::HistoricalSaveOptions {
+                source_commit_id: source,
+                name: "binding".into(),
+                workspace_id: Some(workspace.workspace_id.clone()),
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    let sealed = engine.workspace(&workspace.workspace_id).unwrap();
+    engine
+        .commit_historical_save_plan(&plan.plan_id, "admin", OperationId::generate())
+        .unwrap();
+    let completed = engine.state.plans[&plan.plan_id].clone();
+    (root, engine, sealed, completed)
+}
+
+#[test]
+fn historical_completion_binding_merges_duplicates_and_rejects_conflicting_plans() {
+    let (_root, _engine, sealed, plan) = completed_historical_binding_fixture();
+    let mut candidate =
+        historical::HistoricalWorkspaceCandidate::new(&sealed, &canonical_json(&sealed).unwrap());
+    let mut foreign = plan.clone();
+    foreign.principal = "foreign".into();
+    foreign.input["workspace_fencing_token"] = json!("broken");
+    candidate.observe(&foreign).unwrap();
+    assert!(!candidate.has_completion());
+    candidate.observe(&plan).unwrap();
+    candidate.observe(&plan).unwrap();
+    let mut recovered = sealed.clone();
+    assert!(candidate.reconcile(&mut recovered).unwrap());
+    assert_eq!(recovered.state, WorkspaceState::Committed);
+    let mut conflicting = plan.clone();
+    conflicting.plan_id = new_id("plan");
+    conflicting.input["workspace_fencing_token"] = json!((sealed.fencing_token + 1).to_string());
+    assert_eq!(
+        candidate.observe(&conflicting).unwrap_err().code(),
+        ErrorCode::RecoveryRequired
+    );
+}
+
+#[test]
+fn historical_published_sealed_mirrors_remain_resident_recovery_material() {
+    let (root, engine, sealed, _plan) = completed_historical_binding_fixture();
+    let paths = historical_manifest_paths(&engine, &sealed.workspace_id);
+    for path in &paths {
+        write_json(path, &sealed, false).unwrap();
+    }
+    let before = paths.each_ref().map(|path| fs::read(path).unwrap());
+    drop(engine);
+    let engine = Engine::open(&root.path().join("system")).unwrap();
+    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
+    assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 0);
+    let recovered = engine.workspace(&sealed.workspace_id).unwrap();
+    assert_eq!(recovered.state, WorkspaceState::Committed);
+    assert_eq!(recovered.fencing_token, sealed.fencing_token + 1);
+    assert_eq!(paths.each_ref().map(|path| fs::read(path).unwrap()), before);
+    for file in sealed.files.values() {
+        assert_eq!(fs::read(&file.source_path).unwrap(), b"binding bytes");
+    }
+}
+
+#[test]
+fn historical_unpublished_completion_mirrors_are_only_seed_hints() {
+    let (_root, mut engine, repo, source) = historical_storage_fixture();
+    let workspace = engine
+        .create_historical_workspace(&repo.main_branch_id, &source, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&workspace.workspace_id, "file", b"unpublished staged bytes")
+        .unwrap();
+    engine
+        .seal_workspace(&workspace.workspace_id, "admin")
+        .unwrap();
+    let mut completed = engine.workspace(&workspace.workspace_id).unwrap();
+    completed.state = WorkspaceState::Committed;
+    completed.fencing_token += 1;
+    let paths = historical_manifest_paths(&engine, &workspace.workspace_id);
+    write_json(&paths[1], &completed, false).unwrap();
+    let before = paths.each_ref().map(|path| fs::read(path).unwrap());
+    let prepared = engine.prepare_recovery().unwrap();
+    engine.seed_workspace_recovery(&prepared).unwrap();
+    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
+    assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 0);
+    assert_eq!(
+        engine.load_workspaces().unwrap_err().code(),
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(paths.each_ref().map(|path| fs::read(path).unwrap()), before);
 }
