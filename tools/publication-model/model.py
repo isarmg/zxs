@@ -1,7 +1,8 @@
 """Finite publication protocol transitions; no production code is imported.
 
 The safety oracle lives in properties.py.  Artifact fields describe separate
-filesystem observations, rather than a single durable flag. See SPEC.md.
+filesystem observations, rather than a single durable flag.
+See docs/validation/publication-model.md for assumptions and specification links.
 """
 from dataclasses import asdict, dataclass, replace
 from itertools import product
