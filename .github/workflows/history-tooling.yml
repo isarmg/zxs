@@ -63,8 +63,7 @@ jobs:
           strace --version > provenance/strace.txt
           lscpu --json > provenance/cpu.json
           df -B1 > provenance/filesystem.txt
-          rustfmt +1.99.0 --edition 2024 --emit stdout carrier/tools/history-scale-bench/driver.rs > provenance/formatted-driver.rs
-          diff -u carrier/tools/history-scale-bench/driver.rs provenance/formatted-driver.rs > provenance/driver-format.diff || test "$?" = 1
+          rustfmt +1.99.0 --edition 2024 --check carrier/tools/history-scale-bench/driver.rs > provenance/rustfmt-check.log 2>&1
       - name: Validate Python evidence tooling
         run: python3 -m unittest discover -s carrier/test/history-scale-bench -p 'test_*.py' -v
       - name: Register same ordinary driver in isolated sources
