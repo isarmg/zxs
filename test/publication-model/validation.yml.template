@@ -1,3 +1,7 @@
+# Dedicated search-workflow example, not installed by the product's normal CI.
+# This fixed, previously verified tool snapshot reproduces the historical search
+# evidence. For a different tool revision, update ref before copying this example
+# into a separate validation carrier. Normal CI invokes selftest.py only.
 name: Publication finite model validation
 on:
   push:
@@ -14,7 +18,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: isarmg/zxs
-          ref: TOOL_COMMIT_SHA
+          ref: 0c4b4d37a5b751ff51824df82e021fd8a2ef26b0
           persist-credentials: false
       - name: Record environment and run self tests
         shell: bash

@@ -1,6 +1,6 @@
 # 发布与崩溃恢复有限状态检查器
 
-本工具固定规范基线 `e2f33d9882cf7263412d9370b6a703e0b216357d`，以 Python 标准库实现独立抽象模型。它不导入生产实现、不读真实数据池、不以产品 fixture 或恢复实现作为正确性 oracle。生产源码、格式、Cargo、工具链和现有 CI 均不变。
+本工具固定规范基线 `e2f33d9882cf7263412d9370b6a703e0b216357d`，以 Python 标准库实现独立抽象模型。它不导入生产实现、不读真实数据池、不以产品 fixture 或恢复实现作为正确性 oracle。生产源码、格式、Cargo 和工具链不变；产品集成只在已有 `static` 门禁加入快速自测。
 
 ## 范围与规范映射
 
@@ -22,13 +22,14 @@
 
 实际启动了三个独立代理：protocol 编写转换和 SPEC；search 编写独立性质、BFS、重放及搜索自测；review 核对规范、审阅两者并编写破坏规则验收。集成协调者负责运行矩阵、隔离 GitHub 验证载体、证据与交付。
 
-云工作区只读/编辑源码、使用 Git 和静态语法检查。正式自测、搜索及反例重放只在 GitHub Actions 运行。专用 workflow 的来源模板放在 `test/publication-model/validation.yml.template`；实际 workflow 在无产品祖先的独立 orphan 验证分支中，checkout 精确工具提交。不要把验证载体合并回产品。
+本次集成的云工作区只读/编辑源码和使用 Git；编译、测试和脚本执行都在 GitHub Actions。历史专项 workflow 的例子放在 `test/publication-model/validation.yml.template`，固定检出已验证工具来源 `0c4b4d37a5b751ff51824df82e021fd8a2ef26b0`，可复现旧专项搜索；它不是产品常规工作流。新的工具版本须先更新例子的 ref，再放到独立验证载体。不要把验证载体合并回产品。
 
 ## 可重跑命令
 
 要求 Python 3.11+，无额外依赖。从仓库根运行：
 
 ```sh
+python3 tools/publication-model/selftest.py
 python3 -m unittest discover -s test/publication-model -p 'test_*.py' -v
 python3 test/publication-model/run_validation.py --output /tmp/publication-model-results
 python3 tools/publication-model/cli.py search --members 1 --operations 1 --replicas 1 --crashes 0 --max-states 50000 --max-transitions 500000 --max-depth 120 --max-seconds 30 --output /tmp/search.json
@@ -235,3 +236,13 @@ python3 test/publication-model/run_deep_validation.py --output /tmp/publication-
 表中深度仅表示代表轨迹的最大触及量，不表示该层或此前所有层完成。独立审阅复核了两项补洞、72 项原始自测、各前缀来源及重放、根/局部结果分离，未发现本轮交付阻塞。原 160 个证据文件逐一摘要保持不变；新工具源码/测试及 workflow 模板与实际验证提交逐字节相同。逐项测试索引、原始文件 SHA256、API artifact 摘要及精确提交见 [补强证据清单](../../test/publication-model/evidence/strengthening-manifest.json)。
 
 历史 `results` 在抽象 `_apply()` 中参与抑制重复效果，`lost_binding` 变异显式设置 `duplicate=True` 来模拟重复发布。这验证的是该抽象及性质的敏感性，不能证明生产幂等收据或真实 State 重建实现不会重复。
+
+## 产品分支的独立集成准备
+
+唯一产品集成基线为 `209f31a4122174129bcf40b56c0598ac61e66352`；模型规范仍固定在 `e2f33d9882cf7263412d9370b6a703e0b216357d`。工具、六个测试文件及全部旧证据从获审阅交付 `47655937bbd1a3c8d6638e0260a793b63450bc29` 精确恢复，不混入其他分支。该复制不等于模型已经验证当前产品恢复实现；全部旧运行记录仍只对应其原工具 SHA。
+
+常规 CI 与 Release 都沿已有 `check.sh static` 单一入口调用 `selftest.py` 一次，在独立 Python 进程动态发现 `test/publication-model/test_*.py`。不维护第二份文件或用例清单；零发现返回 2，断言或导入失败返回非零，shell 的 `set -e` 保留失败。新增接线回归使用合成 suite 和现有命令 mock，不再执行一次完整模型套件。
+
+六个既有测试文件保持原样，原 72 项自测包含有限小图、定向轨迹及故意破坏规则的敏感性检查，既有故障保护预算保留。`run_validation.py`、`run_deep_validation.py` 的根搜索／局部搜索矩阵不进入常规门禁，也不新增 CI job、并行清单或权限。旧证据中的模板摘要对应旧工具提交；本次例子改为真实固定来源，不重写旧摘要。
+
+集成接线与来源保留的针对性 GitHub 验证尚待执行；旧 `Inconclusive` 及抽象限制不因集成或快速自测而消除。

@@ -1,6 +1,9 @@
 """Exercise CI suite commands without a compiler, network or product data."""
 from collections import Counter
+from contextlib import redirect_stderr
 import hashlib
+import importlib.util
+import io
 import json
 import os
 import re
@@ -11,6 +14,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from unittest.mock import patch
 
 
 class SuiteCoverageTests(unittest.TestCase):
@@ -211,6 +215,29 @@ class SuiteCoverageTests(unittest.TestCase):
             )
         self.assertEqual(calls[-1], {"tool": "node", "args": [".github/scripts/check-evidence-probes.mjs"]})
         self.assertFalse(any("--metadata" in call["args"] for call in calls))
+
+    def test_publication_model_selftests_run_once_in_static_only(self):
+        expected = {"tool": "python3", "args": ["tools/publication-model/selftest.py"]}
+        self.assertEqual(self.suite("static").count(expected), 1)
+        self.assertNotIn(expected, self.suite("build-tools"))
+        script = (self.root / ".github/scripts/check.sh").read_text()
+        self.assertEqual(script.count("python3 tools/publication-model/selftest.py"), 1)
+        self.assertNotIn("run_validation.py", script)
+        self.assertNotIn("run_deep_validation.py", script)
+
+    def test_static_stops_when_publication_model_selftests_fail(self):
+        binary = self.root / "bin/python3"
+        binary.write_text(binary.read_text() +
+            "if sys.argv[1:] == ['tools/publication-model/selftest.py']:\n"
+            "    sys.exit(37)\n")
+        result = subprocess.run(
+            ["bash", str(self.root / ".github/scripts/check.sh"), "static"],
+            cwd="/tmp", env=self.environment, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 37)
+        calls = [json.loads(line) for line in self.receipt.read_text().splitlines()]
+        self.assertEqual(calls[-1], {"tool": "python3", "args": ["tools/publication-model/selftest.py"]})
+        self.assertFalse(any(call["tool"] == "node" for call in calls))
 
     def test_dependency_documentation_is_verified_in_static_and_source_suites(self):
         expected = {"tool": "python3", "args": ["tools/rust-sources/documentation.py", "verify"]}
@@ -467,6 +494,49 @@ class SuiteCoverageTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertFalse(self.receipt.exists())
+
+
+class PublicationModelSelftestRunner(unittest.TestCase):
+    def setUp(self):
+        path = Path(__file__).resolve().parents[2] / "tools/publication-model/selftest.py"
+        spec = importlib.util.spec_from_file_location("publication_model_selftest_entrypoint", path)
+        self.runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.runner)
+
+    def run_suite(self, suite):
+        output = io.StringIO()
+        with patch.object(self.runner.unittest.defaultTestLoader, "discover", return_value=suite) as discover:
+            with redirect_stderr(output):
+                code = self.runner.main()
+        expected = Path(__file__).resolve().parents[2] / "test/publication-model"
+        discover.assert_called_once_with(str(expected), pattern="test_*.py")
+        return code, output.getvalue()
+
+    def test_nonempty_success_is_successful(self):
+        code, output = self.run_suite(unittest.TestSuite([unittest.FunctionTestCase(lambda: None)]))
+        self.assertEqual(code, 0)
+        self.assertIn("Ran 1 test", output)
+
+    def test_zero_discovery_fails(self):
+        code, output = self.run_suite(unittest.TestSuite())
+        self.assertEqual(code, 2)
+        self.assertIn("No publication model self-tests discovered.", output)
+
+    def test_assertion_and_import_errors_fail(self):
+        for error in (AssertionError, ImportError):
+            with self.subTest(error=error):
+                def invalid_case():
+                    raise error("intentional runner regression")
+                code, output = self.run_suite(unittest.TestSuite([unittest.FunctionTestCase(invalid_case)]))
+                self.assertEqual(code, 1)
+                self.assertIn("FAILED", output)
+                self.assertIn("intentional runner regression", output)
+
+    def test_discovery_exception_is_not_swallowed(self):
+        with patch.object(self.runner.unittest.defaultTestLoader, "discover",
+                          side_effect=ImportError("discovery failed")):
+            with self.assertRaisesRegex(ImportError, "discovery failed"):
+                self.runner.main()
 
 
 class DiagnosticGateCommands(unittest.TestCase):

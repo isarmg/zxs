@@ -6,7 +6,7 @@
 
 | 范围 | 实际检查 |
 | --- | --- |
-| `static` | 不安装或调用 Rust：第一方包与依赖方向检查、工作流早期 env 上下文检查、来源静态校验、CI 与性能报告 Python 工具回归、shell 语法与发布 mock、Node 历史脚本配置和库存检查；不执行历史浏览器验收 |
+| `static` | 不安装或调用 Rust：第一方包与依赖方向检查、工作流早期 env 上下文检查、来源静态校验、CI 与性能报告 Python 工具回归、[发布模型](validation/publication-model.md)的快速自测、shell 语法与发布 mock、Node 历史脚本配置和库存检查；不执行发布模型搜索矩阵或历史浏览器验收 |
 | `rust-sources` | 源码、manifest、全部特性边、锁文件、来源文档和退役记录校验；空 Cargo home 重新解析五个入口／目标闭包，拒绝无闭包使用的活动源码树；完整来源工具 Python 回归 |
 | `quality` | 自有 workspace 的格式与严格 Clippy；宿主机全部目标及 Web 的 WASM release 编译，所有本地依赖的 Rust warning/error 均失败；基础源码不自动格式化 |
 | `security` | 固定 cargo-audit 查询当前 RustSec 与 registry/yank 状态；独立扫描器锁、产品根锁和活动／已合并实现的原始身份均扫描，告警或扫描不完整失败；退役及已升级替换的旧身份单列历史记录 |
