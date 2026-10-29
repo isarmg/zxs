@@ -304,7 +304,8 @@ impl Engine {
         principal: &str,
         operation: OperationId,
     ) -> Result<MergeLink> {
-        let op = self.mutate(
+        let mut created_id = None;
+        let plan = self.plan_mutation_digest(
             "merge-link.create",
             principal,
             operation,
@@ -314,6 +315,7 @@ impl Engine {
                 "target_branch_id": target_branch,
                 "target_commit_id": target_commit
             }),
+            None,
             |engine, state, _| {
                 let sb = state.branches.get(source_branch).ok_or_else(|| {
                     Error::new(
@@ -374,11 +376,29 @@ impl Engine {
                 let id = link.merge_link_id.clone();
                 let history = link.history_tree_id.clone();
                 state.merge_links.insert(id.clone(), link);
+                created_id = Some(id.clone());
                 Ok(json!({"merge_link_id":id,"history_tree_id":history}))
             },
         )?;
+        let op = match plan {
+            MutationPlan::Existing(op) => op,
+            MutationPlan::Prepared {
+                next,
+                prepared,
+                namespace,
+                result,
+            } => {
+                let created = created_id
+                    .as_ref()
+                    .and_then(|id| next.merge_links.get(id))
+                    .expect("invariant: merge-link creation candidate contains its created link")
+                    .clone();
+                self.persist_with_objects(*next, prepared, namespace, result)?;
+                return Ok(created);
+            }
+        };
         // A later split can remap the link or replace it with audit boundaries.
-        // Reconstruct the original response only after mutate has matched the
+        // Reconstruct the original response only after planning has matched the
         // immutable receipt to this exact request and actor.
         Ok(MergeLink {
             merge_link_id: op.result["merge_link_id"]

@@ -182,6 +182,37 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
                 operation,
             )
             .unwrap();
+        assert_eq!(
+            engine.state().merge_links[&original.merge_link_id],
+            original
+        );
+        let receipt = engine.operation(operation).unwrap();
+        assert_eq!(receipt.kind, "merge-link.create");
+        assert_eq!(
+            receipt.result,
+            json!({
+                "merge_link_id": original.merge_link_id,
+                "history_tree_id": original.history_tree_id,
+                "timestamp": receipt.result["timestamp"],
+                "membership_epoch": "1",
+                "version_protection": []
+            })
+        );
+        let published = canonical_json(engine.state()).unwrap();
+        assert_eq!(
+            engine
+                .add_merge_link(
+                    &side.branch_id,
+                    &side.head_commit_id,
+                    &repo.main_branch_id,
+                    &cut,
+                    "admin",
+                    operation,
+                )
+                .unwrap(),
+            original
+        );
+        assert_eq!(canonical_json(engine.state()).unwrap(), published);
         let plan = engine
             .create_split_plan(&repo.history_tree_id, &cut, "admin")
             .unwrap();
@@ -204,6 +235,7 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
                 engine = Engine::open(&root.path().join("system")).unwrap();
             }
             let before = canonical_json(engine.state()).unwrap();
+            assert_eq!(engine.operation(operation).unwrap().result, receipt.result);
             let replay = engine
                 .add_merge_link(
                     &side.branch_id,
@@ -237,4 +269,79 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
             assert_eq!(canonical_json(engine.state()).unwrap(), before);
         }
     }
+}
+
+#[test]
+fn merge_link_creation_does_not_return_candidate_when_publication_fails() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("system");
+    let mut engine = Engine::initialize(
+        &root,
+        Config::development([temporary.path().join("primary")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Interrupted link").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let source = engine.state().histories[&repo.history_tree_id]
+        .root_commit_id
+        .clone();
+    let side = engine
+        .create_branch(
+            &source,
+            &storage_contract::BranchName::parse("side").unwrap(),
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let operation = OperationId::generate();
+    let before = canonical_json(engine.state()).unwrap();
+    engine.inject_fault_once("after_prepare_1");
+    assert_eq!(
+        engine
+            .add_merge_link(
+                &side.branch_id,
+                &side.head_commit_id,
+                &repo.main_branch_id,
+                &source,
+                "admin",
+                operation
+            )
+            .unwrap_err()
+            .code(),
+        ErrorCode::InjectedFailure
+    );
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    drop(engine);
+    let mut engine = Engine::open(&root).unwrap();
+    let created = engine
+        .add_merge_link(
+            &side.branch_id,
+            &side.head_commit_id,
+            &repo.main_branch_id,
+            &source,
+            "admin",
+            operation,
+        )
+        .unwrap();
+    assert_eq!(engine.state().merge_links[&created.merge_link_id], created);
+    assert_eq!(
+        engine
+            .add_merge_link(
+                &side.branch_id,
+                &side.head_commit_id,
+                &repo.main_branch_id,
+                &source,
+                "admin",
+                operation
+            )
+            .unwrap(),
+        created
+    );
 }

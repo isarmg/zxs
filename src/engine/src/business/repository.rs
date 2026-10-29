@@ -1,4 +1,5 @@
 //! Repository ownership and explicit SMB binding.
+use crate::engine::MutationPlan;
 use crate::*;
 use json_codec::json;
 
@@ -183,11 +184,12 @@ impl Engine {
         if file_manager_root {
             input["file_manager_root"] = json!(true);
         }
-        let result = self.mutate(
+        let plan = self.plan_mutation_digest(
             "repository.create",
             principal,
             operation,
             input,
+            None,
             |engine, state, scratch| {
                 if state
                     .repositories
@@ -276,14 +278,38 @@ impl Engine {
                 }))
             },
         )?;
-        // Later SMB binding changes do not change a creation response. Do not
-        // substitute the live repository when replaying its original receipt.
-        json_codec::from_value(result.result["created_repository"].clone()).map_err(|source| {
-            Error::from(source).context(
-                ErrorCode::StateInvalid,
-                "created repository receipt is invalid",
-            )
-        })
+        match plan {
+            MutationPlan::Existing(result) => {
+                // Later SMB binding changes do not change a creation response.
+                json_codec::from_value(result.result["created_repository"].clone()).map_err(
+                    |source| {
+                        Error::from(source).context(
+                            ErrorCode::StateInvalid,
+                            "created repository receipt is invalid",
+                        )
+                    },
+                )
+            }
+            MutationPlan::Prepared {
+                next,
+                prepared,
+                namespace,
+                result,
+            } => {
+                let history = result
+                    .history_tree_id
+                    .as_deref()
+                    .and_then(|id| next.histories.get(id))
+                    .expect("invariant: repository creation candidate contains its history");
+                let created = next
+                    .repositories
+                    .get(&history.repository_id)
+                    .expect("invariant: repository creation candidate contains its repository")
+                    .clone();
+                self.persist_with_objects(*next, prepared, namespace, result)?;
+                Ok(created)
+            }
+        }
     }
 }
 

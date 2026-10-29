@@ -101,6 +101,40 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
             operation,
         )
         .unwrap();
+    assert_eq!(
+        engine.state().repositories[&original.repository_id],
+        original
+    );
+    let receipt = engine.operation(operation).unwrap();
+    assert_eq!(receipt.kind, "repository.create");
+    assert_eq!(
+        receipt.result,
+        json!({
+            "repository_id": original.repository_id,
+            "history_tree_id": original.history_tree_id,
+            "branch_id": original.main_branch_id,
+            "commit_id": engine.state().histories[&original.history_tree_id].root_commit_id,
+            "created_repository": original,
+            "timestamp": receipt.result["timestamp"],
+            "branch_generation": "1",
+            "membership_epoch": "1",
+            "version_protection": []
+        })
+    );
+    let published = canonical_json(engine.state()).unwrap();
+    assert_eq!(
+        engine
+            .create_repository(
+                &storage_contract::RepositoryName::parse("Replay").unwrap(),
+                "P01",
+                1,
+                "admin",
+                operation,
+            )
+            .unwrap(),
+        original
+    );
+    assert_eq!(canonical_json(engine.state()).unwrap(), published);
     let source = engine.state().histories[&original.history_tree_id]
         .root_commit_id
         .clone();
@@ -149,6 +183,7 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
         );
         assert!(main_for_branch(&old_state, &side.branch_id).is_none());
         let before = canonical_json(engine.state()).unwrap();
+        assert_eq!(engine.operation(operation).unwrap().result, receipt.result);
         assert_eq!(
             engine
                 .create_repository(
@@ -178,6 +213,41 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
         }
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
     }
+}
+
+#[test]
+fn repository_creation_does_not_return_candidate_when_publication_fails() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("system");
+    let mut engine = Engine::initialize(
+        &root,
+        Config::development([temporary.path().join("primary")]),
+    )
+    .unwrap();
+    let operation = OperationId::generate();
+    let name = storage_contract::RepositoryName::parse("Interrupted").unwrap();
+    let before = canonical_json(engine.state()).unwrap();
+    engine.inject_fault_once("after_prepare_1");
+    assert_eq!(
+        engine
+            .create_repository(&name, "P01", 1, "admin", operation)
+            .unwrap_err()
+            .code(),
+        ErrorCode::InjectedFailure
+    );
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    drop(engine);
+    let mut engine = Engine::open(&root).unwrap();
+    let created = engine
+        .create_repository(&name, "P01", 1, "admin", operation)
+        .unwrap();
+    assert_eq!(engine.state().repositories[&created.repository_id], created);
+    assert_eq!(
+        engine
+            .create_repository(&name, "P01", 1, "admin", operation)
+            .unwrap(),
+        created
+    );
 }
 
 #[test]
