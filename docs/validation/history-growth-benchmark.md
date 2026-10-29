@@ -157,6 +157,15 @@ git push origin HEAD
 `requested.json` 保存完整请求矩阵，只有全部样本收尾、矩阵完全匹配且三阶段都通过，
 `all_requested_samples_passed` 才能为 true。取消或超时留下的成功前缀不构成全通过。
 
+退出附近的 `/proc/<pid>/io` 权限错误只有在复读明确证明该进程已消失或处于 Z/X
+终态时才能丢弃该无效采样；保留 PID、路径、errno 和观察状态，不补造 RSS/IO 为零。
+活进程权限错误仍使监测失败。针对已观察到的 1025 条恢复采样问题，
+[独立监测回归入口](../../test/history-scale-bench/monitor_regression.py) 在新池用无追踪
+build／reopen 准备并核验 fixture，只追踪 recovery 测量；三阶段完整资源／结果均通过
+才成功。它使用相同监督器和预算，不修改旧失败样本，也不把 fixture 计时混入原性能分布。
+该入口同样只在 GitHub Actions 执行，参数为 `--binary <driver> --source <exact-source-checkout>
+--output <new-evidence-directory>`；正式接线与构建仍按前述流程进行。
+
 固定输入见两边的 `AGENTS.md` 和完整编码规范；实现遵守
 [工程与测试规则](../20-engineering.md) 及 [测试布局](../architecture/test-layout.md)。
 新增说明遵守集中式文档治理；不要在工具目录新增第二份独立 README。
