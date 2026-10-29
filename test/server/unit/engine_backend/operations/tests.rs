@@ -401,7 +401,7 @@ fn existing_receipt_with_missing_history_is_not_an_absent_operation() {
     {
         let mut engine = backend.engine.lock().unwrap();
         let mut state = engine.state().clone();
-        assert!(state.histories.remove_discard(&history));
+        assert!(state.histories.remove(&history).is_some());
         storage_engine::test_support::replace_state(&mut engine, state);
     }
     let error = backend
