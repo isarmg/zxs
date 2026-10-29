@@ -1,6 +1,7 @@
 use super::*;
 use crate::uploads::{self, StagedFile};
 use platform_io::fs_safety::PayloadOpenMode;
+use std::os::unix::fs::MetadataExt;
 
 fn limits(account: u64, total: u64) -> SpoolLimits {
     SpoolLimits {
@@ -13,12 +14,7 @@ fn retained(budget: &Arc<SpoolBudget>, principal: &str, name: &str, declared: u6
     let reservation = budget
         .reserve_with_available(principal, name, declared, u64::MAX)
         .unwrap();
-    let staged = StagedFile::open_budgeted(
-        budget.root.join(name),
-        PayloadOpenMode::CreateNew,
-        reservation,
-    )
-    .unwrap();
+    let staged = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
     staged.write(bytes).unwrap();
     staged.sync().unwrap();
 }
@@ -76,6 +72,256 @@ fn reservation_settles_to_retained_bytes_not_success_or_declared_length() {
     drop(retry);
     assert_eq!(total(&budget), METADATA_ALLOWANCE + 3);
 }
+
+#[test]
+fn last_writer_drop_after_root_replacement_keeps_full_charge_and_blocks_admission() {
+    let root = private_tempdir();
+    let path = root.path().join("spool");
+    PrivateDirectory::create(&path).unwrap();
+    let budget = SpoolBudget::recover(
+        &path,
+        limits(4 * METADATA_ALLOWANCE, 4 * METADATA_ALLOWANCE),
+    )
+    .unwrap();
+    let reservation = budget
+        .reserve_with_available("alice", "work.data", 100, u64::MAX)
+        .unwrap();
+    let staged = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
+    let last_job = Arc::clone(&staged);
+    staged.write(b"abc").unwrap();
+    staged.sync().unwrap();
+    let owner = fs::read(path.join("work.data.owner.json")).unwrap();
+    drop(staged);
+    let moved = root.path().join("retained");
+    fs::rename(&path, &moved).unwrap();
+    PrivateDirectory::create(&path).unwrap();
+    drop(last_job);
+    let ledger = budget.ledger.lock().unwrap();
+    assert_eq!(ledger.total, METADATA_ALLOWANCE + 100);
+    assert_eq!(ledger.files["work.data"].reserved, METADATA_ALLOWANCE + 100);
+    assert!(ledger.uncertain);
+    drop(ledger);
+    assert!(
+        budget
+            .reserve_with_available("bob", "next.data", 0, u64::MAX)
+            .is_err()
+    );
+    assert_eq!(fs::read(moved.join("work.data")).unwrap(), b"abc");
+    assert_eq!(fs::read(moved.join("work.data.owner.json")).unwrap(), owner);
+    assert_eq!(fs::read_dir(path).unwrap().count(), 0);
+}
+
+#[test]
+fn reservation_drop_keeps_full_charge_when_payload_or_owner_is_unsafe() {
+    use std::os::unix::fs::symlink;
+    #[derive(Clone, Copy)]
+    enum UnsafeEntry {
+        Symlink,
+        Hardlink,
+        OwnerDirectory,
+    }
+    for unsafe_entry in [
+        UnsafeEntry::Symlink,
+        UnsafeEntry::Hardlink,
+        UnsafeEntry::OwnerDirectory,
+    ] {
+        let root = private_tempdir();
+        let budget = SpoolBudget::recover(
+            root.path(),
+            limits(4 * METADATA_ALLOWANCE, 4 * METADATA_ALLOWANCE),
+        )
+        .unwrap();
+        let reservation = budget
+            .reserve_with_available("alice", "work.data", 100, u64::MAX)
+            .unwrap();
+        reservation.persist_owner().unwrap();
+        let payload = root.path().join("work.data");
+        let owner = root.path().join("work.data.owner.json");
+        let owner_bytes = fs::read(&owner).unwrap();
+        let target = root.path().join("target");
+        match unsafe_entry {
+            UnsafeEntry::Symlink => {
+                fs::write(&target, b"preserve").unwrap();
+                symlink(&target, &payload).unwrap();
+            }
+            UnsafeEntry::Hardlink => {
+                fs::write(&target, b"preserve").unwrap();
+                fs::hard_link(&target, &payload).unwrap();
+            }
+            UnsafeEntry::OwnerDirectory => {
+                fs::rename(&owner, root.path().join("retained-owner")).unwrap();
+                fs::create_dir(&owner).unwrap();
+            }
+        }
+        drop(reservation);
+        let ledger = budget.ledger.lock().unwrap();
+        assert_eq!(ledger.total, METADATA_ALLOWANCE + 100);
+        assert_eq!(ledger.files["work.data"].reserved, METADATA_ALLOWANCE + 100);
+        assert!(ledger.uncertain);
+        drop(ledger);
+        assert!(
+            budget
+                .reserve_with_available("bob", "new.data", 0, u64::MAX)
+                .is_err()
+        );
+        match unsafe_entry {
+            UnsafeEntry::Symlink | UnsafeEntry::Hardlink => {
+                assert!(fs::symlink_metadata(payload).is_ok());
+                assert_eq!(fs::read(target).unwrap(), b"preserve");
+                assert_eq!(fs::read(owner).unwrap(), owner_bytes);
+            }
+            UnsafeEntry::OwnerDirectory => {
+                assert!(owner.is_dir());
+                assert!(!payload.exists());
+                assert_eq!(
+                    fs::read(root.path().join("retained-owner")).unwrap(),
+                    owner_bytes
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn reservation_cannot_publish_owner_or_payload_into_a_rebound_root() {
+    for owner_persisted in [false, true] {
+        let root = private_tempdir();
+        let path = root.path().join("spool");
+        PrivateDirectory::create(&path).unwrap();
+        let budget = SpoolBudget::recover(
+            &path,
+            limits(4 * METADATA_ALLOWANCE, 4 * METADATA_ALLOWANCE),
+        )
+        .unwrap();
+        let reservation = budget
+            .reserve_with_available("alice", "work.data", 100, u64::MAX)
+            .unwrap();
+        if owner_persisted {
+            reservation.persist_owner().unwrap();
+        }
+        let moved = root.path().join("retained");
+        fs::rename(&path, &moved).unwrap();
+        PrivateDirectory::create(&path).unwrap();
+        let error = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation)
+            .err()
+            .unwrap();
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(total(&budget), METADATA_ALLOWANCE + 100);
+        assert!(budget.ledger.lock().unwrap().uncertain);
+        assert!(
+            budget
+                .reserve_with_available("alice", "other.data", 0, u64::MAX)
+                .is_err()
+        );
+        assert!(!moved.join("work.data").exists());
+        assert_eq!(moved.join("work.data.owner.json").exists(), owner_persisted);
+        assert_eq!(fs::read_dir(path).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn owner_publication_reuses_only_matching_records_without_overwriting_evidence() {
+    #[derive(Clone, Copy)]
+    enum Existing {
+        Matching,
+        Conflicting,
+        Corrupt,
+    }
+    for existing in [Existing::Matching, Existing::Conflicting, Existing::Corrupt] {
+        let root = private_tempdir();
+        let budget = SpoolBudget::recover(
+            root.path(),
+            limits(4 * METADATA_ALLOWANCE, 4 * METADATA_ALLOWANCE),
+        )
+        .unwrap();
+        let reservation = budget
+            .reserve_with_available("alice", "work.data", 100, u64::MAX)
+            .unwrap();
+        let bytes = match existing {
+            Existing::Matching | Existing::Conflicting => json_codec::to_vec(&Owner {
+                data_file: "work.data".into(),
+                principal: if matches!(existing, Existing::Matching) {
+                    "alice"
+                } else {
+                    "bob"
+                }
+                .into(),
+            })
+            .unwrap(),
+            Existing::Corrupt => b"{broken".to_vec(),
+        };
+        let name = EntryName::new("work.data.owner.json").unwrap();
+        platform_io::fs_safety::AtomicFile::create(&budget.directory, &name, &bytes).unwrap();
+        let path = root.path().join(name.as_path());
+        let inode = fs::metadata(&path).unwrap().ino();
+        let result = reservation.persist_owner();
+        match existing {
+            Existing::Matching => result.unwrap(),
+            Existing::Conflicting | Existing::Corrupt => {
+                assert!(result.is_err());
+                assert!(budget.ledger.lock().unwrap().uncertain);
+                assert!(
+                    budget
+                        .reserve_with_available("bob", "next.data", 0, u64::MAX)
+                        .is_err()
+                );
+            }
+        }
+        drop(reservation);
+        let expected = match existing {
+            Existing::Matching => METADATA_ALLOWANCE,
+            Existing::Conflicting | Existing::Corrupt => METADATA_ALLOWANCE + 100,
+        };
+        assert_eq!(total(&budget), expected);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::metadata(path).unwrap().ino(), inode);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+    }
+}
+
+#[test]
+fn lowered_limits_preserve_full_inventory_and_allow_zero_growth_owned_retry() {
+    for (account, global) in [
+        (METADATA_ALLOWANCE, 8 * METADATA_ALLOWANCE),
+        (2 * METADATA_ALLOWANCE, 2 * METADATA_ALLOWANCE),
+    ] {
+        let root = private_tempdir();
+        let budget = SpoolBudget::recover(
+            root.path(),
+            limits(4 * METADATA_ALLOWANCE, 8 * METADATA_ALLOWANCE),
+        )
+        .unwrap();
+        retained(&budget, "alice", "a.data", 100, b"abc");
+        retained(&budget, "bob", "b.data", 100, b"def");
+        let owner = fs::read(root.path().join("a.data.owner.json")).unwrap();
+        drop(budget);
+        let budget = SpoolBudget::recover(root.path(), limits(account, global)).unwrap();
+        assert_eq!(total(&budget), 2 * METADATA_ALLOWANCE + 6);
+        let retry = budget
+            .reserve_with_available("alice", "a.data", 3, u64::MAX)
+            .unwrap();
+        let staged = StagedFile::open_budgeted(PayloadOpenMode::Existing, retry).unwrap();
+        drop(staged);
+        assert_eq!(total(&budget), 2 * METADATA_ALLOWANCE + 6);
+        let principal = if global == 2 * METADATA_ALLOWANCE {
+            "charlie"
+        } else {
+            "alice"
+        };
+        assert!(
+            budget
+                .reserve_with_available(principal, "new.data", 0, u64::MAX)
+                .is_err()
+        );
+        assert_eq!(fs::read(root.path().join("a.data")).unwrap(), b"abc");
+        assert_eq!(fs::read(root.path().join("b.data")).unwrap(), b"def");
+        assert_eq!(
+            fs::read(root.path().join("a.data.owner.json")).unwrap(),
+            owner
+        );
+    }
+}
+
 #[test]
 fn concurrent_reservations_cannot_oversubscribe_account_or_pool() {
     let root = private_tempdir();
@@ -135,13 +381,29 @@ fn recovery_counts_retained_generations_failed_unknown_and_orphan_bytes_once() {
     drop(budget);
     fs::write(root.path().join("unknown.data"), b"unknown").unwrap();
     fs::write(root.path().join("broken.json"), b"{broken").unwrap();
+    let temporary = format!(".state-atomic-{}.tmp", "a".repeat(32));
+    fs::write(root.path().join(&temporary), b"tail").unwrap();
+    fs::write(root.path().join("broken.data.owner.json"), b"{broken").unwrap();
     let budget = SpoolBudget::recover(root.path(), config).unwrap();
-    assert_eq!(total(&budget), 4 * METADATA_ALLOWANCE + 3 + 7 + 7 + 7);
-    assert_eq!(budget.ledger.lock().unwrap().files.len(), 4);
+    assert_eq!(
+        total(&budget),
+        6 * METADATA_ALLOWANCE + 3 + 7 + 7 + 7 + 4 + 7
+    );
+    let ledger = budget.ledger.lock().unwrap();
+    assert_eq!(ledger.files.len(), 6);
+    assert_eq!(ledger.unknown, 4 * METADATA_ALLOWANCE + 7 + 7 + 4 + 7);
+    assert!(ledger.files[&temporary].owner.is_none());
+    assert!(ledger.files["broken.data.owner.json"].owner.is_none());
+    drop(ledger);
     assert_eq!(fs::read(root.path().join("old.data")).unwrap(), b"abc");
     assert_eq!(
         fs::read(root.path().join("unknown.data")).unwrap(),
         b"unknown"
+    );
+    assert_eq!(fs::read(root.path().join(temporary)).unwrap(), b"tail");
+    assert_eq!(
+        fs::read(root.path().join("broken.data.owner.json")).unwrap(),
+        b"{broken"
     );
 }
 #[test]
@@ -300,12 +562,7 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
     let reservation = budget
         .reserve_with_available("alice", "batch.data", size, u64::MAX)
         .unwrap();
-    let staged = StagedFile::open_budgeted(
-        root.path().join("batch.data"),
-        PayloadOpenMode::Existing,
-        reservation,
-    )
-    .unwrap();
+    let staged = StagedFile::open_budgeted(PayloadOpenMode::Existing, reservation).unwrap();
     assert_eq!(staged.write(&batch).unwrap_err().status, 429);
     assert_eq!(fs::read(root.path().join("batch.data")).unwrap(), b"abcdef");
     let unchanged = uploads::load(root.path(), "ws", "item").unwrap().unwrap();
@@ -320,12 +577,7 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
 
     let budget = SpoolBudget::recover(root.path(), limits(quota, quota)).unwrap();
     let reservation = budget.reserve("alice", "batch.data", size).unwrap();
-    let staged = StagedFile::open_budgeted(
-        root.path().join("batch.data"),
-        PayloadOpenMode::Existing,
-        reservation,
-    )
-    .unwrap();
+    let staged = StagedFile::open_budgeted(PayloadOpenMode::Existing, reservation).unwrap();
     let mut prefix = uploads::ExistingPrefix::open(root.path(), &unchanged)
         .unwrap()
         .unwrap();
@@ -378,6 +630,40 @@ fn reservation_drop_does_not_panic_again_during_unwind() {
     };
     assert_eq!(retained.total, METADATA_ALLOWANCE + 10);
     assert_ne!(retained.files["unwind.data"].reserved, 0);
+    assert!(root.path().join("unwind.data.owner.json").is_file());
+}
+
+#[test]
+fn last_staged_owner_during_ledger_unwind_keeps_charge_without_a_second_panic() {
+    let root = private_tempdir();
+    let budget = SpoolBudget::recover(
+        root.path(),
+        limits(2 * METADATA_ALLOWANCE, 2 * METADATA_ALLOWANCE),
+    )
+    .unwrap();
+    let reservation = budget
+        .reserve_with_available("alice", "unwind.data", 100, u64::MAX)
+        .unwrap();
+    let staged = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
+    staged.write(b"retained").unwrap();
+    staged.sync().unwrap();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _owner = staged;
+        let _ledger = budget.ledger.lock().unwrap();
+        panic!("ledger failed before the final staged owner dropped");
+    }));
+    assert!(panic.is_err());
+    assert!(budget.ledger.is_poisoned());
+    let ledger = budget.ledger.lock().err().unwrap().into_inner();
+    assert_eq!(ledger.total, METADATA_ALLOWANCE + 100);
+    assert_eq!(
+        ledger.files["unwind.data"].reserved,
+        METADATA_ALLOWANCE + 100
+    );
+    assert_eq!(
+        fs::read(root.path().join("unwind.data")).unwrap(),
+        b"retained"
+    );
     assert!(root.path().join("unwind.data.owner.json").is_file());
 }
 

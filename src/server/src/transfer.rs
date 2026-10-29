@@ -343,8 +343,6 @@ async fn upload_inner(
             PayloadOpenMode::CreateNew,
         ),
     };
-    let path = spool.join(&data_file);
-    let create_path = path.clone();
     let create_admission = admission.clone();
     let budget = state.http_spool()?;
     let principal = identity.principal.clone();
@@ -352,7 +350,7 @@ async fn upload_inner(
     let staged_file = tokio::task::spawn_blocking(move || {
         let _admission = create_admission;
         let reservation = budget.reserve(&principal, &name, expected_length)?;
-        uploads::StagedFile::open_budgeted(create_path, mode, reservation)
+        uploads::StagedFile::open_budgeted(mode, reservation)
     })
     .await
     .map_err(ApiError::join)??;
@@ -373,18 +371,13 @@ async fn upload_inner(
         .as_ref()
         .filter(|previous| generation > previous.generation)
     {
-        let root = spool.clone();
         let previous = previous.clone();
         let ownership = (admission.clone(), staged_file.clone());
         tokio::task::spawn_blocking(move || {
             // Capture the whole owner, not only the staged-file tuple field:
             // cancellation must retain the per-item claim and transfer slot too.
             let _ownership = ownership;
-            let result = uploads::retain_generation(&root, &previous);
-            if result.is_err() {
-                _ownership.1.block_admission();
-            }
-            result
+            _ownership.1.retain_generation(&previous)
         })
         .await
         .map_err(ApiError::join)??;

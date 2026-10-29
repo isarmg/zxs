@@ -5,13 +5,14 @@
 //! upload success. Unknown files and uncertain I/O never earn free capacity.
 use crate::{ApiError, lock, uploads::UploadRecord};
 use data_serialization::{Deserialize, Serialize};
-use platform_io::fs_safety::{AdvisoryLock, EntryName, PrivateDirectory, RelativePath};
+use platform_io::fs_safety::{
+    AdvisoryLock, AtomicFile, EntryMetadata, EntryName, PrivateDirectory, RelativePath,
+};
+#[cfg(test)]
+use std::fs;
 use std::{
     collections::BTreeMap,
-    fs::{self, OpenOptions},
-    io::Write,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -162,7 +163,7 @@ impl Ledger {
     }
 }
 pub(crate) struct SpoolBudget {
-    root: PathBuf,
+    directory: Arc<PrivateDirectory>,
     limits: SpoolLimits,
     ledger: Mutex<Ledger>,
     _directory_lock: AdvisoryLock,
@@ -171,21 +172,20 @@ pub(crate) struct SpoolBudget {
 fn valid_name(name: &str) -> bool {
     !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\'])
 }
-fn metadata<T: data_serialization::de::DeserializeOwned>(path: &Path) -> Result<T, ApiError> {
-    let directory = PrivateDirectory::open_trusted(
-        path.parent()
-            .expect("invariant: spool entries have a parent"),
-    )
-    .map_err(crate::upload_fs_error)?;
-    let name = EntryName::new(
-        path.file_name()
-            .expect("invariant: spool entries have a filename"),
-    )
-    .map_err(crate::upload_fs_error)?;
+fn metadata<T: data_serialization::de::DeserializeOwned>(
+    directory: &PrivateDirectory,
+    name: &EntryName,
+) -> Result<T, ApiError> {
     let bytes = directory
-        .read_bounded(&name, MAX_METADATA as usize)
+        .read_bounded(name, MAX_METADATA as usize)
         .map_err(crate::upload_fs_error)?;
     storage_contract::decode_strict(&bytes).map_err(ApiError::invalid_source)
+}
+fn inventory_error(error: platform_io::fs_safety::Error) -> ApiError {
+    match error {
+        platform_io::fs_safety::Error::Io(error) => ApiError::io(error),
+        error => crate::upload_fs_error(error),
+    }
 }
 
 fn charge_bytes(bytes: u64) -> Result<u64, ApiError> {
@@ -238,25 +238,31 @@ impl SpoolBudget {
         let mut covered_metadata = BTreeMap::new();
         // Inventory, never cleanup. Corrupt/unrecognized regular files remain
         // charged as unknown rather than being silently discarded or ignored.
-        for entry in fs::read_dir(root).map_err(ApiError::io)? {
-            let entry = entry.map_err(ApiError::io)?;
-            let name = entry.file_name().into_string().map_err(|name| {
-                invalid_state("spool filenames must be valid UTF-8")
-                    .with_source(crate::http_boundary::ApiErrorSource::Filename(name))
-            })?;
-            let info = fs::symlink_metadata(entry.path()).map_err(ApiError::io)?;
-            if !info.is_file() {
-                return Err(invalid_state("spool contains a non-regular file"));
-            }
-            if info.nlink() != 1 {
-                return Err(invalid_state("spool contains an aliased data file"));
-            }
+        for entry in directory.entries().map_err(inventory_error)? {
+            let entry = entry.map_err(inventory_error)?;
+            let name = entry
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| {
+                    invalid_state("spool filenames must be valid UTF-8").with_source(
+                        crate::http_boundary::ApiErrorSource::Filename(
+                            entry.as_os_str().to_owned(),
+                        ),
+                    )
+                })?
+                .to_owned();
+            let size = match directory.entry_metadata(&entry).map_err(inventory_error)? {
+                EntryMetadata::File { bytes } => bytes,
+                EntryMetadata::Directory => {
+                    return Err(invalid_state("spool contains a non-regular file"));
+                }
+            };
             if name == ".budget.lock" {
                 continue;
             }
-            files.insert(name.clone(), info.len());
+            files.insert(name.clone(), size);
             if name.ends_with(".owner.json") {
-                match metadata::<Owner>(&entry.path()) {
+                match metadata::<Owner>(&directory, &entry) {
                     Ok(owner) => {
                         if name != format!("{}.owner.json", owner.data_file) {
                             return Err(invalid_state("spool ownership filename mismatch"));
@@ -269,7 +275,7 @@ impl SpoolBudget {
                     }
                 }
             } else if name.contains(".json") {
-                match metadata::<UploadRecord>(&entry.path()) {
+                match metadata::<UploadRecord>(&directory, &entry) {
                     Ok(record) => {
                         covered_metadata.insert(name, record.data_file.clone());
                         set_owner(&mut owners, record.data_file, record.principal)?;
@@ -332,8 +338,11 @@ impl SpoolBudget {
             }
         }
         ledger.rebuild_totals()?;
+        directory
+            .verify_identity()
+            .map_err(crate::upload_fs_error)?;
         Ok(Arc::new(Self {
-            root: root.to_owned(),
+            directory: Arc::new(directory),
             limits,
             ledger: Mutex::new(ledger),
             _directory_lock: directory_lock,
@@ -346,15 +355,8 @@ impl SpoolBudget {
         name: &str,
         length: u64,
     ) -> Result<Reservation, ApiError> {
-        let available = rustix::fs::statvfs(&self.root)
-            .map_err(std::io::Error::from)
-            .map_err(ApiError::io)?;
-        self.reserve_with_available(
-            principal,
-            name,
-            length,
-            available.f_bavail.saturating_mul(available.f_frsize),
-        )
+        let available = self.directory.available_bytes().map_err(ApiError::io)?;
+        self.reserve_with_available(principal, name, length, available)
     }
 
     fn reserve_with_available(
@@ -367,6 +369,12 @@ impl SpoolBudget {
         if !valid_name(name) || principal.is_empty() || principal.len() > 1024 {
             return Err(ApiError::invalid("invalid spool reservation identity"));
         }
+        self.directory
+            .verify_identity()
+            .map_err(crate::upload_fs_error)?;
+        let payload_name = EntryName::new(name).map_err(crate::upload_fs_error)?;
+        let owner_name =
+            EntryName::new(format!("{name}.owner.json")).map_err(crate::upload_fs_error)?;
         let mut ledger = lock(&self.ledger);
         if ledger.uncertain {
             return Err(invalid_state(
@@ -429,10 +437,13 @@ impl SpoolBudget {
         Ok(Reservation {
             budget: self.clone(),
             name: name.to_owned(),
+            payload_name,
+            owner_name,
             principal: principal.to_owned(),
             max_length: length,
             overhead,
             charged_bytes: bytes,
+            settlement_failed: false,
         })
     }
 }
@@ -440,21 +451,33 @@ impl SpoolBudget {
 pub(crate) struct Reservation {
     budget: Arc<SpoolBudget>,
     name: String,
+    payload_name: EntryName,
+    owner_name: EntryName,
     principal: String,
     max_length: u64,
     overhead: u64,
     charged_bytes: u64,
+    settlement_failed: bool,
 }
 impl Reservation {
+    pub(crate) fn directory(&self) -> &Arc<PrivateDirectory> {
+        &self.budget.directory
+    }
+    pub(crate) fn payload_name(&self) -> &EntryName {
+        &self.payload_name
+    }
+
+    pub(crate) fn retain_unsettled_charge(&mut self) {
+        self.settlement_failed = true;
+    }
+
     pub(crate) fn block_admission(&self) {
-        {
-            let mut ledger = self
-                .budget
-                .ledger
-                .lock()
-                .expect("service state lock poisoned");
-            ledger.uncertain = true;
-        }
+        let mut ledger = self
+            .budget
+            .ledger
+            .lock()
+            .expect("service state lock poisoned");
+        ledger.uncertain = true;
     }
     pub(crate) fn check_headroom(
         &self,
@@ -467,10 +490,12 @@ impl Reservation {
         {
             return Err(invalid_state("write exceeds its spool reservation"));
         }
-        let available = rustix::fs::statvfs(&self.budget.root)
-            .map_err(std::io::Error::from)
+        let available = self
+            .budget
+            .directory
+            .available_bytes()
             .map_err(ApiError::io)?;
-        if available.f_bavail.saturating_mul(available.f_frsize)
+        if available
             < self
                 .budget
                 .limits
@@ -483,33 +508,48 @@ impl Reservation {
         }
         Ok(())
     }
-    /// Establish attribution before creating/writing a new payload. On any
-    /// uncertain outcome both files are retained; recovery inventories them.
+    /// Establish attribution before creating/writing a new payload. Failure
+    /// retains existing evidence and blocks admission until recovery inventories it.
     pub(crate) fn persist_owner(&self) -> Result<(), ApiError> {
-        let path = self.budget.root.join(format!("{}.owner.json", self.name));
-        let mut options = OpenOptions::new();
-        options.create_new(true).write(true).mode(0o600);
-        let mut file = match options.open(&path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let owner = metadata::<Owner>(&path)?;
-                if owner.data_file != self.name || owner.principal != self.principal {
-                    return Err(invalid_state("spool owner record mismatch"));
-                }
-                return Ok(());
+        let result = (|| {
+            let directory = &self.budget.directory;
+            directory
+                .verify_identity()
+                .map_err(crate::upload_fs_error)?;
+            match directory.read_bounded(&self.owner_name, MAX_METADATA as usize) {
+                Ok(bytes) => return self.check_owner(&bytes),
+                Err(platform_io::fs_safety::Error::Io(error))
+                    if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(crate::upload_fs_error(error)),
             }
-            Err(error) => return Err(ApiError::io(error)),
-        };
-        let bytes = json_codec::to_vec(&Owner {
-            data_file: self.name.clone(),
-            principal: self.principal.clone(),
-        })
-        .expect("invariant: internal JSON serialization succeeds");
-        file.write_all(&bytes).map_err(ApiError::io)?;
-        file.sync_all().map_err(ApiError::io)?;
-        fs::File::open(&self.budget.root)
-            .and_then(|file| file.sync_all())
-            .map_err(ApiError::io)
+            let bytes = json_codec::to_vec(&Owner {
+                data_file: self.name.clone(),
+                principal: self.principal.clone(),
+            })
+            .expect("invariant: internal JSON serialization succeeds");
+            match AtomicFile::create(directory, &self.owner_name, &bytes) {
+                Ok(()) => Ok(()),
+                Err(platform_io::fs_safety::Error::DestinationExists(_)) => {
+                    let bytes = directory
+                        .read_bounded(&self.owner_name, MAX_METADATA as usize)
+                        .map_err(crate::upload_fs_error)?;
+                    self.check_owner(&bytes)
+                }
+                Err(error) => Err(crate::upload_fs_error(error)),
+            }
+        })();
+        if result.is_err() {
+            self.block_admission();
+        }
+        result
+    }
+    fn check_owner(&self, bytes: &[u8]) -> Result<(), ApiError> {
+        let owner: Owner =
+            storage_contract::decode_strict(bytes).map_err(ApiError::invalid_source)?;
+        if owner.data_file != self.name || owner.principal != self.principal {
+            return Err(invalid_state("spool owner record mismatch"));
+        }
+        Ok(())
     }
 }
 impl Drop for Reservation {
@@ -521,27 +561,50 @@ impl Drop for Reservation {
                 return;
             }
         };
+        if self.settlement_failed {
+            ledger.uncertain = true;
+            return;
+        }
+        if ledger.uncertain {
+            return;
+        }
         let overhead = self.overhead;
         let maximum = self.charged_bytes;
-        // Last writer/metadata task has finished. Unknown durability and upload
-        // success are irrelevant: charge every retained physical byte.
-        let retained = match fs::symlink_metadata(self.budget.root.join(&self.name)) {
-            Ok(info) if info.is_file() => info.len().checked_add(overhead),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match fs::symlink_metadata(
-                    self.budget.root.join(format!("{}.owner.json", self.name)),
-                ) {
-                    Ok(_) => Some(overhead),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(0),
-                    Err(error) => {
-                        tracing::warn!(error = ?error, "spool ownership cannot be inventoried; admission blocked");
-                        None
+        // Only this verified directory can settle the last task's retained bytes.
+        let retained = (|| -> Result<u64, ApiError> {
+            let directory = &self.budget.directory;
+            directory
+                .verify_identity()
+                .map_err(crate::upload_fs_error)?;
+            let bytes = match directory.entry_metadata(&self.payload_name) {
+                Ok(EntryMetadata::File { bytes }) => bytes.checked_add(overhead),
+                Err(platform_io::fs_safety::Error::Io(error))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    match directory.entry_metadata(&self.owner_name) {
+                        Ok(EntryMetadata::File { .. }) => Some(overhead),
+                        Err(platform_io::fs_safety::Error::Io(error))
+                            if error.kind() == std::io::ErrorKind::NotFound =>
+                        {
+                            Some(0)
+                        }
+                        Ok(EntryMetadata::Directory) => {
+                            return Err(invalid_state("spool ownership is not a regular file"));
+                        }
+                        Err(error) => return Err(inventory_error(error)),
                     }
                 }
-            }
-            Ok(_) => None,
+                Ok(EntryMetadata::Directory) => {
+                    return Err(invalid_state("spool payload is not a regular file"));
+                }
+                Err(error) => return Err(inventory_error(error)),
+            };
+            bytes.ok_or_else(|| invalid_state("spool settlement accounting overflow"))
+        })();
+        let retained = match retained {
+            Ok(bytes) => Some(bytes),
             Err(error) => {
-                tracing::warn!(error = ?error, "spool payload cannot be inventoried; admission blocked");
+                tracing::warn!(error = ?error, "spool accounting could not settle; admission blocked");
                 None
             }
         };

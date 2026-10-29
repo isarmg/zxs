@@ -16,8 +16,11 @@ fn staging_guard_preserves_unpublished_bytes_until_and_after_last_job() {
     let budget = test_budget(root.path());
     let path = root.path().join("unpublished.data");
     let reservation = budget.reserve("alice", "unpublished.data", 10).unwrap();
-    let guard =
-        StagedFile::open_budgeted(path.clone(), PayloadOpenMode::CreateNew, reservation).unwrap();
+    let guard = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        &guard.directory,
+        guard.reservation.directory()
+    ));
     let running_job = guard.clone();
     drop(guard);
     assert!(budget.reserve("alice", "unpublished.data", 10).is_err());
@@ -25,6 +28,105 @@ fn staging_guard_preserves_unpublished_bytes_until_and_after_last_job() {
     drop(running_job);
     assert_eq!(fs::read(path).unwrap(), b"partial");
     assert!(budget.reserve("alice", "unpublished.data", 10).is_ok());
+}
+
+#[test]
+fn last_staged_owner_rejects_smaller_replacement_without_discarding_original_bytes() {
+    let root = private_tempdir();
+    let budget = test_budget(root.path());
+    let reservation = budget.reserve("alice", "work.data", 1024).unwrap();
+    let staged = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
+    let original = vec![42; 256];
+    staged.write(&original).unwrap();
+    staged.sync().unwrap();
+    let last_job = std::sync::Arc::clone(&staged);
+    drop(staged);
+    let retained = root.path().join("retained.data");
+    fs::rename(root.path().join("work.data"), &retained).unwrap();
+    let replacement = EntryName::new("work.data").unwrap();
+    last_job
+        .directory
+        .open_payload(&replacement, PayloadOpenMode::CreateNew)
+        .unwrap()
+        .write_all(b"x")
+        .unwrap();
+    drop(last_job);
+    // Capacity is ample: refusal must be inventory-required, not quota exhaustion.
+    let error = budget.reserve("bob", "next.data", 0).err().unwrap();
+    assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
+    assert_eq!(fs::read(retained).unwrap(), original);
+    assert_eq!(fs::read(root.path().join("work.data")).unwrap(), b"x");
+    assert!(root.path().join("work.data.owner.json").is_file());
+}
+
+#[test]
+fn last_staged_owner_during_writer_unwind_retains_bytes_without_a_second_panic() {
+    let root = private_tempdir();
+    let budget = test_budget(root.path());
+    let reservation = budget.reserve("alice", "work.data", 100).unwrap();
+    let staged = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
+    staged.write(b"retained").unwrap();
+    staged.sync().unwrap();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let owner = staged;
+        let _writer = owner.writer.lock().unwrap();
+        // The writer guard poisons first; the final Arc then drops while unwinding.
+        panic!("writer failed while holding its file lock");
+    }));
+    assert!(panic.is_err());
+    assert_eq!(
+        fs::read(root.path().join("work.data")).unwrap(),
+        b"retained"
+    );
+    assert!(root.path().join("work.data.owner.json").is_file());
+    let error = budget.reserve("bob", "next.data", 0).err().unwrap();
+    assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
+}
+
+#[test]
+fn generation_retention_rejects_rebound_root_and_preserves_prior_record() {
+    let root = private_tempdir();
+    let path = root.path().join("spool");
+    PrivateDirectory::create(&path).unwrap();
+    let budget = test_budget(&path);
+    let reservation = budget.reserve("alice", "work.data", 3).unwrap();
+    let staged = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
+    staged.write(b"old").unwrap();
+    staged.sync().unwrap();
+    let mut record = UploadRecord {
+        workspace_id: "ws".into(),
+        item_id: "item".into(),
+        principal: "alice".into(),
+        path: "file".into(),
+        generation: 1,
+        logical_size: 3,
+        content_hash: Some(storage_contract::ContentHash::from_digest(blake3::hash(
+            b"old",
+        ))),
+        persisted_bytes: 3,
+        persisted_hash: blake3::hash(b"old").to_hex().to_string(),
+        state: UploadState::Complete,
+        data_file: "work.data".into(),
+    };
+    staged.retain_generation(&record).unwrap();
+    let name = format!(
+        "retained-{}-1-{}.json",
+        key("ws", "item"),
+        blake3::hash(b"work.data").to_hex()
+    );
+    let previous = fs::read(path.join(&name)).unwrap();
+    let moved = root.path().join("retained");
+    fs::rename(&path, &moved).unwrap();
+    PrivateDirectory::create(&path).unwrap();
+    record.generation = 2;
+    let error = staged.retain_generation(&record).unwrap_err();
+    assert!(std::error::Error::source(&error).is_some());
+    assert!(budget.reserve("bob", "next.data", 0).is_err());
+    drop(staged);
+    assert_eq!(fs::read_dir(path).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(&moved).unwrap().count(), 4);
+    assert_eq!(fs::read(moved.join(name)).unwrap(), previous);
+    assert_eq!(fs::read(moved.join("work.data")).unwrap(), b"old");
 }
 
 #[test]
@@ -36,14 +138,13 @@ fn staged_payload_modes_preserve_retry_bytes_and_open_error_sources() {
     let budget = test_budget(root.path());
     let path = root.path().join("retry.data");
     let reservation = budget.reserve("alice", "retry.data", 6).unwrap();
-    let staged =
-        StagedFile::open_budgeted(path.clone(), PayloadOpenMode::CreateNew, reservation).unwrap();
+    let staged = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
     staged.write(b"abc").unwrap();
     staged.sync().unwrap();
     drop(staged);
 
     let reservation = budget.reserve("alice", "retry.data", 6).unwrap();
-    let error = StagedFile::open_budgeted(path.clone(), PayloadOpenMode::CreateNew, reservation)
+    let error = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation)
         .err()
         .unwrap();
     assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
@@ -55,8 +156,7 @@ fn staged_payload_modes_preserve_retry_bytes_and_open_error_sources() {
     assert_eq!(fs::read(&path).unwrap(), b"abc");
 
     let reservation = budget.reserve("alice", "retry.data", 6).unwrap();
-    let retry =
-        StagedFile::open_budgeted(path.clone(), PayloadOpenMode::Existing, reservation).unwrap();
+    let retry = StagedFile::open_budgeted(PayloadOpenMode::Existing, reservation).unwrap();
     retry.write(b"def").unwrap();
     retry.sync().unwrap();
     drop(retry);
@@ -64,7 +164,7 @@ fn staged_payload_modes_preserve_retry_bytes_and_open_error_sources() {
 
     let missing = root.path().join("missing.data");
     let reservation = budget.reserve("alice", "missing.data", 6).unwrap();
-    let error = StagedFile::open_budgeted(missing.clone(), PayloadOpenMode::Existing, reservation)
+    let error = StagedFile::open_budgeted(PayloadOpenMode::Existing, reservation)
         .err()
         .unwrap();
     assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
@@ -85,8 +185,7 @@ fn failed_atomic_staged_progress_retains_bytes_and_blocks_admission_until_invent
     let budget = test_budget(root.path());
     let path = root.path().join("new.data");
     let reservation = budget.reserve("alice", "new.data", 9).unwrap();
-    let guard =
-        StagedFile::open_budgeted(path.clone(), PayloadOpenMode::CreateNew, reservation).unwrap();
+    let guard = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
     guard.write(b"new bytes").unwrap();
     guard.sync().unwrap();
     let record = UploadRecord {
@@ -213,12 +312,7 @@ fn replaced_http_payload_or_parent_cannot_be_submitted() {
         fs::set_permissions(&spool, fs::Permissions::from_mode(0o700)).unwrap();
         let budget = test_budget(&spool);
         let reservation = budget.reserve("alice", "upload.data", 8).unwrap();
-        let staged = StagedFile::open_budgeted(
-            spool.join("upload.data"),
-            PayloadOpenMode::CreateNew,
-            reservation,
-        )
-        .unwrap();
+        let staged = StagedFile::open_budgeted(PayloadOpenMode::CreateNew, reservation).unwrap();
         staged.write(b"original").unwrap();
         if swap_parent {
             fs::rename(&spool, root.path().join("moved")).unwrap();

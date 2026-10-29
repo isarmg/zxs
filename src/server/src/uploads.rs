@@ -2,10 +2,12 @@
 use crate::ApiError;
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{EntryName, PayloadOpenMode, PrivateDirectory};
+#[cfg(test)]
+use std::path::PathBuf;
 use std::{
     fs,
     io::{Read, Seek, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -111,29 +113,19 @@ pub(crate) fn load(
 /// Retained files are never deleted merely because an HTTP request ended.
 pub(crate) struct StagedFile {
     writer: std::sync::Mutex<fs::File>,
-    directory: platform_io::fs_safety::PrivateDirectory,
+    directory: std::sync::Arc<PrivateDirectory>,
     name: platform_io::fs_safety::EntryName,
     // Dropped after the writer; settlement inventories the actual file length.
     reservation: crate::spool_budget::Reservation,
 }
 impl StagedFile {
     pub fn open_budgeted(
-        path: PathBuf,
         mode: PayloadOpenMode,
         reservation: crate::spool_budget::Reservation,
     ) -> Result<std::sync::Arc<Self>, ApiError> {
         reservation.persist_owner()?;
-        use platform_io::fs_safety::{EntryName, PrivateDirectory};
-        let directory = PrivateDirectory::open_trusted(
-            path.parent()
-                .ok_or_else(|| ApiError::invalid("upload parent missing"))?,
-        )
-        .map_err(crate::upload_fs_error)?;
-        let name = EntryName::new(
-            path.file_name()
-                .ok_or_else(|| ApiError::invalid("upload filename missing"))?,
-        )
-        .map_err(crate::upload_fs_error)?;
+        let directory = reservation.directory().clone();
+        let name = reservation.payload_name().clone();
         let mut writer = directory
             .open_payload(&name, mode)
             .map_err(crate::upload_fs_error)?;
@@ -173,8 +165,39 @@ impl StagedFile {
     pub fn sync(&self) -> Result<(), ApiError> {
         crate::lock(&self.writer).sync_all().map_err(ApiError::io)
     }
+    pub(crate) fn retain_generation(&self, record: &UploadRecord) -> Result<(), ApiError> {
+        let result = (|| {
+            self.directory
+                .verify_identity()
+                .map_err(crate::upload_fs_error)?;
+            retain_generation_held(&self.directory, record)
+        })();
+        if result.is_err() {
+            self.block_admission();
+        }
+        result
+    }
     pub fn block_admission(&self) {
         self.reservation.block_admission();
+    }
+}
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        let result = match self.writer.get_mut() {
+            Ok(writer) => self
+                .directory
+                .verify_payload(&self.name, writer)
+                .map_err(crate::upload_fs_error),
+            Err(error) => {
+                self.reservation.retain_unsettled_charge();
+                tracing::error!(%error, "spool writer identity could not settle; admission blocked");
+                return;
+            }
+        };
+        if let Err(error) = result {
+            self.reservation.retain_unsettled_charge();
+            tracing::warn!(error = ?error, "spool payload identity changed before settlement; admission blocked");
+        }
     }
 }
 pub(crate) fn persist_staged(record: &UploadRecord, staged: &StagedFile) -> Result<(), ApiError> {
@@ -198,6 +221,7 @@ pub(crate) fn persist(root: &Path, record: &UploadRecord) -> Result<(), ApiError
     let name = format!("{}.json", key(&record.workspace_id, &record.item_id));
     persist_at(root, &name, record)
 }
+#[cfg(test)]
 fn persist_at(root: &Path, name: &str, record: &UploadRecord) -> Result<(), ApiError> {
     let directory = platform_io::fs_safety::PrivateDirectory::open_trusted(root)
         .map_err(crate::upload_fs_error)?;
@@ -307,21 +331,29 @@ pub(crate) struct RetainGenerationHook {
 pub(crate) static RETAIN_GENERATION_HOOK: std::sync::Mutex<Option<RetainGenerationHook>> =
     std::sync::Mutex::new(None);
 
+#[cfg(test)]
 pub(crate) fn retain_generation(root: &Path, record: &UploadRecord) -> Result<(), ApiError> {
+    let directory = PrivateDirectory::open_trusted(root).map_err(crate::upload_fs_error)?;
+    retain_generation_held(&directory, record)
+}
+fn retain_generation_held(
+    directory: &PrivateDirectory,
+    record: &UploadRecord,
+) -> Result<(), ApiError> {
     let name = format!(
         "retained-{}-{}-{}.json",
         key(&record.workspace_id, &record.item_id),
         record.generation,
         blake3::hash(record.data_file.as_bytes()).to_hex()
     );
-    persist_at(root, &name, record)?;
+    persist_held(directory, &name, record)?;
     #[cfg(test)]
     {
         let hook = RETAIN_GENERATION_HOOK
             .lock()
             .unwrap()
             .as_ref()
-            .filter(|hook| hook.root == root)
+            .filter(|hook| hook.root == directory.path())
             .map(|hook| hook.after_publish.clone());
         if let Some(hook) = hook {
             hook();
