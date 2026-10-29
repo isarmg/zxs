@@ -37,6 +37,8 @@ def main():
         ("n1-two-slots", dict(n=1, operations=2), 50000, 30),
         ("n2-one-copy", dict(n=2), 50000, 30),
         ("n2-two-copies", dict(n=2, replicas=2), 50000, 30),
+        ("n3-full-publication", dict(n=3, replicas=2), 150000, 45),
+        ("n4-full-publication", dict(n=4, replicas=2), 250000, 60),
         ("n1-one-crash", dict(n=1, crashes=1), 35000, 25),
         ("n1-recovery-crash", dict(n=1, crashes=2), 35000, 25),
         ("n2-failure-recovery", dict(n=2, crashes=1, fault_budget=1), 25000, 25),

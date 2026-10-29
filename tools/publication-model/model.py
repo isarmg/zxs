@@ -132,6 +132,13 @@ def _certificate(state: State):
                  for row in state.artifacts[state.slot])
 
 
+def _source_available(state: State, config: Config):
+    return any(state.online[m] and not state.read_fault[m] and
+               state.artifacts[state.slot][m][CONTENT].entry and
+               state.artifacts[state.slot][m][CONTENT].data == FULL
+               for m in range(config.replicas))
+
+
 def _healthy_content(state: State, config: Config):
     return all(state.artifacts[state.slot][m][CONTENT].entry and
                state.artifacts[state.slot][m][CONTENT].data == FULL and
@@ -207,6 +214,9 @@ def _stage_steps(state: State, config: Config) -> Iterator[tuple[str, State]]:
     kind = RECOVERY_RESOLUTION if state.phase == "RECOVER_ABORT" else STAGES.index(state.phase)
     targets = (tuple(m for m, v in enumerate(state.observations) if v in (0, 1, 2, 4, 5))
                if kind == RECOVERY_RESOLUTION else tuple(_targets(config, kind)))
+    if kind == CONTENT and state.recovery_mode and not _source_available(state, config):
+        yield "recover:no_content_source", _begin_recovery(state)
+        return
     historical_normal = (state.recovery_result == 1 if state.recovery_mode
                          else state.known_publication[state.slot] == 1)
     if kind in (COMMIT_PROOF, PUBLICATION, PUBLICATION_PROOF) and not historical_normal and state.recovery_result != 2:
@@ -263,7 +273,7 @@ def _observation(state: State, member: int):
         return 3
     row = state.artifacts[state.slot][member]
     # Non-record body corruption affects health, not log continuity.
-    log = (row[k] for k in (PREPARE, ACCEPT, FINALIZE, PUBLICATION))
+    log = (row[k] for k in (PREPARE, ACCEPT, FINALIZE, PUBLICATION, RECOVERY_RESOLUTION))
     if any(a.entry and a.data != FULL for a in log):
         return 3
     resolution = row[RECOVERY_RESOLUTION]
@@ -319,8 +329,7 @@ def _recover_steps(state: State, config: Config):
         rows = tuple(tuple(replace(a, failed=False, done=_durable(a),
                                    file_synced=a.stable_data == FULL) for a in row) for row in rows)
         artifacts = _set(state.artifacts, state.slot, rows)
-        healthy = all(rows[m][CONTENT].entry and rows[m][CONTENT].data == FULL
-                      for m in range(config.replicas))
+        healthy = _source_available(state, config)
         recorded = 1 if 2 in state.observations else (2 if 5 in state.observations else 0)
         if not healthy and not recorded:
             # Explicit degraded recovery remains a committed result. The

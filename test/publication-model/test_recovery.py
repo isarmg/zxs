@@ -105,6 +105,23 @@ class RecoveryWindows(unittest.TestCase):
         self.assertEqual(state.artifacts[0][0][0].data, 3)
         self.assertTrue(state.publication_witness[0][0] & 1)
 
+    def test_one_healthy_copy_repairs_second_required_copy_before_normal_publication(self):
+        config = Config(n=2, replicas=2, crashes=1, fault_budget=1)
+        state = prepare(initial(config), config)
+        for member in range(2):
+            state = complete_member(state, config, "ACCEPT", member)
+        state = take(state, config, "content:corrupt:0:0")
+        state = take(state, config, "crash:process")
+        for member in range(2):
+            state = take(state, config, f"observe:{member}:1")
+        state = take(state, config, "recover:preserve_candidate")
+        state = take(state, config, "recover:reprotect_fixed_members")
+        self.assertEqual(state.phase, "CONTENT")
+        state = advance_publication(state, config)
+        self.assertEqual(state.results, (1,))
+        self.assertEqual([state.artifacts[0][m][0].data for m in range(2)], [1, 1])
+        self.assertEqual(state.publish_count, (1,))
+
     def test_unpublished_decision_damage_publishes_explicit_degraded_result(self):
         config = Config(n=1, crashes=1, fault_budget=1)
         state = prepare(initial(config), config)

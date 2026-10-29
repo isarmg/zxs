@@ -105,6 +105,7 @@ def search(config, limits=None):
             if depth >= limits.max_depth:
                 depth_frontier = True
                 continue
+            max_depth = max(max_depth, depth + 1)
             violations = properties.check(state, following, config)
             if violations:
                 witness = _trace(config, nodes, parents, index, (action, following))

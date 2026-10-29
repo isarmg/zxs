@@ -48,6 +48,19 @@ class ProtocolWindows(unittest.TestCase):
         self.assertNotIn("barrier:ACCEPT", dict(model.successors(s, c)))
         self.assertEqual(s.results, (0,))
 
+    def test_two_sequential_full_publications_for_each_member_count(self):
+        for members in (1, 2, 3, 4):
+            with self.subTest(members=members):
+                c = model.Config(n=members, replicas=min(members, 2), operations=2)
+                s = self.drive_to(model.initial(c), c, "ACK")
+                s = self.step(s, c, "reply:lost")
+                s = self.step(s, c, "retry:original_id")
+                s = self.step(s, c, "next_operation")
+                s = self.drive_to(s, c, "ACK")
+                self.assertEqual(s.results, (1, 1))
+                self.assertEqual(s.events, (0, 1))
+                self.assertEqual(s.publish_count, (1, 1))
+
     def test_nonprefix_failures_are_independent_and_keep_fixed_barrier(self):
         c = model.Config(n=4, fault_budget=2)
         s = self.drive_to(model.initial(c), c, "ACCEPT")
