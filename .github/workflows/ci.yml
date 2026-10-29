@@ -1,218 +1,189 @@
-name: CI
-
+# Verification-only carrier; never merge this workflow override into product ancestry.
+name: Paired actual Backend contention R82
 on:
   push:
-  pull_request:
+    branches: [verify/backend-contention-20261029-r82]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: '1'
-  CARGO_INCREMENTAL: '0'
-
+  group: backend-contention-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  static:
-    name: Static workflow and tooling regressions (no Rust)
+  contention:
+    name: Backend contention (${{ matrix.files }} files)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check workflows, source governance and script regressions
-        run: bash .github/scripts/check.sh static
-
-  tests:
-    name: Tests (${{ matrix.suite }})
-    needs: static
-    runs-on: ubuntu-24.04
-    # Cold crypto runs include ten packaged/local-generated ring cases, including
-    # both release slow-test matrices; the measured run exceeded 30 minutes.
-    # Match the release verification budget without relaxing other shards.
-    timeout-minutes: ${{ matrix.suite == 'foundation-crypto' && 60 || 30 }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
+        files: [500, 1500, 3000]
     env:
-      ZXS_REQUIRE_BROWSER: '1'
+      CARGO_NET_OFFLINE: 'true'
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: never
+      RUST_BACKTRACE: '1'
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: |
-          rustup show active-toolchain
-          rustc --version
-          cargo --version
-      - name: Install WASM standard library for cross-target checks
-        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install system SQLite SDK for unbundled validation
-        if: matrix.suite == 'foundation-data'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
-      - name: Enable sandboxed Chrome for browser future runtime checks
-        if: matrix.suite == 'foundation-language'
-        run: bash .github/scripts/prepare-browser-contract.sh
-      - name: Cache verified security scanner
-        if: matrix.suite == 'security'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            target/security-tools/bin/cargo-audit
-            target/security-tools/verified-build.json
-          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
-      - name: Run locked test suite
-        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
-      - name: Verify isolated system SQLite consumer
-        if: matrix.suite == 'foundation-data'
-        run: python3 .github/scripts/check-sqlite-system.py
-      - name: Retain exact foundation behaviour test evidence
-        if: always() && matrix.suite == 'foundation-async'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: foundation-behaviour-evidence
-          path: |
-            target/foundation-behaviour/logs/
-            target/foundation-behaviour/summary.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  web-production:
-    name: Production WASM build
-    needs: static
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+          ref: ${{ github.sha }}
+          path: harness
+          sparse-checkout: |
+            test/server/bench/contention
+            test/server/unit/engine_backend
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain and WASM target
-        run: |
-          rustup show active-toolchain
-          rustup target add wasm32-unknown-unknown
-          rustc --version
-      - name: Cache locally compiled Rust build helpers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/rust-build-tools
-          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
-          restore-keys: |
-            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build production Web distribution
-        run: bash .github/scripts/check.sh web-production
-      - name: Retain production assets for checks in this run
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-dist
-          path: build/web/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain browser template contract fixture
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output/
-          if-no-files-found: error
-          retention-days: 7
-
-  browser-smoke:
-    name: Extracted release browser smoke (Chrome)
-    needs: web-production
-    runs-on: ubuntu-24.04
-    # Compile one release-profile graph for both product and browser harness.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+          ref: e2f33d9882cf7263412d9370b6a703e0b216357d
+          path: baseline
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: rustup show active-toolchain
-      - name: Fetch production Web assets from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: web-dist
-          path: build/web
-      - name: Fetch browser template contract fixture from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output
-      - name: Verify runner Chrome and ChromeDriver
+          ref: 13b664e9fd41a356ffb7ed982d21e97abb123626
+          path: candidate
+      - name: Authenticate exact products and add only private test module wiring
+        shell: bash
         run: |
-          chrome="$(command -v google-chrome)"
-          driver="$(command -v chromedriver)"
-          "$chrome" --version
-          "$driver" --version
-          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
-          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
-          test "$chrome_major" = "$driver_major"
-          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
-          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
-      - name: Install CJK fonts for the Chinese screenshot
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/contention-evidence"
+          printf 'ZXS_CONTENTION_DEADLINE_UNIX=%s\n' "$(( $(date +%s) + 150 * 60 ))" >> "$GITHUB_ENV"
+          printf 'CARGO_HOME=%s\n' "$(mktemp -d "$RUNNER_TEMP/contention-cargo.XXXXXX")" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, tomllib
+          root = pathlib.Path.cwd()
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'contention-evidence'
+          identities = {
+              'baseline': ('e2f33d9882cf7263412d9370b6a703e0b216357d', 'bee9d4686088a4af6c659a983c6e711f5f62d272'),
+              'candidate': ('13b664e9fd41a356ffb7ed982d21e97abb123626', '861e4820e412fd518212d860a9fa6a3fca111851'),
+          }
+          fixture_path = 'test/server/unit/engine_backend/contention_measurements.rs'
+          source_path = 'src/server/src/engine_backend.rs'
+          fixture = (root/'harness'/fixture_path).read_bytes()
+          wiring = b'\n#[cfg(test)]\n#[path = "../../../test/server/unit/engine_backend/contention_measurements.rs"]\nmod contention_measurements;\n'
+          records = {}
+          for name, (sha, tree) in identities.items():
+              product = root/name
+              def git(*args):
+                  return subprocess.check_output(['git','-C',str(product),*args]).decode().strip()
+              assert git('rev-parse','HEAD') == sha
+              assert git('rev-parse','HEAD^{tree}') == tree
+              assert not git('status','--porcelain')
+              assert tomllib.loads((product/'rust-toolchain.toml').read_text())['toolchain']['channel'] == '1.99.0'
+              original = (product/source_path).read_bytes()
+              assert b'mod contention_measurements;' not in original
+              assert not (product/fixture_path).exists()
+              (product/fixture_path).parent.mkdir(parents=True, exist_ok=True)
+              (product/fixture_path).write_bytes(fixture)
+              (product/source_path).write_bytes(original + wiring)
+              assert git('diff','--name-only').splitlines() == [source_path]
+              assert git('ls-files','--others','--exclude-standard').splitlines() == [fixture_path]
+              (out/f'{name}-test-wiring.diff').write_text(git('diff')+'\n')
+              records[name] = dict(sha=sha, tree=tree,
+                  source_before_sha256=hashlib.sha256(original).hexdigest(),
+                  source_after_sha256=hashlib.sha256(original+wiring).hexdigest(),
+                  fixture_sha256=hashlib.sha256(fixture).hexdigest(),
+                  lock_blob=git('rev-parse','HEAD:Cargo.lock'),
+                  source_catalog_blob=git('rev-parse','HEAD:compliance/rust-sources.json'),
+                  server_manifest_blob=git('rev-parse','HEAD:src/server/Cargo.toml'),
+                  engine_manifest_blob=git('rev-parse','HEAD:src/engine/Cargo.toml'))
+          records['workflow_sha'] = os.environ['GITHUB_SHA']
+          runner = (root/'harness/test/server/bench/contention/run.py').read_bytes()
+          records['runner_sha256'] = hashlib.sha256(runner).hexdigest()
+          records['configuration'] = 'release server unit-test target, existing dev features and cfg(test) hooks, no injected faults'
+          (out/'input-identity.json').write_text(json.dumps(records,indent=2)+'\n')
+          (out/'contention_measurements.rs').write_bytes(fixture)
+          (out/'run.py').write_bytes(runner)
+          PY
+          uname -a > "$RUNNER_TEMP/contention-evidence/uname.txt"
+          lscpu > "$RUNNER_TEMP/contention-evidence/lscpu.txt"
+          free -b > "$RUNNER_TEMP/contention-evidence/memory-before.txt"
+          df -B1 > "$RUNNER_TEMP/contention-evidence/disk-before.txt"
+      - name: Build isolated release test targets and record actual selected features
+        timeout-minutes: 60
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Build and exercise extracted release packages
-        env:
-          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
-          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
+          set -euo pipefail
+          for product in baseline candidate; do
+            (
+              cd "$product"
+              rustc -Vv > "$RUNNER_TEMP/contention-evidence/$product-rustc.txt"
+              cargo --version > "$RUNNER_TEMP/contention-evidence/$product-cargo.txt"
+              grep -q '^rustc 1\.99\.0 ' "$RUNNER_TEMP/contention-evidence/$product-rustc.txt"
+              grep -q '^cargo 1\.99\.0 ' "$RUNNER_TEMP/contention-evidence/$product-cargo.txt"
+              printf '%s\n' 'cargo test --locked --offline --release -p storage-server --lib --no-run --message-format=json -vv' > "$RUNNER_TEMP/contention-evidence/$product-build-command.txt"
+              CARGO_TARGET_DIR="$RUNNER_TEMP/contention-target-$product" cargo test --locked --offline --release -p storage-server --lib --no-run --message-format=json -vv > "$RUNNER_TEMP/contention-evidence/$product-build.jsonl" 2> "$RUNNER_TEMP/contention-evidence/$product-build.log"
+            )
+          done
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path.cwd()
+          out = pathlib.Path(os.environ['RUNNER_TEMP'])/'contention-evidence'
+          identities = json.loads((out/'input-identity.json').read_text())
+          selected = {}
+          for name in ('baseline','candidate'):
+              # -vv preserves prefixed build-script stdout beside Cargo JSON.
+              # Keep the whole raw log; parse only Cargo's JSON object lines.
+              rows = [json.loads(line) for line in (out/f'{name}-build.jsonl').read_text().splitlines()
+                      if line.startswith('{')]
+              finished = [row for row in rows if row['reason'] == 'build-finished']
+              assert len(finished) == 1 and finished[0]['success'], 'successful Cargo completion missing'
+              artifacts = [row for row in rows if row['reason'] == 'compiler-artifact']
+              server = [row for row in artifacts if row['manifest_path'] == str(root/name/'src/server/Cargo.toml')
+                        and row['target']['kind'] == ['lib'] and row['profile']['test'] and row['executable'] is not None]
+              assert len(server) == 1, 'exactly one real server unit-test binary required'
+              engine = [row for row in artifacts if row['manifest_path'] == str(root/name/'src/engine/Cargo.toml')
+                        and row['target']['kind'] == ['lib']]
+              assert engine, 'engine compiler features missing'
+              expected = {'fault-injection'} if name == 'baseline' else {'fault-injection','test-support'}
+              assert all(set(row['features']) == expected for row in engine), engine
+              assert set(server[0]['features']) == {'core','default'}, server
+              binary = pathlib.Path(server[0]['executable'])
+              selected[name] = dict(server=server[0], engine=engine, binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
+              with open(os.environ['GITHUB_ENV'],'a') as environment:
+                  environment.write(f'{name.upper()}_CONTENTION_BIN={binary}\n')
+          (out/'actual-targets-and-features.json').write_text(json.dumps(selected,indent=2)+'\n')
+          PY
+      - name: Run three independent paired contention trials at this scale
+        shell: bash
         run: |
-          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
-          cargo test --locked --offline --release -p browser-smoke
-          bash .github/scripts/release-package.sh
-          bash .github/scripts/release-acceptance.sh
-          python3 .github/scripts/check-csr-browser.py
-          bash .github/scripts/release-assemble.sh
-      - name: Retain verified installation candidate (not a published release)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installation-candidate-linux-web
-          path: release-assets/*
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain template browser result and exact input identity
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-browser
-          path: target/csr-template-check/output/*json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain real Web file manager screenshot
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-screenshot
-          path: artifacts/web-file-manager.png
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain responsive Web viewport previews
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          set -euo pipefail
+          python3 harness/test/server/bench/contention/run.py \
+            --baseline "$BASELINE_CONTENTION_BIN" \
+            --candidate "$CANDIDATE_CONTENTION_BIN" \
+            --baseline-sha e2f33d9882cf7263412d9370b6a703e0b216357d \
+            --candidate-sha 13b664e9fd41a356ffb7ed982d21e97abb123626 \
+            --out "$RUNNER_TEMP/contention-evidence/results" \
+            --pool-parent "$RUNNER_TEMP/contention-pools" \
+            --deadline-unix "$ZXS_CONTENTION_DEADLINE_UNIX" \
+            --sizes '${{ matrix.files }}'
+      - name: Confirm exact source and authoritative records remain unchanged
         if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path.cwd()
+          out = pathlib.Path(os.environ['RUNNER_TEMP'])/'contention-evidence'
+          identities = json.loads((out/'input-identity.json').read_text())
+          for name in ('baseline','candidate'):
+              product = root/name
+              def git(*args):
+                  return subprocess.check_output(['git','-C',str(product),*args]).decode().strip()
+              assert git('rev-parse','HEAD') == identities[name]['sha']
+              assert git('diff','--name-only').splitlines() == ['src/server/src/engine_backend.rs']
+              assert git('ls-files','--others','--exclude-standard').splitlines() == ['test/server/unit/engine_backend/contention_measurements.rs']
+              assert hashlib.sha256((product/'src/server/src/engine_backend.rs').read_bytes()).hexdigest() == identities[name]['source_after_sha256']
+              assert hashlib.sha256((product/'test/server/unit/engine_backend/contention_measurements.rs').read_bytes()).hexdigest() == identities[name]['fixture_sha256']
+          (out/'source-unchanged.txt').write_text('Only exact reviewed cfg(test) module wiring and standalone test fixture differ.\n')
+          PY
+      - name: Upload available raw evidence including failures and incomplete runs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: viewport-previews
-          path: artifacts/viewport-previews/
-          if-no-files-found: warn
-          retention-days: 7
-
-  smb-sdk:
-    needs: static
-    uses: ./.github/workflows/smb-sdk.yml
+          name: backend-contention-${{ matrix.files }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/contention-evidence/
+          if-no-files-found: error
+          retention-days: 14
