@@ -376,7 +376,7 @@ impl Backend for EngineBackend {
             } else {
                 HttpSpoolQualification::Retain
             }),
-            Err(source) if source.code == storage_contract::ErrorCode::WorkspaceNotFound => {
+            Err(source) if source.code() == storage_contract::ErrorCode::WorkspaceNotFound => {
                 Ok(HttpSpoolQualification::Retain)
             }
             Err(source) => Err(error(source)),

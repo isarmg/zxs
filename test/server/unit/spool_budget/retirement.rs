@@ -407,7 +407,20 @@ fn real_retirement_directory_sync_failure_preserves_published_authority_and_char
         ]),
     )
     .unwrap();
-    let identity = crate::engine_backend::install_test_administrator(&mut engine, "alice");
+    let auth = crate::auth::AuthStore::initialize(
+        &core.path().join("auth"),
+        "alice",
+        "integration-test-password",
+    )
+    .unwrap();
+    let identity = auth.sole_identity().unwrap();
+    engine
+        .persist_auth_state(
+            auth.snapshot().unwrap(),
+            "system_auth",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
     let repo = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Retirement").unwrap(),
