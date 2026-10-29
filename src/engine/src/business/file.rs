@@ -522,6 +522,45 @@ pub(crate) struct FileBranchCreation<'a> {
     pub name_key: &'a str,
 }
 
+pub(crate) struct FileBranchChange {
+    pub branch_id: String,
+    file_id: String,
+    commit_id: String,
+    history_tree_id: String,
+    source_version_id: String,
+}
+
+impl FileBranchChange {
+    pub(crate) fn into_receipt(self, source_node: Option<&str>) -> json_codec::Value {
+        let Self {
+            branch_id,
+            file_id,
+            commit_id,
+            history_tree_id,
+            source_version_id,
+        } = self;
+        let mut receipt = json!({
+            "file_id": file_id,
+            "branch_id": branch_id,
+            "commit_id": commit_id,
+            "history_tree_id": history_tree_id,
+            "copied_files": "0",
+            "placeholder_files": "0",
+            "materialized": false,
+            "inherited": true,
+            "own_version_id": null,
+            "version_id": source_version_id,
+            "source_version_id": source_version_id,
+            "content_state": "PENDING",
+            "selected": false
+        });
+        if let Some(node) = source_node {
+            receipt["source_node_id"] = json!(node);
+        }
+        receipt
+    }
+}
+
 pub(crate) fn create_file_branch_change(
     engine: &crate::engine::PlanningContext<'_>,
     state: &mut State,
@@ -529,7 +568,7 @@ pub(crate) fn create_file_branch_change(
     principal: &str,
     operation: OperationId,
     fresh: &mut crate::namespace::NamespaceObjects,
-) -> Result<json_codec::Value> {
+) -> Result<FileBranchChange> {
     let FileBranchCreation {
         file_id,
         source_version,
@@ -672,9 +711,13 @@ pub(crate) fn create_file_branch_change(
             state: BranchState::Active,
         },
     );
-    Ok(
-        json!({"file_id":file_id,"branch_id":id,"commit_id":commit_id,"history_tree_id":source.history_tree_id,"copied_files":"0","placeholder_files":"0","materialized":false,"inherited":true,"own_version_id":null,"version_id":source_version,"source_version_id":source_version,"content_state":"PENDING","selected":false}),
-    )
+    Ok(FileBranchChange {
+        branch_id: id,
+        file_id: file_id.into(),
+        commit_id,
+        history_tree_id: source.history_tree_id,
+        source_version_id: source_version.into(),
+    })
 }
 
 impl Engine {
@@ -813,6 +856,7 @@ impl Engine {
                     operation,
                     &mut scratch.namespace,
                 )
+                .map(|change| change.into_receipt(None))
             },
         )
     }

@@ -180,7 +180,7 @@ impl Engine {
             json!({"file_id":file,"source_version_id":version,"source_node_id":node,"name":name.as_str()}),
             |engine, state, scratch| {
                 source_node(state, file, version, node)?;
-                let mut result = file::create_file_branch_change(
+                let result = file::create_file_branch_change(
                     &engine.planning_context(),
                     state,
                     file::FileBranchCreation {file_id:file,source_version:version,name:name.as_str(),name_key:name.key()},
@@ -188,19 +188,12 @@ impl Engine {
                     operation,
                     &mut scratch.namespace,
                 )?;
-                let branch = result["branch_id"].as_str().ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::StateInvalid,
-                        "branch receipt missing",
-                    )
-                })?;
                 state
                     .branches
-                    .get_mut(branch)
-                    .expect("created branch")
+                    .get_mut(&result.branch_id)
+                    .expect("invariant: file branch creation inserted its generated branch")
                     .file_node_id = Some(node.into());
-                result["source_node_id"] = json!(node);
-                Ok(result)
+                Ok(result.into_receipt(Some(node)))
             },
         )
     }

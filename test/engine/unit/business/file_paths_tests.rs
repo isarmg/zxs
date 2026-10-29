@@ -322,6 +322,83 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
 }
 
 #[test]
+fn file_branch_creation_receipt_shape_and_replay_survive_later_paths_and_restart() {
+    for from_node in [false, true] {
+        let (temporary, mut engine, repository) = setup();
+        save(&mut engine, &repository, "a.txt", b"body");
+        rename(&mut engine, &repository, "a.txt", "b.txt");
+        let file = entries(&engine, &repository)["b.txt"].clone();
+        let node = engine
+            .file_context(&repository.repository_id, "b.txt")
+            .unwrap()
+            .unwrap()
+            .node_id
+            .unwrap();
+        let name = storage_contract::BranchName::parse("receipt branch").unwrap();
+        let operation = storage_contract::OperationId::generate();
+        let create = |engine: &mut Engine| {
+            if from_node {
+                engine.create_file_branch_from_node(
+                    &file.file_id,
+                    &file.version_id,
+                    &node,
+                    &name,
+                    "admin",
+                    operation,
+                )
+            } else {
+                engine.create_file_branch(
+                    &file.file_id,
+                    &file.version_id,
+                    &name,
+                    "admin",
+                    operation,
+                )
+            }
+        };
+        let original = create(&mut engine).unwrap();
+        let branch_id = original.branch_id.as_deref().unwrap();
+        let branch = &engine.state().branches[branch_id];
+        assert_eq!(
+            branch.file_node_id.as_deref(),
+            from_node.then_some(node.as_str())
+        );
+        let mut expected = json_codec::json!({
+            "file_id": file.file_id,
+            "branch_id": branch_id,
+            "commit_id": branch.head_commit_id,
+            "history_tree_id": repository.history_tree_id,
+            "copied_files": "0",
+            "placeholder_files": "0",
+            "materialized": false,
+            "inherited": true,
+            "own_version_id": null,
+            "version_id": file.version_id,
+            "source_version_id": file.version_id,
+            "content_state": "PENDING",
+            "selected": false,
+            "timestamp": original.result["timestamp"],
+            "branch_generation": "1",
+            "membership_epoch": "1",
+            "version_protection": []
+        });
+        if from_node {
+            expected["source_node_id"] = json_codec::json!(node);
+        }
+        assert_eq!(original.result, expected);
+        assert_eq!(
+            storage_contract::canonical_json(&original.result).unwrap(),
+            storage_contract::canonical_json(&expected).unwrap()
+        );
+        rename(&mut engine, &repository, "b.txt", "c.txt");
+        assert_eq!(create(&mut engine).unwrap(), original);
+        drop(engine);
+        let mut engine = Engine::open(&temporary.path().join("system")).unwrap();
+        assert_eq!(create(&mut engine).unwrap(), original);
+    }
+}
+
+#[test]
 fn contextual_selection_rejects_unavailable_owned_content_without_publication() {
     let (_t, mut e, r) = setup();
     save(&mut e, &r, "a.txt", b"original body");

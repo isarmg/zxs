@@ -1051,12 +1051,7 @@ pub(crate) fn prepare_file_write(
         operation,
         fresh,
     )?;
-    let id = result["branch_id"].as_str().ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::StateInvalid,
-            "file fork receipt missing",
-        )
-    })?;
+    let id = result.branch_id.as_str();
     let inherited_node = {
         let draft = crate::namespace::DraftSource {
             fresh: &*fresh,
@@ -1067,12 +1062,7 @@ pub(crate) fn prepare_file_write(
     state
         .branches
         .get_mut(id)
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "created file branch missing",
-            )
-        })?
+        .expect("invariant: file branch creation inserted its generated branch")
         .file_node_id = inherited_node.clone();
     state.file_selections.insert(file_id.into(), id.into());
     state.file_write_origins.remove(file_id);
