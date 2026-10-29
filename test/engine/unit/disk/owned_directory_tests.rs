@@ -90,15 +90,22 @@ fn retry_and_reuse(
         log.contains("retry dir metadata/objects success\n"),
         "complete the owed parent barrier before the store returns success"
     );
-    assert!(log.contains("retry file "), "the object file was really synced");
+    assert!(
+        log.contains("retry file "),
+        "the object file was really synced"
+    );
     assert!(!log.contains("retry dir metadata/objects injected-EIO\n"));
 
     phase(root, "stable");
     object.store_on(held, disk).unwrap();
     let log = events(root);
-    assert_eq!(log.matches("stable dir metadata/objects success\n").count(), 1);
     assert_eq!(
-        log.matches("stable dir metadata/objects/publication success\n").count(),
+        log.matches("stable dir metadata/objects success\n").count(),
+        1
+    );
+    assert_eq!(
+        log.matches("stable dir metadata/objects/publication success\n")
+            .count(),
         1,
         "an independent install cannot inherit the previous call's durability proof"
     );
@@ -210,7 +217,9 @@ fn directory_sync_parallel_in_isolated_child() {
     phase(&root, "stable");
     object.store_on(&held, &disk).unwrap();
     assert_eq!(
-        events(&root).matches("stable dir metadata/objects success\n").count(),
+        events(&root)
+            .matches("stable dir metadata/objects success\n")
+            .count(),
         1
     );
     fs::write(root.join("completed"), b"parallel").unwrap();
@@ -369,15 +378,21 @@ fn directory_sync_batch_in_isolated_child() {
     assert!(!events(&root).contains("batch dir metadata/objects success\n"));
     batch.finish().unwrap();
     let log = events(&root);
-    assert_eq!(log.matches("batch dir metadata/objects success\n").count(), 1);
     assert_eq!(
-        log.matches("batch dir metadata/objects/publication success\n").count(),
+        log.matches("batch dir metadata/objects success\n").count(),
+        1
+    );
+    assert_eq!(
+        log.matches("batch dir metadata/objects/publication success\n")
+            .count(),
         1
     );
     phase(&root, "independent");
     object.store_on(&held, &disk).unwrap();
     assert_eq!(
-        events(&root).matches("independent dir metadata/objects success\n").count(),
+        events(&root)
+            .matches("independent dir metadata/objects success\n")
+            .count(),
         1
     );
     fs::write(root.join("completed"), b"batch").unwrap();
