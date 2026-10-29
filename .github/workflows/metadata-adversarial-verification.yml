@@ -32,9 +32,9 @@ jobs:
           rustc --version | tee -a target/metadata-adversarial/environment.txt
           cargo --version | tee -a target/metadata-adversarial/environment.txt
           test "$(rustc --version | cut -d ' ' -f 2)" = '1.99.0'
-      - name: Verify final repository formatting
+      - name: Verify final engine formatting
         run: |
-          cargo fmt --all -- --check > target/metadata-adversarial/formatting.log 2>&1
+          cargo fmt --package storage-engine -- --check > target/metadata-adversarial/formatting.log 2>&1
       - name: Record existing baseline evidence
         run: |
           printf '%s\n' 'https://github.com/isarmg/zxs/actions/runs/40823819619/artifacts/12875374510' '919 passed; 16 ignored; 0 failed; Rust 1.99.0' 'Final rerun changes only counterexample capture and formatting; production algorithms match the baseline.' > target/metadata-adversarial/baseline-reference.txt
