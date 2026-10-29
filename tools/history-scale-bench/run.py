@@ -129,6 +129,28 @@ def read_peak_rss(path: Path) -> int | None:
     return None
 
 
+def final_budget_reason(existing: str | None, observed: dict, budget: argparse.Namespace, deadline: float) -> str | None:
+    """Check final counters too: an exit between sampling polls is not an exemption."""
+    if existing is not None:
+        return existing
+    if observed["finished_monotonic"] > deadline:
+        return "cohort_wall_time_budget"
+    if observed["wall_seconds"] > budget.phase_seconds:
+        return "phase_wall_time_budget"
+    maximum_rss = observed["time_max_process_rss_bytes"]
+    if maximum_rss is None:
+        return "final_resource_evidence_missing"
+    if maximum_rss > budget.rss_mib * 1024 * 1024:
+        return "time_max_process_rss_budget"
+    if observed["sample_allocated_bytes"] > budget.disk_mib * 1024 * 1024:
+        return "sample_allocated_disk_budget"
+    if observed["cohort_allocated_bytes"] > budget.cohort_disk_mib * 1024 * 1024:
+        return "cohort_allocated_disk_budget"
+    if observed["filesystem_free_bytes"] < budget.minimum_free_mib * 1024 * 1024:
+        return "filesystem_free_space_guard"
+    return None
+
+
 def supervise(command: list[str], sample: Path, stage: str, budget: argparse.Namespace, deadline: float) -> dict:
     """Retain evidence on all exits; external sampling is recorded as overhead."""
     started = time.monotonic()
@@ -159,12 +181,13 @@ def supervise(command: list[str], sample: Path, stage: str, budget: argparse.Nam
                         free_bytes = shutil.disk_usage(sample).free
                         disk_samples.append({"elapsed_seconds": now - started, "cohort_allocated_bytes": cohort_retained["allocated_bytes"], "filesystem_free_bytes": free_bytes, **retained})
                         last_disk = now
-                        if retained["allocated_bytes"] > budget.disk_mib * 1024 * 1024:
-                            reason = "sample_allocated_disk_budget"
-                        elif cohort_retained["allocated_bytes"] > budget.cohort_disk_mib * 1024 * 1024:
-                            reason = "cohort_allocated_disk_budget"
-                        elif free_bytes < budget.minimum_free_mib * 1024 * 1024:
-                            reason = "filesystem_free_space_guard"
+                        if reason is None:
+                            if retained["allocated_bytes"] > budget.disk_mib * 1024 * 1024:
+                                reason = "sample_allocated_disk_budget"
+                            elif cohort_retained["allocated_bytes"] > budget.cohort_disk_mib * 1024 * 1024:
+                                reason = "cohort_allocated_disk_budget"
+                            elif free_bytes < budget.minimum_free_mib * 1024 * 1024:
+                                reason = "filesystem_free_space_guard"
                     if reason:
                         stop_process(process)
                         break
@@ -173,12 +196,24 @@ def supervise(command: list[str], sample: Path, stage: str, budget: argparse.Nam
             if process.poll() is None:
                 stop_process(process)
         returncode = process.wait()
-    elapsed = time.monotonic() - started
+    finished = time.monotonic()
+    elapsed = finished - started
     (sample / f"{stage}.diskstats.after.txt").write_text(diskstats(), encoding="ascii")
+    final_retained = inventory(sample)
+    final_cohort_retained = inventory(budget.output_root)
+    final_observation = {
+        "finished_monotonic": finished, "wall_seconds": elapsed,
+        "time_max_process_rss_bytes": read_peak_rss(resource_file),
+        "sample_allocated_bytes": final_retained["allocated_bytes"],
+        "cohort_allocated_bytes": final_cohort_retained["allocated_bytes"],
+        "filesystem_free_bytes": shutil.disk_usage(sample).free,
+    }
+    reason = final_budget_reason(reason, final_observation, budget, deadline)
     result = {
         "command": invocation, "returncode": returncode, "wall_seconds": elapsed,
         "budget_stop_reason": reason, "sampled_tree_peak_rss_bytes": peak_sampled,
-        "time_max_process_rss_bytes": read_peak_rss(resource_file), "disk_samples": disk_samples,
+        "time_max_process_rss_bytes": final_observation["time_max_process_rss_bytes"], "disk_samples": disk_samples,
+        "final_budget_observation": final_observation,
         "resource_scope": "time max RSS is maximum process RSS; sampled tree RSS sums concurrently observed processes",
     }
     write_json(sample / f"{stage}.supervisor.json", result)

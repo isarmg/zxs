@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,6 +13,7 @@ TOOLS = ROOT / "tools" / "history-scale-bench"
 sys.path.insert(0, str(TOOLS))
 from summarize import aggregate, operation_id, read_json, summarize_driver  # noqa: E402
 from tracing import parse_trace  # noqa: E402
+from run import final_budget_reason  # noqa: E402
 
 
 def valid_rows(operations=4):
@@ -56,6 +58,29 @@ def write_rows(path, rows):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_final_budget_counters_catch_exit_between_sampling_polls(self):
+        mib = 1024 * 1024
+        budget = SimpleNamespace(phase_seconds=600, rss_mib=8, disk_mib=12, cohort_disk_mib=24, minimum_free_mib=2)
+        observed = {
+            "finished_monotonic": 1600, "wall_seconds": 600,
+            "time_max_process_rss_bytes": 8 * mib, "sample_allocated_bytes": 12 * mib,
+            "cohort_allocated_bytes": 24 * mib, "filesystem_free_bytes": 2 * mib,
+        }
+        self.assertIsNone(final_budget_reason(None, observed, budget, 2000))
+        violations = (
+            ("wall_seconds", 600.001, "phase_wall_time_budget"),
+            ("finished_monotonic", 2000.001, "cohort_wall_time_budget"),
+            ("time_max_process_rss_bytes", 8 * mib + 1, "time_max_process_rss_budget"),
+            ("time_max_process_rss_bytes", None, "final_resource_evidence_missing"),
+            ("sample_allocated_bytes", 12 * mib + 1, "sample_allocated_disk_budget"),
+            ("cohort_allocated_bytes", 24 * mib + 1, "cohort_allocated_disk_budget"),
+            ("filesystem_free_bytes", 2 * mib - 1, "filesystem_free_space_guard"),
+        )
+        for field, value, reason in violations:
+            with self.subTest(field=field, value=value):
+                self.assertEqual(final_budget_reason(None, {**observed, field: value}, budget, 2000), reason)
+        self.assertEqual(final_budget_reason("sampled_process_tree_rss_budget", {}, budget, 2000), "sampled_process_tree_rss_budget")
+
     def test_duplicate_or_non_finite_input_is_rejected(self):
         for raw in ('{"phase":"append","phase":"complete"}', '{"latency_ns":NaN}'):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
