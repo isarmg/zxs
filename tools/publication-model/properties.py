@@ -158,7 +158,82 @@ def _check_edge(previous, state, config, require):
         require(state.results == previous.results and state.state_versions == previous.state_versions
                 and state.events == previous.events, "index_independence",
                 "derived index failure changed an authoritative published fact", "10.10; 18; ADR 0005")
+    _check_witnesses(previous, state, config, require)
     _check_stage_barrier(previous, state, config, require)
+
+
+def _physical_record(artifact):
+    return (artifact.data == 1 and artifact.stable_data == 1
+            and artifact.entry and artifact.dir_synced)
+
+
+def _record_facts(artifact):
+    return (f"data={artifact.data}, stable_data={artifact.stable_data}, "
+            f"entry={artifact.entry}, dir_synced={artifact.dir_synced}")
+
+
+def _absence_facts(member):
+    complete_log = all(not member[kind].entry or member[kind].data == 1
+                       for kind in (1, 2, 3, 5, 7))
+    # PREPARE alone permits abort. FINALIZE is stronger decision evidence,
+    # even if a malformed input has lost the local ACCEPT record.
+    no_decision_records = all(not member[kind].entry for kind in (2, 3, 5, 7))
+    return complete_log and no_decision_records
+
+
+def _check_witnesses(previous, state, config, require):
+    quorum = config.n // 2 + 1
+    member_limit = 1 << config.n
+    for slot in range(config.operations):
+        prefix = f"slot {slot}: "
+        decision = state.decision_witness[slot]
+        if decision and not previous.decision_witness[slot]:
+            actual = sum(1 << member for member, row in enumerate(state.artifacts[slot])
+                         if _physical_record(row[2]))
+            require(0 < decision < member_limit and decision.bit_count() >= quorum,
+                    "decision_evidence", prefix + "first decision witness is not a fixed-Q member set", "10.2; 10.6; 10.7")
+            require(state.issued[slot], "decision_evidence",
+                    prefix + "first decision witness precedes issuing ACCEPT", "10.4; 10.5")
+            require(decision == actual, "decision_evidence",
+                    prefix + f"claimed ACCEPT mask {decision:#b} differs from physical mask {actual:#b}", "10.2; 10.3; 10.6")
+            for member, row in enumerate(state.artifacts[slot]):
+                if decision & (1 << member):
+                    require(_physical_record(row[2]), "decision_evidence",
+                            prefix + f"member {member} ACCEPT is not physically durable: {_record_facts(row[2])}", "10.3; 10.6")
+        absence = state.abort_witness[slot]
+        if absence and absence != previous.abort_witness[slot]:
+            require(0 < absence < member_limit and absence.bit_count() >= quorum,
+                    "abort_evidence", prefix + "abort absence witness is not a fixed-Q member set", "10.7")
+            observed = sum(1 << member for member, observation in enumerate(state.observations)
+                           if observation == 0)
+            require(absence == observed, "abort_evidence",
+                    prefix + f"claimed absence mask {absence:#b} differs from complete-absence observations {observed:#b}", "10.6; 10.7")
+            require(not any(value in (1, 2, 4, 5) for value in state.observations),
+                    "abort_evidence", prefix + "abort ignored an observed ACCEPT/publication/resolution", "10.7; 10.10")
+            # Observation 0 is a snapshot taken after isolating the writer.
+            # Its acquisition edge checks online/readability. A later offline
+            # transition does not erase already acquired complete log evidence.
+            for member, row in enumerate(state.artifacts[slot]):
+                if absence & (1 << member):
+                    require(state.observations[member] == 0 and _absence_facts(row),
+                            "abort_evidence", prefix + f"member {member} lacks a complete log with no decision/resolution records", "10.6; 10.7")
+        resolution = state.abort_resolution[slot]
+        if previous.abort_resolution[slot]:
+            require(resolution == previous.abort_resolution[slot], "abort_resolution_evidence",
+                    prefix + "historical durable resolution witness was changed", "10.7; 10.8")
+        elif resolution:
+            require(0 < resolution < member_limit and resolution.bit_count() >= quorum,
+                    "abort_resolution_evidence", prefix + "first durable resolution witness is not a fixed-Q member set", "10.7; 10.8")
+            established = previous.abort_witness[slot]
+            require(0 < established < member_limit and established.bit_count() >= quorum
+                    and absence == established, "abort_resolution_evidence",
+                    prefix + "durable resolution has no previously established fixed-Q absence witness", "10.6; 10.7")
+            require(not decision and not state.known_publication[slot], "abort_resolution_evidence",
+                    prefix + "abort resolution conflicts with a decided or published candidate", "10.4; 10.7; 10.10")
+            for member, row in enumerate(state.artifacts[slot]):
+                if resolution & (1 << member):
+                    require(_physical_record(row[7]), "abort_resolution_evidence",
+                            prefix + f"member {member} RECOVERY_RESOLUTION is not physically durable: {_record_facts(row[7])}", "10.3; 10.7; 10.8")
 
 
 def _independent_durable_masks(state, slot):

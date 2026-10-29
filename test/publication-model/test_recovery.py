@@ -3,16 +3,25 @@ import sys
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/publication-model"))
 from model import Config, initial, successors
 import properties
 
 
+def checked_transition(previous, target, config, action):
+    violations = properties.check(previous, target, config)
+    if violations:
+        details = "; ".join(f"{item['name']}: {item['message']}" for item in violations)
+        raise AssertionError(f"action {action!r} violates safety properties: {details}")
+    return target
+
+
 def take(state, config, label):
     for action, target in successors(state, config):
         if action == label:
-            return target
+            return checked_transition(state, target, config, action)
     raise AssertionError(f"disabled action {label!r} in {state.phase}")
 
 
@@ -41,11 +50,33 @@ def advance_publication(state, config):
                      action.startswith("barrier:") or
                      action.startswith("recover:skip_unavailable_") or
                      action == "publish:atomic_state_receipt_event")):
-                state = target
+                state = checked_transition(state, target, config, action)
                 break
         else:
             raise AssertionError(f"no productive action in {state.phase}")
     raise AssertionError("publication exceeded fixed directed-test step budget")
+
+
+class DirectedHelperOracleSensitivity(unittest.TestCase):
+    """Synthetic invalid edges test the helpers, not the product protocol."""
+
+    def test_take_rejects_invalid_successor_with_action_and_property_name(self):
+        config = Config(n=1)
+        state = initial(config)
+        invalid = replace(state, fault_count=1)
+        synthetic = iter((("oracle:bad_successor", invalid),))
+        with patch.object(sys.modules[__name__], "successors", return_value=synthetic):
+            with self.assertRaisesRegex(AssertionError, "oracle:bad_successor.*fault_boundary"):
+                take(state, config, "oracle:bad_successor")
+
+    def test_advance_rejects_invalid_successor_with_action_and_property_name(self):
+        config = Config(n=1)
+        state = initial(config)
+        invalid = replace(state, phase="ACK", fault_count=1)
+        synthetic = iter((("CONTENT:0:write", invalid),))
+        with patch.object(sys.modules[__name__], "successors", return_value=synthetic):
+            with self.assertRaisesRegex(AssertionError, "CONTENT:0:write.*fault_boundary"):
+                advance_publication(state, config)
 
 
 class RecoveryWindows(unittest.TestCase):
