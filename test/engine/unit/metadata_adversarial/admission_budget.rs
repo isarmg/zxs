@@ -86,8 +86,15 @@ fn save_counterexample(disk: &DiskConfig, snapshot: &Snapshot) {
         return;
     };
     let mut objects = BTreeMap::new();
-    for kind in ["namespace-page", "namespace-index", "state-page", "metadata-index",
-        "event-segment", "operation-segment", "state-control-auth"] {
+    for kind in [
+        "namespace-page",
+        "namespace-index",
+        "state-page",
+        "metadata-index",
+        "event-segment",
+        "operation-segment",
+        "state-control-auth",
+    ] {
         for hash in object_storage::list_object_hashes(disk, kind).unwrap() {
             let value: json_codec::Value = load_object(disk, kind, &hash).unwrap();
             objects.insert(format!("{kind}/{hash}"), value);
@@ -99,8 +106,11 @@ fn save_counterexample(disk: &DiskConfig, snapshot: &Snapshot) {
         "expected":"ObjectCorrupt depth rejection before requesting namespace object 5",
         "test_side_read_allowance":NAMESPACE_INDEX_DEPTH
     });
-    std::fs::write(std::path::Path::new(&directory).join("admission-depth-input.json"),
-        canonical_json(&evidence).unwrap()).unwrap();
+    std::fs::write(
+        std::path::Path::new(&directory).join("admission-depth-input.json"),
+        canonical_json(&evidence).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
