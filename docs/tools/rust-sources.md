@@ -92,6 +92,8 @@ schema 2 的 `source_backport.py` 从 origins、consolidation、layout 和 sourc
 
 标识符映射按完整 token 和 `use` 树的继承前缀判断，保留 raw identifier 的 `r#`、
 别名、本地模块与 Unicode 标识符；注释中的路径单独处理，不把散文引号当 Rust 字面量。
+普通/raw/byte/C string 及 char/byte-char 的非 raw 标识符后缀属于同一字面量 token，
+包括 keyword 拼写及 Unicode 后缀；空白、注释、数字起始与 `r#` 的 `#` 不并入后缀。
 源码标识符必须属于运行该工具的 Python Unicode XID 支持集；不支持的 token、未闭合字面量
 或注释、无法解析的 `use` 树（包括宏 DSL 的 `use $…`）明确停止并要求审阅。
 该工具不解析任意宏 DSL 或执行 Rust 名称解析，映射表仍须绑定已登记的来源变更。

@@ -182,8 +182,10 @@ def resolve(merged, conflicts, chosen):
 
 # ------------------------------------------------------ identifier mapping --
 
-RAW_STRING = re.compile(rb'(?<![A-Za-z0-9_])[bc]?r(#*)"')
-STRING = re.compile(rb'(?<![A-Za-z0-9_])[bc]?"')
+# These match only at the current complete token boundary, including a quote
+# immediately after the preceding literal's identifier suffix.
+RAW_STRING = re.compile(rb'[bc]?r(#*)"')
+STRING = re.compile(rb'[bc]?"')
 CHAR = re.compile(rb"'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|[^\n])|[\xc0-\xf7][\x80-\xbf]{1,3}|[^'\\\n])'")
 
 
@@ -217,6 +219,26 @@ def _identifier_width(data, index):
         return int(byte == 95 or 48 <= byte <= 57 or 65 <= byte <= 90 or 97 <= byte <= 122)
     character, width = _unicode_character(data, index)
     return width if ('a' + character).isidentifier() else 0
+
+
+def _identifier_end(data, index):
+    end = index
+    while end < len(data):
+        width = _identifier_width(data, end)
+        if not width:
+            break
+        end += width
+    return end
+
+
+def _literal_suffix_end(data, index):
+    """A suffix is a complete non-raw identifier, including keyword spellings."""
+    end = _identifier_end(data, index)
+    # The whole-token check also proves identifier start, so a digit or a
+    # combining mark cannot be swallowed as the start of a literal suffix.
+    if end != index and data[index:end].decode('utf-8').isidentifier():
+        return end
+    return index
 
 
 def _space_width(data, index):
@@ -268,7 +290,7 @@ def _rust_tokens(data, prose=False):
             close = data.find(b'"' + raw[1], raw.end())
             if close < 0:
                 raise BackportError('unterminated Rust raw string')
-            index = close + 1 + len(raw[1])
+            index = _literal_suffix_end(data, close + 1 + len(raw[1]))
             tokens.append(_RustToken('literal', b'', start, index))
             continue
         string = None if prose else STRING.match(data, index)
@@ -278,25 +300,20 @@ def _rust_tokens(data, prose=False):
                 end += 2 if data[end] == 0x5c else 1
             if end >= size:
                 raise BackportError('unterminated Rust string')
-            index = end + 1
+            index = _literal_suffix_end(data, end + 1)
             tokens.append(_RustToken('literal', b'', start, index))
             continue
         if not prose and (data[index] == 0x27 or data.startswith(b"b'", index)):
             char = CHAR.match(data, index + (data[index] == 0x62))
             if char:
-                index = char.end()
+                index = _literal_suffix_end(data, char.end())
                 tokens.append(_RustToken('literal', b'', start, index))
                 continue
         raw_ident = data.startswith(b'r#', index)
         at = index + 2 if raw_ident else index
-        width = _identifier_width(data, at) if at < size else 0
-        if width:
-            index = at + width
-            while index < size:
-                width = _identifier_width(data, index)
-                if not width:
-                    break
-                index += width
+        end = _identifier_end(data, at)
+        if end != at:
+            index = end
             name = data[at:index]
             kind = 'number' if 48 <= name[0] <= 57 else 'identifier'
             if kind == 'identifier' and not prose:

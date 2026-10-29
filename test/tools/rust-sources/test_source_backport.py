@@ -288,6 +288,40 @@ class Identifiers(unittest.TestCase):
                     self.assertEqual(data.decode(), expected)
                     self.assertEqual(len(records), 1)
 
+    def test_adjacent_suffixed_literals_do_not_expose_literal_bodies(self):
+        for literal in LITERAL_FORMS:
+            for suffix in ('b', 'futures_core', 'αfutures_core', 'use'):
+                for following in ('"futures_core::Thing"',
+                                  '"futures_core::Thing"futures_core::Tail',
+                                  "'a'futures_core::Thing"):
+                    prefix = 'm!(' + literal + suffix + following
+                    with self.subTest(literal=literal, suffix=suffix, following=following):
+                        source = prefix + ', futures_core::Thing);\n'
+                        data, records = self.mapped(source)
+                        self.assertEqual(data.decode(), prefix + ', futures::Thing);\n')
+                        self.assertEqual(len(records), 1)
+
+    def test_literal_suffix_stops_before_raw_marker_and_non_start_tokens(self):
+        for literal in LITERAL_FORMS:
+            # The non-raw suffix ends at r; # and the following identifier
+            # remain independent macro tokens, as in the local Rust parser.
+            source = 'm!(' + literal + 'r#futures_core::Thing);\n'
+            with self.subTest(literal=literal, boundary='raw marker'):
+                data, records = self.mapped(source)
+                self.assertEqual(data.decode(), source.replace('futures_core', 'futures'))
+                self.assertEqual(len(records), 1)
+            source = 'm!(' + literal + '123 futures_core::Thing);\n'
+            with self.subTest(literal=literal, boundary='number'):
+                data, records = self.mapped(source)
+                self.assertEqual(data.decode(), source.replace('futures_core', 'futures'))
+                self.assertEqual(len(records), 1)
+            with self.subTest(literal=literal, boundary='combining start'):
+                with self.assertRaisesRegex(ValueError, 'unsupported Rust identifier token'):
+                    self.mapped('m!(' + literal + '\u0301futures_core::Thing);\n')
+            with self.subTest(literal=literal, boundary='invalid UTF-8 suffix'):
+                with self.assertRaisesRegex(ValueError, 'Rust identifier is not UTF-8'):
+                    backport.map_identifiers(('m!(' + literal).encode() + b'\xfffutures_core::Thing);', self.MAP)
+
     def test_root_use_groups_raw_identifiers_and_aliases_keep_their_scope(self):
         for text, expected in (
                 ('use {outer::{futures_core::Thing}, futures_core::Stream};\n',
@@ -627,8 +661,10 @@ class Apply(Synthetic):
         backport.check_external_accounting(sha, stored, current, before, after)
 
     def test_plan_apply_and_replay_preserve_literal_suffixes(self):
-        preserved = ''.join('m!(' + literal + suffix + '::Thing);\n'
-                            for literal in LITERAL_FORMS for suffix in LITERAL_SUFFIXES).encode()
+        preserved = (''.join('m!(' + literal + suffix + '::Thing);\n'
+                             for literal in LITERAL_FORMS for suffix in (*LITERAL_SUFFIXES, 'use'))
+                     + 'm!("x"b"futures_core::Thing");\n'
+                     + "m!('x'futures_core'a'futures_core::Thing);\n").encode()
         actual_path = b'm!("x"futures_core futures_core::Thing);\n'
         fixed = FIXED.replace(b'    3\n}', preserved + actual_path + b'    3\n}', 1)
         (self.clone / 'src/lib.rs').write_bytes(fixed)
