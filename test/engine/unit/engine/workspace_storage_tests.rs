@@ -236,7 +236,12 @@ fn workspace_scan_reads_the_admitted_private_base_after_path_replacement() {
     assert_eq!(entries[0].as_os_str(), workspace.workspace_id.as_str());
     let paths = workspace_paths(&locations, &workspace.workspace_id).unwrap();
     let loaded = engine
-        .read_workspace_mirrors(&workspace.workspace_id, &paths, &locations, true)
+        .read_workspace_mirrors(
+            &workspace.workspace_id,
+            &paths,
+            &locations,
+            WorkspaceRead::Published,
+        )
         .unwrap();
     assert_eq!(loaded.canonical, canonical_json(&workspace).unwrap());
     assert_eq!(fs::read(replacement).unwrap(), untouched);

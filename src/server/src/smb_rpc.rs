@@ -11,7 +11,7 @@ use smb_protocol::protocol::{
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::{self, Read, Write},
+    io::{self, Write},
     os::{
         fd::{AsFd, OwnedFd},
         unix::fs::{FileExt, MetadataExt, PermissionsExt},

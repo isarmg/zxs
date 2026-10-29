@@ -327,12 +327,12 @@ fn point_and_page_reads_locate_through_the_index_without_expansion() {
     };
     let view = NamespaceView::new(&namespace, &counting);
     let page = view
-        .list_directory_page("big", Some("file-0499.txt"), 50)
+        .directory_page_entries("big", Some("file-0499.txt"), 50)
         .unwrap()
         .unwrap();
     assert_eq!(page.len(), 50);
-    assert_eq!(page[0].lookup_key(), "file-0500.txt".to_owned());
-    assert_eq!(page[49].lookup_key(), "file-0549.txt".to_owned());
+    assert_eq!(page[0].lookup_key(), "big/file-0500.txt");
+    assert_eq!(page[49].lookup_key(), "big/file-0549.txt");
     let page_reads = counting.reads.get();
     assert!(
         page_reads < total_objects / 2,
@@ -340,17 +340,20 @@ fn point_and_page_reads_locate_through_the_index_without_expansion() {
     );
 
     // The first page needs no cursor, and a trailing cursor yields an empty page.
-    let first = view.list_directory_page("big", None, 3).unwrap().unwrap();
+    let first = view
+        .directory_page_entries("big", None, 3)
+        .unwrap()
+        .unwrap();
     assert_eq!(first.len(), 3);
-    assert_eq!(first[0].lookup_key(), "file-0000.txt".to_owned());
+    assert_eq!(first[0].lookup_key(), "big/file-0000.txt");
     let tail = view
-        .list_directory_page("big", Some("file-0999.txt"), 3)
+        .directory_page_entries("big", Some("file-0999.txt"), 3)
         .unwrap()
         .unwrap();
     assert!(tail.is_empty());
     // A file key is not a directory listing.
     assert!(
-        view.list_directory_page("big/file-0000.txt", None, 3)
+        view.directory_page_entries("big/file-0000.txt", None, 3)
             .unwrap()
             .is_none()
     );

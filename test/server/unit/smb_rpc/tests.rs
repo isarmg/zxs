@@ -2,6 +2,7 @@ use super::*;
 use crate::engine_backend::EngineBackend;
 use crate::projection_failure;
 use std::{
+    io::Read,
     os::unix::fs::FileExt,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };

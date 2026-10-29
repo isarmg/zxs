@@ -1822,24 +1822,6 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceView<'s, S> {
             Some(NamespacePageEntry::File { .. }) | None => None,
         })
     }
-    pub(crate) fn list_directory_page(
-        &self,
-        directory_key: &str,
-        after: Option<&str>,
-        limit: usize,
-    ) -> Result<Option<Vec<NamespacePageEntry>>> {
-        let reference = if directory_key.is_empty() {
-            self.root.root.clone()
-        } else {
-            match self.find_key(directory_key)? {
-                Some(NamespacePageEntry::Directory { subtree, .. }) => subtree,
-                Some(NamespacePageEntry::File { .. }) | None => return Ok(None),
-            }
-        };
-        let mut out = Vec::new();
-        collect_page(&reference, after, limit, self.source, &mut out)?;
-        Ok(Some(out))
-    }
     /// Traverse in canonical full-path lookup-key order, merging lazy bounded
     /// page/index cursors. The callback receives reconstructed absolute paths
     /// and can stop before later subtrees or index children are read.
