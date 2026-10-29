@@ -178,7 +178,7 @@ mod commit_wire;
 mod http_operation;
 mod operation_wire;
 mod operation_observation;
-pub use operation_observation::OperationObservation;
+pub use operation_observation::{CheckedOperationHealth, OperationObservation};
 use http_operation::{operation, operation_outcome};
 
 use auth::{AuthStore, Identity};

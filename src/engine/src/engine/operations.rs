@@ -36,10 +36,27 @@ pub struct OperationReadPlan {
     health: Option<storage_contract::CurrentHealth>,
 }
 
+/// A completed read plan. `None` means it contained no published scope to check.
+/// Its receipt still needs the caller's current authorization before disclosure.
+pub struct OperationReadObservation {
+    record: OperationRecord,
+    health: Option<storage_contract::CurrentHealth>,
+}
+
+impl OperationReadObservation {
+    pub fn health(&self) -> Option<storage_contract::CurrentHealth> {
+        self.health
+    }
+
+    pub fn into_record(self) -> OperationRecord {
+        self.record
+    }
+}
+
 impl OperationReadPlan {
     /// Current named-disk identity, publication proof and complete payload
     /// verification happen after the caller releases its Engine mutex.
-    pub fn observe(mut self) -> (OperationRecord, Option<storage_contract::CurrentHealth>) {
+    pub fn observe(mut self) -> OperationReadObservation {
         for (plan, target_copies) in &self.versions {
             match plan.health(*target_copies) {
                 storage_contract::CurrentHealth::Unavailable => {
@@ -57,15 +74,24 @@ impl OperationReadPlan {
                 }
             }
         }
-        if let Some(health) = self.health {
-            self.record.result.current_health = health;
+        OperationReadObservation {
+            record: self.record,
+            health: self.health,
         }
-        (self.record, self.health)
     }
 
     /// Trusted local convenience retaining the existing result representation.
     pub fn check(self) -> OperationRecord {
-        self.observe().0
+        let observed = self.observe();
+        let mut record = observed.record;
+        if let Some(
+            health @ (storage_contract::CurrentHealth::Unavailable
+            | storage_contract::CurrentHealth::Degraded),
+        ) = observed.health
+        {
+            record.result.current_health = health;
+        }
+        record
     }
 }
 

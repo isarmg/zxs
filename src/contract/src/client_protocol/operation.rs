@@ -77,11 +77,19 @@ fn parse_operation(value: &Value, projection: Projection) -> Option<OperationSta
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         })
-
     {
         return None;
     }
     let commit = json_codec::from_value::<CommitState>(value["commit_state"].clone()).ok()?;
+    if matches!(projection, Projection::Observation)
+        && !matches!(
+            commit,
+            CommitState::Published | CommitState::Acked | CommitState::PublishedDegraded
+        )
+        && !value["current_health"].is_null()
+    {
+        return None;
+    }
     if content {
         content_status(value, commit)
     } else {

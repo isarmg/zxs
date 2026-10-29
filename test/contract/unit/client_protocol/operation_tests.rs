@@ -150,6 +150,8 @@ fn state_is_correlated_with_publication_instead_of_used_as_a_fallback() {
         } else {
             pending["protection_at_publish"] = "UNCONFIRMED".into();
         }
+        assert_eq!(operation_observation_status(&pending), None);
+        pending["current_health"] = Value::Null;
         assert_eq!(operation_observation_status(&pending), Some(OperationStatus::Unknown));
         pending["state"] = "completed".into();
         assert_eq!(operation_observation_status(&pending), None);
@@ -174,6 +176,8 @@ fn current_abort_shapes_are_rejected_without_inventing_publication() {
             assert_eq!(operation_observation_status(&value), None);
             value["error"] = json!({"code":"ABORTED", "message":"aborted", "retryable":false, "request_id":"req_11111111111111111111111111111111"});
         }
+        assert_eq!(operation_observation_status(&value), None);
+        value["current_health"] = Value::Null;
         assert_eq!(operation_observation_status(&value), Some(OperationStatus::Rejected));
     }
 }

@@ -38,14 +38,23 @@ pub fn projection_sequence(path: &Path) -> String {
 }
 
 pub fn receipt_outcome(receipt: &json_codec::Value) -> json_codec::Value {
-    assert_eq!(
-        storage_contract::client_protocol::operation_status(receipt),
-        Some(storage_contract::client_protocol::OperationStatus::Published),
-        "{receipt}"
-    );
-    let mut receipt = receipt.clone();
+    use storage_contract::client_protocol::{
+        OperationStatus, operation_observation_status, operation_status,
+    };
+    let mut outcome = receipt.clone();
     // Diagnostic queries may carry a fresh observation; immediate mutation
     // responses contain only the same permanent publication outcome.
-    receipt.as_object_mut().unwrap().remove("current_health");
-    receipt
+    if outcome.as_object_mut().unwrap().remove("current_health").is_some() {
+        assert_eq!(
+            operation_observation_status(receipt),
+            Some(OperationStatus::Published),
+            "{receipt}"
+        );
+    }
+    assert_eq!(
+        operation_status(&outcome),
+        Some(OperationStatus::Published),
+        "{outcome}"
+    );
+    outcome
 }

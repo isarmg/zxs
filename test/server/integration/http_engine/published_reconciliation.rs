@@ -94,10 +94,11 @@ async fn terminal_workspace_failure_keeps_http_receipt_queryable_and_writes_fenc
         &app,
         &token,
         "GET",
-        &format!("/api/operations/{operation}"),
+        &format!("/api/operations/{operation}/outcome"),
         None,
     )
     .await;
+    assert!(queried.get("current_health").is_none());
     assert_eq!(operation_status(&queried), Some(OperationStatus::Published));
     assert_eq!(queried["operation_id"], operation.to_string());
     assert_eq!(queried["request_digest"], body["request_digest"]);

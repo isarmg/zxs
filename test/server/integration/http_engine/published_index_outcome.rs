@@ -54,6 +54,18 @@ async fn metadata_projection_failure_returns_published_http_receipt_and_same_id_
         None,
     )
     .await;
+    capture_wire("namespace-batch-observation.json", &queried);
+    let outcome = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/operations/{operation}/outcome"),
+        None,
+    )
+    .await;
+    assert!(outcome.get("current_health").is_none());
+    assert_eq!(outcome, saved);
+    capture_wire("namespace-batch-outcome.json", &outcome);
     assert_eq!(
         receipt_outcome(&queried),
         receipt_outcome(&saved)

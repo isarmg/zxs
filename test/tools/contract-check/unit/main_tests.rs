@@ -113,6 +113,58 @@ fn checked_health_does_not_rewrite_the_outcome_or_publication_proof() {
 }
 
 #[test]
+fn generic_diagnostic_health_requires_a_published_operation() {
+    use storage_contract::client_protocol::{
+        OperationStatus, operation_observation_status,
+    };
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let mut core = read(&root.join("core.schema.json")).unwrap();
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    let original = array(&vectors["positive"])
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "generic-not-observed")
+        .unwrap()["value"]
+        .clone();
+    core["$ref"] = "#/$defs/GenericOperationObservation".into();
+    let schema = validator(&core).unwrap();
+    for commit in [
+        "STAGING", "SEALED", "PREPARED", "DECIDING", "DECIDED", "PROTECTED",
+        "RECOVERING", "RECOVERY_REQUIRED", "IN_DOUBT", "ABORTED",
+    ] {
+        let mut observed = original.clone();
+        observed["state"] = "in_doubt".into();
+        observed["commit_state"] = commit.into();
+        observed["protection_at_publish"] = "UNCONFIRMED".into();
+        let expected = if commit == "ABORTED" {
+            OperationStatus::Rejected
+        } else {
+            OperationStatus::Unknown
+        };
+        assert!(schema.is_valid(&observed), "{commit}");
+        assert_eq!(operation_observation_status(&observed), Some(expected));
+        observed["current_health"] =
+            json!({"state":"UNKNOWN","checked_at":"2026-10-18T00:00:00Z"});
+        assert!(!schema.is_valid(&observed), "fabricated observation for {commit}");
+        assert_eq!(operation_observation_status(&observed), None);
+    }
+    for (commit, state, protection, status) in [
+        ("PUBLISHED", "completed", "NOT_APPLICABLE", OperationStatus::Published),
+        ("ACKED", "completed", "NOT_APPLICABLE", OperationStatus::Published),
+        ("PUBLISHED_DEGRADED", "in_doubt", "BELOW_TARGET", OperationStatus::Degraded),
+    ] {
+        let mut observed = original.clone();
+        observed["state"] = state.into();
+        observed["commit_state"] = commit.into();
+        observed["protection_at_publish"] = protection.into();
+        observed["current_health"] =
+            json!({"state":"UNAVAILABLE","checked_at":"2026-10-18T00:00:00Z"});
+        assert!(schema.is_valid(&observed), "{commit}");
+        assert_eq!(operation_observation_status(&observed), Some(status));
+    }
+}
+
+#[test]
 fn persisted_operation_vectors_agree_with_both_schemas_and_rust_decoding() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
     let mut core = read(&root.join("core.schema.json")).unwrap();

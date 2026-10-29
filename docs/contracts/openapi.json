@@ -11461,6 +11461,28 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "commit_state": {
+                  "not": {
+                    "enum": [
+                      "PUBLISHED",
+                      "ACKED",
+                      "PUBLISHED_DEGRADED"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "current_health": {
+                  "type": "null"
+                }
+              }
+            }
           }
         ],
         "description": "非内容操作的显式诊断投影；current_health=null 为 NotObserved，有对象时才为实际 Checked。"

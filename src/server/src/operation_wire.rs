@@ -69,10 +69,13 @@ fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError> {
 
 pub(crate) fn operation_observation_wire(op: crate::OperationObservation) -> Result<Value, ApiError> {
     let mut value = operation_wire(op.outcome)?;
-    value.as_object_mut().expect("invariant: operation projection is an object").insert(
-        "current_health".into(),
-        json_codec::to_value(op.health).expect("invariant: health observation serializes"),
-    );
+    value
+        .as_object_mut()
+        .expect("invariant: operation projection is an object")
+        .insert(
+            "current_health".into(),
+            json_codec::to_value(op.health).expect("invariant: health observation serializes"),
+        );
     Ok(value)
 }
 
@@ -84,5 +87,3 @@ enum OperationPhase {
     InDoubt,
     Processing,
 }
-
-

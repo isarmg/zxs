@@ -36,6 +36,7 @@ fn first_save(
     }
     let uploads = backend.uploads.load(Ordering::SeqCst);
     let saved = client.flush(opened.handle).unwrap();
+    assert!(saved.get("current_health").is_none());
     assert_eq!(saved["commit_state"], "PUBLISHED");
     assert_eq!(saved["operation_id"], operation.to_string());
     if lose_reply {

@@ -157,7 +157,7 @@ fn poll_errors(browser: &Browser) -> Result<()> {
         r#"
         const s=window.__zxsErrorFeedback;
         const edit=Array.from(document.querySelectorAll('button')).find(b=>['Edit file note','编辑文件备注'].includes(b.getAttribute('aria-label')));
-        return s.writes===1&&s.pollPaths.every(path=>path==='/api/operations/'+s.operation)
+        return s.writes===1&&s.pollPaths.every(path=>path==='/api/operations/'+s.operation+'/outcome')
             &&edit&&!edit.disabled&&edit.textContent.includes('browser error recovery note')
             &&!document.querySelector('.zxs-inline-input')&&!document.querySelector('[data-language-toggle]').disabled;
     "#,

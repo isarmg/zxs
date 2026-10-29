@@ -1913,6 +1913,63 @@
         "error": null,
         "current_health": null
       }
+    },
+    {
+      "name": "generic-in-doubt-not-observed",
+      "schema": "GenericOperationObservation",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000002",
+        "operation_kind": "namespace.batch",
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "in_doubt",
+        "commit_state": "IN_DOUBT",
+        "protection_at_publish": "UNCONFIRMED",
+        "publication_sequence": "8",
+        "result": {
+          "entries": []
+        },
+        "error": null,
+        "current_health": null
+      }
+    },
+    {
+      "name": "generic-aborted-not-observed",
+      "schema": "GenericOperationObservation",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000002",
+        "operation_kind": "namespace.batch",
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "in_doubt",
+        "commit_state": "ABORTED",
+        "protection_at_publish": "UNCONFIRMED",
+        "publication_sequence": "8",
+        "result": {
+          "entries": []
+        },
+        "error": null,
+        "current_health": null
+      }
+    },
+    {
+      "name": "generic-published-checked-health",
+      "schema": "GenericOperationObservation",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000002",
+        "operation_kind": "namespace.batch",
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "NOT_APPLICABLE",
+        "publication_sequence": "8",
+        "result": {
+          "entries": []
+        },
+        "error": null,
+        "current_health": {
+          "state": "UNAVAILABLE",
+          "checked_at": "2026-10-18T00:00:00Z"
+        }
+      }
     }
   ],
   "negative": [
@@ -8236,6 +8293,50 @@
               ]
             }
           ]
+        },
+        "error": null,
+        "current_health": {
+          "state": "HEALTHY",
+          "checked_at": "2026-10-18T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "generic-in-doubt-cannot-fabricate-checked-health",
+      "schema": "GenericOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000002",
+        "operation_kind": "namespace.batch",
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "in_doubt",
+        "commit_state": "IN_DOUBT",
+        "protection_at_publish": "UNCONFIRMED",
+        "publication_sequence": "8",
+        "result": {
+          "entries": []
+        },
+        "error": null,
+        "current_health": {
+          "state": "HEALTHY",
+          "checked_at": "2026-10-18T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "generic-aborted-cannot-fabricate-checked-health",
+      "schema": "GenericOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000002",
+        "operation_kind": "namespace.batch",
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "in_doubt",
+        "commit_state": "ABORTED",
+        "protection_at_publish": "UNCONFIRMED",
+        "publication_sequence": "8",
+        "result": {
+          "entries": []
         },
         "error": null,
         "current_health": {

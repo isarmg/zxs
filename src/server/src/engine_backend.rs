@@ -309,10 +309,12 @@ impl EngineBackend {
         if let Some(hook) = self.operation_health_hook.lock().unwrap().clone() {
             hook();
         }
-        let (record, health) = plan.observe();
-        let health = health
+        let observed = plan.observe();
+        let health = observed
+            .health()
             .map(crate::operation_observation::CheckedOperationHealth::completed)
             .transpose()?;
+        let record = observed.into_record();
         let engine = self.engine.lock().expect("service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         operations::authorize_record(&engine, &current, &record)?;

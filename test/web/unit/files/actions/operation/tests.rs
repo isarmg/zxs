@@ -126,6 +126,11 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
         contradictory["state"] = "in_doubt".into();
         let mut extra = published();
         extra["legacy"] = true.into();
+        let mut not_observed = published();
+        not_observed["current_health"] = Value::Null;
+        let mut checked = published();
+        checked["current_health"] =
+            json!({"state":"UNAVAILABLE","checked_at":"2026-10-24T05:33:19Z"});
         for response in [
             Value::Null,
             json!({}),
@@ -141,6 +146,8 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
             empty_id,
             contradictory,
             extra,
+            not_observed,
+            checked,
         ] {
             let state = RwSignal::new(State {
                 authenticated: true,

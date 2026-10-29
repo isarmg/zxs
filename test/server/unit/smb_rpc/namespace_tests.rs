@@ -45,7 +45,7 @@ fn call(client: &mut FrameStream, request: Request) -> Result<Value, Response> {
 #[test]
 fn rpc_flush_returns_published_receipt_when_index_projection_fails() {
     use super::projection_failure::{
-        fail_projection, projection_sequence, receipt_without_observation_time,
+        fail_projection, projection_sequence, receipt_outcome,
     };
     let (temp, shared, backend, branch) = fixture();
     let (mut wire, worker) = connect(shared.clone());
@@ -104,8 +104,8 @@ fn rpc_flush_returns_published_receipt_when_index_projection_fails() {
     )
     .unwrap();
     assert_eq!(
-        receipt_without_observation_time(&queried),
-        receipt_without_observation_time(&saved)
+        receipt_outcome(&queried),
+        receipt_outcome(&saved)
     );
     let uploads = backend.uploads.load(Ordering::SeqCst);
     assert_eq!(
@@ -154,7 +154,7 @@ fn rpc_flush_returns_published_receipt_when_index_projection_fails() {
 #[test]
 fn rpc_namespace_returns_published_receipt_and_does_not_replay_after_index_failure() {
     use super::projection_failure::{
-        fail_projection, projection_sequence, receipt_without_observation_time,
+        fail_projection, projection_sequence, receipt_outcome,
     };
     let (temp, shared, backend, branch) = fixture();
     let (mut wire, worker) = connect(shared.clone());
@@ -189,8 +189,8 @@ fn rpc_namespace_returns_published_receipt_and_does_not_replay_after_index_failu
     )
     .unwrap();
     assert_eq!(
-        receipt_without_observation_time(&queried),
-        receipt_without_observation_time(&saved)
+        receipt_outcome(&queried),
+        receipt_outcome(&saved)
     );
     assert_eq!(
         fs::symlink_metadata(shared.spool.join(format!("{operation}.namespace.json")))

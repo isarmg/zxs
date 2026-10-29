@@ -7,15 +7,36 @@ pub struct OperationObservation {
     pub(crate) health: Option<CheckedOperationHealth>,
 }
 
+impl OperationObservation {
+    pub fn outcome(&self) -> &storage_contract::OperationOutcome {
+        &self.outcome
+    }
+
+    pub fn health(&self) -> Option<&CheckedOperationHealth> {
+        self.health.as_ref()
+    }
+}
+
 #[derive(Debug, data_serialization::Serialize)]
-pub(crate) struct CheckedOperationHealth {
+pub struct CheckedOperationHealth {
     state: storage_contract::CurrentHealth,
     checked_at: String,
 }
 
 impl CheckedOperationHealth {
+    pub fn state(&self) -> storage_contract::CurrentHealth {
+        self.state
+    }
+
+    pub fn checked_at(&self) -> &str {
+        &self.checked_at
+    }
+
     pub(crate) fn completed(state: storage_contract::CurrentHealth) -> Result<Self, ApiError> {
-        Ok(Self { state, checked_at: checked_at(std::time::SystemTime::now())? })
+        Ok(Self {
+            state,
+            checked_at: checked_at(std::time::SystemTime::now())?,
+        })
     }
 }
 
@@ -31,16 +52,14 @@ fn checked_at(time: std::time::SystemTime) -> Result<String, ApiError> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|source| invalid().with_source(source))?;
     // Duration's u64 seconds and subsecond field always fit i128 nanoseconds.
-    let nanos =
-        i128::from(duration.as_secs()) * 1_000_000_000 + i128::from(duration.subsec_nanos());
+    let nanos = i128::from(duration.as_secs()) * 1_000_000_000
+        + i128::from(duration.subsec_nanos());
     let time = date_time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
         .map_err(|source| invalid().with_source(source))?;
     Ok(time
         .format(&date_time::format_description::well_known::Rfc3339)
         .expect("invariant: nonnegative UTC time is within the RFC3339 year range"))
 }
-
-
 #[cfg(test)]
 #[path = "../../../test/server/unit/operation_wire_tests.rs"]
 mod tests;
