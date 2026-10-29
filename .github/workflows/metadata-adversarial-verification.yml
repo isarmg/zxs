@@ -19,13 +19,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          fetch-depth: 2
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
       - name: Record exact source and Rust 1.99 environment
         run: |
           mkdir -p target/metadata-adversarial
           git rev-parse HEAD > target/metadata-adversarial/verification-sha.txt
-          git rev-parse HEAD^ > target/metadata-adversarial/source-sha.txt
+          git rev-parse HEAD:test/engine/unit/metadata_adversarial > target/metadata-adversarial/test-tree.txt
           uname -a > target/metadata-adversarial/environment.txt
           rustup show active-toolchain | tee -a target/metadata-adversarial/environment.txt
           rustc --version | tee -a target/metadata-adversarial/environment.txt
