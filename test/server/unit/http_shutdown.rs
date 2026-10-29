@@ -20,7 +20,13 @@ async fn start(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (stop, stopped) = oneshot::channel();
-    let server = tokio::spawn(serve_with_grace(listener, app, stopped, TEST_GRACE));
+    let server = tokio::spawn(serve_with_grace(
+        listener,
+        app,
+        stopped,
+        TEST_GRACE,
+        std::num::NonZeroUsize::new(128).unwrap(),
+    ));
     let client = TcpStream::connect(address).await.unwrap();
     (client, stop, server)
 }
@@ -170,7 +176,13 @@ fn network_cutoff_keeps_admitted_blocking_work_owned_until_runtime_exit() {
             bound.send(listener.local_addr().unwrap()).unwrap();
             tokio::time::timeout(
                 DEADLINE,
-                serve_with_grace(listener, app, stopped, TEST_GRACE),
+                serve_with_grace(
+                    listener,
+                    app,
+                    stopped,
+                    TEST_GRACE,
+                    std::num::NonZeroUsize::new(128).unwrap(),
+                ),
             )
             .await
             .unwrap()
@@ -239,7 +251,7 @@ fn leased_history_app(
                     // Test-only socket sizing forces a real pending TCP write even
                     // for a final page smaller than the transport's write queue.
                     let socket = tokio::net::TcpSocket::from_std_stream(
-                        connection.socket.try_clone().unwrap(),
+                        connection.socket.socket.try_clone().unwrap(),
                     );
                     socket.set_send_buffer_size(1024).unwrap();
                     let permit = slots.try_acquire_owned().map_err(|source| {
@@ -285,7 +297,13 @@ async fn history_send_lease_and_idle_deadline_cover_actual_unread_tcp_queues_aft
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let (stop, stopped) = oneshot::channel();
-        let server = tokio::spawn(serve_with_grace(listener, app, stopped, TEST_GRACE));
+        let server = tokio::spawn(serve_with_grace(
+            listener,
+            app,
+            stopped,
+            TEST_GRACE,
+            std::num::NonZeroUsize::new(128).unwrap(),
+        ));
         let socket = tokio::net::TcpSocket::new_v4().unwrap();
         socket.set_recv_buffer_size(1024).unwrap();
         let mut client = socket.connect(address).await.unwrap();
@@ -373,4 +391,130 @@ async fn completed_history_send_cancels_its_deadline_and_keeps_healthy_connectio
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+async fn limited_listener() -> (DrainListener, Arc<Semaphore>, SocketAddr) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let slots = Arc::new(Semaphore::new(1));
+    (
+        DrainListener {
+            listener,
+            slots: Arc::clone(&slots),
+            connections: Arc::new(Mutex::new(Connections::default())),
+        },
+        slots,
+        address,
+    )
+}
+
+#[tokio::test]
+async fn connection_admission_waits_until_last_socket_capability_is_released() {
+    let (mut listener, slots, address) = limited_listener().await;
+    let first = TcpStream::connect(address).await.unwrap();
+    let (mut stream, _) = listener.accept().await;
+    stream.register();
+    let response_socket = Arc::clone(&stream.response_socket);
+    let second = TcpStream::connect(address).await.unwrap();
+    assert!(
+        tokio::time::timeout(TEST_GRACE, listener.accept())
+            .await
+            .is_err()
+    );
+    drop(stream);
+    assert!(listener.connections.lock().unwrap().sockets.is_empty());
+    assert_eq!(slots.available_permits(), 0);
+    assert!(
+        tokio::time::timeout(TEST_GRACE, listener.accept())
+            .await
+            .is_err()
+    );
+    drop(response_socket);
+    assert_eq!(slots.available_permits(), 1);
+    let (stream, _) = tokio::time::timeout(DEADLINE, listener.accept())
+        .await
+        .unwrap();
+    assert_eq!(slots.available_permits(), 0);
+    drop(stream);
+    assert_eq!(slots.available_permits(), 1);
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn cancelling_accept_releases_its_unused_reservation() {
+    let (mut listener, slots, _) = limited_listener().await;
+    assert!(
+        tokio::time::timeout(TEST_GRACE, listener.accept())
+            .await
+            .is_err()
+    );
+    assert_eq!(slots.available_permits(), 1);
+}
+
+#[tokio::test]
+async fn network_close_retains_charge_until_socket_owners_finish() {
+    let (mut listener, slots, address) = limited_listener().await;
+    let client = TcpStream::connect(address).await.unwrap();
+    let (mut stream, _) = listener.accept().await;
+    stream.register();
+    let response_socket = Arc::clone(&stream.response_socket);
+    listener.connections.lock().unwrap().close();
+    assert_eq!(slots.available_permits(), 0);
+    drop(stream);
+    assert_eq!(slots.available_permits(), 0);
+    drop(response_socket);
+    assert_eq!(slots.available_permits(), 1);
+    drop(client);
+}
+
+#[tokio::test]
+async fn shutdown_cancels_connection_capacity_wait_without_abandoning_drain() {
+    let (admitted, active) = oneshot::channel();
+    let admitted = Arc::new(Mutex::new(Some(admitted)));
+    let app = Router::new().route(
+        "/upload",
+        post(move |request: Request| {
+            let admitted = admitted.lock().unwrap().take().unwrap();
+            async move {
+                admitted.send(()).unwrap();
+                assert!(to_bytes(request.into_body(), 1024).await.is_err());
+                "finished"
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = oneshot::channel();
+    let server = tokio::spawn(serve_with_grace(
+        listener,
+        app,
+        stopped,
+        TEST_GRACE,
+        std::num::NonZeroUsize::new(1).unwrap(),
+    ));
+    let mut client = TcpStream::connect(address).await.unwrap();
+    client
+        .write_all(b"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nx")
+        .await
+        .unwrap();
+    entered(active).await;
+    let queued = TcpStream::connect(address).await.unwrap();
+    stop.send(()).unwrap();
+    tokio::time::timeout(DEADLINE, server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop((client, queued));
+}
+
+#[test]
+fn connection_config_admits_only_semaphore_representable_limits() {
+    let mut config = crate::ServerConfig::loopback(std::path::Path::new("unused"));
+    assert_eq!(config.http_connection_limit.get(), 128);
+    assert!(config.clone().admit().is_ok());
+    config.http_connection_limit = std::num::NonZeroUsize::new(Semaphore::MAX_PERMITS).unwrap();
+    assert!(config.clone().admit().is_ok());
+    config.http_connection_limit = std::num::NonZeroUsize::new(Semaphore::MAX_PERMITS + 1).unwrap();
+    assert!(config.admit().is_err());
 }

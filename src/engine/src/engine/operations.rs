@@ -4,6 +4,7 @@
 use super::{ContentReadPlan, Engine};
 use crate::journal::RecordType;
 use crate::{disk::DiskResources, journal::*, publication_evidence::verified_object_at, *};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 /// Only the selected operation and its owner, never a clone of the whole State.
@@ -24,6 +25,47 @@ impl OperationRecord {
 
     pub fn into_result(self) -> OperationResult {
         self.result
+    }
+}
+
+/// One request's receipt evidence. Inspect its owner before consuming the result.
+/// The Engine borrow keeps this lookup within the caller's admission scope;
+/// it does not grant authorization or describe current payload health.
+pub struct OperationLookup<'e> {
+    entry: Cow<'e, OperationRecordEntry>,
+    pending: Option<PendingBinding>,
+}
+
+struct PendingBinding {
+    request_digest: String,
+    sequence: u64,
+}
+
+impl OperationLookup<'_> {
+    pub fn owner(&self) -> &str {
+        &self.entry.principal
+    }
+
+    pub fn into_record(self) -> Result<OperationRecord> {
+        let entry = self.entry.into_owned();
+        let mut result = entry.result;
+        if let Some(pending) = self.pending {
+            if result.request_digest != pending.request_digest
+                || result.sequence != pending.sequence
+            {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ObjectCorrupt,
+                    "operation differs from accepted candidate",
+                ));
+            }
+            result.commit_state = storage_contract::CommitState::InDoubt;
+            result.protection_at_publish = storage_contract::ProtectionAtPublish::Unconfirmed;
+            result.current_health = storage_contract::CurrentHealth::Recovering;
+        }
+        Ok(OperationRecord {
+            owner: Some(entry.principal),
+            result,
+        })
     }
 }
 
@@ -196,46 +238,49 @@ impl Engine {
     }
 
     pub fn operation_owner(&self, id: OperationId) -> Result<Option<String>> {
-        if let Some(entry) = self.find_receipt(id)? {
-            return Ok(Some(entry.principal));
-        }
-        let (members, snapshot, _) = match self.pending_operation_snapshot(id) {
-            Ok(pending) => pending,
+        match self.operation_lookup(id) {
+            Ok(lookup) => Ok(Some(lookup.owner().to_owned())),
             Err(error) if error.code() == storage_contract::ErrorCode::OperationNotFound => {
-                return Ok(None);
+                Ok(None)
             }
-            Err(error) => return Err(error),
-        };
-        Ok(snapshot_receipt(self, &members, &snapshot, id, false)?.map(|entry| entry.principal))
+            Err(error) => Err(error),
+        }
     }
 
     /// Published records are metadata-only. An uncertain decision reads only
     /// the hash-bound locator path and one receipt segment, not the
     /// candidate's entire State.
     pub fn operation_record(&self, id: OperationId) -> Result<OperationRecord> {
-        if let Some(entry) = self.find_receipt(id)? {
-            return Ok(OperationRecord {
-                owner: Some(entry.principal),
-                result: entry.result,
+        self.operation_lookup(id)?.into_record()
+    }
+
+    /// Resolve ownership and result evidence once, under the same admission.
+    /// Resident published receipts stay borrowed until the authorized caller
+    /// consumes the lookup; pending evidence is read and hash-verified once.
+    pub fn operation_lookup(&self, id: OperationId) -> Result<OperationLookup<'_>> {
+        let members = self.members();
+        let entry = crate::segment_store::ReceiptLookup {
+            state: &self.state,
+            reader: self.segment_reader(&members),
+            locator_root: self.operation_locator_root.as_ref(),
+        }
+        .find_view(id)?;
+        if let Some(entry) = entry {
+            return Ok(OperationLookup {
+                entry,
+                pending: None,
             });
         }
         let (members, snapshot, candidate) = self.pending_operation_snapshot(id)?;
         let entry = snapshot_receipt(self, &members, &snapshot, id, false)?
             .ok_or_else(operation_not_found)?;
-        let (owner, mut result) = (Some(entry.principal), entry.result);
-        if result.operation_id != id
-            || result.request_digest != candidate.request_digest
-            || result.sequence != candidate.sequence
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::ObjectCorrupt,
-                "operation differs from accepted candidate",
-            ));
-        }
-        result.commit_state = storage_contract::CommitState::InDoubt;
-        result.protection_at_publish = storage_contract::ProtectionAtPublish::Unconfirmed;
-        result.current_health = storage_contract::CurrentHealth::Recovering;
-        Ok(OperationRecord { owner, result })
+        Ok(OperationLookup {
+            entry: Cow::Owned(entry),
+            pending: Some(PendingBinding {
+                request_digest: candidate.request_digest,
+                sequence: candidate.sequence,
+            }),
+        })
     }
 
     /// Capture this immediately after authorizing `record`, in the same Engine

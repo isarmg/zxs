@@ -14,7 +14,38 @@ use web_interface::components::{
 use web_interface::tasks::spawn_local;
 use web_interface::{i18n::t, prelude::*};
 
-const RANGES: [&str; 5] = ["1min", "30min", "1h", "24h", "1month"];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HistoryRange {
+    Minute,
+    HalfHour,
+    Hour,
+    Day,
+    Month,
+}
+
+impl HistoryRange {
+    const ALL: [Self; 5] = [
+        Self::Minute,
+        Self::HalfHour,
+        Self::Hour,
+        Self::Day,
+        Self::Month,
+    ];
+
+    fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|range| range.as_str() == value)
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Minute => "1min",
+            Self::HalfHour => "30min",
+            Self::Hour => "1h",
+            Self::Day => "24h",
+            Self::Month => "1month",
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct Model {
@@ -27,11 +58,12 @@ pub(crate) struct Model {
     pub loaded: bool,
     pub failure: Option<Feedback>,
     pub history: crate::snapshot::Snapshot<Value>,
-    pub range: String,
+    range: HistoryRange,
     pub history_loading: bool,
     pub history_loaded: bool,
     pub history_generation: u64,
     pub history_failure: Option<Feedback>,
+    history_cancellation: Option<api::ReadCancellation>,
 }
 impl Default for Model {
     fn default() -> Self {
@@ -45,12 +77,27 @@ impl Default for Model {
             loaded: false,
             failure: None,
             history: Value::Null.into(),
-            range: "1min".into(),
+            range: HistoryRange::Minute,
             history_loading: false,
             history_loaded: false,
             history_generation: 0,
             history_failure: None,
+            history_cancellation: None,
         }
+    }
+}
+
+impl Model {
+    fn replace_history_range(&mut self, range: HistoryRange) {
+        if let Some(cancellation) = self.history_cancellation.take() {
+            cancellation.abort();
+        }
+        self.range = range;
+        self.history_generation += 1;
+        self.history_loading = false;
+        self.history_loaded = false;
+        self.history = Value::Null.into();
+        self.history_failure = None;
     }
 }
 
@@ -171,24 +218,38 @@ fn load_history(state: RwSignal<State>) {
     if state.with_untracked(|s| !s.session_active() || s.monitor.history_loading) {
         return;
     }
-    state.update(|s| s.monitor.history_loading = true);
+    let cancellation = match api::ReadCancellation::new() {
+        Ok(cancellation) => cancellation,
+        Err(error) => {
+            state.update(|s| s.monitor.history_failure = Some(feedback(&error)));
+            return;
+        }
+    };
+    state.update(|s| {
+        s.monitor.history_loading = true;
+        s.monitor.history_cancellation = Some(cancellation.clone());
+    });
     let (epoch, generation, range) = state.with_untracked(|s| {
         (
             s.session_epoch,
             s.monitor.history_generation,
-            s.monitor.range.clone(),
+            s.monitor.range,
         )
     });
     spawn_local(async move {
-        let result = api::request("GET", &format!("/api/system/history?range={range}"), None).await;
-        complete_history_load(state, epoch, generation, &range, result);
+        let result = api::cancellable_get(
+            &format!("/api/system/history?range={}", range.as_str()),
+            cancellation,
+        )
+        .await;
+        complete_history_load(state, epoch, generation, range, result);
     });
 }
 fn complete_history_load(
     state: RwSignal<State>,
     epoch: u64,
     generation: u64,
-    range: &str,
+    range: HistoryRange,
     result: Result<Value, api::Error>,
 ) {
     if !accept_read_response(state, epoch, &result)
@@ -204,25 +265,22 @@ fn complete_history_load(
         }),
         Err(error) => state.update(|s| s.monitor.history_failure = Some(feedback(&error))),
     }
-    state.update(|s| s.monitor.history_loading = false);
+    state.update(|s| {
+        s.monitor.history_loading = false;
+        s.monitor.history_cancellation = None;
+    });
 }
-fn history_matches(model: &Model, generation: u64, range: &str) -> bool {
+fn history_matches(model: &Model, generation: u64, range: HistoryRange) -> bool {
     model.history_generation == generation && model.range == range
 }
 fn select_range(state: RwSignal<State>, range: String) {
-    if !RANGES.contains(&range.as_str())
-        || state.with_untracked(|s| s.monitor.range == range || !s.session_active())
-    {
+    let Some(range) = HistoryRange::parse(&range) else {
+        return;
+    };
+    if state.with_untracked(|s| s.monitor.range == range || !s.session_active()) {
         return;
     }
-    state.update(|s| {
-        s.monitor.range = range;
-        s.monitor.history_generation += 1;
-        s.monitor.history_loading = false;
-        s.monitor.history_loaded = false;
-        s.monitor.history = Value::Null.into();
-        s.monitor.history_failure = None;
-    });
+    state.update(|s| s.monitor.replace_history_range(range));
     load_history(state);
 }
 fn percent(value: &Value) -> Option<f64> {
@@ -433,11 +491,11 @@ fn metric_card(state: RwSignal<State>, metric: Metric) -> impl IntoView {
     }
 }
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
-    let range = Signal::derive(move || state.with(|s| s.monitor.range.clone()));
+    let range = Signal::derive(move || state.with(|s| s.monitor.range.as_str().to_owned()));
     let options = Signal::derive(|| {
-        RANGES
+        HistoryRange::ALL
             .into_iter()
-            .map(|range| SelectOption::new(range, range))
+            .map(|range| SelectOption::new(range.as_str(), range.as_str()))
             .collect()
     });
     let available_metrics = Memo::new(move |_| state.with(|s| metrics(&s.monitor.snapshot)));

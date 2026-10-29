@@ -1821,6 +1821,8 @@ pub struct SmbConfig {
 }
 #[derive(Clone)]
 pub struct ServerConfig {
+    /// Accepted HTTP connections, including retained response socket capabilities.
+    pub http_connection_limit: std::num::NonZeroUsize,
     pub listen: SocketAddr,
     /// Required when TLS terminates upstream. Origin comparison never uses forwarded headers.
     pub external_origin: Option<String>,
@@ -1838,6 +1840,8 @@ impl ServerConfig {
     pub fn loopback(root: &Path) -> Self {
         Self {
             listen: "127.0.0.1:7400".parse().unwrap(),
+            http_connection_limit: std::num::NonZeroUsize::new(128)
+                .expect("invariant: default HTTP connection limit is positive"),
             external_origin: None,
             trusted_proxy_ips: Vec::new(),
             spool_dir: root.join("api-spool"),
@@ -1878,6 +1882,11 @@ impl ServerConfig {
         {
             return Err(ApiError::invalid(
                 "trusted proxies must be exact loopback IPs and require an HTTPS external origin",
+            ));
+        }
+        if self.http_connection_limit.get() > tokio::sync::Semaphore::MAX_PERMITS {
+            return Err(ApiError::invalid(
+                "HTTP connection limit exceeds semaphore capacity",
             ));
         }
         self.http_spool_limits.validate()?;
@@ -2302,8 +2311,9 @@ pub async fn serve_with_shutdown(
     let smb_max_file_bytes = config.max_upload_bytes;
     let bridge_auth = auth.clone();
     let spool_config = Arc::clone(&config);
+    let connection_limit = config.http_connection_limit;
     let app = router_shared(backend.clone(), auth, config, telemetry, spool_budget)?;
-    let http = |stopped| http_shutdown::serve(listener, app, stopped);
+    let http = |stopped| http_shutdown::serve(listener, app, stopped, connection_limit);
     let smb_connections = management_shutdown.smb_connections();
     let bridge = async move {
         if let Some(smb) = smb {

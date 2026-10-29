@@ -33,6 +33,7 @@ mod integrity_scrub;
 mod lifecycle;
 mod management;
 mod metadata;
+mod monitor_cancellation;
 mod session_delivery;
 use metadata::{assert_metadata_only, metadata_edit, open_fixture_directory};
 mod file_viewports;
@@ -320,6 +321,7 @@ fn exercise(
         if browser.script("return Array.from(document.querySelectorAll('.zxs-history-path')).some(e=>e.textContent.includes('browser-smoke.txt'))")? == true { Ok(()) } else { Err("history missing seeded file".into()) }
     })?;
     integrity_scrub::run(browser)?;
+    monitor_cancellation::run(browser)?;
     browser.css(".zxs-monitor-page .zxs-metric-card")?;
     assert_metadata_only(browser)?;
     println!("PASS administrator status page retains real telemetry controls");

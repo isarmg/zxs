@@ -84,6 +84,9 @@ struct Args {
     /// Keep this filesystem headroom outside new upload reservations.
     #[arg(long, default_value_t = 1_073_741_824)]
     pub(crate) http_spool_recovery_reserve_bytes: u64,
+    /// Accepted HTTP connections, including retained response socket capabilities.
+    #[arg(long, default_value = "128")]
+    pub(crate) http_connection_limit: std::num::NonZeroUsize,
     /// Independent capacity for each HTTP upload/read pool.
     #[arg(long, default_value_t = 2)]
     pub(crate) http_transfer_slots: usize,
@@ -195,6 +198,7 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
         http_spool_bytes_per_account,
         http_spool_bytes_total,
         http_spool_recovery_reserve_bytes,
+        http_connection_limit,
         http_transfer_slots,
         http_transfer_idle_seconds,
         http_transfer_total_seconds,
@@ -225,6 +229,7 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
     config.trusted_proxy_ips = trusted_proxy_ips;
     config.web_dir = web_dir;
     config.max_upload_bytes = max_upload_bytes;
+    config.http_connection_limit = http_connection_limit;
     config.http_spool_limits = storage_server::SpoolLimits {
         bytes_per_account: http_spool_bytes_per_account,
         bytes_total: http_spool_bytes_total,

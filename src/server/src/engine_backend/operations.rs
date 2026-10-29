@@ -8,15 +8,13 @@ pub(super) fn authorized_record(
     identity: &Identity,
     operation_id: storage_contract::OperationId,
 ) -> Result<OperationRecord, ApiError> {
-    // Reject foreign owners before loading pending result pages.
-    if let Some(owner) = engine.operation_owner(operation_id).map_err(super::error)?
-        && owner != identity.principal
-    {
+    let lookup = engine
+        .operation_lookup(operation_id)
+        .map_err(super::error)?;
+    if lookup.owner() != identity.principal {
         return Err(ApiError::forbidden());
     }
-    let record = engine
-        .operation_record(operation_id)
-        .map_err(super::error)?;
+    let record = lookup.into_record().map_err(super::error)?;
     authorize_record(engine, identity, &record)?;
     Ok(record)
 }

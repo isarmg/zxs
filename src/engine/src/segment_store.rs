@@ -5,7 +5,7 @@
 use crate::disk::DiskResources;
 use crate::publication_evidence::verified_graph_object_at;
 use crate::{DiskConfig, Error, Result};
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use storage_contract::{
@@ -317,18 +317,25 @@ impl SegmentReader<'_> {
 /// and retained fresh seal first, then the one-shot cold index, then an exact
 /// locator point read plus one sealed-segment read. `None` means the id was
 /// never bound; path or segment damage stays an explicit error.
-pub(crate) struct ReceiptLookup<'a> {
-    pub(crate) state: &'a storage_contract::State,
+pub(crate) struct ReceiptLookup<'a, 'state> {
+    pub(crate) state: &'state storage_contract::State,
     pub(crate) reader: SegmentReader<'a>,
     pub(crate) locator_root: Option<&'a crate::metadata_map::Reference>,
 }
-impl ReceiptLookup<'_> {
+impl<'state> ReceiptLookup<'_, 'state> {
     pub(crate) fn find(
         &self,
         id: storage_contract::OperationId,
     ) -> Result<Option<OperationRecordEntry>> {
+        Ok(self.find_view(id)?.map(Cow::into_owned))
+    }
+
+    pub(crate) fn find_view(
+        &self,
+        id: storage_contract::OperationId,
+    ) -> Result<Option<Cow<'state, OperationRecordEntry>>> {
         if let Some(entry) = self.state.operations.tail_record(id) {
-            return Ok(Some(entry.clone()));
+            return Ok(Some(Cow::Borrowed(entry)));
         }
         if let Some((_, segment)) = self.state.operations.fresh_seal()
             && let Some(entry) = segment
@@ -336,7 +343,7 @@ impl ReceiptLookup<'_> {
                 .iter()
                 .find(|entry| entry.result.operation_id == id)
         {
-            return Ok(Some(entry.clone()));
+            return Ok(Some(Cow::Borrowed(entry)));
         }
         let ordinal = if let Some(index) = self.state.operations.cold_index() {
             match index.get(&id) {
@@ -362,7 +369,7 @@ impl ReceiptLookup<'_> {
                 "operation locator points at a different receipt",
             ));
         }
-        Ok(Some(entry))
+        Ok(Some(Cow::Owned(entry)))
     }
     /// The receipt at one log ordinal, from the resident tail or a sealed
     /// segment located through the resident directory.

@@ -344,3 +344,106 @@ fn batch_health_owns_configuration_after_engine_drop_and_rechecks_member_identit
         assert_frozen(&observed, &published);
     }
 }
+
+#[test]
+fn published_lookup_borrows_the_resident_receipt_until_consumed() {
+    let (_root, mut engine, repo) = fixture();
+    let published = save(&mut engine, &repo.main_branch_id, b"lookup");
+    let lookup = engine.operation_lookup(published.operation_id).unwrap();
+    let Cow::Borrowed(entry) = &lookup.entry else {
+        panic!("resident receipt was cloned before ownership authorization");
+    };
+    assert!(std::ptr::eq(
+        *entry,
+        engine
+            .state
+            .operations
+            .tail_record(published.operation_id)
+            .unwrap(),
+    ));
+    assert_eq!(lookup.owner(), "owner");
+    assert_eq!(lookup.into_record().unwrap().into_result(), published);
+    let missing = OperationId::generate();
+    assert_eq!(engine.operation_owner(missing).unwrap(), None);
+    assert_eq!(
+        engine.operation_record(missing).err().unwrap().code(),
+        ErrorCode::OperationNotFound
+    );
+}
+
+fn pending_lookup_fixture() -> (tempfile::TempDir, Engine, OperationId) {
+    let (root, mut engine, _repo) = fixture();
+    let operation = OperationId::generate();
+    engine.inject_fault_once("after_accept_1");
+    assert!(
+        engine
+            .create_repository(
+                &storage_contract::RepositoryName::parse("pending lookup").unwrap(),
+                "P01",
+                3,
+                "owner",
+                operation,
+            )
+            .is_err()
+    );
+    (root, engine, operation)
+}
+
+#[test]
+fn pending_lookup_consumes_captured_evidence_without_a_second_journal_read() {
+    let (_root, engine, operation) = pending_lookup_fixture();
+    let lookup = engine.operation_lookup(operation).unwrap();
+    assert_eq!(lookup.owner(), "owner");
+    for disk in engine.members() {
+        fs::write(log_path(&disk), b"invalid journal frame").unwrap();
+    }
+    let record = lookup.into_record().unwrap();
+    assert_eq!(record.result().operation_id, operation);
+    assert_eq!(record.result().commit_state, CommitState::InDoubt);
+    assert_eq!(
+        record.result().protection_at_publish,
+        ProtectionAtPublish::Unconfirmed
+    );
+    assert_eq!(record.result().current_health, CurrentHealth::Recovering);
+    assert_eq!(
+        engine.operation_lookup(operation).err().unwrap().code(),
+        ErrorCode::LogCorrupt
+    );
+}
+
+#[test]
+fn pending_lookup_checks_receipt_binding_after_owner_discovery() {
+    for change_sequence in [false, true] {
+        let (_root, engine, operation) = pending_lookup_fixture();
+        let (members, mut snapshot, mut candidate) =
+            engine.pending_operation_snapshot(operation).unwrap();
+        if change_sequence {
+            candidate.sequence += 1;
+            snapshot.sequence = candidate.sequence;
+            candidate.snapshot_hash =
+                PreparedMetadataObject::new("snapshot", &snapshot, crate::disk::MAX_METADATA)
+                    .unwrap()
+                    .store(&members)
+                    .unwrap();
+        } else {
+            candidate.request_digest = "0".repeat(64);
+        }
+        let hash = PreparedMetadataObject::new("candidate", &candidate, crate::disk::MAX_METADATA)
+            .unwrap()
+            .store(&members)
+            .unwrap();
+        for disk in &members {
+            fs::remove_file(log_path(disk)).unwrap();
+            JournalWriter::create(disk)
+                .unwrap()
+                .append(disk, RecordType::Accept, candidate.sequence, &hash, &hash)
+                .unwrap();
+        }
+        let lookup = engine.operation_lookup(operation).unwrap();
+        assert_eq!(lookup.owner(), "owner");
+        assert_eq!(
+            lookup.into_record().err().unwrap().code(),
+            ErrorCode::ObjectCorrupt
+        );
+    }
+}

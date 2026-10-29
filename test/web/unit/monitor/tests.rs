@@ -9,7 +9,7 @@ fn superseded_history_read_revokes_authentication_without_settling_the_new_read(
             ..Default::default()
         });
         state.update(|s| {
-            s.monitor.range = "24h".into();
+            s.monitor.range = HistoryRange::Day;
             s.monitor.history_generation = 2;
             s.monitor.history_loading = true;
             s.monitor.history = json_codec::json!({"current":"snapshot"}).into();
@@ -18,7 +18,7 @@ fn superseded_history_read_revokes_authentication_without_settling_the_new_read(
             state,
             7,
             1,
-            "1min",
+            HistoryRange::Minute,
             Err(api::Error {
                 code: storage_contract::ErrorCode::Unauthorized,
                 message: "Session expired".into(),
@@ -47,18 +47,24 @@ fn superseded_history_data_and_prior_session_errors_leave_current_state_unchange
             ..Default::default()
         });
         state.update(|s| {
-            s.monitor.range = "24h".into();
+            s.monitor.range = HistoryRange::Day;
             s.monitor.history_generation = 2;
             s.monitor.history_loading = true;
             s.monitor.history = json_codec::json!({"current":"snapshot"}).into();
         });
-        complete_history_load(state, 8, 1, "1min", Ok(json_codec::json!({"stale":true})));
+        complete_history_load(
+            state,
+            8,
+            1,
+            HistoryRange::Minute,
+            Ok(json_codec::json!({"stale":true})),
+        );
         for (epoch, status) in [(7, 401), (8, 503)] {
             complete_history_load(
                 state,
                 epoch,
                 1,
-                "1min",
+                HistoryRange::Minute,
                 Err(api::Error {
                     code: storage_contract::ErrorCode::InjectedFailure,
                     message: "Old request".into(),
@@ -104,14 +110,12 @@ fn missing_or_invalid_samples_are_never_reported_as_zero_usage_or_power() {
 #[test]
 fn changing_history_range_rejects_an_earlier_response_even_after_switching_back() {
     let mut model = Model::default();
-    assert!(history_matches(&model, 0, "1min"));
-    model.range = "24h".into();
-    model.history_generation += 1;
-    assert!(!history_matches(&model, 0, "1min"));
-    model.range = "1min".into();
-    model.history_generation += 1;
-    assert!(!history_matches(&model, 0, "1min"));
-    assert!(history_matches(&model, 2, "1min"));
+    assert!(history_matches(&model, 0, HistoryRange::Minute));
+    model.replace_history_range(HistoryRange::Day);
+    assert!(!history_matches(&model, 0, HistoryRange::Minute));
+    model.replace_history_range(HistoryRange::Minute);
+    assert!(!history_matches(&model, 0, HistoryRange::Minute));
+    assert!(history_matches(&model, 2, HistoryRange::Minute));
 }
 
 fn valid_capacity_response() -> Value {
@@ -267,4 +271,88 @@ fn disk_sampling_notice_distinguishes_unavailable_from_empty_success() {
     );
     snapshot["disk_sampling_unavailable"] = Value::Bool(false);
     assert!(disk_sampling_notice(&snapshot).is_none());
+}
+
+#[test]
+fn replacing_history_range_resets_only_the_history_read() {
+    let mut model = Model {
+        history_loading: true,
+        history_loaded: true,
+        history: json_codec::json!({"old":true}).into(),
+        history_failure: Some(Feedback {
+            message: "Old read failed".into(),
+            request_id: None,
+        }),
+        loading: true,
+        capacity_loading: true,
+        snapshot: json_codec::json!({"current":true}),
+        ..Default::default()
+    };
+    model.replace_history_range(HistoryRange::Day);
+    assert_eq!(model.range, HistoryRange::Day);
+    assert_eq!(model.history_generation, 1);
+    assert!(!model.history_loading);
+    assert!(!model.history_loaded);
+    assert!(model.history.is_null());
+    assert!(model.history_failure.is_none());
+    assert!(model.loading);
+    assert!(model.capacity_loading);
+    assert_eq!(model.snapshot["current"], true);
+}
+
+#[test]
+fn current_history_response_settles_after_an_old_read_was_replaced() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 8,
+            ..Default::default()
+        });
+        state.update(|s| {
+            s.monitor.replace_history_range(HistoryRange::Day);
+            s.monitor.history_loading = true;
+        });
+        complete_history_load(
+            state,
+            8,
+            0,
+            HistoryRange::Minute,
+            Err(api::Error {
+                code: storage_contract::ErrorCode::TransportError,
+                message: "Replaced read".into(),
+                status: 0,
+                retryable: false,
+                request_id: None,
+                source: None,
+            }),
+        );
+        assert!(state.with_untracked(|s| s.monitor.history_loading));
+        complete_history_load(
+            state,
+            8,
+            1,
+            HistoryRange::Day,
+            Ok(json_codec::json!({"current":true})),
+        );
+        state.with_untracked(|s| {
+            assert!(!s.monitor.history_loading);
+            assert!(s.monitor.history_loaded);
+            assert_eq!(s.monitor.history["current"], true);
+            assert!(s.monitor.history_failure.is_none());
+            assert!(s.errors.is_empty());
+        });
+    });
+}
+
+#[test]
+fn history_range_parses_only_supported_wire_labels() {
+    let expected = ["1min", "30min", "1h", "24h", "1month"];
+    assert_eq!(HistoryRange::ALL.map(HistoryRange::as_str), expected);
+    for range in HistoryRange::ALL {
+        assert_eq!(HistoryRange::parse(range.as_str()), Some(range));
+    }
+    for invalid in ["", "1MIN", " 1min", "1min ", "60min", "1year"] {
+        assert_eq!(HistoryRange::parse(invalid), None);
+    }
+    assert_eq!(Model::default().range, HistoryRange::Minute);
 }

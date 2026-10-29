@@ -26,7 +26,9 @@ pub use integrity_scrub::{
 mod observations;
 mod operations;
 pub use observations::{DiskObservation, DiskObservationPlan, MetadataMemberProbe};
-pub use operations::{OperationReadObservation, OperationReadPlan, OperationRecord};
+pub use operations::{
+    OperationLookup, OperationReadObservation, OperationReadPlan, OperationRecord,
+};
 pub(crate) mod provenance;
 mod publication;
 #[cfg(feature = "fault-injection")]

@@ -180,7 +180,7 @@ pub(super) fn view(state: RwSignal<State>, metric: Metric) -> impl IntoView {
             (
                 s.monitor.history_loading,
                 s.monitor.history_loaded,
-                s.monitor.range.clone(),
+                s.monitor.range.as_str(),
             )
         })
     });

@@ -29,6 +29,14 @@ fn count_seal_publication_and_cold_replay_keep_every_permanent_receipt() {
     }
     assert_eq!(engine.state.operations.sealed().len(), 1);
     assert_eq!(engine.state.operations.tail().len(), 1);
+    let fresh = engine.state.operations.fresh_seal().unwrap().1;
+    let first = &fresh.records[0];
+    let lookup = engine.operation_lookup(first.result.operation_id).unwrap();
+    let Cow::Borrowed(entry) = &lookup.entry else {
+        panic!("freshly sealed receipt was cloned before ownership authorization");
+    };
+    assert!(std::ptr::eq(*entry, first));
+    assert_eq!(lookup.into_record().unwrap().into_result(), first.result);
     for result in &published {
         assert_eq!(
             engine
@@ -40,6 +48,12 @@ fn count_seal_publication_and_cold_replay_keep_every_permanent_receipt() {
     }
     drop(engine);
     let mut reopened = Engine::open(&temp.path().join("system")).unwrap();
+    let lookup = reopened
+        .operation_lookup(published[0].operation_id)
+        .unwrap();
+    assert!(matches!(&lookup.entry, Cow::Owned(_)));
+    assert_eq!(lookup.owner(), "owner");
+    assert_eq!(lookup.into_record().unwrap().into_result(), published[0]);
     for result in &published {
         assert_eq!(
             publish(&mut reopened, result.operation_id, 0).unwrap(),

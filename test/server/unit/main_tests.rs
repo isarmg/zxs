@@ -243,3 +243,22 @@ fn payload_proof_budget_is_optional_and_parsed_as_nonzero() {
         assert!(Args::try_parse_from(["zxs", "--max-held-payload-files", value]).is_err());
     }
 }
+
+#[test]
+fn http_connection_limit_has_a_finite_default_and_rejects_zero() {
+    assert_eq!(
+        Args::try_parse_from(["zxs"])
+            .unwrap()
+            .http_connection_limit
+            .get(),
+        128
+    );
+    assert_eq!(
+        Args::try_parse_from(["zxs", "--http-connection-limit", "32"])
+            .unwrap()
+            .http_connection_limit
+            .get(),
+        32
+    );
+    assert!(Args::try_parse_from(["zxs", "--http-connection-limit", "0"]).is_err());
+}

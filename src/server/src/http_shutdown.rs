@@ -20,7 +20,7 @@ use std::{
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{TcpListener, TcpStream},
-    sync::oneshot,
+    sync::{OwnedSemaphorePermit, Semaphore, oneshot},
 };
 
 const NETWORK_GRACE: Duration = Duration::from_secs(5);
@@ -28,13 +28,13 @@ const NETWORK_GRACE: Duration = Duration::from_secs(5);
 #[derive(Default)]
 struct Connections {
     closed: bool,
-    sockets: BTreeMap<RawFd, Arc<std::net::TcpStream>>,
+    sockets: BTreeMap<RawFd, Arc<ConnectionSocket>>,
 }
 impl Connections {
     fn close(&mut self) {
         self.closed = true;
         for socket in self.sockets.values() {
-            if let Err(error) = socket.shutdown(Shutdown::Both)
+            if let Err(error) = socket.socket.shutdown(Shutdown::Both)
                 && error.kind() != io::ErrorKind::NotConnected
             {
                 tracing::warn!(error = ?error, "HTTP socket shutdown failed");
@@ -52,15 +52,23 @@ impl Drop for NetworkGuard {
     }
 }
 
+// Field order closes the duplicated socket before returning its admission permit.
+struct ConnectionSocket {
+    socket: std::net::TcpStream,
+    _permit: OwnedSemaphorePermit,
+}
+
 struct DrainListener {
+    slots: Arc<Semaphore>,
     listener: TcpListener,
     connections: Arc<Mutex<Connections>>,
 }
 
 struct DrainStream {
+    // Close the original socket before releasing any shared connection owner.
     stream: TcpStream,
-    cancel: Option<Arc<std::net::TcpStream>>,
-    response_socket: Arc<std::net::TcpStream>,
+    cancel: Option<Arc<ConnectionSocket>>,
+    response_socket: Arc<ConnectionSocket>,
     write_progress: tokio::sync::watch::Sender<tokio::time::Instant>,
     key: RawFd,
     connections: Arc<Mutex<Connections>>,
@@ -70,7 +78,7 @@ struct DrainStream {
 /// cannot accidentally shut down a later connection after descriptor reuse.
 #[derive(Clone)]
 pub(crate) struct ResponseConnection {
-    socket: Arc<std::net::TcpStream>,
+    socket: Arc<ConnectionSocket>,
     write_progress: tokio::sync::watch::Sender<tokio::time::Instant>,
 }
 
@@ -82,7 +90,7 @@ impl Drop for SendDeadline {
 }
 impl ResponseConnection {
     pub(crate) fn shutdown(&self) {
-        if let Err(error) = self.socket.shutdown(Shutdown::Both)
+        if let Err(error) = self.socket.socket.shutdown(Shutdown::Both)
             && error.kind() != io::ErrorKind::NotConnected
         {
             tracing::warn!(error = ?error, "HTTP response deadline shutdown failed");
@@ -166,7 +174,7 @@ impl DrainStream {
             .lock()
             .expect("service state lock poisoned");
         if connections.closed {
-            if let Err(error) = socket.shutdown(Shutdown::Both)
+            if let Err(error) = socket.socket.shutdown(Shutdown::Both)
                 && error.kind() != io::ErrorKind::NotConnected
             {
                 tracing::warn!(error = ?error, "HTTP socket shutdown failed");
@@ -243,12 +251,19 @@ impl Listener for DrainListener {
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
+            let permit = Arc::clone(&self.slots)
+                .acquire_owned()
+                .await
+                .expect("invariant: HTTP connection admission is never explicitly closed");
             // Keep the library's accept-error handling and backoff.
             let (stream, address) = Listener::accept(&mut self.listener).await;
             let prepared = (|| {
                 let stream = stream.into_std()?;
-                let cancel = Arc::new(stream.try_clone()?);
-                let key = cancel.as_raw_fd();
+                let cancel = Arc::new(ConnectionSocket {
+                    socket: stream.try_clone()?,
+                    _permit: permit,
+                });
+                let key = cancel.socket.as_raw_fd();
                 Ok::<_, io::Error>(DrainStream {
                     stream: TcpStream::from_std(stream)?,
                     response_socket: cancel.clone(),
@@ -277,8 +292,9 @@ pub(crate) async fn serve(
     listener: TcpListener,
     app: Router,
     stopped: oneshot::Receiver<()>,
+    limit: std::num::NonZeroUsize,
 ) -> io::Result<()> {
-    serve_with_grace(listener, app, stopped, NETWORK_GRACE).await
+    serve_with_grace(listener, app, stopped, NETWORK_GRACE, limit).await
 }
 
 async fn serve_with_grace(
@@ -286,9 +302,11 @@ async fn serve_with_grace(
     app: Router,
     stopped: oneshot::Receiver<()>,
     grace: Duration,
+    limit: std::num::NonZeroUsize,
 ) -> io::Result<()> {
     let sockets = NetworkGuard::default();
     let listener = DrainListener {
+        slots: Arc::new(Semaphore::new(limit.get())),
         listener,
         connections: sockets.0.clone(),
     }
