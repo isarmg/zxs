@@ -117,3 +117,36 @@ fn typed_graph_keeps_history_error_and_rechecks_authority_before_missing_history
         );
     }
 }
+
+#[test]
+fn scoped_graph_commit_capture_matches_full_graph_after_state_replacement() {
+    let (_root, mut engine, repo, _) = fixture();
+    save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"first");
+    save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"second");
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Other graph").unwrap(),
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let compare = |engine: &Engine| {
+        let expected = json_codec::to_value(engine.graph(&repo.history_tree_id).unwrap()).unwrap();
+        let mut snapshot = crate::engine_backend::graph::capture(engine, &repo.history_tree_id);
+        snapshot.commits.sort_by_key(|commit| commit.sequence);
+        let actual = crate::backend_graph::HistoryGraphResponse::from(snapshot);
+        assert_eq!(json_codec::to_value(actual).unwrap(), expected);
+    };
+    compare(&engine);
+    let mut state = engine.state().clone();
+    state.branches.get_mut(&repo.main_branch_id).unwrap().state =
+        storage_contract::BranchState::Migrated;
+    let ids = state.commits.keys().cloned().collect::<Vec<_>>();
+    for id in ids {
+        state.commits.get_mut(&id).unwrap().sequence = 7;
+    }
+    storage_engine::test_support::replace_state(&mut engine, state);
+    compare(&engine);
+}

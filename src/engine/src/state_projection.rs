@@ -322,6 +322,9 @@ impl Rows {
             self.0.remove(&field);
         }
     }
+    pub(super) fn keys(&self, field: Field) -> impl Iterator<Item = &String> {
+        self.0.get(&field).into_iter().flat_map(SharedRecords::keys)
+    }
     pub(super) fn values(
         &self,
         field: Field,

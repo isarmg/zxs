@@ -1,18 +1,13 @@
 //! Pure same-state capture; sorting and wire serialization need no admission lock.
 use crate::HistoryGraphSnapshot;
-use std::sync::Arc;
-use storage_contract::State;
+use storage_engine::Engine;
 
 /// Caller has authorized this history and its repository in this same State.
-pub(super) fn capture(state: &State, history: &str) -> HistoryGraphSnapshot {
+pub(super) fn capture(engine: &Engine, history: &str) -> HistoryGraphSnapshot {
+    let state = engine.state();
     HistoryGraphSnapshot {
         history: state.histories[history].clone(),
-        commits: state
-            .commits
-            .shared_values()
-            .filter(|commit| commit.history_tree_id == history)
-            .map(Arc::clone)
-            .collect(),
+        commits: engine.history_commit_records(history),
         branches: state
             .branches
             .values()

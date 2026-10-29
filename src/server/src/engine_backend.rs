@@ -1620,7 +1620,7 @@ impl Backend for EngineBackend {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         repo_for_history(&engine, id)?;
-        let mut snapshot = graph::capture(engine.state(), id);
+        let mut snapshot = graph::capture(&engine, id);
         drop(engine);
         snapshot.commits.sort_by_key(|commit| commit.sequence);
         Ok(snapshot)

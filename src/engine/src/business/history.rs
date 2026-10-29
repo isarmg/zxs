@@ -97,6 +97,34 @@ impl Engine {
         versions.sort_by_key(|v| v.version_sequence);
         Ok(versions)
     }
+    /// Share all commit records of one history in commit-ID order.
+    ///
+    /// Uses only an already available index bound to the current State. Cold
+    /// or detached States retain the full scan without building an index or
+    /// reading namespace objects. Missing histories yield an empty collection;
+    /// this projection grants no authorization and retains no global map root.
+    pub fn history_commit_records(&self, history_id: &str) -> Vec<std::sync::Arc<Commit>> {
+        if let Some(owners) = self.available_history_owners() {
+            return owners
+                .rows(history_id)
+                .into_iter()
+                .flat_map(|rows| rows.keys(crate::state_projection::Field::Commits))
+                .map(|id| {
+                    self.state
+                        .commits
+                        .get_shared(id)
+                        .expect("invariant: bound history membership names an existing commit")
+                })
+                .collect();
+        }
+        self.state
+            .commits
+            .shared_values()
+            .filter(|commit| commit.history_tree_id == history_id)
+            .map(std::sync::Arc::clone)
+            .collect()
+    }
+
     pub fn graph(&self, history_id: &str) -> Result<HistoryGraph> {
         let history = self
             .state

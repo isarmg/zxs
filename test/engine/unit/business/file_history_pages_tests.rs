@@ -1661,3 +1661,96 @@ fn detached_merge_pages_match_borrowed_windows_and_reject_invalid_boundaries() {
     assert!(retained.upgrade().is_none());
     assert_eq!(records, expected);
 }
+
+fn assert_history_commit_records(engine: &Engine, history: &str) {
+    let expected = engine
+        .state()
+        .commits
+        .shared_values()
+        .filter(|commit| commit.history_tree_id == history)
+        .collect::<Vec<_>>();
+    let actual = engine.history_commit_records(history);
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert!(std::sync::Arc::ptr_eq(actual, expected));
+    }
+    assert!(
+        actual
+            .windows(2)
+            .all(|pair| pair[0].commit_id < pair[1].commit_id)
+    );
+}
+
+#[test]
+fn history_commit_records_match_scan_with_bound_index_and_unavailable_fallback() {
+    let mut pool = Pool::new();
+    pool.save("file.txt", b"body", "commit");
+    let other = pool
+        .engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Other graph").unwrap(),
+            "P01",
+            3,
+            "admin",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    assert!(pool.engine.available_history_owners().is_some());
+    for history in [
+        &pool.repo.history_tree_id,
+        &other.history_tree_id,
+        "missing",
+    ] {
+        assert_history_commit_records(&pool.engine, history);
+    }
+    let catalog = pool.engine.history_catalog.take();
+    assert!(pool.engine.available_history_owners().is_none());
+    for history in [
+        &pool.repo.history_tree_id,
+        &other.history_tree_id,
+        "missing",
+    ] {
+        assert_history_commit_records(&pool.engine, history);
+    }
+    assert!(
+        pool.engine.history_catalog.is_none(),
+        "read must not create an owner catalog"
+    );
+    pool.engine.history_catalog = catalog;
+    assert!(pool.engine.available_history_owners().is_some());
+    assert_history_commit_records(&pool.engine, &pool.repo.history_tree_id);
+}
+
+#[test]
+fn history_commit_records_reject_stale_owner_binding_after_decoded_state_replacement() {
+    let mut pool = Pool::new();
+    pool.save("file.txt", b"body", "commit");
+    let history = pool.repo.history_tree_id.clone();
+    assert!(pool.engine.available_history_owners().is_some());
+    let captured = pool.engine.history_commit_records(&history);
+    let original = std::sync::Arc::clone(&pool.engine.state);
+    // A decoded/replaced allocation must not use the previous publication's
+    // owner membership, including after commit ownership changes.
+    let mut decoded: State =
+        json_codec::from_value(json_codec::to_value(pool.engine.state()).unwrap()).unwrap();
+    let moved = captured[0].commit_id.clone();
+    decoded.commits.get_mut(&moved).unwrap().history_tree_id = "another-history".into();
+    decoded
+        .branches
+        .get_mut(&pool.repo.main_branch_id)
+        .unwrap()
+        .state = BranchState::Migrated;
+    pool.engine.state = std::sync::Arc::new(decoded);
+    assert!(pool.engine.available_history_owners().is_none());
+    for history in [history.as_str(), "another-history", "missing"] {
+        assert_history_commit_records(&pool.engine, history);
+    }
+    assert!(
+        pool.engine.available_history_owners().is_none(),
+        "fallback must not build an index"
+    );
+    assert_eq!(captured[0].history_tree_id, history);
+    pool.engine.state = original;
+    assert!(pool.engine.available_history_owners().is_some());
+    assert_history_commit_records(&pool.engine, &history);
+}
