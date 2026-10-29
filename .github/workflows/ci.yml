@@ -122,7 +122,10 @@ jobs:
           selected = {}
           for name in ('baseline','candidate'):
               manifest = str(root / name / 'src/engine/Cargo.toml')
-              records = [json.loads(line) for line in (evidence / f'{name}-build.jsonl').read_text().splitlines()]
+              lines = (evidence / f'{name}-build.jsonl').read_text().splitlines()
+              # Cargo -vv interleaves bracket-prefixed build-script output with JSON messages.
+              records = [json.loads(line) for line in lines if line.startswith('{')]
+              assert [row['success'] for row in records if row['reason'] == 'build-finished'] == [True]
               artifacts = [row for row in records if row['reason'] == 'compiler-artifact' and row['manifest_path'] == manifest]
               assert any(row['target']['kind'] == ['lib'] for row in artifacts), 'engine library compile evidence missing'
               assert any(row['target']['kind'] == ['bin'] and row['target']['name'] == 'task1_adoption' for row in artifacts), 'measurement binary evidence missing'
