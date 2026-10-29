@@ -168,3 +168,77 @@ fn typed_event_page_is_frozen_and_serializes_without_the_engine_lock() {
     drop(backend);
     assert_eq!(json_codec::to_value(response).unwrap(), expected);
 }
+
+#[test]
+fn detached_event_completion_checks_current_authority_before_read_errors() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &temporary.path().join("system"),
+        Config::development([temporary.path().join("disk")]),
+    )
+    .unwrap();
+    let identity = install_test_administrator(&mut engine, "owner");
+    let backend = EngineBackend::new(engine);
+    let plan = backend.engine.lock().unwrap().prepare_event_page(0);
+    let events = plan.read().unwrap();
+    let failure = || {
+        ApiError::new(
+            ::http::StatusCode::INTERNAL_SERVER_ERROR,
+            storage_contract::ErrorCode::ObjectCorrupt,
+            "selected event segment is corrupt",
+        )
+    };
+    assert_eq!(
+        backend
+            .finish_event_page(&identity, 0, Err(failure()))
+            .err()
+            .unwrap()
+            .code,
+        storage_contract::ErrorCode::ObjectCorrupt
+    );
+    install_test_administrator(&mut backend.engine.lock().unwrap(), "replacement");
+    for result in [Ok(events), Err(failure())] {
+        assert_eq!(
+            backend
+                .finish_event_page(&identity, 0, result)
+                .err()
+                .unwrap()
+                .code,
+            storage_contract::ErrorCode::Unauthorized
+        );
+    }
+}
+
+#[test]
+fn detached_event_completion_keeps_its_prefix_across_a_later_publication() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &temporary.path().join("system"),
+        Config::development([temporary.path().join("disk")]),
+    )
+    .unwrap();
+    let identity = install_test_administrator(&mut engine, "owner");
+    let baseline = engine.state().sequence;
+    let backend = EngineBackend::new(engine);
+    let plan = backend.engine.lock().unwrap().prepare_event_page(baseline);
+    backend
+        .engine
+        .lock()
+        .unwrap()
+        .create_repository(
+            &storage_contract::RepositoryName::parse("later").unwrap(),
+            "P01",
+            1,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let captured = backend
+        .finish_event_page(&identity, baseline, plan.read().map_err(error))
+        .unwrap();
+    assert!(captured.events.is_empty());
+    assert_eq!(captured.next_cursor, baseline);
+    let next = backend.event_page(&identity, captured.next_cursor).unwrap();
+    assert_eq!(next.events.len(), 1);
+    assert!(next.next_cursor > baseline);
+}

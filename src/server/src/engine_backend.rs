@@ -66,6 +66,17 @@ pub struct EngineBackend {
     operation_health_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 impl EngineBackend {
+    fn finish_event_page(
+        &self,
+        identity: &Identity,
+        after: u64,
+        events: Result<Vec<storage_contract::Event>, ApiError>,
+    ) -> Result<crate::EventPage, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        events.map(|events| capture_event_page(events, after))
+    }
+
     fn finish_file_history_page<T>(
         &self,
         identity: &Identity,
@@ -1601,8 +1612,10 @@ impl Backend for EngineBackend {
                 "event cursor is ahead of the published sequence",
             ));
         }
-        let events = engine.events_page(after, 1000).map_err(error)?;
-        Ok(capture_event_page(events, after))
+        let plan = engine.prepare_event_page(after);
+        drop(engine);
+        let events = plan.read().map_err(error);
+        self.finish_event_page(identity, after, events)
     }
     fn activity_history(
         &self,

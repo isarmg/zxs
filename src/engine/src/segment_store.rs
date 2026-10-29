@@ -128,19 +128,32 @@ pub(crate) fn events_page(
     if !tail_serves {
         // First segment that could hold events beyond `after`: the one before
         // the first segment whose first sequence exceeds the cursor.
-        let mut index = sealed
+        let index = sealed
             .partition_point(|segment| segment.first_sequence <= after)
             .saturating_sub(1);
-        while index < sealed.len() && out.len() < limit {
-            let segment = reader.event_segment(&sealed[index])?;
-            let rank = segment.partition_point(|event| event.sequence <= after);
-            out.extend(segment[rank..].iter().take(limit - out.len()).cloned());
-            index += 1;
-        }
+        out = read_event_segments(&sealed[index..], reader, after, limit)?;
     }
     if out.len() < limit {
         let rank = tail.partition_point(|event| event.sequence <= after);
         out.extend(tail[rank..].iter().take(limit - out.len()).cloned());
+    }
+    Ok(out)
+}
+
+pub(crate) fn read_event_segments(
+    sealed: &[EventSegmentRef],
+    reader: &SegmentReader<'_>,
+    after: u64,
+    limit: usize,
+) -> Result<Vec<storage_contract::Event>> {
+    let mut out = Vec::new();
+    for reference in sealed {
+        if out.len() == limit {
+            break;
+        }
+        let segment = reader.event_segment(reference)?;
+        let rank = segment.partition_point(|event| event.sequence <= after);
+        out.extend(segment[rank..].iter().take(limit - out.len()).cloned());
     }
     Ok(out)
 }
