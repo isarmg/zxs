@@ -274,6 +274,8 @@ HTTP spool 必须由服务身份拥有且权限为 `0700`；现有目录不会�
 
 HTTP token 检查、授权后端和 managed 引擎准入读取[已提交鉴权快照](../architecture/auth-committed-snapshots.md)，不等待凭据写序列的 fsync。读写请求仍在引擎锁后复核当前会话，保留注销、改密、到期及不确定权威故障关闭；密码哈希与持久写仍有各自的有界阻塞任务准入。
 
+<a id="文件历史有界读边界"></a>
+
 ### 文件历史有界读边界
 
 文件历史按 [ADR 0009](../adr/0009-bounded-file-history-windows.md) 只提供有界页：主节点页
