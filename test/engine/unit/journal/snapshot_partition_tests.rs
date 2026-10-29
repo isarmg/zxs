@@ -179,7 +179,7 @@ fn current_snapshot_requires_every_map_even_when_empty_and_validates_addresses_b
         json_codec::from_value(json_codec::json!({"kind":"state-page","hash":"../../outside"}))
             .unwrap(),
     );
-    assert!(resolve_raw_snapshot(bad, |_, _| panic!("address must fail before I/O")).is_err());
+    assert!(resolve_admitted_snapshot(bad, |_, _| panic!("address must fail before I/O")).is_err());
     let mut unknown = prepared.descriptor.clone();
     unknown
         .maps

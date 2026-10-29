@@ -1,18 +1,29 @@
-//! Published receipt roots used only for retained-workspace admission before repair.
+//! One prepared publication and its root, borrowed for workspace admission then replayed.
 use super::*;
 
 pub(super) struct PreparedCandidate {
+    pub evidence: PreparedPublication,
+    pub receipts: PublishedReceiptRoot,
+}
+
+pub(super) struct PreparedPublication {
     pub candidate: Candidate,
     pub publication: Publication,
     pub seal: PublicationSeal,
 }
 
 pub(super) struct PublishedReceiptRoot {
-    snapshot: Snapshot,
+    snapshot: SchemaValidatedSnapshot,
     operation_id: OperationId,
     request_digest: String,
     sequence: u64,
     recovered_result: Option<OperationResult>,
+}
+
+impl PublishedReceiptRoot {
+    pub(super) fn into_snapshot(self) -> SchemaValidatedSnapshot {
+        self.snapshot
+    }
 }
 
 impl PreparedRecovery {
@@ -21,11 +32,13 @@ impl PreparedRecovery {
         engine: &Engine,
         mut visit: impl FnMut(Plan) -> Result<()>,
     ) -> Result<()> {
-        let Some(root) = &self.published_receipts else {
+        let Some((_, prepared)) = &self.candidates else {
             return Ok(());
         };
+        let root = &prepared.receipts;
         let plans = root
             .snapshot
+            .snapshot()
             .maps
             .get("plans")
             .expect("invariant: admitted snapshot schema includes plans");
@@ -60,13 +73,14 @@ impl PreparedRecovery {
         engine: &Engine,
         id: OperationId,
     ) -> Result<Option<storage_contract::OperationRecordEntry>> {
-        let Some(root) = &self.published_receipts else {
+        let Some((_, prepared)) = &self.candidates else {
             return Ok(None);
         };
+        let root = &prepared.receipts;
         let Some(mut entry) = super::super::operations::snapshot_receipt(
             engine,
             &self.online,
-            &root.snapshot,
+            root.snapshot.snapshot(),
             id,
             id == root.operation_id && root.recovered_result.is_some(),
         )?
@@ -97,11 +111,7 @@ impl Engine {
         &self,
         online: &[DiskConfig],
         records: &super::super::recovery_checkpoint::Records,
-    ) -> Result<(
-        Option<(u64, PreparedCandidate)>,
-        Option<PublishedReceiptRoot>,
-        Option<(u64, Error)>,
-    )> {
+    ) -> Result<(Option<(u64, PreparedCandidate)>, Option<(u64, Error)>)> {
         let mut prepared = None;
         let mut barrier_failure = None;
         let mut previous = None;
@@ -161,31 +171,30 @@ impl Engine {
             previous = Some(candidate.snapshot_hash.clone());
             prepared = Some((
                 *sequence,
-                PreparedCandidate {
+                PreparedPublication {
                     candidate,
                     publication,
                     seal,
                 },
             ));
         }
-        let published = prepared
-            .as_ref()
-            .map(|(_, source)| {
+        let prepared = prepared
+            .map(|(sequence, source)| {
                 let snapshot: Snapshot = verified_object_at(
                     &self.disk_resources,
                     online,
                     "snapshot",
                     &source.candidate.snapshot_hash,
                 )?;
-                validate_snapshot_schema(&snapshot)?;
-                if snapshot.sequence != source.candidate.sequence {
+                let snapshot = SchemaValidatedSnapshot::new(snapshot)?;
+                if snapshot.snapshot().sequence != source.candidate.sequence {
                     return Err(Error::new(
                         ErrorCode::ObjectCorrupt,
                         "snapshot sequence differs",
                     ));
                 }
                 let publication = &source.publication;
-                Ok(PublishedReceiptRoot {
+                let receipts = PublishedReceiptRoot {
                     snapshot,
                     operation_id: source.candidate.operation_id,
                     request_digest: source.candidate.request_digest.clone(),
@@ -194,10 +203,17 @@ impl Engine {
                         .recovery
                         .as_ref()
                         .map(|_| publication.result.clone()),
-                })
+                };
+                Ok((
+                    sequence,
+                    PreparedCandidate {
+                        evidence: source,
+                        receipts,
+                    },
+                ))
             })
             .transpose()?;
-        Ok((prepared, published, barrier_failure))
+        Ok((prepared, barrier_failure))
     }
 }
 

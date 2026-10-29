@@ -127,9 +127,10 @@ fn snapshot_reuse_reads_and_installs_only_in_its_admitted_resources_after_rebind
     for disk in &config.disks {
         let root = &resources.get(disk).unwrap().root;
         let descriptor = load_object_at(root, disk, "snapshot", &hot.hash).unwrap();
-        let restored = resolve_raw_snapshot(descriptor, |kind, hash| {
-            load_authenticated_object_at(root, disk, kind, hash)
-        })
+        let restored = resolve_raw_snapshot(
+            SchemaValidatedSnapshot::new(descriptor).unwrap(),
+            |kind, hash| load_authenticated_object_at(root, disk, kind, hash),
+        )
         .unwrap()
         .into_codec_fixture();
         assert_eq!(restored, next);

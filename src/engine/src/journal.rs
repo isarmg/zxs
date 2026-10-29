@@ -1020,10 +1020,12 @@ pub(crate) fn load_snapshot(d: &DiskConfig, hash: &str) -> Result<State> {
 #[cfg(test)]
 fn load_raw_snapshot_fixture(d: &DiskConfig, hash: &str) -> Result<State> {
     let snapshot: Snapshot = load_object(d, "snapshot", hash)?;
-    Ok(resolve_raw_snapshot(snapshot, |kind, hash| {
-        load_authenticated_object(d, kind, hash)
-    })?
-    .into_codec_fixture())
+    Ok(
+        resolve_raw_snapshot(SchemaValidatedSnapshot::new(snapshot)?, |kind, hash| {
+            load_authenticated_object(d, kind, hash)
+        })?
+        .into_codec_fixture(),
+    )
 }
 #[cfg(test)]
 pub(crate) fn resolve_snapshot(
@@ -1034,21 +1036,43 @@ pub(crate) fn resolve_snapshot(
 }
 pub(crate) fn resolve_admitted_snapshot(
     snapshot: Snapshot,
-    mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+    load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<crate::history_package::AdmittedState> {
-    let raw = resolve_raw_snapshot(snapshot, &mut load)?;
-    // Admission reads each commit's namespace through the same authenticated
-    // object loader that produced the snapshot's own pages.
-    let source = crate::namespace::ObjectLoaderSource::memoized(&mut load);
-    crate::history_package::AdmittedState::admit(raw, &source)
+    SchemaValidatedSnapshot::new(snapshot)?.resolve(load)
+}
+
+/// Root schema only: object authenticity belongs to its loader, and dependency
+/// integrity and logical State admission still belong to the consuming resolver.
+pub(crate) struct SchemaValidatedSnapshot(Snapshot);
+
+impl SchemaValidatedSnapshot {
+    pub(crate) fn new(snapshot: Snapshot) -> Result<Self> {
+        validate_snapshot_schema(&snapshot)?;
+        Ok(Self(snapshot))
+    }
+
+    pub(crate) fn snapshot(&self) -> &Snapshot {
+        &self.0
+    }
+
+    pub(crate) fn resolve(
+        self,
+        mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+    ) -> Result<crate::history_package::AdmittedState> {
+        let raw = resolve_raw_snapshot(self, &mut load)?;
+        // Admission reads each commit's namespace through the same authenticated
+        // object loader that produced the snapshot's own pages.
+        let source = crate::namespace::ObjectLoaderSource::memoized(&mut load);
+        crate::history_package::AdmittedState::admit(raw, &source)
+    }
 }
 fn resolve_raw_snapshot(
-    snapshot: Snapshot,
+    snapshot: SchemaValidatedSnapshot,
     mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
 ) -> Result<crate::history_package::RawState> {
     #[cfg(test)]
     SNAPSHOT_LOAD_COUNT.with(|count| count.set(count.get() + 1));
-    validate_snapshot_schema(&snapshot)?;
+    let SchemaValidatedSnapshot(snapshot) = snapshot;
     let auth = load("state-control-auth", snapshot.control_auth.hash())?;
 
     let mut out = json_codec::Map::new();

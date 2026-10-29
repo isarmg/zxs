@@ -14,7 +14,7 @@ pub(super) enum RecoveryMode {
 }
 
 mod workspace_receipts;
-use workspace_receipts::{PreparedCandidate, PublishedReceiptRoot};
+use workspace_receipts::PreparedCandidate;
 
 /// A read-only journal admission. The same open descriptions become writers
 /// only after the caller has admitted retained workspace evidence.
@@ -25,7 +25,6 @@ pub(super) struct PreparedRecovery {
     records: super::recovery_checkpoint::Records,
     checkpoint: Option<super::recovery_checkpoint::Checkpoint>,
     candidates: Option<(u64, PreparedCandidate)>,
-    published_receipts: Option<PublishedReceiptRoot>,
     barrier_failure: Option<(u64, Error)>,
 }
 
@@ -242,8 +241,7 @@ impl Engine {
             checkpoint_snapshot_hash = checkpoint.as_ref().map(|value| value.snapshot_hash.as_str()),
             "recovery checkpoint selection"
         );
-        let (candidates, published_receipts, barrier_failure) =
-            self.prepare_published_receipts(&online, &records)?;
+        let (candidates, barrier_failure) = self.prepare_published_receipts(&online, &records)?;
         Ok(PreparedRecovery {
             members,
             online,
@@ -251,7 +249,6 @@ impl Engine {
             records,
             checkpoint,
             candidates,
-            published_receipts,
             barrier_failure,
         })
     }
@@ -268,7 +265,6 @@ impl Engine {
             records,
             checkpoint,
             candidates: mut prepared_candidates,
-            published_receipts: _,
             mut barrier_failure,
         } = prepared;
         let mut scanned_journals = BTreeMap::new();
@@ -334,17 +330,18 @@ impl Engine {
                         source,
                     });
             }
-            let (candidate, prepared_publication, prepared_seal) = match prepared {
+            let (candidate, prepared_publication, prepared_seal, snapshot) = match prepared {
                 Some(prepared) => (
-                    prepared.candidate,
-                    Some(prepared.publication),
-                    Some(prepared.seal),
+                    prepared.evidence.candidate,
+                    Some(prepared.evidence.publication),
+                    Some(prepared.evidence.seal),
+                    RecoverySnapshot::Prepared(prepared.receipts.into_snapshot()),
                 ),
                 None => {
                     let candidate: Candidate =
                         verified_object_at(&self.disk_resources, &online, "candidate", &hash)?;
                     self.verify_candidate_membership(&candidate)?;
-                    (candidate, None, None)
+                    (candidate, None, None, RecoverySnapshot::Stored)
                 }
             };
             if candidate.pool_id != self.config.pool_id
@@ -410,12 +407,9 @@ impl Engine {
                             "checkpoint boundary differs from journal",
                         ));
                     }
-                    let mut next = verified_snapshot_at(
-                        &self.disk_resources,
-                        &online,
-                        &candidate.snapshot_hash,
-                    )?
-                    .into_state();
+                    let mut next = snapshot
+                        .resolve(&self.disk_resources, &online, &candidate.snapshot_hash)?
+                        .into_state();
                     if publication.recovery.is_some() {
                         self.overlay_recovered_result(
                             &online,
@@ -434,7 +428,7 @@ impl Engine {
                 continue;
             }
             let admitted =
-                verified_snapshot_at(&self.disk_resources, &online, &candidate.snapshot_hash)?;
+                snapshot.resolve(&self.disk_resources, &online, &candidate.snapshot_hash)?;
             let history_objects = crate::history_package::bound_history_objects_at(
                 &self.disk_resources,
                 &online,
@@ -629,6 +623,31 @@ impl Engine {
     }
 }
 
+// Only the selected prepared candidate carries its already authenticated root.
+// Every dependency still crosses the full snapshot admission boundary below.
+enum RecoverySnapshot {
+    Prepared(SchemaValidatedSnapshot),
+    Stored,
+}
+
+impl RecoverySnapshot {
+    fn resolve(
+        self,
+        resources: &DiskResources,
+        members: &[DiskConfig],
+        hash: &str,
+    ) -> Result<crate::history_package::AdmittedState> {
+        match self {
+            Self::Prepared(snapshot) => snapshot.resolve(|kind, hash| {
+                crate::publication_evidence::verified_graph_object_at(
+                    resources, members, kind, hash,
+                )
+            }),
+            Self::Stored => verified_snapshot_at(resources, members, hash),
+        }
+    }
+}
+
 fn retain_replayed_records(history: &mut Vec<(Record, String)>, tail: &[(Record, String)]) {
     let Some((first, _)) = tail.first() else {
         return;
@@ -791,3 +810,7 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/recovery/diagnostics_tests.rs"]
 mod diagnostics_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/recovery/prepared_snapshot_tests.rs"]
+mod prepared_snapshot_tests;
