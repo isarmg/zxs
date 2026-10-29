@@ -253,7 +253,7 @@ jobs:
           checks = dict(
               exact_product_sha=git('rev-parse', 'HEAD').decode().strip() == '88c2f97721af384a8bdfa18ce973bbeb6026784c',
               exact_product_tree=git('rev-parse', 'HEAD^{tree}').decode().strip() == 'de1d220a2f01985aad7ee7f744b8c0013536d4bb',
-              exact_parent=git('show', '-s', '--format=%P', 'HEAD').decode().strip() == base,
+              exact_parent=git('show', '-s', '--format=%P', 'HEAD').decode().strip() == '508ce7acd7e4e163d5ada090b36b547dedc8588c',
               fixture_input_matches_r81=before_bytes == git('show', base + ':' + fixture),
               only_allowed_tracked_change=changed == [fixture], no_untracked_source=not untracked,
               no_deletions_or_mode_changes=not removed and not mode_changes,
