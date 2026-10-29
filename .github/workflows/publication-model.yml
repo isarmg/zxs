@@ -14,7 +14,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: isarmg/zxs
-          ref: fd4d7a15900491c3e217ceedcf74e226476db8e4
+          ref: 51b20bb5638526bce21f8a38d8e91fd5eb9aece8
           persist-credentials: false
       - name: Record environment and run self tests
         shell: bash
