@@ -44,7 +44,12 @@ pub fn receipt_outcome(receipt: &json_codec::Value) -> json_codec::Value {
     let mut outcome = receipt.clone();
     // Diagnostic queries may carry a fresh observation; immediate mutation
     // responses contain only the same permanent publication outcome.
-    if outcome.as_object_mut().unwrap().remove("current_health").is_some() {
+    if outcome
+        .as_object_mut()
+        .unwrap()
+        .remove("current_health")
+        .is_some()
+    {
         assert_eq!(
             operation_observation_status(receipt),
             Some(OperationStatus::Published),

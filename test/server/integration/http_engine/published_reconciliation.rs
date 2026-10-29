@@ -109,10 +109,7 @@ async fn terminal_workspace_failure_keeps_http_receipt_queryable_and_writes_fenc
     assert_eq!(queried["result"]["outcome"], "COMMITTED_AND_PROTECTED");
     assert_eq!(queried["result"]["protection_at_publish"], "TARGET_MET");
     let replay = success(&app, &token, "POST", &route, Some(body)).await;
-    assert_eq!(
-        receipt_outcome(&replay),
-        receipt_outcome(&queried)
-    );
+    assert_eq!(receipt_outcome(&replay), receipt_outcome(&queried));
     let (ready, _) = send(&app, Some(&token), "GET", "/readyz", None).await;
     assert_eq!(ready, StatusCode::SERVICE_UNAVAILABLE);
     let (write, _) = send(

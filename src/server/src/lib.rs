@@ -176,10 +176,10 @@ mod http_read;
 use http_read::resolve;
 mod commit_wire;
 mod http_operation;
-mod operation_wire;
 mod operation_observation;
-pub use operation_observation::{CheckedOperationHealth, OperationObservation};
+mod operation_wire;
 use http_operation::{operation, operation_outcome};
+pub use operation_observation::{CheckedOperationHealth, OperationObservation};
 
 use auth::{AuthStore, Identity};
 use http_auth::{authorize, change_password, login, logout, me};
@@ -2047,7 +2047,10 @@ fn router_shared(
         .route("/api/workspaces/{workspace}/seal", post(seal))
         .route("/api/workspaces/{workspace}/abort", post(abort))
         .route("/api/operations/{operation}", get(operation))
-        .route("/api/operations/{operation}/outcome", get(operation_outcome))
+        .route(
+            "/api/operations/{operation}/outcome",
+            get(operation_outcome),
+        )
         .route(
             "/api/versions/{version}/content",
             get(content).head(content),

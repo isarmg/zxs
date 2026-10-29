@@ -1246,7 +1246,10 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ("PUT", "/api/repositories/repository/smb-binding"),
     ("GET", "/api/repositories/repository/branches"),
     ("GET", "/api/operations/op_00000000000000000000000000000000"),
-    ("GET", "/api/operations/op_00000000000000000000000000000000/outcome"),
+    (
+        "GET",
+        "/api/operations/op_00000000000000000000000000000000/outcome",
+    ),
     ("POST", "/api/workspaces"),
     ("POST", "/api/workspaces/workspace/abort"),
     ("POST", "/api/workspaces/workspace/seal"),

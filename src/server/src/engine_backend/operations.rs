@@ -14,7 +14,9 @@ pub(super) fn authorized_record(
     {
         return Err(ApiError::forbidden());
     }
-    let record = engine.operation_record(operation_id).map_err(super::error)?;
+    let record = engine
+        .operation_record(operation_id)
+        .map_err(super::error)?;
     authorize_record(engine, identity, &record)?;
     Ok(record)
 }

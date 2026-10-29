@@ -52,8 +52,8 @@ fn checked_at(time: std::time::SystemTime) -> Result<String, ApiError> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|source| invalid().with_source(source))?;
     // Duration's u64 seconds and subsecond field always fit i128 nanoseconds.
-    let nanos = i128::from(duration.as_secs()) * 1_000_000_000
-        + i128::from(duration.subsec_nanos());
+    let nanos =
+        i128::from(duration.as_secs()) * 1_000_000_000 + i128::from(duration.subsec_nanos());
     let time = date_time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
         .map_err(|source| invalid().with_source(source))?;
     Ok(time

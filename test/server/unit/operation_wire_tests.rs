@@ -69,6 +69,9 @@ fn serializing_a_completed_observation_preserves_its_exact_check_time() {
         );
         let wire = crate::operation_wire::operation_observation_wire(captured).unwrap();
         assert_eq!(wire["current_health"]["state"], "DEGRADED");
-        assert_eq!(wire["current_health"]["checked_at"], "1970-01-01T00:00:42.123Z");
+        assert_eq!(
+            wire["current_health"]["checked_at"],
+            "1970-01-01T00:00:42.123Z"
+        );
     }
 }

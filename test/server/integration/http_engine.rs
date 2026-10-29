@@ -2252,7 +2252,10 @@ async fn operation_over_http(
     .await;
     assert!(observation["current_health"]["checked_at"].is_string());
     let mut observed_outcome = observation.clone();
-    observed_outcome.as_object_mut().unwrap().remove("current_health");
+    observed_outcome
+        .as_object_mut()
+        .unwrap()
+        .remove("current_health");
     assert_eq!(observed_outcome, outcome);
     assert_eq!(
         success(&app, &token, "GET", &outcome_path, None).await,

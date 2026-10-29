@@ -629,7 +629,9 @@ impl Backend for ManagementBackend {
         identity: &Identity,
         operation_id: storage_contract::OperationId,
     ) -> Result<storage_contract::OperationOutcome, ApiError> {
-        self.inner.backend()?.operation_outcome(identity, operation_id)
+        self.inner
+            .backend()?
+            .operation_outcome(identity, operation_id)
     }
     fn commit_workspace(
         &self,

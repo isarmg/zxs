@@ -325,9 +325,15 @@ fn outcome_lookup_does_not_start_health_or_depend_on_current_payloads() {
     assert_eq!(before, after);
     let wire = crate::operation_wire::operation_wire(after).unwrap();
     assert!(wire.get("current_health").is_none());
-    assert_eq!(storage_contract::client_protocol::operation_status(&wire), Some(storage_contract::client_protocol::OperationStatus::Published));
+    assert_eq!(
+        storage_contract::client_protocol::operation_status(&wire),
+        Some(storage_contract::client_protocol::OperationStatus::Published)
+    );
     *backend.operation_health_hook.lock().unwrap() = None;
-    let observation = backend.operation(&identity, operation_id).and_then(crate::operation_wire::operation_observation_wire).unwrap();
+    let observation = backend
+        .operation(&identity, operation_id)
+        .and_then(crate::operation_wire::operation_observation_wire)
+        .unwrap();
     assert_eq!(observation["current_health"]["state"], "UNAVAILABLE");
     assert_eq!(observation["result"], wire["result"]);
 }
@@ -336,17 +342,40 @@ fn outcome_lookup_does_not_start_health_or_depend_on_current_payloads() {
 fn outcome_lookup_rechecks_current_identity_and_owner() {
     let (_root, backend, mut auth, token, identity, operation_id) = fixture();
     let foreign_operation = storage_contract::OperationId::generate();
-    backend.engine.lock().unwrap().create_repository(
-        &storage_contract::RepositoryName::parse("Foreign outcome").unwrap(),
-        "P01", 3, "other", foreign_operation,
-    ).unwrap();
-    assert_eq!(backend.operation_outcome(&identity, foreign_operation).unwrap_err().code,
-        storage_contract::ErrorCode::Forbidden);
-    assert_eq!(backend.operation_outcome(&identity, OperationId::generate()).unwrap_err().code,
-        storage_contract::ErrorCode::OperationNotFound);
+    backend
+        .engine
+        .lock()
+        .unwrap()
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Foreign outcome").unwrap(),
+            "P01",
+            3,
+            "other",
+            foreign_operation,
+        )
+        .unwrap();
+    assert_eq!(
+        backend
+            .operation_outcome(&identity, foreign_operation)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    assert_eq!(
+        backend
+            .operation_outcome(&identity, OperationId::generate())
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::OperationNotFound
+    );
     auth.logout(&token).unwrap();
-    assert_eq!(backend.operation_outcome(&identity, operation_id).unwrap_err().code,
-        storage_contract::ErrorCode::Unauthorized);
+    assert_eq!(
+        backend
+            .operation_outcome(&identity, operation_id)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
 }
 
 #[test]
@@ -355,7 +384,14 @@ fn metadata_without_a_published_commit_scope_is_explicitly_not_observed() {
     let operation_id = OperationId::generate();
     {
         let mut engine = backend.engine.lock().unwrap();
-        let file_id = engine.state().versions.values().next().unwrap().file_id.clone();
+        let file_id = engine
+            .state()
+            .versions
+            .values()
+            .next()
+            .unwrap()
+            .file_id
+            .clone();
         engine
             .set_file_note(
                 &file_id,
@@ -383,9 +419,19 @@ fn accepted_pending_operation_has_an_outcome_and_no_checked_health() {
     let operation_id = OperationId::generate();
     {
         let mut engine = backend.engine.lock().unwrap();
-        let branch = engine.operation_record(published).unwrap().result().branch_id.clone().unwrap();
-        let workspace = engine.create_workspace(&branch, &identity.principal).unwrap();
-        engine.stage_bytes(&workspace.workspace_id, "pending.txt", b"pending content").unwrap();
+        let branch = engine
+            .operation_record(published)
+            .unwrap()
+            .result()
+            .branch_id
+            .clone()
+            .unwrap();
+        let workspace = engine
+            .create_workspace(&branch, &identity.principal)
+            .unwrap();
+        engine
+            .stage_bytes(&workspace.workspace_id, "pending.txt", b"pending content")
+            .unwrap();
         engine.inject_fault_once("after_accept_1");
         assert!(
             engine
@@ -441,7 +487,10 @@ fn foreign_pending_owner_is_rejected_by_both_operation_projections() {
         panic!("foreign pending operation reached a health observation");
     }));
     assert_eq!(
-        backend.operation_outcome(&identity, operation_id).unwrap_err().code,
+        backend
+            .operation_outcome(&identity, operation_id)
+            .unwrap_err()
+            .code,
         storage_contract::ErrorCode::Forbidden
     );
     assert_eq!(
@@ -457,8 +506,7 @@ fn outcome_and_diagnostic_500_file_measurement() {
     const FILE_BYTES: usize = 4096;
     const REPETITIONS: usize = 3;
     let bytes = vec![0x5a; FILE_BYTES];
-    let (_root, backend, _auth, _token, identity, operation_id) =
-        fixture_with_files(FILES, &bytes);
+    let (_root, backend, _auth, _token, identity, operation_id) = fixture_with_files(FILES, &bytes);
     let (copies, sequence) = {
         let engine = backend.engine.lock().unwrap();
         assert_eq!(engine.state().versions.len(), FILES);

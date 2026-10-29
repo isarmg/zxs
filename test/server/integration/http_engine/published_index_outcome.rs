@@ -1,7 +1,5 @@
 //! Projection failure must not turn an authoritative receipt into an HTTP error.
-use super::projection_failure::{
-    fail_projection, projection_sequence, receipt_outcome,
-};
+use super::projection_failure::{fail_projection, projection_sequence, receipt_outcome};
 use super::*;
 
 async fn sequence(app: &Router, token: &str) -> u64 {
@@ -66,16 +64,10 @@ async fn metadata_projection_failure_returns_published_http_receipt_and_same_id_
     assert!(outcome.get("current_health").is_none());
     assert_eq!(outcome, saved);
     capture_wire("namespace-batch-outcome.json", &outcome);
-    assert_eq!(
-        receipt_outcome(&queried),
-        receipt_outcome(&saved)
-    );
+    assert_eq!(receipt_outcome(&queried), receipt_outcome(&saved));
     let replay = success(&app, &token, "POST", route, Some(request.clone())).await;
     assert!(replay.get("current_health").is_none());
-    assert_eq!(
-        receipt_outcome(&replay),
-        receipt_outcome(&saved)
-    );
+    assert_eq!(receipt_outcome(&replay), receipt_outcome(&saved));
     assert_eq!(sequence(&app, &token).await, before + 1);
     assert_eq!(projection_sequence(&index), projected_before);
 
@@ -164,21 +156,12 @@ async fn native_client_receives_published_content_receipt_when_projection_update
     let route = format!("/api/operations/{operation}");
     let queried = client.request("GET", &route, None).await.unwrap();
     assert!(queried["current_health"]["checked_at"].is_string());
-    assert_eq!(
-        receipt_outcome(&queried),
-        receipt_outcome(&saved)
-    );
+    assert_eq!(receipt_outcome(&queried), receipt_outcome(&saved));
     let http_query = success(&app, &token, "GET", &route, None).await;
-    assert_eq!(
-        receipt_outcome(&http_query),
-        receipt_outcome(&saved)
-    );
+    assert_eq!(receipt_outcome(&http_query), receipt_outcome(&saved));
     let replay = client.commit_prepared(&request).await.unwrap();
     assert!(replay.get("current_health").is_none());
-    assert_eq!(
-        receipt_outcome(&replay),
-        receipt_outcome(&saved)
-    );
+    assert_eq!(receipt_outcome(&replay), receipt_outcome(&saved));
     assert_eq!(sequence(&app, &token).await, before + 1);
     assert_eq!(projection_sequence(&index), projected_before);
     stop.send(()).unwrap();

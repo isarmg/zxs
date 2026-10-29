@@ -67,7 +67,9 @@ fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError> {
         .ok_or_else(|| ApiError::invalid(format!("missing string field {key}")))
 }
 
-pub(crate) fn operation_observation_wire(op: crate::OperationObservation) -> Result<Value, ApiError> {
+pub(crate) fn operation_observation_wire(
+    op: crate::OperationObservation,
+) -> Result<Value, ApiError> {
     let mut value = operation_wire(op.outcome)?;
     value
         .as_object_mut()

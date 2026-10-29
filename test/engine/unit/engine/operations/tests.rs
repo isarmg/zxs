@@ -55,14 +55,24 @@ fn current_observation_is_separate_from_the_local_result_projection() {
         record.result.current_health = storage_contract::CurrentHealth::Unknown;
         record
     };
-    let observed = engine.prepare_operation_health(record_with_frozen_health()).observe();
-    assert_eq!(observed.health(), Some(storage_contract::CurrentHealth::Healthy));
+    let observed = engine
+        .prepare_operation_health(record_with_frozen_health())
+        .observe();
+    assert_eq!(
+        observed.health(),
+        Some(storage_contract::CurrentHealth::Healthy)
+    );
     assert_eq!(
         observed.into_record().result().current_health,
         storage_contract::CurrentHealth::Unknown
     );
-    let local = engine.prepare_operation_health(record_with_frozen_health()).check();
-    assert_eq!(local.result().current_health, storage_contract::CurrentHealth::Unknown);
+    let local = engine
+        .prepare_operation_health(record_with_frozen_health())
+        .check();
+    assert_eq!(
+        local.result().current_health,
+        storage_contract::CurrentHealth::Unknown
+    );
 }
 
 #[test]

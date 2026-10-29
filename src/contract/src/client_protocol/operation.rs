@@ -64,8 +64,10 @@ fn parse_operation(value: &Value, projection: Projection) -> Option<OperationSta
                     health.is_null()
                         || (keys(health, &["state", "checked_at"])
                             && strings(health, &["checked_at"])
-                            && matches!(health["state"].as_str(),
-                                Some("HEALTHY" | "DEGRADED" | "UNAVAILABLE" | "UNKNOWN")))
+                            && matches!(
+                                health["state"].as_str(),
+                                Some("HEALTHY" | "DEGRADED" | "UNAVAILABLE" | "UNKNOWN")
+                            ))
                 })
         }),
     };

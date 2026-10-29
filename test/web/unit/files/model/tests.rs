@@ -26,7 +26,10 @@ fn navigation_resets_only_location_owned_state() {
             writable: true,
             available_bytes: 4096,
         }];
-        let degraded: Value = json_codec::from_str(DEGRADED).unwrap();
+        let mut degraded: Value = json_codec::from_str(DEGRADED).unwrap();
+        // Derive a synthetic outcome from the captured diagnostic; navigation
+        // preserves the accepted result, not a fresh health observation.
+        degraded.as_object_mut().unwrap().remove("current_health");
         let operations = vec![
             FileOperation::unknown("original"),
             FileOperation::from_receipt(degraded["operation_id"].as_str().unwrap(), &degraded),
@@ -251,6 +254,51 @@ fn backup_history_keeps_its_stored_body_and_current_node() {
 }
 const DEGRADED: &str = include_str!("../fixtures/degraded-save-operation.json");
 const DAMAGE: &str = include_str!("../fixtures/damaged-published-save-operation.json");
+#[test]
+fn captured_http_outcomes_and_diagnostics_keep_separate_consumer_contracts() {
+    use storage_contract::client_protocol::{OperationStatus, operation_observation_status};
+
+    // Real HTTP captures: https://github.com/isarmg/zxs/actions/runs/40834921728
+    // The run records source 93f1f962 and its rustfmt patch. Existing captures
+    // remain unchanged; these pairs were obtained from the two actual routes.
+    for (outcome, observation, status, save_status) in [
+        (
+            include_str!("../fixtures/github-degraded-save-outcome.json"),
+            include_str!("../fixtures/github-degraded-save-observation.json"),
+            OperationStatus::Degraded,
+            SaveStatus::Degraded,
+        ),
+        (
+            include_str!("../fixtures/github-damaged-published-save-outcome.json"),
+            include_str!("../fixtures/github-damaged-published-save-observation.json"),
+            OperationStatus::Published,
+            SaveStatus::Published,
+        ),
+        (
+            include_str!("../fixtures/github-namespace-batch-outcome.json"),
+            include_str!("../fixtures/github-namespace-batch-observation.json"),
+            OperationStatus::Published,
+            SaveStatus::Published,
+        ),
+    ] {
+        let outcome: Value = json_codec::from_str(outcome).unwrap();
+        let observation: Value = json_codec::from_str(observation).unwrap();
+        let id = outcome["operation_id"].as_str().unwrap();
+        assert!(outcome.get("current_health").is_none());
+        assert_eq!(FileOperation::from_receipt(id, &outcome).status(), save_status);
+        assert_eq!(operation_observation_status(&observation), Some(status));
+        assert_eq!(
+            FileOperation::from_receipt(id, &observation).status(),
+            SaveStatus::Unknown
+        );
+        let mut observed_outcome = observation;
+        observed_outcome
+            .as_object_mut()
+            .unwrap()
+            .remove("current_health");
+        assert_eq!(outcome, observed_outcome);
+    }
+}
 #[test]
 fn publication_protection_is_not_rewritten_by_later_damage() {
     let mut damage: Value = json_codec::from_str(DAMAGE).unwrap();

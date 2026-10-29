@@ -30,7 +30,11 @@ fn actual_metadata_and_content_receipts_share_one_closed_parser() {
         for key in value.as_object().unwrap().keys() {
             let mut missing = value.clone();
             missing.as_object_mut().unwrap().remove(key);
-            assert_eq!(operation_observation_status(&missing), None, "missing {key}");
+            assert_eq!(
+                operation_observation_status(&missing),
+                None,
+                "missing {key}"
+            );
         }
         for (key, malformed) in [
             ("operation_id", json!("")),
@@ -45,9 +49,16 @@ fn actual_metadata_and_content_receipts_share_one_closed_parser() {
         ] {
             let mut invalid = value.clone();
             invalid[key] = malformed;
-            assert_eq!(operation_observation_status(&invalid), None, "invalid {key}");
+            assert_eq!(
+                operation_observation_status(&invalid),
+                None,
+                "invalid {key}"
+            );
         }
-        assert_eq!(operation_observation_status(&json!({"operation":value})), None);
+        assert_eq!(
+            operation_observation_status(&json!({"operation":value})),
+            None
+        );
     }
 }
 
@@ -99,7 +110,11 @@ fn published_content_requires_complete_frozen_protection_evidence() {
                     .as_object_mut()
                     .unwrap()
                     .remove(key);
-                assert_eq!(operation_observation_status(&missing), None, "missing {path}/{key}");
+                assert_eq!(
+                    operation_observation_status(&missing),
+                    None,
+                    "missing {path}/{key}"
+                );
             }
             let mut extra = value.clone();
             extra.pointer_mut(path).unwrap()["unexpected"] = true.into();
@@ -124,7 +139,11 @@ fn published_content_requires_complete_frozen_protection_evidence() {
         ] {
             let mut invalid = value.clone();
             *invalid.pointer_mut(path).unwrap() = malformed;
-            assert_eq!(operation_observation_status(&invalid), None, "invalid {path}");
+            assert_eq!(
+                operation_observation_status(&invalid),
+                None,
+                "invalid {path}"
+            );
         }
         let mut contradictory = value.clone();
         contradictory["result"]["outcome"] =
@@ -152,7 +171,10 @@ fn state_is_correlated_with_publication_instead_of_used_as_a_fallback() {
         }
         assert_eq!(operation_observation_status(&pending), None);
         pending["current_health"] = Value::Null;
-        assert_eq!(operation_observation_status(&pending), Some(OperationStatus::Unknown));
+        assert_eq!(
+            operation_observation_status(&pending),
+            Some(OperationStatus::Unknown)
+        );
         pending["state"] = "completed".into();
         assert_eq!(operation_observation_status(&pending), None);
     }
@@ -178,7 +200,10 @@ fn current_abort_shapes_are_rejected_without_inventing_publication() {
         }
         assert_eq!(operation_observation_status(&value), None);
         value["current_health"] = Value::Null;
-        assert_eq!(operation_observation_status(&value), Some(OperationStatus::Rejected));
+        assert_eq!(
+            operation_observation_status(&value),
+            Some(OperationStatus::Rejected)
+        );
     }
 }
 
@@ -215,7 +240,11 @@ fn frozen_copy_evidence_cannot_contradict_the_publication_label() {
     ] {
         let mut malformed = value.clone();
         *malformed.pointer_mut(path).unwrap() = invalid;
-        assert_eq!(operation_observation_status(&malformed), None, "contradictory {path}");
+        assert_eq!(
+            operation_observation_status(&malformed),
+            None,
+            "contradictory {path}"
+        );
     }
     let mut duplicate = value.clone();
     duplicate["result"]["versions"]
@@ -239,7 +268,11 @@ fn receipt_publication_states_reject_object_aliases() {
             if let Some(token) = value.get(field).and_then(Value::as_str) {
                 let mut invalid = value.clone();
                 invalid[field] = json!({token:null});
-                assert_eq!(operation_observation_status(&invalid), None, "object alias for {field}");
+                assert_eq!(
+                    operation_observation_status(&invalid),
+                    None,
+                    "object alias for {field}"
+                );
             }
         }
     }
@@ -248,7 +281,11 @@ fn receipt_publication_states_reject_object_aliases() {
 #[test]
 fn outcome_projection_is_closed_and_never_implies_current_health() {
     for (mut observed, status) in receipts() {
-        let health = observed.as_object_mut().unwrap().remove("current_health").unwrap();
+        let health = observed
+            .as_object_mut()
+            .unwrap()
+            .remove("current_health")
+            .unwrap();
         assert_eq!(operation_status(&observed), Some(status));
         assert_eq!(operation_observation_status(&observed), None);
         for key in observed.as_object().unwrap().keys() {

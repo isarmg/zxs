@@ -1255,7 +1255,9 @@ impl Request {
                 )
                 .map(|_| ()),
             Self::Operation => backend.operation(identity, fixture.operation).map(|_| ()),
-            Self::OperationOutcome => backend.operation_outcome(identity, fixture.operation).map(|_| ()),
+            Self::OperationOutcome => backend
+                .operation_outcome(identity, fixture.operation)
+                .map(|_| ()),
             Self::CommitWorkspace => backend
                 .commit_workspace(
                     identity,

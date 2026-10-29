@@ -55,8 +55,8 @@ fn operation_get_routes_separate_outcome_polling_from_explicit_observation() {
         ("/api/operations/{operation}", "OperationObservation"),
     ] {
         assert_eq!(
-            api["paths"][route]["get"]["responses"]["200"]["content"]["application/json"]
-                ["schema"]["$ref"],
+            api["paths"][route]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                ["$ref"],
             format!("#/components/schemas/{name}")
         );
     }
@@ -94,13 +94,15 @@ fn checked_health_does_not_rewrite_the_outcome_or_publication_proof() {
         .unwrap()["value"]
         .clone();
     assert!(original.get("current_health").is_none());
-    assert_eq!(operation_status(&original), Some(OperationStatus::Published));
+    assert_eq!(
+        operation_status(&original),
+        Some(OperationStatus::Published)
+    );
     core["$ref"] = "#/$defs/SaveOperationObservation".into();
     let schema = validator(&core).unwrap();
     for state in ["HEALTHY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"] {
         let mut observed = original.clone();
-        observed["current_health"] =
-            json!({"state":state,"checked_at":"2026-10-18T00:00:00Z"});
+        observed["current_health"] = json!({"state":state,"checked_at":"2026-10-18T00:00:00Z"});
         assert!(schema.is_valid(&observed));
         semantics("SaveOperationObservation", &observed).unwrap();
         assert_eq!(observed["result"], original["result"]);
@@ -114,9 +116,7 @@ fn checked_health_does_not_rewrite_the_outcome_or_publication_proof() {
 
 #[test]
 fn generic_diagnostic_health_requires_a_published_operation() {
-    use storage_contract::client_protocol::{
-        OperationStatus, operation_observation_status,
-    };
+    use storage_contract::client_protocol::{OperationStatus, operation_observation_status};
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
     let mut core = read(&root.join("core.schema.json")).unwrap();
     let vectors = read(&root.join("vectors.json")).unwrap();
@@ -129,8 +129,16 @@ fn generic_diagnostic_health_requires_a_published_operation() {
     core["$ref"] = "#/$defs/GenericOperationObservation".into();
     let schema = validator(&core).unwrap();
     for commit in [
-        "STAGING", "SEALED", "PREPARED", "DECIDING", "DECIDED", "PROTECTED",
-        "RECOVERING", "RECOVERY_REQUIRED", "IN_DOUBT", "ABORTED",
+        "STAGING",
+        "SEALED",
+        "PREPARED",
+        "DECIDING",
+        "DECIDED",
+        "PROTECTED",
+        "RECOVERING",
+        "RECOVERY_REQUIRED",
+        "IN_DOUBT",
+        "ABORTED",
     ] {
         let mut observed = original.clone();
         observed["state"] = "in_doubt".into();
@@ -143,15 +151,32 @@ fn generic_diagnostic_health_requires_a_published_operation() {
         };
         assert!(schema.is_valid(&observed), "{commit}");
         assert_eq!(operation_observation_status(&observed), Some(expected));
-        observed["current_health"] =
-            json!({"state":"UNKNOWN","checked_at":"2026-10-18T00:00:00Z"});
-        assert!(!schema.is_valid(&observed), "fabricated observation for {commit}");
+        observed["current_health"] = json!({"state":"UNKNOWN","checked_at":"2026-10-18T00:00:00Z"});
+        assert!(
+            !schema.is_valid(&observed),
+            "fabricated observation for {commit}"
+        );
         assert_eq!(operation_observation_status(&observed), None);
     }
     for (commit, state, protection, status) in [
-        ("PUBLISHED", "completed", "NOT_APPLICABLE", OperationStatus::Published),
-        ("ACKED", "completed", "NOT_APPLICABLE", OperationStatus::Published),
-        ("PUBLISHED_DEGRADED", "in_doubt", "BELOW_TARGET", OperationStatus::Degraded),
+        (
+            "PUBLISHED",
+            "completed",
+            "NOT_APPLICABLE",
+            OperationStatus::Published,
+        ),
+        (
+            "ACKED",
+            "completed",
+            "NOT_APPLICABLE",
+            OperationStatus::Published,
+        ),
+        (
+            "PUBLISHED_DEGRADED",
+            "in_doubt",
+            "BELOW_TARGET",
+            OperationStatus::Degraded,
+        ),
     ] {
         let mut observed = original.clone();
         observed["state"] = state.into();
