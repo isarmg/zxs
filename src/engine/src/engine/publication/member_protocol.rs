@@ -84,6 +84,10 @@ impl StageSequence {
         self.started.elapsed()
     }
 
+    pub(super) fn candidate_hash(&self) -> &str {
+        &self.report.candidate_hash
+    }
+
     pub(super) fn record(&mut self, timing: StageTiming) {
         self.report.stages.push(timing);
     }
@@ -402,7 +406,7 @@ impl Engine {
             // A worker panic still joins every task. Preserve its payload,
             // but fence the owner before unwinding past the engine boundary.
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_member_stage(stage, sequence.offset(), tasks, &work)
+                run_member_stage(stage, sequence.offset(), tasks, work)
             }))
         };
         self.fence_failed_journals(members);
@@ -518,21 +522,22 @@ impl Engine {
             1
         };
         let result =
-            run_member_stage_with_limit(stage, sequence.offset(), tasks, worker_limit, &work);
+            run_member_stage_with_limit(stage, sequence.offset(), tasks, worker_limit, work);
         finish_stage(sequence, result)
     }
 }
 
 fn finish_stage<T>(
     sequence: &mut StageSequence,
-    result: std::result::Result<StageRun<T>, (StageFailure, StageTiming)>,
+    result: std::result::Result<StageRun<T>, Box<(StageFailure, StageTiming)>>,
 ) -> Result<Vec<T>> {
     match result {
         Ok(run) => {
             sequence.record(run.timing);
             Ok(run.values)
         }
-        Err((failure, timing)) => {
+        Err(failed) => {
+            let (failure, timing) = *failed;
             sequence.record(timing);
             Err(sequence.fail(failure))
         }

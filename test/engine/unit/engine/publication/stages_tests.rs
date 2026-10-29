@@ -209,6 +209,55 @@ fn a_reduced_verification_budget_runs_all_members_serially() {
 }
 
 #[test]
+fn failed_stage_retains_io_source_timing_and_completed_work() {
+    use std::error::Error as _;
+
+    let tasks = Tasks::new(2);
+    let offset = Duration::from_millis(17);
+    let result =
+        run_member_stage_with_limit(StageKind::Prepare, offset, tasks.stages(), 1, |task| {
+            if index(task) == 0 {
+                done(())
+            } else {
+                TaskOutcome {
+                    value: Err(Error::from(std::io::Error::from_raw_os_error(28)).retryable()),
+                    io: StageIo {
+                        objects_completed: 1,
+                        logical_bytes_completed: 7,
+                        ..StageIo::default()
+                    },
+                }
+            }
+        });
+    let (failure, timing) = *result.err().unwrap();
+    assert_eq!(failure.completed, ["t0"]);
+    assert_eq!(failure.failed, [("t1".to_owned(), ErrorCode::NoSpace)]);
+    assert_eq!(timing.stage, StageKind::Prepare);
+    assert_eq!(timing.started_at, offset);
+    assert_eq!(timing.workers, 1);
+    assert_eq!(timing.members_completed, 1);
+    assert_eq!(timing.io.objects_completed, 1);
+    assert_eq!(timing.io.records_completed, 1);
+    assert_eq!(timing.io.logical_bytes_completed, 17);
+    let (primary, summary) = failure.into_parts();
+    assert_eq!(primary.code(), ErrorCode::NoSpace);
+    assert!(primary.is_retryable());
+    assert_eq!(
+        primary
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(28)
+    );
+    assert_eq!(
+        summary,
+        "stage prepare; completed [t0]; failed [t1=NO_SPACE]"
+    );
+}
+
+#[test]
 fn started_tasks_finish_and_the_lowest_failed_index_wins() {
     let tasks = Tasks::new(8);
     let finished = AtomicUsize::new(0);
@@ -241,7 +290,7 @@ fn started_tasks_finish_and_the_lowest_failed_index_wins() {
             }
         })
     });
-    let (failure, timing) = result.err().unwrap();
+    let (failure, timing) = *result.err().unwrap();
     assert_eq!(finished.load(Ordering::SeqCst), 8);
     assert_eq!(failure.stage, StageKind::Accept);
     assert_eq!(failure.primary.message(), "task t2 failed");
@@ -297,7 +346,7 @@ fn a_failure_stops_claiming_unstarted_members() {
             },
         )
     });
-    let (failure, _) = result.err().unwrap();
+    let (failure, _) = *result.err().unwrap();
     assert_eq!(started.load(Ordering::SeqCst), MAX_STAGE_WORKERS);
     assert_eq!(failure.completed.len(), MAX_STAGE_WORKERS - 1);
     assert_eq!(failure.failed.len(), 1);

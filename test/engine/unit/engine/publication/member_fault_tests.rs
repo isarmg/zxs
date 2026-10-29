@@ -1001,6 +1001,7 @@ fn the_stage_report_records_completed_logical_work_and_serial_stage_offsets() {
             .unwrap()
     };
     let (hash, candidate) = candidate_of(&members[0], sequence);
+    assert_eq!(report.candidate_hash, hash);
     let object_size = |kind: &str, object: &str| -> u64 {
         members
             .iter()
@@ -1086,4 +1087,29 @@ fn the_stage_report_records_completed_logical_work_and_serial_stage_offsets() {
         version.logical_size
     );
     assert_eq!(report.total_io().records_completed, 12);
+
+    // Replay admission uses the same candidate identity held by the stage
+    // sequence; a foreign sequence must reject before any member work.
+    let publication = load_object(
+        &members[0],
+        "publication",
+        &object_of(RecordType::Publication),
+    )
+    .unwrap();
+    let next = std::sync::Arc::clone(&engine.state);
+    let before_replay = journal_sizes(&members);
+    let mut foreign = StageSequence::new("foreign-candidate", members.len());
+    let error = engine
+        .complete_published_candidate(
+            &candidate,
+            &next,
+            publication,
+            |_, _| panic!("a foreign stage sequence must not consult member receipts"),
+            AppendMode::Recovery,
+            &mut foreign,
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::PublicationInvalid);
+    assert_eq!(journal_sizes(&members), before_replay);
+    assert!(foreign.finish("rejected").stages.is_empty());
 }

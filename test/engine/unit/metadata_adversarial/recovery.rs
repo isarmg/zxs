@@ -185,19 +185,37 @@ fn authority(fixture: &Fixture) -> BTreeMap<PathBuf, Vec<u8>> {
 
 fn assert_error(error: &Error, target: Target, damage: Damage) {
     let cause = if matches!(target, Target::Namespace) {
-        // Namespace admission occurs in history projection after the raw
-        // snapshot is decoded; its context must retain the concrete cause.
-        assert_eq!(error.code(), ErrorCode::StateInvalid);
-        assert_eq!(error.message(), "invalid snapshot history");
-        match error {
-            Error::Context { source, .. } => source.as_ref(),
-            other => panic!("namespace rejection lost its history context: {other}"),
+        let mut cause = error;
+        for (expected_code, expected_message) in [
+            (ErrorCode::StateInvalid, "invalid snapshot history"),
+            (
+                ErrorCode::HistoryPackageInvalid,
+                "commit entries are not in canonical namespace form",
+            ),
+        ] {
+            let Error::Context {
+                code,
+                message,
+                retryable: false,
+                source,
+            } = cause
+            else {
+                panic!("namespace rejection lost its admission context: {cause:?}");
+            };
+            assert_eq!(*code, expected_code);
+            assert_eq!(message, expected_message);
+            cause = source;
         }
+        cause
     } else {
         error
     };
     match damage {
         Damage::Missing | Damage::Digest => {
+            assert!(matches!(
+                cause,
+                Error::Contract(storage_contract::Error::Message { .. })
+            ));
             assert_eq!(cause.code(), ErrorCode::ObjectCorrupt);
             let reason = match damage {
                 Damage::Missing => "immutable object is missing",

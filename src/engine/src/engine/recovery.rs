@@ -419,7 +419,6 @@ impl Engine {
                     let mut stages = super::publication::StageSequence::new(&hash, members.len());
                     let replayed = self.complete_published_candidate(
                         &candidate,
-                        &hash,
                         &next,
                         publication,
                         |d, pub_hash| {
