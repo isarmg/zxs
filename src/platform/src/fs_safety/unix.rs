@@ -231,6 +231,27 @@ pub(super) fn files(
     Ok(result)
 }
 
+pub(super) fn entry_metadata(
+    directory: &PrivateDirectory,
+    name: &EntryName,
+) -> Result<super::EntryMetadata, Error> {
+    let metadata = statat(
+        &directory.directory,
+        name.as_os_str(),
+        AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .map_err(io::Error::from)?;
+    match FileType::from_raw_mode(metadata.st_mode) {
+        FileType::Directory => Ok(super::EntryMetadata::Directory),
+        FileType::RegularFile if metadata.st_nlink == 1 => Ok(super::EntryMetadata::File {
+            bytes: u64::try_from(metadata.st_size)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+        }),
+        FileType::RegularFile => Err(Error::MultipleLinks(name.as_path().to_owned())),
+        _ => Err(Error::UnsafeFileType(name.as_path().to_owned())),
+    }
+}
+
 pub(super) fn open_regular(directory: &PrivateDirectory, name: &EntryName) -> Result<File, Error> {
     verify_administration(directory)?;
     let file = File::from(

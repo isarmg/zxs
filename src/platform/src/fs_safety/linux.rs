@@ -206,6 +206,12 @@ pub struct DirectoryEntries {
 }
 
 impl DirectoryEntries {
+    pub(super) fn read_from(directory: &File) -> Result<Self, Error> {
+        Ok(Self {
+            directory: Dir::read_from(directory).map_err(io::Error::from)?,
+        })
+    }
+
     fn new(directory: File) -> Result<Self, Error> {
         Ok(Self {
             directory: Dir::new(directory).map_err(io::Error::from)?,

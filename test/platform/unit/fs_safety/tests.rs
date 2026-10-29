@@ -878,3 +878,82 @@ fn available_bytes_uses_the_held_directory_after_its_name_is_replaced() {
     assert!(directory.verify_identity().is_err());
     assert_eq!(fs::read_link(&path).unwrap(), missing);
 }
+
+#[test]
+fn streaming_inventory_uses_independent_held_cursors_and_relative_metadata() {
+    use std::{collections::BTreeSet, ffi::OsString, os::unix::ffi::OsStringExt};
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("private");
+    let directory = PrivateDirectory::create(&path).unwrap();
+    let payload = EntryName::new("payload").unwrap();
+    let raw = EntryName::new(OsString::from_vec(vec![b'u', 0xff])).unwrap();
+    AtomicFile::create(&directory, &payload, b"old").unwrap();
+    AtomicFile::create(&directory, &raw, b"raw").unwrap();
+    directory
+        .create_child(&EntryName::new("child").unwrap())
+        .unwrap();
+    let first = directory.entries().unwrap();
+    let second = directory.entries().unwrap();
+    fs::rename(&path, temp.path().join("retained")).unwrap();
+    let replacement = PrivateDirectory::create(&path).unwrap();
+    replacement.create_child(&payload).unwrap();
+    AtomicFile::create(&replacement, &EntryName::new("unrelated").unwrap(), b"new").unwrap();
+    assert_eq!(
+        directory.entry_metadata(&payload).unwrap(),
+        EntryMetadata::File { bytes: 3 }
+    );
+    assert_eq!(
+        directory.entry_metadata(&raw).unwrap(),
+        EntryMetadata::File { bytes: 3 }
+    );
+    assert_eq!(
+        replacement.entry_metadata(&payload).unwrap(),
+        EntryMetadata::Directory
+    );
+    assert!(directory.verify_identity().is_err());
+    let expected = BTreeSet::from([payload, raw, EntryName::new("child").unwrap()]);
+    let first = first.collect::<Result<BTreeSet<_>, _>>().unwrap();
+    assert_eq!(first, expected);
+    // The independently owned cursor remains valid after the original owner ends.
+    drop(directory);
+    assert_eq!(
+        second.collect::<Result<BTreeSet<_>, _>>().unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn relative_inventory_metadata_rejects_links_special_files_and_missing_entries() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(temp.path().join("private")).unwrap();
+    let source = directory.path().join("source");
+    fs::write(&source, b"data").unwrap();
+    fs::hard_link(&source, directory.path().join("hardlink")).unwrap();
+    symlink(&source, directory.path().join("symlink")).unwrap();
+    let fifo = EntryName::new("fifo").unwrap();
+    rustix::fs::mkfifoat(
+        directory.directory_handle(),
+        fifo.as_os_str(),
+        rustix::fs::Mode::from_raw_mode(0o600),
+    )
+    .unwrap();
+    for name in ["source", "hardlink"] {
+        assert!(matches!(
+            directory.entry_metadata(&EntryName::new(name).unwrap()),
+            Err(Error::MultipleLinks(_))
+        ));
+    }
+    for name in ["symlink", "fifo"] {
+        assert!(matches!(
+            directory.entry_metadata(&EntryName::new(name).unwrap()),
+            Err(Error::UnsafeFileType(_))
+        ));
+    }
+    assert!(
+        matches!(directory.entry_metadata(&EntryName::new("missing").unwrap()),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound)
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"data");
+    assert!(fs::symlink_metadata(directory.path().join("fifo")).is_ok());
+}

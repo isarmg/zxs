@@ -204,17 +204,19 @@ impl Budget {
             invalid("SMB spool lock is unsafe or already has an owner").with_source(source)
         })?;
         let mut inventory = BTreeMap::new();
-        for entry in fs::read_dir(root).map_err(ApiError::io)? {
-            let entry = entry.map_err(ApiError::io)?;
-            let info = fs::symlink_metadata(entry.path()).map_err(ApiError::io)?;
-            if entry.file_name() == "empty-directory" && info.is_dir() {
-                continue;
-            }
-            if !info.is_file() || info.nlink() != 1 {
-                return Err(invalid("SMB spool contains an aliased or non-regular file"));
-            }
-            if entry.file_name() != ".budget.lock" {
-                inventory.insert(entry.path(), info.len());
+        for name in directory.entries().map_err(inventory_error)? {
+            let name = name.map_err(inventory_error)?;
+            let metadata = directory.entry_metadata(&name).map_err(inventory_error)?;
+            use platform_io::fs_safety::EntryMetadata;
+            let size = match metadata {
+                EntryMetadata::Directory if name.as_os_str() == "empty-directory" => continue,
+                EntryMetadata::Directory => {
+                    return Err(invalid("SMB spool contains an unexpected directory"));
+                }
+                EntryMetadata::File { bytes } => bytes,
+            };
+            if name.as_os_str() != ".budget.lock" {
+                inventory.insert(root.join(name.as_path()), size);
             }
         }
         let mut ledger = Ledger::default();
@@ -293,6 +295,9 @@ impl Budget {
             }
         }
         ledger.rebuild()?;
+        directory.verify_identity().map_err(|source| {
+            invalid("SMB spool directory changed during inventory").with_source(source)
+        })?;
         Ok(Arc::new(Self {
             directory: Arc::new(directory),
             limits,
@@ -542,6 +547,13 @@ impl Lease {
             pending.complete = true;
         }
         Ok(())
+    }
+}
+
+fn inventory_error(error: platform_io::fs_safety::Error) -> ApiError {
+    match error {
+        platform_io::fs_safety::Error::Io(error) => ApiError::io(error),
+        error => invalid("SMB spool contains an unsafe or unavailable entry").with_source(error),
     }
 }
 

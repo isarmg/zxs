@@ -132,6 +132,176 @@ fn orphan_bytes_charge_every_account_without_deletion() {
     assert!(reserve(&budget, "bob", "new", 0).is_err());
     assert_eq!(fs::read(root.path().join("legacy")).unwrap(), b"unknown");
 }
+
+#[test]
+fn recovery_keeps_full_charges_when_account_or_global_limits_are_lowered() {
+    for (account, global) in [(OVERHEAD, 8 * OVERHEAD), (2 * OVERHEAD, 2 * OVERHEAD)] {
+        let root = crate::tests::private_tempdir();
+        let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 8 * OVERHEAD)).unwrap();
+        let mut records = Vec::new();
+        for (principal, name, extent) in [("alice", "a", 100), ("bob", "b", 200)] {
+            let lease = reserve(&budget, principal, name, extent).unwrap();
+            fs::write(&lease.source, b"old").unwrap();
+            let record = record_path(&lease.source);
+            records.push((record.clone(), fs::read(record).unwrap()));
+            drop(lease);
+        }
+        drop(budget);
+        let budget = Budget::recover(root.path(), limits(account, global)).unwrap();
+        let ledger = budget.ledger.lock().unwrap();
+        assert_eq!(ledger.total, 2 * OVERHEAD + 300);
+        assert_eq!(ledger.accounts["alice"], OVERHEAD + 100);
+        assert_eq!(ledger.accounts["bob"], OVERHEAD + 200);
+        assert_eq!(ledger.unknown, 0);
+        assert!(!ledger.uncertain);
+        drop(ledger);
+        let principal = if global == 2 * OVERHEAD {
+            "charlie"
+        } else {
+            "alice"
+        };
+        let error = reserve(&budget, principal, "new", 0).err().unwrap();
+        assert_eq!(
+            error.code,
+            storage_contract::ErrorCode::ResourceLimitExceeded
+        );
+        for (path, bytes) in records {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+        for name in ["a", "b"] {
+            assert_eq!(fs::read(root.path().join(name)).unwrap(), b"old");
+        }
+    }
+}
+
+#[test]
+fn recovery_only_exempts_the_real_empty_directory_and_safe_inventory_lock() {
+    use std::os::unix::fs::symlink;
+    #[derive(Clone, Copy)]
+    enum Kind {
+        Directory,
+        Regular,
+        Symlink,
+    }
+    for kind in [Kind::Directory, Kind::Regular, Kind::Symlink] {
+        let root = crate::tests::private_tempdir();
+        let path = root.path().join("empty-directory");
+        match kind {
+            Kind::Directory => fs::create_dir(&path).unwrap(),
+            Kind::Regular => fs::write(&path, b"count me").unwrap(),
+            Kind::Symlink => symlink(root.path(), &path).unwrap(),
+        }
+        let result = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD));
+        if matches!(kind, Kind::Symlink) {
+            assert_eq!(
+                result.err().unwrap().code,
+                storage_contract::ErrorCode::SmbSpoolUnavailable
+            );
+            assert_eq!(fs::read_link(&path).unwrap(), root.path());
+            continue;
+        }
+        let budget = result.unwrap();
+        let ledger = budget.ledger.lock().unwrap();
+        let charged = if matches!(kind, Kind::Regular) {
+            OVERHEAD + 8
+        } else {
+            0
+        };
+        assert_eq!(ledger.total, charged);
+        assert_eq!(ledger.unknown, charged);
+        assert_eq!(
+            ledger.files.len(),
+            usize::from(matches!(kind, Kind::Regular))
+        );
+        assert!(!ledger.files.contains_key(&root.path().join(".budget.lock")));
+        assert!(root.path().join(".budget.lock").is_file());
+        if matches!(kind, Kind::Regular) {
+            assert_eq!(fs::read(path).unwrap(), b"count me");
+        } else {
+            assert!(path.is_dir());
+        }
+    }
+}
+
+#[test]
+fn non_utf8_inventory_names_remain_charged_or_strictly_rejected_as_budget_records() {
+    use std::os::unix::ffi::OsStringExt;
+    #[derive(Clone, Copy)]
+    enum Kind {
+        Unknown,
+        Budget,
+        InvalidBudget,
+    }
+    for kind in [Kind::Unknown, Kind::Budget, Kind::InvalidBudget] {
+        let root = crate::tests::private_tempdir();
+        let name = std::ffi::OsString::from_vec(match kind {
+            Kind::Budget | Kind::InvalidBudget => b"copy-\xff.budget.json".to_vec(),
+            Kind::Unknown => b"copy-\xff".to_vec(),
+        });
+        let path = root.path().join(name);
+        let bytes = match kind {
+            Kind::Budget => json_codec::to_vec(&Owner {
+                principal: "alice".into(),
+                source: "copy".into(),
+                admitted_end: 100,
+            })
+            .unwrap(),
+            Kind::Unknown | Kind::InvalidBudget => b"kept".to_vec(),
+        };
+        fs::write(&path, &bytes).unwrap();
+        let result = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD));
+        let expected_error = match kind {
+            Kind::Unknown => None,
+            Kind::Budget => Some("SMB budget filename mismatch"),
+            Kind::InvalidBudget => Some("SMB budget record is invalid"),
+        };
+        if let Some(message) = expected_error {
+            let error = result.err().unwrap();
+            assert_eq!(error.code, storage_contract::ErrorCode::SmbSpoolUnavailable);
+            assert_eq!(error.message, message);
+        } else {
+            let budget = result.unwrap();
+            let ledger = budget.ledger.lock().unwrap();
+            assert_eq!(ledger.total, OVERHEAD + 4);
+            assert_eq!(ledger.unknown, OVERHEAD + 4);
+            assert_eq!(ledger.files[&path].bytes, OVERHEAD + 4);
+        }
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn recovery_rejects_fifo_symlink_and_hardlinked_unknown_entries_without_deletion() {
+    use std::os::unix::fs::symlink;
+    enum Kind {
+        Fifo,
+        Symlink,
+        Hardlink,
+    }
+    for kind in [Kind::Fifo, Kind::Symlink, Kind::Hardlink] {
+        let root = crate::tests::private_tempdir();
+        let target = root.path().join("target");
+        fs::write(&target, b"keep").unwrap();
+        let path = root.path().join("unknown");
+        match kind {
+            Kind::Fifo => rustix::fs::mkfifoat(
+                rustix::fs::CWD,
+                &path,
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )
+            .unwrap(),
+            Kind::Symlink => symlink(&target, &path).unwrap(),
+            Kind::Hardlink => fs::hard_link(&target, &path).unwrap(),
+        }
+        let error = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD))
+            .err()
+            .unwrap();
+        assert_eq!(error.code, storage_contract::ErrorCode::SmbSpoolUnavailable);
+        assert!(fs::symlink_metadata(path).is_ok());
+        assert_eq!(fs::read(target).unwrap(), b"keep");
+    }
+}
+
 #[test]
 fn ceiling_checks_happen_before_write_and_metadata_corruption_fails_closed() {
     let root = crate::tests::private_tempdir();
@@ -934,4 +1104,46 @@ fn real_cleanup_directory_sync_failure_keeps_charge_and_blocks_admission() {
     // Reopen inventories the actual filesystem, not an invented rollback.
     let budget = Budget::recover(&root, limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
     assert_eq!(total(&budget), 0);
+}
+
+#[test]
+fn inventory_errors_preserve_real_io_and_unsafe_object_sources() {
+    use std::{error::Error as _, os::unix::fs::symlink};
+    let root = crate::tests::private_tempdir();
+    let directory = PrivateDirectory::open_trusted(root.path()).unwrap();
+    let name = EntryName::new("gone").unwrap();
+    fs::write(root.path().join(name.as_path()), b"original").unwrap();
+    let names = directory
+        .entries()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(names, vec![name.clone()]);
+    fs::remove_file(root.path().join(name.as_path())).unwrap();
+    let error = inventory_error(directory.entry_metadata(&name).unwrap_err());
+    assert_eq!(error.code, storage_contract::ErrorCode::IoError);
+    assert_eq!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<io::Error>()
+            .unwrap()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    symlink(root.path(), root.path().join(name.as_path())).unwrap();
+    let error = inventory_error(directory.entry_metadata(&name).unwrap_err());
+    assert_eq!(error.code, storage_contract::ErrorCode::SmbSpoolUnavailable);
+    assert!(matches!(
+        error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<platform_io::fs_safety::Error>()
+            .unwrap(),
+        platform_io::fs_safety::Error::UnsafeFileType(_)
+    ));
 }

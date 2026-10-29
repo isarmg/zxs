@@ -45,6 +45,13 @@ impl EntryName {
     }
 }
 
+/// Metadata for a direct child of a held private directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryMetadata {
+    File { bytes: u64 },
+    Directory,
+}
+
 #[derive(Clone, Debug)]
 pub struct FileEntry {
     pub name: EntryName,
@@ -161,6 +168,24 @@ impl PrivateDirectory {
     pub fn files(&self, limits: InventoryLimits) -> Result<Vec<FileEntry>, Error> {
         unix::files(self, limits)
     }
+    /// Stream names through an independent cursor anchored to this descriptor.
+    /// This does not impose inventory quotas or provide a directory snapshot.
+    ///
+    /// # Errors
+    /// Opening or reading the cursor preserves the underlying I/O error.
+    #[cfg(target_os = "linux")]
+    pub fn entries(&self) -> Result<linux::DirectoryEntries, Error> {
+        linux::DirectoryEntries::read_from(&self.directory)
+    }
+    /// Inspect a direct child without following links or opening its contents.
+    ///
+    /// # Errors
+    /// Rejects aliased regular files and objects other than files/directories;
+    /// missing entries and metadata failures preserve their I/O source.
+    pub fn entry_metadata(&self, name: &EntryName) -> Result<EntryMetadata, Error> {
+        unix::entry_metadata(self, name)
+    }
+
     pub fn read_bounded(&self, name: &EntryName, max_bytes: usize) -> Result<Vec<u8>, Error> {
         unix::read_bounded(self, name, max_bytes)
     }

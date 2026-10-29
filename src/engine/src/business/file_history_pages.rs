@@ -290,6 +290,69 @@ impl FileVersionReadPlan {
     }
 }
 
+/// Request-scoped merge summaries over immutable shared roots, not an
+/// authorization grant. The roots retain old records only until `read` returns.
+pub struct FileMergeReadPlan {
+    merges: storage_contract::SharedRecords<FileBranchMerge>,
+    membership: Option<storage_contract::SharedRecords<()>>,
+    file_id: String,
+    history_id: String,
+    boundary: Option<(MergeKey, Direction)>,
+    limit: usize,
+}
+
+impl FileMergeReadPlan {
+    /// Select and summarize outside the Engine lock. No source arrays or
+    /// shared record handles survive this consuming read.
+    pub fn read(self) -> (Selection<MergeKey>, Vec<MergeRecord>) {
+        let mut selector = Selector::new(
+            self.boundary
+                .as_ref()
+                .map(|(key, direction)| (key, *direction)),
+            self.limit,
+        );
+        for id in self.membership.iter().flat_map(|members| members.keys()) {
+            let merge = self
+                .merges
+                .get(id)
+                .expect("invariant: captured merge membership names an existing record");
+            if merge.file_id == self.file_id && merge.history_tree_id == self.history_id {
+                selector.consider(MergeKey {
+                    sequence: merge.sequence,
+                    merge_id: merge.merge_id.clone(),
+                });
+            }
+        }
+        let selection = selector.finish();
+        let records = selection
+            .keys
+            .iter()
+            .map(|key| {
+                merge_summary(
+                    self.merges
+                        .get(&key.merge_id)
+                        .expect("invariant: selected merge exists in captured map"),
+                )
+            })
+            .collect();
+        (selection, records)
+    }
+}
+
+fn merge_summary(merge: &FileBranchMerge) -> MergeRecord {
+    MergeRecord {
+        merge_id: merge.merge_id.clone(),
+        sequence: merge.sequence,
+        chosen_node_id: merge.chosen_node_id.clone(),
+        result_node_id: merge.result_node_id.clone(),
+        surviving_branch_id: merge.surviving_branch_id.clone(),
+        reused_node: merge.reused_node,
+        operation_id: merge.operation_id,
+        input_count: merge.input_branch_ids.len(),
+        parent_count: merge.parent_node_ids.len(),
+    }
+}
+
 fn version_selection<'a>(
     versions: impl Iterator<Item = &'a FileVersion>,
     boundary: Option<(&VersionKey, Direction)>,
@@ -864,16 +927,29 @@ impl<'a> FileHistoryScope<'a> {
                 "merge cursor sequence does not match its boundary",
             ));
         }
-        Ok(MergeRecord {
-            merge_id: merge.merge_id.clone(),
-            sequence: merge.sequence,
-            chosen_node_id: merge.chosen_node_id.clone(),
-            result_node_id: merge.result_node_id.clone(),
-            surviving_branch_id: merge.surviving_branch_id.clone(),
-            reused_node: merge.reused_node,
-            operation_id: merge.operation_id,
-            input_count: merge.input_branch_ids.len(),
-            parent_count: merge.parent_node_ids.len(),
+        Ok(merge_summary(merge))
+    }
+
+    /// Capture only shared merge roots after validating the cursor boundary.
+    /// No tracked write set or source relation is copied.
+    ///
+    /// # Errors
+    /// `NotFound` or `InvalidCursor` for an invalid boundary.
+    pub fn prepare_merge_page(
+        &self,
+        boundary: Option<(MergeKey, Direction)>,
+        limit: usize,
+    ) -> Result<FileMergeReadPlan> {
+        if let Some((key, _)) = &boundary {
+            self.merge_record(key)?;
+        }
+        Ok(FileMergeReadPlan {
+            merges: storage_contract::SharedRecords::clone(&self.state.file_branch_merges),
+            membership: self.file_rows().map(|rows| rows.merges.clone()),
+            file_id: self.file_id.to_owned(),
+            history_id: self.history_id.to_owned(),
+            boundary,
+            limit,
         })
     }
 

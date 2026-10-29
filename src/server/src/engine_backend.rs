@@ -66,12 +66,12 @@ pub struct EngineBackend {
     operation_health_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 impl EngineBackend {
-    fn finish_version_page(
+    fn finish_file_history_page<T>(
         &self,
         identity: &Identity,
         file_id: &str,
-        page: Result<crate::VersionPage, ApiError>,
-    ) -> Result<crate::VersionPage, ApiError> {
+        page: Result<T, ApiError>,
+    ) -> Result<T, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         file_manager::file_repo(&engine, file_id)?;
@@ -1426,7 +1426,10 @@ impl Backend for EngineBackend {
     ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::history_pages::merges(&engine, request)
+        let file_id = request.0.file_id.as_str().to_owned();
+        let plan = file_manager::history_pages::prepare_merge_page(&engine, request)?;
+        drop(engine);
+        self.finish_file_history_page(identity, &file_id, Ok(plan.read()))
     }
     fn file_history_merge_inputs(
         &self,
@@ -1465,7 +1468,7 @@ impl Backend for EngineBackend {
         let file_id = request.file_id.as_str().to_owned();
         let plan = file_manager::history_pages::prepare_version_page(&engine, request)?;
         drop(engine);
-        self.finish_version_page(identity, &file_id, plan.read())
+        self.finish_file_history_page(identity, &file_id, plan.read())
     }
     fn file_version_sources(
         &self,

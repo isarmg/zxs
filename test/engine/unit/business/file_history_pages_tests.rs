@@ -1550,3 +1550,114 @@ fn detached_version_page_keeps_only_its_captured_roots_across_publication() {
     drop(pool);
     assert_eq!(versions[0].logical_size, 5);
 }
+
+#[test]
+fn detached_merge_pages_match_borrowed_windows_and_reject_invalid_boundaries() {
+    let g = graph();
+    let original = g.pool.scope(&g.file);
+    let mut state = g.pool.engine.state().clone();
+    // Ties exercise merge-id ordering in both directions without changing membership.
+    for id in state.file_branch_merges.keys().cloned().collect::<Vec<_>>() {
+        state.file_branch_merges.get_mut(&id).unwrap().sequence = u64::MAX;
+    }
+    let scope = FileHistoryScope {
+        state: &state,
+        ..original
+    };
+    let oracle = oracle_merges(&state, &g.file, &g.pool.repo.history_tree_id);
+    exhaust(&oracle, |boundary, limit| {
+        let plan = scope
+            .prepare_merge_page(
+                boundary.map(|(key, direction)| (key.clone(), direction)),
+                limit,
+            )
+            .unwrap();
+        assert!(plan.merges.shares_storage_with(&state.file_branch_merges));
+        assert!(
+            plan.membership
+                .as_ref()
+                .unwrap()
+                .shares_storage_with(&scope.file_rows().unwrap().merges)
+        );
+        let (selection, records) = plan.read();
+        assert_eq!(selection, scope.select_merges(boundary, limit));
+        assert_eq!(
+            records,
+            selection
+                .keys
+                .iter()
+                .map(|key| scope.merge_record(key).unwrap())
+                .collect::<Vec<_>>()
+        );
+        selection
+    });
+    for (key, expected) in [
+        (
+            MergeKey {
+                sequence: 0,
+                merge_id: "missing".into(),
+            },
+            storage_contract::ErrorCode::NotFound,
+        ),
+        (
+            MergeKey {
+                sequence: 0,
+                merge_id: oracle[0].merge_id.clone(),
+            },
+            storage_contract::ErrorCode::InvalidCursor,
+        ),
+    ] {
+        let Err(error) = scope.prepare_merge_page(Some((key, Direction::Forward)), 2) else {
+            panic!("invalid merge boundary was admitted");
+        };
+        assert_eq!(error.code(), expected);
+    }
+    for (file_id, history_id) in [
+        (g.other_file.as_str(), g.pool.repo.history_tree_id.as_str()),
+        (g.file.as_str(), "foreign-history"),
+    ] {
+        let other = FileHistoryScope {
+            file_id,
+            history_id,
+            ..scope
+        };
+        let (selection, records) = other.prepare_merge_page(None, 2).unwrap().read();
+        assert!(selection.keys.is_empty());
+        assert!(records.is_empty());
+        assert_eq!(
+            other
+                .prepare_merge_page(Some((oracle[0].clone(), Direction::Forward)), 2)
+                .err()
+                .unwrap()
+                .code(),
+            storage_contract::ErrorCode::NotFound
+        );
+    }
+    let expected = scope
+        .select_merges(None, 10)
+        .keys
+        .iter()
+        .map(|key| scope.merge_record(key).unwrap())
+        .collect::<Vec<_>>();
+    let plan = scope.prepare_merge_page(None, 10).unwrap();
+    let retained = std::sync::Arc::downgrade(
+        &state
+            .file_branch_merges
+            .get_shared(&oracle[0].merge_id)
+            .unwrap(),
+    );
+    state
+        .file_branch_merges
+        .get_mut(&oracle[0].merge_id)
+        .unwrap()
+        .parent_node_ids
+        .clear();
+    state.file_branch_merges.remove(&oracle[1].merge_id);
+    assert!(!plan.merges.shares_storage_with(&state.file_branch_merges));
+    drop(state);
+    drop(g);
+    assert!(retained.upgrade().is_some());
+    let (_, records) = plan.read();
+    assert!(retained.upgrade().is_none());
+    assert_eq!(records, expected);
+}
