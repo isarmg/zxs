@@ -124,7 +124,7 @@ impl Session {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(ApiError::io(error)),
         }
-        let _budget = self.shared.budget.reserve(
+        let budget = self.shared.budget.reserve(
             &self.identity.principal,
             &self.shared.spool.join(operation_id.to_string()),
             0,
@@ -134,11 +134,19 @@ impl Session {
         if let Some(target) = destination.as_deref() {
             affected.push(target);
         }
-        let reserved = self.reserve_paths(&affected)?;
+        let reserved = match self.reserve_paths(&affected) {
+            Ok(reserved) => reserved,
+            Err(error) => {
+                if let Err(cleanup) = budget.cleanup(budget::Evidence::Reservation) {
+                    tracing::warn!(error = ?cleanup, %operation_id, "SMB namespace admission cleanup incomplete");
+                }
+                return Err(error);
+            }
+        };
         let mut pending_workspace = None;
         let mut submission_started = false;
         let mut record_durable = false;
-        let result = (|| {
+        let mut result = (|| {
             let workspace = self.workspace()?;
             pending_workspace = Some(workspace.workspace_id.clone());
             let commit = crate::CommitWorkspace {
@@ -276,14 +284,20 @@ impl Session {
                 .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })();
         if result.is_ok() {
-            cleanup_namespace_record(&record);
-        } else if !submission_started && let Some(workspace) = pending_workspace {
+            if let Err(error) = budget.cleanup(budget::Evidence::Namespace) {
+                result = Err(publication::cleanup_error(error));
+            }
+        } else if !submission_started && let Some(workspace) = pending_workspace.as_ref() {
             match self
                 .shared
                 .backend
-                .abort_workspace(&self.identity, &workspace)
+                .abort_workspace(&self.identity, workspace)
             {
-                Ok(_) if record_durable => cleanup_namespace_record(&record),
+                Ok(_) if record_durable => {
+                    if let Err(error) = budget.cleanup(budget::Evidence::Namespace) {
+                        tracing::warn!(error = ?error, %operation_id, "SMB namespace preparation cleanup incomplete");
+                    }
+                }
                 Ok(_) => {
                     tracing::warn!(%operation_id, workspace, path=%record.display(), "SMB namespace record durability failed; retaining available recovery evidence after abort")
                 }
@@ -291,6 +305,10 @@ impl Session {
                     tracing::warn!(%operation_id, workspace, path=%record.display(), error = ?error, "SMB namespace preparation abort failed; recovery required")
                 }
             }
+        } else if pending_workspace.is_none()
+            && let Err(error) = budget.cleanup(budget::Evidence::Reservation)
+        {
+            tracing::warn!(error = ?error, %operation_id, "SMB namespace workspace admission cleanup incomplete");
         }
         // Once submission starts, even a business or transport error is not
         // proof of non-publication. Leave workspace and record untouched.
@@ -341,23 +359,6 @@ fn write_namespace_record(path: &Path, value: &Value) -> Result<(), ApiError> {
         .map_err(|error| ApiError::io(error.error))?;
     sync_namespace_record(&file, false)?;
     sync_namespace_record(&File::open(parent).map_err(ApiError::io)?, true)
-}
-
-fn cleanup_namespace_record(path: &Path) {
-    let removed = match fs::remove_file(path) {
-        Ok(()) => true,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        Err(error) => {
-            tracing::warn!(error = ?error, path=%path.display(), "SMB namespace recovery record cleanup failed");
-            false
-        }
-    };
-    if removed
-        && let Some(parent) = path.parent()
-        && let Err(error) = File::open(parent).and_then(|directory| directory.sync_all())
-    {
-        tracing::warn!(error = ?error, path=%path.display(), "SMB namespace recovery record cleanup was not synced");
-    }
 }
 
 #[cfg(test)]

@@ -80,7 +80,7 @@ struct Writer {
     recovery_record: recovery_record::ActiveRecord,
     reservation: budget::Lease,
     file: File,
-    directory: platform_io::fs_safety::PrivateDirectory,
+    directory: Arc<platform_io::fs_safety::PrivateDirectory>,
     source: PathBuf,
     path: name_policy::PortablePath,
     item_id: String,

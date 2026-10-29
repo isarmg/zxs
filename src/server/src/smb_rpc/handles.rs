@@ -122,7 +122,6 @@ impl Session {
         let (handle, fd, size, workspace_id) = if writable {
             self.reserve_paths(&[path.as_str()])?;
             let mut pending_workspace = None;
-            let mut pending_source = None;
             let mut pending_reservation = None;
             let result = (|| {
                 let workspace = self.workspace()?;
@@ -152,17 +151,15 @@ impl Session {
                         "the file changed while its write handle was opening; reopen it",
                     ));
                 }
-                use platform_io::fs_safety::{EntryName, PayloadOpenMode, PrivateDirectory};
-                let directory = PrivateDirectory::open_trusted(&self.shared.spool)
+                use platform_io::fs_safety::{EntryName, PayloadOpenMode};
+                let directory = Arc::clone(&self.shared.budget.directory);
+                directory
+                    .verify_identity()
                     .map_err(crate::upload_fs_error)?;
                 let name =
                     EntryName::new(format!("{}-{}", workspace.workspace_id, new_id("upload")))
                         .map_err(crate::upload_fs_error)?;
-                let mut file = directory
-                    .open_payload(&name, PayloadOpenMode::CreateNew)
-                    .map_err(crate::upload_fs_error)?;
                 let source = directory.path().join(name.as_path());
-                pending_source = Some(source.clone());
                 let content = version
                     .as_deref()
                     .filter(|_| !truncate)
@@ -183,6 +180,24 @@ impl Session {
                     initial_size,
                     self.max_file_bytes,
                 )?);
+                let mut file = match directory.open_payload(&name, PayloadOpenMode::CreateNew) {
+                    Ok(file) => file,
+                    Err(source) => {
+                        let reservation = pending_reservation.take().unwrap();
+                        if matches!(&source, platform_io::fs_safety::Error::Io(error)
+                            if error.kind() == io::ErrorKind::AlreadyExists)
+                        {
+                            if let Err(error) = reservation.cleanup(budget::Evidence::Reservation) {
+                                tracing::warn!(error = ?error, "SMB unopened payload reservation cleanup incomplete");
+                            }
+                        } else {
+                            // CreateNew may have created the inode before its
+                            // descriptor validation failed. Keep its charge.
+                            reservation.block_admission();
+                        }
+                        return Err(crate::upload_fs_error(source));
+                    }
+                };
                 let reservation = pending_reservation.as_mut().unwrap();
                 if let Some(content) = content {
                     content.copy_verified_to(&mut file, |end, bytes| {
@@ -229,7 +244,7 @@ impl Session {
                 if let Err(error) = writer.file.sync_all().map_err(ApiError::io).and_then(|()| {
                     recovery_record(&mut writer, &self.identity.principal, &self.branch)
                 }) {
-                    publication::cleanup_writer(&writer);
+                    pending_reservation = Some(writer.reservation);
                     return Err(error);
                 }
                 Ok((
@@ -245,14 +260,10 @@ impl Session {
                 {
                     tracing::warn!(error = ?error, "SMB preparation abort failed; workspace retained for recovery");
                 }
-                if let Some(path) = pending_source {
-                    for path in [path.with_extension("work.json"), path] {
-                        if let Err(error) = fs::remove_file(path)
-                            && error.kind() != io::ErrorKind::NotFound
-                        {
-                            tracing::warn!(error = ?error, "SMB preparation files retained after cleanup failure");
-                        }
-                    }
+                if let Some(reservation) = pending_reservation
+                    && let Err(error) = reservation.cleanup(budget::Evidence::Writer)
+                {
+                    tracing::warn!(error = ?error, "SMB preparation cleanup incomplete; admission remains blocked");
                 }
                 self.release_paths(&[path.key().to_owned()]);
             }

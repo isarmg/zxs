@@ -49,3 +49,13 @@ pub(super) fn grow(root: &Path, source: &Path, owner: &Owner) -> Result<(), ApiE
     pause(Point::After);
     result
 }
+
+pub(super) fn cleanup(
+    directory: &platform_io::fs_safety::PrivateDirectory,
+    names: &[platform_io::fs_safety::EntryName],
+) -> Result<(), ApiError> {
+    pause(Point::Before);
+    let result = persistence::cleanup(directory, names);
+    pause(Point::After);
+    result
+}

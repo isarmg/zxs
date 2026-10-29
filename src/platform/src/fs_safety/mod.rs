@@ -167,6 +167,18 @@ impl PrivateDirectory {
     pub fn remove_file(&self, name: &EntryName) -> Result<(), Error> {
         unix::remove_file(self, name)
     }
+    /// Remove private regular entries and confirm their deletion with one
+    /// directory sync. Missing entries are already removed. The named directory
+    /// must still match this owner; every existing entry receives the same
+    /// no-link and identity checks as [`Self::remove_file`].
+    ///
+    /// # Errors
+    /// Stops at the first unsafe entry or I/O failure. Earlier removals may
+    /// already have happened; an error does not establish durable deletion or
+    /// rollback. Callers must not release resources based on partial cleanup.
+    pub fn remove_files(&self, names: &[EntryName]) -> Result<(), Error> {
+        unix::remove_files(self, names)
+    }
     pub fn create(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref();
         unix::create_private_directory(path)

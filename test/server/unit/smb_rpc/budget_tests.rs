@@ -50,7 +50,7 @@ fn reserve(
 ) -> Result<Lease, ApiError> {
     budget.reserve_available(
         principal,
-        &budget.root.join(name),
+        &budget.directory.path().join(name),
         ceiling,
         ceiling,
         u64::MAX,
@@ -102,7 +102,7 @@ fn successful_cleanup_releases_capacity_but_failed_cleanup_does_not() {
     let budget = Budget::recover(clean.path(), limits(limit, limit)).unwrap();
     let lease = reserve(&budget, "alice", "copy", 100).unwrap();
     fs::write(&lease.source, b"one").unwrap();
-    fs::remove_file(&lease.source).unwrap();
+    lease.cleanup(Evidence::Writer).unwrap();
     drop(lease);
     assert_eq!(total(&budget), 0);
     assert!(!clean.path().join("copy.budget.json").exists());
@@ -213,6 +213,7 @@ fn tiny_open_reserves_current_extent_not_static_maximum_and_growth_is_durable() 
     // A later truncate/overwrite cannot release an earlier admitted extent.
     lease.before_write_available(1, 1, u64::MAX).unwrap();
     drop(lease);
+    _other.cleanup(Evidence::Reservation).unwrap();
     drop(_other);
     drop(budget);
     let budget = Budget::recover(root.path(), limits(limit, limit)).unwrap();
@@ -498,6 +499,8 @@ fn failed_budget_cleanup_keeps_accounted_high_water() {
     let lease = reserve(&budget, "alice", "copy", 100).unwrap();
     fs::remove_file(record_path(&lease.source)).unwrap();
     fs::create_dir(record_path(&lease.source)).unwrap();
+    assert!(lease.cleanup(Evidence::Writer).is_err());
+    assert!(budget.ledger.lock().unwrap().uncertain);
     drop(lease);
     assert_eq!(total(&budget), OVERHEAD + 100);
     assert!(root.path().join("copy.budget.json").is_dir());
@@ -713,4 +716,97 @@ fn retained_grants_can_exceed_the_live_pool_but_remain_charged_after_restart() {
         assert_eq!(fs::read(root.path().join(name)).unwrap(), b"x");
         assert_eq!(grown_end(root.path(), name), MIB + 1);
     }
+}
+
+#[test]
+fn dropping_unused_reservation_does_not_claim_durable_cleanup() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let lease = reserve(&budget, "alice", "copy", 100).unwrap();
+    drop(lease);
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    assert!(root.path().join("copy.budget.json").is_file());
+}
+
+#[test]
+fn explicit_cleanup_refunds_only_after_the_directory_barrier() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let lease = reserve(&budget, "alice", "copy", 100).unwrap();
+    fs::write(&lease.source, b"payload").unwrap();
+    fs::write(lease.source.with_extension("work.json"), b"evidence").unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let worker = {
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            persist::pause_at(persist::Point::After, barrier);
+            lease.cleanup(Evidence::Writer)
+        })
+    };
+    barrier.wait();
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    assert!(!root.path().join("copy.budget.json").exists());
+    barrier.wait();
+    worker.join().unwrap().unwrap();
+    assert_eq!(total(&budget), 0);
+    drop(budget);
+    let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    assert_eq!(total(&budget), 0);
+}
+
+#[test]
+fn partial_cleanup_retains_charge_and_does_not_remove_later_evidence() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let lease = reserve(&budget, "alice", "copy", 100).unwrap();
+    fs::write(&lease.source, b"payload").unwrap();
+    fs::create_dir(lease.source.with_extension("work.json")).unwrap();
+    assert!(lease.cleanup(Evidence::Writer).is_err());
+    assert!(!lease.source.exists());
+    assert!(record_path(&lease.source).is_file());
+    drop(lease);
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    assert!(budget.ledger.lock().unwrap().uncertain);
+    assert!(reserve(&budget, "alice", "next", 0).is_err());
+}
+
+#[test]
+fn reservation_cleanup_never_removes_a_payload_it_did_not_create() {
+    let root = crate::tests::private_tempdir();
+    let budget = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let lease = reserve(&budget, "alice", "copy", 100).unwrap();
+    fs::write(&lease.source, b"collision").unwrap();
+    lease.cleanup(Evidence::Reservation).unwrap();
+    assert_eq!(fs::read(&lease.source).unwrap(), b"collision");
+    assert_eq!(total(&budget), 0);
+}
+
+#[test]
+#[ignore = "requires budget_io_eio.c in an isolated LD_PRELOAD child"]
+fn real_cleanup_directory_sync_failure_keeps_charge_and_blocks_admission() {
+    let root = PathBuf::from(std::env::var_os("ZXS_SMB_BUDGET_FAULT_ROOT").unwrap());
+    let budget = Budget::recover(&root, limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let lease = reserve(&budget, "alice", "copy", 100).unwrap();
+    fs::write(&lease.source, b"payload").unwrap();
+    fs::write(lease.source.with_extension("work.json"), b"evidence").unwrap();
+    fs::write(root.join(".inject"), b"enable cleanup fsync EIO").unwrap();
+    let error = lease.cleanup(Evidence::Writer).unwrap_err();
+    let mut cause: &dyn std::error::Error = &error;
+    while let Some(source) = cause.source() {
+        cause = source;
+    }
+    assert_eq!(
+        cause.downcast_ref::<io::Error>().unwrap().raw_os_error(),
+        Some(5)
+    );
+    drop(lease);
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    assert!(budget.ledger.lock().unwrap().uncertain);
+    assert!(reserve(&budget, "alice", "next", 0).is_err());
+    assert!(!root.join("copy.work.json").exists());
+    fs::remove_file(root.join(".inject")).unwrap();
+    drop(budget);
+    // Reopen inventories the actual filesystem, not an invented rollback.
+    let budget = Budget::recover(&root, limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    assert_eq!(total(&budget), 0);
 }

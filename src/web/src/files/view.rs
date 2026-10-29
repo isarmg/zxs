@@ -19,7 +19,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         </section>
     }
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum DiskRoots {
     Loading,
     Empty,
@@ -36,11 +36,16 @@ fn disk_roots_projection(model: &super::model::Model) -> DiskRoots {
     }
 }
 
+fn disk_roots_snapshot(state: RwSignal<State>) -> Memo<DiskRoots> {
+    Memo::new(move |_| state.with(|s| disk_roots_projection(&s.files)))
+}
+
 fn disk_roots(state: RwSignal<State>) -> impl IntoView {
+    let disks = disk_roots_snapshot(state);
     view! {
         <p class="zxs-row">{t("选择一个硬盘目录查看文件。","Choose a disk directory to browse its files.")}</p>
         {move ||{
-            let disks = match state.with(|s| disk_roots_projection(&s.files)) {
+            let disks = match disks.get() {
                 DiskRoots::Loading => return view!{<LoadingState/>}.into_any(),
                 DiskRoots::Empty => return view!{<EmptyState message=t("没有可访问的硬盘目录。","No disk directories are available.")/>}.into_any(),
                 DiskRoots::Disks(disks) => disks,

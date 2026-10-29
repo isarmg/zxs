@@ -38,3 +38,13 @@ pub(super) fn grow(root: &Path, source: &Path, owner: &Owner) -> Result<(), ApiE
         .and_then(|directory| directory.sync_all())
         .map_err(ApiError::io)
 }
+
+/// Unlink only this completed operation's files and durably settle the directory.
+pub(super) fn cleanup(
+    directory: &platform_io::fs_safety::PrivateDirectory,
+    names: &[platform_io::fs_safety::EntryName],
+) -> Result<(), ApiError> {
+    directory
+        .remove_files(names)
+        .map_err(crate::upload_fs_error)
+}

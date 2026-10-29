@@ -1,6 +1,90 @@
 use super::*;
 
 #[test]
+fn batch_removal_cleans_only_named_files_and_accepts_missing_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(temp.path().join("private")).unwrap();
+    let names = ["source", "source.work.json", "source.budget.json"]
+        .map(|name| EntryName::new(name).unwrap());
+    for name in &names {
+        AtomicFile::create(&directory, name, b"retained").unwrap();
+    }
+    let unrelated = EntryName::new("unrelated").unwrap();
+    AtomicFile::create(&directory, &unrelated, b"keep").unwrap();
+    directory.remove_files(&names).unwrap();
+    directory.remove_files(&names).unwrap();
+    for name in &names {
+        assert!(!directory.path().join(name.as_path()).exists());
+    }
+    assert_eq!(
+        fs::read(directory.path().join("unrelated")).unwrap(),
+        b"keep"
+    );
+}
+
+#[test]
+fn batch_removal_stops_at_unsafe_entry_without_deleting_later_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(temp.path().join("private")).unwrap();
+    let names = ["source", "source.work.json", "source.budget.json"]
+        .map(|name| EntryName::new(name).unwrap());
+    AtomicFile::create(&directory, &names[0], b"source").unwrap();
+    directory.create_child(&names[1]).unwrap();
+    AtomicFile::create(&directory, &names[2], b"budget").unwrap();
+    assert!(matches!(
+        directory.remove_files(&names),
+        Err(Error::UnsafeFileType(_))
+    ));
+    assert!(!directory.path().join("source").exists());
+    assert!(directory.path().join("source.work.json").is_dir());
+    assert_eq!(
+        fs::read(directory.path().join("source.budget.json")).unwrap(),
+        b"budget"
+    );
+}
+
+#[test]
+fn batch_removal_rejects_replaced_named_directory_without_removing_either_copy() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("private");
+    let held = PrivateDirectory::create(&path).unwrap();
+    let name = EntryName::new("source").unwrap();
+    AtomicFile::create(&held, &name, b"original").unwrap();
+    let moved = temp.path().join("moved");
+    fs::rename(&path, &moved).unwrap();
+    let replacement = PrivateDirectory::create(&path).unwrap();
+    AtomicFile::create(&replacement, &name, b"replacement").unwrap();
+    assert!(matches!(
+        held.remove_files(&[name]),
+        Err(Error::UnsafeFileType(_))
+    ));
+    assert_eq!(fs::read(moved.join("source")).unwrap(), b"original");
+    assert_eq!(fs::read(path.join("source")).unwrap(), b"replacement");
+}
+
+#[test]
+fn batch_removal_rejects_symbolic_and_multiple_links() {
+    use std::os::unix::fs::symlink;
+    for symbolic in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = PrivateDirectory::create(temp.path().join("private")).unwrap();
+        let source = EntryName::new("source").unwrap();
+        AtomicFile::create(&directory, &source, b"keep").unwrap();
+        let alias = EntryName::new("alias").unwrap();
+        let source_path = directory.path().join(source.as_path());
+        let alias_path = directory.path().join(alias.as_path());
+        if symbolic {
+            symlink(&source_path, &alias_path).unwrap();
+        } else {
+            fs::hard_link(&source_path, &alias_path).unwrap();
+        }
+        assert!(directory.remove_files(&[alias]).is_err());
+        assert_eq!(fs::read(&source_path).unwrap(), b"keep");
+        assert!(fs::symlink_metadata(&alias_path).is_ok());
+    }
+}
+
+#[test]
 fn admitted_relative_paths_split_into_typed_parents_and_entries() {
     for (input, parent, name) in [
         ("entry", None, "entry"),

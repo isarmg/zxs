@@ -84,14 +84,33 @@ fn retain_detached(writer: &mut Writer, principal: &str, branch: &str, reason: &
     }
 }
 
-pub(super) fn cleanup_writer(writer: &Writer) {
-    for path in [&writer.source, &writer.source.with_extension("work.json")] {
-        if let Err(error) = fs::remove_file(path)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            tracing::warn!(error = ?error,path=%path.display(),"SMB staging cleanup failed");
-        }
+fn cleanup_writer(writer: &Writer) -> Result<(), ApiError> {
+    let result = (|| {
+        let name = platform_io::fs_safety::EntryName::new(
+            writer
+                .source
+                .file_name()
+                .expect("invariant: writer source has a filename"),
+        )
+        .map_err(crate::upload_fs_error)?;
+        writer
+            .directory
+            .verify_payload(&name, &writer.file)
+            .map_err(crate::upload_fs_error)?;
+        writer.reservation.cleanup(budget::Evidence::Writer)
+    })();
+    if result.is_err() {
+        writer.reservation.block_admission();
     }
+    result
+}
+
+pub(super) fn cleanup_error(mut error: ApiError) -> ApiError {
+    error.status = ::http::StatusCode::SERVICE_UNAVAILABLE;
+    error.code = storage_contract::ErrorCode::RecoveryRequired;
+    error.message = "SMB operation finished but staging cleanup is unconfirmed; query the original operation, do not replay".into();
+    error.retryable = false;
+    error
 }
 
 pub(super) fn finish_publication(
@@ -414,7 +433,7 @@ impl Session {
                 "SMB handle missing",
             ));
         }
-        let saved = (|| {
+        let mut saved = (|| {
             if !abort {
                 self.flush(handle)?;
             }
@@ -429,7 +448,9 @@ impl Session {
         })();
         if let Some(Handle::Write(mut writer)) = self.handles.remove(&handle) {
             match &saved {
-                Ok(()) => cleanup_writer(&writer),
+                Ok(()) => {
+                    saved = cleanup_writer(&writer).map_err(cleanup_error);
+                }
                 Err(error) => {
                     retain_detached(&mut writer, &self.identity.principal, &self.branch, error);
                 }

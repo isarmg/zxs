@@ -860,6 +860,7 @@ fn failed_vfs_close_detaches_only_its_writer_and_keeps_both_sessions_usable() {
                 .is_ok_and(|target| target == retained),
             "VFS descriptor survived its terminal close"
         );
+        assert!(retained.with_extension("budget.json").is_file());
         let metadata = record(&retained);
         assert_eq!(metadata["operation_id"], operation);
         assert_eq!(metadata["handle_state"], "detached");

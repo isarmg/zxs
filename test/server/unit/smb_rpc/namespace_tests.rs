@@ -1021,6 +1021,12 @@ fn namespace_submission_errors_retain_original_operation_without_abort() {
             })
             .collect::<Vec<_>>();
         assert_eq!(records.len(), 1);
+        assert!(
+            shared
+                .spool
+                .join(format!("{}.budget.json", operation_id.as_ref().unwrap()))
+                .is_file()
+        );
         let record: Value = json_codec::from_slice(&fs::read(&records[0]).unwrap()).unwrap();
         assert_eq!(record["commit_request"], commit);
         assert_eq!(record["principal"], "alice");

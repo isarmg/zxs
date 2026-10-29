@@ -18,3 +18,13 @@ for grow in 0 1; do
       smb_rpc::budget::tests::real_budget_io_failure_preserves_source_charge_and_error
   done
 done
+
+for test in \
+  smb_rpc::budget::tests::real_cleanup_directory_sync_failure_keeps_charge_and_blocks_admission \
+  smb_rpc::tests::cleanup_tests::real_close_directory_sync_failure_keeps_published_outcome_and_consumes_handle; do
+  root="$temporary/${test##*::}"
+  mkdir -m 700 "$root"
+  env LD_PRELOAD="$temporary/budget-io-eio.so" \
+    ZXS_SMB_BUDGET_FAULT_ROOT="$root" ZXS_SMB_BUDGET_FAULT_STAGE=directory-sync \
+    "$binary" --ignored --exact --nocapture "$test"
+done

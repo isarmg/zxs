@@ -112,7 +112,7 @@ impl Ledger {
     }
 }
 pub(super) struct Budget {
-    root: PathBuf,
+    pub(super) directory: Arc<PrivateDirectory>,
     limits: SpoolLimits,
     ledger: Mutex<Ledger>,
     _lock: AdvisoryLock,
@@ -293,7 +293,7 @@ impl Budget {
         }
         ledger.rebuild()?;
         Ok(Arc::new(Self {
-            root: root.to_owned(),
+            directory: Arc::new(directory),
             limits,
             ledger: Mutex::new(ledger),
             _lock: lock,
@@ -326,7 +326,7 @@ impl Budget {
             .and_then(|name| name.to_str())
             .filter(|name| source_name(name))
             .ok_or_else(|| invalid("invalid SMB source name"))?;
-        if source.parent() != Some(self.root.as_path())
+        if source.parent() != Some(self.directory.path())
             || principal.is_empty()
             || principal.len() > 1024
         {
@@ -350,7 +350,7 @@ impl Budget {
         };
         drop(ledger);
         persist::create(
-            &self.root,
+            self.directory.path(),
             source,
             &Owner {
                 principal: principal.into(),
@@ -406,7 +406,7 @@ impl Budget {
         (self.limits.bytes_total / 64).min(GRANT_POOL_MAX)
     }
     fn available(&self) -> Result<u64, ApiError> {
-        let info = rustix::fs::statvfs(&self.root)
+        let info = rustix::fs::statvfs(self.directory.path())
             .map_err(io::Error::from)
             .map_err(ApiError::io)?;
         Ok(info.f_bavail.saturating_mul(info.f_frsize))
@@ -489,7 +489,7 @@ impl Lease {
             // Persist the enlarged extent before acknowledging permission to
             // mutate the FD. Unknown metadata outcomes block further admission.
             persist::grow(
-                &self.budget.root,
+                self.budget.directory.path(),
                 &self.source,
                 &Owner {
                     principal: self.principal.clone(),
@@ -501,55 +501,62 @@ impl Lease {
         }
         Ok(())
     }
-    fn evidence_absent(&self) -> io::Result<bool> {
-        for path in [
-            self.source.clone(),
-            self.source.with_extension("work.json"),
-            self.source.with_extension("namespace.json"),
-        ] {
-            match fs::symlink_metadata(path) {
-                Ok(_) => return Ok(false),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
+    pub(super) fn block_admission(&self) {
+        self.budget.lock_ledger().uncertain = true;
+    }
+
+    /// Only an explicitly finished operation may discard its recovery material.
+    /// The durable directory barrier precedes refunding its admitted extent.
+    pub(super) fn cleanup(&self, evidence: Evidence) -> Result<(), ApiError> {
+        if self.budget.lock_ledger().uncertain {
+            return Err(invalid("SMB spool needs reconciliation"));
         }
-        Ok(true)
+        let mut pending = Pending {
+            budget: &self.budget,
+            complete: false,
+        };
+        let paths = match evidence {
+            Evidence::Writer => vec![self.source.clone(), self.source.with_extension("work.json")],
+            Evidence::Namespace => vec![self.source.with_extension("namespace.json")],
+            Evidence::Reservation => Vec::new(),
+        };
+        let names = paths
+            .into_iter()
+            .chain([record_path(&self.source)])
+            .map(|path| {
+                EntryName::new(
+                    path.file_name()
+                        .expect("invariant: admitted source has a filename"),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(crate::upload_fs_error)?;
+        persist::cleanup(&self.budget.directory, &names)?;
+        {
+            let mut ledger = self.budget.lock_ledger();
+            if ledger.uncertain {
+                return Err(invalid("SMB spool needs reconciliation"));
+            }
+            ledger.replace(self.source.clone(), None)?;
+            pending.complete = true;
+        }
+        Ok(())
     }
 }
+
+pub(super) enum Evidence {
+    Writer,
+    Namespace,
+    Reservation,
+}
+
 impl Drop for Lease {
     fn drop(&mut self) {
-        let mut ledger = match self.budget.ledger.lock() {
-            Ok(ledger) => ledger,
+        match self.budget.ledger.lock() {
+            Ok(mut ledger) => ledger.granted -= self.granted,
             Err(error) => {
-                tracing::error!(%error, "SMB cleanup skipped; ledger remains poisoned");
-                return;
+                tracing::error!(%error, "SMB grant release skipped; ledger remains poisoned")
             }
-        };
-        // Only the live pool forgets this grant; its durable charge below stays
-        // until cleanup removes the record. The pool always includes it.
-        ledger.granted -= self.granted;
-        if ledger.uncertain {
-            return;
-        }
-        match self.evidence_absent() {
-            Ok(false) => return,
-            Err(error) => {
-                tracing::warn!(error = ?error, "SMB ownership retained because recovery evidence cannot be inventoried");
-                return;
-            }
-            Ok(true) => {}
-        }
-        match fs::remove_file(record_path(&self.source)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                tracing::warn!(error = ?error, "SMB ownership record retained after cleanup failure");
-                return;
-            }
-        }
-        if let Err(error) = ledger.replace(self.source.clone(), None) {
-            ledger.uncertain = true;
-            tracing::warn!(error = ?error, "SMB spool accounting could not settle; admission blocked");
         }
     }
 }

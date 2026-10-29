@@ -128,12 +128,13 @@ impl Session {
         };
         let mut operation_id = match &request {
             Request::Namespace { operation_id, .. } => Some(operation_id.to_string()),
-            Request::Flush { handle } | Request::Close { handle } | Request::Dirty { handle } => {
-                match self.handles.get(handle) {
-                    Some(Handle::Write(writer)) => Some(writer.operation_id.to_string()),
-                    _ => None,
-                }
-            }
+            Request::Flush { handle }
+            | Request::Close { handle }
+            | Request::Dirty { handle }
+            | Request::Abort { handle } => match self.handles.get(handle) {
+                Some(Handle::Write(writer)) => Some(writer.operation_id.to_string()),
+                _ => None,
+            },
             _ => None,
         };
         let result = self.dispatch_request(request);

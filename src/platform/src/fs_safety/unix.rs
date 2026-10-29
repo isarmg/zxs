@@ -289,6 +289,23 @@ pub(super) fn remove_file(directory: &PrivateDirectory, name: &EntryName) -> Res
     directory.sync()
 }
 
+pub(super) fn remove_files(directory: &PrivateDirectory, names: &[EntryName]) -> Result<(), Error> {
+    directory.verify_identity()?;
+    for name in names {
+        let _file = match open_regular(directory, name) {
+            Ok(file) => file,
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        match unlinkat(&directory.directory, name.as_os_str(), AtFlags::empty()) {
+            Ok(()) => {}
+            Err(error) if error == rustix::io::Errno::NOENT => {}
+            Err(error) => return Err(io::Error::from(error).into()),
+        }
+    }
+    directory.sync()
+}
+
 fn regular_single_link(fd: impl AsFd, path: &Path) -> Result<rustix::fs::Stat, Error> {
     let stat = fstat(fd).map_err(io::Error::from)?;
     if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
