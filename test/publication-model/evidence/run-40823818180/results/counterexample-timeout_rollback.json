@@ -1,0 +1,80 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "timeout_rollback"
+  },
+  "initial_digest": "bec25f153b2387b68e72adba40b1e18389e756705ea7198ae2fc32db373a66f7",
+  "schema": "zxs-publication-model-trace-v1",
+  "steps": [
+    {
+      "action": "CONTENT:0:write",
+      "state_digest": "f17628032a12426eafe82d085cc548832c75095fa9a597e441292c92b451a6fd"
+    },
+    {
+      "action": "CONTENT:0:file_sync",
+      "state_digest": "66dd4c7cbec1a0999e87e535441c185655729d092362b697fcaca83f43467c40"
+    },
+    {
+      "action": "CONTENT:0:install",
+      "state_digest": "1ab74446f03534792e1fa201bd0f568dfdd0f1b393d63b13612bcf35447bf1b7"
+    },
+    {
+      "action": "CONTENT:0:directory_sync",
+      "state_digest": "9f3e4b3aa5b13420da64e24c7326c1a44d8d511f01e8af9e18a181ace5f44590"
+    },
+    {
+      "action": "barrier:CONTENT",
+      "state_digest": "5edf34edd2db0231985322156883864ded7bade6bb1e3ae3ce874e7c7a196452"
+    },
+    {
+      "action": "PREPARE:0:write",
+      "state_digest": "adf3c90aa68841f6cac05a88e16a941dedbb94d9d74c684caae4b4fa7be573d0"
+    },
+    {
+      "action": "PREPARE:0:file_sync",
+      "state_digest": "58b169677825b03136ebdd58665afa4ce7945cd04d1177b5817f47ffa684a44b"
+    },
+    {
+      "action": "PREPARE:0:install",
+      "state_digest": "03a26c3ae040ce3c444ad0ec8902958705c35a95b3afc152f5b9e12216010af9"
+    },
+    {
+      "action": "PREPARE:0:directory_sync",
+      "state_digest": "9ad6db889ef71e2453fc5e728381ad7ab4893f9632f2c7a1410b4ed67828bc5f"
+    },
+    {
+      "action": "barrier:PREPARE",
+      "state_digest": "c7c305b4b83dedffcc6ba9e7e95733c0414c714c35de2b62a48945e487261eeb"
+    },
+    {
+      "action": "issue_accept",
+      "state_digest": "a946ee2bff741b45b32ea86398b24aac794682b4198fa38e4ad48128aaa50945"
+    },
+    {
+      "action": "mutant:timeout_rollback",
+      "state_digest": "ab907ddc2e561ad51829b6049979118d02344ca88a21039d2349e52b68d3cc97"
+    }
+  ],
+  "violations": [
+    {
+      "message": "slot 0: ACCEPT was issued but abort has no complete fixed-Q absence evidence",
+      "name": "no_timeout_abort",
+      "spec": "10.4; 10.7; 10.11"
+    },
+    {
+      "message": "slot 0: aborted result has no complete fixed-Q absence evidence",
+      "name": "abort_resolution",
+      "spec": "10.7"
+    },
+    {
+      "message": "slot 0: aborted result has no fixed-Q durable resolution",
+      "name": "abort_resolution",
+      "spec": "10.7; 10.8"
+    }
+  ]
+}

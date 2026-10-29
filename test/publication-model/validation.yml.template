@@ -1,0 +1,47 @@
+name: Publication finite model validation
+on:
+  push:
+    branches: ['validation/codex-publication-model-20261029']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact tool revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: isarmg/zxs
+          ref: TOOL_COMMIT_SHA
+          persist-credentials: false
+      - name: Record environment and run self tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/publication-evidence
+          python3 --version | tee /tmp/publication-evidence/python.txt
+          git rev-parse HEAD | tee /tmp/publication-evidence/tool-commit.txt
+          printf '%s\n' "$GITHUB_SHA" > /tmp/publication-evidence/validation-commit.txt
+          python3 -m unittest discover -s test/publication-model -p 'test_*.py' -v 2>&1 | tee /tmp/publication-evidence/selftests.log
+      - name: Exhaust small bounds then expand; find and replay deliberate errors
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 test/publication-model/run_validation.py --output /tmp/publication-evidence/results 2>&1 | tee /tmp/publication-evidence/search.log
+      - name: Selected legal prefixes and bounded deep suffixes
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 test/publication-model/run_deep_validation.py --output /tmp/publication-evidence/deep-results 2>&1 | tee /tmp/publication-evidence/deep-search.log
+      - name: Upload complete raw evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: publication-model-evidence
+          path: /tmp/publication-evidence
+          if-no-files-found: error
+          retention-days: 30

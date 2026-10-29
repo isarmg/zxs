@@ -1,0 +1,317 @@
+model	Set up job	﻿2026-10-29T05:41:58.6402985Z Current runner version: '2.338.0'
+model	Set up job	2026-10-29T05:41:58.6428838Z ##[group]Runner Image Provisioner
+model	Set up job	2026-10-29T05:41:58.6429728Z Hosted Compute Agent
+model	Set up job	2026-10-29T05:41:58.6430474Z Version: 20261021.618
+model	Set up job	2026-10-29T05:41:58.6431162Z Commit: 21505ad2541d5be6135ed84fc33697146cf75b8e
+model	Set up job	2026-10-29T05:41:58.6431954Z Build Date: 2026-10-21T00:45:21Z
+model	Set up job	2026-10-29T05:41:58.6433045Z Worker ID: {32ae9289-21d6-40e4-857a-d06bbe1cc53c}
+model	Set up job	2026-10-29T05:41:58.6433771Z Region: westus2
+model	Set up job	2026-10-29T05:41:58.6434456Z Cloud: Azure
+model	Set up job	2026-10-29T05:41:58.6435007Z ##[endgroup]
+model	Set up job	2026-10-29T05:41:58.6436585Z ##[group]Operating System
+model	Set up job	2026-10-29T05:41:58.6437265Z Ubuntu
+model	Set up job	2026-10-29T05:41:58.6437796Z 24.04.5
+model	Set up job	2026-10-29T05:41:58.6438396Z LTS
+model	Set up job	2026-10-29T05:41:58.6438952Z ##[endgroup]
+model	Set up job	2026-10-29T05:41:58.6439539Z ##[group]Runner Image
+model	Set up job	2026-10-29T05:41:58.6440167Z Image: ubuntu-24.04
+model	Set up job	2026-10-29T05:41:58.6440736Z Version: 20261025.353.1
+model	Set up job	2026-10-29T05:41:58.6441880Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261025.353/images/ubuntu/Ubuntu2404-Readme.md
+model	Set up job	2026-10-29T05:41:58.6444065Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261025.353
+model	Set up job	2026-10-29T05:41:58.6445090Z ##[endgroup]
+model	Set up job	2026-10-29T05:41:58.6446152Z ##[group]GITHUB_TOKEN Permissions
+model	Set up job	2026-10-29T05:41:58.6448435Z Contents: read
+model	Set up job	2026-10-29T05:41:58.6449074Z Metadata: read
+model	Set up job	2026-10-29T05:41:58.6450079Z ##[endgroup]
+model	Set up job	2026-10-29T05:41:58.6452206Z Secret source: Actions
+model	Set up job	2026-10-29T05:41:58.6453855Z Cache mode: write
+model	Set up job	2026-10-29T05:41:58.6454606Z Prepare workflow directory
+model	Set up job	2026-10-29T05:41:58.6789981Z Prepare all required actions
+model	Set up job	2026-10-29T05:41:58.6861275Z Getting action download info
+model	Set up job	2026-10-29T05:41:59.0603900Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+model	Set up job	2026-10-29T05:41:59.1621128Z Download action repository 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' (SHA:cf430e030ddbb5b0abf93d22962f4752f3646cd9)
+model	Set up job	2026-10-29T05:41:59.3449407Z Complete job name: model
+model	Checkout exact tool revision	﻿2026-10-29T05:41:59.4372218Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+model	Checkout exact tool revision	2026-10-29T05:41:59.4373853Z with:
+model	Checkout exact tool revision	2026-10-29T05:41:59.4374326Z   repository: isarmg/zxs
+model	Checkout exact tool revision	2026-10-29T05:41:59.4374872Z   ref: 23ed7105050108ba5dcd12dbd6eba306ec0e4d0b
+model	Checkout exact tool revision	2026-10-29T05:41:59.4375481Z   persist-credentials: false
+model	Checkout exact tool revision	2026-10-29T05:41:59.4379470Z   token: ***
+model	Checkout exact tool revision	2026-10-29T05:41:59.4379907Z   ssh-strict: true
+model	Checkout exact tool revision	2026-10-29T05:41:59.4380352Z   ssh-user: git
+model	Checkout exact tool revision	2026-10-29T05:41:59.4380790Z   clean: true
+model	Checkout exact tool revision	2026-10-29T05:41:59.4381242Z   sparse-checkout-cone-mode: true
+model	Checkout exact tool revision	2026-10-29T05:41:59.4381771Z   fetch-depth: 1
+model	Checkout exact tool revision	2026-10-29T05:41:59.4382202Z   fetch-tags: false
+model	Checkout exact tool revision	2026-10-29T05:41:59.4382996Z   show-progress: true
+model	Checkout exact tool revision	2026-10-29T05:41:59.4383470Z   lfs: false
+model	Checkout exact tool revision	2026-10-29T05:41:59.4383888Z   submodules: false
+model	Checkout exact tool revision	2026-10-29T05:41:59.4384340Z   set-safe-directory: true
+model	Checkout exact tool revision	2026-10-29T05:41:59.4384848Z   allow-unsafe-pr-checkout: false
+model	Checkout exact tool revision	2026-10-29T05:41:59.4385829Z ##[endgroup]
+model	Checkout exact tool revision	2026-10-29T05:41:59.7853784Z Syncing repository: isarmg/zxs
+model	Checkout exact tool revision	2026-10-29T05:41:59.7856975Z ##[group]Getting Git version info
+model	Checkout exact tool revision	2026-10-29T05:41:59.7858367Z Working directory is '/home/runner/work/zxs/zxs'
+model	Checkout exact tool revision	2026-10-29T05:41:59.7905926Z [command]/usr/bin/git version
+model	Checkout exact tool revision	2026-10-29T05:41:59.8105254Z git version 2.56.0
+model	Checkout exact tool revision	2026-10-29T05:41:59.8147244Z ##[endgroup]
+model	Checkout exact tool revision	2026-10-29T05:41:59.8175629Z Temporarily overriding HOME='/home/runner/work/_temp/06e42b5e-76a7-4145-9ffb-08a0e2cf23fe' before making global git config changes
+model	Checkout exact tool revision	2026-10-29T05:41:59.8178383Z Adding repository directory to the temporary git global config as a safe directory
+model	Checkout exact tool revision	2026-10-29T05:41:59.8180764Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/zxs/zxs
+model	Checkout exact tool revision	2026-10-29T05:41:59.8259943Z Deleting the contents of '/home/runner/work/zxs/zxs'
+model	Checkout exact tool revision	2026-10-29T05:41:59.8265535Z ##[group]Determining repository object format
+model	Checkout exact tool revision	2026-10-29T05:41:59.8273748Z ##[endgroup]
+model	Checkout exact tool revision	2026-10-29T05:41:59.8275890Z ##[group]Initializing the repository
+model	Checkout exact tool revision	2026-10-29T05:41:59.8277265Z [command]/usr/bin/git init /home/runner/work/zxs/zxs
+model	Checkout exact tool revision	2026-10-29T05:41:59.8450548Z hint: Using 'master' as the name for the initial branch. This default branch name
+model	Checkout exact tool revision	2026-10-29T05:41:59.8453275Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+model	Checkout exact tool revision	2026-10-29T05:41:59.8455121Z hint: to use in all of your new repositories, which will suppress this warning,
+model	Checkout exact tool revision	2026-10-29T05:41:59.8456548Z hint: call:
+model	Checkout exact tool revision	2026-10-29T05:41:59.8457330Z hint:
+model	Checkout exact tool revision	2026-10-29T05:41:59.8458370Z hint: 	git config --global init.defaultBranch <name>
+model	Checkout exact tool revision	2026-10-29T05:41:59.8459710Z hint:
+model	Checkout exact tool revision	2026-10-29T05:41:59.8460936Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+model	Checkout exact tool revision	2026-10-29T05:41:59.8463920Z hint: 'development'. The just-created branch can be renamed via this command:
+model	Checkout exact tool revision	2026-10-29T05:41:59.8465493Z hint:
+model	Checkout exact tool revision	2026-10-29T05:41:59.8466382Z hint: 	git branch -m <name>
+model	Checkout exact tool revision	2026-10-29T05:41:59.8467337Z hint:
+model	Checkout exact tool revision	2026-10-29T05:41:59.8468631Z hint: Disable this message with "git config set advice.defaultBranchName false"
+model	Checkout exact tool revision	2026-10-29T05:41:59.8476922Z Initialized empty Git repository in /home/runner/work/zxs/zxs/.git/
+model	Checkout exact tool revision	2026-10-29T05:41:59.8494744Z [command]/usr/bin/git remote add origin https://github.com/isarmg/zxs
+model	Checkout exact tool revision	2026-10-29T05:41:59.8566643Z ##[endgroup]
+model	Checkout exact tool revision	2026-10-29T05:41:59.8568614Z ##[group]Disabling automatic garbage collection
+model	Checkout exact tool revision	2026-10-29T05:41:59.8588117Z [command]/usr/bin/git config --local gc.auto 0
+model	Checkout exact tool revision	2026-10-29T05:41:59.8656048Z ##[endgroup]
+model	Checkout exact tool revision	2026-10-29T05:41:59.8657665Z ##[group]Setting up auth
+model	Checkout exact tool revision	2026-10-29T05:41:59.8658822Z Removing SSH command configuration
+model	Checkout exact tool revision	2026-10-29T05:41:59.8662205Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+model	Checkout exact tool revision	2026-10-29T05:41:59.8733880Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+model	Checkout exact tool revision	2026-10-29T05:41:59.9220307Z Removing HTTP extra header
+model	Checkout exact tool revision	2026-10-29T05:41:59.9225824Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+model	Checkout exact tool revision	2026-10-29T05:41:59.9276172Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+model	Checkout exact tool revision	2026-10-29T05:41:59.9547666Z Removing includeIf entries pointing to credentials config files
+model	Checkout exact tool revision	2026-10-29T05:41:59.9550636Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+model	Checkout exact tool revision	2026-10-29T05:41:59.9605294Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+model	Checkout exact tool revision	2026-10-29T05:41:59.9889877Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-2911ab44-b01f-43f2-834a-46c52e478a5b.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+model	Checkout exact tool revision	2026-10-29T05:41:59.9951585Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/zxs/zxs/.git.path /home/runner/work/_temp/git-credentials-2911ab44-b01f-43f2-834a-46c52e478a5b.config
+model	Checkout exact tool revision	2026-10-29T05:42:00.0008298Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/zxs/zxs/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-2911ab44-b01f-43f2-834a-46c52e478a5b.config
+model	Checkout exact tool revision	2026-10-29T05:42:00.0072279Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-2911ab44-b01f-43f2-834a-46c52e478a5b.config
+model	Checkout exact tool revision	2026-10-29T05:42:00.0132067Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-2911ab44-b01f-43f2-834a-46c52e478a5b.config
+model	Checkout exact tool revision	2026-10-29T05:42:00.0179201Z ##[endgroup]
+model	Checkout exact tool revision	2026-10-29T05:42:00.0181245Z ##[group]Fetching the repository
+model	Checkout exact tool revision	2026-10-29T05:42:00.0188317Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin 23ed7105050108ba5dcd12dbd6eba306ec0e4d0b
+model	Checkout exact tool revision	2026-10-29T05:42:04.0898701Z From https://github.com/isarmg/zxs
+model	Checkout exact tool revision	2026-10-29T05:42:04.0900763Z  * branch              23ed7105050108ba5dcd12dbd6eba306ec0e4d0b -> FETCH_HEAD
+model	Checkout exact tool revision	2026-10-29T05:42:04.0911666Z [command]/usr/bin/git rev-parse --verify --quiet 23ed7105050108ba5dcd12dbd6eba306ec0e4d0b^{object}
+model	Checkout exact tool revision	2026-10-29T05:42:04.0953286Z 23ed7105050108ba5dcd12dbd6eba306ec0e4d0b
+model	Checkout exact tool revision	2026-10-29T05:42:04.0958560Z ##[endgroup]
+model	Checkout exact tool revision	2026-10-29T05:42:04.0959523Z ##[group]Determining the checkout info
+model	Checkout exact tool revision	2026-10-29T05:42:04.0960450Z ##[endgroup]
+model	Checkout exact tool revision	2026-10-29T05:42:04.0964603Z [command]/usr/bin/git sparse-checkout disable
+model	Checkout exact tool revision	2026-10-29T05:42:04.1032090Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+model	Checkout exact tool revision	2026-10-29T05:42:04.1077039Z ##[group]Checking out the ref
+model	Checkout exact tool revision	2026-10-29T05:42:04.1081582Z [command]/usr/bin/git checkout --progress --force 23ed7105050108ba5dcd12dbd6eba306ec0e4d0b
+model	Checkout exact tool revision	2026-10-29T05:42:05.1399415Z Updating files:  67% (10916/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.1618552Z Updating files:  68% (11031/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.1849959Z Updating files:  69% (11193/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.1962946Z Updating files:  70% (11355/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.2135914Z Updating files:  71% (11517/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.2213459Z Updating files:  72% (11680/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.2318746Z Updating files:  73% (11842/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.2470717Z Updating files:  74% (12004/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.2566263Z Updating files:  75% (12166/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.2692660Z Updating files:  76% (12328/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.2807588Z Updating files:  77% (12491/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.2970494Z Updating files:  78% (12653/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.3141153Z Updating files:  79% (12815/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.3278568Z Updating files:  80% (12977/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.3407305Z Updating files:  81% (13140/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.3492639Z Updating files:  82% (13302/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.3591969Z Updating files:  83% (13464/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.3980215Z Updating files:  84% (13626/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.4136880Z Updating files:  85% (13788/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.4250475Z Updating files:  86% (13951/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.4427509Z Updating files:  87% (14113/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.4559550Z Updating files:  88% (14275/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.4691298Z Updating files:  89% (14437/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.4780010Z Updating files:  90% (14599/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.4913992Z Updating files:  91% (14762/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.5299916Z Updating files:  92% (14924/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.5441258Z Updating files:  93% (15086/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.5548284Z Updating files:  94% (15248/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.5738566Z Updating files:  95% (15410/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.5830530Z Updating files:  96% (15573/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.5963057Z Updating files:  97% (15735/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.6088340Z Updating files:  98% (15897/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.6197766Z Updating files:  99% (16059/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.6198165Z Updating files: 100% (16221/16221)
+model	Checkout exact tool revision	2026-10-29T05:42:05.6198484Z Updating files: 100% (16221/16221), done.
+model	Checkout exact tool revision	2026-10-29T05:42:05.6434489Z Note: switching to '23ed7105050108ba5dcd12dbd6eba306ec0e4d0b'.
+model	Checkout exact tool revision	2026-10-29T05:42:05.6435092Z 
+model	Checkout exact tool revision	2026-10-29T05:42:05.6435350Z You are in 'detached HEAD' state. You can look around, make experimental
+model	Checkout exact tool revision	2026-10-29T05:42:05.6435853Z changes and commit them, and you can discard any commits you make in this
+model	Checkout exact tool revision	2026-10-29T05:42:05.6436505Z state without impacting any branches by switching back to a branch.
+model	Checkout exact tool revision	2026-10-29T05:42:05.6437061Z 
+model	Checkout exact tool revision	2026-10-29T05:42:05.6443847Z If you want to create a new branch to retain commits you create, you may
+model	Checkout exact tool revision	2026-10-29T05:42:05.6444799Z do so (now or later) by using -c with the switch command. Example:
+model	Checkout exact tool revision	2026-10-29T05:42:05.6445338Z 
+model	Checkout exact tool revision	2026-10-29T05:42:05.6445658Z   git switch -c <new-branch-name>
+model	Checkout exact tool revision	2026-10-29T05:42:05.6445960Z 
+model	Checkout exact tool revision	2026-10-29T05:42:05.6446194Z Or undo this operation with:
+model	Checkout exact tool revision	2026-10-29T05:42:05.6446560Z 
+model	Checkout exact tool revision	2026-10-29T05:42:05.6446830Z   git switch -
+model	Checkout exact tool revision	2026-10-29T05:42:05.6447111Z 
+model	Checkout exact tool revision	2026-10-29T05:42:05.6447478Z Turn off this advice by setting config variable advice.detachedHead to false
+model	Checkout exact tool revision	2026-10-29T05:42:05.6448083Z 
+model	Checkout exact tool revision	2026-10-29T05:42:05.6448822Z HEAD is now at 23ed7105 test(model): require recovered abort prefix on all fixed members [skip ci]
+model	Checkout exact tool revision	2026-10-29T05:42:05.6499798Z ##[endgroup]
+model	Checkout exact tool revision	2026-10-29T05:42:05.6573866Z [command]/usr/bin/git log -1 --format=%H
+model	Checkout exact tool revision	2026-10-29T05:42:05.6620525Z 23ed7105050108ba5dcd12dbd6eba306ec0e4d0b
+model	Checkout exact tool revision	2026-10-29T05:42:05.6631598Z ##[group]Removing auth
+model	Checkout exact tool revision	2026-10-29T05:42:05.6632071Z Removing SSH command configuration
+model	Checkout exact tool revision	2026-10-29T05:42:05.6636679Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+model	Checkout exact tool revision	2026-10-29T05:42:05.6684700Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+model	Checkout exact tool revision	2026-10-29T05:42:05.6973465Z Removing HTTP extra header
+model	Checkout exact tool revision	2026-10-29T05:42:05.6977795Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+model	Checkout exact tool revision	2026-10-29T05:42:05.7027063Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+model	Checkout exact tool revision	2026-10-29T05:42:05.7318344Z Removing includeIf entries pointing to credentials config files
+model	Checkout exact tool revision	2026-10-29T05:42:05.7323685Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+model	Checkout exact tool revision	2026-10-29T05:42:05.7367211Z includeif.gitdir:/home/runner/work/zxs/zxs/.git.path
+model	Checkout exact tool revision	2026-10-29T05:42:05.7368526Z includeif.gitdir:/home/runner/work/zxs/zxs/.git/worktrees/*.path
+model	Checkout exact tool revision	2026-10-29T05:42:05.7369298Z includeif.gitdir:/github/workspace/.git.path
+model	Checkout exact tool revision	2026-10-29T05:42:05.7370171Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+model	Checkout exact tool revision	2026-10-29T05:42:05.7380144Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/zxs/zxs/.git.path
+model	Checkout exact tool revision	2026-10-29T05:42:05.7424035Z /home/runner/work/_temp/git-credentials-2911ab44-b01f-43f2-834a-46c52e478a5b.config
+model	Checkout exact tool revision	2026-10-29T05:42:05.7438905Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/zxs/zxs/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-2911ab44\-b01f\-43f2\-834a\-46c52e478a5b\.config
+model	Checkout exact tool revision	2026-10-29T05:42:05.7496913Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/zxs/zxs/.git/worktrees/*.path
+model	Checkout exact tool revision	2026-10-29T05:42:05.7540602Z /home/runner/work/_temp/git-credentials-2911ab44-b01f-43f2-834a-46c52e478a5b.config
+model	Checkout exact tool revision	2026-10-29T05:42:05.7551244Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/zxs/zxs/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-2911ab44\-b01f\-43f2\-834a\-46c52e478a5b\.config
+model	Checkout exact tool revision	2026-10-29T05:42:05.7601556Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+model	Checkout exact tool revision	2026-10-29T05:42:05.7641183Z /github/runner_temp/git-credentials-2911ab44-b01f-43f2-834a-46c52e478a5b.config
+model	Checkout exact tool revision	2026-10-29T05:42:05.7656593Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-2911ab44\-b01f\-43f2\-834a\-46c52e478a5b\.config
+model	Checkout exact tool revision	2026-10-29T05:42:05.7707790Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+model	Checkout exact tool revision	2026-10-29T05:42:05.7744331Z /github/runner_temp/git-credentials-2911ab44-b01f-43f2-834a-46c52e478a5b.config
+model	Checkout exact tool revision	2026-10-29T05:42:05.7752195Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-2911ab44\-b01f\-43f2\-834a\-46c52e478a5b\.config
+model	Checkout exact tool revision	2026-10-29T05:42:05.7806547Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+model	Checkout exact tool revision	2026-10-29T05:42:05.8090830Z Removing credentials config '/home/runner/work/_temp/git-credentials-2911ab44-b01f-43f2-834a-46c52e478a5b.config'
+model	Checkout exact tool revision	2026-10-29T05:42:05.8102060Z ##[endgroup]
+model	Record environment and run self tests	﻿2026-10-29T05:42:05.8315575Z ##[group]Run set -euo pipefail
+model	Record environment and run self tests	2026-10-29T05:42:05.8315966Z [36;1mset -euo pipefail[0m
+model	Record environment and run self tests	2026-10-29T05:42:05.8316263Z [36;1mmkdir -p /tmp/publication-evidence[0m
+model	Record environment and run self tests	2026-10-29T05:42:05.8316889Z [36;1mpython3 --version | tee /tmp/publication-evidence/python.txt[0m
+model	Record environment and run self tests	2026-10-29T05:42:05.8317374Z [36;1mgit rev-parse HEAD | tee /tmp/publication-evidence/tool-commit.txt[0m
+model	Record environment and run self tests	2026-10-29T05:42:05.8317898Z [36;1mprintf '%s\n' "$GITHUB_SHA" > /tmp/publication-evidence/validation-commit.txt[0m
+model	Record environment and run self tests	2026-10-29T05:42:05.8318596Z [36;1mpython3 -m unittest discover -s test/publication-model -p 'test_*.py' -v 2>&1 | tee /tmp/publication-evidence/selftests.log[0m
+model	Record environment and run self tests	2026-10-29T05:42:05.8343326Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+model	Record environment and run self tests	2026-10-29T05:42:05.8343683Z ##[endgroup]
+model	Record environment and run self tests	2026-10-29T05:42:05.8435343Z Python 3.12.3
+model	Record environment and run self tests	2026-10-29T05:42:05.8453351Z 23ed7105050108ba5dcd12dbd6eba306ec0e4d0b
+model	Record environment and run self tests	2026-10-29T05:42:06.0080441Z test_file_sync_error_can_leave_persistent_bytes (test_model.ProtocolWindows.test_file_sync_error_can_leave_persistent_bytes) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.0166870Z test_later_content_and_index_failure_preserve_historical_result (test_model.ProtocolWindows.test_later_content_and_index_failure_preserve_historical_result) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.0193426Z test_lost_reply_retry_and_digest_mismatch_preserve_business_effect (test_model.ProtocolWindows.test_lost_reply_retry_and_digest_mismatch_preserve_business_effect) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.0213351Z test_nonprefix_accept_completion_decides_without_publication (test_model.ProtocolWindows.test_nonprefix_accept_completion_decides_without_publication) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.0377893Z test_nonprefix_failures_are_independent_and_keep_fixed_barrier (test_model.ProtocolWindows.test_nonprefix_failures_are_independent_and_keep_fixed_barrier) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.0383530Z test_process_exit_and_power_loss_have_different_byte_outcomes (test_model.ProtocolWindows.test_process_exit_and_power_loss_have_different_byte_outcomes) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.0428238Z test_second_crash_can_interrupt_recovery (test_model.ProtocolWindows.test_second_crash_can_interrupt_recovery) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.0460289Z test_single_publication_record_is_not_all_member_completion (test_model.ProtocolWindows.test_single_publication_record_is_not_all_member_completion) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.0997920Z test_two_sequential_full_publications_for_each_member_count (test_model.ProtocolWindows.test_two_sequential_full_publications_for_each_member_count) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.1006246Z test_unreadable_log_cannot_supply_absence_evidence (test_model.ProtocolWindows.test_unreadable_log_cannot_supply_absence_evidence) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.1014565Z test_unsynced_directory_name_can_survive_or_disappear (test_model.ProtocolWindows.test_unsynced_directory_name_can_survive_or_disappear) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.1075953Z test_early_ack (test_mutations.MutationSensitivityTests.test_early_ack) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.1360009Z test_lost_idempotency_binding (test_mutations.MutationSensitivityTests.test_lost_idempotency_binding) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.1379598Z test_omit_sync (test_mutations.MutationSensitivityTests.test_omit_sync) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.1436442Z test_saved_mutation_trace_rejects_action_tampering (test_mutations.MutationSensitivityTests.test_saved_mutation_trace_rejects_action_tampering) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.1553571Z test_saved_mutation_trace_rejects_state_digest_tampering (test_mutations.MutationSensitivityTests.test_saved_mutation_trace_rejects_state_digest_tampering) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3495444Z test_shrunken_quorum (test_mutations.MutationSensitivityTests.test_shrunken_quorum) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3534708Z test_timeout_rollback (test_mutations.MutationSensitivityTests.test_timeout_rollback) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3544254Z test_abort_needs_durable_fixed_quorum_resolution (test_mutations.OracleSensitivityTests.test_abort_needs_durable_fixed_quorum_resolution) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3546458Z test_corrupt_installed_record_is_not_complete_absence (test_mutations.OracleSensitivityTests.test_corrupt_installed_record_is_not_complete_absence) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3549336Z test_fabricated_publication_origin_is_rejected (test_mutations.OracleSensitivityTests.test_fabricated_publication_origin_is_rejected) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3565764Z test_abort_q_without_missing_member_and_no_resurrection (test_recovery.RecoveryWindows.test_abort_q_without_missing_member_and_no_resurrection) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3582894Z test_one_healthy_copy_repairs_second_required_copy_before_normal_publication (test_recovery.RecoveryWindows.test_one_healthy_copy_repairs_second_required_copy_before_normal_publication) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3590047Z test_planned_normal_recovery_does_not_hide_new_content_damage (test_recovery.RecoveryWindows.test_planned_normal_recovery_does_not_hide_new_content_damage) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3594692Z test_second_power_failure_during_abort_resolution (test_recovery.RecoveryWindows.test_second_power_failure_during_abort_resolution) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3606374Z test_single_publication_then_damage_keeps_original_normal_result (test_recovery.RecoveryWindows.test_single_publication_then_damage_keeps_original_normal_result) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3614412Z test_unpublished_decision_damage_publishes_explicit_degraded_result (test_recovery.RecoveryWindows.test_unpublished_decision_damage_publishes_explicit_degraded_result) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3615897Z test_depth_boundary_backedges_are_not_silently_unchecked (test_search.SearchTests.test_depth_boundary_backedges_are_not_silently_unchecked) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3617093Z test_depth_cutoff_is_not_a_pass_or_out_of_bounds_violation (test_search.SearchTests.test_depth_cutoff_is_not_a_pass_or_out_of_bounds_violation) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3618640Z test_duplicate_labels_are_model_errors (test_search.SearchTests.test_duplicate_labels_are_model_errors) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3620000Z test_edges_to_seen_states_are_checked (test_search.SearchTests.test_edges_to_seen_states_are_checked) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3621335Z test_exact_dedup_finishes_cycles (test_search.SearchTests.test_exact_dedup_finishes_cycles) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3634123Z test_initial_violation_trace_preserves_expected_property (test_search.SearchTests.test_initial_violation_trace_preserves_expected_property) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3635770Z test_invalid_resource_limits_are_rejected (test_search.SearchTests.test_invalid_resource_limits_are_rejected) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3637313Z test_replay_rejects_changed_digest_and_disabled_action (test_search.SearchTests.test_replay_rejects_changed_digest_and_disabled_action) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3638305Z test_replay_wide_successors_fail_with_explicit_budget (test_search.SearchTests.test_replay_wide_successors_fail_with_explicit_budget) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3639246Z test_shortest_deterministic_witness_and_replay (test_search.SearchTests.test_shortest_deterministic_witness_and_replay) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3640167Z test_state_and_transition_cutoffs_are_inconclusive (test_search.SearchTests.test_state_and_transition_cutoffs_are_inconclusive) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3641155Z test_wide_successors_respect_budget_before_materialization (test_search.SearchTests.test_wide_successors_respect_budget_before_materialization) ... ok
+model	Record environment and run self tests	2026-10-29T05:42:06.3641729Z 
+model	Record environment and run self tests	2026-10-29T05:42:06.3641879Z ----------------------------------------------------------------------
+model	Record environment and run self tests	2026-10-29T05:42:06.3642275Z Ran 39 tests in 0.356s
+model	Record environment and run self tests	2026-10-29T05:42:06.3642735Z 
+model	Record environment and run self tests	2026-10-29T05:42:06.3642821Z OK
+model	Exhaust small bounds then expand; find and replay deliberate errors	﻿2026-10-29T05:42:06.3830540Z ##[group]Run set -euo pipefail
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:06.3830880Z [36;1mset -euo pipefail[0m
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:06.3831520Z [36;1mpython3 test/publication-model/run_validation.py --output /tmp/publication-evidence/results 2>&1 | tee /tmp/publication-evidence/search.log[0m
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:06.3852054Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:06.3852583Z ##[endgroup]
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:06.4744534Z {"config": {"crashes": 0, "fault_budget": 0, "n": 1, "operations": 1, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 658, "max_depth": 57, "queued": 0, "states": 658, "transitions": 1029}, "name": "n1-one-slot", "status": "BoundedExhaustive", "truncation": null}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:06.6495281Z {"config": {"crashes": 0, "fault_budget": 0, "n": 1, "operations": 2, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 3002, "max_depth": 96, "queued": 0, "states": 3002, "transitions": 4724}, "name": "n1-two-slots", "status": "BoundedExhaustive", "truncation": null}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:06.8640835Z {"config": {"crashes": 0, "fault_budget": 0, "n": 2, "operations": 1, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 3324, "max_depth": 76, "queued": 0, "states": 3324, "transitions": 5844}, "name": "n2-one-copy", "status": "BoundedExhaustive", "truncation": null}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:07.2008898Z {"config": {"crashes": 0, "fault_budget": 0, "n": 2, "operations": 1, "replicas": 2, "retries": true, "variant": "correct"}, "counts": {"expanded": 5104, "max_depth": 88, "queued": 0, "states": 5104, "transitions": 9416}, "name": "n2-two-copies", "status": "BoundedExhaustive", "truncation": null}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:14.8641522Z {"config": {"crashes": 0, "fault_budget": 0, "n": 3, "operations": 1, "replicas": 2, "retries": true, "variant": "correct"}, "counts": {"expanded": 84915, "max_depth": 107, "queued": 0, "states": 84915, "transitions": 184653}, "name": "n3-full-publication", "status": "BoundedExhaustive", "truncation": null}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:39.4206162Z {"config": {"crashes": 0, "fault_budget": 0, "n": 4, "operations": 1, "replicas": 2, "retries": true, "variant": "correct"}, "counts": {"expanded": 234682, "max_depth": 58, "queued": 15318, "states": 250000, "transitions": 607570}, "name": "n4-full-publication", "status": "Inconclusive", "truncation": "max_states"}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:39.6349597Z {"config": {"crashes": 1, "fault_budget": 0, "n": 1, "operations": 1, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 2589, "max_depth": 60, "queued": 0, "states": 2589, "transitions": 5492}, "name": "n1-one-crash", "status": "BoundedExhaustive", "truncation": null}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:40.2439080Z {"config": {"crashes": 2, "fault_budget": 0, "n": 1, "operations": 1, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 5244, "max_depth": 61, "queued": 0, "states": 5244, "transitions": 13988}, "name": "n1-recovery-crash", "status": "BoundedExhaustive", "truncation": null}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:46.3812197Z {"config": {"crashes": 2, "fault_budget": 1, "n": 1, "operations": 1, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 44347, "max_depth": 63, "queued": 0, "states": 44347, "transitions": 151386}, "name": "n1-failure-recovery", "status": "BoundedExhaustive", "truncation": null}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:49.3519317Z {"config": {"crashes": 1, "fault_budget": 1, "n": 2, "operations": 1, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 19496, "max_depth": 17, "queued": 5504, "states": 25000, "transitions": 64142}, "name": "n2-failure-recovery", "status": "Inconclusive", "truncation": "max_states"}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:51.5834287Z {"config": {"crashes": 0, "fault_budget": 3, "n": 3, "operations": 1, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 11948, "max_depth": 10, "queued": 13052, "states": 25000, "transitions": 69668}, "name": "n3-nonprefix-failures", "status": "Inconclusive", "truncation": "max_states"}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:42:57.2706496Z {"config": {"crashes": 2, "fault_budget": 2, "n": 3, "operations": 1, "replicas": 2, "retries": true, "variant": "correct"}, "counts": {"expanded": 10134, "max_depth": 7, "queued": 14866, "states": 25000, "transitions": 89157}, "name": "n3-recovery", "status": "Inconclusive", "truncation": "max_states"}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:43:05.1708367Z {"config": {"crashes": 2, "fault_budget": 1, "n": 3, "operations": 2, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 10007, "max_depth": 9, "queued": 14993, "states": 25000, "transitions": 69895}, "name": "n3-two-slots", "status": "Inconclusive", "truncation": "max_states"}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:43:07.8165272Z {"config": {"crashes": 0, "fault_budget": 4, "n": 4, "operations": 1, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 9978, "max_depth": 8, "queued": 15022, "states": 25000, "transitions": 87716}, "name": "n4-nonprefix-failures", "status": "Inconclusive", "truncation": "max_states"}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:43:13.9762581Z {"config": {"crashes": 2, "fault_budget": 2, "n": 4, "operations": 1, "replicas": 2, "retries": true, "variant": "correct"}, "counts": {"expanded": 7800, "max_depth": 6, "queued": 17200, "states": 25000, "transitions": 85292}, "name": "n4-recovery", "status": "Inconclusive", "truncation": "max_states"}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:43:24.3818563Z {"config": {"crashes": 2, "fault_budget": 1, "n": 4, "operations": 2, "replicas": 1, "retries": true, "variant": "correct"}, "counts": {"expanded": 8993, "max_depth": 9, "queued": 16007, "states": 25000, "transitions": 74726}, "name": "n4-two-slots", "status": "Inconclusive", "truncation": "max_states"}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:43:24.5745948Z {"counts": {"expanded": 2835, "max_depth": 21, "queued": 419, "states": 3254, "transitions": 5502}, "replayed": true, "status": "Counterexample", "variant": "shrunken_quorum", "violations": [{"message": "slot 0: decision witness has fewer than fixed Q distinct members", "name": "fixed_quorum", "spec": "10.2; 10.6; 10.7"}]}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:43:24.5791629Z {"counts": {"expanded": 22, "max_depth": 16, "queued": 4, "states": 26, "transitions": 29}, "replayed": true, "status": "Counterexample", "variant": "early_ack", "violations": [{"message": "slot 0: member 0 lacks durable metadata/publication evidence", "name": "publication_barrier", "spec": "10.3(2-3); 10.10(1,3)"}, {"message": "slot 0: required member 0 lacks durable content/proof evidence", "name": "publication_barrier", "spec": "10.3(1,2,4); 10.10(2,4)"}, {"message": "slot 0: permanent result differs from the historical publication kind", "name": "fixed_result", "spec": "10.10"}]}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:43:24.5808961Z {"counts": {"expanded": 5, "max_depth": 5, "queued": 0, "states": 5, "transitions": 6}, "replayed": true, "status": "Counterexample", "variant": "omit_sync", "violations": [{"message": "CONTENT: member 0 advanced without durable complete bytes and directory entry", "name": "durability_barrier", "spec": "10.3; 10.5; 10.10"}]}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:43:24.5842910Z {"counts": {"expanded": 12, "max_depth": 12, "queued": 1, "states": 13, "transitions": 13}, "replayed": true, "status": "Counterexample", "variant": "timeout_rollback", "violations": [{"message": "slot 0: ACCEPT was issued but abort has no complete fixed-Q absence evidence", "name": "no_timeout_abort", "spec": "10.4; 10.7; 10.11"}, {"message": "slot 0: aborted result has no complete fixed-Q absence evidence", "name": "abort_resolution", "spec": "10.7"}, {"message": "slot 0: aborted result has no fixed-Q durable resolution", "name": "abort_resolution", "spec": "10.7; 10.8"}]}
+model	Exhaust small bounds then expand; find and replay deliberate errors	2026-10-29T05:43:24.6097015Z {"counts": {"expanded": 373, "max_depth": 39, "queued": 23, "states": 396, "transitions": 575}, "replayed": true, "status": "Counterexample", "variant": "lost_binding", "violations": [{"message": "events repeat or violate decision-slot order", "name": "unique_publication", "spec": "10.2; 10.3(5); 10.10"}, {"message": "slot 0: operation has multiple business effects", "name": "unique_publication", "spec": "10.3(5); 18"}]}
+model	Upload complete raw evidence	﻿2026-10-29T05:43:24.6335117Z ##[group]Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+model	Upload complete raw evidence	2026-10-29T05:43:24.6335559Z with:
+model	Upload complete raw evidence	2026-10-29T05:43:24.6335775Z   name: publication-model-evidence
+model	Upload complete raw evidence	2026-10-29T05:43:24.6336057Z   path: /tmp/publication-evidence
+model	Upload complete raw evidence	2026-10-29T05:43:24.6336328Z   if-no-files-found: error
+model	Upload complete raw evidence	2026-10-29T05:43:24.6336563Z   retention-days: 30
+model	Upload complete raw evidence	2026-10-29T05:43:24.6336778Z   compression-level: 6
+model	Upload complete raw evidence	2026-10-29T05:43:24.6336991Z   overwrite: false
+model	Upload complete raw evidence	2026-10-29T05:43:24.6337204Z   include-hidden-files: false
+model	Upload complete raw evidence	2026-10-29T05:43:24.6337433Z   archive: true
+model	Upload complete raw evidence	2026-10-29T05:43:24.6337629Z ##[endgroup]
+model	Upload complete raw evidence	2026-10-29T05:43:24.8057090Z With the provided path, there will be 38 files uploaded
+model	Upload complete raw evidence	2026-10-29T05:43:24.8063047Z Artifact name is valid!
+model	Upload complete raw evidence	2026-10-29T05:43:24.8063646Z Root directory input is valid!
+model	Upload complete raw evidence	2026-10-29T05:43:25.2598011Z Uploading artifact: publication-model-evidence.zip
+model	Upload complete raw evidence	2026-10-29T05:43:25.2642735Z Beginning upload of artifact content to blob storage
+model	Upload complete raw evidence	2026-10-29T05:43:25.7416092Z Uploaded bytes 30926
+model	Upload complete raw evidence	2026-10-29T05:43:25.8271060Z Finished uploading artifact content to blob storage!
+model	Upload complete raw evidence	2026-10-29T05:43:25.8273383Z SHA256 digest of uploaded artifact is 346dee5f0f33d85f8410e5702bcc84d79c053aae2d898a46320cfa68959f0efd
+model	Upload complete raw evidence	2026-10-29T05:43:25.8274582Z Finalizing artifact upload
+model	Upload complete raw evidence	2026-10-29T05:43:26.4659840Z Artifact publication-model-evidence successfully finalized. Artifact ID 12875894042
+model	Upload complete raw evidence	2026-10-29T05:43:26.4660827Z Artifact publication-model-evidence has been successfully uploaded! Final size is 30926 bytes. Artifact ID is 12875894042
+model	Upload complete raw evidence	2026-10-29T05:43:26.4664754Z Artifact download URL: https://github.com/isarmg/zxs/actions/runs/40824885678/artifacts/12875894042
+model	Post Checkout exact tool revision	﻿2026-10-29T05:43:26.4914661Z Post job cleanup.
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.5897771Z [command]/usr/bin/git version
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.5955984Z git version 2.56.0
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6002727Z Temporarily overriding HOME='/home/runner/work/_temp/b11252cf-1285-4a61-a5b7-27a691e63915' before making global git config changes
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6004122Z Adding repository directory to the temporary git global config as a safe directory
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6009321Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/zxs/zxs
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6054345Z Removing SSH command configuration
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6062722Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6114412Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6454414Z Removing HTTP extra header
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6461958Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6518311Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6864854Z Removing includeIf entries pointing to credentials config files
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6871908Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+model	Post Checkout exact tool revision	2026-10-29T05:43:26.6931168Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+model	Complete job	﻿2026-10-29T05:43:26.7381618Z Cleaning up orphan processes

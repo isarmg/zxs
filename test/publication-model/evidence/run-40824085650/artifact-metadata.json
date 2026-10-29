@@ -1,0 +1,23 @@
+{
+  "artifacts": [
+    {
+      "id": 12876126178,
+      "name": "publication-model-evidence",
+      "size_in_bytes": 30378,
+      "url": "https://api.github.com/repos/isarmg/zxs/actions/artifacts/12876126178",
+      "archive_download_url": "https://api.github.com/repos/isarmg/zxs/actions/artifacts/12876126178/zip",
+      "expired": false,
+      "created_at": "2026-10-29T05:34:22Z",
+      "expires_at": "2026-11-28T05:34:21Z",
+      "updated_at": "2026-10-29T05:34:22Z",
+      "digest": "sha256:71a5b33307c643536eaebab3e7dff22699accf11cacda5a45edf7f195fbe9172",
+      "workflow_run": {
+        "id": 40824085650,
+        "repository_id": 1424437655,
+        "head_repository_id": 1424437655,
+        "head_branch": "validation/codex-publication-model-20261029",
+        "head_sha": "bcdbe160a1cab25df735af913f7536925e338afa"
+      }
+    }
+  ]
+}

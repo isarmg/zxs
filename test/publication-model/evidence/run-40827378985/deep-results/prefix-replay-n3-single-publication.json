@@ -1,0 +1,18 @@
+{
+  "config": {
+    "crashes": 2,
+    "fault_budget": 1,
+    "n": 3,
+    "operations": 1,
+    "replicas": 2,
+    "retries": true,
+    "variant": "correct"
+  },
+  "counterexample": false,
+  "final_digest": "251db451bc6036c572ffacea4beb857cc6e38b7b3b7c4b7fddaeab6291d9bea6",
+  "first_violation_step": null,
+  "schema": "zxs-publication-model-replay-v1",
+  "steps": 62,
+  "valid": true,
+  "violations": []
+}

@@ -1,0 +1,29 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 1,
+    "n": 2,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "shrunken_quorum"
+  },
+  "counterexample": true,
+  "final_digest": "9da74a2320353b08ea81f178fac775519bef21853c8c30052a456a0a23af7e18",
+  "first_violation_step": 21,
+  "schema": "zxs-publication-model-replay-v1",
+  "steps": 21,
+  "valid": true,
+  "violations": [
+    {
+      "message": "slot 0: decision witness has fewer than fixed Q distinct members",
+      "name": "fixed_quorum",
+      "spec": "10.2; 10.6; 10.7"
+    },
+    {
+      "message": "slot 0: first decision witness is not a fixed-Q member set",
+      "name": "decision_evidence",
+      "spec": "10.2; 10.6; 10.7"
+    }
+  ]
+}

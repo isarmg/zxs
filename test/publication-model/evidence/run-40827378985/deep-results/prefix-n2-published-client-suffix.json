@@ -1,0 +1,227 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 2,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "correct"
+  },
+  "initial_digest": "ecbe9cb5e76b714164cbfed6c9cfdf392c5dff7015aaf255688fe1d9d4c9dac2",
+  "schema": "zxs-publication-model-trace-v1",
+  "steps": [
+    {
+      "action": "CONTENT:0:write",
+      "state_digest": "81481abe028f14e146ee63cfd6a8508c21d77ef7b78529efdbb4aa788a64618d"
+    },
+    {
+      "action": "CONTENT:0:file_sync",
+      "state_digest": "acd82bfdf1a29c011bca580c64894bcc8931378419fc8a37c362e2083b516a7b"
+    },
+    {
+      "action": "CONTENT:0:install",
+      "state_digest": "8141fa5edf000405694f95f2aa0205c00a535de108c7d1d3b76ab271367e154f"
+    },
+    {
+      "action": "CONTENT:0:directory_sync",
+      "state_digest": "d861cd06ad0525589bbeb35c2345979ee73bc1304cc900295f9981a86b7f3a5a"
+    },
+    {
+      "action": "barrier:CONTENT",
+      "state_digest": "a9215f63e3e30e26092fd7dd389e01d0208cef045a4bfdad3b9c173723bb90c5"
+    },
+    {
+      "action": "PREPARE:0:write",
+      "state_digest": "c34b3d589cd9a2b3eb0d6320c0e8d68693bbf065cc49fd5b0f680f008dcd7ab0"
+    },
+    {
+      "action": "PREPARE:0:file_sync",
+      "state_digest": "26e7d86f6dbfcc85b2eebccbf34ff93ff30097b1636224519b05521b1f7d77eb"
+    },
+    {
+      "action": "PREPARE:0:install",
+      "state_digest": "a49952b4f4276a2370fcb1d6489bb376d9029ea7dcd9ee93b87c26a50f744b12"
+    },
+    {
+      "action": "PREPARE:0:directory_sync",
+      "state_digest": "8dd65b706472f5364327472874e20365958ea58b2ebc77d4fd47543542713ecc"
+    },
+    {
+      "action": "PREPARE:1:write",
+      "state_digest": "ad87adf4df5379af48619a131c1581712b714f50d3db754a89b833322577abb1"
+    },
+    {
+      "action": "PREPARE:1:file_sync",
+      "state_digest": "1eb33c186d6c58e762482190b21e4055ead62ace29ca4da90da93abc59b3db51"
+    },
+    {
+      "action": "PREPARE:1:install",
+      "state_digest": "49c1c1211cdf81cd2e082479651663fb602f096f184a9742cc98a5d2a0d32ffb"
+    },
+    {
+      "action": "PREPARE:1:directory_sync",
+      "state_digest": "a8f0c1d5c31c48eea69b6b8861dd9293d4d0fd690c6d9bde98d73e1acfe6edeb"
+    },
+    {
+      "action": "barrier:PREPARE",
+      "state_digest": "272a924f915c9fa2c466dff160c29c3d97dec639893ac8a5be001d1ec98ce279"
+    },
+    {
+      "action": "issue_accept",
+      "state_digest": "fd2a538d4c693bebf4156a8c0cf2d24f80a0d393dcf64c902ecf8a4aa78543f2"
+    },
+    {
+      "action": "ACCEPT:0:write",
+      "state_digest": "9143a0944157aa35f8be779fe9ff429a516327718588cab2574097b4856980f1"
+    },
+    {
+      "action": "ACCEPT:0:file_sync",
+      "state_digest": "b612949a9f8dd1a75a91ffaedfc1befb20a3a55289cc0eebbcecdf00e0898157"
+    },
+    {
+      "action": "ACCEPT:0:install",
+      "state_digest": "b242c762283905948840f8606497d1b6dc86fc50310a45966b6cbb237edadc07"
+    },
+    {
+      "action": "ACCEPT:0:directory_sync",
+      "state_digest": "c2d45d9263b500a2351d4b7a6cc2ec47f8f1bb4798a614284953ad1ba1a4bdaf"
+    },
+    {
+      "action": "ACCEPT:1:write",
+      "state_digest": "0f8066ca6b5a81292188803c2bd474e275e359c82eb351854c388a8558f59982"
+    },
+    {
+      "action": "ACCEPT:1:file_sync",
+      "state_digest": "8b5472e3cba6aed50359e9a2dbb7f4adeacf5299016246fb4ff7c1a063d49481"
+    },
+    {
+      "action": "ACCEPT:1:install",
+      "state_digest": "47bf37ce42460311f13fb43f3f3b4cdbe2b8654a991bcd985506d493b9d8a125"
+    },
+    {
+      "action": "ACCEPT:1:directory_sync",
+      "state_digest": "accf0bffb0e15bd2e940ecfe5fb934a9d4391c8daa8b159469c31203fcb9b95c"
+    },
+    {
+      "action": "barrier:ACCEPT",
+      "state_digest": "e9c54a045be83cbed2aae97fcdaf29b1a539e856769fad7043043277ba3e9149"
+    },
+    {
+      "action": "FINALIZE:0:write",
+      "state_digest": "bed2b31e13d1a60308f335a327aed688e03f0b8f8a40a9301a95e0ef9e9ab735"
+    },
+    {
+      "action": "FINALIZE:0:file_sync",
+      "state_digest": "75a7bb009e8d910022094a5779e4e956994690aa2e02fb5d7e3da8a0a7fe2980"
+    },
+    {
+      "action": "FINALIZE:0:install",
+      "state_digest": "6b4050aa3a09bfd4fa1606089949d0333fa6052649870df6081bbca63ff9f63a"
+    },
+    {
+      "action": "FINALIZE:0:directory_sync",
+      "state_digest": "26ed747d6fd5a24d18e42d90a2304f50ecc3ec4338c409624c9fdc89f2c9f8d4"
+    },
+    {
+      "action": "FINALIZE:1:write",
+      "state_digest": "46d277d5797d238887e3646dde039b4ed4551e4b28f22fa5ec03a51c829e2bab"
+    },
+    {
+      "action": "FINALIZE:1:file_sync",
+      "state_digest": "6635dc2dce90af1df590a62f95f1d986700aed26f994778120d7ae40c54d4480"
+    },
+    {
+      "action": "FINALIZE:1:install",
+      "state_digest": "67c6db733b42c24be835fdafcb1a242f83ec5d05331757dc0f9cce571cd05e66"
+    },
+    {
+      "action": "FINALIZE:1:directory_sync",
+      "state_digest": "659a608b61a74637ecbd51d45d8f353a49b3422dfb63fcc12079fd8992e31f04"
+    },
+    {
+      "action": "barrier:FINALIZE",
+      "state_digest": "5f7866366779fd81d5db6d7913bb25d2bea380679627853608216a4448827311"
+    },
+    {
+      "action": "COMMIT_PROOF:0:write",
+      "state_digest": "d704af45d3680daf65099c6c351b6eec50468f4c2a7e52a5d59cfe73148255cc"
+    },
+    {
+      "action": "COMMIT_PROOF:0:file_sync",
+      "state_digest": "9338cbcc9e07f663da0492a539b2f39ef7ce02650104b2f2c1c185711998b7b3"
+    },
+    {
+      "action": "COMMIT_PROOF:0:install",
+      "state_digest": "ccfcbd14c0ab2235c4a9cb6aac88e97b09c73c8079a8c1a416d08df241257998"
+    },
+    {
+      "action": "COMMIT_PROOF:0:directory_sync",
+      "state_digest": "653a0cf3a53e212c0ddd6fefdbca610702fef614c1f679e56169782e200287fc"
+    },
+    {
+      "action": "barrier:COMMIT_PROOF",
+      "state_digest": "2c1b90c9a9d6cb1b48153c747b28e9b8c174e899bfe175c92e2a3e325cf69c62"
+    },
+    {
+      "action": "PUBLICATION:1:write",
+      "state_digest": "9884e3e201178b2c5fa5065504008bcb6dd5509f6eaa58f5d658f729bbab703f"
+    },
+    {
+      "action": "PUBLICATION:1:file_sync",
+      "state_digest": "3abec8d941c6916f885bdb2304344e3053d80483a27ef4036b72ac67bfc34ce3"
+    },
+    {
+      "action": "PUBLICATION:1:install",
+      "state_digest": "e7cf78e45c76d2e2696b9ee19ebb440e9aeec0c6625cda042329e9224ab508a2"
+    },
+    {
+      "action": "PUBLICATION:1:directory_sync",
+      "state_digest": "8266a3f0bc760d3c961db37084ce400468be8bd9c2012dcea771f6654043faa6"
+    },
+    {
+      "action": "PUBLICATION:0:write",
+      "state_digest": "f357ec37c8ba65bed08e5794b1b308668e178f94a8a971a7e864dd145a421ff0"
+    },
+    {
+      "action": "PUBLICATION:0:file_sync",
+      "state_digest": "cb9ed293a40f36473ce2d49c293ea56a247654165736d1742817b2586d579864"
+    },
+    {
+      "action": "PUBLICATION:0:install",
+      "state_digest": "d34b7e5b1479906908092ff1ac80d6285ce94f582504f1844eb8adcfa233cec8"
+    },
+    {
+      "action": "PUBLICATION:0:directory_sync",
+      "state_digest": "1c7338946daa304473c303200b58925cbea7cf976e44fe59df647e4f96d91be4"
+    },
+    {
+      "action": "barrier:PUBLICATION",
+      "state_digest": "51c93fb7e6fb87d33f3ff5ca56ebff031e762333c988dbe44de33169329d6e7d"
+    },
+    {
+      "action": "PUBLICATION_PROOF:0:write",
+      "state_digest": "c57f6e2aa91748b1a005fc6acc969984c08c154fbc61dc3eeffcbc5530acde65"
+    },
+    {
+      "action": "PUBLICATION_PROOF:0:file_sync",
+      "state_digest": "dc8f9a7272fc9a16e27c629d848076b6b92d5392048488f8ea08f49815ad2aa7"
+    },
+    {
+      "action": "PUBLICATION_PROOF:0:install",
+      "state_digest": "e8593fc450028614b62ec9792fe0c3347249f047aafc40eb9d97d166504c1417"
+    },
+    {
+      "action": "PUBLICATION_PROOF:0:directory_sync",
+      "state_digest": "37855d9001bcb91708c6caf5e6f4cfce33e746ea556c4fe08e12e811121f771c"
+    },
+    {
+      "action": "barrier:PUBLICATION_PROOF",
+      "state_digest": "d13e4d0e45b9738c2d116c9514182d8df6f39af5e4c93fb0e1096bf1e54f1a5c"
+    },
+    {
+      "action": "publish:atomic_state_receipt_event",
+      "state_digest": "cd9acfde5fdb62593b9a55b50cdd68e5c48bb06149c258b34b8dbb58c5e81565"
+    }
+  ]
+}
