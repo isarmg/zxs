@@ -15,6 +15,9 @@ mod metadata_adversarial_segments;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/metadata_adversarial/budgets.rs"]
 mod metadata_adversarial_budgets;
+#[cfg(test)]
+#[path = "../../../test/engine/unit/metadata_adversarial/admission_budget.rs"]
+mod metadata_adversarial_admission_budget;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serialization(rename_all = "UPPERCASE")]
