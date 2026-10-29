@@ -548,8 +548,8 @@ pub(crate) use object_storage::ObjectAddress;
 use object_storage::write_object_bytes;
 use object_storage::write_object_bytes_at;
 #[cfg(test)]
-pub(crate) use object_storage::{existing_object_paths, list_object_hashes};
-pub(crate) use object_storage::{existing_object_paths_at, list_object_hashes_at, object_path};
+pub(crate) use object_storage::{existing_object_paths, list_object_hashes, object_path};
+pub(crate) use object_storage::{existing_object_paths_at, list_object_hashes_at};
 #[cfg(test)]
 pub(crate) fn store_object<T: Serialize + ?Sized>(
     d: &DiskConfig,
