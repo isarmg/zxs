@@ -1,5 +1,5 @@
 //! Known publication is not a definite HTTP rejection when terminal mirrors fail.
-use super::projection_failure::receipt_without_observation_time;
+use super::projection_failure::receipt_outcome;
 use super::published_reconciliation_failure::{obstruct_terminal_mirror, restore_terminal_mirror};
 use super::*;
 
@@ -109,8 +109,8 @@ async fn terminal_workspace_failure_keeps_http_receipt_queryable_and_writes_fenc
     assert_eq!(queried["result"]["protection_at_publish"], "TARGET_MET");
     let replay = success(&app, &token, "POST", &route, Some(body)).await;
     assert_eq!(
-        receipt_without_observation_time(&replay),
-        receipt_without_observation_time(&queried)
+        receipt_outcome(&replay),
+        receipt_outcome(&queried)
     );
     let (ready, _) = send(&app, Some(&token), "GET", "/readyz", None).await;
     assert_eq!(ready, StatusCode::SERVICE_UNAVAILABLE);

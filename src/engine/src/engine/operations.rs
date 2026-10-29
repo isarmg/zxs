@@ -33,18 +33,23 @@ impl OperationRecord {
 pub struct OperationReadPlan {
     record: OperationRecord,
     versions: Vec<(ContentReadPlan, u32)>,
-    unavailable: bool,
+    health: Option<storage_contract::CurrentHealth>,
 }
 
 impl OperationReadPlan {
     /// Current named-disk identity, publication proof and complete payload
     /// verification happen after the caller releases its Engine mutex.
-    pub fn check(mut self) -> OperationRecord {
-        let mut degraded = false;
+    pub fn observe(mut self) -> (OperationRecord, Option<storage_contract::CurrentHealth>) {
         for (plan, target_copies) in &self.versions {
             match plan.health(*target_copies) {
-                storage_contract::CurrentHealth::Unavailable => self.unavailable = true,
-                storage_contract::CurrentHealth::Degraded => degraded = true,
+                storage_contract::CurrentHealth::Unavailable => {
+                    self.health = Some(storage_contract::CurrentHealth::Unavailable);
+                }
+                storage_contract::CurrentHealth::Degraded => {
+                    if self.health != Some(storage_contract::CurrentHealth::Unavailable) {
+                        self.health = Some(storage_contract::CurrentHealth::Degraded);
+                    }
+                }
                 storage_contract::CurrentHealth::Healthy => (),
                 storage_contract::CurrentHealth::Unknown
                 | storage_contract::CurrentHealth::Recovering => {
@@ -52,12 +57,15 @@ impl OperationReadPlan {
                 }
             }
         }
-        if self.unavailable {
-            self.record.result.current_health = storage_contract::CurrentHealth::Unavailable;
-        } else if degraded {
-            self.record.result.current_health = storage_contract::CurrentHealth::Degraded;
+        if let Some(health) = self.health {
+            self.record.result.current_health = health;
         }
-        self.record
+        (self.record, self.health)
+    }
+
+    /// Trusted local convenience retaining the existing result representation.
+    pub fn check(self) -> OperationRecord {
+        self.observe().0
     }
 }
 
@@ -210,7 +218,7 @@ impl Engine {
         let mut plan = OperationReadPlan {
             record,
             versions: Vec::new(),
-            unavailable: false,
+            health: None,
         };
         // A pending candidate has no publication to inspect, even if its staged
         // commit happens to resemble an existing public commit.
@@ -226,6 +234,7 @@ impl Engine {
         else {
             return plan;
         };
+        plan.health = Some(storage_contract::CurrentHealth::Healthy);
         // Health covers the publication's complete commit: stream its file
         // versions through the paged namespace, deduplicated, without holding
         // the materialized tree.
@@ -243,7 +252,7 @@ impl Engine {
         });
         if streamed.is_err() {
             // An unreadable namespace page cannot prove any content healthy.
-            plan.unavailable = true;
+            plan.health = Some(storage_contract::CurrentHealth::Unavailable);
             return plan;
         }
         for version_id in versions {
@@ -255,7 +264,7 @@ impl Engine {
                 }
                 // Purged/migrated, missing or inconsistent descriptors all fail
                 // closed, without rewriting the original publication receipt.
-                Err(_) => plan.unavailable = true,
+                Err(_) => plan.health = Some(storage_contract::CurrentHealth::Unavailable),
             }
         }
         plan

@@ -60,10 +60,17 @@ struct NamespaceAfterWorkspace {
 impl Backend for NamespaceAfterWorkspace {
     fn operation(
         &self,
+        _identity: &Identity,
+        _operation_id: storage_contract::OperationId,
+    ) -> Result<crate::OperationObservation, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn operation_outcome(
+        &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
-        self.inner.operation(identity, operation_id)
+    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+        self.inner.operation_outcome(identity, operation_id)
     }
     fn require_native_workspace_commit_completion(
         &self,
@@ -851,7 +858,7 @@ fn namespace_preconditions_use_workspace_base_after_concurrent_head_changes() {
         assert!(
             backend
                 .inner
-                .operation(&session.identity, operation_id.parse().unwrap())
+                .operation_outcome(&session.identity, operation_id.parse().unwrap())
                 .and_then(crate::operation_wire::operation_wire)
                 .is_err()
         );
@@ -928,7 +935,7 @@ fn publication_comparison_uses_entry_identity_in_renamed_commit() {
         &session.identity,
         &branch,
         writer,
-        renamed_publication,
+        renamed_publication.into(),
     )
     .unwrap();
     assert!(writer.committed);

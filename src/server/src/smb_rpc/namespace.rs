@@ -94,7 +94,11 @@ impl Session {
         let _operation = OperationReservation::acquire(&self.shared, operation_id)?;
         // Namespace is not a replay API. An existing operation or recovery
         // record must be reconciled, not staged into a new workspace.
-        match self.shared.backend.operation(&self.identity, operation_id) {
+        match self
+            .shared
+            .backend
+            .operation_outcome(&self.identity, operation_id)
+        {
             Ok(_) => {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::OperationIdConflict,
@@ -269,7 +273,7 @@ impl Session {
             self.shared
                 .backend
                 .commit_workspace(&self.identity, commit)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })();
         if result.is_ok() {
             cleanup_namespace_record(&record);

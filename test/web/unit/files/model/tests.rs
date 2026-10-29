@@ -253,12 +253,19 @@ const DEGRADED: &str = include_str!("../fixtures/degraded-save-operation.json");
 const DAMAGE: &str = include_str!("../fixtures/damaged-published-save-operation.json");
 #[test]
 fn publication_protection_is_not_rewritten_by_later_damage() {
-    let damage: Value = json_codec::from_str(DAMAGE).unwrap();
+    let mut damage: Value = json_codec::from_str(DAMAGE).unwrap();
+    assert_eq!(
+        FileOperation::from_receipt(damage["operation_id"].as_str().unwrap(), &damage).status(),
+        SaveStatus::Unknown
+    );
     // Derive a healthy comparison from this real receipt, changing only
     // current health. Frozen publication evidence must give the same label.
     let mut good = damage.clone();
     good["current_health"]["state"] = "HEALTHY".into();
     assert_eq!(good["result"], damage["result"]);
+    good.as_object_mut().unwrap().remove("current_health");
+    damage.as_object_mut().unwrap().remove("current_health");
+    assert_eq!(good, damage);
     let id = damage["operation_id"].as_str().unwrap();
     assert_eq!(
         FileOperation::from_receipt(id, &good).status(),
@@ -271,7 +278,8 @@ fn publication_protection_is_not_rewritten_by_later_damage() {
 }
 #[test]
 fn permanent_loss_is_distinct_from_ordinary_save() {
-    let loss: Value = json_codec::from_str(DEGRADED).unwrap();
+    let mut loss: Value = json_codec::from_str(DEGRADED).unwrap();
+    loss.as_object_mut().unwrap().remove("current_health");
     let id = loss["operation_id"].as_str().unwrap();
     assert_eq!(
         FileOperation::from_receipt(id, &loss).status(),

@@ -7,6 +7,8 @@ pub mod encoding;
 mod integer_json;
 pub use content_hash::{ContentHash, ParseContentHashError};
 mod operation_id;
+mod operation_outcome;
+pub use operation_outcome::OperationOutcome;
 mod public_commit;
 pub use operation_id::OperationId;
 pub use public_commit::{

@@ -28,7 +28,9 @@
 
 PUBLICATION 的结构允许非空、按身份排序且无重复身份的回执集；不同内容但相同 disk_id 仍须拒绝。Schema 和独立向量没有可信成员配置，不能证明回执集完整；运行时必须对照持久化的可信配置验证精确成员身份和数量、全部成员完成屏障及成员代际，不能用回执数量推导新成员集。单/双成员字段向量不是三成员池缺失回执的授权。
 
-PUBLICATION 中回执使用合成身份与摘要；通过字段或覆盖集合检查不证明磁盘曾同步。展开清单只是字段语义，生产日志须使用有界分页引用并保留完整证明闭包。成功保存后当前健康变为不可用的样例，只验证这两个维度可以分别表达，不模拟真实故障。
+PUBLICATION 中回执使用合成身份与摘要；通过字段或覆盖集合检查不证明磁盘曾同步。展开清单只是字段语义，生产日志须使用有界分页引用并保留完整证明闭包。成功保存后当前健康变为不可用的 SaveOperationObservation 样例，只验证这两个维度可以分别表达，不模拟真实故障。
+
+`SaveOperation` 是即时内容回执及 `/api/operations/{operation}/outcome` 的内容变体，明确拒绝 `current_health`。`SaveOperationObservation` 是原 operation GET 的显式诊断内容变体：必填的 `current_health=null` 表示 NotObserved，不把 pending 或缺少作用域伪装成健康；实际 Checked 才返回 `CurrentHealth` 的 state/checked_at 对象。非内容操作由 `GenericOperation` / `GenericOperationObservation` 表达，两个 GET 分别使用联合 `OperationOutcome` / `OperationObservation`。通用 operation_kind/result 保持开放，发布结果和当前观察互不替代。固定向量同步覆盖额外健康字段拒绝、缺失观察判别字段、旧字符串形态、pending 伪造检查、健康状态变化及原保护语义；它们是手工审阅的合成契约源输入，不是运行时捕获证据。持久化 `OperationResult`、`OperationSegment`、原固定规范字节与摘要向量未改变，不增加旧响应兼容分支。
 
 文件大小等大整数使用十进制字符串；schema 的 UInt64 正则精确限制最大值。语义检查另验证盘位连续、物理成员不重复、所需内容证明覆盖、上传完整性及 HTTP、SMB 各自独立的 spool 所有者/总额关系。OpenAPI 内嵌与 core 相同的定义供工具离线使用，校验器会拒绝二者漂移。
 

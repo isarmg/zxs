@@ -2237,14 +2237,27 @@ async fn operation_over_http(
         .unwrap();
     let app = storage_server::router(backend, auth, ServerConfig::loopback(system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
-    success(
+    let outcome_path = format!("/api/operations/{operation}/outcome?unused=accepted");
+    let outcome = success(&app, &token, "GET", &outcome_path, None).await;
+    assert!(outcome.get("current_health").is_none());
+    let observation = success(
         &app,
         &token,
         "GET",
         &format!("/api/operations/{operation}?unused=accepted"),
         None,
     )
-    .await
+    .await;
+    assert!(observation["current_health"]["checked_at"].is_string());
+    let mut observed_outcome = observation.clone();
+    observed_outcome.as_object_mut().unwrap().remove("current_health");
+    assert_eq!(observed_outcome, outcome);
+    assert_eq!(
+        success(&app, &token, "GET", &outcome_path, None).await,
+        outcome,
+        "a diagnostic read must not add observations to the cheap outcome"
+    );
+    observation
 }
 
 #[tokio::test]
@@ -2533,19 +2546,11 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         Some(json!({"directory_branch_id":frozen,"operation_id":selection_operation})),
     )
     .await;
-    // Health is a fresh observation; only its timestamp varies across replay.
-    assert!(replay["current_health"]["checked_at"].is_string());
-    let mut first_receipt = selected.clone();
-    let mut replay_receipt = replay;
-    first_receipt["current_health"]
-        .as_object_mut()
-        .unwrap()
-        .remove("checked_at");
-    replay_receipt["current_health"]
-        .as_object_mut()
-        .unwrap()
-        .remove("checked_at");
-    assert_eq!(replay_receipt, first_receipt);
+    // Mutation replay returns the permanent outcome, not a fabricated health
+    // observation with a new timestamp.
+    assert!(selected.get("current_health").is_none());
+    assert!(replay.get("current_health").is_none());
+    assert_eq!(replay, selected);
     let changed = send(
         &app,
         Some(&session),
@@ -4267,7 +4272,7 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
     assert!(initialized["result"]["directory_branch_id"].is_string());
     assert_eq!(initialized["operation_kind"], "directory.scope.initialize");
     assert!(initialized["publication_sequence"].is_string());
-    assert!(initialized["current_health"]["checked_at"].is_string());
+    assert!(initialized.get("current_health").is_none());
     let replay = success(
         &app,
         &token,

@@ -71,7 +71,7 @@ fn select_same_version_draft(shared: &Shared, branch: &str, path: &str) -> Entry
                 operation_id: storage_contract::OperationId::generate(),
             },
         )
-        .and_then(crate::operation_wire::operation_wire)
+        .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         .unwrap();
     assert_eq!(created["result"]["materialized"], false);
     shared

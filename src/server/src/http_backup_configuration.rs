@@ -116,7 +116,7 @@ pub(crate) async fn configure(
         .run(move |backend| {
             backend
                 .configure_backups(&identity, parse(body)?)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)

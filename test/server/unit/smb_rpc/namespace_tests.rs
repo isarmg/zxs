@@ -98,7 +98,9 @@ fn rpc_flush_returns_published_receipt_when_index_projection_fails() {
     assert_eq!(projection_sequence(&index), projected_before);
     let operation = saved["operation_id"].as_str().unwrap().parse().unwrap();
     let queried = crate::operation_wire::operation_wire(
-        backend.operation(&identity(&shared), operation).unwrap(),
+        backend
+            .operation_outcome(&identity(&shared), operation)
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -181,7 +183,9 @@ fn rpc_namespace_returns_published_receipt_and_does_not_replay_after_index_failu
     assert_eq!(saved["protection_at_publish"], "NOT_APPLICABLE");
     assert_eq!(projection_sequence(&index), projected_before);
     let queried = crate::operation_wire::operation_wire(
-        backend.operation(&identity(&shared), operation).unwrap(),
+        backend
+            .operation_outcome(&identity(&shared), operation)
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -273,10 +277,17 @@ struct NamespaceFailure {
 impl Backend for NamespaceFailure {
     fn operation(
         &self,
+        _identity: &Identity,
+        _operation_id: storage_contract::OperationId,
+    ) -> Result<crate::OperationObservation, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn operation_outcome(
+        &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
-        self.inner.operation(identity, operation_id)
+    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+        self.inner.operation_outcome(identity, operation_id)
     }
     fn require_native_workspace_commit_completion(
         &self,
@@ -1038,7 +1049,7 @@ fn namespace_submission_errors_retain_original_operation_without_abort() {
         if publish {
             let operation = backend
                 .inner
-                .operation(
+                .operation_outcome(
                     &identity(&shared),
                     operation_id.as_deref().unwrap().parse().unwrap(),
                 )
@@ -1110,7 +1121,7 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
         if publish {
             let operation = backend
                 .inner
-                .operation(
+                .operation_outcome(
                     &session.identity,
                     error.operation_id.as_deref().unwrap().parse().unwrap(),
                 )
@@ -1316,7 +1327,7 @@ fn write_through_dirty_error_identifies_the_new_submitted_generation() {
     );
     let operation = backend
         .inner
-        .operation(&session.identity, current)
+        .operation_outcome(&session.identity, current)
         .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     assert_eq!(operation["commit_state"], "PUBLISHED");
@@ -1338,10 +1349,17 @@ struct PreparationFailure {
 impl Backend for PreparationFailure {
     fn operation(
         &self,
+        _identity: &Identity,
+        _operation_id: storage_contract::OperationId,
+    ) -> Result<crate::OperationObservation, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn operation_outcome(
+        &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
-        self.inner.operation(identity, operation_id)
+    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+        self.inner.operation_outcome(identity, operation_id)
     }
     fn require_native_workspace_commit_completion(
         &self,
@@ -2099,7 +2117,7 @@ fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
             assert!(
                 backend
                     .inner
-                    .operation(&session.identity, operation_id.parse().unwrap())
+                    .operation_outcome(&session.identity, operation_id.parse().unwrap())
                     .and_then(crate::operation_wire::operation_wire)
                     .is_err(),
                 "preparation failure must not be presented as publication"
@@ -2148,7 +2166,7 @@ fn dropped_successful_rpc_frame_keeps_the_client_allocated_operation_queryable()
     worker.join().unwrap();
     let result = backend
         .inner
-        .operation(&identity(&shared), operation_id.parse().unwrap())
+        .operation_outcome(&identity(&shared), operation_id.parse().unwrap())
         .and_then(crate::operation_wire::operation_wire)
         .unwrap();
     assert_eq!(result["commit_state"], "PUBLISHED");

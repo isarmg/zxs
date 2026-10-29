@@ -414,11 +414,18 @@ struct PanickingBackend {
 }
 
 impl Backend for PanickingBackend {
+    fn operation_outcome(
+        &self,
+        _: &crate::auth::Identity,
+        _: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationOutcome, crate::ApiError> {
+        panic!("private operation outcome lookup panic detail")
+    }
     fn operation(
         &self,
         _: &crate::auth::Identity,
         _: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+    ) -> Result<crate::OperationObservation, crate::ApiError> {
         panic!("private operation lookup panic detail")
     }
     fn commit_workspace(
@@ -1346,6 +1353,11 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         (
             "GET",
             "/api/operations/op_00000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/operations/op_00000000000000000000000000000000/outcome",
             None,
         ),
         (

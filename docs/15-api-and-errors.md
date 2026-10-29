@@ -91,7 +91,8 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `PUT /api/workspaces/{workspace}/files/{item}/ranges/{offset}` | 可选脏范围协议，只有能力已声明才可使用 |
 | `POST /api/workspaces/{workspace}/namespace-operations` | 准备创建、改名、移动、删除等操作 |
 | `POST /api/workspaces/{workspace}/commit` | 发起封存与提交 |
-| `GET /api/operations/{operation}` | 查询确定结果或处理中状态 |
+| `GET /api/operations/{operation}/outcome` | 只查询确定结果或处理中状态，供写入后的结果核对；不观察当前健康 |
+| `GET /api/operations/{operation}` | 显式管理员诊断：原操作结果与当前健康观察分开返回 |
 | `POST /api/workspaces/{workspace}/abort` | 仅在安全阶段中止 |
 | `GET /api/versions/{version}/content` | 受授权的固定版本内容与 Range；可传 repository_id/path 按具体逻辑别名生成下载名称 |
 | `GET /api/versions/{version}` | 返回获授权版本描述及可信校验清单摘要 |
@@ -162,7 +163,9 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 }
 ```
 
-请求先通过验证并登记操作，长任务可返回 `202` 和操作 ID，明确表示尚未完成。内容提交的最终成功结果包含 `commit_id`、分支新代际、逐版本r(v)、一级归属、required_slots及每级确认状态、拓扑/绑定代际、成员代际和业务序号。操作查询分别返回 `commit_state`、`protection_at_publish`、`current_health`；已成功提交后来掉盘时保持原提交结果，只更新当前健康状态。
+请求先通过验证并登记操作，长任务可返回 `202` 和操作 ID，明确表示尚未完成。内容提交的最终成功结果包含 `commit_id`、分支新代际、逐版本r(v)、一级归属、required_slots及每级确认状态、拓扑/绑定代际、成员代际和业务序号。即时变更回执与 `GET /api/operations/{operation}/outcome` 只返回原操作的发布结果，不带 `current_health` 或 `checked_at`，不会为了确认发布而枚举历史版本、读取内容副本或取得当前时刻。
+
+显式 `GET /api/operations/{operation}` 保留真实管理员诊断能力：相同的固定结果之外，必填 `current_health` 为 `null` 或 `{state, checked_at}`。`null` 明确表示 NotObserved（操作尚未完成或没有可观察作用域），不表示健康，也不伪造观察时间；对象表示 Checked，`state` 为 `HEALTHY`、`DEGRADED`、`UNAVAILABLE` 或 `UNKNOWN`，`checked_at` 是实际观察的 UTC 时刻。已成功提交后来掉盘时，原发布结果与保护证据不变，只有独立健康观察变化。两条 GET 均保留当前认证、主体绑定、原 operation ID 和错误来源，不通过切换端点绕过准入。
 
 收到超时后只能查询或用**同一个 operation_id 和相同请求**重试。相同 ID 携带不同请求必须返回 `IDEMPOTENCY_KEY_REUSED`，不能覆盖原操作。
 
@@ -360,7 +363,7 @@ HTTP 202 或任务已受理只表示操作登记，不表示正常保存成功�
 
 HTTP 状态描述本次调用，operation 的终态描述原业务请求，二者不可互换。SMB 的精确 NTSTATUS 值与回调必须在锁定版本的映射表和样机记录中冻结；以上分类不代替真实协议错误测试。
 
-准确的发布后工作区终态镜像失败、显式降级恢复的发布后索引重建／工作区核对失败，返回现有错误封套的 `503 RECOVERY_REQUIRED`、`retryable:false`，消息保留原 operation ID 并明确已发布；内部保留原收据、阶段、主体绑定和具体 source。这不是确定拒绝，也不是自动重新提交的许可。当前客户端仍保留原操作为待查询状态，不从错误消息解析新的收据；正常 receipt 字段及 `current_health` 含义不变。只有这几个已知发布后上下文改变分类，普通输入／路径拒绝仍保持原状态码。严格重开可能先因同一故障失败，管理离线核对与普通操作查询的可达性尚未闭环，详见[事务恢复](10-transactions-and-recovery.md#s10-10)。
+准确的发布后工作区终态镜像失败、显式降级恢复的发布后索引重建／工作区核对失败，返回现有错误封套的 `503 RECOVERY_REQUIRED`、`retryable:false`，消息保留原 operation ID 并明确已发布；内部保留原收据、阶段、主体绑定和具体 source。这不是确定拒绝，也不是自动重新提交的许可。当前客户端仍保留原操作为待查询状态，不从错误消息解析新的收据；使用 outcome 查询核对固定发布事实，当前健康只在显式诊断查询中观察。只有这几个已知发布后上下文改变分类，普通输入／路径拒绝仍保持原状态码。严格重开可能先因同一故障失败，管理离线核对与普通操作查询的可达性尚未闭环，详见[事务恢复](10-transactions-and-recovery.md#s10-10)。
 
 [契约附件](contracts/README.md)提供核心保存请求、操作结果、版本描述及配置约束的机器可读草案和固定样例。OpenAPI 明确列出当前已描述端点；本章其他拟定接口在补齐 schema、错误映射与验收前不能标记为已冻结。规范、schema 和样例出现差异时阻止发布并修订，不由某个客户端自行选择宽松解释。
 

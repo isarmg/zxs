@@ -2,7 +2,7 @@
 use json_codec::json;
 
 mod operation;
-pub use operation::{OperationStatus, operation_status};
+pub use operation::{OperationStatus, operation_observation_status, operation_status};
 
 /// Common JSON response cap, enforced while streaming and again when decoding.
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;

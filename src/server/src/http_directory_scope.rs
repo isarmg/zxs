@@ -60,7 +60,7 @@ pub(crate) async fn initialize(
             let command = parse(body)?;
             backend
                 .initialize_directory_scope(&identity, command)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)

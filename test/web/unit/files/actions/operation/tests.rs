@@ -6,6 +6,8 @@ fn published() -> Value {
         "../../fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
+    value.as_object_mut().unwrap().remove("current_health");
     value["operation_id"] = "original".into();
     value
 }
@@ -216,6 +218,8 @@ fn receipt_observations_keep_terminal_and_unknown_statuses() {
     pending["protection_at_publish"] = "UNCONFIRMED".into();
     let mut degraded: Value =
         json_codec::from_str(include_str!("../../fixtures/degraded-save-operation.json")).unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
+    degraded.as_object_mut().unwrap().remove("current_health");
     degraded["operation_id"] = "original".into();
     for (mut value, status) in [
         (published(), SaveStatus::Published),

@@ -221,13 +221,13 @@ fn operation_observation_preserves_publication_wire_facts() {
     let (_root, backend, _auth, _token, identity, operation_id) = fixture();
     let before = backend
         .operation(&identity, operation_id)
-        .and_then(crate::operation_wire::operation_wire)
+        .and_then(crate::operation_wire::operation_observation_wire)
         .unwrap();
     assert_eq!(before["current_health"]["state"], "HEALTHY");
     let sequence = backend.engine.lock().unwrap().state().sequence;
     let replay = backend
         .operation(&identity, operation_id)
-        .and_then(crate::operation_wire::operation_wire)
+        .and_then(crate::operation_wire::operation_observation_wire)
         .unwrap();
     // Health timestamps are fresh observations, not publication facts.
     assert!(before["current_health"]["checked_at"].is_string());
@@ -256,7 +256,7 @@ fn operation_observation_preserves_publication_wire_facts() {
     }
     let after = backend
         .operation(&identity, operation_id)
-        .and_then(crate::operation_wire::operation_wire)
+        .and_then(crate::operation_wire::operation_observation_wire)
         .unwrap();
     assert_eq!(after["current_health"]["state"], "UNAVAILABLE");
     assert_eq!(after["commit_state"], before["commit_state"]);
@@ -299,4 +299,45 @@ fn pending_owner_discovery_failure_is_not_a_missing_operation_response() {
     let error = backend.operation(&identity, operation).unwrap_err();
     assert_ne!(error.code, storage_contract::ErrorCode::NotFound);
     assert!(error.source().is_some());
+}
+
+#[test]
+fn outcome_lookup_does_not_start_health_or_depend_on_current_payloads() {
+    let (_root, backend, _auth, _token, identity, operation_id) = fixture();
+    *backend.operation_health_hook.lock().unwrap() = Some(Arc::new(|| {
+        panic!("outcome-only lookup started full-content health checking");
+    }));
+    let before = backend.operation_outcome(&identity, operation_id).unwrap();
+    {
+        let engine = backend.engine.lock().unwrap();
+        for disk in &engine.config().disks {
+            std::fs::remove_dir_all(disk.root.join("histories")).unwrap();
+        }
+    }
+    let after = backend.operation_outcome(&identity, operation_id).unwrap();
+    assert_eq!(before, after);
+    let wire = crate::operation_wire::operation_wire(after).unwrap();
+    assert!(wire.get("current_health").is_none());
+    assert_eq!(storage_contract::client_protocol::operation_status(&wire), Some(storage_contract::client_protocol::OperationStatus::Published));
+    *backend.operation_health_hook.lock().unwrap() = None;
+    let observation = backend.operation(&identity, operation_id).and_then(crate::operation_wire::operation_observation_wire).unwrap();
+    assert_eq!(observation["current_health"]["state"], "UNAVAILABLE");
+    assert_eq!(observation["result"], wire["result"]);
+}
+
+#[test]
+fn outcome_lookup_rechecks_current_identity_and_owner() {
+    let (_root, backend, mut auth, token, identity, operation_id) = fixture();
+    let foreign_operation = storage_contract::OperationId::generate();
+    backend.engine.lock().unwrap().create_repository(
+        &storage_contract::RepositoryName::parse("Foreign outcome").unwrap(),
+        "P01", 3, "other", foreign_operation,
+    ).unwrap();
+    assert_eq!(backend.operation_outcome(&identity, foreign_operation).unwrap_err().code,
+        storage_contract::ErrorCode::Forbidden);
+    assert_eq!(backend.operation_outcome(&identity, OperationId::generate()).unwrap_err().code,
+        storage_contract::ErrorCode::OperationNotFound);
+    auth.logout(&token).unwrap();
+    assert_eq!(backend.operation_outcome(&identity, operation_id).unwrap_err().code,
+        storage_contract::ErrorCode::Unauthorized);
 }

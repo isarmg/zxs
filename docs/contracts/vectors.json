@@ -116,11 +116,7 @@
             }
           ]
         },
-        "error": null,
-        "current_health": {
-          "state": "HEALTHY",
-          "checked_at": "2026-10-18T00:00:00Z"
-        }
+        "error": null
       }
     },
     {
@@ -286,7 +282,7 @@
     },
     {
       "name": "historical-success-current-loss",
-      "schema": "SaveOperation",
+      "schema": "SaveOperationObservation",
       "layer": "schema",
       "value": {
         "operation_id": "op_00000000000000000000000000000001",
@@ -341,11 +337,7 @@
         "state": "processing",
         "commit_state": "STAGING",
         "result": null,
-        "error": null,
-        "current_health": {
-          "state": "HEALTHY",
-          "checked_at": "2026-10-18T00:00:00Z"
-        }
+        "error": null
       }
     },
     {
@@ -1823,6 +1815,104 @@
         "sequence": "18446744073709551615",
         "result": null
       }
+    },
+    {
+      "name": "completed-checked-observation",
+      "schema": "SaveOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "operation_kind": "content_save",
+        "request_digest": "3152fbb5f9d87d05e61faf4a8b0cbb348bc637e92ef360a969c134ea7d5b76f3",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "result": {
+          "outcome": "COMMITTED_AND_PROTECTED",
+          "commit_id": "commit_00000000000000000000000000000002",
+          "branch_id": "br_00000000000000000000000000000001",
+          "branch_generation": "2",
+          "publication_sequence": "7",
+          "membership_epoch": "1",
+          "protection_at_publish": "TARGET_MET",
+          "versions": [
+            {
+              "version_id": "ver_00000000000000000000000000000001",
+              "primary_slot_id": "P01",
+              "target_copies": 1,
+              "required_slots": [
+                "P01"
+              ],
+              "topology_generation": "1",
+              "slots": [
+                {
+                  "slot_id": "P01",
+                  "copy_level": 1,
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "binding_generation": "1",
+                  "state": "COMPLETE_VERIFIED"
+                }
+              ]
+            }
+          ]
+        },
+        "error": null,
+        "current_health": {
+          "state": "HEALTHY",
+          "checked_at": "2026-10-18T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "pending-not-observed",
+      "schema": "SaveOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "operation_kind": "content_save",
+        "request_digest": "3152fbb5f9d87d05e61faf4a8b0cbb348bc637e92ef360a969c134ea7d5b76f3",
+        "state": "processing",
+        "commit_state": "STAGING",
+        "result": null,
+        "error": null,
+        "current_health": null
+      }
+    },
+    {
+      "name": "generic-outcome-without-health",
+      "schema": "GenericOperation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000002",
+        "operation_kind": "namespace.batch",
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "NOT_APPLICABLE",
+        "publication_sequence": "8",
+        "result": {
+          "entries": []
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "generic-not-observed",
+      "schema": "GenericOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000002",
+        "operation_kind": "namespace.batch",
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "NOT_APPLICABLE",
+        "publication_sequence": "8",
+        "result": {
+          "entries": []
+        },
+        "error": null,
+        "current_health": null
+      }
     }
   ],
   "negative": [
@@ -1927,11 +2017,7 @@
         "state": "completed",
         "commit_state": "PUBLISHED",
         "result": null,
-        "error": null,
-        "current_health": {
-          "state": "HEALTHY",
-          "checked_at": "2026-10-18T00:00:00Z"
-        }
+        "error": null
       }
     },
     {
@@ -1973,11 +2059,7 @@
             }
           ]
         },
-        "error": null,
-        "current_health": {
-          "state": "HEALTHY",
-          "checked_at": "2026-10-18T00:00:00Z"
-        }
+        "error": null
       }
     },
     {
@@ -7772,6 +7854,394 @@
             "obsolete": true
           }
         ]
+      }
+    },
+    {
+      "name": "outcome-rejects-current-health",
+      "schema": "SaveOperation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "operation_kind": "content_save",
+        "request_digest": "3152fbb5f9d87d05e61faf4a8b0cbb348bc637e92ef360a969c134ea7d5b76f3",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "result": {
+          "outcome": "COMMITTED_AND_PROTECTED",
+          "commit_id": "commit_00000000000000000000000000000002",
+          "branch_id": "br_00000000000000000000000000000001",
+          "branch_generation": "2",
+          "publication_sequence": "7",
+          "membership_epoch": "1",
+          "protection_at_publish": "TARGET_MET",
+          "versions": [
+            {
+              "version_id": "ver_00000000000000000000000000000001",
+              "primary_slot_id": "P01",
+              "target_copies": 1,
+              "required_slots": [
+                "P01"
+              ],
+              "topology_generation": "1",
+              "slots": [
+                {
+                  "slot_id": "P01",
+                  "copy_level": 1,
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "binding_generation": "1",
+                  "state": "COMPLETE_VERIFIED"
+                }
+              ]
+            }
+          ]
+        },
+        "error": null,
+        "current_health": {
+          "state": "HEALTHY",
+          "checked_at": "2026-10-18T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "observation-requires-health-discriminant",
+      "schema": "SaveOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "operation_kind": "content_save",
+        "request_digest": "3152fbb5f9d87d05e61faf4a8b0cbb348bc637e92ef360a969c134ea7d5b76f3",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "result": {
+          "outcome": "COMMITTED_AND_PROTECTED",
+          "commit_id": "commit_00000000000000000000000000000002",
+          "branch_id": "br_00000000000000000000000000000001",
+          "branch_generation": "2",
+          "publication_sequence": "7",
+          "membership_epoch": "1",
+          "protection_at_publish": "TARGET_MET",
+          "versions": [
+            {
+              "version_id": "ver_00000000000000000000000000000001",
+              "primary_slot_id": "P01",
+              "target_copies": 1,
+              "required_slots": [
+                "P01"
+              ],
+              "topology_generation": "1",
+              "slots": [
+                {
+                  "slot_id": "P01",
+                  "copy_level": 1,
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "binding_generation": "1",
+                  "state": "COMPLETE_VERIFIED"
+                }
+              ]
+            }
+          ]
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "observation-health-old-string",
+      "schema": "SaveOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "operation_kind": "content_save",
+        "request_digest": "3152fbb5f9d87d05e61faf4a8b0cbb348bc637e92ef360a969c134ea7d5b76f3",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "result": {
+          "outcome": "COMMITTED_AND_PROTECTED",
+          "commit_id": "commit_00000000000000000000000000000002",
+          "branch_id": "br_00000000000000000000000000000001",
+          "branch_generation": "2",
+          "publication_sequence": "7",
+          "membership_epoch": "1",
+          "protection_at_publish": "TARGET_MET",
+          "versions": [
+            {
+              "version_id": "ver_00000000000000000000000000000001",
+              "primary_slot_id": "P01",
+              "target_copies": 1,
+              "required_slots": [
+                "P01"
+              ],
+              "topology_generation": "1",
+              "slots": [
+                {
+                  "slot_id": "P01",
+                  "copy_level": 1,
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "binding_generation": "1",
+                  "state": "COMPLETE_VERIFIED"
+                }
+              ]
+            }
+          ]
+        },
+        "error": null,
+        "current_health": "HEALTHY"
+      }
+    },
+    {
+      "name": "observation-health-missing-timestamp",
+      "schema": "SaveOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "operation_kind": "content_save",
+        "request_digest": "3152fbb5f9d87d05e61faf4a8b0cbb348bc637e92ef360a969c134ea7d5b76f3",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "result": {
+          "outcome": "COMMITTED_AND_PROTECTED",
+          "commit_id": "commit_00000000000000000000000000000002",
+          "branch_id": "br_00000000000000000000000000000001",
+          "branch_generation": "2",
+          "publication_sequence": "7",
+          "membership_epoch": "1",
+          "protection_at_publish": "TARGET_MET",
+          "versions": [
+            {
+              "version_id": "ver_00000000000000000000000000000001",
+              "primary_slot_id": "P01",
+              "target_copies": 1,
+              "required_slots": [
+                "P01"
+              ],
+              "topology_generation": "1",
+              "slots": [
+                {
+                  "slot_id": "P01",
+                  "copy_level": 1,
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "binding_generation": "1",
+                  "state": "COMPLETE_VERIFIED"
+                }
+              ]
+            }
+          ]
+        },
+        "error": null,
+        "current_health": {
+          "state": "HEALTHY"
+        }
+      }
+    },
+    {
+      "name": "observation-health-unknown-state",
+      "schema": "SaveOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "operation_kind": "content_save",
+        "request_digest": "3152fbb5f9d87d05e61faf4a8b0cbb348bc637e92ef360a969c134ea7d5b76f3",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "result": {
+          "outcome": "COMMITTED_AND_PROTECTED",
+          "commit_id": "commit_00000000000000000000000000000002",
+          "branch_id": "br_00000000000000000000000000000001",
+          "branch_generation": "2",
+          "publication_sequence": "7",
+          "membership_epoch": "1",
+          "protection_at_publish": "TARGET_MET",
+          "versions": [
+            {
+              "version_id": "ver_00000000000000000000000000000001",
+              "primary_slot_id": "P01",
+              "target_copies": 1,
+              "required_slots": [
+                "P01"
+              ],
+              "topology_generation": "1",
+              "slots": [
+                {
+                  "slot_id": "P01",
+                  "copy_level": 1,
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "binding_generation": "1",
+                  "state": "COMPLETE_VERIFIED"
+                }
+              ]
+            }
+          ]
+        },
+        "error": null,
+        "current_health": {
+          "state": "RECOVERING",
+          "checked_at": "2026-10-18T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "observation-health-extra-field",
+      "schema": "SaveOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "operation_kind": "content_save",
+        "request_digest": "3152fbb5f9d87d05e61faf4a8b0cbb348bc637e92ef360a969c134ea7d5b76f3",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "result": {
+          "outcome": "COMMITTED_AND_PROTECTED",
+          "commit_id": "commit_00000000000000000000000000000002",
+          "branch_id": "br_00000000000000000000000000000001",
+          "branch_generation": "2",
+          "publication_sequence": "7",
+          "membership_epoch": "1",
+          "protection_at_publish": "TARGET_MET",
+          "versions": [
+            {
+              "version_id": "ver_00000000000000000000000000000001",
+              "primary_slot_id": "P01",
+              "target_copies": 1,
+              "required_slots": [
+                "P01"
+              ],
+              "topology_generation": "1",
+              "slots": [
+                {
+                  "slot_id": "P01",
+                  "copy_level": 1,
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "binding_generation": "1",
+                  "state": "COMPLETE_VERIFIED"
+                }
+              ]
+            }
+          ]
+        },
+        "error": null,
+        "current_health": {
+          "state": "HEALTHY",
+          "checked_at": "2026-10-18T00:00:00Z",
+          "cached": true
+        }
+      }
+    },
+    {
+      "name": "pending-cannot-fabricate-checked-health",
+      "schema": "SaveOperationObservation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "operation_kind": "content_save",
+        "request_digest": "3152fbb5f9d87d05e61faf4a8b0cbb348bc637e92ef360a969c134ea7d5b76f3",
+        "state": "processing",
+        "commit_state": "STAGING",
+        "result": null,
+        "error": null,
+        "current_health": {
+          "state": "HEALTHY",
+          "checked_at": "2026-10-18T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "generic-outcome-rejects-health",
+      "schema": "GenericOperation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000002",
+        "operation_kind": "namespace.batch",
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "NOT_APPLICABLE",
+        "publication_sequence": "8",
+        "result": {
+          "entries": []
+        },
+        "error": null,
+        "current_health": null
+      }
+    },
+    {
+      "name": "generic-kind-cannot-shadow-content-save",
+      "schema": "GenericOperation",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000002",
+        "operation_kind": "content_save",
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "protection_at_publish": "NOT_APPLICABLE",
+        "publication_sequence": "8",
+        "result": {
+          "entries": []
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "observation-retains-publication-semantics",
+      "schema": "SaveOperationObservation",
+      "layer": "semantic",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "operation_kind": "content_save",
+        "request_digest": "3152fbb5f9d87d05e61faf4a8b0cbb348bc637e92ef360a969c134ea7d5b76f3",
+        "state": "completed",
+        "commit_state": "PUBLISHED",
+        "result": {
+          "outcome": "COMMITTED_AND_PROTECTED",
+          "commit_id": "commit_00000000000000000000000000000002",
+          "branch_id": "br_00000000000000000000000000000001",
+          "branch_generation": "2",
+          "publication_sequence": "7",
+          "membership_epoch": "1",
+          "protection_at_publish": "TARGET_MET",
+          "versions": [
+            {
+              "version_id": "ver_00000000000000000000000000000001",
+              "primary_slot_id": "P01",
+              "target_copies": 1,
+              "required_slots": [
+                "P01"
+              ],
+              "topology_generation": "1",
+              "slots": [
+                {
+                  "slot_id": "P01",
+                  "copy_level": 1,
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "binding_generation": "1",
+                  "state": "COMPLETE_VERIFIED"
+                }
+              ]
+            },
+            {
+              "version_id": "ver_00000000000000000000000000000001",
+              "primary_slot_id": "P01",
+              "target_copies": 1,
+              "required_slots": [
+                "P01"
+              ],
+              "topology_generation": "1",
+              "slots": [
+                {
+                  "slot_id": "P01",
+                  "copy_level": 1,
+                  "disk_id": "disk_00000000000000000000000000000001",
+                  "binding_generation": "1",
+                  "state": "COMPLETE_VERIFIED"
+                }
+              ]
+            }
+          ]
+        },
+        "error": null,
+        "current_health": {
+          "state": "HEALTHY",
+          "checked_at": "2026-10-18T00:00:00Z"
+        }
       }
     }
   ],

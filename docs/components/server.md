@@ -127,7 +127,8 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 | `/api/policies/{policy}`、`/api/primary-placement-rules/{rule}` | GET 保护策略／主盘规则；PUT 按 generation 更新，保护策略仅接受无稳定 scope 的现行路径规则 |
 | `/api/admin/disks`、`/api/backup-topologies/default`、`/api/admin/check` | GET 盘状态、拓扑、既有目录诊断 |
 | `/api/admin/scrub`、`/api/admin/scrub/{job_id}/cancel` | GET 完整巡检状态、POST 启动、POST 请求取消 |
-| `/api/operations/{operation}`、`/api/events`、`/api/compare` | GET 结果/分页事件、POST 两次提交比较 |
+| `/api/operations/{operation}/outcome`、`/api/operations/{operation}` | GET 原操作结果核对／显式健康诊断；后者才附带健康观察 |
+| `/api/events`、`/api/compare` | GET 分页事件、POST 两次提交比较 |
 
 表中同一行的缩写路径共享资源前缀，例如 `/api/branches/{branch}/tree` 和 `/api/branches/{branch}/resolve`。请求字段以代码及 [HTTP 契约](../15-api-and-errors.md) 为准；64 位整数使用规范十进制字符串。重复 JSON 键、浮点数、未声明的变更字段会被拒绝。失败响应包含 `error.code/message/retryable/request_id`，不会把未实现操作返回为成功。
 
@@ -165,7 +166,7 @@ HTTP 正文只合并已经就绪的帧：每批至多 256 KiB、64 帧；遇到 
 
 HTTP 断开不会取消已运行的阻塞发布或进度持久化。每个任务共享同一上传并发名额和文件写入占用，直到最终状态持久化完成；这期间同文件重试返回 `FILE_WRITE_BUSY`。请求体/空闲超时返回 408；已接纳不可取消发布后的等待超时返回 503，调用方须先查询原上传状态，不能推断尚未发布。Range 错误统一返回 `416` 和 `Content-Range: bytes */大小`，HEAD 响应不含正文；读租约随下载正文的消费或丢弃释放。
 
-先调用 `seal` 冻结工作内容并取得提交模板，填入固定的 operation_id/message，再按 `storage_contract::request_digest` 计算完整请求摘要。原样保存请求后调用 commit；结果不确定时查询 operation 或原样重试。普通内容保存返回契约中的 SaveOperation/SaveResult，成功结果保留发布时保护证据，当前健康度单独计算。历史保存计划在单次核心事务中登记独立分支，只为实际写入的文件生成 FULL 版本，其余文件保留冻结父引用，原分支 HEAD 不变。
+先调用 `seal` 冻结工作内容并取得提交模板，填入固定的 operation_id/message，再按 `storage_contract::request_digest` 计算完整请求摘要。原样保存请求后调用 commit；结果不确定时查询 operation 的 `/outcome` 或原样重试。普通内容保存返回契约中的 SaveOperation/SaveResult，成功结果保留发布时保护证据，不读取当前健康或采样时钟。显式 operation GET 使用 SaveOperationObservation（非内容操作使用对应 GenericOperationObservation），健康尚未观察时为 null，实际检查后才含 state/checked_at。历史保存计划在单次核心事务中登记独立分支，只为实际写入的文件生成 FULL 版本，其余文件保留冻结父引用，原分支 HEAD 不变。
 
 ## 分支登记与首次写入
 
@@ -196,7 +197,7 @@ CARGO_TARGET_DIR=target/native CARGO_INCREMENTAL=0 \
   cargo test --locked --offline -p storage-server -p storage-client
 ```
 
-Unix socket 测试需要运行环境允许本机 socket。[集成回归](../../test/server/integration/http_engine.rs) 覆盖 HTTP 准入、封存、三盘发布、幂等、Range、认证、历史计划和策略 CAS，也覆盖文件/目录分支、真实版本祖先、备注与重命名下载、上传池限额，以及改密的 CSRF、同源、字段和 JSON 长度边界。永久丢失后的降级发布与发布后损坏均保留原保护证据；可信嵌入式认证快照恢复测试仍保留，但不代表 daemon 在权威交接后允许自动恢复丢失的认证主库。管理运行时回归另外验证主库丢失时围栏拒绝旧快照、数据引擎阻塞时仍可登录，以及排队请求在注销或改密后被拒绝。两种保存结果 wire 均通过原 SaveOperation schema 验证。
+Unix socket 测试需要运行环境允许本机 socket。[集成回归](../../test/server/integration/http_engine.rs) 覆盖 HTTP 准入、封存、三盘发布、幂等、Range、认证、历史计划和策略 CAS，也覆盖文件/目录分支、真实版本祖先、备注与重命名下载、上传池限额，以及改密的 CSRF、同源、字段和 JSON 长度边界。永久丢失后的降级发布与发布后损坏均保留原保护证据；可信嵌入式认证快照恢复测试仍保留，但不代表 daemon 在权威交接后允许自动恢复丢失的认证主库。管理运行时回归另外验证主库丢失时围栏拒绝旧快照、数据引擎阻塞时仍可登录，以及排队请求在注销或改密后被拒绝。即时内容回执与显式诊断分别使用 SaveOperation 和 SaveOperationObservation schema；字段检查不替代真实 HTTP 与磁盘故障回归。
 
 模块回归还验证上传断开后的占用生命周期、Range/HEAD 及读租约、静态/API 命名空间、规范化账号限流、损坏上传状态和持久化失败清理。平台与共享认证回归使用 `cargo test --locked --offline -p authentication -p platform-io -p storage-server` 一并运行。
 
