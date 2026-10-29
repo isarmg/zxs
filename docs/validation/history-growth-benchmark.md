@@ -156,7 +156,8 @@ python3 -m unittest discover -s test/history-scale-bench -p 'test_*.py' -v
 
 把工具补丁提交后，在独立验证载体分支复制模板到 `.github/workflows/history-scale.yml`，
 手动 dispatch `mode=selftest`。载体不得进入产品祖先，不修改正常 CI，不推 main。
-自测通过后 `mode=acceptance` 加同一构建 run ID／carrier SHA 运行边界和 1k。
+自测通过后 `mode=acceptance` 加原构建 `build_run_id`／`build_carrier_sha`，
+以及成功的 `selftest_run_id` 运行边界和 1k；若自测与构建同 run，后者可省略。
 `mode=10000` 仍等待实际初档结果与资源趋势审阅；不启动 100k。
 
 旧 `13b664e9fd41a356ffb7ed982d21e97abb123626` 的
