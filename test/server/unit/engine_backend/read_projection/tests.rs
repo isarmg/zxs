@@ -1301,6 +1301,15 @@ fn owned_directory_scope_sort_preserves_tie_breaks_and_current_flags() {
         "folder/file.txt",
         b"content",
     );
+    engine
+        .create_directory_branches(
+            &repo.repository_id,
+            Some(&name_policy::LookupPath::parse("folder").unwrap()),
+            &storage_contract::BranchName::parse("template").unwrap(),
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
     let template = engine.state().directory_branches.values().next().unwrap();
     // Synthetic observations exercise equal sequences independently of publish IDs.
     let branches = [(7, "z"), (6, "older"), (7, "a")]
