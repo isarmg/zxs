@@ -240,8 +240,31 @@ fn absent_held_mount_cannot_fall_back_to_an_available_named_mount() {
         storage_contract::ErrorCode::DiskIdentityMismatch
     );
     let overflow = table.replacen("36 ", "18446744073709551616 ", 1);
-    assert_eq!(
-        resolve_id(&overflow, 36).unwrap_err().code(),
-        storage_contract::ErrorCode::DiskIdentityMismatch
-    );
+    for error in [
+        resolve_id(&overflow, 36).unwrap_err(),
+        resolve(&overflow, Path::new("/configured")).unwrap_err(),
+    ] {
+        use std::error::Error as _;
+
+        assert_eq!(
+            error.code(),
+            storage_contract::ErrorCode::DiskIdentityMismatch
+        );
+        assert_eq!(error.message(), "invalid mountinfo mount identity");
+        assert_eq!(
+            error.to_string(),
+            "DISK_IDENTITY_MISMATCH: invalid mountinfo mount identity"
+        );
+        assert!(!error.is_retryable());
+        assert!(error.published_result().is_none());
+        let contextual_source = error.source().unwrap();
+        assert!(contextual_source.is::<Error>());
+        let parse_source = contextual_source
+            .source()
+            .unwrap()
+            .downcast_ref::<std::num::ParseIntError>()
+            .unwrap();
+        assert_eq!(parse_source.kind(), &std::num::IntErrorKind::PosOverflow);
+        assert!(parse_source.source().is_none());
+    }
 }
