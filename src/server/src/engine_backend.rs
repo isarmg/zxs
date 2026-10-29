@@ -422,10 +422,10 @@ impl Backend for EngineBackend {
         current_protected_identity(&engine, identity)?;
         read_projection::branch_snapshot(engine.state(), branch, Some(commit))?;
         let tree = engine.namespace_tree_at(branch, commit).map_err(error)?;
-        if let Some(entry) = tree.get_key(key).map_err(error)? {
-            if entry.entry_id == entry_id {
-                return Ok(Some(entry));
-            }
+        if let Some(entry) = tree.get_key(key).map_err(error)?
+            && entry.entry_id == entry_id
+        {
+            return Ok(Some(entry));
         }
         // A concurrent rename moved the stable entry away from the caller's
         // last-known key: resolve by identity with an early-stop walk.

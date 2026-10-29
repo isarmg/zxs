@@ -12,7 +12,7 @@ pub(super) fn matching<'a>(
 ) -> Result<Vec<&'a storage_contract::DirectoryBranch>, ApiError> {
     let state = engine.state();
     let requested_directory_id = match requested_key {
-        Some(key) if key.is_empty() => Some(repository.repository_id.clone()),
+        Some("") => Some(repository.repository_id.clone()),
         Some(key) => {
             let namespace = state
                 .branches
