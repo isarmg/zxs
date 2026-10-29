@@ -1,0 +1,130 @@
+name: History scale validation carrier
+
+on:
+  push:
+    branches: [verify/history-scale-*]
+    paths:
+      - .github/workflows/history-scale.yml
+      - tools/history-scale-bench/**
+      - test/history-scale-bench/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: history-scale-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUSTUP_TOOLCHAIN: '1.99.0'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  benchmark:
+    name: History scale (${{ matrix.cohort }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        cohort: [boundaries, '1000', '10000', '100000']
+    steps:
+      - name: Checkout measurement carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: carrier
+      - name: Checkout exact old baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isarmg/zxs
+          ref: e2f33d9882cf7263412d9370b6a703e0b216357d
+          persist-credentials: false
+          path: baseline-source
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: isarmg/zxs
+          ref: 13b664e9fd41a356ffb7ed982d21e97abb123626
+          persist-credentials: false
+          path: candidate-source
+      - name: Install trace and resource tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y strace time
+      - name: Initialize isolated offline Cargo home
+        run: bash carrier/.github/scripts/initialize-cargo-home.sh
+      - name: Record fixed compiler and runner
+        run: |
+          mkdir -p provenance
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup component add rustfmt --toolchain 1.99.0
+          rustc +1.99.0 --version --verbose > provenance/rustc.txt
+          cargo +1.99.0 --version > provenance/cargo.txt
+          strace --version > provenance/strace.txt
+          lscpu --json > provenance/cpu.json
+          df -B1 > provenance/filesystem.txt
+          rustfmt +1.99.0 --edition 2024 --emit stdout carrier/tools/history-scale-bench/driver.rs > provenance/formatted-driver.rs
+          diff -u carrier/tools/history-scale-bench/driver.rs provenance/formatted-driver.rs > provenance/driver-format.diff || test "$?" = 1
+      - name: Validate Python evidence tooling
+        run: python3 -m unittest discover -s carrier/test/history-scale-bench -p 'test_*.py' -v
+      - name: Register same ordinary driver in isolated sources
+        run: |
+          python3 carrier/tools/history-scale-bench/prepare.py --source baseline-source > provenance/baseline-registration.json
+          python3 carrier/tools/history-scale-bench/prepare.py --source candidate-source > provenance/candidate-registration.json
+      - name: Build old baseline without dev-dependency features
+        working-directory: baseline-source
+        run: |
+          cargo tree --locked --offline -p perf-check -e normal,build,features --features history-scale-baseline > ../provenance/baseline-features.txt
+          if rg 'fault-injection' ../provenance/baseline-features.txt; then exit 1; fi
+          cargo build --locked --offline --release -p perf-check --bin history-scale-driver --features history-scale-baseline --message-format=json > ../provenance/baseline-build.jsonl 2> ../provenance/baseline-build.stderr.log
+          python3 ../carrier/tools/history-scale-bench/verify_build.py --input ../provenance/baseline-build.jsonl > ../provenance/baseline-actual-artifacts.json
+          git diff -- tools/perf-check/Cargo.toml > ../provenance/baseline-harness.patch
+          sha256sum Cargo.lock target/native/release/history-scale-driver > ../provenance/baseline-sha256.txt
+      - name: Build candidate without dev-dependency features
+        working-directory: candidate-source
+        run: |
+          cargo tree --locked --offline -p perf-check -e normal,build,features > ../provenance/candidate-features.txt
+          if rg 'fault-injection' ../provenance/candidate-features.txt; then exit 1; fi
+          cargo build --locked --offline --release -p perf-check --bin history-scale-driver --message-format=json > ../provenance/candidate-build.jsonl 2> ../provenance/candidate-build.stderr.log
+          python3 ../carrier/tools/history-scale-bench/verify_build.py --input ../provenance/candidate-build.jsonl > ../provenance/candidate-actual-artifacts.json
+          git diff -- tools/perf-check/Cargo.toml > ../provenance/candidate-harness.patch
+          sha256sum Cargo.lock target/native/release/history-scale-driver > ../provenance/candidate-sha256.txt
+      - name: Run bounded paired histories
+        env:
+          COHORT: ${{ matrix.cohort }}
+        run: |
+          if [ "$COHORT" = boundaries ]; then
+            sizes=255,256,257,1023,1024,1025
+            repeats=1
+            count_sizes=1025
+          else
+            sizes="$COHORT"
+            repeats=2
+            count_sizes="$COHORT"
+          fi
+          python3 carrier/tools/history-scale-bench/run.py \
+            --baseline-source baseline-source \
+            --candidate-source candidate-source \
+            --baseline-binary baseline-source/target/native/release/history-scale-driver \
+            --candidate-binary candidate-source/target/native/release/history-scale-driver \
+            --output-root "evidence/$COHORT" \
+            --sizes "$sizes" --repeats "$repeats" \
+            --counts-repeats 1 --counts-sizes "$count_sizes" \
+            --phase-seconds 600 --cohort-seconds 2400 \
+            --rss-mib 8192 --disk-mib 12288
+      - name: Retain all outcomes and raw evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: history-scale-${{ matrix.cohort }}-${{ github.run_attempt }}
+          path: |
+            provenance/
+            evidence/
+            !evidence/**/pool/**
+          if-no-files-found: error
+          retention-days: 14
