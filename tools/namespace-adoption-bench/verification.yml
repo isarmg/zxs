@@ -1,29 +1,29 @@
-# Verification-only carrier. Both products retain their original normal CI.
-name: Combined depth-fixed end-to-end R86 measurements
+# Publish only as ci.yml on the separate verification carrier; never a product ancestor.
+name: Namespace exact-build paired measurements
 on:
   push:
-    branches: [verify/combined-performance-20261029-r86]
+    branches: [verify/namespace-build-once-20261029]
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: namespace-adoption-${{ github.ref }}
+  group: namespace-build-once-${{ github.ref }}
   cancel-in-progress: false
+env:
+  CARGO_NET_OFFLINE: 'true'
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: '1'
+  CFLAGS: '-march=x86-64 -mtune=generic'
 jobs:
-  paired:
-    name: Paired namespace (${{ matrix.files }} files)
+  build:
+    name: Build exact baseline and candidate once
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
-    strategy:
-      fail-fast: false
-      matrix:
-        files: [500, 1500, 3000]
-    env:
-      CARGO_NET_OFFLINE: 'true'
-      CARGO_INCREMENTAL: '0'
-      CARGO_BUILD_JOBS: '2'
-      CARGO_TERM_COLOR: never
-      RUST_BACKTRACE: '1'
+    timeout-minutes: 90
+    outputs:
+      manifest_sha256: ${{ steps.seal.outputs.manifest_sha256 }}
+      measurement_deadline_unix: ${{ steps.prepare.outputs.measurement_deadline_unix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -43,12 +43,20 @@ jobs:
           persist-credentials: false
           ref: 99f02cb978bff53f28d1ad8414037a3f52d74cd2
           path: candidate
+      - name: Run tooling boundary regressions for this exact carrier
+        run: |
+          python3 harness/test/engine/bench/namespace_adoption/test_harness.py
       - name: Authenticate products and install only the standalone measurement adapters
+        id: prepare
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/namespace-evidence"
-          printf 'ZXS_MEASUREMENT_DEADLINE_UNIX=%s\n' "$(( $(date +%s) + 150 * 60 ))" >> "$GITHUB_ENV"
+          measurement_deadline_unix=$(( $(date +%s) + 150 * 60 ))
+          printf 'measurement_deadline_unix=%s\n' "$measurement_deadline_unix" >> "$GITHUB_OUTPUT"
+          printf 'ZXS_MEASUREMENT_DEADLINE_UNIX=%s\n' "$measurement_deadline_unix" >> "$GITHUB_ENV"
+          printf 'CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu\n' >> "$GITHUB_ENV"
+          printf 'CARGO_ENCODED_RUSTFLAGS=-C\x1ftarget-cpu=x86-64\n' >> "$GITHUB_ENV"
           printf 'CARGO_HOME=%s\n' "$(mktemp -d "$RUNNER_TEMP/namespace-cargo.XXXXXX")" >> "$GITHUB_ENV"
           python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess, tomllib
@@ -110,9 +118,9 @@ jobs:
               cargo --version | tee "$RUNNER_TEMP/namespace-evidence/$product-cargo.txt"
               grep -q '^rustc 1\.99\.0 ' "$RUNNER_TEMP/namespace-evidence/$product-rustc.txt"
               grep -q '^cargo 1\.99\.0 ' "$RUNNER_TEMP/namespace-evidence/$product-cargo.txt"
-              printf '%s\n' 'cargo build --locked --offline --release -p storage-engine --bin task1_adoption --message-format=json -vv' > "$RUNNER_TEMP/namespace-evidence/$product-build-command.txt"
-              CARGO_TARGET_DIR="$RUNNER_TEMP/namespace-target-$product" cargo build --locked --offline --release -p storage-engine --bin task1_adoption --message-format=json -vv > "$RUNNER_TEMP/namespace-evidence/$product-build.jsonl" 2> "$RUNNER_TEMP/namespace-evidence/$product-build.log"
-              sha256sum "$RUNNER_TEMP/namespace-target-$product/release/task1_adoption" > "$RUNNER_TEMP/namespace-evidence/$product-binary.sha256"
+              printf '%s\n' 'cargo build --locked --offline --release --target x86_64-unknown-linux-gnu -p storage-engine --bin task1_adoption --message-format=json -vv' > "$RUNNER_TEMP/namespace-evidence/$product-build-command.txt"
+              CARGO_TARGET_DIR="$RUNNER_TEMP/namespace-target-$product" cargo build --locked --offline --release --target x86_64-unknown-linux-gnu -p storage-engine --bin task1_adoption --message-format=json -vv > "$RUNNER_TEMP/namespace-evidence/$product-build.jsonl" 2> "$RUNNER_TEMP/namespace-evidence/$product-build.log"
+              sha256sum "$RUNNER_TEMP/namespace-target-$product/x86_64-unknown-linux-gnu/release/task1_adoption" > "$RUNNER_TEMP/namespace-evidence/$product-binary.sha256"
             )
           done
           python3 - <<'PY'
@@ -134,17 +142,6 @@ jobs:
               selected[name] = artifacts
           (evidence / 'actual-engine-features.json').write_text(json.dumps(selected,indent=2)+'\n')
           PY
-      - name: Run three untraced pairs and one separate synchronization-count pair
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 harness/tools/namespace-adoption-bench/run.py \
-            --baseline "$RUNNER_TEMP/namespace-target-baseline/release/task1_adoption" \
-            --candidate "$RUNNER_TEMP/namespace-target-candidate/release/task1_adoption" \
-            --output "$RUNNER_TEMP/namespace-evidence/results" \
-            --pool-parent "$RUNNER_TEMP/namespace-pools" \
-            --deadline-unix "$ZXS_MEASUREMENT_DEADLINE_UNIX" \
-            --sizes '${{ matrix.files }}'
       - name: Confirm no measurement changed production source or authoritative records
         if: always()
         shell: bash
@@ -165,11 +162,122 @@ jobs:
               assert git('ls-files','--others','--exclude-standard').splitlines() == ['test/engine/bench/task1_adoption.rs']
           (out/'source-unchanged.txt').write_text('Only declared standalone benchmark binary and manifest wiring differ.\n')
           PY
-      - name: Upload available raw evidence for success, failure or incomplete measurements
+      - name: Seal binaries and complete build identity
+        id: seal
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_sha256=$(python3 harness/tools/namespace-adoption-bench/artifacts.py seal \
+            --workspace "$GITHUB_WORKSPACE" --harness "$GITHUB_WORKSPACE/harness" \
+            --evidence "$RUNNER_TEMP/namespace-evidence" \
+            --bundle-dir "$RUNNER_TEMP/namespace-bundle" \
+            --baseline-binary "$RUNNER_TEMP/namespace-target-baseline/x86_64-unknown-linux-gnu/release/task1_adoption" \
+            --candidate-binary "$RUNNER_TEMP/namespace-target-candidate/x86_64-unknown-linux-gnu/release/task1_adoption")
+          printf 'manifest_sha256=%s\n' "$manifest_sha256" >> "$GITHUB_OUTPUT"
+      - name: Upload sealed binaries for this run only
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: namespace-exact-build-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/namespace-bundle/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain all raw build evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: combined-r86-paired-${{ matrix.files }}-${{ github.run_attempt }}
+          name: namespace-build-evidence-${{ github.run_attempt }}
           path: ${{ runner.temp }}/namespace-evidence/
+          if-no-files-found: error
+          retention-days: 14
+  paired:
+    name: Pair (${{ matrix.files }} files, repetition ${{ matrix.pair }})
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        files: [500, 1500, 3000]
+        pair: [0, 1, 2, 3]
+    env:
+      ZXS_EXPECTED_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
+      ZXS_MEASUREMENT_DEADLINE_UNIX: ${{ needs.build.outputs.measurement_deadline_unix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: harness
+          sparse-checkout: |
+            tools/namespace-adoption-bench
+            test/engine/bench/namespace_adoption
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: namespace-exact-build-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/namespace-bundle
+      - name: Initialize bounded paired measurement
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/namespace-evidence"
+          command -v strace
+          strace --version > "$RUNNER_TEMP/namespace-evidence/strace.txt"
+          uname -a > "$RUNNER_TEMP/namespace-evidence/uname.txt"
+          lscpu > "$RUNNER_TEMP/namespace-evidence/lscpu.txt"
+          free -b > "$RUNNER_TEMP/namespace-evidence/memory-before.txt"
+          df -B1 > "$RUNNER_TEMP/namespace-evidence/disk-before.txt"
+      - name: Verify exact artifact identity and actually execute this pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 harness/tools/namespace-adoption-bench/run.py \
+            --bundle-dir "$RUNNER_TEMP/namespace-bundle" \
+            --audit-dir "$RUNNER_TEMP/namespace-evidence/artifact-audit" \
+            --output "$RUNNER_TEMP/namespace-evidence/results" \
+            --pool-parent "$RUNNER_TEMP/namespace-pools" \
+            --deadline-unix "$ZXS_MEASUREMENT_DEADLINE_UNIX" \
+            --sizes '${{ matrix.files }}' --pair-index '${{ matrix.pair }}'
+      - name: Retain every raw log, failure and partial measurement
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: namespace-pair-${{ matrix.files }}-${{ matrix.pair }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/namespace-evidence/
+          if-no-files-found: error
+          retention-days: 14
+  aggregate:
+    name: Account for all twelve executed pairs
+    if: always()
+    needs: [build, paired]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: harness
+          sparse-checkout: tools/namespace-adoption-bench
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: namespace-pair-*-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/namespace-pairs
+        continue-on-error: true
+      - name: Report complete, failed and incomplete evidence separately
+        if: always()
+        env:
+          ZXS_BUILD_RESULT: ${{ needs.build.result }}
+          ZXS_EXPECTED_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
+        shell: bash
+        run: |
+          python3 harness/tools/namespace-adoption-bench/summarize.py \
+            --input "$RUNNER_TEMP/namespace-pairs" --output "$RUNNER_TEMP/namespace-summary"
+      - name: Retain aggregate evidence index
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: namespace-summary-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/namespace-summary/
           if-no-files-found: error
           retention-days: 14
