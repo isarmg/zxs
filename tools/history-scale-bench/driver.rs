@@ -317,7 +317,11 @@ fn check_queries(
 
 #[cfg(feature = "history-scale-baseline")]
 fn events_page(engine: &Engine, after: u64) -> storage_engine::Result<Vec<Event>> {
-    Ok(engine.events_after(after).take(EVENT_PAGE_SIZE).cloned().collect())
+    Ok(engine
+        .events_after(after)
+        .take(EVENT_PAGE_SIZE)
+        .cloned()
+        .collect())
 }
 
 #[cfg(not(feature = "history-scale-baseline"))]
@@ -343,7 +347,12 @@ fn check_events(
             let expected_id = operation_id(ordinal)?;
             let (kind, object) = if ordinal == 0 {
                 let creation = engine.operation_record(expected_id)?.into_result();
-                ("repository.create", creation.commit_id.ok_or_else(|| invalid("setup commit missing"))?)
+                (
+                    "repository.create",
+                    creation
+                        .commit_id
+                        .ok_or_else(|| invalid("setup commit missing"))?,
+                )
             } else {
                 ("smb.binding.update", expected_id.to_string())
             };
@@ -393,7 +402,10 @@ fn verify_all_receipts(
         )?;
         count += 1;
     }
-    require(count == arguments.operations, "original ledger length differs")?;
+    require(
+        count == arguments.operations,
+        "original ledger length differs",
+    )?;
     reporter.emit(json!({
         "phase": "verify_receipts", "records": count,
         "latency_ns": started.elapsed().as_nanos(), "verified": true,
@@ -412,18 +424,36 @@ fn verify_retries(
         let started = Instant::now();
         if *index == 0 {
             let actual = engine.create_repository(
-                &RepositoryName::parse(REPOSITORY_NAME)?, "P01", 1, ACTOR, expected.operation_id,
+                &RepositoryName::parse(REPOSITORY_NAME)?,
+                "P01",
+                1,
+                ACTOR,
+                expected.operation_id,
             )?;
-            require(actual == *repo, "creation retry changed its original response")?;
+            require(
+                actual == *repo,
+                "creation retry changed its original response",
+            )?;
         } else {
             let actual = engine.set_smb_binding(
-                &repo.repository_id, &repo.main_branch_id, index % 2 == 0,
-                *index as u64, ACTOR, expected.operation_id,
+                &repo.repository_id,
+                &repo.main_branch_id,
+                index % 2 == 0,
+                *index as u64,
+                ACTOR,
+                expected.operation_id,
             )?;
-            require(actual == *expected, "same-request retry changed its permanent result")?;
+            require(
+                actual == *expected,
+                "same-request retry changed its permanent result",
+            )?;
             let mismatch = engine.set_smb_binding(
-                &repo.repository_id, &repo.main_branch_id, index % 2 != 0,
-                *index as u64, ACTOR, expected.operation_id,
+                &repo.repository_id,
+                &repo.main_branch_id,
+                index % 2 != 0,
+                *index as u64,
+                ACTOR,
+                expected.operation_id,
             );
             match mismatch {
                 Err(error) if error.code() == storage_engine::ErrorCode::IdempotencyKeyReused => (),
