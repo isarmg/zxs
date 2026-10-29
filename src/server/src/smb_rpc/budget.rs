@@ -120,6 +120,7 @@ pub(super) struct Budget {
 pub(super) struct Lease {
     budget: Arc<Budget>,
     source: PathBuf,
+    record: EntryName,
     max_length: u64,
     principal: String,
     /// This lease's share of `Ledger::granted` from its latest growth.
@@ -332,6 +333,8 @@ impl Budget {
         {
             return Err(invalid("invalid SMB reservation identity"));
         }
+        let record =
+            EntryName::new(format!("{name}.budget.json")).map_err(crate::upload_fs_error)?;
         let mut ledger = self.lock_ledger();
         if ledger.uncertain || ledger.files.contains_key(source) {
             return Err(invalid("SMB spool needs reconciliation"));
@@ -350,8 +353,8 @@ impl Budget {
         };
         drop(ledger);
         persist::create(
-            self.directory.path(),
-            source,
+            &self.directory,
+            &record,
             &Owner {
                 principal: principal.into(),
                 source: name.into(),
@@ -362,6 +365,7 @@ impl Budget {
         Ok(Lease {
             budget: self.clone(),
             source: source.to_owned(),
+            record,
             max_length,
             principal: principal.to_owned(),
             granted: 0,
@@ -406,10 +410,7 @@ impl Budget {
         (self.limits.bytes_total / 64).min(GRANT_POOL_MAX)
     }
     fn available(&self) -> Result<u64, ApiError> {
-        let info = rustix::fs::statvfs(self.directory.path())
-            .map_err(io::Error::from)
-            .map_err(ApiError::io)?;
-        Ok(info.f_bavail.saturating_mul(info.f_frsize))
+        self.directory.available_bytes().map_err(ApiError::io)
     }
 }
 // Exclusive lease access serializes one source without a second writer lock.
@@ -489,8 +490,8 @@ impl Lease {
             // Persist the enlarged extent before acknowledging permission to
             // mutate the FD. Unknown metadata outcomes block further admission.
             persist::grow(
-                self.budget.directory.path(),
-                &self.source,
+                &self.budget.directory,
+                &self.record,
                 &Owner {
                     principal: self.principal.clone(),
                     source: self.source.file_name().unwrap().to_str().unwrap().into(),
@@ -520,9 +521,8 @@ impl Lease {
             Evidence::Namespace => vec![self.source.with_extension("namespace.json")],
             Evidence::Reservation => Vec::new(),
         };
-        let names = paths
+        let mut names = paths
             .into_iter()
-            .chain([record_path(&self.source)])
             .map(|path| {
                 EntryName::new(
                     path.file_name()
@@ -531,6 +531,7 @@ impl Lease {
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(crate::upload_fs_error)?;
+        names.push(self.record.clone());
         persist::cleanup(&self.budget.directory, &names)?;
         {
             let mut ledger = self.budget.lock_ledger();

@@ -858,3 +858,23 @@ fn io_error_source_preserves_errno_without_changing_display() {
         Some(13)
     );
 }
+
+#[test]
+fn available_bytes_uses_the_held_directory_after_its_name_is_replaced() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("private");
+    let directory = PrivateDirectory::create(&path).unwrap();
+    let moved = temp.path().join("retained");
+    fs::rename(&path, &moved).unwrap();
+    let missing = temp.path().join("missing-filesystem");
+    std::os::unix::fs::symlink(&missing, &path).unwrap();
+    // A pathname-based statistic cannot traverse the deliberately broken path.
+    // Space changes independently, so compare the held filesystem's geometry
+    // rather than requiring two sequential free-space samples to be identical.
+    assert!(rustix::fs::statvfs(&path).is_err());
+    let capacity = rustix::fs::fstatvfs(directory.directory_handle()).unwrap();
+    let available = directory.available_bytes().unwrap();
+    assert!(available <= capacity.f_blocks.saturating_mul(capacity.f_frsize));
+    assert!(directory.verify_identity().is_err());
+    assert_eq!(fs::read_link(&path).unwrap(), missing);
+}

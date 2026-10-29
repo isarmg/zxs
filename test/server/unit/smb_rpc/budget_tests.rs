@@ -435,7 +435,12 @@ fn temporary_creation_failure_retains_growth_and_original_evidence() {
     assert!(budget.ledger.lock().unwrap().uncertain);
     drop(lease);
     assert_eq!(fs::read(moved.join("copy")).unwrap(), b"old");
-    assert!(moved.join("copy.budget.json").is_file());
+    let owner: Owner =
+        storage_contract::decode_strict(&fs::read(moved.join("copy.budget.json")).unwrap())
+            .unwrap();
+    assert_eq!(owner.admitted_end, 3);
+    assert_eq!(fs::read(&directory).unwrap(), b"not a directory");
+    assert!(atomic_temporaries(&moved).is_empty());
 }
 
 #[test]
@@ -443,26 +448,23 @@ fn temporary_creation_failure_retains_growth_and_original_evidence() {
 fn real_budget_io_failure_preserves_source_charge_and_error() {
     let root = PathBuf::from(std::env::var_os("ZXS_SMB_BUDGET_FAULT_ROOT").unwrap());
     let grow = std::env::var("ZXS_SMB_BUDGET_GROW").unwrap() == "1";
+    let stage = std::env::var("ZXS_SMB_BUDGET_FAULT_STAGE").unwrap();
     let budget = Budget::recover(&root, limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
     let source = root.join("copy");
-    let lease = grow.then(|| {
+    let mut lease = grow.then(|| {
         budget
             .reserve_available("alice", &source, 3, 100, u64::MAX)
             .unwrap()
     });
     fs::write(&source, b"old").unwrap();
     fs::write(root.join(".inject"), b"enable child-only interposer").unwrap();
-    let result = if let Some(mut lease) = lease {
+    let result = if let Some(lease) = &mut lease {
         lease.before_write_available(100, 97, u64::MAX)
     } else {
         reserve(&budget, "alice", "copy", 100).map(|_| ())
     };
     let error = result.unwrap_err();
-    let cause = std::error::Error::source(&error).unwrap().source().unwrap();
-    assert_eq!(
-        cause.downcast_ref::<io::Error>().unwrap().raw_os_error(),
-        Some(5)
-    );
+    assert!(has_io_errno(&error, 5), "{error:?}");
     assert_eq!(total(&budget), OVERHEAD + 100);
     let ledger = budget.ledger.lock().unwrap();
     assert_eq!(ledger.accounts["alice"], OVERHEAD + 100);
@@ -470,8 +472,131 @@ fn real_budget_io_failure_preserves_source_charge_and_error() {
     assert!(ledger.uncertain);
     drop(ledger);
     assert!(reserve(&budget, "bob", "other", 0).is_err());
+    if let Some(lease) = &mut lease {
+        assert!(lease.before_write_available(3, 0, u64::MAX).is_err());
+    }
     assert_eq!(fs::read(&source).unwrap(), b"old");
-    assert!(record_path(&source).is_file());
+    if stage == "directory-sync" || grow {
+        let owner: Owner =
+            storage_contract::decode_strict(&fs::read(record_path(&source)).unwrap()).unwrap();
+        assert_eq!(
+            owner.admitted_end,
+            if stage == "directory-sync" { 100 } else { 3 }
+        );
+    } else {
+        assert!(!record_path(&source).exists());
+    }
+    assert!(atomic_temporaries(&root).is_empty());
+}
+
+fn has_io_errno(error: &(dyn std::error::Error + 'static), errno: i32) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if error
+            .downcast_ref::<io::Error>()
+            .is_some_and(|io| io.raw_os_error() == Some(errno))
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+fn atomic_temporaries(root: &Path) -> Vec<PathBuf> {
+    fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            platform_io::fs_safety::AtomicFile::is_temporary_name(
+                &EntryName::new(path.file_name().unwrap()).unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn atomic_temporary_inventory_charges_unknown_bytes_without_deleting_them() {
+    let root = crate::tests::private_tempdir();
+    let name = format!(".state-atomic-{}.tmp", "a".repeat(32));
+    let path = root.path().join(&name);
+    fs::write(&path, b"partial").unwrap();
+    let charged = OVERHEAD + 7;
+    let budget = Budget::recover(root.path(), limits(charged, charged)).unwrap();
+    let ledger = budget.ledger.lock().unwrap();
+    assert_eq!(ledger.total, charged);
+    assert_eq!(ledger.unknown, charged);
+    assert_eq!(ledger.files.len(), 1);
+    assert!(ledger.accounts.is_empty());
+    drop(ledger);
+    for principal in ["alice", "bob"] {
+        let error = reserve(&budget, principal, "new", 0).err().unwrap();
+        assert_eq!(
+            error.code,
+            storage_contract::ErrorCode::ResourceLimitExceeded
+        );
+    }
+    assert_eq!(atomic_temporaries(root.path()), vec![path.clone()]);
+    assert_eq!(fs::read(path).unwrap(), b"partial");
+}
+
+#[test]
+fn nonregular_atomic_temporary_rejects_inventory_without_removal() {
+    let root = crate::tests::private_tempdir();
+    let path = root
+        .path()
+        .join(format!(".state-atomic-{}.tmp", "0".repeat(32)));
+    fs::create_dir(&path).unwrap();
+    let error = Budget::recover(root.path(), limits(4 * OVERHEAD, 4 * OVERHEAD))
+        .err()
+        .unwrap();
+    assert_eq!(error.code, storage_contract::ErrorCode::SmbSpoolUnavailable);
+    assert!(path.is_dir());
+}
+
+#[test]
+fn cleanup_error_fixture_preserves_original_io_source() {
+    // This checks error conversion only; the isolated child tests cover real I/O.
+    let error = crate::upload_fs_error(platform_io::fs_safety::Error::Cleanup {
+        operation: Box::new(platform_io::fs_safety::Error::Io(
+            io::Error::from_raw_os_error(5),
+        )),
+        cleanup: io::Error::from_raw_os_error(13),
+    });
+    assert!(has_io_errno(&error, 5));
+    assert!(!has_io_errno(&error, 13));
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+    let mut cleanup_errno = None;
+    while let Some(error) = current {
+        if let Some(platform_io::fs_safety::Error::Cleanup { cleanup, .. }) =
+            error.downcast_ref::<platform_io::fs_safety::Error>()
+        {
+            cleanup_errno = cleanup.raw_os_error();
+        }
+        current = error.source();
+    }
+    assert_eq!(cleanup_errno, Some(13));
+}
+
+#[test]
+fn budget_creation_rejects_rebound_directory_without_touching_replacement() {
+    let root = crate::tests::private_tempdir();
+    let path = root.path().join("spool");
+    PrivateDirectory::create(&path).unwrap();
+    let budget = Budget::recover(&path, limits(4 * OVERHEAD, 4 * OVERHEAD)).unwrap();
+    let moved = root.path().join("retained");
+    fs::rename(&path, &moved).unwrap();
+    let replacement = PrivateDirectory::create(&path).unwrap();
+    let record = EntryName::new("copy.budget.json").unwrap();
+    platform_io::fs_safety::AtomicFile::create(&replacement, &record, b"unrelated").unwrap();
+    let error = reserve(&budget, "alice", "copy", 100).err().unwrap();
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(total(&budget), OVERHEAD + 100);
+    assert!(budget.ledger.lock().unwrap().uncertain);
+    assert_eq!(fs::read(path.join(record.as_path())).unwrap(), b"unrelated");
+    assert!(!moved.join(record.as_path()).exists());
+    assert!(atomic_temporaries(&path).is_empty());
+    assert!(atomic_temporaries(&moved).is_empty());
 }
 
 #[test]

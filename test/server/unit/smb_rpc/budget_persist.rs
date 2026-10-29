@@ -1,6 +1,7 @@
 //! Test-only scheduling and counting around the real persistence functions;
 //! no fake filesystem.
-use super::{ApiError, Owner, Path, persistence};
+use super::{ApiError, Owner, persistence};
+use platform_io::fs_safety::{EntryName, PrivateDirectory};
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Barrier};
 
@@ -35,17 +36,25 @@ fn pause(point: Point) {
         barrier.wait();
     }
 }
-pub(super) fn create(root: &Path, source: &Path, owner: &Owner) -> Result<(), ApiError> {
+pub(super) fn create(
+    directory: &PrivateDirectory,
+    name: &EntryName,
+    owner: &Owner,
+) -> Result<(), ApiError> {
     CREATES.set(CREATES.get() + 1);
     pause(Point::Before);
-    let result = persistence::create(root, source, owner);
+    let result = persistence::create(directory, name, owner);
     pause(Point::After);
     result
 }
-pub(super) fn grow(root: &Path, source: &Path, owner: &Owner) -> Result<(), ApiError> {
+pub(super) fn grow(
+    directory: &PrivateDirectory,
+    name: &EntryName,
+    owner: &Owner,
+) -> Result<(), ApiError> {
     GROWS.set(GROWS.get() + 1);
     pause(Point::Before);
-    let result = persistence::grow(root, source, owner);
+    let result = persistence::grow(directory, name, owner);
     pause(Point::After);
     result
 }

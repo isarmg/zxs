@@ -24,9 +24,15 @@ static int targeted(int fd, const char *stage) {
     if (!strcmp(stage, "directory-sync"))
         return S_ISDIR(metadata.st_mode) && !strcmp(path, root);
     size_t length = strlen(root);
-    return S_ISREG(metadata.st_mode) && !strncmp(path, root, length)
-        && path[length] == '/' &&
-        (strstr(path + length, ".budget.json") || strstr(path + length, ".budget-grow-"));
+    if (!S_ISREG(metadata.st_mode) || strncmp(path, root, length)
+        || path[length] != '/') return 0;
+    const char *name = path + length + 1;
+    if (strlen(name) != 50 || strncmp(name, ".state-atomic-", 14)
+        || strcmp(name + 46, ".tmp")) return 0;
+    for (size_t index = 14; index < 46; ++index)
+        if (!((name[index] >= '0' && name[index] <= '9')
+              || (name[index] >= 'a' && name[index] <= 'f'))) return 0;
+    return 1;
 }
 
 int fsync(int fd) {

@@ -215,6 +215,15 @@ impl PrivateDirectory {
     pub fn resolve(&self, relative: &RelativePath) -> PathBuf {
         self.path.join(relative.as_path())
     }
+    /// Available bytes on the filesystem owning this descriptor. Renaming or
+    /// replacing its diagnostic path does not redirect the measurement.
+    ///
+    /// # Errors
+    /// Returns the underlying filesystem-statistics error without a fallback.
+    pub fn available_bytes(&self) -> io::Result<u64> {
+        let stat = rustix::fs::fstatvfs(&self.directory).map_err(io::Error::from)?;
+        Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
+    }
     pub fn sync(&self) -> Result<(), Error> {
         self.directory.sync_all()?;
         Ok(())
