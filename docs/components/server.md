@@ -132,6 +132,8 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 
 表中同一行的缩写路径共享资源前缀，例如 `/api/branches/{branch}/tree` 和 `/api/branches/{branch}/resolve`。请求字段以代码及 [HTTP 契约](../15-api-and-errors.md) 为准；64 位整数使用规范十进制字符串。重复 JSON 键、浮点数、未声明的变更字段会被拒绝。失败响应包含 `error.code/message/retryable/request_id`，不会把未实现操作返回为成功。
 
+<a id="integrity-scrub"></a>
+
 ## 锁外完整巡检
 
 正常 daemon 在存储准入后自动运行完整巡检；默认每轮结束后 24 小时再调度，实际读取限速 64 MiB/s，成功报告从扫描开始起 48 小时内有效。主机参数 `--scrub-interval-seconds`、`--scrub-max-age-seconds`、`--scrub-bytes-per-second` 分别默认 `86400`、`172800`、`67108864`；必须为正，最大年龄不能短于间隔。间隔不是扫描完成 SLA；长扫描可能完成时已过期。

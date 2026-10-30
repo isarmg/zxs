@@ -53,7 +53,7 @@ HTTP 状态独立保存运行 phase、最近终态、最近完整成功时间及
 finish 后另取一次短锁，只调用现有资格检查采样共享元数据覆盖；此锁可能等待
 并发 Engine 操作，status/cancel 仍只取控制状态锁。该观察不参与任何资格判定。
 完整健康报告、HTTP freshness 和收尾时覆盖观察分别保留；局部 proof/body 故障
-仍可与有效共享图覆盖并存。终态字段及下界可行性状态见[服务端合同](../components/server.md#锁外完整巡检)。
+仍可与有效共享图覆盖并存。终态字段及下界可行性状态见[服务端合同](../components/server.md#integrity-scrub)。
 
 仅 Complete 且 `report.is_healthy()` 更新完整成功时间。写成功、Ready、取消、部分失败、Superseded、线程失败都不能刷新。新鲜度使用单调时间，从**扫描开始**计算；一轮耗时超过 48 小时即使最终完整，也显示 expired。UTC 仅用于展示；重启不恢复旧绿色状态。已观察到故障立即令 freshness 不可用，不等全池扫描结束。
 
