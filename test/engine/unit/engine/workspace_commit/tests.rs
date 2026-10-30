@@ -96,7 +96,19 @@ fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
             .as_str(),
         "committed"
     );
-    assert_eq!(engine.workspaces.len(), 4);
+    // Publication releases only the target's resident slot, not its manifest,
+    // permanent receipt, metadata charge, or any unrelated recovery evidence.
+    assert_eq!(engine.workspaces.len(), unrelated.len());
+    assert!(!engine.workspaces.contains_key(&target.workspace_id));
+    let capacity = engine.workspace_capacity("alice");
+    assert_eq!(capacity.global.records.used, 3);
+    assert_eq!(capacity.global.cold_records, 1);
+    assert_eq!(capacity.principal.records.used, 1);
+    assert_eq!(capacity.principal.cold_records, 1);
+    assert_eq!(
+        capacity.global.metadata_bytes.used,
+        capacities[0].1.global.metadata_bytes.used
+    );
     for (id, workspace) in &unrelated {
         assert_eq!(
             canonical_json(&engine.workspace(id).unwrap()).unwrap(),
@@ -629,22 +641,37 @@ fn public_preparation_fences_registration_and_finish_rechecks_live_receipt() {
         // this unit fixture to exercise the live-receipt branch independently of
         // today's global write fence; this is not a claim that writers bypass it.
         drop(prepared._admission.take());
-        let registered = engine
-            .commit_workspace_wire(registered_request, public_envelope(registered_body))
-            .unwrap();
-        if change == "actor" {
-            // Simulate a conflicting actor receipt after capture, without adding
-            // any production hook or pretending another actor owns this workspace.
-            let state = Arc::make_mut(&mut engine.state);
-            let mut records = state.operations.tail().to_vec();
-            records
-                .iter_mut()
-                .find(|entry| entry.result.operation_id == request.operation_id)
+        let registered = if change == "actor" {
+            // Publish through the normal admission path, not by mutating the
+            // live State. Keep every replay binding except the receipt owner,
+            // so this branch cannot pass on a kind, branch, or digest mismatch.
+            engine
+                .mutate_digest(
+                    "workspace.commit",
+                    "different-actor",
+                    request.operation_id,
+                    json!({}),
+                    request.request_digest.clone(),
+                    |_, _, _| Ok(json!({"branch_id": workspace.branch_id})),
+                )
                 .unwrap()
-                .principal = "different-actor".into();
-            state.operations = storage_contract::OperationLog::from_records(records).unwrap();
+        } else {
+            engine
+                .commit_workspace_wire(registered_request, public_envelope(registered_body))
+                .unwrap()
+        };
+        if change == "actor" {
+            let entry = engine.find_receipt(request.operation_id).unwrap().unwrap();
+            assert_eq!(entry.principal, "different-actor");
+            assert_eq!(entry.result.request_digest, prepared.expected_digest);
+            assert!(workspace_request_matches_result(
+                &engine.workspace(&request.workspace_id).unwrap(),
+                &request,
+                &entry.result
+            ));
         }
         let sequence = engine.state.sequence;
+        let published = canonical_json(engine.state()).unwrap();
         let result = engine.finish_workspace_commit(prepared);
         if change == "same" {
             assert_eq!(result.unwrap(), registered);
@@ -652,5 +679,10 @@ fn public_preparation_fences_registration_and_finish_rechecks_live_receipt() {
             assert_eq!(result.unwrap_err().code(), ErrorCode::IdempotencyKeyReused);
         }
         assert_eq!(engine.state.sequence, sequence);
+        assert_eq!(canonical_json(engine.state()).unwrap(), published);
+        assert_eq!(
+            engine.published_receipt(request.operation_id).unwrap(),
+            Some(registered)
+        );
     }
 }

@@ -27,7 +27,7 @@ fn fixture(
     for (reference, chunk) in events
         .sealed()
         .iter()
-        .zip(all.chunks_exact(EVENT_SEGMENT_SPAN))
+        .zip(all.as_chunks::<EVENT_SEGMENT_SPAN>().0)
     {
         let segment = EventSegment {
             format: Default::default(),

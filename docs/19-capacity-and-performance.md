@@ -230,6 +230,8 @@ SQLite 不再保存无生产查询消费者的通用 `entities` 镜像。启动�
 
 ### 持久工作区证据准入
 
+**2026-10-30 候选实现补充：** 下文“仅普通空 Aborted 冷存、Committed 仍占驻留名额”保留首批范围；后续候选已扩展到由永久收据/原请求或已发布历史保存 Completed 计划证明的终态记录，细节见 [ADR 0008 的候选扩展](adr/0008-workspace-lifecycle-separation.md#2026-10-30候选实现扩展状态)。只返还驻留记录名额，不返还冷热元数据字节，不删除清单、永久收据或 retained FULL 恢复正文。未绑定、未决或证据不一致的记录不因状态标签而豁免。这是候选实现状态，不表示 main 已合入或整仓验证完成。
+
 `max_workspaces` 继续限制 open/sealed 工作区。另设跨状态、跨重启的证据预算：
 `max_retained_workspaces` 默认 4096 条，
 `max_retained_workspaces_per_principal` 默认每主体 1024 条；

@@ -225,12 +225,28 @@ fn assert_error(error: &Error, target: Target, damage: Damage) {
             assert_eq!(cause.message(), reason);
         }
         Damage::Truncated => {
-            assert_eq!(cause.code(), ErrorCode::InvalidJson);
-            assert!(matches!(
-                cause,
-                Error::Contract(storage_contract::Error::Json { .. })
-            ));
-            assert!(std::error::Error::source(cause).is_some());
+            assert_eq!(cause.code(), ErrorCode::ObjectCorrupt);
+            assert_eq!(cause.message(), "immutable object JSON is invalid");
+            let Error::Context {
+                source,
+                retryable: false,
+                ..
+            } = cause
+            else {
+                panic!("missing persisted-object context: {cause:?}");
+            };
+            let Error::Contract(storage_contract::Error::Json { source: json, .. }) =
+                source.as_ref()
+            else {
+                panic!("missing truncated JSON cause: {source:?}");
+            };
+            assert_eq!(source.code(), ErrorCode::InvalidJson);
+            assert!(json.is_eof());
+            assert!(
+                std::error::Error::source(source.as_ref())
+                    .unwrap()
+                    .is::<json_codec::Error>()
+            );
         }
     }
 }

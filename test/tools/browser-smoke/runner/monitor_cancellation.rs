@@ -9,6 +9,10 @@ fn choose(browser: &Browser, range: &str) -> Result<()> {
     )?)
 }
 
+// The metric header and G4 contour decorations also contain SVGs. Only the
+// chart owns the selected range label and plotted history.
+const CURRENT_CHART: &str = "document.querySelector('[data-metric=cpu] .zxs-metric-chart svg[role=img][aria-label=\"CPU · 24h\"] .zxs-chart-line')!==null&&document.querySelector('.zxs-monitor-range .zxs-select > button').textContent.trim()==='24h'";
+
 fn check(browser: &Browser, label: &str, expression: &str) -> Result<()> {
     wait_for(label, || {
         if browser.script(expression)? == true {
@@ -55,7 +59,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             check(
                 browser,
                 "monitor replacement aborts old fetch and renders",
-                "return window.__zxsMonitorReads.aborted===1&&window.__zxsMonitorReads.pending.signal.aborted&&document.querySelector('[data-metric=cpu] .zxs-chart-line')!==null",
+                &format!("return window.__zxsMonitorReads.aborted===1&&window.__zxsMonitorReads.pending.signal.aborted&&{CURRENT_CHART}"),
             )?;
             browser.script("window.__zxsMonitorReads.pending.release();return true")?;
             check(
@@ -64,7 +68,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "return window.__zxsMonitorReads.delivered===1",
             )?;
             let result = browser.cdp("Runtime.evaluate", json!({
-                "expression":"(async()=>{for(let i=0;i<8;i++)await new Promise(requestAnimationFrame);return document.querySelector('[data-metric=cpu] .zxs-chart-line')!==null&&document.querySelector('[data-metric=cpu] svg')?.getAttribute('aria-label').includes('24h');})()",
+                "expression":format!("(async()=>{{for(let i=0;i<8;i++)await new Promise(requestAnimationFrame);return {CURRENT_CHART};}})()"),
                 "awaitPromise":true,"returnByValue":true,
             }))?;
             if !result["exceptionDetails"].is_null() || result["result"]["value"] != true {

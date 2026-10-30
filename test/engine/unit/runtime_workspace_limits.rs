@@ -147,6 +147,19 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
     let mut engine = f.initialize();
     let repo = repository(&mut engine, 1);
     let first = save(&mut engine, &repo.main_branch_id, "saved", b"saved payload");
+    assert_eq!(engine.workspace_capacity("admin").global.records.used, 0);
+    assert_eq!(engine.workspace_capacity("admin").global.cold_records, 1);
+    // A published receipt is not a live resource. Retain real unpublished
+    // payload evidence to exercise the persisted one-record admission limit.
+    let retained = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&retained.workspace_id, "unpublished", b"retained evidence")
+        .unwrap();
+    engine
+        .abort_workspace(&retained.workspace_id, "admin")
+        .unwrap();
     assert_eq!(
         engine
             .create_workspace(&repo.main_branch_id, "admin")
@@ -195,7 +208,7 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
     engine
         .stage_bytes(&third.workspace_id, "another", b"another payload")
         .unwrap();
-    engine
+    let third_result = engine
         .commit_workspace(CommitRequest {
             workspace_id: third.workspace_id.clone(),
             operation_id: storage_contract::OperationId::generate(),
@@ -206,14 +219,25 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
             request_digest: None,
         })
         .unwrap();
+    assert_eq!(engine.workspace_capacity("writer").global.records.used, 2);
+    assert_eq!(engine.workspace_capacity("writer").global.cold_records, 2);
+    let active = engine
+        .create_workspace(&repo.main_branch_id, "writer")
+        .unwrap();
+    engine
+        .stage_bytes(&active.workspace_id, "active", b"unpublished payload")
+        .unwrap();
     let error = engine
         .create_workspace(&repo.main_branch_id, "writer")
         .unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert!(error.to_string().contains("global record count"));
     let report = engine.workspace_capacity("admin");
     assert_eq!(report.global.records.used, 3);
     assert_eq!(report.global.records.limit, 3);
     assert_eq!(report.principal.records.used, 2);
+    assert_eq!(report.global.cold_records, 2);
+    assert_eq!(report.principal.cold_records, 1);
     assert!(report.automatic_retirement);
     engine.assert_workspace_budget_consistent();
     drop(engine);
@@ -237,6 +261,10 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
     let engine = Engine::open_for_recovery_with_workspace_limits(&f.root, Some(raised)).unwrap();
     assert_eq!(engine.workspace_capacity("admin"), report);
     assert_eq!(engine.operation(first.operation_id).unwrap(), first);
+    assert_eq!(
+        engine.operation(third_result.operation_id).unwrap(),
+        third_result
+    );
     drop(engine);
     let before = files(f.temp.path());
     let restored = f.temp.path().join("restored");
@@ -297,6 +325,18 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
     );
     assert_eq!(engine.operation(first.operation_id).unwrap(), first);
     assert_eq!(
+        engine.operation(third_result.operation_id).unwrap(),
+        third_result
+    );
+    assert_eq!(
+        engine.workspace(&retained.workspace_id).unwrap().state,
+        WorkspaceState::Aborted
+    );
+    assert_eq!(
+        engine.workspace(&active.workspace_id).unwrap().state,
+        WorkspaceState::Open
+    );
+    assert_eq!(
         fs::read(restored.join("config.json")).unwrap(),
         config_bytes
     );
@@ -308,6 +348,11 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
     drop(engine);
     let engine = Engine::open_with_workspace_limits(&restored, Some(raised)).unwrap();
     assert_eq!(engine.workspace_capacity("admin"), report);
+    assert_eq!(engine.operation(first.operation_id).unwrap(), first);
+    assert_eq!(
+        engine.operation(third_result.operation_id).unwrap(),
+        third_result
+    );
 }
 
 #[test]

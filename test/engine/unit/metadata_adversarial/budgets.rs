@@ -128,14 +128,14 @@ fn truncated_json_and_wrong_digest_keep_distinct_causes_and_original_bytes() {
     let hash = store_object(disk, NAMESPACE_PAGE_KIND, &empty_page()).unwrap();
     let path = object_path(disk, NAMESPACE_PAGE_KIND, &hash);
     let root = DiskRoot::open(&disk.root).unwrap();
-    for (bytes, code) in [
+    for (bytes, truncated) in [
         (
             &b"{\"format\":\"namespace-page\",\"entries\":["[..],
-            ErrorCode::InvalidJson,
+            true,
         ),
         (
             &b"{\"format\":\"namespace-page\",\"entries\":[],\"extra\":true}"[..],
-            ErrorCode::ObjectCorrupt,
+            false,
         ),
     ] {
         fs::write(&path, bytes).unwrap();
@@ -152,13 +152,24 @@ fn truncated_json_and_wrong_digest_keep_distinct_causes_and_original_bytes() {
         )
         .err()
         .expect("corrupt bytes cannot authenticate at the original reference");
-        assert_eq!(error.code(), code);
-        if code == ErrorCode::InvalidJson {
-            assert!(matches!(
-                &error,
-                Error::Contract(storage_contract::Error::Json { .. })
-            ));
-            assert!(error.source().unwrap().is::<json_codec::Error>());
+        assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
+        if truncated {
+            assert_eq!(error.message(), "immutable object JSON is invalid");
+            let Error::Context {
+                source,
+                retryable: false,
+                ..
+            } = &error
+            else {
+                panic!("missing persisted-object context: {error:?}");
+            };
+            let Error::Contract(storage_contract::Error::Json { source: json, .. }) =
+                source.as_ref()
+            else {
+                panic!("missing JSON cause: {source:?}");
+            };
+            assert!(json.is_eof());
+            assert!(source.source().unwrap().is::<json_codec::Error>());
         } else {
             assert_eq!(error.message(), "immutable object digest differs");
         }
