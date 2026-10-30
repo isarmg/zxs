@@ -17,6 +17,7 @@ mod namespace;
 mod repository;
 mod workspace;
 pub(crate) use ancestry::descendant_commits;
+pub(crate) use directory::context_key_from_key;
 pub use file_nodes::{FileNodeProjectionRequest, FileNodeSummary};
 pub use file_requests::{FileBranchMergeRequest, FileNodeTagsUpdateRequest};
 pub use namespace::NamespaceTree;

@@ -286,6 +286,10 @@ impl Engine {
                 .retryable());
         }
         let previous = std::mem::replace(&mut self.state, std::sync::Arc::new(next));
+        self.history_window_roots = Some(super::history_window::HistoryRootBindings::published(
+            &self.state,
+            history_basis.clone(),
+        ));
         self.snapshot = Some(candidate.snapshot_hash.clone());
         self.update_index(&previous);
         // Only the completed member publication establishes this proof. SQLite is
