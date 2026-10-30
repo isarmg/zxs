@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical]
 
 permissions:
   contents: read
@@ -61,6 +61,11 @@ jobs:
           tree = os.environ['SOURCE_TREE']
           if tree and not re.fullmatch(r'[0-9a-f]{40}', tree):
               raise SystemExit('source_tree must be an exact 40-character lowercase tree SHA')
+          if os.environ['SCOPE'].startswith('retirement-') and (source, tree) != (
+              '7107bedfa14cd0cde9a713571a83b889828920d6',
+              '2d7dddf25f914f440de27163a6c25972a68019e0',
+          ):
+              raise SystemExit('Retirement diagnostics require the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -164,6 +169,29 @@ jobs:
               test_target='workspace_namespace_preconditions', release=False,
               expected_count=3, required_names='[]',
               command='cargo test --locked --offline -p storage-engine --test workspace_namespace_preconditions -- --nocapture'))
+          retirement = 'tests::published_workspace_retirement::'
+          retirement_names = [
+              'published_normal_workspaces_release_records_but_keep_replay_and_bytes',
+              'published_abort_stays_cold_at_full_resident_quota_across_restart',
+              'published_workspace_survives_system_loss_without_reactivating_record_charge',
+              'unbound_terminal_records_cannot_bypass_quota_before_recovery_writes',
+              'recovery_source_search_reads_old_full_generations_from_cold_workspaces',
+              'published_completion_with_upload_owner_or_unknown_material_stays_resident',
+              'published_cold_point_reads_and_recovery_hints_keep_exact_mirror_proof',
+              'damaged_request_mirror_replays_admitted_cold_but_restart_keeps_record_resident',
+          ]
+          smb_quota = 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'
+          groups['retirement-critical'] = [
+              dict(id='retirement-format', format_base='8f28d74ae1e3ead1f31e7a96a8abfd9e3ffa6d3f',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='published-workspace-retirement', cache='storage-engine',
+                  package='storage-engine', test_filter=retirement, expected_count=8,
+                  required_names=json.dumps(retirement_names),
+                  command=f'cargo test --locked --offline -p storage-engine --lib {retirement} -- --nocapture'),
+              dict(id='retirement-smb-quota', cache='server', package='storage-server',
+                  exact_test=smb_quota,
+                  command=f'cargo test --locked --offline -p storage-server --lib {smb_quota} -- --exact --nocapture'),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -195,10 +223,12 @@ jobs:
       EXPECTED_COUNT: ${{ matrix.expected_count }}
       REQUIRED_NAMES: ${{ matrix.required_names }}
       VERIFY_UNIT_INVENTORY: ${{ matrix.unit_inventory }}
+      FORMAT_BASE: ${{ matrix.format_base }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
+          fetch-depth: ${{ matrix.format_base != '' && '0' || '1' }}
           persist-credentials: false
       - name: Verify exact checkout and record source identity
         run: |
@@ -233,6 +263,25 @@ jobs:
           rustup show active-toolchain
           rustc --version
           cargo --version
+      - name: Check feature-changed Rust files without modifying source
+        if: matrix.format_base != ''
+        run: |
+          python3 - <<'PY' 2>&1 | tee .diagnostics/format.log
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          base = os.environ['FORMAT_BASE']
+          subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], check=True)
+          changed = subprocess.check_output(['git', 'diff', '--name-only', '--diff-filter=ACMRT', '-z', base, 'HEAD'])
+          paths = [os.fsdecode(path) for path in changed.split(b'\0') if path.endswith(b'.rs')]
+          if not paths:
+              raise SystemExit('Reviewed feature has no changed Rust paths')
+          command = ['rustfmt', '+1.99.0', '--edition', '2024', '--config', 'skip_children=true', '--check', *paths]
+          Path('.diagnostics/format-command.json').write_text(json.dumps(command, indent=2))
+          print(json.dumps(command))
+          subprocess.run(command, check=True)
+          PY
       # Reuse the repository's pinned cache action, with a separate namespace.
       # Only compiled artifacts are cached; Cargo home and test results are not.
       - name: Cache compiled native dependencies
@@ -306,7 +355,7 @@ jobs:
           print(f'Inventoried {len(tests)} server unit test bodies')
           PY
       - name: Execute selected locked offline tests and retain failures
-        if: matrix.repetitions != 10
+        if: matrix.repetitions != 10 && matrix.format_base == ''
         run: |
           printf 'Source: %s\nCommand: %s\n' "$SOURCE_SHA" "$TEST_COMMAND" | tee .diagnostics/command.txt
           set +e
