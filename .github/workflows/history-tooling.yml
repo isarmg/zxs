@@ -161,7 +161,7 @@ jobs:
           ):
               raise SystemExit('History window repair requires the exact strict-parser and consumer successor')
           if os.environ['SCOPE'] == 'history-window-web' and (source, tree) != (
-              '3525a500126bf1d1111583d76b8d02b9bd7437c4', '74acc2e5252a4e1e345336c2edfba3f1610577c2',
+              'a4dfa51c0fbb00a270e2789a3eb350f360e8476b', '23751e85496656fa8aa1f65ae5ed57f137269c9f',
           ):
               raise SystemExit('History window Web checkpoint requires the exact cross-layer source and tree')
           if os.environ['SCOPE'] == 'scrub-terminal-diagnostics' and (source, tree) != (
