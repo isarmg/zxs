@@ -1989,6 +1989,9 @@ mod http_boundary_tests;
 #[path = "tests/auxiliary_startup.rs"]
 mod auxiliary_startup_tests;
 
+#[path = "tests/static_assets.rs"]
+mod static_asset_tests;
+
 #[tokio::test]
 async fn workspace_capacity_requires_authentication_and_preserves_unsupported_backend() {
     let root = private_tempdir();
