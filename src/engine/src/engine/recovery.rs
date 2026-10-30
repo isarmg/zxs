@@ -246,9 +246,9 @@ impl Engine {
             let opened = opened_journals
                 .remove(&disk.disk_id)
                 .expect("scanned online journal");
-            scanned_journals.insert(disk.disk_id.clone(), opened.scan.records.clone());
-            self.journals
-                .insert(disk.disk_id.clone(), opened.into_writer()?);
+            let (writer, scanned) = opened.into_writer()?;
+            scanned_journals.insert(disk.disk_id.clone(), scanned);
+            self.journals.insert(disk.disk_id.clone(), writer);
         }
         let checkpoint = if online.len() == members.len() && !torn_tail {
             match super::recovery_checkpoint::load(self, &prefixes, &records) {

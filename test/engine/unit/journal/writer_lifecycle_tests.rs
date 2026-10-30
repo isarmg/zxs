@@ -69,7 +69,7 @@ fn scanned_journal_keeps_its_parent_for_creation_and_sync_after_root_rebinding()
         put(&mut replacement, &disk, RecordType::Prepare, 99);
         let replacement_bytes = std::fs::read(log_path(&disk)).unwrap();
 
-        let mut original = opened.into_writer().unwrap();
+        let (mut original, _) = opened.into_writer().unwrap();
         put(&mut original, &disk, RecordType::Accept, 1);
         assert_eq!(std::fs::read(log_path(&disk)).unwrap(), replacement_bytes);
         let records = scan_at(&held, &disk).unwrap().records;
@@ -135,7 +135,7 @@ fn failed_write_or_sync_requires_explicit_recovery_before_retry() {
         );
         // Scan alone is read-only, including a damaged suffix.
         assert_eq!(std::fs::read(log_path(&disk)).unwrap(), bytes);
-        let mut writer = opened.into_writer().unwrap();
+        let (mut writer, _) = opened.into_writer().unwrap();
         writer.repair_torn_tail().unwrap();
         let receipt = put(&mut writer, &disk, RecordType::Accept, 1);
         assert!(
@@ -217,6 +217,52 @@ fn full_recovery_keeps_historical_receipts_and_wire_bytes() {
         .map(|disk| std::fs::read(log_path(disk)).unwrap())
         .collect();
     drop(engine);
+    for disk in &config.disks {
+        let opened = OpenJournal::scan(disk).unwrap();
+        let allocation = (
+            opened.scan.records.as_ptr(),
+            opened.scan.records.len(),
+            opened.scan.records.capacity(),
+        );
+        let strings: Vec<_> = opened
+            .scan
+            .records
+            .iter()
+            .map(|(record, hash)| {
+                [
+                    record.candidate_hash.as_ptr(),
+                    record.object_hash.as_ptr(),
+                    record.previous_frame_hash.as_ptr(),
+                    hash.as_ptr(),
+                ]
+            })
+            .collect();
+        let expected_records = canonical_json(&opened.scan.records).unwrap();
+        let (writer, history) = opened.into_writer().unwrap();
+        assert_eq!(
+            (history.as_ptr(), history.len(), history.capacity()),
+            allocation
+        );
+        assert_eq!(canonical_json(&history).unwrap(), expected_records);
+        for ((record, hash), pointers) in history.iter().zip(strings) {
+            assert_eq!(
+                [
+                    record.candidate_hash.as_ptr(),
+                    record.object_hash.as_ptr(),
+                    record.previous_frame_hash.as_ptr(),
+                    hash.as_ptr(),
+                ],
+                pointers
+            );
+        }
+        let sequence = history.last().unwrap().0.sequence;
+        let start = history.partition_point(|(record, _)| record.sequence < sequence);
+        assert!(start > 0, "fixture must include historical slots");
+        assert_eq!(
+            canonical_json(writer.records()).unwrap(),
+            canonical_json(&history[start..]).unwrap()
+        );
+    }
     let mut recovered = Engine::open(&root).unwrap();
     assert_eq!(canonical_json(recovered.state()).unwrap(), expected);
     assert!(!recovered.is_read_only());

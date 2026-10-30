@@ -137,7 +137,9 @@ impl OpenJournal {
             opening_fault: None,
         })
     }
-    pub(crate) fn into_writer(self) -> Result<JournalWriter> {
+    /// Transfer the scanned history to recovery; only the current slot is
+    /// duplicated for the writer's independently mutable receipt tail.
+    pub(crate) fn into_writer(self) -> Result<(JournalWriter, Vec<(Record, String)>)> {
         let file = match self.file {
             Some(file) => {
                 // A surviving leaf may come from a failed creation before its directory fence.
@@ -151,22 +153,25 @@ impl OpenJournal {
             }
             None => create_synced_journal(&self.directory)?,
         };
-        let mut records = self.scan.records;
+        let records = self.scan.records;
         let start = records.last().map_or(0, |(last, _)| {
             records.partition_point(|(record, _)| record.sequence < last.sequence)
         });
-        let records = records.split_off(start);
-        Ok(JournalWriter {
-            file,
-            records,
-            state: if self.scan.torn_tail {
-                WriterState::TornTail(self.scan.valid_bytes)
-            } else {
-                WriterState::Ready
+        let tail = records[start..].to_vec();
+        Ok((
+            JournalWriter {
+                file,
+                records: tail,
+                state: if self.scan.torn_tail {
+                    WriterState::TornTail(self.scan.valid_bytes)
+                } else {
+                    WriterState::Ready
+                },
+                #[cfg(feature = "fault-injection")]
+                fault: None,
             },
-            #[cfg(feature = "fault-injection")]
-            fault: None,
-        })
+            records,
+        ))
     }
 }
 
