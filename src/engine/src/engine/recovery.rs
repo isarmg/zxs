@@ -2,7 +2,7 @@
 use super::Engine;
 use crate::journal::RecordType;
 use crate::publication_evidence::{
-    repair_object_copies_at, verified_object_at, verified_publication_seal_at, verified_snapshot_at,
+    repair_object_copies_at, verified_object_at, verified_publication_seal_at,
 };
 use crate::{disk::*, journal::*, *};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,6 +11,47 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) enum RecoveryMode {
     CompletePending,
     PreservePending,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NamespaceReuse {
+    Discard,
+    FreshOpen,
+}
+
+/// Exists only within one recovery call, never an import/admission capability.
+struct RecoveryNamespaceSeed {
+    nodes: crate::segment_store::NamespaceCache,
+    state: std::sync::Weak<State>,
+    resources: std::sync::Weak<DiskResources>,
+    caches: std::sync::Weak<crate::segment_store::SegmentCaches>,
+    snapshot: String,
+}
+
+impl RecoveryNamespaceSeed {
+    fn new(engine: &Engine, snapshot: String, nodes: crate::segment_store::NamespaceCache) -> Self {
+        Self {
+            nodes,
+            state: std::sync::Arc::downgrade(&engine.state),
+            resources: std::sync::Arc::downgrade(&engine.disk_resources),
+            caches: std::sync::Arc::downgrade(&engine.segment_caches),
+            snapshot,
+        }
+    }
+
+    fn install(self, engine: &Engine) {
+        // This optimization may be dropped, never turn a valid open into an error.
+        // State identity binds the exact installed candidate/generation; resources
+        // and cache identity prohibit transfer even to an otherwise identical pool.
+        if !engine.blocked
+            && engine.snapshot.as_deref() == Some(self.snapshot.as_str())
+            && self.state.ptr_eq(&std::sync::Arc::downgrade(&engine.state))
+            && self.resources.ptr_eq(&std::sync::Arc::downgrade(&engine.disk_resources))
+            && self.caches.ptr_eq(&std::sync::Arc::downgrade(&engine.segment_caches))
+        {
+            engine.segment_caches.replace_namespace(self.nodes);
+        }
+    }
 }
 
 mod workspace_receipts;
@@ -128,6 +169,16 @@ impl Engine {
         let prepared = self.prepare_recovery()?;
         self.seed_workspace_recovery(&prepared)?;
         self.apply_recovery(mode, prepared)
+    }
+
+    /// Called only while constructing a fresh, still-unpublished Engine.
+    pub(super) fn recover_for_open(&mut self, mode: RecoveryMode) -> Result<()> {
+        if mode == RecoveryMode::PreservePending {
+            return self.recover_mode(mode);
+        }
+        let prepared = self.prepare_recovery()?;
+        self.seed_workspace_recovery(&prepared)?;
+        self.apply_recovery_with_namespace_cache(mode, prepared, NamespaceReuse::FreshOpen)
     }
 
     pub(super) fn prepare_recovery(&mut self) -> Result<PreparedRecovery> {
@@ -258,6 +309,15 @@ impl Engine {
         mode: RecoveryMode,
         prepared: PreparedRecovery,
     ) -> Result<()> {
+        self.apply_recovery_with_namespace_cache(mode, prepared, NamespaceReuse::Discard)
+    }
+
+    fn apply_recovery_with_namespace_cache(
+        &mut self,
+        mode: RecoveryMode,
+        prepared: PreparedRecovery,
+        reuse: NamespaceReuse,
+    ) -> Result<()> {
         let PreparedRecovery {
             members,
             online,
@@ -281,6 +341,7 @@ impl Engine {
         // historical root that references them. Never persist this evidence.
         let mut repaired_pages = BTreeSet::new();
         let mut repaired_histories = BTreeSet::new();
+        let mut namespace_seed = None;
         for (sequence, candidates) in records {
             let active = candidates
                 .into_iter()
@@ -302,6 +363,8 @@ impl Engine {
             let Some((hash, rs)) = active.into_iter().next() else {
                 continue;
             };
+            // No proof from a preceding candidate may survive another admission.
+            namespace_seed = None;
             let prepared = if prepared_candidates
                 .as_ref()
                 .is_some_and(|(slot, _)| *slot == sequence)
@@ -318,6 +381,7 @@ impl Engine {
             } else {
                 None
             };
+            let had_failed_seal = failed_seal.is_some();
             if online.len() == members.len()
                 && let Some(source) = failed_seal.take()
             {
@@ -370,6 +434,10 @@ impl Engine {
                     }
                 }
             };
+            let retain_namespace = reuse == NamespaceReuse::FreshOpen
+                && online.len() == members.len()
+                && !had_failed_seal
+                && publication.as_ref().is_some_and(|p| p.recovery.is_none());
             if let Some(checkpoint) = checkpoint
                 .as_ref()
                 .filter(|c| candidate.sequence <= c.sequence)
@@ -407,9 +475,10 @@ impl Engine {
                             "checkpoint boundary differs from journal",
                         ));
                     }
-                    let mut next = snapshot
-                        .resolve(&self.disk_resources, &online, &candidate.snapshot_hash)?
-                        .into_state();
+                    let resolved = snapshot
+                        .resolve(&self.disk_resources, &online, &candidate.snapshot_hash)?;
+                    let cache = retain_namespace.then_some(resolved.namespace_cache);
+                    let mut next = resolved.admitted.into_state();
                     if publication.recovery.is_some() {
                         self.overlay_recovered_result(
                             &online,
@@ -419,6 +488,9 @@ impl Engine {
                         )?;
                     }
                     self.state = std::sync::Arc::new(next);
+                    namespace_seed = cache.map(|nodes| {
+                        RecoveryNamespaceSeed::new(self, candidate.snapshot_hash.clone(), nodes)
+                    });
                     self.history_catalog = Some(super::history_window::HistoryCatalog::recovered(
                         &self.state,
                         candidate.history_roots.clone(),
@@ -427,8 +499,10 @@ impl Engine {
                 self.snapshot = Some(candidate.snapshot_hash);
                 continue;
             }
-            let admitted =
+            let resolved =
                 snapshot.resolve(&self.disk_resources, &online, &candidate.snapshot_hash)?;
+            let cache = retain_namespace.then_some(resolved.namespace_cache);
+            let admitted = resolved.admitted;
             let history_objects = crate::history_package::bound_history_objects_at(
                 &self.disk_resources,
                 &online,
@@ -534,6 +608,9 @@ impl Engine {
                     )?;
                 }
                 self.state = std::sync::Arc::new(next);
+                namespace_seed = cache.map(|nodes| {
+                    RecoveryNamespaceSeed::new(self, candidate.snapshot_hash.clone(), nodes)
+                });
                 self.history_catalog = Some(super::history_window::HistoryCatalog::recovered(
                     &self.state,
                     candidate.history_roots.clone(),
@@ -619,6 +696,11 @@ impl Engine {
         {
             self.recovery_warnings.checkpoint_save = Some(error);
         }
+        if let Some(seed) = namespace_seed {
+            // Replaces rather than merges the ordinary cache. A later workspace
+            // or index failure drops this unpublished Engine and all its caches.
+            seed.install(self);
+        }
         Ok(())
     }
 }
@@ -636,14 +718,14 @@ impl RecoverySnapshot {
         resources: &DiskResources,
         members: &[DiskConfig],
         hash: &str,
-    ) -> Result<crate::history_package::AdmittedState> {
+    ) -> Result<crate::journal::ResolvedSnapshot> {
         match self {
-            Self::Prepared(snapshot) => snapshot.resolve(|kind, hash| {
+            Self::Prepared(snapshot) => snapshot.resolve_with_namespace_cache(|kind, hash| {
                 crate::publication_evidence::verified_graph_object_at(
                     resources, members, kind, hash,
                 )
             }),
-            Self::Stored => verified_snapshot_at(resources, members, hash),
+            Self::Stored => crate::publication_evidence::verified_snapshot_with_namespace_cache_at(resources, members, hash),
         }
     }
 }

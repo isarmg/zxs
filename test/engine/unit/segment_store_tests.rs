@@ -337,3 +337,57 @@ fn authenticated_segment_and_locator_schema_failures_are_corrupt_evidence() {
         );
     }
 }
+
+#[test]
+fn admission_namespace_cache_moves_nodes_budget_and_fifo_without_loading() {
+    use crate::namespace::{NamespaceNode, NamespaceSource, ObjectLoaderSource};
+    use storage_contract::{NamespacePage, NamespaceRefKind, NamespaceReference};
+    let temp = tempfile::tempdir().unwrap();
+    let config = Config::development([temp.path().join("member")]);
+    private_dir(&config.disks[0].root).unwrap();
+    let page = NamespacePage { format: Default::default(), entries: Vec::new() };
+    let hash = store_object(&config.disks[0], storage_contract::NAMESPACE_PAGE_KIND, &page).unwrap();
+    let reference = NamespaceReference { kind: NamespaceRefKind::Page, hash };
+    let calls = std::cell::Cell::new(0);
+    let source = ObjectLoaderSource::memoized(|kind, hash: &str| {
+        calls.set(calls.get() + 1);
+        crate::journal::load_authenticated_object(&config.disks[0], kind, hash)
+    });
+    let NamespaceNode::Page(node) = source.node(&reference).unwrap() else {
+        panic!("expected page");
+    };
+    source.node(&reference).unwrap();
+    assert_eq!(calls.get(), 1);
+    let cache = source.into_namespace_cache().unwrap();
+    assert_eq!(cache.max_bytes, MAX_CACHED_NAMESPACE_BYTES);
+    assert_eq!(cache.max_entries, usize::MAX);
+    let charge = cache.bytes;
+    let order = cache.order.clone();
+    assert!(charge > 0);
+    let caches = SegmentCaches::new();
+    caches.replace_namespace(cache);
+    {
+        let moved = SegmentCaches::lock(&caches.namespace);
+        assert_eq!(moved.bytes, charge);
+        assert!(moved.order == order);
+        let NamespaceNode::Page(retained) = moved.get(&NamespaceCacheKey::parse(&reference).unwrap()).unwrap() else {
+            panic!("expected retained page");
+        };
+        assert!(Arc::ptr_eq(&node, &retained));
+    }
+    assert_eq!(calls.get(), 1);
+    std::fs::remove_file(object_path(&config.disks[0], storage_contract::NAMESPACE_PAGE_KIND, &reference.hash)).unwrap();
+    let admitted = ValidatedConfig::try_from(config.clone()).unwrap();
+    let resources = DiskResources::open(&admitted, false).unwrap();
+    let reader = SegmentReader { resources: &resources, members: &config.disks, caches: &caches, observe: None };
+    let NamespaceNode::Page(hit) = reader.namespace_node(&reference).unwrap() else {
+        panic!("expected cached proof");
+    };
+    assert!(Arc::ptr_eq(&node, &hit));
+    let weak = Arc::downgrade(&node);
+    drop(node);
+    drop(hit);
+    caches.replace_namespace(NamespaceCache::new(usize::MAX, MAX_CACHED_NAMESPACE_BYTES));
+    assert!(weak.upgrade().is_none(), "replacement must release the previous cache");
+    assert!(reader.namespace_node(&reference).is_err(), "cold miss must still read and verify storage");
+}

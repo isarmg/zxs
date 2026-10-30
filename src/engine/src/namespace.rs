@@ -228,7 +228,7 @@ pub(crate) struct LoaderSource<F>(pub(crate) F);
 /// reads or a package directory): each loaded node authenticates before decoding.
 pub(crate) struct ObjectLoaderSource<F> {
     load: std::cell::RefCell<F>,
-    nodes: Option<std::cell::RefCell<crate::segment_store::BoundedCache<NamespaceNode>>>,
+    nodes: Option<std::cell::RefCell<crate::segment_store::NamespaceCache>>,
 }
 impl<F> ObjectLoaderSource<F> {
     pub(crate) fn new(load: F) -> Self {
@@ -237,7 +237,12 @@ impl<F> ObjectLoaderSource<F> {
             nodes: None,
         }
     }
-    /// Share authenticated, shape-validated nodes only within this admission.
+    /// Consume the loader and move its existing bounded typed-node owners.
+    pub(crate) fn into_namespace_cache(self) -> Option<crate::segment_store::NamespaceCache> {
+        self.nodes.map(std::cell::RefCell::into_inner)
+    }
+
+    /// Share authenticated, shape-validated nodes within this admission.
     /// Every graph walk still validates its own path, depth and recorded counts.
     /// The shared byte budget charges canonical bytes, not active heap size.
     pub(crate) fn memoized(load: F) -> Self {
@@ -257,20 +262,16 @@ where
     F: FnMut(&'static str, &str) -> Result<crate::journal::AuthenticatedMetadataObject>,
 {
     fn node(&self, reference: &NamespaceReference) -> Result<NamespaceNode> {
-        reference.validate()?;
-        let address = self
-            .nodes
-            .as_ref()
-            .map(|_| format!("{}/{}", reference.kind.as_str(), reference.hash));
-        if let Some((nodes, address)) = self.nodes.as_ref().zip(address.as_ref())
-            && let Some(node) = nodes.borrow().get(address)
+        let address = crate::segment_store::NamespaceCacheKey::parse(reference)?;
+        if let Some(nodes) = &self.nodes
+            && let Some(node) = nodes.borrow().get(&address)
         {
             return Ok(node);
         }
         let object = (self.load.borrow_mut())(reference.kind.as_str(), &reference.hash)?;
         let canonical_len = object.canonical_len();
         let node = NamespaceNode::decode(reference, object.into_value(), canonical_len)?;
-        if let Some((nodes, address)) = self.nodes.as_ref().zip(address) {
+        if let Some(nodes) = &self.nodes {
             nodes
                 .borrow_mut()
                 .insert(address, node.clone(), canonical_len);

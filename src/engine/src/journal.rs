@@ -1074,6 +1074,11 @@ pub(crate) fn resolve_admitted_snapshot(
 /// integrity and logical State admission still belong to the consuming resolver.
 pub(crate) struct SchemaValidatedSnapshot(Snapshot);
 
+pub(crate) struct ResolvedSnapshot {
+    pub(crate) admitted: crate::history_package::AdmittedState,
+    pub(crate) namespace_cache: crate::segment_store::NamespaceCache,
+}
+
 impl SchemaValidatedSnapshot {
     pub(crate) fn new(snapshot: Snapshot) -> Result<Self> {
         validate_snapshot_schema(&snapshot)?;
@@ -1086,13 +1091,23 @@ impl SchemaValidatedSnapshot {
 
     pub(crate) fn resolve(
         self,
-        mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+        load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
     ) -> Result<crate::history_package::AdmittedState> {
+        Ok(self.resolve_with_namespace_cache(load)?.admitted)
+    }
+
+    pub(crate) fn resolve_with_namespace_cache(
+        self,
+        mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+    ) -> Result<ResolvedSnapshot> {
         let raw = resolve_raw_snapshot(self, &mut load)?;
         // Admission reads each commit's namespace through the same authenticated
         // object loader that produced the snapshot's own pages.
         let source = crate::namespace::ObjectLoaderSource::memoized(&mut load);
-        crate::history_package::AdmittedState::admit(raw, &source)
+        let admitted = crate::history_package::AdmittedState::admit(raw, &source)?;
+        let namespace_cache = source.into_namespace_cache()
+            .expect("invariant: snapshot admission uses a memoized namespace source");
+        Ok(ResolvedSnapshot { admitted, namespace_cache })
     }
 }
 fn resolve_raw_snapshot(

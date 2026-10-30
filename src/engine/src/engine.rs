@@ -426,7 +426,7 @@ impl Engine {
         let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
             .with_workspace_limits(workspace_limits)?;
         let mut engine = Self::prepare_workspace_recovery(root, config)?;
-        engine.recover_mode(mode)?;
+        engine.recover_for_open(mode)?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)

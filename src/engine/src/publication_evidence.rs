@@ -131,6 +131,18 @@ pub(crate) fn verified_snapshot_at(
     verified_snapshot_observed_at(resources, members, hash, &mut |_| {})
 }
 
+/// The fresh-open recovery caller alone decides whether this cache may be retained.
+pub(crate) fn verified_snapshot_with_namespace_cache_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    hash: &str,
+) -> Result<crate::journal::ResolvedSnapshot> {
+    let snapshot: Snapshot = verified_object_at(resources, members, "snapshot", hash)?;
+    crate::journal::SchemaValidatedSnapshot::new(snapshot)?.resolve_with_namespace_cache(
+        |kind, hash| verified_graph_object_at(resources, members, kind, hash),
+    )
+}
+
 pub(crate) fn verified_snapshot_observed_at(
     resources: &DiskResources,
     members: &[DiskConfig],

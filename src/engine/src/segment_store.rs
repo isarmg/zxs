@@ -68,16 +68,30 @@ impl<V: Clone, K: Ord + Clone> BoundedCache<V, K> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum NamespaceCacheKey {
+pub(crate) enum NamespaceCacheKey {
     Page([u8; 64]),
     Index([u8; 64]),
 }
+
+impl NamespaceCacheKey {
+    pub(crate) fn parse(reference: &storage_contract::NamespaceReference) -> Result<Self> {
+        reference.validate()?;
+        let hash = reference.hash.as_bytes().try_into()
+            .expect("invariant: a validated namespace hash has 64 bytes");
+        Ok(match reference.kind {
+            storage_contract::NamespaceRefKind::Page => Self::Page(hash),
+            storage_contract::NamespaceRefKind::Index => Self::Index(hash),
+        })
+    }
+}
+
+pub(crate) type NamespaceCache = BoundedCache<crate::namespace::NamespaceNode, NamespaceCacheKey>;
 
 pub(crate) struct SegmentCaches {
     events: Mutex<BoundedCache<Arc<Vec<storage_contract::Event>>>>,
     operations: Mutex<BoundedCache<Arc<Vec<OperationRecordEntry>>>>,
     locator_pages: Mutex<BoundedCache<Arc<json_codec::Value>>>,
-    namespace: Mutex<BoundedCache<crate::namespace::NamespaceNode, NamespaceCacheKey>>,
+    namespace: Mutex<NamespaceCache>,
 }
 impl SegmentCaches {
     pub(crate) fn new() -> Self {
@@ -88,6 +102,10 @@ impl SegmentCaches {
             namespace: Mutex::new(BoundedCache::new(usize::MAX, MAX_CACHED_NAMESPACE_BYTES)),
         }
     }
+    pub(crate) fn replace_namespace(&self, cache: NamespaceCache) {
+        *Self::lock(&self.namespace) = cache;
+    }
+
     fn lock<V, K>(
         cache: &Mutex<BoundedCache<V, K>>,
     ) -> std::sync::MutexGuard<'_, BoundedCache<V, K>> {
@@ -311,16 +329,7 @@ impl SegmentReader<'_> {
         reference: &storage_contract::NamespaceReference,
     ) -> Result<crate::namespace::NamespaceNode> {
         self.checkpoint()?;
-        reference.validate()?;
-        let hash = reference
-            .hash
-            .as_bytes()
-            .try_into()
-            .expect("invariant: a validated namespace hash has 64 bytes");
-        let address = match reference.kind {
-            storage_contract::NamespaceRefKind::Page => NamespaceCacheKey::Page(hash),
-            storage_contract::NamespaceRefKind::Index => NamespaceCacheKey::Index(hash),
-        };
+        let address = NamespaceCacheKey::parse(reference)?;
         if let Some(node) = SegmentCaches::lock(&self.caches.namespace).get(&address) {
             return Ok(node);
         }

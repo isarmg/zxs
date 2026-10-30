@@ -260,3 +260,108 @@ fn schema_admitted_root_and_raw_entry_share_full_state_admission() {
         assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
     }
 }
+
+fn namespace_handoff_fixture(engine: &mut Engine) -> (String, storage_contract::NamespaceReference) {
+    publish(engine, "files");
+    let branch = engine.state.branches.keys().next().unwrap().clone();
+    let workspace = engine.create_workspace(&branch, "admin").unwrap();
+    engine.stage_bytes(&workspace.workspace_id, "proof.txt", b"retained proof").unwrap();
+    engine.commit_workspace(storage_contract::CommitRequest {
+        workspace_id: workspace.workspace_id,
+        operation_id: OperationId::generate(),
+        principal: "admin".into(),
+        expected_head: workspace.base_head,
+        fencing_token: workspace.fencing_token,
+        message: "proof".into(),
+        request_digest: None,
+    }).unwrap();
+    let head = &engine.state.branches[&branch].head_commit_id;
+    (branch, engine.state.commits[head].namespace.root.clone())
+}
+
+#[test]
+fn fresh_normal_open_retains_admitted_namespace_but_offline_and_in_place_do_not() {
+    for mode in ["normal", "offline", "in-place"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("system");
+        let mut engine = Engine::initialize(&root, Config::development([temp.path().join("primary")])).unwrap();
+        let (branch, reference) = namespace_handoff_fixture(&mut engine);
+        let config = engine.config.clone();
+        drop(engine);
+        let engine = match mode {
+            "normal" => Engine::open(&root).unwrap(),
+            "offline" => Engine::open_for_recovery(&root).unwrap(),
+            "in-place" => {
+                let mut engine = Engine::prepare_workspace_recovery(root.clone(), config.clone()).unwrap();
+                engine.recover_mode(RecoveryMode::CompletePending).unwrap();
+                engine
+            }
+            _ => unreachable!(),
+        };
+        let path = object_path(&config.disks[0], reference.kind.as_str(), &reference.hash);
+        std::fs::write(&path, b"changed after successful admission").unwrap();
+        let result = engine.namespace_tree(&branch).unwrap().get("proof.txt");
+        if mode == "normal" {
+            assert_eq!(result.unwrap().unwrap().path(), "proof.txt");
+        } else {
+            assert!(result.is_err(), "non-normal opening must not receive admission cache");
+        }
+        // No ordinary cached proof exempts a new independent admission.
+        drop(engine);
+        assert!(Engine::open(&root).is_err());
+    }
+}
+
+#[test]
+fn namespace_seed_rejects_changed_state_resources_cache_and_snapshot_owners() {
+    use crate::namespace::NamespaceNode;
+    use crate::segment_store::{NamespaceCache, NamespaceCacheKey, MAX_CACHED_NAMESPACE_BYTES};
+    use std::sync::Arc;
+    use storage_contract::{NamespacePage, NamespaceRefKind, NamespaceReference};
+    for changed in ["state", "resources", "cache", "snapshot", "blocked", "unchanged"] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("system");
+        let mut engine = Engine::initialize(&root, Config::development([temp.path().join("primary")])).unwrap();
+        publish(&mut engine, "proof");
+        let reference = NamespaceReference { kind: NamespaceRefKind::Page, hash: "a".repeat(64) };
+        let node = Arc::new(NamespacePage { format: Default::default(), entries: Vec::new() });
+        let weak = Arc::downgrade(&node);
+        let mut cache = NamespaceCache::new(usize::MAX, MAX_CACHED_NAMESPACE_BYTES);
+        cache.insert(NamespaceCacheKey::parse(&reference).unwrap(), NamespaceNode::Page(node), 1);
+        let seed = RecoveryNamespaceSeed::new(&engine, engine.snapshot.clone().unwrap(), cache);
+        match changed {
+            "state" => engine.state = Arc::new((*engine.state).clone()),
+            "resources" => engine.disk_resources = Arc::new(DiskResources::open(&engine.config, false).unwrap()),
+            "cache" => engine.segment_caches = Arc::new(crate::segment_store::SegmentCaches::new()),
+            "snapshot" => engine.snapshot = Some("b".repeat(64)),
+            "blocked" => engine.blocked = true,
+            "unchanged" => {}
+            _ => unreachable!(),
+        }
+        seed.install(&engine);
+        assert_eq!(weak.upgrade().is_some(), changed == "unchanged");
+    }
+}
+
+#[test]
+fn completing_a_pending_candidate_does_not_retain_the_preceding_admission_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("system");
+    let mut engine = Engine::initialize(&root, Config::development([temp.path().join("primary")])).unwrap();
+    let (branch, reference) = namespace_handoff_fixture(&mut engine);
+    let config = engine.config.clone();
+    engine.inject_fault_once("after_accept_1");
+    assert!(engine.create_repository(
+        &storage_contract::RepositoryName::parse("pending").unwrap(),
+        "P01", 1, "admin", OperationId::generate(),
+    ).is_err());
+    drop(engine);
+    let engine = Engine::open(&root).unwrap();
+    assert!(!engine.blocked);
+    assert_eq!(engine.state.repositories.len(), 2);
+    std::fs::write(
+        object_path(&config.disks[0], reference.kind.as_str(), &reference.hash),
+        b"changed after pending recovery",
+    ).unwrap();
+    assert!(engine.namespace_tree(&branch).unwrap().get("proof.txt").is_err());
+}
