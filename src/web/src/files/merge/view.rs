@@ -195,7 +195,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     <button class="zxs-button" disabled=move ||navigation_disabled.get()||state.with(|s|s.files.file_history.previous_branch_cursor().is_none()) on:click=move |_|actions::page_history_branches(state,false)>{t("上一页分支","Previous branches")}</button>
                     <button class="zxs-button" disabled=move ||navigation_disabled.get()||state.with(|s|s.files.file_history.next_branch_cursor().is_none()) on:click=move |_|actions::page_history_branches(state,true)>{t("下一页分支","Next branches")}</button>
                 </div>
-                <p class="zxs-row" role="heading" aria-level="4">{t("跨页所选分支","Selected branches across pages")}</p>
+                <p class="zxs-row" role="heading" {web_interface::attr::custom::custom_attribute("aria-level", "4")}>{t("跨页所选分支","Selected branches across pages")}</p>
                 {move ||selected.get().into_iter().map(move |branch|{
                     let id=branch.id.clone();
                     view!{<div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{format!("{} · {}",branch.name,branch.expected)}</span><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|select_branch(state,instance,id.clone(),false)>{t("移除选择","Remove selection")}</button></div>}
