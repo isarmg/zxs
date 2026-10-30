@@ -625,26 +625,34 @@ fn ranges_obey_boundaries_and_reject_non_decimal_syntax() {
 
 #[tokio::test]
 async fn malformed_duplicate_and_unsatisfiable_ranges_include_size_and_head_is_empty() {
+    let mut ranges = Vec::new();
+    for invalid in ["bytes=missing", "bytes=+1-2", "bytes=20-"] {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_str(invalid).unwrap());
+        ranges.push(headers);
+    }
+    let mut duplicate = HeaderMap::new();
+    duplicate.append(header::RANGE, HeaderValue::from_static("bytes=0-1"));
+    duplicate.append(header::RANGE, HeaderValue::from_static("bytes=2-3"));
+    ranges.push(duplicate);
     for method in [Method::GET, Method::HEAD] {
-        for invalid in ["bytes=missing", "bytes=+1-2", "bytes=20-"] {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::RANGE, HeaderValue::from_str(invalid).unwrap());
+        for headers in &ranges {
             let response =
-                content_response(content(Arc::default()), method.clone(), headers).unwrap();
-            assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
-            assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */10");
+                content_response(content(Arc::default()), method.clone(), headers.clone()).unwrap();
+            if method == Method::HEAD {
+                assert_eq!(response.status(), StatusCode::OK);
+                assert_eq!(response.headers()[header::CONTENT_LENGTH], "10");
+                assert!(!response.headers().contains_key(header::CONTENT_RANGE));
+            } else {
+                assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+                assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */10");
+            }
             assert_eq!(response.headers()[header::ACCEPT_RANGES], "bytes");
             let body = http_routing::body::to_bytes(response.into_body(), 8192)
                 .await
                 .unwrap();
             assert_eq!(body.is_empty(), method == Method::HEAD);
         }
-        let mut headers = HeaderMap::new();
-        headers.append(header::RANGE, HeaderValue::from_static("bytes=0-1"));
-        headers.append(header::RANGE, HeaderValue::from_static("bytes=2-3"));
-        let response = content_response(content(Arc::default()), method.clone(), headers).unwrap();
-        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
-        assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */10");
     }
 }
 
@@ -682,12 +690,28 @@ async fn stale_if_range_returns_complete_content_and_head_retains_length() {
             .unwrap(),
         "0123456789"
     );
+    let current = content(Arc::default());
+    let etag = format!("\"{}\"", current.hash);
+    let mut headers = HeaderMap::new();
+    headers.insert(header::RANGE, HeaderValue::from_static("bytes=2-3"));
+    headers.insert(header::IF_RANGE, HeaderValue::from_str(&etag).unwrap());
+    let response = content_response(current, Method::GET, headers).unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(response.headers()[header::CONTENT_LENGTH], "2");
+    assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 2-3/10");
+    assert_eq!(
+        http_routing::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap(),
+        "23"
+    );
     let dropped = Arc::new(AtomicUsize::new(0));
     let mut headers = HeaderMap::new();
     headers.insert(header::RANGE, HeaderValue::from_static("bytes=2-3"));
     let response = content_response(content(dropped.clone()), Method::HEAD, headers).unwrap();
-    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
-    assert_eq!(response.headers()[header::CONTENT_LENGTH], "2");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_LENGTH], "10");
+    assert!(!response.headers().contains_key(header::CONTENT_RANGE));
     assert!(
         http_routing::body::to_bytes(response.into_body(), 8192)
             .await
