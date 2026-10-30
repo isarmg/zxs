@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair]
 
 permissions:
   contents: read
@@ -92,6 +92,10 @@ jobs:
               '486bb70f01f5d47d5b56193dce2381d0e44d2e8f', '4b9877902b78313d9098d86a812809054acf3ed9',
           ):
               raise SystemExit('SMB stream diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'smb-stream-repair' and (source, tree) != (
+              '48f1ddd92b648ef90742510957aa75176c733748', 'bcfe4fb034cc65e7ca3fea14f755acc8fb5efda8',
+          ):
+              raise SystemExit('SMB stream repair diagnostics require the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -395,6 +399,16 @@ jobs:
                   ]), command='Shared proof budget and full SMB RPC unit commands'),
               dict(id='smb-stream-real-sdk', cache='smb-vfs', smb_sdk=True,
                   required_names=json.dumps(sdk_witnesses), command=sdk_command),
+          ]
+          seek_witnesses = [
+              'module::tests::seek_tests::registered_readonly_seek_rejects_placeholder_geometry_and_rechecks_admission',
+              'module::tests::seek_tests::registered_writable_seek_preserves_work_fd_position_length_and_kernel_errors',
+          ]
+          groups['smb-stream-repair'] = [
+              dict(groups['smb-stream'][0], id='smb-stream-repair-format'),
+              dict(groups['smb-stream'][2], id='smb-stream-repair-server'),
+              dict(groups['smb-stream'][3], id='smb-stream-repair-real-sdk',
+                  required_names=json.dumps(sdk_witnesses + seek_witnesses)),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
