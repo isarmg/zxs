@@ -2,7 +2,6 @@
 use crate::{
     ApiError, AppState, DirectoryBranchFilter, DirectoryBranchProjection, ReadDirectoryScopes,
     auth::Identity,
-    backend_directory_scopes::DirectoryScopesResponse,
     http_boundary::{ApiPath, ApiQuery},
 };
 use http_routing::{Extension, extract::State, response::Response};
@@ -53,11 +52,7 @@ pub(crate) async fn read(
                 control,
             )
         },
-        |snapshot| {
-            crate::backend_file_history::encode_response_bounded(DirectoryScopesResponse::from(
-                snapshot,
-            ))
-        },
+        |snapshot| Ok(snapshot.into_encoded()),
     )
     .await
 }

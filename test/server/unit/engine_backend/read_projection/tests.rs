@@ -1359,7 +1359,7 @@ mod merge_link_tests;
 
 #[test]
 fn directory_scope_order_agrees_across_full_summary_listing_and_selection() {
-    use crate::{DirectoryBranchFilter, DirectoryBranchProjection, DirectoryScopeRows};
+    use crate::{DirectoryBranchFilter, DirectoryBranchProjection};
     let (root, mut engine, repo, _) = fixture();
     for path in ["folder/a.txt", "folder/b.txt"] {
         save_projection_file(&mut engine, &repo.main_branch_id, path, b"content");
@@ -1424,16 +1424,13 @@ fn directory_scope_order_agrees_across_full_summary_listing_and_selection() {
                 &crate::tests::history_read_control(),
             )
             .unwrap();
-        let ids = match snapshot.branches {
-            DirectoryScopeRows::Full(branches) => branches
-                .into_iter()
-                .map(|row| row.branch.directory_branch_id.clone())
-                .collect::<Vec<_>>(),
-            DirectoryScopeRows::Summary(branches) => branches
-                .into_iter()
-                .map(|row| row.directory_branch_id)
-                .collect::<Vec<_>>(),
-        };
+        let value = crate::tests::directory_scopes_value(&snapshot);
+        let ids = value["directory_branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["directory_branch_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
         assert_eq!(ids, expected);
     }
     let listing = backend
@@ -1488,10 +1485,10 @@ fn directory_scope_order_agrees_across_full_summary_listing_and_selection() {
                 &crate::tests::history_read_control(),
             )
             .unwrap();
-        match snapshot.branches {
-            DirectoryScopeRows::Full(rows) => assert!(rows.is_empty()),
-            DirectoryScopeRows::Summary(rows) => assert!(rows.is_empty()),
-        }
+        assert_eq!(
+            crate::tests::directory_scopes_value(&snapshot)["directory_branches"],
+            json!([])
+        );
         let Err(error) = backend.directory_scopes(
             &identity,
             crate::ReadDirectoryScopes {
@@ -1508,10 +1505,8 @@ fn directory_scope_order_agrees_across_full_summary_listing_and_selection() {
 }
 
 #[test]
-fn owned_directory_scope_sort_preserves_tie_breaks_and_current_flags() {
-    use crate::{
-        DirectoryBranchChoice, DirectoryScopeBranch, DirectoryScopeRows, DirectoryScopesSnapshot,
-    };
+fn borrowed_directory_scope_sort_preserves_tie_breaks_and_current_flags() {
+    use crate::{DirectoryBranchChoice, DirectoryScopeBranch};
     let (_root, mut engine, repo, _) = fixture();
     save_projection_file(
         &mut engine,
@@ -1530,37 +1525,39 @@ fn owned_directory_scope_sort_preserves_tie_breaks_and_current_flags() {
         .unwrap();
     let template = engine.state().directory_branches.values().next().unwrap();
     // Synthetic observations exercise equal sequences independently of publish IDs.
-    let branches = [(7, "z"), (6, "older"), (7, "a")]
+    let records = [(7, "z"), (6, "older"), (7, "a")]
         .into_iter()
         .map(|(sequence, id)| {
             let mut branch = template.clone();
             branch.sequence = sequence;
             branch.directory_branch_id = id.into();
-            DirectoryScopeBranch {
-                file_count: branch
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
-                    .count(),
-                branch: std::sync::Arc::new(branch),
-                current: id == "z",
-            }
+            branch
         })
         .collect::<Vec<_>>();
+    let mut branches = records
+        .iter()
+        .map(|branch| DirectoryScopeBranch {
+            branch,
+            current: branch.directory_branch_id == "z",
+            file_count: branch
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
+                .count(),
+        })
+        .collect::<Vec<_>>();
+    for (row, original) in branches.iter().zip(&records) {
+        assert!(std::ptr::eq(row.branch, original));
+        assert_eq!(row.branch.entries.as_ptr(), original.entries.as_ptr());
+    }
     let mut choices = branches
         .iter()
-        .map(|row| DirectoryBranchChoice::capture(&row.branch, row.current))
+        .map(|row| DirectoryBranchChoice::capture(row.branch, row.current))
         .collect::<Vec<_>>();
-    let mut full = DirectoryScopesSnapshot {
-        repository_id: repo.repository_id,
-        branches: DirectoryScopeRows::Full(branches),
-    };
     drop(engine);
-    crate::engine_backend::directory_scopes::sort(&mut full);
+    crate::engine_backend::directory_scopes::sort(&mut branches);
     crate::engine_backend::directory_scopes::sort_choices(&mut choices);
-    let DirectoryScopeRows::Full(rows) = full.branches else {
-        panic!("full projection changed kind");
-    };
+    let rows = branches;
     let ids = rows
         .iter()
         .map(|row| row.branch.directory_branch_id.as_str())
@@ -1581,11 +1578,7 @@ fn owned_directory_scope_sort_preserves_tie_breaks_and_current_flags() {
         choices.iter().map(|row| row.current).collect::<Vec<_>>(),
         [false, true, false]
     );
-    let mut empty = DirectoryScopesSnapshot {
-        repository_id: "empty".into(),
-        branches: DirectoryScopeRows::Full(Vec::new()),
-    };
-    crate::engine_backend::directory_scopes::sort(&mut empty);
+    crate::engine_backend::directory_scopes::sort(&mut []);
     crate::engine_backend::directory_scopes::sort_choices(&mut []);
 }
 

@@ -1,5 +1,5 @@
 //! Admit primary-directory metadata under the writer lock, then enumerate one
-//! immutable publication outside it. Backup namespace admission stays global.
+//! immutable publication outside it. Backup path validation remains global.
 use super::pagination::{PageRequest, PageSelector};
 use super::*;
 use crate::backend_listing::SortKey;
@@ -15,7 +15,7 @@ enum Candidate<'a> {
 }
 
 pub(in crate::engine_backend) enum ListingRead {
-    Backup(crate::ListingSnapshot),
+    Backup(backup_namespace::BackupListing),
     Primary(PrimaryListing),
 }
 
@@ -51,7 +51,15 @@ pub(in crate::engine_backend) fn capture(
     let request = PageRequest::parse(engine, input)?;
     let (slot, value) = (slot_id.as_str(), path.as_str());
     if disk(engine, slot)?.level != 1 {
-        return backup_namespace::entries(engine, slot, value, request).map(ListingRead::Backup);
+        return Ok(ListingRead::Backup(
+            backup_namespace::BackupListing::capture(
+                engine.published_read_view(),
+                request,
+                slot_id,
+                path,
+                engine.config().max_entries,
+            ),
+        ));
     }
     let root = value.is_empty();
     let resolved = resolve_read(engine, slot, value);
@@ -145,7 +153,7 @@ impl ListingRead {
         control: &crate::HistoryReadControl,
     ) -> Result<crate::ListingSnapshot, ApiError> {
         let mut snapshot = match self {
-            Self::Backup(snapshot) => snapshot,
+            Self::Backup(plan) => plan.read(control)?,
             Self::Primary(plan) => plan.read(control)?,
         };
         activity::checkpoint(control)?;
@@ -252,31 +260,7 @@ impl PrimaryListing {
                     } else {
                         &repo.name
                     };
-                    let context = view.file_context_for_current_entry(&repo.repository_id, entry);
-                    let branch = &view.state().branches[&repo.main_branch_id];
-                    let commit = &view.state().commits[&branch.head_commit_id];
-                    let resolution = super::super::wire::PendingResolution::new(
-                        view.state(),
-                        &repo.main_branch_id,
-                        commit,
-                    );
-                    let source = resolution.resolve(
-                        entry,
-                        entry,
-                        super::super::wire::PendingContexts {
-                            current: context.as_deref(),
-                            historical: None,
-                        },
-                        || view.pending_file_source(&repo.main_branch_id, &entry.file_id),
-                    );
-                    listed_entry(
-                        view.state(),
-                        repo,
-                        entry,
-                        prefix,
-                        context.as_deref(),
-                        source,
-                    )
+                    listed_current_entry(&view, repo, entry, prefix)
                 }
             })
         };

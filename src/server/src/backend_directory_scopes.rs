@@ -1,7 +1,10 @@
-//! Owned directory-scope observations; summary reads never copy namespace payloads.
-use data_serialization::{Serialize, Serializer, ser::SerializeSeq};
+//! Complete directory-scope responses encoded from borrowed publication records.
+use crate::{
+    ApiError,
+    backend_file_history::{BoundedWriter, EncodedPage},
+};
+use data_serialization::Serialize;
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use storage_contract::{DirectoryBranch, DirectoryReference, Entry, FileContext};
 
 pub enum DirectoryBranchFilter {
@@ -29,18 +32,52 @@ pub struct ReadDirectoryScopes<'a> {
     pub filter: &'a DirectoryBranchFilter,
     pub projection: DirectoryBranchProjection,
 }
+/// Complete encoded response; owns neither publication records nor authorization.
+#[derive(Debug)]
 pub struct DirectoryScopesSnapshot {
-    pub repository_id: String,
-    pub branches: DirectoryScopeRows,
+    encoded: EncodedPage,
 }
-pub enum DirectoryScopeRows {
-    Full(Vec<DirectoryScopeBranch>),
-    Summary(Vec<DirectoryBranchChoice>),
-}
-pub struct DirectoryScopeBranch {
-    pub branch: Arc<DirectoryBranch>,
+/// Lightweight observation borrowing the actual publication's record.
+pub struct DirectoryScopeBranch<'a> {
+    pub branch: &'a DirectoryBranch,
     pub current: bool,
     pub file_count: usize,
+}
+impl DirectoryScopesSnapshot {
+    /// Encode the complete response once. Oversized responses fail, never truncate.
+    /// Returns `ResourceLimitExceeded` above the protocol's 8 MiB response cap.
+    pub fn encode(
+        repository_id: &str,
+        projection: DirectoryBranchProjection,
+        rows: &[DirectoryScopeBranch<'_>],
+    ) -> Result<Self, ApiError> {
+        let mut writer = BoundedWriter::new(storage_contract::client_protocol::MAX_RESPONSE_BYTES);
+        writer.punctuation(b"{\"repository_id\":")?;
+        writer.json(&repository_id)?;
+        writer.punctuation(b",\"directory_branches\":[")?;
+        for (index, row) in rows.iter().enumerate() {
+            if index != 0 {
+                writer.punctuation(b",")?;
+            }
+            match projection {
+                DirectoryBranchProjection::Full => writer.json(&DirectoryScopeRecord::from(row))?,
+                DirectoryBranchProjection::Summary => writer.json(&DirectoryChoiceRecord::from(
+                    DirectoryBranchChoice::capture_counted(row.branch, row.current, row.file_count),
+                ))?,
+            }
+        }
+        writer.punctuation(b"]}")?;
+        Ok(Self {
+            encoded: writer.finish(),
+        })
+    }
+    pub(crate) fn into_encoded(self) -> EncodedPage {
+        self.encoded
+    }
+    #[cfg(test)]
+    pub(crate) fn body(&self) -> &[u8] {
+        self.encoded.body()
+    }
 }
 pub struct DirectoryBranchChoice {
     pub directory_branch_id: String,
@@ -67,7 +104,6 @@ impl DirectoryBranchChoice {
         Self::capture_counted(branch, current, file_count)
     }
 
-    #[cfg(feature = "core")]
     pub(crate) fn capture_counted(
         branch: &DirectoryBranch,
         current: bool,
@@ -104,27 +140,6 @@ impl DirectoryBranchChoice {
             sequence: *sequence,
             file_count,
         }
-    }
-}
-#[derive(Serialize)]
-pub(crate) struct DirectoryScopesResponse {
-    repository_id: String,
-    directory_branches: DirectoryScopeResponses,
-}
-#[derive(Serialize)]
-#[serialization(untagged)]
-enum DirectoryScopeResponses {
-    Full(SharedDirectoryScopes),
-    Summary(Vec<DirectoryChoiceRecord>),
-}
-struct SharedDirectoryScopes(Vec<DirectoryScopeBranch>);
-impl Serialize for SharedDirectoryScopes {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
-        for row in &self.0 {
-            sequence.serialize_element(&DirectoryScopeRecord::from(row))?;
-        }
-        sequence.end()
     }
 }
 #[derive(Serialize)]
@@ -199,8 +214,8 @@ struct DirectoryScopeRecord<'a> {
     current: bool,
     file_count: String,
 }
-impl<'a> From<&'a DirectoryScopeBranch> for DirectoryScopeRecord<'a> {
-    fn from(snapshot: &'a DirectoryScopeBranch) -> Self {
+impl<'a> From<&DirectoryScopeBranch<'a>> for DirectoryScopeRecord<'a> {
+    fn from(snapshot: &DirectoryScopeBranch<'a>) -> Self {
         let DirectoryScopeBranch {
             branch,
             current,
@@ -222,7 +237,7 @@ impl<'a> From<&'a DirectoryScopeBranch> for DirectoryScopeRecord<'a> {
             directory_refs,
             materialized,
             sequence,
-        } = branch.as_ref();
+        } = *branch;
         Self {
             directory_branch_id,
             repository_id,
@@ -241,22 +256,6 @@ impl<'a> From<&'a DirectoryScopeBranch> for DirectoryScopeRecord<'a> {
             sequence: *sequence,
             current: *current,
             file_count: file_count.to_string(),
-        }
-    }
-}
-impl From<DirectoryScopesSnapshot> for DirectoryScopesResponse {
-    fn from(snapshot: DirectoryScopesSnapshot) -> Self {
-        let directory_branches = match snapshot.branches {
-            DirectoryScopeRows::Full(rows) => {
-                DirectoryScopeResponses::Full(SharedDirectoryScopes(rows))
-            }
-            DirectoryScopeRows::Summary(rows) => DirectoryScopeResponses::Summary(
-                rows.into_iter().map(DirectoryChoiceRecord::from).collect(),
-            ),
-        };
-        Self {
-            repository_id: snapshot.repository_id,
-            directory_branches,
         }
     }
 }

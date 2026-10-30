@@ -1247,12 +1247,14 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
                 &crate::tests::history_read_control(),
             )
             .unwrap();
-        let crate::DirectoryScopeRows::Summary(rows) = snapshot.branches else {
-            panic!("summary request returned full scopes")
-        };
-        rows.into_iter()
-            .find(|branch| branch.directory_branch_id == id)
+        let value = crate::tests::directory_scopes_value(&snapshot);
+        value["directory_branches"]
+            .as_array()
             .unwrap()
+            .iter()
+            .find(|branch| branch["directory_branch_id"] == id)
+            .unwrap()
+            .clone()
     };
     let m0 = scope(&a_m);
     let n0 = scope(&a_n);
@@ -1290,10 +1292,10 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     assert_eq!(moved.version_id, source.version_id);
     let m1 = scope(&a_m);
     let l1 = scope(&b_l);
-    assert_ne!(m1.head_tree_id, m0.head_tree_id);
-    assert_ne!(l1.head_tree_id, l0.head_tree_id);
-    assert_eq!(scope(&a_n).head_tree_id, n0.head_tree_id);
-    assert_eq!(scope(&b_p).head_tree_id, p0.head_tree_id);
+    assert_ne!(m1["head_tree_id"], m0["head_tree_id"]);
+    assert_ne!(l1["head_tree_id"], l0["head_tree_id"]);
+    assert_eq!(scope(&a_n)["head_tree_id"], n0["head_tree_id"]);
+    assert_eq!(scope(&b_p)["head_tree_id"], p0["head_tree_id"]);
     let mut bytes = [0; 6];
     reader.read_exact_at(&mut bytes, 0).unwrap();
     assert_eq!(&bytes, b"source");
@@ -1306,13 +1308,13 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     client.dirty(opened.handle).unwrap();
     client.close(opened.handle, false).unwrap();
     assert_eq!(
-        scope(&a_m).head_tree_id,
-        m1.head_tree_id,
+        scope(&a_m)["head_tree_id"],
+        m1["head_tree_id"],
         "source stopped tracking the moved file"
     );
-    assert_ne!(scope(&b_l).head_tree_id, l1.head_tree_id);
-    assert_eq!(scope(&a_n).head_tree_id, n0.head_tree_id);
-    assert_eq!(scope(&b_p).head_tree_id, p0.head_tree_id);
+    assert_ne!(scope(&b_l)["head_tree_id"], l1["head_tree_id"]);
+    assert_eq!(scope(&a_n)["head_tree_id"], n0["head_tree_id"]);
+    assert_eq!(scope(&b_p)["head_tree_id"], p0["head_tree_id"]);
     let previous = backend.content(identity, &source.version_id).unwrap();
     previous.file.read_exact_at(&mut bytes, 0).unwrap();
     assert_eq!(&bytes, b"source");

@@ -329,13 +329,13 @@ EngineBackend 同锁当前身份→既有repository准入→核心 select_defaul
 
 ## 目录范围 GET 的完整记录与轻量选择
 
-`/api/repositories/{repo}/directory-branches` 的 GET full/summary 是不同的真实响应：Web batch/actions.rs:257 读取12字段摘要，namespace HTTP回归读取完整entries/maps；SMB目录移动回归只读head_tree_id，现也直接消费typed Summary。HTTP将省略path、显式空path、具名LookupPath分别表达All/Root/Directory，summary只接收字符串true，未知query仍拒绝。静态query/path解析移到HTTP阻塞任务，不再穿Value到引擎；因此静态坏格式在Backend当前身份/资源准入前拒绝，中间件认证仍最先。POST bounded selection在后节独立接续，不混入GET投影。
+`/api/repositories/{repo}/directory-branches` 的 GET full/summary 是不同的真实响应：Web batch/actions.rs:257 读取12字段摘要，namespace HTTP回归读取完整entries/maps；SMB目录移动回归只读head_tree_id，现也解码 Summary 响应边界。HTTP将省略path、显式空path、具名LookupPath分别表达All/Root/Directory，summary只接收字符串true，未知query仍拒绝。静态query/path解析移到HTTP阻塞任务，不再穿Value到引擎；因此静态坏格式在Backend当前身份/资源准入前拒绝，中间件认证仍最先。POST bounded selection在后节独立接续，不混入GET投影。
 
-required directory_scopes 在同锁current/repository准入后使用共享借用筛选器，原排序sequence逆序再ID、NFD/casefold路径查询、当前目录身份优先和当前目录不存在时按历史branch.path回退均保留。manifest验证已保证repository→main branch→head commit（manifest.rs主分支及live commit验证，加state_read完整coverage；真实磁盘state_read_tests已有MissingMain/MissingHead负例）；原链式Option不能把缺父链伪装成历史path回退，现明确内部不变量。合法的未找到当前目录Entry仍是Option业务缺失，外部未知repository仍NotFound；不新增每行父链验证。
+required directory_scopes 在同锁current/repository准入后捕获发布视图，锁外使用共享借用筛选器，原排序sequence逆序再ID、NFD/casefold路径查询、当前目录身份优先和当前目录不存在时按历史branch.path回退均保留。manifest验证已保证repository→main branch→head commit（manifest.rs主分支及live commit验证，加state_read完整coverage；真实磁盘state_read_tests已有MissingMain/MissingHead负例）；原链式Option不能把缺父链伪装成历史path回退，现明确内部不变量。合法的未找到当前目录Entry仍是Option业务缺失，外部未知repository仍NotFound；不新增每行父链验证。
 
-State.directory_branches仍是TrackedMap而非SharedRecords：Full为实际锁外序列化捕获一次owned DirectoryBranch，file_count从该冻结记录在锁外计算，出口move各字段、entries/maps不再复制；Summary只复制展示字段，不复制entries或上下文map。两者file_count仍按entries中的File计数，不混用default-branch摘要的file_branches.len。模型/持久化的共享表示不在此批擅改；当前完整响应原本需要O(payload)的JSON树分配，现为typed所有权再直接编码，不宣称零复制或未经测量的吞吐提升。嵌套Entry/FileContext等仍沿既有公开字段编码，未宣称全模型已完成wire分离。
+State.directory_branches仍是TrackedMap而非SharedRecords，不存在逐记录get_shared。GET在准入后捕获PublishedReadView，锁外借用匹配DirectoryBranch、逐条目计算file_count、排序轻量借用行，再以既有8 MiB有界编码器完成一次完整响应。Full不复制entries/maps；Summary逐行复用DirectoryBranchChoice与DirectoryChoiceRecord，仅短暂复制展示字段。两者file_count仍按entries中的File计数，不混用default-branch摘要的file_branches.len。结果只拥有编码字节，完整视图在最终当前身份复核前释放，HTTP不再序列化。模型/持久化表示不变；8 MiB只限制正文，借用行、旧发布根、排序及单行元数据另计。不宣称总堆有界或未经测量的吞吐提升。嵌套Entry/FileContext等仍沿既有公开字段编码。
 
-回归覆盖原full wire/可选map省略/12字段摘要、NFD/root/all过滤、移动目录身份回归、稳定排序、后续mutation不影响已捕获所有权、锁外序列化/owner释放、实际HTTP摘要与完整响应、未知query/非法路径/匿名拒绝，以及required方法的授权参数/撤权/panic/取消许可矩阵。没有新增缓存、状态索引、fsync或永久幂等格式。
+回归覆盖原full wire/可选map省略/12字段摘要、NFD/root/all过滤、移动目录身份回归、稳定排序、后续mutation不影响冻结响应、锁外编码/旧根释放、实际HTTP摘要与完整响应、未知query/非法路径/匿名拒绝，以及required方法的授权参数/撤权/panic/取消许可矩阵。没有新增缓存、状态索引、fsync或永久幂等格式。
 
 
 ## 有界目录选择事实

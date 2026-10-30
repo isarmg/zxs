@@ -85,6 +85,8 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 
 主盘条目的排序键直接借用已准入 `PortablePath` 的末级规范化键再复制到页候选；路径按组件独立规范化，因此与 `lookup_key(entry.name())` 一致。Unicode 小写字段仍单独计算，不能用完整 case folding 代替小写排序／搜索；仓库显示名和备份逻辑路径仍沿用原计算。外来游标继续重新计算并核对其排序字段，不能因内部路径已准入而跳过输入校验。资源和剩余扫描成本见[目录分页预算](../19-capacity-and-performance.md#s19-04)。
 
+备份盘列表在同一准入锁内捕获分页请求、配置的 `max_entries` 与已发布读视图，锁外执行全部版本和所有仓库主命名空间扫描，再验证全局逻辑路径冲突及隐式父目录计数；空候选、查询过滤和分页都不跳过这些验证。目录存在性判断仍在全局验证之后。可用性仅表示捕获的正文状态与放置关系，不触发实时正文健康探测。主盘与备份盘复用同一冻结条目投影，历史版本覆盖仍在当前上下文解析之后；完成时先复核当前身份，再处理取消或读取结果。全局候选与逻辑节点仍随支持规模增长，这次只缩短写锁持有范围，不声称扫描复杂度或吞吐已改善。
+
 公开 `/readyz` 不需要版本放置账本或磁盘容量：锁内捕获共享不可变配置、mode、sequence 和成员计数，锁外只逐个校验配置中的 metadata member 当前 seal/设备身份，不采样 `statvfs`、不扫描非 metadata 盘及历史 placements。配置准入时建立私有成员索引；配置克隆只共享 `Arc`，root rebinding 使用 copy-on-write 保留旧快照，成员关系不变。捕获为 O(1)，探测随 metadata 成员数增长，与历史量无关；这不是吞吐实测结论，也不是在线状态缓存。
 
 只读恢复仍返回 503 `RECOVERY_REQUIRED`；任一配置 metadata member 不可用仍返回 503 `METADATA_UNAVAILABLE`，现在保留首个失败的内部 source，公开消息不暴露本机路径。没有 metadata member 的配置仍在输入边界拒绝。非 metadata 盘离线不改变 ready 的判断（此前也只统计 metadata 的 online）；移除无消费者的容量采样不改变判定。正常响应 mode、sequence、storage/member counts 和 Management 状态语义不变。此观测不是写入许可，写侧仍在实际使用/提交处校验实时身份及完整性。
@@ -335,11 +337,11 @@ Web 窗口夹具 `test/fixtures/file-history-window.json`）、`engine_backend/f
 
 `GET /api/repositories/{repo}/directory-branches` 的 All、根目录与路径过滤在当前身份、仓库准入后捕获 `PublishedReadView`。锁外依据该发布根解析主分支命名空间，复用 `ScopeMatch` 的稳定目录 ID／缺失路径回退规则，逐分支筛选、逐条目计数并排序。完成时仅复核当前身份，再检查取消和传播读取结果；普通发布不使冻结响应失效，不增加完成时仓库存在性或 generation 检查。POST 有界选择及主目录 listing 的匹配语义不变。
 
-Full 保存实际 `State.directory_branches.get_shared` 返回的不可变 `Arc<DirectoryBranch>`、捕获时的 current 和 file_count；wire 借用原始 entries 与上下文 map，不深复制目录分支、不经 Value 往返。Summary 仍只复制既有选择字段。sequence 与 file_count 继续输出十进制字符串，空可选 map 继续省略，entries／file_branches 字段保留；顺序仍是 sequence 降序、分支 ID 升序。
+`State.directory_branches` 实际是 `Tracked<BTreeMap<String, DirectoryBranch>>`，没有 `get_shared`。Full 对匹配记录只保存借用、捕获时的 current 和 file_count；排序后在脱离写锁的读取函数内借用原始 entries 与上下文 map 完成一次有界编码，不深复制目录分支、不经 Value 往返。Summary 逐行复用既有选择字段与 serializer，仅短暂复制该行展示元数据。返回的 `DirectoryScopesSnapshot` 仅拥有编码字节，发布视图在最终当前身份核验前释放，HTTP 移交已有字节而不再次序列化。sequence 与 file_count 继续输出十进制字符串，空可选 map 继续省略，entries／file_branches 字段保留；顺序仍是 sequence 降序、分支 ID 升序。
 
-HTTP 与历史读取共用扫描槽、最长 30 秒协作工作期限、既有完整响应 8 MiB 编码器及 Body／实际传输块租约。超限失败，不分页、不截断。这收紧了此前 GET 完整响应无字节上限的行为；8 MiB 不是总堆内存上限：旧发布根及全部匹配 Arc 行句柄仍随历史／匹配分支数增长。逐分支、逐条目及命名空间读取检查取消；标准排序前后检查取消，排序本身及编码是不可逐比较／逐字段中断的协作段。分支扫描 O(B)，Full 句柄查找 O(M log B)，匹配条目计数 O(E)，排序 O(M log M)；未提供吞吐提升测量。
+HTTP 与历史读取共用扫描槽、最长 30 秒协作工作期限、既有完整响应 8 MiB 编码器及 Body／实际传输块租约。超限失败，不分页、不截断。这收紧了此前 GET 完整响应无字节上限的行为；8 MiB 不是总堆内存上限：编码期间的旧发布根及全部匹配借用行仍随历史／匹配分支数增长；Summary 单行临时元数据及排序工作区也不属于正文上限。逐分支、逐条目及命名空间读取检查取消；标准排序前后检查取消，排序本身及编码是不可逐比较／逐字段中断的协作段。分支扫描 O(B)，匹配条目计数 O(E)，排序 O(M log M)，借用行占 O(M)；Full 无逐行 map 再查询，正文按实际输出编码；未提供吞吐提升测量。
 
-根 test 目录覆盖冻结发布／共享记录身份、路径别名、排序、Full 字节与空字段、Summary 数量、撤权优先级、取消、字节超限和传输块租约。格式与静态检查不代替编译或实际执行；运行结果由对应验证提交记录。
+原 R130 关于目录分支共享 Arc 身份的测试主张不成立；修复后的根 test 用实际发布记录的借用指针、真实共享 commit 的 Weak 生命周期及编码字节分配身份检查借用、旧根释放和 HTTP 单次编码移交，并保留冻结发布、路径别名、排序、Full 字节与空字段、Summary 数量、撤权优先级、取消、字节超限和传输块租约。格式与静态检查不代替编译或实际执行；运行结果由对应验证提交记录。
 
 ### 活动历史投影边界
 

@@ -42,13 +42,24 @@ impl<'a> PendingSources<'a> {
                 self.engine
                     .file_context_for_current_entry(repository, entry)
             });
-            if let Some(source) = self.resolve(
+            let resolution = PendingResolution {
+                state: self.engine.state(),
+                commit: self.commit,
+                current: self.current,
+                main_repository: self.main_repository,
+            };
+            if let Some(source) = resolution.resolve(
                 entry,
                 entry,
-                CurrentContext::Resolved(context.as_deref()),
-                historical.as_ref(),
-            )? {
-                versions.insert(entry.file_id.clone(), source);
+                PendingContexts {
+                    current: context.as_deref(),
+                    historical: historical
+                        .as_ref()
+                        .and_then(|contexts| contexts.get(entry.lookup_key()).copied()),
+                },
+                || self.engine.pending_file_source(self.branch, &entry.file_id),
+            ) {
+                versions.insert(entry.file_id.clone(), source.to_owned());
             }
             Ok(true)
         })?;

@@ -213,27 +213,33 @@ thread_local! { static LISTED_ENTRY_PROJECTIONS: std::cell::Cell<usize> = const 
 /// `entry` is this repository's own current-commit materialization, already
 /// in hand at the caller; no listing or key lookup is repeated here.
 fn listed_current_entry(
-    engine: &Engine,
+    view: &storage_engine::PublishedReadView,
     repo: &Repository,
     entry: &storage_contract::Entry,
     prefix: &str,
-) -> Result<crate::ListingEntry, ApiError> {
-    let context = engine.file_context_for_current_entry(&repo.repository_id, entry);
-    let source = super::wire::current_entry_source_resolved(
-        engine,
-        &repo.main_branch_id,
+) -> crate::ListingEntry {
+    let context = view.file_context_for_current_entry(&repo.repository_id, entry);
+    let branch = &view.state().branches[&repo.main_branch_id];
+    let commit = &view.state().commits[&branch.head_commit_id];
+    let resolution =
+        super::wire::PendingResolution::new(view.state(), &repo.main_branch_id, commit);
+    let source = resolution.resolve(
         entry,
-        context.as_deref(),
-    )
-    .map_err(error)?;
-    Ok(listed_entry(
-        engine.state(),
+        entry,
+        super::wire::PendingContexts {
+            current: context.as_deref(),
+            historical: None,
+        },
+        || view.pending_file_source(&repo.main_branch_id, &entry.file_id),
+    );
+    listed_entry(
+        view.state(),
         repo,
         entry,
         prefix,
         context.as_deref(),
-        source.as_deref(),
-    ))
+        source,
+    )
 }
 
 /// Project the already resolved current entry without reading another namespace.

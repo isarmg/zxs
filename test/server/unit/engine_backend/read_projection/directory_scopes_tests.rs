@@ -1,8 +1,6 @@
 use super::*;
-use crate::backend_directory_scopes::DirectoryScopesResponse;
-use crate::{
-    DirectoryBranchFilter, DirectoryBranchProjection, DirectoryScopeRows, ReadDirectoryScopes,
-};
+use crate::tests::directory_scopes_value;
+use crate::{DirectoryBranchFilter, DirectoryBranchProjection, ReadDirectoryScopes};
 
 fn legacy_full(engine: &Engine, repo: &str) -> Value {
     let mut branches = engine
@@ -130,8 +128,20 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
             &crate::tests::history_read_control(),
         )
         .unwrap();
-    assert!(matches!(&full.branches,DirectoryScopeRows::Full(rows) if rows.len()==4));
-    assert!(matches!(&summary.branches,DirectoryScopeRows::Summary(rows) if rows.len()==4));
+    assert_eq!(
+        directory_scopes_value(&full)["directory_branches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(
+        directory_scopes_value(&summary)["directory_branches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
     let root_only = backend
         .directory_scopes(
             &identity,
@@ -143,9 +153,14 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
             &crate::tests::history_read_control(),
         )
         .unwrap();
-    assert!(
-        matches!(root_only.branches,DirectoryScopeRows::Summary(rows) if rows.len()==2 && rows.iter().all(|row|row.directory_id==repo.repository_id))
-    );
+    assert!({
+        let value = directory_scopes_value(&root_only);
+        let rows = value["directory_branches"].as_array().unwrap();
+        rows.len() == 2
+            && rows
+                .iter()
+                .all(|row| row["directory_id"] == repo.repository_id)
+    });
     let nfd =
         DirectoryBranchFilter::Directory(name_policy::LookupPath::parse("CAFE\u{301}").unwrap());
     let nested = backend
@@ -159,9 +174,11 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
             &crate::tests::history_read_control(),
         )
         .unwrap();
-    assert!(
-        matches!(nested.branches,DirectoryScopeRows::Summary(rows) if rows.len()==2 && rows.iter().all(|row|row.path=="Café"))
-    );
+    assert!({
+        let value = directory_scopes_value(&nested);
+        let rows = value["directory_branches"].as_array().unwrap();
+        rows.len() == 2 && rows.iter().all(|row| row["path"] == "Café")
+    });
     backend
         .engine
         .lock()
@@ -174,33 +191,11 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let full = DirectoryScopesResponse::from(full);
-    let summary = DirectoryScopesResponse::from(summary);
-    struct Probe<'a>(&'a EngineBackend, &'a DirectoryScopesResponse);
-    impl Serialize for Probe<'_> {
-        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            let available = std::thread::scope(|scope| {
-                scope
-                    .spawn(|| self.0.engine.try_lock().is_ok())
-                    .join()
-                    .unwrap()
-            });
-            if !available {
-                return Err(S::Error::custom("directory scopes retained engine lock"));
-            }
-            self.1.serialize(serializer)
-        }
-    }
+    assert!(backend.engine.try_lock().is_ok());
+    assert_eq!(directory_scopes_value(&full), expected);
+    assert_eq!(directory_scopes_value(&summary), expected_summary);
     assert_eq!(
-        json_codec::to_value(Probe(&backend, &full)).unwrap(),
-        expected
-    );
-    assert_eq!(
-        json_codec::to_value(Probe(&backend, &summary)).unwrap(),
-        expected_summary
-    );
-    assert_eq!(
-        storage_contract::canonical_json(&full).unwrap(),
+        storage_contract::canonical_json(&directory_scopes_value(&full)).unwrap(),
         storage_contract::canonical_json(&expected).unwrap()
     );
     let missing = || ReadDirectoryScopes {
@@ -225,12 +220,12 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
     );
     drop(auth);
     drop(backend);
-    assert_eq!(json_codec::to_value(full).unwrap(), expected);
-    assert_eq!(json_codec::to_value(summary).unwrap(), expected_summary);
+    assert_eq!(directory_scopes_value(&full), expected);
+    assert_eq!(directory_scopes_value(&summary), expected_summary);
 }
 
 #[test]
-fn detached_scopes_share_rows_and_finish_while_publication_advances() {
+fn detached_scopes_encode_once_and_release_root_while_publication_advances() {
     let (_root, mut engine, repo, identity) = fixture();
     save_projection_file(
         &mut engine,
@@ -247,11 +242,33 @@ fn detached_scopes_share_rows_and_finish_while_publication_advances() {
         )
         .unwrap();
     let id = engine.state().directory_selections[&repo.repository_id].clone();
-    let shared = engine.state().directory_branches.get_shared(&id).unwrap();
-    let weak = Arc::downgrade(&shared);
+    let head = &engine.state().branches[&repo.main_branch_id].head_commit_id;
+    let commit = engine.state().commits.get_shared(head).unwrap();
+    let weak = Arc::downgrade(&commit);
+    drop(commit);
     let expected = legacy_full(&engine, &repo.repository_id);
     let backend = EngineBackend::new(engine);
     let view = backend.engine.lock().unwrap().published_read_view();
+    {
+        let original = &view.state().directory_branches[&id];
+        let row = crate::DirectoryScopeBranch {
+            branch: original,
+            current: true,
+            file_count: 1,
+        };
+        assert!(std::ptr::eq(
+            row.branch,
+            &view.state().directory_branches[&id]
+        ));
+        assert_eq!(row.branch.entries.as_ptr(), original.entries.as_ptr());
+        let encoded = crate::DirectoryScopesSnapshot::encode(
+            &repo.repository_id,
+            DirectoryBranchProjection::Full,
+            &[row],
+        )
+        .unwrap();
+        assert_eq!(directory_scopes_value(&encoded), expected);
+    }
     let mut writer = backend.engine.lock().unwrap();
     writer
         .rename_directory_branch(
@@ -287,23 +304,26 @@ fn detached_scopes_share_rows_and_finish_while_publication_advances() {
             &crate::tests::history_read_control(),
         )
         .unwrap();
-    let DirectoryScopeRows::Full(rows) = &snapshot.branches else {
-        panic!("full projection changed");
-    };
-    assert!(Arc::ptr_eq(&rows[0].branch, &shared));
-    assert_eq!(rows[0].file_count, 1);
-    let response = DirectoryScopesResponse::from(snapshot);
-    assert_eq!(json_codec::to_value(&response).unwrap(), expected);
-    let encoded = crate::backend_file_history::encode_response_bounded(response).unwrap();
+    assert_eq!(directory_scopes_value(&snapshot), expected);
+    assert_eq!(
+        directory_scopes_value(&snapshot)["directory_branches"][0]["file_count"],
+        "1"
+    );
+    drop(backend);
+    assert!(
+        weak.upgrade().is_none(),
+        "encoded snapshot must not retain the old publication"
+    );
+    let allocation = snapshot.body().as_ptr();
+    let encoded = snapshot.into_encoded();
+    assert_eq!(
+        encoded.body().as_ptr(),
+        allocation,
+        "HTTP drain must move the already encoded allocation"
+    );
     assert_eq!(
         json_codec::from_slice::<Value>(encoded.body()).unwrap(),
         expected
-    );
-    drop(backend);
-    drop(shared);
-    assert!(
-        weak.upgrade().is_none(),
-        "encoded bytes must not retain shared rows"
     );
 }
 
@@ -395,7 +415,7 @@ fn scope_completion_reauthorizes_success_errors_and_cancellation() {
 }
 
 #[tokio::test]
-async fn shared_scope_wire_preserves_empty_fields_bytes_and_response_lease() {
+async fn borrowed_scope_wire_preserves_empty_fields_bytes_and_response_lease() {
     use futures::StreamExt;
     let (_root, mut engine, repo, _) = fixture();
     engine
@@ -406,37 +426,24 @@ async fn shared_scope_wire_preserves_empty_fields_bytes_and_response_lease() {
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let read = || {
-        crate::engine_backend::directory_scopes::read(
-            engine.published_read_view(),
-            ReadDirectoryScopes {
-                repository_id: &repo.repository_id,
-                filter: &DirectoryBranchFilter::Root,
-                projection: DirectoryBranchProjection::Full,
-            },
-            &crate::tests::history_read_control(),
-        )
+    let mut branch = engine
+        .state()
+        .directory_branches
+        .values()
+        .next()
         .unwrap()
-    };
-    let mut snapshot = read();
-    let DirectoryScopeRows::Full(rows) = &mut snapshot.branches else {
-        panic!("full projection changed");
-    };
-    assert_eq!(rows.len(), 1);
-    let row = &mut rows[0];
-    let branch = Arc::make_mut(&mut row.branch);
+        .clone();
     branch.entries.clear();
     branch.file_branches.clear();
     branch.file_contexts.clear();
     branch.inherited_files.clear();
     branch.directory_refs.clear();
     branch.sequence = u64::MAX;
-    row.file_count = 0;
-    let mut branch_bytes = json_codec::to_vec(branch).unwrap();
+    let current = true;
+    let mut branch_bytes = json_codec::to_vec(&branch).unwrap();
     assert_eq!(branch_bytes.pop(), Some(b'}'));
-    branch_bytes.extend_from_slice(
-        format!(",\"current\":{},\"file_count\":\"0\"}}", row.current).as_bytes(),
-    );
+    branch_bytes
+        .extend_from_slice(format!(",\"current\":{},\"file_count\":\"0\"}}", current).as_bytes());
     let mut expected = format!(
         "{{\"repository_id\":{},\"directory_branches\":[",
         json_codec::to_string(&repo.repository_id).unwrap()
@@ -444,10 +451,19 @@ async fn shared_scope_wire_preserves_empty_fields_bytes_and_response_lease() {
     .into_bytes();
     expected.extend_from_slice(&branch_bytes);
     expected.extend_from_slice(b"]}");
-    let encoded = crate::backend_file_history::encode_response_bounded(
-        DirectoryScopesResponse::from(snapshot),
+    let snapshot = crate::DirectoryScopesSnapshot::encode(
+        &repo.repository_id,
+        DirectoryBranchProjection::Full,
+        &[crate::DirectoryScopeBranch {
+            branch: &branch,
+            current,
+            file_count: 0,
+        }],
     )
     .unwrap();
+    let allocation = snapshot.body().as_ptr();
+    let encoded = snapshot.into_encoded();
+    assert_eq!(encoded.body().as_ptr(), allocation);
     assert_eq!(encoded.body(), expected);
     let value: Value = json_codec::from_slice(encoded.body()).unwrap();
     let wire = &value["directory_branches"][0];
@@ -472,16 +488,17 @@ async fn shared_scope_wire_preserves_empty_fields_bytes_and_response_lease() {
     assert_eq!(slots.available_permits(), 0);
     drop(chunk);
     assert_eq!(slots.available_permits(), 1);
-    let mut oversized = read();
-    let DirectoryScopeRows::Full(rows) = &mut oversized.branches else {
-        panic!("full projection changed");
-    };
-    Arc::make_mut(&mut rows[0].branch).name =
-        "x".repeat(storage_contract::client_protocol::MAX_RESPONSE_BYTES);
+    branch.name = "x".repeat(storage_contract::client_protocol::MAX_RESPONSE_BYTES);
     assert_eq!(
-        crate::backend_file_history::encode_response_bounded(DirectoryScopesResponse::from(
-            oversized
-        ))
+        crate::DirectoryScopesSnapshot::encode(
+            &repo.repository_id,
+            DirectoryBranchProjection::Full,
+            &[crate::DirectoryScopeBranch {
+                branch: &branch,
+                current,
+                file_count: 0
+            }],
+        )
         .err()
         .unwrap()
         .code,

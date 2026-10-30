@@ -482,10 +482,7 @@ impl Backend for TestBackend {
             request.projection,
             crate::DirectoryBranchProjection::Full
         ));
-        Ok(crate::DirectoryScopesSnapshot {
-            repository_id: request.repository_id.into(),
-            branches: crate::DirectoryScopeRows::Full(vec![]),
-        })
+        crate::DirectoryScopesSnapshot::encode(request.repository_id, request.projection, &[])
     }
     fn default_directory_branch(
         &self,
@@ -2428,4 +2425,8 @@ async fn listing_http_boundary_preserves_root_shape_and_rejects_invalid_queries(
             );
         }
     }
+}
+
+pub(crate) fn directory_scopes_value(snapshot: &crate::DirectoryScopesSnapshot) -> Value {
+    json_codec::from_slice(snapshot.body()).unwrap()
 }

@@ -147,7 +147,7 @@ mod backend_directory_scopes;
 mod http_directory_selection;
 pub use backend_directory_scopes::{
     DirectoryBranchChoice, DirectoryBranchFilter, DirectoryBranchProjection, DirectoryScopeBranch,
-    DirectoryScopeRows, DirectoryScopesSnapshot, ReadDirectoryScopes,
+    DirectoryScopesSnapshot, ReadDirectoryScopes,
 };
 mod backend_default_directory;
 mod backend_diagnostics;

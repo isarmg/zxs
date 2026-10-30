@@ -480,10 +480,7 @@ fn scope_response(
         },
         &crate::tests::history_read_control(),
     )?;
-    Ok(json_codec::to_value(
-        crate::backend_directory_scopes::DirectoryScopesResponse::from(snapshot),
-    )
-    .unwrap())
+    Ok(crate::tests::directory_scopes_value(&snapshot))
 }
 
 fn directory_mutation(

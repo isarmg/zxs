@@ -3,15 +3,14 @@
 use super::pagination::{PageRequest, PageSelector};
 use super::*;
 use crate::backend_listing::SortKey;
-use storage_engine::{Entry, FileVersion};
+use storage_engine::{Entry, FileVersion, PublishedReadView};
 
-fn available_on(engine: &Engine, slot: &str, version: &str) -> bool {
-    engine
-        .state()
+fn available_on(view: &PublishedReadView, slot: &str, version: &str) -> bool {
+    view.state()
         .content_states
         .get(version)
         .is_none_or(|state| *state == storage_contract::ContentState::Available)
-        && engine
+        && view
             .state()
             .placements
             .get(version)
@@ -119,13 +118,12 @@ fn default_backup_path(
     repo: &Repository,
     entry: Option<&Entry>,
     version: &FileVersion,
-    engine: &Engine,
+    view: &PublishedReadView,
 ) -> String {
     let relative = entry
         .map(|entry| entry.path.as_str())
         .or_else(|| {
-            engine
-                .state()
+            view.state()
                 .file_locations
                 .get(&version.file_id)
                 .map(String::as_str)
@@ -137,7 +135,7 @@ fn default_backup_path(
         format!("{}/{}/{relative}", repo.primary_slot_id, repo.name)
     }
 }
-fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<crate::ListingEntry, ApiError> {
+fn project(view: &PublishedReadView, slot: &str, node: &Node<'_>) -> crate::ListingEntry {
     let display = node.display();
     let name = display
         .rsplit('/')
@@ -153,7 +151,7 @@ fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<crate::Listin
         } => {
             // Resolve against the current entry before overlaying historical content.
             let mut value = if let Some(current) = current {
-                let mut entry = listed_current_entry(engine, repo, current, "")?;
+                let mut entry = listed_current_entry(view, repo, current, "");
                 entry.path = display.into();
                 entry.name = name.into();
                 entry
@@ -167,7 +165,7 @@ fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<crate::Listin
                     file_id: version.file_id.clone(),
                     version: crate::ListingVersion::File {
                         content: super::super::branch::capture_content(
-                            engine.state(),
+                            view.state(),
                             Some(&version.version_id),
                             None,
                         ),
@@ -180,8 +178,7 @@ fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<crate::Listin
                         selected_branch_id: None,
                     }),
                     note: Some(
-                        engine
-                            .state()
+                        view.state()
                             .file_notes
                             .get(&version.file_id)
                             .cloned()
@@ -197,7 +194,7 @@ fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<crate::Listin
                 value.node_id = Some(version.version_id.clone());
                 value.version = crate::ListingVersion::File {
                     content: super::super::branch::capture_content(
-                        engine.state(),
+                        view.state(),
                         Some(&version.version_id),
                         None,
                     ),
@@ -215,28 +212,75 @@ fn project(engine: &Engine, slot: &str, node: &Node<'_>) -> Result<crate::Listin
     };
     entry.read_only = Some(true);
     entry.backup = true;
-    Ok(entry)
+    entry
 }
 
-pub(super) fn entries(
-    engine: &Engine,
+/// Request-owned publication and its same-lock configuration limit; no authority.
+pub(super) struct BackupListing {
+    view: PublishedReadView,
+    request: PageRequest,
+    slot: String,
+    path: String,
+    maximum: usize,
+}
+
+impl BackupListing {
+    pub(super) fn capture(
+        view: PublishedReadView,
+        request: PageRequest,
+        slot: String,
+        path: String,
+        maximum: usize,
+    ) -> Self {
+        Self {
+            view,
+            request,
+            slot,
+            path,
+            maximum,
+        }
+    }
+
+    pub(super) fn read(
+        self,
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ListingSnapshot, ApiError> {
+        entries(
+            &self.view,
+            &self.slot,
+            &self.path,
+            self.request,
+            self.maximum,
+            control,
+        )
+    }
+}
+
+fn entries(
+    view: &PublishedReadView,
     slot: &str,
     path: &str,
     request: PageRequest,
+    maximum: usize,
+    control: &crate::HistoryReadControl,
 ) -> Result<crate::ListingSnapshot, ApiError> {
-    let repositories = engine
+    activity::checkpoint(control)?;
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+    let repositories = view
         .state()
         .repositories
         .values()
-        .map(|repo| (repo.history_tree_id.as_str(), repo))
-        .collect::<BTreeMap<_, _>>();
+        .map(|repo| {
+            activity::checkpoint(control)?;
+            Ok((repo.history_tree_id.as_str(), repo))
+        })
+        .collect::<Result<BTreeMap<_, _>, ApiError>>()?;
     let mut latest = BTreeMap::<&str, (&Repository, &FileVersion)>::new();
-    for version in engine
-        .state()
-        .versions
-        .values()
-        .filter(|version| available_on(engine, slot, &version.version_id))
-    {
+    for version in view.state().versions.values() {
+        activity::checkpoint(control)?;
+        if !available_on(view, slot, &version.version_id) {
+            continue;
+        }
         let Some(repo) = repositories.get(version.history_tree_id.as_str()) else {
             continue;
         };
@@ -252,10 +296,11 @@ pub(super) fn entries(
     // Stream each main head once, retaining only candidate file entries.
     let mut collected: Vec<Entry> = Vec::new();
     for repo in repositories.values() {
-        engine
-            .namespace_tree(&repo.main_branch_id)
-            .map_err(error)?
+        activity::checkpoint(control)?;
+        view.namespace_tree(&repo.main_branch_id, &observe)
+            .map_err(activity::read_error)?
             .walk(|entry| {
+                control.checkpoint()?;
                 if entry.kind == storage_contract::NamespaceEntryKind::File
                     && latest.contains_key(entry.file_id.as_str())
                 {
@@ -263,11 +308,12 @@ pub(super) fn entries(
                 }
                 Ok(true)
             })
-            .map_err(error)?;
+            .map_err(activity::read_error)?;
     }
     let mut canonical = BTreeMap::<&str, &Entry>::new();
     for entry in &collected {
-        let owner = engine
+        activity::checkpoint(control)?;
+        let owner = view
             .state()
             .file_locations
             .get(&entry.file_id)
@@ -276,21 +322,21 @@ pub(super) fn entries(
             canonical.insert(&entry.file_id, entry);
         }
     }
-    let maximum = engine.config().max_entries;
     let mut nodes = BTreeMap::new();
     for (file, (repo, newest)) in latest {
+        activity::checkpoint(control)?;
         let current = canonical.get(file).copied();
         let version = current
-            .filter(|entry| available_on(engine, slot, &entry.version_id))
-            .and_then(|entry| engine.state().versions.get(&entry.version_id))
+            .filter(|entry| available_on(view, slot, &entry.version_id))
+            .and_then(|entry| view.state().versions.get(&entry.version_id))
             .unwrap_or(newest);
-        let display = engine
+        let display = view
             .state()
             .file_backup_paths
             .get(file)
             .and_then(|paths| paths.get(slot))
             .cloned()
-            .unwrap_or_else(|| default_backup_path(repo, current, version, engine));
+            .unwrap_or_else(|| default_backup_path(repo, current, version, view));
         name_policy::validate_path(&display).map_err(ApiError::invalid_source)?;
         parents(&mut nodes, &display, maximum)?;
         retain_node(
@@ -320,6 +366,7 @@ pub(super) fn entries(
     let mut file_count = 0;
     let mut page = PageSelector::new(request);
     for (key, node) in &nodes {
+        activity::checkpoint(control)?;
         let Some(relative) = key.strip_prefix(&prefix) else {
             continue;
         };
@@ -344,11 +391,17 @@ pub(super) fn entries(
     let values = page
         .values
         .iter()
-        .map(|node| project(engine, slot, node))
+        .map(|node| {
+            activity::checkpoint(control)?;
+            Ok::<_, ApiError>(project(view, slot, node))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let selected_entry = page
         .selected
-        .map(|node| project(engine, slot, node))
+        .map(|node| {
+            activity::checkpoint(control)?;
+            Ok::<_, ApiError>(project(view, slot, node))
+        })
         .transpose()?;
     Ok(crate::ListingSnapshot {
         slot_id: slot.into(),

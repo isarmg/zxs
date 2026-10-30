@@ -40,18 +40,17 @@ fn typed_scope_read_and_bounded_selection_do_not_change_state() {
             &crate::tests::history_read_control(),
         )
         .unwrap();
-    let crate::DirectoryScopeRows::Full(branches) = direct.branches else {
-        panic!("full request returned a summary")
-    };
+    let direct = crate::tests::directory_scopes_value(&direct);
+    let branches = direct["directory_branches"].as_array().unwrap();
     assert!(!branches.is_empty());
-    let branch = &branches[0].branch;
+    let branch = &branches[0];
     let request = || {
         crate::ReadDirectorySelection::parse(
             repo.repository_id.clone(),
             "",
             vec![crate::DirectorySelectionSourceInput {
-                directory_branch_id: branch.directory_branch_id.clone(),
-                expected_tree_id: branch.head_tree_id.clone(),
+                directory_branch_id: branch["directory_branch_id"].as_str().unwrap().to_owned(),
+                expected_tree_id: branch["head_tree_id"].as_str().unwrap().to_owned(),
             }],
             vec![],
         )

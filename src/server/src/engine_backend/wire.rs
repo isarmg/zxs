@@ -46,12 +46,6 @@ pub(super) fn stored_version_content_state(
         .copied()
         .unwrap_or(storage_contract::ContentState::Available)
 }
-enum CurrentContext<'a> {
-    Lookup,
-    // A missing context has already been resolved; do not search again.
-    Resolved(Option<&'a storage_contract::FileContext>),
-}
-
 /// Source selection over one immutable State; callers supply their own checked
 /// entry/context and fallback lookup, without granting authority or doing I/O.
 pub(super) struct PendingResolution<'a> {
@@ -140,9 +134,8 @@ impl<'a> PendingResolution<'a> {
     }
 }
 
-/// Borrowed, request-local source resolution. The current-entry resolver uses
-/// its own snapshot materialization directly; external entries retain checked
-/// point-lookup semantics against the commit namespace.
+/// Borrowed, request-local source resolution for external entries, retaining
+/// checked point-lookup semantics against the commit namespace.
 pub(super) struct PendingSources<'a> {
     engine: &'a Engine,
     branch: &'a str,
@@ -197,16 +190,6 @@ impl<'a> PendingSources<'a> {
         let Some(visible) = self.visible(entry)? else {
             return Ok(None);
         };
-        self.resolve(entry, &visible, CurrentContext::Lookup, None)
-    }
-
-    fn resolve(
-        &self,
-        entry: &storage_contract::Entry,
-        visible: &storage_contract::Entry,
-        context: CurrentContext<'_>,
-        historical: Option<&std::collections::BTreeMap<&str, &'a storage_contract::FileContext>>,
-    ) -> Result<Option<String>, storage_engine::Error> {
         let state = self.engine.state();
         let source = PendingResolution {
             state,
@@ -214,34 +197,26 @@ impl<'a> PendingSources<'a> {
             current: self.current,
             main_repository: self.main_repository,
         };
-        let owned;
-        let context = match context {
-            CurrentContext::Resolved(context) => context,
-            CurrentContext::Lookup => {
-                owned = match self.main_repository {
-                    Some(repository) => self.engine.file_context(repository, &entry.path)?,
-                    None => None,
-                };
-                owned.as_ref()
-            }
+        let context = match self.main_repository {
+            Some(repository) => self.engine.file_context(repository, &entry.path)?,
+            None => None,
         };
         let historical = source
             .historical()
-            .then(|| match historical {
-                Some(contexts) => contexts.get(entry.lookup_key()).copied(),
-                None => state
+            .then(|| {
+                state
                     .directory_trees
                     .values()
                     .filter(|tree| tree.commit_id == self.commit.commit_id)
-                    .find_map(|tree| tree.file_contexts.get(entry.lookup_key())),
+                    .find_map(|tree| tree.file_contexts.get(entry.lookup_key()))
             })
             .flatten();
         Ok(source
             .resolve(
                 entry,
-                visible,
+                &visible,
                 PendingContexts {
-                    current: context,
+                    current: context.as_ref(),
                     historical,
                 },
                 || self.engine.pending_file_source(self.branch, &entry.file_id),
@@ -262,33 +237,6 @@ pub(super) fn pending_entry_source(
     entry: &storage_contract::Entry,
 ) -> Result<Option<String>, storage_engine::Error> {
     PendingSources::new(engine, branch, commit).checked(entry)
-}
-
-/// The entry is this branch's own current-commit materialization, already in
-/// hand at the caller. Unlike the checked external-entry API, callers cannot
-/// substitute another snapshot's entry and no repeated key lookup is needed.
-pub(super) fn current_entry_source_resolved(
-    engine: &Engine,
-    branch: &str,
-    entry: &storage_contract::Entry,
-
-    context: Option<&storage_contract::FileContext>,
-) -> Result<Option<String>, storage_engine::Error> {
-    let Some(current) = engine.state().branches.get(branch) else {
-        return Ok(None);
-    };
-    let Some(commit) = engine.state().commits.get(&current.head_commit_id) else {
-        return Ok(None);
-    };
-    if entry.kind != storage_contract::NamespaceEntryKind::File {
-        return Ok(None);
-    }
-    PendingSources::new(engine, branch, commit).resolve(
-        entry,
-        entry,
-        CurrentContext::Resolved(context),
-        None,
-    )
 }
 
 pub(super) fn field<'a>(value: &'a Value, key: &str) -> Result<&'a str, ApiError> {
