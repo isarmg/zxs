@@ -58,7 +58,7 @@ class ReleaseIntegrity(unittest.TestCase):
 
     def test_missing_rescue_binary_rejects_partial_native_release(self):
         for name in ("zxs-rescue",):
-            path = self.root / "target/native/release" / name
+            path = self.root / "target/native/x86_64-unknown-linux-gnu/release" / name
             saved = path.read_bytes()
             path.unlink()
             result = self.package()
@@ -66,6 +66,28 @@ class ReleaseIntegrity(unittest.TestCase):
             self.assertFalse((self.root / "release-assets").exists())
             path.write_bytes(saved)
             path.chmod(0o755)
+
+    def test_missing_receipt_and_modified_native_bytes_are_rejected(self):
+        native = self.root / "target/native/x86_64-unknown-linux-gnu/release"
+        receipt = native / "BUILD.txt"
+        original = receipt.read_bytes()
+        receipt.unlink()
+        self.assertNotEqual(self.package().returncode, 0)
+        self.assertFalse((self.root / "release-assets").exists())
+        receipt.write_bytes(original)
+        (native / "zxs").write_bytes(b"different executable")
+        result = self.package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("native build output checksum mismatch", result.stderr)
+        self.assertFalse((self.root / "release-assets").exists())
+
+    def test_wrong_native_target_receipt_is_rejected(self):
+        receipt = self.root / "target/native/x86_64-unknown-linux-gnu/release/BUILD.txt"
+        receipt.write_text(receipt.read_text().replace("x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"))
+        result = self.package()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("native build target/profile identity mismatch", result.stderr)
+        self.assertFalse((self.root / "release-assets").exists())
 
     def test_modified_output_is_rejected_before_creating_assets(self):
         (self.dist / "pkg/zxs_bg.wasm").write_bytes(b"damaged WASM")
@@ -166,7 +188,7 @@ class ReleaseIntegrity(unittest.TestCase):
             validator.verify(self.root)
 
     def test_symlinks_in_outputs_source_ancestors_materials_and_binary_fail(self):
-        for relative in ("build/web/pkg/zxs.js", "Cargo.lock", "README.md", "deploy/systemd/zxs.service", "deploy/samba/smb.conf.example", "target/native/release/zxs"):
+        for relative in ("build/web/pkg/zxs.js", "Cargo.lock", "README.md", "deploy/systemd/zxs.service", "deploy/samba/smb.conf.example", "target/native/x86_64-unknown-linux-gnu/release/zxs"):
             path = self.root / relative
             data, mode = path.read_bytes(), path.stat().st_mode
             path.unlink()
@@ -194,7 +216,7 @@ class ReleaseIntegrity(unittest.TestCase):
         before = wasm.read_bytes()
         (self.dist / "pkg/zxs_bg.wasm").write_bytes(b"changed after verification")
         self.assertEqual(wasm.read_bytes(), before)
-        self.assertEqual((stage / "native/zxs").read_bytes(), (self.root / "target/native/release/zxs").read_bytes())
+        self.assertEqual((stage / "native/zxs").read_bytes(), (self.root / "target/native/x86_64-unknown-linux-gnu/release/zxs").read_bytes())
         self.assertTrue((stage / "material/compliance/NOTICE.md").is_file())
         (self.dist / "pkg/zxs_bg.wasm").write_bytes(before)
         with self.assertRaises(FileExistsError):

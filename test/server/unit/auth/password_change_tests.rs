@@ -9,11 +9,18 @@ const NEW_PASSWORD: &str = "password-change-new-password";
 
 struct UnusedBackend;
 impl crate::Backend for UnusedBackend {
+    fn operation_outcome(
+        &self,
+        _: &crate::auth::Identity,
+        _: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationOutcome, crate::ApiError> {
+        unreachable!("test does not query operation outcomes")
+    }
     fn operation(
         &self,
         _: &crate::auth::Identity,
         _: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+    ) -> Result<crate::OperationObservation, crate::ApiError> {
         unreachable!("test does not query operations")
     }
     fn commit_workspace(

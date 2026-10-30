@@ -12,14 +12,16 @@ use storage_engine::{CommitRequest, Engine};
 
 const PASSWORD: &str = "integration-test-password";
 
-fn fixture() -> (
+type OperationFixture = (
     tempfile::TempDir,
     Arc<EngineBackend>,
     AuthStore,
     String,
     Identity,
     OperationId,
-) {
+);
+
+fn fixture() -> OperationFixture {
     let root = crate::tests::private_tempdir();
     let config = Config::development([
         root.path().join("d1"),
@@ -221,13 +223,13 @@ fn operation_observation_preserves_publication_wire_facts() {
     let (_root, backend, _auth, _token, identity, operation_id) = fixture();
     let before = backend
         .operation(&identity, operation_id)
-        .and_then(crate::operation_wire::operation_wire)
+        .and_then(crate::operation_wire::operation_observation_wire)
         .unwrap();
     assert_eq!(before["current_health"]["state"], "HEALTHY");
     let sequence = backend.engine.lock().unwrap().state().sequence;
     let replay = backend
         .operation(&identity, operation_id)
-        .and_then(crate::operation_wire::operation_wire)
+        .and_then(crate::operation_wire::operation_observation_wire)
         .unwrap();
     // Health timestamps are fresh observations, not publication facts.
     assert!(before["current_health"]["checked_at"].is_string());
@@ -256,7 +258,7 @@ fn operation_observation_preserves_publication_wire_facts() {
     }
     let after = backend
         .operation(&identity, operation_id)
-        .and_then(crate::operation_wire::operation_wire)
+        .and_then(crate::operation_wire::operation_observation_wire)
         .unwrap();
     assert_eq!(after["current_health"]["state"], "UNAVAILABLE");
     assert_eq!(after["commit_state"], before["commit_state"]);
@@ -299,4 +301,232 @@ fn pending_owner_discovery_failure_is_not_a_missing_operation_response() {
     let error = backend.operation(&identity, operation).unwrap_err();
     assert_ne!(error.code, storage_contract::ErrorCode::NotFound);
     assert!(error.source().is_some());
+    let outcome_error = backend.operation_outcome(&identity, operation).unwrap_err();
+    assert_eq!(outcome_error.code, error.code);
+    assert!(outcome_error.source().is_some());
+}
+
+#[test]
+fn outcome_lookup_does_not_start_health_or_depend_on_current_payloads() {
+    let (_root, backend, _auth, _token, identity, operation_id) = fixture();
+    *backend.operation_health_hook.lock().unwrap() = Some(Arc::new(|| {
+        panic!("outcome-only lookup started full-content health checking");
+    }));
+    let before = backend.operation_outcome(&identity, operation_id).unwrap();
+    {
+        let engine = backend.engine.lock().unwrap();
+        for disk in &engine.config().disks {
+            std::fs::remove_dir_all(disk.root.join("histories")).unwrap();
+        }
+    }
+    let after = backend.operation_outcome(&identity, operation_id).unwrap();
+    assert_eq!(before, after);
+    let wire = crate::operation_wire::operation_wire(after).unwrap();
+    assert!(wire.get("current_health").is_none());
+    assert_eq!(
+        storage_contract::client_protocol::operation_status(&wire),
+        Some(storage_contract::client_protocol::OperationStatus::Published)
+    );
+    *backend.operation_health_hook.lock().unwrap() = None;
+    let observation = backend
+        .operation(&identity, operation_id)
+        .and_then(crate::operation_wire::operation_observation_wire)
+        .unwrap();
+    assert_eq!(observation["current_health"]["state"], "UNAVAILABLE");
+    assert_eq!(observation["result"], wire["result"]);
+}
+
+#[test]
+fn published_outcome_survives_observation_clock_representation_failure() {
+    use std::error::Error as _;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let (_root, backend, _auth, _token, identity, operation_id) = fixture();
+    let outcome = backend.operation_outcome(&identity, operation_id).unwrap();
+    let observed = backend.operation(&identity, operation_id).unwrap();
+    let health = observed.health().unwrap().state();
+    let sequence = backend.engine.lock().unwrap().state().sequence;
+    for clock in [
+        UNIX_EPOCH - Duration::from_nanos(1),
+        UNIX_EPOCH + Duration::from_secs(253_402_300_800),
+    ] {
+        let error =
+            crate::operation_observation::CheckedOperationHealth::at(health, clock).unwrap_err();
+        assert_eq!(error.status, ::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code, storage_contract::ErrorCode::IoError);
+        assert!(error.source().is_some());
+        let wire = crate::operation_wire::operation_wire(outcome.clone()).unwrap();
+        assert_eq!(wire["commit_state"], "PUBLISHED");
+        assert!(wire.get("current_health").is_none());
+        assert_eq!(
+            storage_contract::client_protocol::operation_status(&wire),
+            Some(storage_contract::client_protocol::OperationStatus::Published)
+        );
+        assert_eq!(
+            backend.operation_outcome(&identity, operation_id).unwrap(),
+            outcome
+        );
+        assert_eq!(backend.engine.lock().unwrap().state().sequence, sequence);
+    }
+}
+
+#[test]
+fn outcome_lookup_rechecks_current_identity_and_owner() {
+    let (_root, backend, mut auth, token, identity, operation_id) = fixture();
+    let foreign_operation = storage_contract::OperationId::generate();
+    backend
+        .engine
+        .lock()
+        .unwrap()
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Foreign outcome").unwrap(),
+            "P01",
+            3,
+            "other",
+            foreign_operation,
+        )
+        .unwrap();
+    assert_eq!(
+        backend
+            .operation_outcome(&identity, foreign_operation)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    assert_eq!(
+        backend
+            .operation_outcome(&identity, OperationId::generate())
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::OperationNotFound
+    );
+    auth.logout(&token).unwrap();
+    assert_eq!(
+        backend
+            .operation_outcome(&identity, operation_id)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+}
+
+#[test]
+fn metadata_without_a_published_commit_scope_is_explicitly_not_observed() {
+    let (_root, backend, _auth, _token, identity, _published) = fixture();
+    let operation_id = OperationId::generate();
+    {
+        let mut engine = backend.engine.lock().unwrap();
+        let file_id = engine
+            .state()
+            .versions
+            .values()
+            .next()
+            .unwrap()
+            .file_id
+            .clone();
+        engine
+            .set_file_note(
+                &file_id,
+                None,
+                &storage_contract::Note::parse("metadata only".into()).unwrap(),
+                &identity.principal,
+                operation_id,
+            )
+            .unwrap();
+    }
+    let observed = backend.operation(&identity, operation_id).unwrap();
+    assert!(observed.outcome().commit_id.is_none());
+    assert!(observed.health().is_none());
+    let wire = crate::operation_wire::operation_observation_wire(observed).unwrap();
+    assert!(wire["current_health"].is_null());
+    assert_eq!(
+        storage_contract::client_protocol::operation_observation_status(&wire),
+        Some(storage_contract::client_protocol::OperationStatus::Published)
+    );
+}
+
+#[test]
+fn accepted_pending_operation_has_an_outcome_and_no_checked_health() {
+    let (_root, backend, _auth, _token, identity, published) = fixture();
+    let operation_id = OperationId::generate();
+    {
+        let mut engine = backend.engine.lock().unwrap();
+        let branch = engine
+            .operation_record(published)
+            .unwrap()
+            .result()
+            .branch_id
+            .clone()
+            .unwrap();
+        let workspace = engine
+            .create_workspace(&branch, &identity.principal)
+            .unwrap();
+        engine
+            .stage_bytes(&workspace.workspace_id, "pending.txt", b"pending content")
+            .unwrap();
+        engine.inject_fault_once("after_accept_1");
+        assert!(
+            engine
+                .commit_workspace(CommitRequest {
+                    workspace_id: workspace.workspace_id,
+                    operation_id,
+                    principal: identity.principal.clone(),
+                    expected_head: workspace.base_head,
+                    fencing_token: workspace.fencing_token,
+                    message: String::new(),
+                    request_digest: None,
+                })
+                .is_err()
+        );
+    }
+    let pending = backend.operation_outcome(&identity, operation_id).unwrap();
+    assert_eq!(pending.commit_state, storage_contract::CommitState::InDoubt);
+    assert_eq!(
+        pending.protection_at_publish,
+        storage_contract::ProtectionAtPublish::Unconfirmed
+    );
+    let observed = backend.operation(&identity, operation_id).unwrap();
+    assert_eq!(observed.outcome(), &pending);
+    assert!(observed.health().is_none());
+    let wire = crate::operation_wire::operation_observation_wire(observed).unwrap();
+    assert!(wire["current_health"].is_null());
+    assert_eq!(
+        storage_contract::client_protocol::operation_observation_status(&wire),
+        Some(storage_contract::client_protocol::OperationStatus::Unknown)
+    );
+}
+
+#[test]
+fn foreign_pending_owner_is_rejected_by_both_operation_projections() {
+    let (_root, backend, _auth, _token, identity, _published) = fixture();
+    let operation_id = OperationId::generate();
+    {
+        let mut engine = backend.engine.lock().unwrap();
+        engine.inject_fault_once("after_accept_1");
+        assert!(
+            engine
+                .create_repository(
+                    &storage_contract::RepositoryName::parse("Foreign pending outcome").unwrap(),
+                    "P01",
+                    3,
+                    "other",
+                    operation_id,
+                )
+                .is_err()
+        );
+    }
+    *backend.operation_health_hook.lock().unwrap() = Some(Arc::new(|| {
+        panic!("foreign pending operation reached a health observation");
+    }));
+    assert_eq!(
+        backend
+            .operation_outcome(&identity, operation_id)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Forbidden
+    );
+    assert_eq!(
+        backend.operation(&identity, operation_id).unwrap_err().code,
+        storage_contract::ErrorCode::Forbidden
+    );
 }

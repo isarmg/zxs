@@ -1,0 +1,54 @@
+{
+  "commit_state": "PUBLISHED",
+  "error": null,
+  "operation_id": "op_af4bdbfecaf94a689fb6dcb9e7f6adfb",
+  "operation_kind": "directory.namespace.batch",
+  "protection_at_publish": "NOT_APPLICABLE",
+  "publication_sequence": "5",
+  "request_digest": "c4cf407633b8a1ac040af24d8ae540f7707c7cb08dbae113051f872eaf5a0a84",
+  "result": {
+    "action": "rename",
+    "branch_generation": "3",
+    "branch_id": "br_58795b20bb504b62a67a7028a4aa1105",
+    "changes": [
+      {
+        "directory_branch_id": "dbr_b5c12f177f0c48f0a3b9ced6f332a89b",
+        "head_tree_id": "dtree_b331696a0361402dbdc90daf27cbbfff",
+        "path": "",
+        "previous_tree_id": "dtree_abd566d1c3ae40d3b2649eb0742082f5"
+      }
+    ],
+    "commit_id": "commit_747f44c62e3d426aa8aeb88361cffb6e",
+    "copies": [],
+    "count": "1",
+    "directory_branch_ids": [
+      "dbr_b5c12f177f0c48f0a3b9ced6f332a89b"
+    ],
+    "file_node_ids": [
+      "fnode_91c59783915c47de8037d257ffa430cc"
+    ],
+    "history_tree_id": "history_35cff090156847db8a29f4aba943db0e",
+    "membership_epoch": "1",
+    "timestamp": "1793349473",
+    "transfers": [
+      {
+        "file_id": "file_81ce949238ba4370b74f617b7d7fe8cf",
+        "physical_path": "renamed.txt",
+        "source": {
+          "directory_branch_id": "dbr_b5c12f177f0c48f0a3b9ced6f332a89b",
+          "entry_id": "entry_b7a23526d6434f1daeacc363e3b8a1fd",
+          "expected_tree_id": "dtree_abd566d1c3ae40d3b2649eb0742082f5",
+          "path": "original.txt"
+        },
+        "target": {
+          "directory_branch_id": "dbr_b5c12f177f0c48f0a3b9ced6f332a89b",
+          "expected_tree_id": "dtree_abd566d1c3ae40d3b2649eb0742082f5",
+          "path": "renamed.txt"
+        },
+        "version_id": "ver_1991d7030f574b2f97a6dba3c1f77027"
+      }
+    ],
+    "version_protection": []
+  },
+  "state": "completed"
+}

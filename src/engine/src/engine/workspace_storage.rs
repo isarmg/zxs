@@ -1,11 +1,12 @@
 //! Durable workspace manifests and restart reconciliation.
 use super::{
     Engine, ReadSource,
-    workspace_budget::{WorkspaceMirrors, WorkspaceRetention},
+    workspace_budget::{WorkspaceColdKind, WorkspaceMirrors, WorkspaceRetention},
 };
 use crate::journal::RecordType;
 use crate::{disk::*, *};
 use std::{
+    borrow::Cow,
     fs,
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -55,7 +56,8 @@ impl WorkspaceSource<'_> {
 struct LoadedWorkspace {
     workspace: Workspace,
     canonical: Vec<u8>,
-    retention: WorkspaceRetention,
+    consistent: bool,
+    terminal: bool,
 }
 
 mod inventory;
@@ -256,14 +258,12 @@ impl Engine {
                 if paths.is_empty() {
                     continue;
                 }
-                let loaded = self.read_workspace_mirrors(id, &paths, &locations, authoritative)?;
-                let admission = self.check_workspace_budget(
-                    &loaded.workspace,
-                    &loaded.canonical,
-                    loaded.retention,
-                )?;
+                let loaded = self.read_workspace_mirrors(id, &paths, authoritative)?;
+                let retention = self.workspace_retention(&loaded, &paths, &locations)?;
+                let admission =
+                    self.check_workspace_budget(&loaded.workspace, &loaded.canonical, retention)?;
                 self.account_workspace(admission);
-                if !loaded.retention.is_cold() {
+                if !retention.is_cold() {
                     self.workspaces.insert(id.into(), loaded.workspace);
                 }
             }
@@ -275,7 +275,6 @@ impl Engine {
         &self,
         id: &str,
         paths: &[WorkspaceSource<'_>],
-        locations: &[WorkspaceLocation],
         authoritative: bool,
     ) -> Result<LoadedWorkspace> {
         let mut healthy = Vec::new();
@@ -294,6 +293,17 @@ impl Engine {
             ));
         }
         let damaged = healthy.len() != paths.len();
+        let terminal = healthy.iter().all(|workspace| {
+            matches!(
+                workspace.state,
+                WorkspaceState::Committed | WorkspaceState::Aborted
+            )
+        });
+        let first = canonical_json(&healthy[0])?;
+        let mut consistent = true;
+        for workspace in &healthy[1..] {
+            consistent &= first == canonical_json(workspace)?;
+        }
         if authoritative && healthy.len() == 2 {
             self.reconcile_completion_contexts(&mut healthy)?;
         }
@@ -375,23 +385,43 @@ impl Engine {
                 })?;
             }
         }
-        let retention = match workspace_mirrors(paths) {
-            Some(mirrors)
-                if !damaged
-                    && self.empty_aborted_workspace(&selected)
-                    && workspace_directories_clear(locations, id)? =>
-            {
-                WorkspaceRetention::Cold {
-                    fingerprint: blake3::hash(&canonical),
-                    mirrors,
-                }
-            }
-            _ => WorkspaceRetention::Resident,
-        };
         Ok(LoadedWorkspace {
             workspace: selected,
             canonical,
-            retention,
+            consistent: consistent && !damaged,
+            terminal,
+        })
+    }
+
+    fn workspace_retention(
+        &self,
+        loaded: &LoadedWorkspace,
+        paths: &[WorkspaceSource<'_>],
+        locations: &[WorkspaceLocation],
+    ) -> Result<WorkspaceRetention> {
+        let workspace = &loaded.workspace;
+        let id = &workspace.workspace_id;
+        let kind = if !loaded.consistent {
+            None
+        } else if self.empty_aborted_workspace(workspace)
+            && workspace_directories_clear(locations, id, false)?
+        {
+            Some(WorkspaceColdKind::EmptyAbort)
+        } else if loaded.terminal
+            && self.published_normal_workspace(workspace)?
+            && workspace_directories_clear(locations, id, true)?
+        {
+            Some(WorkspaceColdKind::Published)
+        } else {
+            None
+        };
+        Ok(match (workspace_mirrors(paths), kind) {
+            (Some(mirrors), Some(kind)) => WorkspaceRetention::Cold {
+                fingerprint: blake3::hash(&loaded.canonical),
+                mirrors,
+                kind,
+            },
+            _ => WorkspaceRetention::Resident,
         })
     }
 
@@ -407,12 +437,34 @@ impl Engine {
         id: &str,
         admitted: WorkspaceRetention,
     ) -> Result<Workspace> {
+        self.read_admitted_cold_workspace(id, admitted, true)
+    }
+
+    fn read_admitted_cold_workspace(
+        &self,
+        id: &str,
+        admitted: WorkspaceRetention,
+        authoritative: bool,
+    ) -> Result<Workspace> {
+        let WorkspaceRetention::Cold {
+            fingerprint,
+            mirrors,
+            kind,
+        } = admitted
+        else {
+            unreachable!("invariant: cold point reads require cold admission");
+        };
         let locations = self.workspace_locations()?;
         let paths = workspace_paths(&locations, id)?;
-        let loaded = self.read_workspace_mirrors(id, &paths, &locations, true)?;
-        // A cold point read is a disk boundary, not permission to replace the
-        // admitted accounting/identity with different but syntactically valid data.
-        if loaded.retention != admitted {
+        let loaded = self.read_workspace_mirrors(id, &paths, authoritative)?;
+        // Admission already bound the publication. A point read must preserve
+        // its exact manifest/mirrors, not repeat retirement against damaged
+        // request copies. Replay still requires an exact healthy saved request.
+        if !loaded.consistent
+            || workspace_mirrors(&paths) != Some(mirrors)
+            || blake3::hash(&loaded.canonical) != fingerprint
+            || !workspace_directories_clear(&locations, id, kind == WorkspaceColdKind::Published)?
+        {
             return Err(recovery_required(
                 "cold workspace evidence changed; reopen for reconciliation",
             ));
@@ -420,61 +472,142 @@ impl Engine {
         Ok(loaded.workspace)
     }
 
-    pub(crate) fn persist_aborted_workspace(&mut self, workspace: Workspace) -> Result<()> {
-        let canonical = encode_metadata(&workspace, MAX_METADATA)?;
-        let id = &workspace.workspace_id;
-        let retention = if self.cold_workspace_retention(id).is_some() {
-            // The owned input came from a point read bound to this process's
-            // admitted mirror set. Successful persistence restores both mirrors.
-            WorkspaceRetention::Cold {
-                fingerprint: blake3::hash(&canonical),
-                mirrors: WorkspaceMirrors::Both,
-            }
-        } else if self.empty_aborted_workspace(&workspace)
-            && !self
-                .commit_preparation
-                .load(std::sync::atomic::Ordering::Acquire)
-            && !self
+    /// The complete published prefix admitted cold hints before replay. At an
+    /// earlier replay slot, verify those same bytes/mirrors without requiring
+    /// its later operation to have been installed in the live State already.
+    pub(crate) fn workspace_recovery_hint(&self, id: &str) -> Result<Cow<'_, Workspace>> {
+        if let Some(workspace) = self.workspaces.get(id) {
+            return Ok(Cow::Borrowed(workspace));
+        }
+        let admitted = self
+            .cold_workspace_retention(id)
+            .expect("invariant: retained ID is charged");
+        Ok(Cow::Owned(
+            self.read_admitted_cold_workspace(id, admitted, false)?,
+        ))
+    }
+
+    fn workspace_has_preparation(&self, id: &str) -> bool {
+        self.commit_preparation
+            .load(std::sync::atomic::Ordering::Acquire)
+            || self
                 .upload_preparations
                 .lock()
                 .expect("invariant: upload preparation lock poisoned")
                 .contains(id)
+    }
+
+    fn published_normal_workspace(&self, workspace: &Workspace) -> Result<bool> {
+        if workspace.purpose != WorkspacePurpose::Normal
+            || !matches!(
+                workspace.state,
+                WorkspaceState::Committed | WorkspaceState::Aborted
+            )
+            || !self.state.branches.contains_key(&workspace.branch_id)
         {
-            // Classify before persisting abort: an I/O failure is a definite
-            // refusal, not a post-abort error from installing derived state.
-            let locations = self.workspace_locations()?;
-            let paths = workspace_paths(&locations, id)?;
-            let local = self.root.join("workspaces").join(id).join("workspace.json");
-            let primary = self
-                .workspace_data_directory(&workspace)?
-                .join("workspace.json");
-            if paths
-                .iter()
-                .any(|path| path.path() != local.as_path() && path.path() != primary.as_path())
+            return Ok(false);
+        }
+        // A terminal label is not a publication proof. Reuse the existing
+        // actor/workspace/action binding and native/wire digest verification.
+        let directories = self
+            .planning_context()
+            .workspace_evidence_directories(workspace)?;
+        let mut damage = None;
+        let mut bound = false;
+        for directory in &directories {
+            let Some(request) = read_workspace_evidence::<CommitRequest>(
+                directory.join("commit-request.json").open(),
+                &mut damage,
+            )?
+            else {
+                continue;
+            };
+            if !self.workspace_request_matches_operation(workspace, &request)
+                || !self.saved_request_digest_matches(workspace, &request, &directories)?
             {
-                return Err(recovery_required(
-                    "workspace mirror is not on its authoritative primary",
-                ));
+                return Ok(false);
             }
-            if workspace_mirrors(&paths) == Some(WorkspaceMirrors::Both)
-                && workspace_directories_clear(&locations, id)?
+            let operation = &self.state.operations[&request.operation_id];
+            let completed = request.fencing_token.checked_add(1);
+            let terminal = match workspace.state {
+                WorkspaceState::Committed => completed == Some(workspace.fencing_token),
+                WorkspaceState::Aborted => completed
+                    .and_then(|fence| fence.checked_add(1))
+                    .is_some_and(|closed| workspace.fencing_token >= closed),
+                WorkspaceState::Open | WorkspaceState::Sealed => false,
+            };
+            if !terminal
+                || !matches!(
+                    operation.commit_state,
+                    CommitState::Published | CommitState::PublishedDegraded
+                )
             {
-                WorkspaceRetention::Cold {
-                    fingerprint: blake3::hash(&canonical),
-                    mirrors: WorkspaceMirrors::Both,
-                }
-            } else {
+                return Ok(false);
+            }
+            bound = true;
+        }
+        Ok(bound && damage.is_none())
+    }
+
+    pub(crate) fn persist_terminal_workspace(&mut self, workspace: &Workspace) -> Result<()> {
+        let canonical = encode_metadata(workspace, MAX_METADATA)?;
+        let id = &workspace.workspace_id;
+        let owned = self.workspace_has_preparation(id);
+        let retention = if !owned
+            && let Some(WorkspaceRetention::Cold { kind, .. }) = self.cold_workspace_retention(id)
+        {
+            // Input is already bound to this process's admitted evidence. A
+            // successful terminal write restores both mirrors in place.
+            WorkspaceRetention::Cold {
+                fingerprint: blake3::hash(&canonical),
+                mirrors: WorkspaceMirrors::Both,
+                kind,
+            }
+        } else if !owned {
+            let published = self.published_normal_workspace(workspace)?;
+            if !published && !self.empty_aborted_workspace(workspace) {
                 WorkspaceRetention::Resident
+            } else {
+                // Classify before either write. Actual I/O failures cannot turn
+                // a durable terminal result into a later derived-state refusal.
+                let locations = self.workspace_locations()?;
+                let paths = workspace_paths(&locations, id)?;
+                let local = self.root.join("workspaces").join(id).join("workspace.json");
+                let primary = self
+                    .workspace_data_directory(workspace)?
+                    .join("workspace.json");
+                if paths
+                    .iter()
+                    .any(|path| path.path() != local.as_path() && path.path() != primary.as_path())
+                {
+                    return Err(recovery_required(
+                        "workspace mirror is not on its authoritative primary",
+                    ));
+                }
+                if workspace_mirrors(&paths) == Some(WorkspaceMirrors::Both)
+                    && workspace_directories_clear(&locations, id, published)?
+                {
+                    WorkspaceRetention::Cold {
+                        fingerprint: blake3::hash(&canonical),
+                        mirrors: WorkspaceMirrors::Both,
+                        kind: if published {
+                            WorkspaceColdKind::Published
+                        } else {
+                            WorkspaceColdKind::EmptyAbort
+                        },
+                    }
+                } else {
+                    WorkspaceRetention::Resident
+                }
             }
         } else {
             WorkspaceRetention::Resident
         };
-        self.persist_workspace_as(&workspace, &canonical, retention)?;
+        self.persist_workspace_as(workspace, &canonical, retention)?;
         if retention.is_cold() {
             self.workspaces.remove(id);
         } else {
-            self.workspaces
-                .insert(workspace.workspace_id.clone(), workspace);
+            self.workspaces.insert(id.clone(), workspace.clone());
         }
         Ok(())
     }
@@ -497,7 +630,7 @@ impl Engine {
             ));
         }
         let local = self.root.join("workspaces").join(id);
-        let primary = if authoritative {
+        let primary = if authoritative || self.state.branches.contains_key(&workspace.branch_id) {
             let branch = self
                 .state
                 .branches
@@ -849,9 +982,13 @@ fn workspace_paths<'a>(
     Ok(paths)
 }
 
-fn workspace_directories_clear(locations: &[WorkspaceLocation], id: &str) -> Result<bool> {
-    // Only an empty-Aborted candidate reaches this check. Mirror discovery is
-    // independent, so an early non-manifest witness cannot hide a third mirror.
+fn workspace_directories_clear(
+    locations: &[WorkspaceLocation],
+    id: &str,
+    published: bool,
+) -> Result<bool> {
+    // Mirror discovery is independent, so an early unknown-material witness
+    // cannot hide a third mirror. FULL generations remain on their original paths.
     for location in locations {
         let directory = location.directory().join(id);
         let entries = match location.root().entries(&directory) {
@@ -862,9 +999,22 @@ fn workspace_directories_clear(locations: &[WorkspaceLocation], id: &str) -> Res
         // A directory without a manifest can still contain an older full
         // generation whose workspace must remain a payload-recovery hint.
         for entry in entries {
-            if entry?.as_os_str() != "workspace.json" {
+            let entry = entry?;
+            let name = entry.as_os_str();
+            if name == "workspace.json" {
+                continue;
+            }
+            if !published
+                || !(name == "commit-request.json"
+                    || name == "wire-request.json"
+                    || retained_full_generation(entry.as_path()))
+            {
                 return Ok(false);
             }
+            // A known name cannot hide a directory, symlink or special file.
+            location
+                .root()
+                .open_regular(&directory.join(entry.as_path()))?;
         }
     }
     Ok(true)
@@ -872,6 +1022,20 @@ fn workspace_directories_clear(locations: &[WorkspaceLocation], id: &str) -> Res
 
 fn recovery_required(message: &str) -> Error {
     Error::new(storage_contract::ErrorCode::RecoveryRequired, message)
+}
+
+fn retained_full_generation(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some((item, generation)) = name
+        .strip_suffix(".full")
+        .and_then(|stem| stem.rsplit_once('-'))
+    else {
+        return false;
+    };
+    validate_id(item, "entry").is_ok()
+        && storage_contract::parse_u64_decimal(generation).is_ok_and(|generation| generation > 0)
 }
 
 fn possible_commit_transition(before: &Workspace, after: &Workspace) -> bool {

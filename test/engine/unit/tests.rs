@@ -4380,3 +4380,6 @@ fn public_envelope(body: json_codec::Value) -> storage_contract::PublicCommitEnv
     let workspace = body["workspace_id"].as_str().unwrap().to_owned();
     storage_contract::PublicCommitEnvelope::parse(&workspace, body).unwrap()
 }
+
+#[path = "published_workspace_retirement.rs"]
+mod published_workspace_retirement;

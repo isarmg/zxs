@@ -2,7 +2,10 @@
 use super::HistoryManifest;
 use crate::{Error, ErrorCode, Result, State};
 use data_serialization::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 #[derive(Deserialize)]
 #[serialization(transparent)]
@@ -23,6 +26,29 @@ impl AdmittedState {
     }
     pub(crate) fn into_state(self) -> State {
         self.0
+    }
+
+    /// Lend the original admitted bytes to read-only workspace admission while
+    /// retaining the proof for the same candidate's later history checks.
+    pub(crate) fn into_shared(self) -> SharedAdmittedState {
+        SharedAdmittedState(Arc::new(self.0))
+    }
+}
+
+pub(crate) struct SharedAdmittedState(Arc<State>);
+
+impl SharedAdmittedState {
+    pub(crate) fn share_state(&self) -> Arc<State> {
+        Arc::clone(&self.0)
+    }
+
+    /// The workspace-admission loan must end before replay consumes this proof.
+    /// Recover ownership without revalidation, decoding or cloning the State.
+    pub(crate) fn into_admitted(self) -> AdmittedState {
+        let Ok(state) = Arc::try_unwrap(self.0) else {
+            unreachable!("invariant: workspace admission released its snapshot loan");
+        };
+        AdmittedState(state)
     }
 }
 

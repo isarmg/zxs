@@ -147,6 +147,8 @@ fn language_reload_waits_for_pending_or_uncertain_work() {
         "../files/fixtures/damaged-published-save-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
+    receipt.as_object_mut().unwrap().remove("current_health");
     receipt["operation_id"] = "original".into();
     state.files.operations[0] = FileOperation::from_receipt("original", &receipt);
     assert!(!state.reload_blocked());

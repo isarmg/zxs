@@ -80,7 +80,7 @@ async fn submit(
         .run(move |backend| {
             backend
                 .mutate_disk_directory(&identity, parse(body, action)?)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)

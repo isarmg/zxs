@@ -172,8 +172,10 @@ mod http_read;
 use http_read::resolve;
 mod commit_wire;
 mod http_operation;
+mod operation_observation;
 mod operation_wire;
-use http_operation::operation;
+use http_operation::{operation, operation_outcome};
+pub use operation_observation::{CheckedOperationHealth, OperationObservation};
 
 use auth::{AuthStore, Identity};
 use http_auth::{authorize, change_password, login, logout, me};
@@ -341,11 +343,16 @@ pub struct CommitWorkspace {
 }
 
 pub trait Backend: Send + Sync {
+    fn operation_outcome(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationOutcome, ApiError>;
     fn operation(
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError>;
+    ) -> Result<OperationObservation, ApiError>;
     fn commit_workspace(
         &self,
         identity: &Identity,
@@ -825,9 +832,17 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
+    ) -> Result<OperationObservation, ApiError> {
         self.backend
             .operation(&self.current(identity)?, operation_id)
+    }
+    fn operation_outcome(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+        self.backend
+            .operation_outcome(&self.current(identity)?, operation_id)
     }
     fn commit_workspace(
         &self,
@@ -1856,6 +1871,10 @@ fn router_shared(
         .route("/api/workspaces/{workspace}/seal", post(seal))
         .route("/api/workspaces/{workspace}/abort", post(abort))
         .route("/api/operations/{operation}", get(operation))
+        .route(
+            "/api/operations/{operation}/outcome",
+            get(operation_outcome),
+        )
         .route(
             "/api/versions/{version}/content",
             get(content).head(content),

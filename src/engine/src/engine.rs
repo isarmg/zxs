@@ -23,7 +23,7 @@ pub use integrity_scrub::{
 mod observations;
 mod operations;
 pub use observations::{DiskObservation, DiskObservationPlan, MetadataMemberProbe};
-pub use operations::{OperationReadPlan, OperationRecord};
+pub use operations::{OperationReadObservation, OperationReadPlan, OperationRecord};
 pub(crate) mod provenance;
 mod publication;
 pub(crate) use publication::{DetachedPublication, PublishedDependencyReuse};
@@ -386,18 +386,21 @@ impl Engine {
         let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
             .with_workspace_limits(workspace_limits)?;
         let mut engine = Self::prepare_workspace_recovery(root, config)?;
-        engine.recover_mode(mode)?;
+        let mut prepared = engine.prepare_recovery()?;
+        engine.preflight_workspace_receipts(&mut prepared)?;
+        engine.recover_prepared(mode, prepared)?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
     }
 
-    /// Admission preflight is read-only apart from writer lock files. Keep this
-    /// same Engine and its locks through replay and authoritative reconciliation.
+    /// Hold the same Engine and writer locks through read-only receipt/workspace
+    /// admission, replay and authoritative reconciliation. No journal writer is
+    /// opened until both preflights have accepted the retained evidence.
     fn prepare_workspace_recovery(root: PathBuf, config: ValidatedConfig) -> Result<Self> {
         let disk_resources = Arc::new(DiskResources::open(&config, true)?);
         let locks = acquire_locks(&root, &disk_resources)?;
-        let mut engine = Self {
+        let engine = Self {
             root,
             config,
             disk_resources,
@@ -423,7 +426,6 @@ impl Engine {
             #[cfg(feature = "fault-injection")]
             fault: None,
         };
-        engine.seed_workspace_recovery()?;
         Ok(engine)
     }
     /// Explicit recovery after loss of the system disk. Never initializes data disks.
@@ -521,10 +523,12 @@ impl Engine {
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
         let mut engine = Self::prepare_workspace_recovery(root, config)?;
+        let mut prepared = engine.prepare_recovery()?;
+        engine.preflight_workspace_receipts(&mut prepared)?;
         // A quota failure must not publish a system configuration or replay any
         // journal repair. Preflight above retains the locks across publication.
         write_json(&engine.root.join("config.json"), &engine.config, false)?;
-        engine.recover_mode(RecoveryMode::CompletePending)?;
+        engine.recover_prepared(RecoveryMode::CompletePending, prepared)?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
@@ -807,7 +811,7 @@ impl Engine {
             if result.request_digest == digest
                 && self.operation_owner(operation_id)?.as_deref() == Some(principal)
             {
-                return self.operation(operation_id).map(MutationPlan::Existing);
+                return Ok(MutationPlan::Existing(result.clone()));
             }
             return Err(Error::new(
                 storage_contract::ErrorCode::IdempotencyKeyReused,

@@ -24,7 +24,15 @@ pub(super) enum WorkspaceRetention {
     Cold {
         fingerprint: blake3::Hash,
         mirrors: WorkspaceMirrors,
+        kind: WorkspaceColdKind,
     },
+}
+
+/// In-memory admission proof, never a new manifest field or disk format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WorkspaceColdKind {
+    EmptyAbort,
+    Published,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -293,6 +301,10 @@ impl Engine {
         principal.bytes = principal.bytes - old_bytes + bytes;
         principal.resident = principal.resident - old_resident + resident;
         principal.cold = principal.cold - old_cold + cold;
+    }
+
+    pub(crate) fn retained_workspace_ids(&self) -> impl Iterator<Item = &str> {
+        self.workspace_budget.records.keys().map(String::as_str)
     }
 
     pub(super) fn accounted_workspace(&self, id: &str) -> bool {

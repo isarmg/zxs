@@ -2,14 +2,14 @@ use super::*;
 use crate::operation_wire::operation_wire;
 use json_codec::json;
 use storage_contract::{
-    CommitState, OperationResult, ProtectionAtPublish,
+    CommitState, OperationOutcome, ProtectionAtPublish,
     client_protocol::{OperationStatus, operation_status},
 };
 
-fn domain(value: &Value) -> OperationResult {
+fn domain(value: &Value) -> OperationOutcome {
     let content = value["operation_kind"] == "content_save";
     let result = &value["result"];
-    OperationResult {
+    OperationOutcome {
         operation_id: value["operation_id"].as_str().unwrap().parse().unwrap(),
         kind: if content {
             "workspace.commit"
@@ -25,7 +25,6 @@ fn domain(value: &Value) -> OperationResult {
             if content { result } else { value }["protection_at_publish"].clone(),
         )
         .unwrap(),
-        current_health: json_codec::from_value(value["current_health"]["state"].clone()).unwrap(),
         request_digest: value["request_digest"].as_str().unwrap().into(),
         sequence: storage_contract::parse_u64_decimal(
             if content { result } else { value }["publication_sequence"]
@@ -53,17 +52,18 @@ fn receipts() -> Vec<Value> {
 }
 
 #[test]
-fn current_wire_matches_recorded_http_fixtures_and_the_shared_parser() {
-    for expected in receipts() {
-        let mut actual = operation_wire(domain(&expected)).unwrap();
+fn outcome_wire_matches_derived_fixture_fields_and_the_shared_parser() {
+    for mut expected in receipts() {
+        let actual = operation_wire(domain(&expected)).unwrap();
+        // This comparison derives the outcome projection in memory; captured
+        // fixture evidence is not rewritten to claim a new HTTP execution.
+        expected.as_object_mut().unwrap().remove("current_health");
         assert_eq!(operation_status(&actual), operation_status(&expected));
         assert!(matches!(
             operation_status(&actual),
             Some(OperationStatus::Published | OperationStatus::Degraded)
         ));
-        // This one live observation timestamp is deliberately not frozen.
-        assert!(actual["current_health"]["checked_at"].as_str().is_some());
-        actual["current_health"]["checked_at"] = expected["current_health"]["checked_at"].clone();
+        assert!(actual.get("current_health").is_none());
         assert_eq!(actual, expected);
     }
 }

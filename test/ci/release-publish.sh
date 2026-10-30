@@ -13,6 +13,13 @@ for name in INSTALL.md zxs-0.1.0-x86_64-unknown-linux-gnu.tar.gz web-interface-0
   printf 'actual fixture bytes\n' > "$root/release-assets/$name"
 done
 printf 'version=0.1.0\ncommit=%s\n' "$MOCK_SHA" > "$root/release-assets/BUILD.txt"
+{
+  printf 'native-target=x86_64-unknown-linux-gnu\nnative-profile=release\nnative-rustc=fixture compiler\n'
+  for field in native-environment-sha256 native-inputs-sha256 native-zxs-sha256 native-zxs-rescue-sha256; do
+    printf '%s=%064d\n' "$field" 0
+  done
+  printf 'native-archive-sha256=%s\n' "$(sha256sum "$root/release-assets/zxs-0.1.0-x86_64-unknown-linux-gnu.tar.gz" | cut -d' ' -f1)"
+} >> "$root/release-assets/BUILD.txt"
 (cd "$root/release-assets" && sha256sum -- * > SHA256SUMS)
 cat > "$root/bin/gh" <<'MOCK'
 #!/usr/bin/env bash

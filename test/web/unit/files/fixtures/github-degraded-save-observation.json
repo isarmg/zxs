@@ -1,0 +1,91 @@
+{
+  "commit_state": "PUBLISHED_DEGRADED",
+  "current_health": {
+    "checked_at": "2026-10-30T08:37:59.170879998Z",
+    "state": "UNAVAILABLE"
+  },
+  "error": null,
+  "operation_id": "op_ae639b74678f42f0866245ee5f6f971e",
+  "operation_kind": "content_save",
+  "request_digest": "dc5f848b0ebe4efeda804791d807f402af11d1efe2fefed9cdd390003356c2e3",
+  "result": {
+    "branch_generation": "2",
+    "branch_id": "br_837f2ab8843f45bc87196da9ebf0ae96",
+    "commit_id": "commit_1e5a7d9a9f344d71842656c09fdbf351",
+    "membership_epoch": "1",
+    "outcome": "COMMITTED_DEGRADED",
+    "protection_at_publish": "BELOW_TARGET",
+    "publication_sequence": "3",
+    "versions": [
+      {
+        "primary_slot_id": "P01",
+        "required_slots": [
+          "P01",
+          "B01",
+          "C01"
+        ],
+        "slots": [
+          {
+            "binding_generation": "1",
+            "copy_level": 1,
+            "disk_id": "disk_a9bed074efcd4a478802891dfb36a582",
+            "slot_id": "P01",
+            "state": "UNAVAILABLE"
+          },
+          {
+            "binding_generation": "1",
+            "copy_level": 2,
+            "disk_id": "disk_e9a214ffe8274350a539ff83db5c389e",
+            "slot_id": "B01",
+            "state": "UNAVAILABLE"
+          },
+          {
+            "binding_generation": "1",
+            "copy_level": 3,
+            "disk_id": "disk_0a75696f0a104ea780a2d16d80b51250",
+            "slot_id": "C01",
+            "state": "UNAVAILABLE"
+          }
+        ],
+        "target_copies": 3,
+        "topology_generation": "1",
+        "version_id": "ver_246198ee6c84443690bfa8cfeb40d587"
+      },
+      {
+        "primary_slot_id": "P01",
+        "required_slots": [
+          "P01",
+          "B01",
+          "C01"
+        ],
+        "slots": [
+          {
+            "binding_generation": "1",
+            "copy_level": 1,
+            "disk_id": "disk_a9bed074efcd4a478802891dfb36a582",
+            "slot_id": "P01",
+            "state": "COMPLETE_VERIFIED"
+          },
+          {
+            "binding_generation": "1",
+            "copy_level": 2,
+            "disk_id": "disk_e9a214ffe8274350a539ff83db5c389e",
+            "slot_id": "B01",
+            "state": "COMPLETE_VERIFIED"
+          },
+          {
+            "binding_generation": "1",
+            "copy_level": 3,
+            "disk_id": "disk_0a75696f0a104ea780a2d16d80b51250",
+            "slot_id": "C01",
+            "state": "COMPLETE_VERIFIED"
+          }
+        ],
+        "target_copies": 3,
+        "topology_generation": "1",
+        "version_id": "ver_c1bea67f42f64ccda7f681f8551177fa"
+      }
+    ]
+  },
+  "state": "completed"
+}

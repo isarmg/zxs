@@ -32,7 +32,7 @@ struct PlanningSnapshot {
     metadata_integrity: Arc<super::provenance::MetadataIntegrity>,
     integrity_scrub_schedule: Option<std::sync::Weak<super::integrity_scrub::ScheduleState>>,
     next_slot: u64,
-    replay: Option<super::OperationReadPlan>,
+    replay: Option<OperationResult>,
     locks: Vec<File>,
 }
 impl PlanningSnapshot {
@@ -183,7 +183,7 @@ impl Engine {
             integrity_scrub_schedule: self.integrity_scrub_schedule.clone(),
             next_slot: self.next_slot,
             replay: if replay {
-                Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
+                Some(self.operation_record(request.operation_id)?.into_result())
             } else {
                 None
             },
@@ -228,7 +228,9 @@ impl Engine {
             .contains_key(&prepared.request.operation_id)
         {
             self.validate_workspace_commit_replay(&prepared.request, &prepared.expected_digest)?;
-            return self.operation(prepared.request.operation_id);
+            return Ok(self
+                .operation_record(prepared.request.operation_id)?
+                .into_result());
         }
         self.require_write()?;
         self.repository_for_branch(&workspace.branch_id)?;

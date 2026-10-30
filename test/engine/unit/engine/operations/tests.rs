@@ -47,6 +47,35 @@ fn assert_frozen(observed: &OperationResult, published: &OperationResult) {
 }
 
 #[test]
+fn current_observation_is_separate_from_the_local_result_projection() {
+    let (_root, mut engine, repo) = fixture();
+    let published = save(&mut engine, &repo.main_branch_id, b"healthy content");
+    let record_with_frozen_health = || {
+        let mut record = engine.operation_record(published.operation_id).unwrap();
+        record.result.current_health = storage_contract::CurrentHealth::Unknown;
+        record
+    };
+    let observed = engine
+        .prepare_operation_health(record_with_frozen_health())
+        .observe();
+    assert_eq!(
+        observed.health(),
+        Some(storage_contract::CurrentHealth::Healthy)
+    );
+    assert_eq!(
+        observed.into_record().result().current_health,
+        storage_contract::CurrentHealth::Unknown
+    );
+    let local = engine
+        .prepare_operation_health(record_with_frozen_health())
+        .check();
+    assert_eq!(
+        local.result().current_health,
+        storage_contract::CurrentHealth::Unknown
+    );
+}
+
+#[test]
 fn operation_read_plan_blocks_purge_until_observation_finishes() {
     let (_root, mut engine, repo) = fixture();
     let original = save(&mut engine, &repo.main_branch_id, b"old payload");

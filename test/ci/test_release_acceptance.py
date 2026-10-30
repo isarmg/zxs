@@ -23,7 +23,7 @@ class ReleaseAcceptance(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()
         browser = workflow.split('  browser-smoke:\n', 1)[1].split('  smb-sdk:', 1)[0]
         self.assertIn('name: web-dist', browser)
-        self.assertIn('cargo build --locked --offline --release --package storage-server --package storage-rescue', browser)
+        self.assertIn('python3 .github/scripts/release-native.py', browser)
         self.assertLess(browser.index('release-package.sh'), browser.index('release-acceptance.sh'))
         self.assertIn('check-csr-browser.py', browser)
         self.assertNotIn('check.sh browser-smoke', browser)
@@ -47,10 +47,10 @@ class ReleaseAcceptance(unittest.TestCase):
 
     def test_release_rebuilds_both_native_products_before_packaging(self):
         workflow = (ROOT / '.github/workflows/release.yml').read_text()
-        build = 'cargo build --locked --offline --release --package storage-server --package storage-rescue'
+        build = 'python3 .github/scripts/release-native.py'
         self.assertLess(workflow.index(build), workflow.index('release-package.sh'))
         documentation = (ROOT / 'docs/release.md').read_text()
-        self.assertIn('不是原生构建收据', documentation)
+        self.assertIn('不保证完全可重现', documentation)
         self.assertIn('修改源码后不能沿用旧', documentation)
 
     def test_installation_recipe_has_one_authoritative_source(self):

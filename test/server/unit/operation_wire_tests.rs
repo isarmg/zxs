@@ -35,3 +35,43 @@ fn system_clock_health_time_preserves_fraction_and_calendar_boundary() {
             .is::<std::time::SystemTimeError>()
     );
 }
+
+#[test]
+fn serializing_a_completed_observation_preserves_its_exact_check_time() {
+    let operation_id = storage_contract::OperationId::generate();
+    let observation = || OperationObservation {
+        outcome: storage_contract::OperationOutcome {
+            operation_id,
+            kind: "file.metadata".into(),
+            commit_id: None,
+            history_tree_id: None,
+            branch_id: None,
+            commit_state: storage_contract::CommitState::Published,
+            protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
+            request_digest: "0".repeat(64),
+            sequence: 1,
+            result: json_codec::json!({}),
+        },
+        health: Some(CheckedOperationHealth {
+            state: storage_contract::CurrentHealth::Degraded,
+            checked_at: checked_at(UNIX_EPOCH + Duration::new(42, 123_000_000)).unwrap(),
+        }),
+    };
+    for _ in 0..2 {
+        let captured = observation();
+        assert_eq!(
+            captured.health().unwrap().state(),
+            storage_contract::CurrentHealth::Degraded
+        );
+        assert_eq!(
+            captured.health().unwrap().checked_at(),
+            "1970-01-01T00:00:42.123Z"
+        );
+        let wire = crate::operation_wire::operation_observation_wire(captured).unwrap();
+        assert_eq!(wire["current_health"]["state"], "DEGRADED");
+        assert_eq!(
+            wire["current_health"]["checked_at"],
+            "1970-01-01T00:00:42.123Z"
+        );
+    }
+}

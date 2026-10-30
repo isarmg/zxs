@@ -60,11 +60,19 @@ impl BackendProbe {
     }
 }
 impl Backend for BackendProbe {
+    fn operation_outcome(
+        &self,
+        _: &crate::auth::Identity,
+        _: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationOutcome, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn operation(
         &self,
         _: &crate::auth::Identity,
         _: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+    ) -> Result<crate::OperationObservation, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
@@ -1154,6 +1162,10 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ("PUT", "/api/repositories/repository/smb-binding"),
     ("GET", "/api/repositories/repository/branches"),
     ("GET", "/api/operations/op_00000000000000000000000000000000"),
+    (
+        "GET",
+        "/api/operations/op_00000000000000000000000000000000/outcome",
+    ),
     ("POST", "/api/workspaces"),
     ("POST", "/api/workspaces/workspace/abort"),
     ("POST", "/api/workspaces/workspace/seal"),

@@ -591,9 +591,6 @@
               "type": "null"
             }
           ]
-        },
-        "current_health": {
-          "$ref": "#/$defs/CurrentHealth"
         }
       },
       "required": [
@@ -603,8 +600,7 @@
         "state",
         "commit_state",
         "result",
-        "error",
-        "current_health"
+        "error"
       ],
       "additionalProperties": false,
       "allOf": [
@@ -737,7 +733,8 @@
             }
           }
         }
-      ]
+      ],
+      "description": "即时内容保存回执和 outcome 查询：仅表达原操作发布结果，不读取当前内容健康，不携带检查时刻。"
     },
     "MemberReceipt": {
       "type": "object",
@@ -3211,6 +3208,481 @@
       ],
       "additionalProperties": false,
       "description": "按root-to-leaf顺序携带一条路径的实际JSON节点；只约束外形与1..65节点数。核心按根引用验证每步域哈希、位置前缀、路由、叶页界限和目标值，并拒绝多余或截断节点；schema不能证明成员关系。"
+    },
+    "SaveOperationObservation": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "operation_kind": {
+          "const": "content_save"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Hash"
+        },
+        "state": {
+          "enum": [
+            "processing",
+            "in_doubt",
+            "completed",
+            "failed"
+          ]
+        },
+        "commit_state": {
+          "enum": [
+            "STAGING",
+            "SEALED",
+            "PREPARED",
+            "DECIDING",
+            "DECIDED",
+            "PROTECTED",
+            "PUBLISHED",
+            "ACKED",
+            "RECOVERING",
+            "RECOVERY_REQUIRED",
+            "IN_DOUBT",
+            "PUBLISHED_DEGRADED",
+            "ABORTED"
+          ]
+        },
+        "result": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SaveResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_health": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CurrentHealth"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "operation_kind",
+        "request_digest",
+        "state",
+        "commit_state",
+        "result",
+        "error",
+        "current_health"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/SaveResult"
+              },
+              "error": {
+                "type": "null"
+              },
+              "commit_state": {
+                "enum": [
+                  "PUBLISHED",
+                  "ACKED",
+                  "PUBLISHED_DEGRADED"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "result": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "failed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "$ref": "#/$defs/Error"
+              },
+              "commit_state": {
+                "const": "ABORTED"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "error": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "processing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "commit_state": {
+                "enum": [
+                  "STAGING",
+                  "SEALED",
+                  "PREPARED",
+                  "DECIDING",
+                  "DECIDED",
+                  "PROTECTED",
+                  "RECOVERING"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "in_doubt"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "commit_state": {
+                "enum": [
+                  "IN_DOUBT",
+                  "RECOVERY_REQUIRED"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "commit_state": {
+                "const": "PUBLISHED_DEGRADED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/SaveResult"
+                  },
+                  {
+                    "properties": {
+                      "outcome": {
+                        "const": "COMMITTED_DEGRADED"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "not": {
+                  "const": "completed"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "current_health": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "显式诊断查询：固定发布结果与当前健康分离。current_health 为 null 表示尚未观察或没有可观察作用域，不代表 HEALTHY；对象表示实际检查及其 UTC 时刻。"
+    },
+    "GenericOperation": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "operation_kind": {
+          "type": "string",
+          "not": {
+            "const": "content_save"
+          }
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Hash"
+        },
+        "state": {
+          "enum": [
+            "completed",
+            "in_doubt"
+          ]
+        },
+        "commit_state": {
+          "enum": [
+            "STAGING",
+            "SEALED",
+            "PREPARED",
+            "DECIDING",
+            "DECIDED",
+            "PROTECTED",
+            "PUBLISHED",
+            "ACKED",
+            "RECOVERING",
+            "RECOVERY_REQUIRED",
+            "IN_DOUBT",
+            "PUBLISHED_DEGRADED",
+            "ABORTED"
+          ]
+        },
+        "protection_at_publish": {
+          "enum": [
+            "NOT_APPLICABLE",
+            "TARGET_MET",
+            "BELOW_TARGET",
+            "UNCONFIRMED"
+          ]
+        },
+        "publication_sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "result": {},
+        "error": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "operation_id",
+        "operation_kind",
+        "request_digest",
+        "state",
+        "commit_state",
+        "protection_at_publish",
+        "publication_sequence",
+        "result",
+        "error"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "commit_state": {
+                "enum": [
+                  "PUBLISHED",
+                  "ACKED"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "const": "completed"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "state": {
+                "const": "in_doubt"
+              }
+            }
+          }
+        }
+      ],
+      "description": "非 content_save 的当前 HTTP 发布投影。operation_kind 与 result 保持开放，不改变持久化 OperationResult；当前健康不属于回执。"
+    },
+    "GenericOperationObservation": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "operation_kind": {
+          "type": "string",
+          "not": {
+            "const": "content_save"
+          }
+        },
+        "request_digest": {
+          "$ref": "#/$defs/Hash"
+        },
+        "state": {
+          "enum": [
+            "completed",
+            "in_doubt"
+          ]
+        },
+        "commit_state": {
+          "enum": [
+            "STAGING",
+            "SEALED",
+            "PREPARED",
+            "DECIDING",
+            "DECIDED",
+            "PROTECTED",
+            "PUBLISHED",
+            "ACKED",
+            "RECOVERING",
+            "RECOVERY_REQUIRED",
+            "IN_DOUBT",
+            "PUBLISHED_DEGRADED",
+            "ABORTED"
+          ]
+        },
+        "protection_at_publish": {
+          "enum": [
+            "NOT_APPLICABLE",
+            "TARGET_MET",
+            "BELOW_TARGET",
+            "UNCONFIRMED"
+          ]
+        },
+        "publication_sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "result": {},
+        "error": {
+          "type": "null"
+        },
+        "current_health": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/CurrentHealth"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "operation_kind",
+        "request_digest",
+        "state",
+        "commit_state",
+        "protection_at_publish",
+        "publication_sequence",
+        "result",
+        "error",
+        "current_health"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "commit_state": {
+                "enum": [
+                  "PUBLISHED",
+                  "ACKED"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "const": "completed"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "state": {
+                "const": "in_doubt"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "commit_state": {
+                "not": {
+                  "enum": [
+                    "PUBLISHED",
+                    "ACKED",
+                    "PUBLISHED_DEGRADED"
+                  ]
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "current_health": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "非内容操作的显式诊断投影；current_health=null 为 NotObserved，有对象时才为实际 Checked。"
+    },
+    "OperationOutcome": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SaveOperation"
+        },
+        {
+          "$ref": "#/$defs/GenericOperation"
+        }
+      ]
+    },
+    "OperationObservation": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SaveOperationObservation"
+        },
+        {
+          "$ref": "#/$defs/GenericOperationObservation"
+        }
+      ]
     }
   }
 }

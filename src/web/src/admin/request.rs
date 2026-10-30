@@ -466,6 +466,18 @@ pub(super) fn operation(id: &str) -> Request {
     }
 }
 
+pub(super) fn operation_outcome(id: &str) -> Request {
+    Request {
+        method: "GET",
+        path: format!(
+            "/api/operations/{}/outcome",
+            storage_contract::client_protocol::uri_component_segment(id)
+        ),
+        body: None,
+        contract: Contract::OperationOutcome { id: id.into() },
+    }
+}
+
 #[cfg(test)]
 #[path = "../../../../test/web/unit/admin/request_tests.rs"]
 mod single_disk_tests;

@@ -23,7 +23,13 @@ class ReleaseAssets(unittest.TestCase):
         self.assets.mkdir()
         for name in ("INSTALL.md", "zxs-0.1.0-x86_64-unknown-linux-gnu.tar.gz", "web-interface-0.1.0.tar.gz"):
             (self.assets / name).write_bytes(b"release asset bytes")
-        (self.assets / "BUILD.txt").write_text(f"version=0.1.0\ncommit={COMMIT}\n")
+        fields = {"version": "0.1.0", "commit": COMMIT,
+                  "native-target": "x86_64-unknown-linux-gnu", "native-profile": "release",
+                  "native-rustc": "fixture compiler", "native-environment-sha256": "a" * 64,
+                  "native-inputs-sha256": "b" * 64, "native-zxs-sha256": "c" * 64,
+                  "native-zxs-rescue-sha256": "d" * 64,
+                  "native-archive-sha256": hashlib.sha256(b"release asset bytes").hexdigest()}
+        (self.assets / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
         self.checksums()
 
     def checksums(self):
@@ -75,6 +81,24 @@ class ReleaseAssets(unittest.TestCase):
     def test_modified_asset_fails(self):
         (self.assets / "INSTALL.md").write_text("modified")
         with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            self.verify()
+
+    def test_target_and_archive_identity_cannot_be_relabelled_with_new_checksums(self):
+        path = self.assets / "BUILD.txt"
+        original = path.read_text()
+        for old, new in (("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"),
+                         ("native-profile=release", "native-profile=debug"),
+                         ("native-archive-sha256=", "unrecognized-archive="),
+                         ("native-zxs-sha256=", "unrecognized-binary=")):
+            path.write_text(original.replace(old, new))
+            self.checksums()
+            with self.assertRaises(ValueError):
+                self.verify()
+
+    def test_missing_build_receipt_is_rejected(self):
+        (self.assets / "BUILD.txt").unlink()
+        self.checksums()
+        with self.assertRaisesRegex(ValueError, "complete expected asset set"):
             self.verify()
 
     def test_symlink_asset_directory_and_snapshot_are_rejected(self):
