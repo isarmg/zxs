@@ -1,14 +1,14 @@
 //! File history ancestry, including body and path nodes, laid out once per identity/edge change. Notes never
 //! participate in layout keys, so refreshing metadata preserves active editors.
-use super::model::{
-    Model, history_node_id, history_nodes_ref, inherited_content, materialized, visible_content,
+use super::{
+    actions, branch,
+    history::{FileNode, NodeKind, ParentEndpoint, ParentSet},
+    history_index::HistoryIndex,
+    inline,
+    model::Model,
 };
-use super::{actions, branch, inline};
-use crate::{
-    format,
-    ui::{State, text},
-};
-use json_codec::Value;
+use crate::ui::State;
+use storage_contract::history_window::HistoryField;
 use std::{
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
@@ -22,7 +22,7 @@ mod refresh;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Version {
     id: String,
-    created: String,
+    sequence: u64,
     parents: Vec<String>,
 }
 
@@ -32,40 +32,23 @@ struct Layout {
     edges: Vec<(String, String)>,
 }
 
-fn metadata(records: &[Value], file_id: &str) -> Vec<Version> {
+fn metadata(records: &[FileNode]) -> Vec<Version> {
     let mut versions = records
         .iter()
-        .filter_map(|record| {
-            let id = record["node_id"].as_str().unwrap_or_default().to_owned();
-            let owner = text(record, &["file_id"]);
-            if id.is_empty()
-                || !(materialized(record)
-                    || (matches!(record["kind"].as_str(), Some("rename" | "tags" | "merge"))
-                        && visible_content(record)))
-                || (!owner.is_empty() && !file_id.is_empty() && owner != file_id)
-            {
-                return None;
-            }
+        .map(|record| {
             let mut parents = record
-                .get("parent_node_ids")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .filter(|parent| !parent.is_empty() && *parent != id)
-                .map(str::to_owned)
+                .parents()
+                .iter()
+                .filter(|parent| parent.endpoint() == ParentEndpoint::InWindow)
+                .map(|parent| parent.id().to_owned())
                 .collect::<Vec<_>>();
             parents.sort();
             parents.dedup();
-            let created = record["created_at"]
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_default();
-            Some(Version {
-                id,
-                created,
+            Version {
+                id: record.id().to_owned(),
+                sequence: record.sequence(),
                 parents,
-            })
+            }
         })
         .collect::<Vec<_>>();
     versions.sort();
@@ -74,19 +57,16 @@ fn metadata(records: &[Value], file_id: &str) -> Vec<Version> {
 }
 
 fn newer_first(a: &Version, b: &Version) -> std::cmp::Ordering {
-    // Current history timestamps share the same whole-second UTC wire format,
-    // so lexical order is chronological. Missing dates remain last.
-    a.created
-        .is_empty()
-        .cmp(&b.created.is_empty())
-        .then_with(|| b.created.cmp(&a.created))
+    b.sequence
+        .cmp(&a.sequence)
         .then_with(|| a.id.cmp(&b.id))
 }
 
 /// This marker belongs to the selected branch projection, not the immutable
 /// parent version. Its tree node remains one real historical node.
 fn inherited_current(model: &Model, version: &str) -> bool {
-    (inherited_content(&model.file_history) && history_node_id(&model.file_history) == version)
+    (model.file_history.current_inherited()
+        && model.file_history.current_node_id() == Some(version))
         || model
             .selected
             .as_ref()
@@ -221,9 +201,10 @@ fn layout(versions: &[Version]) -> Layout {
             }
         }
     }
-    // Walk from all branch tips towards old ancestors. This is a reverse
+    // Walk from loaded-window tips towards loaded ancestors. This is a reverse
     // topological layout, not a visual reversal of the old root-first layers:
-    // tips of both short and long branches belong on the first layer.
+    // both short and long visible paths end on the first layer. Window bounds
+    // do not establish the tips or roots of the complete history.
     let mut remaining_children = accepted_children.iter().map(Vec::len).collect::<Vec<_>>();
     let mut by_priority = (0..nodes.len()).collect::<Vec<_>>();
     by_priority.sort_by(|&a, &b| newer_first(&nodes[a], &nodes[b]));
@@ -707,49 +688,28 @@ fn observe(
     });
 }
 
-fn index_nodes(history: &Value) -> BTreeMap<String, Value> {
-    let mut index = BTreeMap::new();
-    for node in history_nodes_ref(history) {
-        // Preserve the previous first-match behavior for duplicate identities.
-        index.entry(history_node_id(node)).or_insert_with(|| {
-            #[cfg(test)]
-            INDEX_COPIES.with(|count| count.set(count.get() + 1));
-            node.clone()
-        });
-    }
-    index
-}
-
-#[cfg(test)]
-thread_local! { static INDEX_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-
-fn index_projection(
-    history: Memo<crate::snapshot::Snapshot<super::history::FileHistory>>,
-) -> Memo<BTreeMap<String, Value>> {
-    Memo::new(move |_| history.with(|history| index_nodes(history)))
-}
-
 pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
-    let history = Memo::new(move |_| state.with(|s| s.files.file_history.clone()));
-    let selected_file = Memo::new(move |_| {
-        state.with(|s| {
-            s.files
-                .selected
-                .as_ref()
-                .map(|entry| entry.file_id().to_owned())
-                .unwrap_or_default()
-        })
-    });
-    let records = index_projection(history);
-    let versions = Memo::new(move |_| {
-        history.with(|history| metadata(history_nodes_ref(history), &selected_file.get()))
-    });
+    // A replaced window owns a fresh graph and observer lifetime. Equal
+    // structural keys keep metadata refreshes on the existing controls.
+    let key = Memo::new(move |_| state.with(|s| s.files.file_history.window_key()));
+    view! {
+        <For each=move ||[key.get()] key=|key|*key children=move |_|window(state)/>
+    }
+}
+
+fn window(state: RwSignal<State>) -> impl IntoView {
+    let records = super::history_index::shared();
+    let versions = Memo::new(move |_| records.with(|index| metadata(index.snapshot.nodes())));
     let tree = Memo::new(move |_| layout(&versions.get()));
     let geometry = RwSignal::new(Geometry::default());
     let root = NodeRef::<html::Div>::new();
     let links = NodeRef::<svg::Svg>::new();
     observe(root, links, tree, geometry);
     view! {
+        <p class="zxs-row zxs-history-window-boundary">{t(
+            "此窗口只展示已加载节点之间的关系，窗口边界不代表完整历史的起点或分支末端。",
+            "This window shows relationships between loaded nodes. Its boundaries do not mark the start or tips of the complete history.",
+        )}</p>
         <div class="zxs-version-tree-scroll" aria-label=t("文件版本树","File version tree")>
             <div class="zxs-version-tree-canvas" node_ref=root>
                 <svg node_ref=links class="zxs-version-tree-links" aria-hidden="true" focusable="false"
@@ -772,36 +732,63 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
 
 fn node(
     state: RwSignal<State>,
-    records: Memo<BTreeMap<String, Value>>,
+    records: Memo<HistoryIndex>,
     version_id: String,
 ) -> impl IntoView {
     let id = StoredValue::new(version_id);
     let version = Memo::new(move |_| {
-        records.with(|records| id.with_value(|id| records.get(id).cloned().unwrap_or(Value::Null)))
+        records.with(|records| id.with_value(|id| records.node(id).map(|(_, node)| node.clone())))
     });
     let can_modify = Signal::derive(move || {
         state.with(|s| s.files.writable && !super::model::selected_entry_read_only(&s.files))
     });
-    let disabled = Signal::derive(move || !can_modify.get() || !state.with(actions::write_allowed));
+    let disabled = Signal::derive(move || {
+        !can_modify.get() || !state.with(actions::history_write_allowed)
+    });
+    let navigation_disabled = Signal::derive(move || !state.with(actions::history_navigation_ready));
+    let current = Signal::derive(move || {
+        state.with(|s| s.files.file_history.current_node_id() == Some(id.get_value().as_str()))
+    });
     let inherited =
         Signal::derive(move || state.with(|s| inherited_current(&s.files, &id.get_value())));
     let note_target = version.with_untracked(|node| {
-        if matches!(node["kind"].as_str(), Some("rename" | "tags" | "merge")) {
-            inline::Target::NodeNote(id.get_value())
-        } else {
-            inline::Target::VersionNote(text(node, &["version_id"]))
+        let node = node
+            .as_ref()
+            .expect("invariant: rendered node belongs to the installed window");
+        match node.kind() {
+            NodeKind::Rename | NodeKind::Tags | NodeKind::Merge => {
+                inline::Target::NodeNote(id.get_value())
+            }
+            NodeKind::Content => inline::Target::VersionNote(
+                node.version_id()
+                    .expect("invariant: visible content node references a body")
+                    .to_owned(),
+            ),
         }
+    });
+    let boundary = Memo::new(move |_| {
+        version.with(|node| node.as_ref().map(parent_boundary).unwrap_or_default())
     });
     let (note, edit) = inline::version_note(state, note_target, id.get_value(), disabled);
     view! {
-        <article class="zxs-content-panel zxs-version-node zxs-frame zxs-stack zxs-stack--flush" data-version-id=id.get_value() data-node-id=id.get_value() data-body-version-id=move ||version.with(|node|text(node,&["version_id"])) data-node-kind=move ||version.with(|node|text(node,&["kind"]))
-            aria-label=move ||version.with(|v|if v["current"]==true{if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前版本","Current version")}}else{t("历史版本","Historical version")})>
+        <article class="zxs-content-panel zxs-version-node zxs-frame zxs-stack zxs-stack--flush" data-version-id=id.get_value() data-node-id=id.get_value() data-body-version-id=move ||version.with(|node|node.as_ref().and_then(FileNode::version_id).map(str::to_owned).unwrap_or_default()) data-node-kind=move ||version.with(|node|node.as_ref().map(|node|kind_name(node.kind())).unwrap_or_default())
+            data-parent-set=move ||boundary.with(|boundary|if boundary.more.is_some(){"more"}else{"complete"})
+            aria-label=move ||if current.get(){if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前版本","Current version")}}else{t("历史版本","Historical version")}>
             <div class="zxs-version-date zxs-row" title=id.get_value()>
                 <Show when=move ||can_modify.get()><input class="zxs-node-checkbox" type="checkbox" aria-label=t("选择此节点","Select this node") disabled=move ||disabled.get()||state.with(|s|s.files.tag_edit.is_some()) prop:checked=move ||state.with(|s|s.files.checked_nodes.contains(&id.get_value())) on:change=move |event|super::tags::toggle(state,id.get_value(),event_target_checked(&event))/></Show>
-                <time>{move ||version.with(|v|v["created_at"].as_str().map(format::timestamp).unwrap_or_else(||t("未记录时间","Time not recorded")))}</time>
-                <Show when=move ||version.with(|v|v["current"]==true)><span class="zxs-version-current">{move ||if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前","Current")}}</span></Show>
+                <span class="zxs-row">{t("日期未加载","Date not loaded")}</span>
+                <button class="zxs-button" data-history-field="created_at" disabled=move ||navigation_disabled.get() on:click=move |_|actions::load_history_field(state,id.get_value(),HistoryField::CreatedAt,None)>{t("读取日期","Load date")}</button>
+                <Show when=move ||current.get()><span class="zxs-version-current">{move ||if inherited.get(){t("继承的父版本","Inherited parent version")}else{t("当前","Current")}}</span></Show>
             </div>
             {note}
+            <Show when=move ||version.with(|node|node.as_ref().and_then(FileNode::content_state).is_some())>
+                <span class="zxs-row" data-content-disposition="recorded">{move ||version.with(|node|match node.as_ref().and_then(FileNode::content_state){
+                    Some(storage_contract::ContentState::Available)=>t("正文记录可用","Content recorded as available"),
+                    Some(storage_contract::ContentState::Purged)=>t("正文已清除","Content purged"),
+                    Some(storage_contract::ContentState::Migrated)=>t("正文已迁移","Content migrated"),
+                    None=>String::new(),
+                })}</span>
+            </Show>
             <div class="zxs-version-actions zxs-flow zxs-flow--start">
                 {edit}
                 <Show when=move ||can_modify.get() fallback=move ||view!{<span class="zxs-row">{t("只读","Read only")}</span>}>
@@ -809,7 +796,58 @@ fn node(
                 {branch::control(state,t("创建分支","Create branch"),branch::Target::HistoryNode(id.get_value()),disabled)}
                 </Show>
             </div>
+            <div class="zxs-version-parents zxs-stack">
+                <For each=move ||boundary.with(|boundary|boundary.outside.clone()) key=|parent|parent.clone() children=move |parent|{
+                    let parent=StoredValue::new(parent);
+                    view!{<div class="zxs-flow" data-parent-endpoint="outside_window" data-parent-node=parent.get_value()>
+                        <span class="zxs-row">{t("父节点未加载","Parent not loaded")}</span>
+                        <span class="zxs-row">{parent.get_value()}</span>
+                        <button class="zxs-button" title=parent.get_value() disabled=move ||navigation_disabled.get() on:click=move |_|actions::anchor_history_node(state,parent.get_value())>{t("定位父节点","Locate parent")}</button>
+                    </div>}
+                }/>
+                <Show when=move ||boundary.with(|boundary|boundary.empty)><span class="zxs-row" data-parent-state="empty">{t("无父关系","No parent relationships")}</span></Show>
+                <Show when=move ||boundary.with(|boundary|boundary.more.is_some())>
+                    <button class="zxs-button" data-parent-state="more" disabled=move ||navigation_disabled.get() on:click=move |_|if let Some(cursor)=boundary.with_untracked(|boundary|boundary.more.clone()){actions::open_history_parents(state,id.get_value(),Some(cursor));}>{t("继续读取父关系","More parents")}</button>
+                </Show>
+            </div>
         </article>
+    }
+}
+
+fn kind_name(kind: NodeKind) -> &'static str {
+    match kind {
+        NodeKind::Content => "content",
+        NodeKind::Rename => "rename",
+        NodeKind::Tags => "tags",
+        NodeKind::Merge => "merge",
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ParentBoundary {
+    outside: Vec<String>,
+    more: Option<String>,
+    empty: bool,
+}
+
+fn parent_boundary(node: &FileNode) -> ParentBoundary {
+    let outside = node
+        .parents()
+        .iter()
+        .filter(|parent| parent.endpoint() == ParentEndpoint::OutsideWindow)
+        .map(|parent| parent.id().to_owned())
+        .collect();
+    match node.parent_set() {
+        ParentSet::Complete => ParentBoundary {
+            outside,
+            more: None,
+            empty: node.parents().is_empty(),
+        },
+        ParentSet::More { cursor } => ParentBoundary {
+            outside,
+            more: Some(cursor.clone()),
+            empty: false,
+        },
     }
 }
 

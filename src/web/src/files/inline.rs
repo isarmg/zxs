@@ -1,8 +1,8 @@
 //! Single-line metadata edits share the branch editor's commit/cancel behavior.
-use super::{actions, model::NamespaceAction};
+use super::{actions, history::NodeKind, model::NamespaceAction};
 use crate::{
     icons::FileIcon,
-    ui::{State, text},
+    ui::State,
 };
 use web_interface::{html, i18n::t, prelude::*};
 
@@ -35,6 +35,16 @@ enum InputKind {
 }
 
 impl Target {
+    fn scope(&self) -> EditScope {
+        match self {
+            Self::CreateDirectory | Self::RenameDirectoryBranch { .. } => EditScope::Location,
+            Self::RenameFileBranch { .. }
+            | Self::FileNote
+            | Self::VersionNote(_)
+            | Self::NodeNote(_) => EditScope::History,
+        }
+    }
+
     fn input_kind(&self) -> InputKind {
         match self {
             Self::CreateDirectory => InputKind::NamespaceName,
@@ -56,29 +66,19 @@ impl Target {
         edit
     }
 
-    fn initial(&self, state: &State) -> String {
+    fn initial(&self, state: &State) -> Option<String> {
         match self {
-            Self::CreateDirectory => String::new(),
+            Self::CreateDirectory => Some(String::new()),
             Self::RenameDirectoryBranch { name, .. } | Self::RenameFileBranch { name, .. } => {
-                name.clone()
+                Some(name.clone())
             }
-            Self::FileNote => state.files.file_history["note"]
-                .as_str()
-                .or_else(|| state.files.selected.as_ref().and_then(|entry| entry.note()))
-                .unwrap_or_default()
-                .to_owned(),
-            Self::NodeNote(id) => super::model::history_nodes_ref(&state.files.file_history)
-                .iter()
-                .find(|node| super::model::history_node_id(node) == *id)
-                .map(|node| text(node, &["note"]))
-                .unwrap_or_default(),
-            Self::VersionNote(id) => state.files.file_history["versions"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|version| text(version, &["version_id"]) == *id)
-                .map(|version| text(version, &["note"]))
-                .unwrap_or_default(),
+            Self::FileNote => state.files.file_history.file_note().map(str::to_owned),
+            Self::NodeNote(id) => state
+                .files
+                .file_history
+                .node(id)
+                .map(|node| node.note().to_owned()),
+            Self::VersionNote(id) => state.files.file_history.body_note(id).map(str::to_owned),
         }
     }
 
@@ -88,28 +88,37 @@ impl Target {
             Self::VersionNote(id) => history.version(id),
             _ => unreachable!("invariant: version note displays only node or version metadata"),
         };
-        let value = node.map(|node| text(node, &["note"])).unwrap_or_default();
+        let value = node
+            .and_then(|node| match self {
+                Self::NodeNote(_) => Some(node.note()),
+                Self::VersionNote(_) => node.body_note(),
+                _ => unreachable!("invariant: version note displays only node or version metadata"),
+            })
+            .unwrap_or_default();
         if !value.is_empty() {
-            return value;
+            return value.to_owned();
         }
         if matches!(self, Self::NodeNote(_))
             && let Some(node) = node
         {
-            match node["kind"].as_str().unwrap_or_default() {
-                "tags" => return t("标签变化", "Tags changed"),
-                "merge" => return t("合并分支", "Merged branches"),
-                _ => {}
+            match node.kind() {
+                NodeKind::Tags => return t("标签变化", "Tags changed"),
+                NodeKind::Merge => return t("合并分支", "Merged branches"),
+                NodeKind::Rename => {
+                    let (Some(previous), Some(path)) = (node.previous_path(), node.path()) else {
+                        return t("路径变化", "Path changed");
+                    };
+                    let action = if previous.rsplit_once('/').map(|(parent, _)| parent)
+                        == path.rsplit_once('/').map(|(parent, _)| parent)
+                    {
+                        t("改名", "Renamed")
+                    } else {
+                        t("路径变化", "Path changed")
+                    };
+                    return format!("{action} {previous} → {path}");
+                }
+                NodeKind::Content => {}
             }
-            let previous = text(node, &["previous_path"]);
-            let path = text(node, &["path"]);
-            let action = if previous.rsplit_once('/').map(|(parent, _)| parent)
-                == path.rsplit_once('/').map(|(parent, _)| parent)
-            {
-                t("改名", "Renamed")
-            } else {
-                t("路径变化", "Path changed")
-            };
-            return format!("{action} {previous} → {path}");
         }
         t("无备注", "No note")
     }
@@ -178,6 +187,14 @@ pub(super) struct Draft {
     pub(super) value: RwSignal<String>,
     pub(super) error: RwSignal<bool>,
     operation: RwSignal<Option<String>>,
+    history_root: RwSignal<Option<String>>,
+    scope: EditScope,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditScope {
+    Location,
+    History,
 }
 
 #[derive(Clone, PartialEq)]
@@ -189,7 +206,19 @@ struct Context {
     directory: String,
     repository: String,
     directory_branch: String,
-    selected: Option<(String, String, String, String, String)>,
+    selected: Option<SelectedContext>,
+}
+
+#[derive(Clone, PartialEq)]
+struct SelectedContext {
+    entry: String,
+    file: String,
+    branch: Option<String>,
+    version: Option<String>,
+    node: Option<String>,
+    repository: Option<String>,
+    path: Option<String>,
+    backup: bool,
 }
 impl Context {
     fn capture(state: &State) -> Self {
@@ -207,14 +236,15 @@ impl Context {
                 .find(|branch| branch.current())
                 .map(|branch| branch.id().to_owned())
                 .unwrap_or_default(),
-            selected: state.files.selected.as_ref().map(|entry| {
-                (
-                    super::model::entry_key(entry),
-                    entry.file_id().to_owned(),
-                    entry.selected_branch_id().unwrap_or_default().to_owned(),
-                    entry.version_id().unwrap_or_default().to_owned(),
-                    entry.node_id().unwrap_or_default().to_owned(),
-                )
+            selected: state.files.selected.as_ref().map(|entry| SelectedContext {
+                entry: super::model::entry_key(entry),
+                file: entry.file_id().to_owned(),
+                branch: entry.selected_branch_id().map(str::to_owned),
+                version: entry.version_id().map(str::to_owned),
+                node: entry.node_id().map(str::to_owned),
+                repository: entry.repository_id().map(str::to_owned),
+                path: entry.repository_path().map(str::to_owned),
+                backup: entry.backup(),
             }),
         }
     }
@@ -228,20 +258,37 @@ pub(super) fn provide_context(state: RwSignal<State>) {
     })));
 }
 
+pub(super) fn history_navigation_allowed(state: RwSignal<State>) -> bool {
+    if state.with_untracked(|s| s.files.history_editors == 0) {
+        return true;
+    }
+    state.update(|s| {
+        s.notice = t(
+            "请先保存或取消当前编辑，再切换历史页面。",
+            "Save or cancel the current edit before changing history pages.",
+        );
+    });
+    false
+}
+
 impl Draft {
-    fn unobserved(state: RwSignal<State>) -> Self {
-        Self {
+    fn unobserved_in(state: RwSignal<State>, scope: EditScope) -> Self {
+        let draft = Self {
             state,
             context: RwSignal::new(None),
             editing: RwSignal::new(false),
             value: RwSignal::new(String::new()),
             error: RwSignal::new(false),
             operation: RwSignal::new(None),
-        }
+            history_root: RwSignal::new(None),
+            scope,
+        };
+        on_cleanup(move || draft.release_registration());
+        draft
     }
 
-    pub(super) fn new(state: RwSignal<State>) -> Self {
-        let draft = Self::unobserved(state);
+    pub(super) fn new(state: RwSignal<State>, scope: EditScope) -> Self {
+        let draft = Self::unobserved_in(state, scope);
         let context = use_context::<SharedContext>()
             .expect("invariant: file page provides its editor context")
             .0;
@@ -267,11 +314,31 @@ impl Draft {
     }
 
     fn cancel(self) {
+        self.release_registration();
         self.context.set(None);
         self.editing.set(false);
         self.value.set(String::new());
         self.error.set(false);
         self.operation.set(None);
+        self.history_root.set(None);
+    }
+
+    fn release_registration(self) {
+        if !self.editing.get_untracked() {
+            return;
+        }
+        let epoch = self.context.with_untracked(|context| {
+            context
+                .as_ref()
+                .expect("invariant: an active editor captured its context")
+                .epoch
+        });
+        // The state may already be disposed when the document owner closes.
+        let _ = self.state.try_update(|state| {
+            if state.session_epoch == epoch {
+                state.files.history_editors -= 1;
+            }
+        });
     }
 
     pub(super) fn cancel_idle(self) {
@@ -284,8 +351,20 @@ impl Draft {
         if self.editing.get_untracked() || self.operation.get_untracked().is_some() {
             return;
         }
-        self.context
-            .set(Some(self.state.with_untracked(Context::capture)));
+        let context = self.state.with_untracked(Context::capture);
+        if !context.active {
+            return;
+        }
+        if self.scope == EditScope::History
+            && !self.state.with_untracked(actions::history_write_allowed)
+        {
+            return;
+        }
+        self.state.update(|state| state.files.history_editors += 1);
+        self.context.set(Some(context));
+        self.history_root.set(self.state.with_untracked(|state| {
+            state.files.file_history.root().map(str::to_owned)
+        }));
         self.value.set(value);
         self.error.set(false);
         self.editing.set(true);
@@ -302,6 +381,22 @@ impl Draft {
         let current = self.state.with_untracked(Context::capture);
         if !current.active || self.context.get_untracked().as_ref() != Some(&current) {
             self.cancel();
+            return;
+        }
+        if self.scope == EditScope::History
+            && !self.state.with_untracked(|state| {
+                actions::history_write_allowed(state)
+                    && self.history_root.with_untracked(|root| {
+                        root.as_deref() == state.files.file_history.root()
+                    })
+            })
+        {
+            self.state.update(|state| {
+                state.notice = t(
+                    "历史依据已改变；请取消当前编辑，刷新后重新核对。",
+                    "The history basis changed. Cancel this edit, refresh, and review it again.",
+                );
+            });
             return;
         }
         // Establish the blur guard before admission changes disabled state.
@@ -339,7 +434,7 @@ impl Editor {
     fn new(state: RwSignal<State>, label: String, target: Target, disabled: Signal<bool>) -> Self {
         Self {
             state,
-            draft: Draft::new(state),
+            draft: Draft::new(state, target.scope()),
             kind: target.input_kind(),
             target: StoredValue::new(target),
             label: StoredValue::new(label),
@@ -351,10 +446,12 @@ impl Editor {
         if self.disabled.get_untracked() {
             return;
         }
-        self.draft.start(
-            self.state
-                .with_untracked(|s| self.target.get_value().initial(s)),
-        );
+        if let Some(value) = self
+            .state
+            .with_untracked(|s| self.target.get_value().initial(s))
+        {
+            self.draft.start(value);
+        }
     }
 
     fn commit(self) {
@@ -440,7 +537,7 @@ pub(super) fn control(
                         disabled=move ||editor.disabled.get() on:click=move |_|editor.start()>
                         {icon.map(|name|view!{<FileIcon name=name/>})}
                         {move ||if editor.kind == InputKind::Note {
-                            let note=state.with(|s|editor.target.get_value().initial(s));
+                            let note=state.with(|s|editor.target.get_value().initial(s)).unwrap_or_default();
                             if note.is_empty(){editor.label.get_value()}else{note}
                         }else{editor.label.get_value()}}
                     </button>

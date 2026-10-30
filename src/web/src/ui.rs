@@ -124,6 +124,7 @@ pub(crate) fn accept_read_response<T>(
         && error.status == 401
     {
         fail(state, error.clone());
+        state.update(|s| s.files.cancel_history());
         return false;
     }
     true
@@ -312,6 +313,7 @@ fn begin_login(state: &mut State) -> Option<u64> {
     {
         return None;
     }
+    state.files.cancel_history();
     state.login_in_flight = true;
     state.session_epoch += 1;
     state.login_failure = None;
@@ -326,6 +328,7 @@ fn begin_restore(state: &mut State) -> Option<u64> {
     {
         return None;
     }
+    state.files.cancel_history();
     state.session_transition = SessionTransition::Restoring;
     state.session_epoch += 1;
     state.session_failure = None;
@@ -366,6 +369,7 @@ pub(crate) fn begin_logout(state: &mut State) -> Option<u64> {
     if state.logout_pending() {
         return None;
     }
+    state.files.cancel_history();
     state.session_transition = SessionTransition::LoggingOut;
     state.session_epoch += 1;
     api::invalidate_session_work();
@@ -410,6 +414,7 @@ pub(crate) fn complete_logout(state: RwSignal<State>, result: Result<Value, api:
     });
 }
 fn end_session(state: RwSignal<State>, notice: String) {
+    state.update(|s| s.files.cancel_history());
     api::clear_session();
     let session_epoch = state.with_untracked(|s| s.session_epoch + 1);
     state.set(State {

@@ -7,16 +7,7 @@ fn editing() -> State {
         ..Default::default()
     };
     state.files.writable = true;
-    state.files.merge = Some(Draft {
-        file: "file".into(),
-        repository: "repo".into(),
-        path: "a.txt".into(),
-        branches: vec![],
-        nodes: vec![],
-        selected: BTreeSet::new(),
-        chosen: "node".into(),
-        survivor: "branch".into(),
-    });
+    state.files.merge = Some(super::super::tests::draft());
     state
         .files
         .publications
@@ -64,4 +55,31 @@ fn merge_cancel_preserves_pending_and_unknown_operation_drafts() {
     state.files.operations.clear();
     cancel(&mut state);
     assert!(state.files.merge.is_none());
+}
+
+#[test]
+fn selected_branch_pages_are_render_limits_and_preserve_off_page_selection() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(editing());
+        state.update(|s| {
+            let draft = s.files.merge.as_mut().unwrap();
+            for index in 0..SELECTED_ROWS {
+                let id = format!("extra-{index:04}");
+                draft.selected.insert(id.clone(), SelectedBranch {
+                    id, name: format!("branch {index}"), expected: format!("head-{index}"),
+                });
+            }
+        });
+        let before = state.with_untracked(|s|s.files.merge.as_ref().unwrap().selected.clone());
+        move_selected_page(state, true);
+        state.with_untracked(|s| {
+            let draft = s.files.merge.as_ref().unwrap();
+            assert_eq!(draft.selected_page, 1);
+            assert_eq!(draft.selected, before);
+            assert_eq!(draft.chosen.as_ref().unwrap().id, "fnode-unrelated");
+            assert_eq!(draft.selected.values().skip(draft.selected_page*SELECTED_ROWS).take(SELECTED_ROWS).count(), 2);
+        });
+        move_selected_page(state, false);
+        assert_eq!(state.with_untracked(|s|s.files.merge.as_ref().unwrap().selected_page), 0);
+    });
 }

@@ -11,6 +11,13 @@ pub(super) enum Target {
 }
 
 impl Target {
+    fn scope(&self) -> super::inline::EditScope {
+        match self {
+            Self::CurrentDirectory | Self::Directory { .. } => super::inline::EditScope::Location,
+            Self::CurrentFileVersion | Self::HistoryNode(_) => super::inline::EditScope::History,
+        }
+    }
+
     fn submit(self, state: RwSignal<State>, name: String) -> Option<String> {
         match self {
             Self::CurrentDirectory => {
@@ -31,19 +38,23 @@ impl Target {
 fn file_source(model: &super::model::Model, target: &Target) -> Option<(String, Option<String>)> {
     match target {
         Target::CurrentFileVersion => {
-            let entry = model.selected.as_ref()?;
+            if !model.file_history.ready() {
+                return None;
+            }
             Some((
-                entry.version_id()?.to_owned(),
-                entry.node_id().map(str::to_owned),
+                model.file_history.current_version_id()?.to_owned(),
+                model.file_history.current_node_id().map(str::to_owned),
             ))
         }
         Target::HistoryNode(id) => {
-            let record = super::model::history_nodes_ref(&model.file_history)
-                .iter()
-                .find(|node| super::model::history_node_id(node) == *id)?;
-            let version = record["version_id"].as_str().filter(|id| !id.is_empty())?;
-            let node = record["node_id"].as_str().filter(|id| !id.is_empty());
-            Some((version.to_owned(), node.map(str::to_owned)))
+            if !model.file_history.ready() {
+                return None;
+            }
+            let record = model.file_history.node(id)?;
+            Some((
+                record.version_id()?.to_owned(),
+                Some(record.id().to_owned()),
+            ))
         }
         Target::CurrentDirectory | Target::Directory { .. } => None,
     }
@@ -79,7 +90,7 @@ pub(super) fn control(
     target: Target,
     disabled: Signal<bool>,
 ) -> impl IntoView {
-    let draft = super::inline::Draft::new(state);
+    let draft = super::inline::Draft::new(state, target.scope());
     let editing = draft.editing;
     let value = draft.value;
     let error = draft.error;

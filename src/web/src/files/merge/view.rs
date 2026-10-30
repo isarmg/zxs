@@ -1,6 +1,8 @@
 use super::*;
 use web_interface::components::{Select, SelectOption};
 
+const SELECTED_ROWS: usize = super::super::page::PAGE_SIZE;
+
 fn cancel(state: &mut State) {
     if !actions::pending(state) {
         state.files.merge = None;
@@ -8,135 +10,134 @@ fn cancel(state: &mut State) {
     }
 }
 
+fn move_selected_page(state: RwSignal<State>, next: bool) {
+    state.update(|s| {
+        if let Some(draft) = s.files.merge.as_mut() {
+            if next && (draft.selected_page + 1) * SELECTED_ROWS < draft.selected.len() {
+                draft.selected_page += 1;
+            } else if !next && draft.selected_page > 0 {
+                draft.selected_page -= 1;
+            }
+        }
+    });
+}
+
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     let open = Memo::new(move |_| state.with(|s| s.files.merge.is_some()));
     let branches = Memo::new(move |_| {
-        state.with(|s| {
-            s.files
-                .merge
-                .as_ref()
-                .map(|draft| draft.branches.clone())
-                .unwrap_or_default()
-        })
+        state.with(|s| s.files.file_history.branches().iter()
+            .filter(|branch| branch.writable()).cloned().collect::<Vec<_>>())
     });
-    let disabled = Signal::derive(move || state.with(|s| !actions::write_allowed(s)));
-    let result_options = Signal::derive(move || {
-        state.with(|s| {
-            s.files
-                .merge
-                .as_ref()
-                .map(|draft| {
-                    draft
-                        .nodes
-                        .iter()
-                        .enumerate()
-                        .map(|(index, node)| {
-                            SelectOption::new(history_node_id(node), node_label(node, index))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
-        })
+    let selected = Memo::new(move |_| {
+        state.with(|s| s.files.merge.as_ref().map(|draft| {
+            draft.selected.values().skip(draft.selected_page * SELECTED_ROWS)
+                .take(SELECTED_ROWS).cloned().collect::<Vec<_>>()
+        }).unwrap_or_default())
     });
-    let survivor_options = Signal::derive(move || {
-        state.with(|s| {
-            s.files
-                .merge
-                .as_ref()
-                .map(|draft| {
-                    draft
-                        .branches
-                        .iter()
-                        .filter(|branch| draft.selected.contains(branch.id()))
-                        .map(|branch| SelectOption::new(branch.id(), branch.name()))
-                        .collect()
-                })
-                .unwrap_or_default()
+    let disabled = Signal::derive(move || state.with(|s| !actions::history_write_allowed(s)));
+    let navigation_disabled = Signal::derive(move || state.with(|s| !actions::history_navigation_ready(s)));
+    let review_needed = Signal::derive(move || state.with(|s| {
+        s.files.merge.as_ref().is_some_and(|draft| {
+            !s.files.file_history.ready() || s.files.file_history.root() != Some(draft.root())
         })
-    });
-    let result = Signal::derive(move || {
-        state.with(|s| {
-            s.files
-                .merge
-                .as_ref()
-                .map(|draft| draft.chosen.clone())
-                .unwrap_or_default()
-        })
-    });
-    let survivor = Signal::derive(move || {
-        state.with(|s| {
-            s.files
-                .merge
-                .as_ref()
-                .map(|draft| draft.survivor.clone())
-                .unwrap_or_default()
-        })
-    });
-    view! {<Show when=move ||open.get()><section class="zxs-frame zxs-stack zxs-merge-review" aria-label=t("合并文件分支","Merge file branches")>
-        <div class="zxs-file-toolbar zxs-flow"><h3 class="zxs-row">{t("合并文件分支","Merge file branches")}</h3><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|state.update(cancel)>{t("取消","Cancel")}</button></div>
-        <p class="zxs-row">{t("保留分支采用结果节点，其余参与分支保留原节点并变为只读别名；未选择的可写文件分支保持不变。所有当前命名目录分支中引用参与分支的对应条目（含当前未显示的目录分支）将更新到结果节点，其他文件引用不变。","The surviving branch adopts the result node. Other selected branches keep their original nodes as read-only aliases; unselected writable file branches stay unchanged. Matching references in all current named folder branches, including branches not currently displayed, advance to the result node; other file references stay unchanged.")}</p>
-        <fieldset class="zxs-review-choices"><legend class="zxs-row">{t("参与分支","Input branches")}</legend>{move ||branches.get().into_iter().map(move |branch|{let id=branch.id().to_owned();let checked_id=id.clone();view!{<label class="zxs-batch-check zxs-row"><input type="checkbox" disabled=move ||disabled.get() prop:checked=move ||state.with(|s|s.files.merge.as_ref().is_some_and(|draft|draft.selected.contains(&checked_id))) on:change=move |event|{let checked=event_target_checked(&event);update(state,|draft|{if checked{draft.selected.insert(id.clone());}else{draft.selected.remove(&id);if draft.survivor==id{draft.survivor.clear();}}});}/><span>{branch.name().to_owned()}</span></label>}}).collect_view()}</fieldset>
-        <div class="zxs-file-toolbar zxs-flow"><Select label=t("结果节点（可选此文件任一节点）","Result node (any node of this file)") options=result_options value=result disabled=disabled on_change=Callback::new(move |value:String|update(state,|draft|draft.chosen=value))/><Select label=t("合并后保留的分支","Surviving branch") options=survivor_options value=survivor disabled=disabled on_change=Callback::new(move |value:String|update(state,|draft|draft.survivor=value))/></div>
-        <p class="zxs-row zxs-inline-error" role="status">{move ||state.with(|s|review::error_text(s,review::Kind::Merge))}</p>
-        <button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|submit(state)>{t("确认合并所选分支","Confirm merge of selected branches")}</button>
-    </section></Show>}
+    }));
+    let result_options = Signal::derive(move || state.with(|s| {
+        let mut options = s.files.file_history.nodes().iter()
+            .filter(|node| node.visible_content()).enumerate()
+            .map(|(index, node)| SelectOption::new(node.id(), node_label(node, index)))
+            .collect::<Vec<_>>();
+        if let Some(chosen) = s.files.merge.as_ref().and_then(|draft| draft.chosen.as_ref()) {
+            if !s.files.file_history.nodes().iter().any(|node|node.id()==chosen.id) {
+                options.push(SelectOption::new(&chosen.id, format!("{} · {}", t("所选节点", "Selected node"), chosen.id)));
+            }
+        }
+        options
+    }));
+    let survivor_options = Signal::derive(move || state.with(|s| {
+        s.files.merge.as_ref().map(|draft| {
+            let mut branches = draft.selected.values().skip(draft.selected_page * SELECTED_ROWS)
+                .take(SELECTED_ROWS).collect::<Vec<_>>();
+            if let Some(branch) = draft.selected.get(&draft.survivor) {
+                if !branches.iter().any(|candidate| candidate.id == branch.id) {
+                    branches.push(branch);
+                }
+            }
+            branches.into_iter().map(|branch| SelectOption::new(&branch.id, &branch.name)).collect()
+        }).unwrap_or_default()
+    }));
+    let result = Signal::derive(move || state.with(|s| {
+        s.files.merge.as_ref().and_then(|draft| draft.chosen.as_ref())
+            .map(|node| node.id.clone()).unwrap_or_default()
+    }));
+    let survivor = Signal::derive(move || state.with(|s| {
+        s.files.merge.as_ref().map(|draft| draft.survivor.clone()).unwrap_or_default()
+    }));
+    view! {
+        <Show when=move ||open.get()>
+            <section class="zxs-frame zxs-stack zxs-merge-review" aria-label=t("合并文件分支","Merge file branches")>
+                <div class="zxs-file-toolbar zxs-flow">
+                    <h3 class="zxs-row">{t("合并文件分支","Merge file branches")}</h3>
+                    <button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|state.update(cancel)>{t("取消","Cancel")}</button>
+                </div>
+                <p class="zxs-row">{t("保留分支采用结果节点，其余参与分支保留原节点并变为只读别名。可分页浏览本文件任一历史节点；换页不会清除所选依据。","The surviving branch adopts the result node; other selected branches retain their nodes as read-only aliases. Browse any history node of this file across pages; page changes preserve selected bases.")}</p>
+                <Show when=move ||review_needed.get()>
+                    <p class="zxs-row" role="status">{review_required()}</p>
+                    <button class="zxs-button" disabled=move ||navigation_disabled.get() on:click=move |_|actions::review_history_merge(state)>{t("读取全部所选依据以重新审阅","Load all selected bases for review")}</button>
+                </Show>
+                <Show when=move ||state.with(|s|s.files.merge.as_ref().is_some_and(|draft|draft.resolved.is_some()))>
+                    <div class="zxs-frame zxs-stack">
+                        <p class="zxs-row">{t("全部所选身份已重新读取。请检查下面的旧依据与新依据，再明确接受。","Every selected identity has been read again. Check the previous and current bases below, then explicitly accept the review.")}</p>
+                        {move ||state.with(|s|s.files.merge.as_ref().map(|draft|{
+                            draft.selected.values().skip(draft.selected_page*SELECTED_ROWS).take(SELECTED_ROWS).filter_map(|old|{
+                                draft.resolved.as_ref()?.selected.get(&old.id).map(|new|format!("{}: {} → {}",old.name,old.expected,new.expected))
+                            }).collect::<Vec<_>>()
+                        }).unwrap_or_default()).into_iter().map(|line|view!{<p class="zxs-row">{line}</p>}).collect_view()}
+                        <button class="zxs-button" disabled=move ||navigation_disabled.get() on:click=move |_|accept_review(state)>{t("接受重新审阅的全部依据","Accept every reviewed base")}</button>
+                    </div>
+                </Show>
+                <fieldset class="zxs-review-choices">
+                    <legend class="zxs-row">{t("本页可写分支","Writable branches on this page")}</legend>
+                    {move ||branches.get().into_iter().map(move |branch|{
+                        let id=branch.id().to_owned();let checked_id=id.clone();
+                        view!{<label class="zxs-batch-check zxs-row">
+                            <input type="checkbox" disabled=move ||disabled.get()||review_needed.get() prop:checked=move ||state.with(|s|s.files.merge.as_ref().is_some_and(|draft|draft.selected.contains_key(&checked_id))) on:change=move |event|select_branch(state,id.clone(),event_target_checked(&event))/>
+                            <span>{branch.name().to_owned()}</span>
+                        </label>}
+                    }).collect_view()}
+                </fieldset>
+                <div class="zxs-file-toolbar zxs-flow">
+                    <button class="zxs-button" disabled=move ||navigation_disabled.get()||state.with(|s|s.files.file_history.previous_branch_cursor().is_none()) on:click=move |_|actions::page_history_branches(state,false)>{t("上一页分支","Previous branches")}</button>
+                    <button class="zxs-button" disabled=move ||navigation_disabled.get()||state.with(|s|s.files.file_history.next_branch_cursor().is_none()) on:click=move |_|actions::page_history_branches(state,true)>{t("下一页分支","Next branches")}</button>
+                </div>
+                <h4 class="zxs-row">{t("跨页所选分支","Selected branches across pages")}</h4>
+                {move ||selected.get().into_iter().map(move |branch|{
+                    let id=branch.id.clone();
+                    view!{<div class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{format!("{} · {}",branch.name,branch.expected)}</span><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|select_branch(state,id.clone(),false)>{t("移除选择","Remove selection")}</button></div>}
+                }).collect_view()}
+                <div class="zxs-file-toolbar zxs-flow">
+                    <span class="zxs-row">{move ||state.with(|s|s.files.merge.as_ref().map(|draft|format!("{} {}",draft.selected.len(),t("个分支已选择","branches selected"))).unwrap_or_default())}</span>
+                    <button class="zxs-button" disabled=move ||state.with(|s|s.files.merge.as_ref().is_none_or(|draft|draft.selected_page==0)) on:click=move |_|move_selected_page(state,false)>{t("上一页所选项","Previous selected items")}</button>
+                    <button class="zxs-button" disabled=move ||state.with(|s|s.files.merge.as_ref().is_none_or(|draft|(draft.selected_page+1)*SELECTED_ROWS>=draft.selected.len())) on:click=move |_|move_selected_page(state,true)>{t("下一页所选项","Next selected items")}</button>
+                </div>
+                <div class="zxs-file-toolbar zxs-flow">
+                    <Select label=t("结果节点（可选此文件任一节点）","Result node (any node of this file)") options=result_options value=result disabled=Signal::derive(move ||disabled.get()||review_needed.get()) on_change=Callback::new(move |value:String|choose_node(state,value))/>
+                    <Select label=t("合并后保留的分支","Surviving branch") options=survivor_options value=survivor disabled=Signal::derive(move ||disabled.get()||review_needed.get()) on_change=Callback::new(move |value:String|choose_survivor(state,value))/>
+                </div>
+                <div class="zxs-file-toolbar zxs-flow">
+                    <button class="zxs-button" disabled=move ||navigation_disabled.get()||state.with(|s|s.files.file_history.previous_cursor().is_none()) on:click=move |_|actions::page_history_nodes(state,false)>{t("上一页节点","Previous nodes")}</button>
+                    <button class="zxs-button" disabled=move ||navigation_disabled.get()||state.with(|s|s.files.file_history.next_cursor().is_none()) on:click=move |_|actions::page_history_nodes(state,true)>{t("下一页节点","Next nodes")}</button>
+                    <input class="zxs-input zxs-input--compact" aria-label=t("精确历史节点 ID","Exact history node ID") maxlength=256 prop:value=move ||state.with(|s|s.files.merge.as_ref().map(|draft|draft.anchor.clone()).unwrap_or_default()) on:input=move |event|state.update(|s|{if let Some(draft)=s.files.merge.as_mut(){draft.anchor=event_target_value(&event);}})/>
+                    <button class="zxs-button" disabled=move ||navigation_disabled.get() on:click=move |_|{let id=state.with_untracked(|s|s.files.merge.as_ref().map(|draft|draft.anchor.trim().to_owned()).unwrap_or_default());if !id.is_empty(){actions::anchor_history_node(state,id);}}>{t("定位节点","Locate node")}</button>
+                </div>
+                <p class="zxs-row zxs-inline-error" role="status">{move ||state.with(|s|review::error_text(s,review::Kind::Merge))}</p>
+                <button class="zxs-button" disabled=move ||disabled.get()||review_needed.get() on:click=move |_|submit(state)>{t("确认合并所选分支","Confirm merge of selected branches")}</button>
+            </section>
+        </Show>
+    }
 }
 
-/// The acyclic tree may deliberately omit an edge when reusing an ancestor.
-/// Preserve all inputs in a separate provenance list instead of inventing
-/// another content node or hiding the source branch history.
-pub(crate) fn history() -> impl IntoView {
-    let history = super::super::history_index::shared();
-    let records = Memo::new(move |_| {
-        history.with(|history| {
-            history.snapshot["merges"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|record| {
-                    let branch_name = |id: &str| {
-                        history
-                            .branch(id)
-                            .map(|branch| branch.name().to_owned())
-                            .unwrap_or_else(|| t("历史分支", "Historical branch"))
-                    };
-                    let node_name = |id: &str| {
-                        history
-                            .node(id)
-                            .map(|(index, node)| node_label(node, index))
-                            .unwrap_or_else(|| t("历史节点", "Historical node"))
-                    };
-                    let inputs = record["input_branch_ids"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .enumerate()
-                        .map(|(index, id)| {
-                            let node = record["input_node_ids"][index].as_str().unwrap_or_default();
-                            format!(
-                                "{} ({})",
-                                branch_name(id.as_str().unwrap_or_default()),
-                                node_name(node)
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" / ");
-                    let survivor =
-                        branch_name(record["surviving_branch_id"].as_str().unwrap_or_default());
-                    let chosen = node_name(record["chosen_node_id"].as_str().unwrap_or_default());
-                    let result = node_name(record["result_node_id"].as_str().unwrap_or_default());
-                    (
-                        inputs,
-                        survivor,
-                        chosen,
-                        result,
-                        record["reused_node"] == true,
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-    });
-    view! {<Show when=move ||!records.get().is_empty()><section class="zxs-merge-history zxs-stack" aria-label=t("合并来源记录","Merge provenance")><h3 class="zxs-row">{t("合并来源记录","Merge provenance")}</h3>{move ||records.get().into_iter().map(|(inputs,survivor,chosen,result,reused)|view!{<div class="zxs-frame zxs-stack"><p class="zxs-row">{format!("{}: {inputs}",t("参与分支及依据节点","Input branches and base nodes"))}</p><p class="zxs-row">{format!("{}: {chosen} → {result}",t("选定内容及结果","Chosen content and result"))}</p><p class="zxs-row">{format!("{}: {survivor} · {}",t("保留分支","Surviving branch"),if reused{t("复用已有节点；所有来源在此保留，树只显示无环连线。","Reused an existing node; all sources are recorded here and the tree shows only acyclic edges.")}else{t("新建合并节点，正文与标签采用所选内容。","Added a merge node using the chosen content and tags.")})}</p></div>}).collect_view()}</section></Show>}
+pub(crate) fn history(state: RwSignal<State>) -> impl IntoView {
+    super::super::history::provenance_view(state)
 }
 
 #[cfg(test)]

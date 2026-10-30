@@ -32,12 +32,12 @@ fn invalid_names_never_become_branch_requests() {
 }
 #[test]
 fn branching_from_a_path_node_keeps_the_body_id_and_explicit_node_parent_separate() {
-    let model = super::super::model::Model {
+    let mut model = super::super::model::Model {
         selected: Some(crate::files::test_entries::entry(
             json_codec::json!({"file_id":"file","version_id":"ver-one","node_id":"fnode-rename"}),
         )),
         file_history: crate::files::history::tests::history(
-            json_codec::json!({"nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename"}]}),
+            json_codec::json!({"current_node_id":"fnode-rename","version_id":"ver-one","nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename"}]}),
         ),
         ..Default::default()
     };
@@ -49,7 +49,44 @@ fn branching_from_a_path_node_keeps_the_body_id_and_explicit_node_parent_separat
         file_source(&model, &Target::CurrentFileVersion),
         Some(("ver-one".into(), Some("fnode-rename".into())))
     );
+    model.file_history.invalidate();
+    assert_eq!(file_source(&model, &Target::CurrentFileVersion), None);
+    assert_eq!(
+        file_source(&model, &Target::HistoryNode("fnode-rename".into())),
+        None
+    );
 }
+
+#[test]
+fn current_source_uses_the_admitted_summary_even_outside_the_node_page() {
+    let model = super::super::model::Model {
+        selected: Some(crate::files::test_entries::entry(json_codec::json!({
+            "version_id":"old-body", "node_id":"old-node"
+        }))),
+        file_history: crate::files::history::tests::history(json_codec::json!({
+            "version_id":"current-body", "current_node_id":"current-node", "nodes":[]
+        })),
+        ..Default::default()
+    };
+    assert_eq!(
+        file_source(&model, &Target::CurrentFileVersion),
+        Some(("current-body".into(), Some("current-node".into())))
+    );
+    assert!(model.file_history.nodes().is_empty());
+}
+
+#[test]
+fn an_unloaded_history_does_not_admit_a_branch_from_cached_selected_content() {
+    let model = super::super::model::Model {
+        selected: Some(crate::files::test_entries::entry(
+            json_codec::json!({"file_id":"file","version_id":"body","node_id":"current-node"}),
+        )),
+        ..Default::default()
+    };
+    assert_eq!(file_source(&model, &Target::CurrentFileVersion), None);
+    assert_eq!(file_source(&model, &Target::HistoryNode("current-node".into())), None);
+}
+
 #[test]
 fn a_missing_visible_version_never_uses_the_source_id_for_a_branch_request() {
     Owner::new().with(|| {

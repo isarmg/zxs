@@ -1,6 +1,10 @@
 use super::*;
 use crate::files::model::FileOperation;
 
+fn unobserved_draft(state: RwSignal<State>) -> Draft {
+    Draft::unobserved_in(state, EditScope::Location)
+}
+
 #[test]
 fn metadata_limits_are_bytes_without_splitting_utf8() {
     let ascii = "a".repeat(128);
@@ -115,7 +119,7 @@ fn a_path_nodes_generated_caption_is_display_only_and_note_input_starts_from_met
         json_codec::json!({"nodes":[{"node_id":"fnode-rename","version_id":"ver-one","kind":"rename","previous_path":"old/report.txt","path":"new/report.txt","note":""}]}),
     );
     let target = Target::NodeNote("fnode-rename".into());
-    assert_eq!(target.initial(&state), "");
+    assert_eq!(target.initial(&state), Some(String::new()));
     assert_eq!(
         target.display(&super::super::history_index::HistoryIndex::new(
             state.files.file_history.clone()
@@ -138,18 +142,38 @@ fn a_path_nodes_generated_caption_is_display_only_and_note_input_starts_from_met
     );
 }
 #[test]
-fn legacy_notes_are_displayed_without_silent_truncation() {
-    let original = format!("{}\nlegacy", "文".repeat(60));
+fn body_note_editors_use_body_versions_and_never_the_graph_node_identity() {
     let mut state = State::default();
     state.files.file_history = crate::files::history::tests::history(json_codec::json!({
-        "note": original,
-        "versions": [{"version_id": "old", "note": original}],
+        "note":"file note",
+        "nodes":[
+            {"node_id":"content-node","version_id":"body-version","kind":"content",
+                "note":"body note","body_note":"body note"},
+            {"node_id":"rename-node","version_id":"body-version","kind":"rename",
+                "note":"path note","previous_path":"old.txt","path":"new.txt"}
+        ],
     }));
-    assert_eq!(Target::FileNote.initial(&state), original);
-    assert_eq!(Target::VersionNote("old".into()).initial(&state), original);
-    assert_eq!(edit_value(&original, InputKind::Note), Edit::Invalid);
-    assert_eq!(state.files.file_history["note"], original);
+    assert_eq!(Target::FileNote.initial(&state), Some("file note".into()));
+    assert_eq!(
+        Target::NodeNote("rename-node".into()).initial(&state),
+        Some("path note".into())
+    );
+    assert_eq!(
+        Target::VersionNote("body-version".into()).initial(&state),
+        Some("body note".into())
+    );
+    assert_eq!(Target::VersionNote("rename-node".into()).initial(&state), None);
+    assert_eq!(Target::NodeNote("body-version".into()).initial(&state), None);
 }
+
+#[test]
+fn unloaded_note_targets_do_not_become_known_empty_notes() {
+    let state = State::default();
+    assert_eq!(Target::FileNote.initial(&state), None);
+    assert_eq!(Target::NodeNote("unloaded-node".into()).initial(&state), None);
+    assert_eq!(Target::VersionNote("unloaded-body".into()).initial(&state), None);
+}
+
 #[test]
 fn directory_branch_rename_keeps_the_record_identity_and_shares_cancel_and_byte_rules() {
     let target = Target::RenameDirectoryBranch {
@@ -158,7 +182,7 @@ fn directory_branch_rename_keeps_the_record_identity_and_shares_cancel_and_byte_
         name: "auto-generated".into(),
     };
     let state = State::default();
-    assert_eq!(target.initial(&state), "auto-generated");
+    assert_eq!(target.initial(&state), Some("auto-generated".into()));
     assert!(target.input_kind() == InputKind::BranchName);
     assert_eq!(edit_value("", target.input_kind()), Edit::Cancel);
     assert_eq!(
@@ -181,10 +205,121 @@ fn active_state() -> State {
 }
 
 #[test]
+fn history_navigation_requires_explicit_editor_completion_or_cancellation() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(active_state());
+        let draft = unobserved_draft(state);
+        assert!(history_navigation_allowed(state));
+        draft.start("keep this exact input".into());
+        draft.start("do not replace the draft".into());
+        assert_eq!(state.with_untracked(|s| s.files.history_editors), 1);
+        assert!(!history_navigation_allowed(state));
+        assert_eq!(draft.value.get_untracked(), "keep this exact input");
+        draft.submit(|| Some("pending".into()));
+        draft.cancel_idle();
+        assert!(!history_navigation_allowed(state));
+        draft.settle("pending", super::super::model::SaveStatus::Rejected);
+        assert!(!history_navigation_allowed(state));
+        draft.cancel_idle();
+        assert!(history_navigation_allowed(state));
+        assert_eq!(state.with_untracked(|s| s.files.history_editors), 0);
+    });
+}
+
+#[test]
+fn editor_owner_cleanup_releases_only_its_own_history_navigation_registration() {
+    let root = Owner::new();
+    let state = root.with(|| RwSignal::new(active_state()));
+    let first_owner = root.with(Owner::new);
+    let first = first_owner.with(|| unobserved_draft(state));
+    let second_owner = root.with(Owner::new);
+    let second = second_owner.with(|| unobserved_draft(state));
+    first.start("first".into());
+    second.start("second".into());
+    assert_eq!(state.with_untracked(|s| s.files.history_editors), 2);
+    first_owner.cleanup();
+    assert_eq!(state.with_untracked(|s| s.files.history_editors), 1);
+    assert_eq!(second.value.get_untracked(), "second");
+    second.cancel_idle();
+    second_owner.cleanup();
+    assert_eq!(state.with_untracked(|s| s.files.history_editors), 0);
+    root.cleanup();
+}
+
+#[test]
+fn old_editor_cleanup_cannot_release_a_new_sessions_history_navigation_gate() {
+    let root = Owner::new();
+    let state = root.with(|| RwSignal::new(active_state()));
+    let old_owner = root.with(Owner::new);
+    let old = old_owner.with(|| unobserved_draft(state));
+    old.start("old session".into());
+    state.set(State {
+        session_epoch: 8,
+        ..active_state()
+    });
+    let current_owner = root.with(Owner::new);
+    let current = current_owner.with(|| unobserved_draft(state));
+    current.start("current session".into());
+    assert_eq!(state.with_untracked(|s| s.files.history_editors), 1);
+    old_owner.cleanup();
+    assert_eq!(state.with_untracked(|s| s.files.history_editors), 1);
+    assert_eq!(current.value.get_untracked(), "current session");
+    current_owner.cleanup();
+    assert_eq!(state.with_untracked(|s| s.files.history_editors), 0);
+    root.cleanup();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn history_invalidation_retains_editor_text_without_refreshing_its_write_basis() {
+    use task_dispatch::Executor;
+    Executor::init_futures_executor().expect("test initializes the native effect executor once");
+    let root = Owner::new();
+    root.with(|| {
+        let mut initial = active_state();
+        initial.management.storage = crate::management::Storage::Ready;
+        initial.files.writable = true;
+        initial.files.selected = Some(crate::files::test_entries::entry(
+            json_codec::json!({"file_id":"file"}),
+        ));
+        initial.files.file_history = crate::files::history::tests::history(
+            json_codec::json!({"history_root":"original-root","note":"stored note"}),
+        );
+        let state = RwSignal::new(initial);
+        provide_context(state);
+        let draft = Draft::new(state, EditScope::History);
+        Executor::poll_local();
+        draft.start("exact unsaved text".into());
+        assert!(draft.editing.get_untracked());
+        state.update(|s| s.files.file_history.invalidate());
+        Executor::poll_local();
+        assert_eq!(draft.value.get_untracked(), "exact unsaved text");
+        assert!(draft.editing.get_untracked());
+        draft.submit(|| panic!("an invalidated history basis cannot admit this write"));
+        assert!(!draft.pending());
+        assert!(!history_navigation_allowed(state));
+
+        state.update(|s| {
+            s.files.file_history = crate::files::history::tests::history(
+                json_codec::json!({"history_root":"replacement-root","note":"new stored note"}),
+            );
+        });
+        Executor::poll_local();
+        draft.submit(|| panic!("a new root cannot silently replace the captured basis"));
+        assert_eq!(draft.value.get_untracked(), "exact unsaved text");
+        assert!(draft.editing.get_untracked());
+        assert!(!draft.pending());
+        draft.cancel_idle();
+        assert!(history_navigation_allowed(state));
+    });
+    root.cleanup();
+}
+
+#[test]
 fn an_editor_keeps_text_until_its_own_success_and_locks_unknown_outcomes() {
     Owner::new().with(|| {
         let state = RwSignal::new(active_state());
-        let draft = Draft::unobserved(state);
+        let draft = unobserved_draft(state);
         draft.start("user's exact draft".into());
         draft.submit(|| Some("first".into()));
         draft.cancel_idle(); // A disabled input's blur is not cancellation.
@@ -211,7 +346,7 @@ fn an_editor_keeps_text_until_its_own_success_and_locks_unknown_outcomes() {
 fn rejected_admission_keeps_the_draft_and_unsubmitted_edits_can_cancel() {
     Owner::new().with(|| {
         let state = RwSignal::new(active_state());
-        let draft = Draft::unobserved(state);
+        let draft = unobserved_draft(state);
         draft.start("keep me".into());
         draft.submit(|| None);
         assert_eq!(draft.value.get_untracked(), "keep me");
@@ -236,7 +371,7 @@ fn owned_navigation_invalidates_a_queued_editor_without_admitting_its_write() {
                 s.files.slot = "P01".into();
                 s.files.directory = "docs".into();
             });
-            let draft = Draft::unobserved(state);
+            let draft = unobserved_draft(state);
             draft.start("old location draft".into());
             state.update(|s| s.files.navigate(destination));
             draft.submit(|| panic!("navigation must invalidate the old editor context"));
@@ -249,11 +384,25 @@ fn owned_navigation_invalidates_a_queued_editor_without_admitting_its_write() {
 #[test]
 fn queued_edits_cannot_submit_after_session_navigation_alias_or_branch_changes() {
     Owner::new().with(|| {
-        for change in ["epoch", "logout", "page", "slot", "directory", "repository", "directory_branch", "path", "branch", "version"] {
+        for change in [
+            "epoch",
+            "logout",
+            "page",
+            "slot",
+            "directory",
+            "repository",
+            "directory_branch",
+            "path",
+            "branch",
+            "version",
+            "selected_repository",
+            "selected_path",
+            "backup",
+        ] {
             let mut initial = active_state();
             initial.files.selected = Some(crate::files::test_entries::entry(json_codec::json!({"entry_id":"same","file_id":"same","path":"docs/a","selected_branch_id":"main","version_id":"v1"})));
             let state = RwSignal::new(initial);
-            let draft = Draft::unobserved(state);
+            let draft = unobserved_draft(state);
             draft.start("old context".into());
             state.update(|s| match change {
                 "epoch" => s.session_epoch += 1,
@@ -266,6 +415,9 @@ fn queued_edits_cannot_submit_after_session_navigation_alias_or_branch_changes()
                 "path" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"path":"docs/b"})),
                 "branch" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"selected_branch_id":"other"})),
                 "version" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"version_id":"v2"})),
+                "selected_repository" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"repository_id":"other"})),
+                "selected_path" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"repository_path":"alias/a"})),
+                "backup" => crate::files::test_entries::update(s.files.selected.as_mut().unwrap(), json_codec::json!({"backup":true})),
                 _ => unreachable!(),
             });
             draft.submit(|| panic!("old editor must not submit into a new context"));
@@ -317,8 +469,8 @@ fn scheduled_shared_context_effects_preserve_pending_drafts_and_follow_page_owne
     let (first, second, old_context) = page.with(|| {
         provide_context(state);
         (
-            Draft::new(state),
-            Draft::new(state),
+            Draft::new(state, EditScope::Location),
+            Draft::new(state, EditScope::Location),
             use_context::<SharedContext>().unwrap().0,
         )
     });
@@ -363,7 +515,7 @@ fn scheduled_shared_context_effects_preserve_pending_drafts_and_follow_page_owne
     let remounted = root.with(Owner::new);
     let (fresh, fresh_context) = remounted.with(|| {
         provide_context(state);
-        (Draft::new(state), use_context::<SharedContext>().unwrap().0)
+        (Draft::new(state, EditScope::Location), use_context::<SharedContext>().unwrap().0)
     });
     assert!(old_context != fresh_context);
     Executor::poll_local();

@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn receipts_settle_only_the_matching_publication_and_preserve_unknown_outcomes() {
     let mut model = Model::default();
-    model.checked_nodes.insert("selected-node".into());
+    model.checked_nodes = crate::files::tags::tests::selection(&["selected-node"]);
     model.publications.insert(
         Kind::Tags,
         Publication {

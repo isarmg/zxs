@@ -1,10 +1,6 @@
 //! Page-owned lookup positions borrow records from the existing immutable snapshot.
-use super::{
-    history::{FileBranch, FileHistory},
-    model::{history_node_id, history_nodes_ref},
-};
+use super::history::{FileBranch, FileHistory, FileNode};
 use crate::{snapshot::Snapshot, ui::State};
-use json_codec::Value;
 use std::collections::BTreeMap;
 use web_interface::prelude::*;
 
@@ -19,22 +15,18 @@ pub(super) struct HistoryIndex {
 impl HistoryIndex {
     pub(super) fn new(snapshot: Snapshot<FileHistory>) -> Self {
         let mut nodes = BTreeMap::new();
-        for (position, node) in history_nodes_ref(&snapshot).iter().enumerate() {
-            // Keep the same first-match semantics as the previous linear lookup.
-            nodes.entry(history_node_id(node)).or_insert(position);
+        for (position, node) in snapshot.nodes().iter().enumerate() {
+            nodes.insert(node.id().to_owned(), position);
         }
         let mut branches = BTreeMap::new();
         for (position, branch) in snapshot.branches().iter().enumerate() {
             branches.insert(branch.id().to_owned(), position);
         }
         let mut versions = BTreeMap::new();
-        for (position, version) in snapshot["versions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
-            if let Some(id) = version["version_id"].as_str() {
+        for (position, node) in snapshot.nodes().iter().enumerate() {
+            if let Some(id) = node.version_id()
+                && node.body_note().is_some()
+            {
                 versions.entry(id.to_owned()).or_insert(position);
             }
         }
@@ -46,16 +38,16 @@ impl HistoryIndex {
         }
     }
 
-    pub(super) fn node(&self, id: &str) -> Option<(usize, &Value)> {
+    pub(super) fn node(&self, id: &str) -> Option<(usize, &FileNode)> {
         self.nodes
             .get(id)
-            .map(|&position| (position, &history_nodes_ref(&self.snapshot)[position]))
+            .map(|&position| (position, &self.snapshot.nodes()[position]))
     }
 
-    pub(super) fn version(&self, id: &str) -> Option<&Value> {
+    pub(super) fn version(&self, id: &str) -> Option<&FileNode> {
         self.versions
             .get(id)
-            .map(|&position| &self.snapshot["versions"][position])
+            .map(|&position| &self.snapshot.nodes()[position])
     }
 
     pub(super) fn branch(&self, id: &str) -> Option<&FileBranch> {

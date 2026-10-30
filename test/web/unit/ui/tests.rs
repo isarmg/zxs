@@ -1,4 +1,23 @@
 use super::*;
+
+#[test]
+fn a_session_transition_releases_every_history_read_generation() {
+    use crate::files::history::reads::Resource;
+    let mut state = State {
+        authenticated: true,
+        session_epoch: 7,
+        ..Default::default()
+    };
+    state.files.history_loading = true;
+    state.files.history_generation = 11;
+    let generation = state.files.history_aux.begin(Resource::Field, None);
+    assert!(state.files.history_aux.current(Resource::Field, generation));
+    assert_eq!(begin_logout(&mut state), Some(8));
+    assert!(!state.files.history_loading);
+    assert_eq!(state.files.history_generation, 12);
+    assert!(!state.files.history_aux.current(Resource::Field, generation));
+    assert!(!state.files.history_aux.loading());
+}
 use crate::files::FileOperation;
 #[test]
 fn session_transitions_reject_duplicate_and_overlapping_submissions() {
