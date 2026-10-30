@@ -386,7 +386,9 @@ impl Engine {
         let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
             .with_workspace_limits(workspace_limits)?;
         let mut engine = Self::prepare_workspace_recovery(root, config)?;
-        engine.recover_mode(mode)?;
+        let mut prepared = engine.prepare_recovery()?;
+        engine.preflight_workspace_receipts(&mut prepared)?;
+        engine.recover_prepared(mode, prepared)?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
@@ -397,7 +399,7 @@ impl Engine {
     fn prepare_workspace_recovery(root: PathBuf, config: ValidatedConfig) -> Result<Self> {
         let disk_resources = Arc::new(DiskResources::open(&config, true)?);
         let locks = acquire_locks(&root, &disk_resources)?;
-        let mut engine = Self {
+        let engine = Self {
             root,
             config,
             disk_resources,
@@ -423,7 +425,6 @@ impl Engine {
             #[cfg(feature = "fault-injection")]
             fault: None,
         };
-        engine.seed_workspace_recovery()?;
         Ok(engine)
     }
     /// Explicit recovery after loss of the system disk. Never initializes data disks.
@@ -521,10 +522,12 @@ impl Engine {
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
         let mut engine = Self::prepare_workspace_recovery(root, config)?;
+        let mut prepared = engine.prepare_recovery()?;
+        engine.preflight_workspace_receipts(&mut prepared)?;
         // A quota failure must not publish a system configuration or replay any
         // journal repair. Preflight above retains the locks across publication.
         write_json(&engine.root.join("config.json"), &engine.config, false)?;
-        engine.recover_mode(RecoveryMode::CompletePending)?;
+        engine.recover_prepared(RecoveryMode::CompletePending, prepared)?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)

@@ -295,6 +295,10 @@ impl Engine {
         principal.cold = principal.cold - old_cold + cold;
     }
 
+    pub(crate) fn retained_workspace_ids(&self) -> impl Iterator<Item = &str> {
+        self.workspace_budget.records.keys().map(String::as_str)
+    }
+
     pub(super) fn accounted_workspace(&self, id: &str) -> bool {
         self.workspace_budget.records.contains_key(id)
     }

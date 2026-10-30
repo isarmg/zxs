@@ -66,10 +66,11 @@ impl Engine {
                 return Ok(Some(ReadSource::on_disk(owner, source)));
             }
         }
-        for workspace in self.workspaces.values() {
-            let directory = self.workspace_data_directory(workspace)?;
+        for id in self.retained_workspace_ids() {
+            let workspace = self.workspace_recovery_hint(id)?;
+            let directory = self.workspace_data_directory(&workspace)?;
             let context = self.planning_context();
-            let owner = context.workspace_disk(workspace)?;
+            let owner = context.workspace_disk(&workspace)?;
             let root = &owner.root;
             let entries = match root.entries(&directory) {
                 Ok(entries) => entries,

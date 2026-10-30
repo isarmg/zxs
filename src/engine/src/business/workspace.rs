@@ -1098,7 +1098,7 @@ impl Engine {
         }
         w.state = WorkspaceState::Aborted;
         w.fencing_token = w.fencing_token.saturating_add(1);
-        self.persist_aborted_workspace(w)
+        self.persist_terminal_workspace(&w)
     }
     pub fn commit_workspace(&mut self, request: CommitRequest) -> Result<OperationResult> {
         self.commit_workspace_inner(request, None)
@@ -1211,7 +1211,7 @@ impl Engine {
         Self::refresh_workspace_contexts(&self.state, &mut completed);
         completed.state = WorkspaceState::Committed;
         completed.fencing_token += 1;
-        if let Err(source) = self.persist_workspace(&completed) {
+        if let Err(source) = self.persist_terminal_workspace(&completed) {
             // Publication is already authoritative. Even pre-write budget/path
             // failures leave local completion unresolved, never a rejected save.
             self.blocked = true;
@@ -1219,8 +1219,6 @@ impl Engine {
                 PublishedWorkspaceReconciliation::new(result, &completed, source),
             )));
         }
-        self.workspaces
-            .insert(completed.workspace_id.clone(), completed);
         Ok(result)
     }
     pub(crate) fn build_version(
