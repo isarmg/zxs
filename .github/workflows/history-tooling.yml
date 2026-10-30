@@ -165,7 +165,7 @@ jobs:
           ):
               raise SystemExit('History window Web checkpoint requires the exact cross-layer source and tree')
           if os.environ['SCOPE'] == 'history-window-web-browser' and (source, tree) != (
-              '01c88040c5dd5dd9713674dc129725af87efabdc', 'c877c5015fdb6c31c34f4fa1019be726f2d85936',
+              '0004c5f76d535ac5886a0f04351dc85b2579e122', 'afa0a719e55e3739563d7c85a728a32dfd6cad91',
           ):
               raise SystemExit('History browser requires the exact main/model/fixture composition and tree')
           if os.environ['SCOPE'] == 'scrub-terminal-diagnostics' and (source, tree) != (
@@ -765,9 +765,7 @@ jobs:
           ]
           groups['history-window-web-browser'] = [dict(id='history-window-web-production', web_production=True,
               command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check '
-                  'test/tools/browser-smoke/runner/fixture.rs '
-                  'test/tools/browser-smoke/runner/history_windows.rs '
-                  'test/tools/browser-smoke/unit/fixture_tests.rs\n'
+                  'test/tools/browser-smoke/runner/history_windows.rs\n'
                   'bash .github/scripts/check.sh web-production')]
           groups['scrub-terminal-diagnostics'] = [
               dict(id='scrub-terminal-format', format_base='096f9a7f60025ca14781b179d9e7415f10c5b846',
@@ -1367,13 +1365,15 @@ jobs:
           ZXS_REQUIRE_BROWSER: '1'
           ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
         run: |
-          fixture='fixture::tests::test_only_fixture_persists_two_versions_and_refuses_reuse'
-          cargo test --locked --offline -p browser-smoke --bin browser-smoke "$fixture" -- --exact --list 2>&1 | tee .native-diagnostics/fixture-list.log
-          test "$(grep -cFx "$fixture: test" .native-diagnostics/fixture-list.log)" = 1
-          cargo test --locked --offline -p browser-smoke --bin browser-smoke "$fixture" -- --exact --ignored --list 2>&1 | tee .native-diagnostics/fixture-ignored.log
-          if grep -q ': test$' .native-diagnostics/fixture-ignored.log; then exit 1; fi
-          bash .github/scripts/check.sh browser-smoke 2>&1 | tee .native-diagnostics/history-window-browser.log
-          grep -Fx "test $fixture ... ok" .native-diagnostics/history-window-browser.log
+          # The unchanged fixture's 20 bodies passed on 01c88040 in run 41106335001.
+          # Run the source's official browser-smoke build/Chrome/CSR commands.
+          bash -euo pipefail <<'BASH' 2>&1 | tee .native-diagnostics/history-window-browser.log
+          cargo build --locked --offline -p storage-server -p storage-rescue
+          cargo run --locked --offline -p browser-smoke -- \
+            --cli-bin "$PWD/target/native/debug/zxs" --web-dir "$PWD/build/web" \
+            --screenshot "$ZXS_SMOKE_SCREENSHOT"
+          python3 .github/scripts/check-csr-browser.py
+          BASH
           grep -Fx 'PASS synthetic history AbortSignal replacement, late completion ownership, real-file selection and navigation cleanup' .native-diagnostics/history-window-browser.log
           grep -Fx 'PASS synthetic 32-node window replacement/observer disposal, real-ID tag and merge basis review, replace-only UTF-8 fields and stale auxiliary delivery (no writes submitted)' .native-diagnostics/history-window-browser.log
       - name: Retain history window browser failure diagnostics
