@@ -235,9 +235,6 @@ impl Entry {
             .as_ref()
             .and_then(|location| location.selected_branch_id.as_deref())
     }
-    pub(crate) fn note(&self) -> Option<&str> {
-        self.note.as_deref()
-    }
     pub(crate) fn repository_id(&self) -> Option<&str> {
         self.location
             .as_ref()
@@ -256,15 +253,6 @@ impl Entry {
     }
     pub(crate) fn read_only(&self) -> bool {
         self.read_only
-    }
-    pub(crate) fn materialized(&self) -> bool {
-        matches!(
-            self.body,
-            Body::File {
-                ownership: Ownership::Materialized,
-                ..
-            }
-        )
     }
     pub(crate) fn inherited(&self) -> bool {
         matches!(

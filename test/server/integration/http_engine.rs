@@ -609,6 +609,130 @@ async fn manager_upload(app: &Router, token: &str, path: &str, bytes: &[u8]) -> 
     .await
 }
 
+fn history_root(page: &Value) -> &str {
+    page["identity"]["history_root"].as_str().unwrap()
+}
+
+async fn history_page(
+    app: &Router,
+    token: &str,
+    route: &str,
+    root: &str,
+    location: Option<(&str, &str)>,
+) -> Value {
+    let mut query = url_encoding::form::Serializer::new(String::new());
+    query.append_pair("history_root", root);
+    if let Some((repository, path)) = location {
+        query.append_pair("repository_id", repository);
+        query.append_pair("path", path);
+    }
+    let page = success(
+        app,
+        token,
+        "GET",
+        &format!("{route}?{}", query.finish()),
+        None,
+    )
+    .await;
+    assert_eq!(history_root(&page), root);
+    page
+}
+
+async fn history_versions(
+    app: &Router,
+    token: &str,
+    file: &str,
+    nodes: &Value,
+    location: Option<(&str, &str)>,
+) -> Value {
+    let page = history_page(
+        app,
+        token,
+        &format!("/api/files/{file}/history"),
+        history_root(nodes),
+        location,
+    )
+    .await;
+    assert_eq!(page["kind"], "versions");
+    assert_eq!(page["identity"]["context"], nodes["identity"]["context"]);
+    assert!(page["page"]["previous_cursor"].is_null());
+    assert!(
+        page["page"]["next_cursor"].is_null(),
+        "fixture must fit one version page"
+    );
+    page
+}
+
+async fn history_related(
+    app: &Router,
+    token: &str,
+    file: &str,
+    nodes: &Value,
+    suffix: &str,
+    location: Option<(&str, &str)>,
+) -> Value {
+    let page = history_page(
+        app,
+        token,
+        &format!("/api/file-manager/files/{file}/history/{suffix}"),
+        history_root(nodes),
+        location,
+    )
+    .await;
+    assert_eq!(page["identity"]["context"], nodes["identity"]["context"]);
+    page
+}
+
+async fn history_version_sources(
+    app: &Router,
+    token: &str,
+    file: &str,
+    nodes: &Value,
+    version: &str,
+    location: Option<(&str, &str)>,
+) -> Value {
+    let page = history_page(
+        app,
+        token,
+        &format!("/api/files/{file}/history/versions/{version}/sources"),
+        history_root(nodes),
+        location,
+    )
+    .await;
+    assert_eq!(page["kind"], "version_sources");
+    assert_eq!(page["identity"]["context"], nodes["identity"]["context"]);
+    page
+}
+
+// These fixtures contain short scalar fields; require a complete single fragment
+// instead of rebuilding an unbounded historical record for the assertions.
+async fn small_history_field(
+    app: &Router,
+    token: &str,
+    file: &str,
+    nodes: &Value,
+    node: &str,
+    field: &str,
+    location: Option<(&str, &str)>,
+) -> String {
+    let page = history_related(
+        app,
+        token,
+        file,
+        nodes,
+        &format!("nodes/{node}/fields/{field}"),
+        location,
+    )
+    .await;
+    assert_eq!(page["kind"], "node_field");
+    assert_eq!(page["byte_offset"], "0");
+    assert_eq!(page["end_of_field"], true);
+    assert!(page["next_cursor"].is_null());
+    let text = page["text"].as_str().unwrap();
+    assert_eq!(page["total_bytes"], text.len().to_string());
+    text.to_owned()
+}
+
 #[tokio::test]
 async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_container_name() {
     let root = tempfile::tempdir().unwrap();
@@ -729,16 +853,17 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
         None,
     )
     .await;
-    assert_eq!(history["note"], "container note, second line");
-    assert_eq!(history["versions"][0]["note"], "historical note");
+    let versions = history_versions(&app, &session, file, &history, None).await;
+    assert_eq!(history["context"]["note"], "container note, second line");
+    assert_eq!(versions["versions"][0]["note"], "historical note");
     assert!(
-        history["versions"][0]["storage_name"]
+        versions["versions"][0]["storage_name"]
             .as_str()
             .unwrap()
             .starts_with("v000001_")
     );
-    assert!(history["versions"][0].get("legacy").is_none());
-    assert_eq!(history["versions"][0]["download_name"], "改名后的文件.txt");
+    assert!(versions["versions"][0].get("legacy").is_none());
+    assert_eq!(versions["versions"][0]["download_name"], "改名后的文件.txt");
     let response = app
         .clone()
         .oneshot(
@@ -769,8 +894,10 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
         None,
     )
     .await;
+    assert!(deleted["identity"]["context"]["path"].is_null());
+    let deleted_versions = history_versions(&app, &session, file, &deleted, None).await;
     assert_eq!(
-        deleted["versions"][0]["download_name"], "改名后的文件.txt",
+        deleted_versions["versions"][0]["download_name"], "改名后的文件.txt",
         "deletion preserves the container's last name for historical downloads"
     );
     let response = app
@@ -817,8 +944,9 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
         None,
     )
     .await;
-    assert_eq!(history["note"], "container note, second line");
-    assert_eq!(history["versions"][0]["note"], "historical note");
+    assert_eq!(history["context"]["note"], "container note, second line");
+    let versions = history_versions(&app, &token, file, &history, None).await;
+    assert_eq!(versions["versions"][0]["note"], "historical note");
 }
 
 #[tokio::test]
@@ -851,12 +979,7 @@ async fn file_history_exposes_durable_content_edges_and_rechecks_authentication(
 
     manager_upload(&app, &admin, "tree.txt", b"second main content").await;
     let main = success(&app, &admin, "GET", &history_path, None).await;
-    let main_version = main["versions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|version| version["current"] == true)
-        .unwrap()["version_id"]
+    let main_version = main["context"]["content"]["version_id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -871,20 +994,19 @@ async fn file_history_exposes_durable_content_edges_and_rechecks_authentication(
     .await;
     let branch_id = branch["result"]["branch_id"].as_str().unwrap();
     let forked = success(&app, &admin, "GET", &history_path, None).await;
-    let pending = forked["branches"]
+    let forked_branches = history_related(&app, &admin, file, &forked, "branches", None).await;
+    let pending = forked_branches["branches"]
         .as_array()
         .unwrap()
         .iter()
         .find(|branch| branch["branch_id"] == branch_id)
         .unwrap();
-    assert_eq!(pending["version_id"], original);
-    assert_eq!(pending["inherited"], true);
-    assert!(pending["own_version_id"].is_null());
-    assert_eq!(pending["visible_content_state"], "AVAILABLE");
-    assert_eq!(pending["materialized"], false);
-    assert_eq!(pending["content_state"], "PENDING");
-    assert_eq!(pending["source_version_id"], original);
-    assert_eq!(forked["versions"].as_array().unwrap().len(), 2);
+    assert_eq!(pending["content"]["version_id"], original);
+    assert_eq!(pending["content"]["source"]["kind"], "inherited");
+    assert_eq!(pending["content"]["stored_state"], "AVAILABLE");
+    assert_eq!(pending["content"]["source"]["source_version_id"], original);
+    let forked_versions = history_versions(&app, &admin, file, &forked, None).await;
+    assert_eq!(forked_versions["versions"].as_array().unwrap().len(), 2);
     success(
         &app,
         &admin,
@@ -900,53 +1022,92 @@ async fn file_history_exposes_durable_content_edges_and_rechecks_authentication(
     let nodes = history["nodes"].as_array().unwrap();
     assert_eq!(nodes.len(), 3);
     for node in nodes {
-        assert!(node["node_id"].as_str().is_some_and(|id| !id.is_empty()));
-        assert!(node["parent_node_ids"].as_array().is_some());
-        assert!(node["created_at"].is_string());
+        let id = node["node_id"].as_str().unwrap();
+        let parents = history_related(
+            &app,
+            &session,
+            file,
+            &history,
+            &format!("nodes/{id}/parents"),
+            None,
+        )
+        .await;
+        assert_eq!(parents["kind"], "node_parents");
+        assert!(parents["page"]["next_cursor"].is_null());
+        assert_eq!(node["parents"]["state"], "complete");
+        for parent in parents["parents"].as_array().unwrap() {
+            assert!(
+                history["edges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|edge| edge["node_id"] == id
+                        && edge["parent_node_id"] == parent["parent_node_id"])
+            );
+        }
+        for field in ["created_at", "author", "message"] {
+            let text = small_history_field(&app, &session, file, &history, id, field, None).await;
+            assert_eq!(node["fields"][field]["byte_length"], text.len().to_string());
+            assert!(node.get(field).is_none());
+        }
         assert!(node.get("legacy").is_none());
     }
-    let versions = history["versions"].as_array().unwrap();
+    assert!(
+        nodes.windows(2).all(|pair| pair[0]["sequence"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            > pair[1]["sequence"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()),
+        "node pages retain descending graph order"
+    );
+    let versions_page = history_versions(&app, &session, file, &history, None).await;
+    let versions = versions_page["versions"].as_array().unwrap();
     assert_eq!(versions.len(), 3);
     assert!(
         versions.windows(2).all(|pair| {
-            pair[0]["sequence"]
+            pair[0]["version_sequence"]
                 .as_str()
                 .unwrap()
                 .parse::<u64>()
                 .unwrap()
-                > pair[1]["sequence"]
+                < pair[1]["version_sequence"]
                     .as_str()
                     .unwrap()
                     .parse::<u64>()
                     .unwrap()
         }),
-        "HTTP history remains newest first, independent of candidate-index order"
+        "version windows retain ascending stable version keys"
     );
-    let parent_ids = |id: &str| {
-        versions
-            .iter()
-            .find(|version| version["version_id"] == id)
-            .unwrap()["source_version_ids"]
-            .clone()
-    };
-    assert_eq!(parent_ids(original), json!([]));
-    assert_eq!(parent_ids(&main_version), json!([original]));
-    let newest = versions
+    let newest = nodes
         .iter()
         .find(|version| version["current"] == true)
         .unwrap();
-    assert_eq!(newest["source_version_ids"], json!([original]));
     assert_ne!(newest["version_id"], main_version);
     assert_eq!(newest["branch_id"], branch_id);
     for version in versions {
-        assert_eq!(version["file_id"], file);
+        assert_eq!(versions_page["identity"]["file_id"], file);
         assert_ne!(version["version_id"], sibling["version_id"]);
+        let id = version["version_id"].as_str().unwrap();
+        let sources = history_version_sources(&app, &session, file, &history, id, None).await;
+        assert!(sources["page"]["next_cursor"].is_null());
+        let sources = sources["sources"].as_array().unwrap();
+        assert_eq!(version["source_count"], sources.len().to_string());
+        if id == original {
+            assert!(sources.is_empty());
+        } else {
+            assert_eq!(sources.len(), 1);
+            assert_eq!(sources[0]["ordinal"], "0");
+            assert_eq!(sources[0]["version_id"], original);
+        }
         assert!(
-            version["source_version_ids"]
-                .as_array()
-                .unwrap()
+            sources
                 .iter()
-                .all(|parent| parent != &sibling["version_id"])
+                .all(|source| source["version_id"] != sibling["version_id"])
         );
     }
     let sibling_history = success(
@@ -960,11 +1121,20 @@ async fn file_history_exposes_durable_content_edges_and_rechecks_authentication(
         None,
     )
     .await;
-    assert_eq!(sibling_history["versions"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        sibling_history["versions"][0]["source_version_ids"],
-        json!([])
-    );
+    let sibling_file = sibling["file_id"].as_str().unwrap();
+    let sibling_versions =
+        history_versions(&app, &session, sibling_file, &sibling_history, None).await;
+    assert_eq!(sibling_versions["versions"].as_array().unwrap().len(), 1);
+    let sibling_sources = history_version_sources(
+        &app,
+        &session,
+        sibling_file,
+        &sibling_history,
+        sibling["version_id"].as_str().unwrap(),
+        None,
+    )
+    .await;
+    assert!(sibling_sources["sources"].as_array().unwrap().is_empty());
     assert_eq!(
         send(&app, None, "GET", &history_path, None).await.0,
         StatusCode::UNAUTHORIZED
@@ -1152,18 +1322,22 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
     let branch_id = branch["result"]["branch_id"].as_str().unwrap();
     let history_path = format!("/api/file-manager/files/{file}/history");
     let pending_history = success(&app, &token, "GET", &history_path, None).await;
-    assert_eq!(pending_history["versions"].as_array().unwrap().len(), 1);
-    let pending_branch = pending_history["branches"]
+    let pending_versions = history_versions(&app, &token, file, &pending_history, None).await;
+    assert_eq!(pending_versions["versions"].as_array().unwrap().len(), 1);
+    let pending_branches =
+        history_related(&app, &token, file, &pending_history, "branches", None).await;
+    let pending_branch = pending_branches["branches"]
         .as_array()
         .unwrap()
         .iter()
         .find(|branch| branch["branch_id"] == branch_id)
         .unwrap();
-    assert_eq!(pending_branch["version_id"], one["version_id"]);
-    assert_eq!(pending_branch["inherited"], true);
-    assert!(pending_branch["own_version_id"].is_null());
-    assert_eq!(pending_branch["source_version_id"], one["version_id"]);
-    assert_eq!(pending_branch["materialized"], false);
+    assert_eq!(pending_branch["content"]["version_id"], one["version_id"]);
+    assert_eq!(pending_branch["content"]["source"]["kind"], "inherited");
+    assert_eq!(
+        pending_branch["content"]["source"]["source_version_id"],
+        one["version_id"]
+    );
     assert_eq!(pending_branch["current"], false);
     let branch_info = success(
         &app,
@@ -1383,20 +1557,26 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
         None,
     )
     .await;
-    assert_eq!(history["selected_branch_id"], branch_id);
-    assert_eq!(history["branches"].as_array().unwrap().len(), 2);
-    assert_eq!(history["versions"].as_array().unwrap().len(), 2);
-    let materialized = history["branches"]
+    assert_eq!(
+        history["identity"]["context"]["selected_branch_id"],
+        branch_id
+    );
+    let branches = history_related(&app, &token, file, &history, "branches", None).await;
+    let versions = history_versions(&app, &token, file, &history, None).await;
+    assert_eq!(branches["branches"].as_array().unwrap().len(), 2);
+    assert_eq!(versions["versions"].as_array().unwrap().len(), 2);
+    let materialized = branches["branches"]
         .as_array()
         .unwrap()
         .iter()
         .find(|branch| branch["branch_id"] == branch_id)
         .unwrap();
-    assert_eq!(materialized["materialized"], true);
-    assert_eq!(materialized["inherited"], false);
-    assert_eq!(materialized["own_version_id"], materialized["version_id"]);
-    assert!(materialized["source_version_id"].is_null());
-    assert!(materialized["version_id"].is_string());
+    assert_eq!(materialized["content"]["source"]["kind"], "owned");
+    assert!(materialized["content"]["version_id"].is_string());
+    assert_eq!(
+        materialized["content"]["version_id"],
+        history["context"]["content"]["version_id"]
+    );
     // Historical registration views keep the parent version after the branch
     // gets its own content, and never claim that parent as an owned version.
     let pending_commit = branch_info["head_commit_id"].as_str().unwrap();
@@ -1443,13 +1623,16 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
     .await;
     assert!(actual_source["version"].is_object());
     assert_eq!(actual_source["version"]["version_id"], one["version_id"]);
-    assert!(
-        history["versions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|v| v["created_at"].is_string())
-    );
+    for version in versions["versions"].as_array().unwrap() {
+        let id = version["version_id"].as_str().unwrap();
+        let created_at =
+            small_history_field(&app, &token, file, &history, id, "created_at", None).await;
+        assert!(!created_at.is_empty());
+        assert_eq!(
+            version["fields"]["created_at"]["byte_length"],
+            created_at.len().to_string()
+        );
+    }
     assert_eq!(
         send(
             &app,
@@ -1668,6 +1851,7 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         (parent_b, b"B".as_slice()),
         (parent_c, b"C".as_slice()),
     ] {
+        let file = parent["file_id"].as_str().unwrap();
         let history = success(
             &app,
             &token,
@@ -1680,20 +1864,39 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         )
         .await;
         assert_eq!(
-            history["versions"].as_array().unwrap().len(),
+            history_versions(&app, &token, file, &history, None).await["versions"]
+                .as_array()
+                .unwrap()
+                .len(),
             1,
             "registering and selecting branches never copies content"
         );
-        assert_eq!(history["inherited"], true);
-        assert_eq!(history["version_id"], parent["version_id"]);
-        assert!(history["own_version_id"].is_null());
+        assert_eq!(history["context"]["content"]["source"]["kind"], "inherited");
         assert_eq!(
-            history["branches"].as_array().unwrap().len(),
+            history["context"]["content"]["version_id"],
+            parent["version_id"]
+        );
+        assert_eq!(
+            history["context"]["content"]["source"]["source_version_id"],
+            parent["version_id"]
+        );
+        assert_eq!(
+            history_related(&app, &token, file, &history, "branches", None).await["branches"]
+                .as_array()
+                .unwrap()
+                .len(),
             1,
             "directory registration must reuse each existing shared file branch"
         );
         assert_eq!(
-            version_bytes(&app, &token, history["version_id"].as_str().unwrap()).await,
+            version_bytes(
+                &app,
+                &token,
+                history["context"]["content"]["version_id"]
+                    .as_str()
+                    .unwrap()
+            )
+            .await,
             expected
         );
     }
@@ -1733,7 +1936,20 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         None,
     )
     .await;
-    assert_eq!(b_history["versions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        history_versions(
+            &app,
+            &token,
+            pending_b["file_id"].as_str().unwrap(),
+            &b_history,
+            None
+        )
+        .await["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     let a_history = success(
         &app,
         &token,
@@ -1745,7 +1961,20 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         None,
     )
     .await;
-    assert_eq!(a_history["versions"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        history_versions(
+            &app,
+            &token,
+            pending_a["file_id"].as_str().unwrap(),
+            &a_history,
+            None
+        )
+        .await["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     let mixed = success(
         &app,
         &token,
@@ -2890,14 +3119,23 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         None,
     )
     .await;
-    let shared_a = a_history["branches"]
+    let a_branches = history_related(
+        &app,
+        &session,
+        original["file_id"].as_str().unwrap(),
+        &a_history,
+        "branches",
+        None,
+    )
+    .await;
+    let shared_a = a_branches["branches"]
         .as_array()
         .unwrap()
         .iter()
         .find(|branch| branch["branch_id"] == original["selected_branch_id"])
         .unwrap();
     assert_eq!(
-        shared_a["version_id"], latest_a,
+        shared_a["content"]["version_id"], latest_a,
         "saving a sibling must not rewind shared file branch HEAD"
     );
     success(
@@ -3546,17 +3784,27 @@ async fn moved_file_aliases_keep_independent_path_contexts_for_history_and_write
         format!("/api/file-manager/files/{file}/history?repository_id={repo}&path={path}")
     };
     assert_eq!(
-        success(&app, &token, "GET", &history_route("a/report.txt"), None).await["version_id"],
+        success(&app, &token, "GET", &history_route("a/report.txt"), None).await["context"]["content"]
+            ["version_id"],
         original["version_id"]
     );
     manager_upload(&app, &token, "b/report.txt", b"written in b").await;
     let a = success(&app, &token, "GET", &history_route("a/report.txt"), None).await;
     let b = success(&app, &token, "GET", &history_route("b/report.txt"), None).await;
-    assert_eq!(a["version_id"], original["version_id"]);
-    assert_ne!(b["version_id"], original["version_id"]);
-    assert_ne!(a["selected_branch_id"], b["selected_branch_id"]);
-    assert_eq!(a["inherited"], true);
-    assert_eq!(b["inherited"], false);
+    assert_eq!(
+        a["context"]["content"]["version_id"],
+        original["version_id"]
+    );
+    assert_ne!(
+        b["context"]["content"]["version_id"],
+        original["version_id"]
+    );
+    assert_ne!(
+        a["identity"]["context"]["selected_branch_id"],
+        b["identity"]["context"]["selected_branch_id"]
+    );
+    assert_eq!(a["context"]["content"]["source"]["kind"], "inherited");
+    assert_eq!(b["context"]["content"]["source"]["kind"], "owned");
     let index = root.path().join("system/index.sqlite");
     let saved_index = root.path().join("system/index.saved");
     std::fs::rename(&index, &saved_index).unwrap();
@@ -3576,23 +3824,35 @@ async fn moved_file_aliases_keep_independent_path_contexts_for_history_and_write
         "b write must not alter the retained a alias"
     );
     assert_eq!(
-        version_bytes(&app, &token, a["version_id"].as_str().unwrap()).await,
+        version_bytes(
+            &app,
+            &token,
+            a["context"]["content"]["version_id"].as_str().unwrap()
+        )
+        .await,
         b"original"
     );
     assert_eq!(
-        version_bytes(&app, &token, b["version_id"].as_str().unwrap()).await,
+        version_bytes(
+            &app,
+            &token,
+            b["context"]["content"]["version_id"].as_str().unwrap()
+        )
+        .await,
         b"written in b"
     );
     success(&app,&token,"POST",&format!("/api/file-manager/files/{file}/select"),Some(json!({
-        "repository_id":repo,"path":"a/report.txt","branch_id":b["selected_branch_id"],"operation_id":new_id("op")
+        "repository_id":repo,"path":"a/report.txt","branch_id":b["identity"]["context"]["selected_branch_id"],"operation_id":new_id("op")
     }))).await;
     assert_eq!(
-        success(&app, &token, "GET", &history_route("a/report.txt"), None).await["version_id"],
-        b["version_id"]
+        success(&app, &token, "GET", &history_route("a/report.txt"), None).await["context"]["content"]
+            ["version_id"],
+        b["context"]["content"]["version_id"]
     );
     assert_eq!(
-        success(&app, &token, "GET", &history_route("b/report.txt"), None).await["version_id"],
-        b["version_id"]
+        success(&app, &token, "GET", &history_route("b/report.txt"), None).await["context"]["content"]
+            ["version_id"],
+        b["context"]["content"]["version_id"]
     );
     assert_eq!(
         send(
@@ -3696,6 +3956,7 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
         None,
     )
     .await;
+    let before_versions = history_versions(&app, &admin, id, &before, None).await;
     let body = json!({"name":"客户主稿","operation_id":new_id("op")});
     let result = success(&app, &admin, "PATCH", &route, Some(body.clone())).await;
     assert_eq!(result["result"]["name"], "客户主稿");
@@ -3720,10 +3981,17 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
         None,
     )
     .await;
-    assert_eq!(after["versions"], before["versions"]);
-    assert_eq!(after["selected_branch_id"], before["selected_branch_id"]);
+    assert_eq!(
+        history_versions(&app, &admin, id, &after, None).await["versions"],
+        before_versions["versions"]
+    );
+    assert_eq!(
+        after["identity"]["context"]["selected_branch_id"],
+        before["identity"]["context"]["selected_branch_id"]
+    );
+    let after_branches = history_related(&app, &admin, id, &after, "branches", None).await;
     assert!(
-        after["branches"]
+        after_branches["branches"]
             .as_array()
             .unwrap()
             .iter()
@@ -3861,8 +4129,9 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
         None,
     )
     .await;
+    let current_branches = history_related(&app, &admin, id, &current, "branches", None).await;
     assert!(
-        current["branches"]
+        current_branches["branches"]
             .as_array()
             .unwrap()
             .iter()
@@ -3897,7 +4166,8 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
     let history_route = format!("/api/file-manager/files/{file}/history");
     let before = success(&app, &admin, "GET", &history_route, None).await;
     assert_eq!(before["nodes"].as_array().unwrap().len(), 1);
-    assert_eq!(before["node_id"], body);
+    assert_eq!(before["identity"]["context"]["current_node_id"], body);
+    let before_versions = history_versions(&app, &admin, file, &before, None).await;
     manager_namespace(&app, &admin, "rename", "documents", Some("archive")).await;
     let after = success(
         &app,
@@ -3907,10 +4177,21 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
         None,
     )
     .await;
-    assert_eq!(
-        after["versions"], before["versions"],
-        "renaming a folder reuses the real content DTO and body"
-    );
+    let after_versions =
+        history_versions(&app, &admin, file, &after, Some((repo, "archive/one.txt"))).await;
+    assert_eq!(after_versions["versions"].as_array().unwrap().len(), 1);
+    for field in [
+        "version_id",
+        "version_sequence",
+        "size",
+        "content_hash",
+        "source_count",
+    ] {
+        assert_eq!(
+            after_versions["versions"][0][field], before_versions["versions"][0][field],
+            "renaming a folder reuses the real content identity and body"
+        );
+    }
     assert_eq!(after["nodes"].as_array().unwrap().len(), 2);
     let path_node = after["nodes"]
         .as_array()
@@ -3922,12 +4203,20 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
     let node = path_node["node_id"].as_str().unwrap();
     assert!(node.starts_with("fnode_"));
     assert_eq!(path_node["version_id"], body);
-    assert_eq!(path_node["parent_node_ids"], json!([body]));
+    let parents = history_related(
+        &app,
+        &admin,
+        file,
+        &after,
+        &format!("nodes/{node}/parents"),
+        Some((repo, "archive/one.txt")),
+    )
+    .await;
+    assert_eq!(parents["parents"], json!([{"parent_node_id":body}]));
     assert_eq!(path_node["path"], "archive/one.txt");
     assert_eq!(path_node["previous_path"], "documents/one.txt");
     assert_eq!(path_node["current"], true);
-    assert_eq!(after["node_id"], node);
-    assert_eq!(after["current_node_id"], node);
+    assert_eq!(after["identity"]["context"]["current_node_id"], node);
     let nested = success(
         &app,
         &admin,
@@ -3949,7 +4238,13 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
         None,
     )
     .await;
-    assert_eq!(two_history["versions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        history_versions(&app, &admin, two_file, &two_history, None).await["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(two_history["nodes"].as_array().unwrap().len(), 2);
     assert_eq!(version_bytes(&app, &admin, body).await, b"original one");
     let scopes = success(
@@ -4041,26 +4336,45 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
     let branch_id = branch["result"]["branch_id"].as_str().unwrap();
     let registered = success(&app, &admin, "GET", &history_route, None).await;
     assert_eq!(registered["nodes"].as_array().unwrap().len(), 2);
-    assert_eq!(registered["versions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        history_versions(&app, &admin, file, &registered, None).await["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let registered_branches =
+        history_related(&app, &admin, file, &registered, "branches", None).await;
     assert!(
-        registered["branches"]
+        registered_branches["branches"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|branch| branch["branch_id"] == branch_id && branch["file_node_id"] == node)
+            .any(|branch| branch["branch_id"] == branch_id && branch["node_id"] == node)
     );
     success(&app,&admin,"POST",&format!("/api/file-manager/files/{file}/select"),Some(json!({"repository_id":repo,"path":"archive/one.txt","branch_id":branch_id,"operation_id":new_id("op")}))).await;
     assert_eq!(
-        success(&app, &admin, "GET", &history_route, None).await["node_id"],
+        success(&app, &admin, "GET", &history_route, None).await["identity"]["context"]["current_node_id"],
         node
     );
     manager_upload(&app, &admin, "archive/one.txt", b"new body after path node").await;
     let written = success(&app, &admin, "GET", &history_route, None).await;
-    assert_eq!(written["versions"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        history_versions(&app, &admin, file, &written, None).await["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(written["nodes"].as_array().unwrap().len(), 3);
-    let current_body = written["version_id"].as_str().unwrap();
+    let current_body = written["context"]["content"]["version_id"]
+        .as_str()
+        .unwrap();
     assert_ne!(current_body, body);
-    assert_eq!(written["node_id"], current_body);
+    assert_eq!(
+        written["identity"]["context"]["current_node_id"],
+        current_body
+    );
     let content = written["nodes"]
         .as_array()
         .unwrap()
@@ -4068,10 +4382,20 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
         .find(|node| node["node_id"] == current_body)
         .unwrap();
     assert_eq!(content["kind"], "content");
-    assert_eq!(content["parent_node_ids"], json!([node]));
+    let parents = history_related(
+        &app,
+        &admin,
+        file,
+        &written,
+        &format!("nodes/{current_body}/parents"),
+        None,
+    )
+    .await;
+    assert_eq!(parents["parents"], json!([{"parent_node_id":node}]));
+    let sources = history_version_sources(&app, &admin, file, &written, current_body, None).await;
     assert_eq!(
-        content["source_version_ids"],
-        json!([body]),
+        sources["sources"],
+        json!([{"ordinal":"0","version_id":body}]),
         "real body provenance remains separate from the file-node graph"
     );
     assert_eq!(content["current"], true);
@@ -4774,7 +5098,10 @@ async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map(
         .to_owned();
     let history_route = format!("/api/file-manager/files/{file}/history");
     let history = success(&app, &token, "GET", &history_route, None).await;
-    let node = history["node_id"].as_str().unwrap().to_owned();
+    let node = history["identity"]["context"]["current_node_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(node.starts_with("fnode_"));
     let mut receipts = Vec::new();
     for (method, route, kind, id_key, canonical) in [

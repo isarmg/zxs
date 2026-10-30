@@ -110,6 +110,7 @@ fn remote_errno(code: ErrorCode) -> i32 {
         | ErrorCode::BatchScopeConflict
         | ErrorCode::NamespaceConflict
         | ErrorCode::HeadConflict
+        | ErrorCode::HistoryChanged
         | ErrorCode::CommitPreparationStale
         | ErrorCode::WorkspaceRebaseRequired => libc::EAGAIN,
         ErrorCode::AlreadyInitialized

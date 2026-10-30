@@ -1,4 +1,6 @@
 use super::*;
+use crate::files::actions::history::complete_history_load;
+use crate::files::history::FileHistory;
 use json_codec::Value;
 
 #[test]
@@ -155,11 +157,7 @@ fn selected_file_history_read_requires_an_active_session() {
 }
 
 fn history_response(note: &str) -> FileHistory {
-    FileHistory::parse(
-        json_codec::json!({"file_id":"file","branches":[],"selected_branch_id":null,"note":note}),
-        "file",
-    )
-    .unwrap()
+    (*crate::files::history::tests::history(json_codec::json!({"note":note}))).clone()
 }
 
 fn history_load_state() -> State {
@@ -215,7 +213,7 @@ fn history_completion_requires_its_session_and_selected_file() {
 fn current_history_completion_settles_loading_and_failure_discards_stale_heads() {
     let mut state = history_load_state();
     complete_history_load(&mut state, 3, 8, "file", Ok(history_response("current"))).unwrap();
-    assert_eq!(state.files.file_history["note"], "current");
+    assert_eq!(state.files.file_history.file_note(), Some("current"));
     assert!(!state.files.history_loading);
     assert!(state.files.history_cancellation.is_none());
     state.files.history_loading = true;
@@ -223,7 +221,7 @@ fn current_history_completion_settles_loading_and_failure_discards_stale_heads()
     let error =
         complete_history_load(&mut state, 3, 9, "file", Err(disk_read_error(503))).unwrap_err();
     assert_eq!(error.status, 503);
-    assert!(state.files.file_history.is_null());
+    assert!(state.files.file_history.loaded() && !state.files.file_history.ready());
     assert!(!state.files.history_loading);
     assert!(state.files.history_cancellation.is_none());
 }
@@ -600,7 +598,7 @@ fn admitted_page_applies_all_metadata_and_keeps_independent_selected_details() {
         state.files.selected.as_ref().unwrap().note(),
         Some("fresh entry note")
     );
-    assert_eq!(state.files.file_history["note"], "loaded history");
+    assert_eq!(state.files.file_history.file_note(), Some("loaded history"));
     assert_eq!(
         state.files.checked_entries,
         [entry_key(&row)].into_iter().collect()

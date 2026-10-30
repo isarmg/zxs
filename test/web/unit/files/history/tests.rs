@@ -1,15 +1,30 @@
+//! UI-only fixtures. Strict current wire admission is covered by window_tests.rs.
 use super::*;
 use crate::snapshot::Snapshot;
 use json_codec::json;
+use storage_contract::history_window::{
+    HistoryCollection, HistoryContentDisposition, HistoryFieldInfo, HistoryNodeFields,
+    HistoryPageLimit, HistoryQueryHash, HistoryRepositoryId, HistoryRoot, HistoryTreeId,
+    HistoryVersionId,
+};
+
+fn text(value: &Value, field: &str) -> Option<String> {
+    value[field].as_str().map(str::to_owned)
+}
+
+fn number(value: &Value, field: &str, default: u64) -> u64 {
+    match value.get(field) {
+        None => default,
+        Some(Value::String(value)) => value.parse().unwrap(),
+        Some(value) => value.as_u64().unwrap(),
+    }
+}
 
 pub(crate) fn branch_wire(overrides: Value) -> Value {
     let mut value = json!({
-        "branch_id":"branch", "history_tree_id":"history", "name":"main",
-        "head_commit_id":"head", "fork_commit_id":"fork", "branch_kind":"file",
-        "file_id":"file", "pending_file_versions":{}, "generation":"1", "state":"active",
-        "materialized":true, "inherited":false, "content_state":"LIVE",
-        "version_id":"version", "own_version_id":"version", "source_version_id":null,
-        "visible_content_state":"LIVE", "read_only":false, "alias_of":null,
+        "branch_id":"branch", "name":"main", "state":"active", "alias_of":null,
+        "materialized":true, "inherited":false, "version_id":"version",
+        "own_version_id":"version", "source_version_id":null, "content_state":"LIVE",
         "node_id":"version", "current":false
     });
     value
@@ -18,260 +33,455 @@ pub(crate) fn branch_wire(overrides: Value) -> Value {
         .extend(overrides.as_object().unwrap().clone());
     value
 }
+
 pub(crate) fn branch(overrides: Value) -> FileBranch {
-    wire::branch(branch_wire(overrides), "file", None).unwrap()
-}
-pub(crate) fn response(branches: Vec<Value>, selected: Option<&str>) -> Value {
-    json!({"file_id":"file", "selected_branch_id":selected, "branches":branches})
+    let value = branch_wire(overrides);
+    let version = text(&value, "version_id").filter(|value| !value.is_empty());
+    let head = text(&value, "node_id")
+        .filter(|value| !value.is_empty())
+        .or_else(|| text(&value, "file_node_id").filter(|value| !value.is_empty()))
+        .or_else(|| version.clone());
+    let pending = value["pending"].as_bool().unwrap_or_else(|| {
+        version.is_none()
+            || value["inherited"] == true
+            || value["materialized"] == false
+            || value["content_state"] == "PENDING"
+    });
+    let writable = value["read_only"]
+        .as_bool()
+        .map(|read_only| !read_only)
+        .unwrap_or_else(|| value["state"] == "active" && value["alias_of"].is_null());
+    FileBranch {
+        id: text(&value, "branch_id").unwrap(),
+        name: text(&value, "name").unwrap(),
+        head,
+        pending,
+        writable,
+    }
 }
 
-/// Focused consumers provide unrelated history metadata without duplicating the wire fixture.
-pub(crate) fn history(mut metadata: Value) -> Snapshot<FileHistory> {
-    if metadata.is_null() {
+pub(crate) fn node(value: Value) -> FileNode {
+    let id = text(&value, "node_id")
+        .or_else(|| text(&value, "version_id"))
+        .unwrap_or_else(|| "fixture-node".into());
+    let version = match value.get("version_id") {
+        None => Some(id.clone()),
+        Some(Value::Null) => None,
+        Some(value) => Some(value.as_str().unwrap().to_owned()),
+    };
+    let kind = match value["kind"].as_str().unwrap_or("content") {
+        "content" => NodeKind::Content,
+        "rename" => NodeKind::Rename,
+        "tags" => NodeKind::Tags,
+        "merge" => NodeKind::Merge,
+        kind => panic!("unknown UI fixture node kind: {kind}"),
+    };
+    let note = text(&value, "note").unwrap_or_default();
+    let body_note = match value.get("body_note") {
+        Some(Value::Null) => None,
+        Some(value) => Some(value.as_str().unwrap().to_owned()),
+        None => (kind == NodeKind::Content && version.is_some()).then(|| note.clone()),
+    };
+    let parents = if let Some(edges) = value["parent_edges"].as_array() {
+        edges
+            .iter()
+            .map(|edge| Parent {
+                id: text(edge, "node_id").unwrap(),
+                endpoint: match edge["endpoint"].as_str().unwrap() {
+                    "in_window" => ParentEndpoint::InWindow,
+                    "outside_window" => ParentEndpoint::OutsideWindow,
+                    endpoint => panic!("unknown UI fixture endpoint: {endpoint}"),
+                },
+            })
+            .collect()
+    } else {
+        value["parent_node_ids"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|id| Parent {
+                id: id.as_str().unwrap().to_owned(),
+                endpoint: ParentEndpoint::InWindow,
+            })
+            .collect()
+    };
+    let parent_set = match value["parent_set"]["state"].as_str().unwrap_or("complete") {
+        "complete" => ParentSet::Complete,
+        "more" => ParentSet::More {
+            cursor: text(&value["parent_set"], "cursor").unwrap(),
+        },
+        state => panic!("unknown UI fixture parent set: {state}"),
+    };
+    let tags = value["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|tag| tag.as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert!(tags.len() <= storage_contract::MAX_FILE_TAGS);
+    assert!(
+        tags.iter()
+            .all(|tag| tag.len() <= storage_contract::MAX_TAG_BYTES)
+    );
+    let field = |name| HistoryFieldInfo {
+        byte_length: number(&value["fields"][name], "byte_length", 0),
+    };
+    FileNode {
+        id,
+        version,
+        sequence: number(&value, "sequence", 0),
+        kind,
+        note,
+        body_note,
+        tags,
+        path: text(&value, "path"),
+        previous_path: text(&value, "previous_path"),
+        parents,
+        parent_set,
+        content_state: match value["content_state"].as_str() {
+            Some("AVAILABLE") => Some(storage_contract::ContentState::Available),
+            Some("PURGED") => Some(storage_contract::ContentState::Purged),
+            Some("MIGRATED") => Some(storage_contract::ContentState::Migrated),
+            _ => None,
+        },
+        fields: HistoryNodeFields {
+            message: field("message"),
+            author: field("author"),
+            created_at: field("created_at"),
+        },
+    }
+}
+
+fn identity(max_entries: u64) -> HistoryPageIdentity {
+    HistoryPageIdentity {
+        history_root: HistoryRoot::parse(&"a".repeat(64)).unwrap(),
+        file_id: format!("file_{:032x}", 1).parse().unwrap(),
+        collection: HistoryCollection::Nodes,
+        context: HistoryResolvedContext {
+            repository_id: HistoryRepositoryId::parse(&format!("repo_{:032x}", 1)).unwrap(),
+            history_tree_id: HistoryTreeId::parse(&format!("history_{:032x}", 1)).unwrap(),
+            path: None,
+            current_node_id: None,
+            selected_branch_id: None,
+        },
+        query_hash: HistoryQueryHash::parse(&"b".repeat(64)).unwrap(),
+        limit: HistoryPageLimit::default_for(&HistoryCollection::Nodes),
+        action_max_entries: max_entries,
+    }
+}
+
+/// Construct local control state without a wire decoder or legacy response fallback.
+pub(crate) fn history(value: Value) -> Snapshot<FileHistory> {
+    if value.is_null() {
         return Default::default();
     }
-    let fields = metadata.as_object_mut().unwrap();
-    fields.entry("file_id").or_insert_with(|| "file".into());
-    fields.entry("selected_branch_id").or_insert(Value::Null);
-    fields.entry("branches").or_insert_with(|| json!([]));
-    let file = metadata["file_id"].as_str().unwrap().to_owned();
-    FileHistory::parse(metadata, &file).unwrap().into()
+    let nodes = value["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(position, value)| {
+            let mut value = value.clone();
+            if value.get("node_id").is_none() && value.get("version_id").is_none() {
+                value["node_id"] = format!("fixture-node-{position}").into();
+            }
+            node(value)
+        })
+        .collect::<Vec<_>>();
+    let branches = value["branches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .cloned()
+        .map(branch)
+        .collect::<Vec<_>>();
+    let selected = text(&value, "selected_branch_id");
+    let current_id = text(&value, "current_node_id")
+        .or_else(|| text(&value, "node_id"))
+        .or_else(|| {
+            value["nodes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|node| node["current"] == true)
+                .and_then(|node| text(node, "node_id"))
+        });
+    let current_version = match value.get("version_id") {
+        Some(Value::Null) => None,
+        Some(value) => Some(value.as_str().unwrap().to_owned()),
+        None => nodes
+            .iter()
+            .find(|node| Some(node.id()) == current_id.as_deref())
+            .and_then(FileNode::version_id)
+            .map(str::to_owned),
+    };
+    let current_inherited =
+        value["inherited"] == true || current_version.is_some() && value["materialized"] == false;
+    let current_node = nodes
+        .iter()
+        .find(|node| Some(node.id()) == current_id.as_deref())
+        .cloned()
+        .or_else(|| {
+            value["current_node"]
+                .as_object()
+                .map(|_| node(value["current_node"].clone()))
+        })
+        .or_else(|| {
+            current_id.as_ref().map(|id| {
+                node(json!({
+                    "node_id":id, "version_id":current_version, "inherited":current_inherited,
+                    "note":value["current_note"].as_str().unwrap_or("")
+                }))
+            })
+        });
+    let current_branch = branches
+        .iter()
+        .find(|branch| Some(branch.id()) == selected.as_deref())
+        .cloned()
+        .or_else(|| {
+            value["current_branch"]
+                .as_object()
+                .map(|_| branch(value["current_branch"].clone()))
+        });
+    let content = current_version.as_ref().map(|_| HistoryContentDisposition {
+        version_id: Some(HistoryVersionId::parse(&format!("ver_{:032x}", 1)).unwrap()),
+        source: if current_inherited {
+            HistoryContentSource::Inherited {
+                source_version_id: None,
+            }
+        } else {
+            HistoryContentSource::Owned
+        },
+        stored_state: None,
+    });
+    let loaded = value["loaded"] != false;
+    FileHistory {
+        identity: loaded.then(|| identity(number(&value, "action_max_entries", 100_000))),
+        root: loaded.then(|| text(&value, "history_root").unwrap_or_else(|| "root-one".into())),
+        selected,
+        context: loaded.then(|| HistoryContextSummary {
+            note: text(&value, "note").unwrap_or_default(),
+            content,
+        }),
+        current_id,
+        current_version,
+        current_inherited,
+        current_node,
+        nodes: nodes.into(),
+        branches: branches.into(),
+        current_branch,
+        page: loaded.then_some(HistoryPageCursors {
+            previous_cursor: None,
+            next_cursor: None,
+        }),
+        ready: loaded && value["ready"] != false,
+        window_key: number(&value, "window_key", 1),
+        ..Default::default()
+    }
+    .into()
 }
+
+fn node_value(node: &FileNode) -> Value {
+    let mut value = json!({
+        "node_id":node.id(), "version_id":node.version_id(), "sequence":node.sequence().to_string(),
+        "kind":match node.kind() {
+            NodeKind::Content => "content", NodeKind::Rename => "rename",
+            NodeKind::Tags => "tags", NodeKind::Merge => "merge",
+        },
+        "note":node.note(), "tags":node.tags(), "path":node.path(), "previous_path":node.previous_path(),
+        "content_state":node.content_state(),
+        "parent_edges":node.parents().iter().map(|parent| json!({
+            "node_id":parent.id(), "endpoint":match parent.endpoint() {
+                ParentEndpoint::InWindow => "in_window", ParentEndpoint::OutsideWindow => "outside_window",
+            }
+        })).collect::<Vec<_>>(),
+        "parent_set":match node.parent_set() {
+            ParentSet::Complete => json!({"state":"complete"}),
+            ParentSet::More { cursor } => json!({"state":"more", "cursor":cursor}),
+        },
+        "fields":{
+            "message":{"byte_length":node.field_bytes(HistoryField::Message).to_string()},
+            "author":{"byte_length":node.field_bytes(HistoryField::Author).to_string()},
+            "created_at":{"byte_length":node.field_bytes(HistoryField::CreatedAt).to_string()}
+        }
+    });
+    if node.body_note()
+        != (node.kind() == NodeKind::Content && node.visible_content()).then(|| node.note())
+    {
+        value["body_note"] = json!(node.body_note());
+    }
+    value
+}
+
+fn branch_value(branch: &FileBranch) -> Value {
+    json!({
+        "branch_id":branch.id(), "name":branch.name(), "node_id":branch.head(),
+        "version_id":branch.head(), "pending":branch.pending(), "read_only":!branch.writable()
+    })
+}
+
 pub(crate) fn update_metadata(
-    history: &mut Snapshot<FileHistory>,
+    snapshot: &mut Snapshot<FileHistory>,
     update: impl FnOnce(&mut Value),
 ) {
-    update(&mut history.metadata);
+    let mut value = json!({
+        "loaded":snapshot.loaded(), "ready":snapshot.ready(), "history_root":snapshot.root(),
+        "window_key":snapshot.window_key(), "selected_branch_id":snapshot.selected(),
+        "note":snapshot.file_note(), "current_node_id":snapshot.current_node_id(),
+        "version_id":snapshot.current_version.as_deref(), "inherited":snapshot.current_inherited(),
+        "materialized":!snapshot.current_inherited(),
+        "current_node":snapshot.current_node.as_ref().map(node_value),
+        "current_branch":snapshot.current_branch.as_ref().map(branch_value),
+        "nodes":snapshot.nodes().iter().map(node_value).collect::<Vec<_>>(),
+        "branches":snapshot.branches().iter().map(branch_value).collect::<Vec<_>>(),
+        "action_max_entries":snapshot.action_max_entries()
+    });
+    update(&mut value);
+    *snapshot = history(value);
 }
 
 #[test]
-fn state_and_alias_are_admitted_once_as_write_disposition() {
-    for state in ["active", "archived", "migrated", "merged"] {
-        for alias in [None, Some("survivor")] {
-            let readonly = state != "active" || alias.is_some();
-            let value = branch_wire(json!({"state":state, "alias_of":alias, "read_only":readonly}));
-            let parsed = FileHistory::parse(response(vec![value.clone()], None), "file").unwrap();
-            assert_eq!(parsed.branches()[0].writable(), !readonly);
-            assert!(parsed.get("branches").is_none());
-            assert!(parsed.get("selected_branch_id").is_none());
-            let mut contradictory = value;
-            contradictory["read_only"] = (!readonly).into();
-            assert!(FileHistory::parse(response(vec![contradictory], None), "file").is_err());
-        }
-    }
+fn unloaded_and_loaded_empty_ui_histories_have_distinct_state() {
+    let unloaded = history(Value::Null);
+    assert!(!unloaded.loaded() && !unloaded.ready());
+    let empty = history(json!({}));
+    assert!(empty.loaded() && empty.ready());
+    assert_eq!(empty.root(), Some("root-one"));
+    assert!(empty.nodes().is_empty());
+    assert_eq!(empty.action_max_entries(), Some(100_000));
 }
 
 #[test]
-fn current_uses_the_single_selected_identity_without_requiring_a_file_branch() {
-    for selected in [None, Some("full-branch"), Some("migrated-branch")] {
-        let parsed = FileHistory::parse(response(vec![], selected), "file").unwrap();
-        assert_eq!(parsed.selected(), selected);
-    }
-    let current = branch_wire(json!({"current":true}));
-    let parsed =
-        FileHistory::parse(response(vec![current.clone()], Some("branch")), "file").unwrap();
-    assert_eq!(parsed.selected(), Some("branch"));
-    assert!(FileHistory::parse(response(vec![current], None), "file").is_err());
-    assert!(
-        FileHistory::parse(
-            response(vec![branch_wire(json!({}))], Some("branch")),
-            "file"
-        )
-        .is_err()
+fn current_summary_stays_independent_from_a_replaced_node_window() {
+    let history = history(json!({
+        "current_node_id":"stored", "version_id":"stored-body", "inherited":true,
+        "nodes":[{"node_id":"newer","version_id":"newer-body"}]
+    }));
+    assert_eq!(history.current_node_id(), Some("stored"));
+    assert!(history.current_inherited());
+    assert_eq!(
+        history.node("stored").unwrap().version_id(),
+        Some("stored-body")
     );
-    let duplicate = branch_wire(json!({}));
-    assert!(
-        FileHistory::parse(response(vec![duplicate.clone(), duplicate], None), "file").is_err()
-    );
+    assert_eq!(history.nodes().len(), 1);
+    assert_eq!(history.nodes()[0].id(), "newer");
 }
 
 #[test]
-fn owned_pending_empty_and_unavailable_content_keep_the_current_projection() {
-    let explicit =
-        branch(json!({"file_node_id":"node","node_id":"node","generation":u64::MAX.to_string()}));
-    assert_eq!(explicit.head(), Some("node"));
-    for visible in ["LIVE", "AVAILABLE", "PURGED", "MIGRATED"] {
-        let owned = branch(json!({"visible_content_state":visible,"content_state":visible}));
-        assert!(!owned.pending());
-        assert_eq!(owned.head(), Some("version"));
-        for source in ["source", ""] {
-            let version = (!source.is_empty()).then_some(source);
-            let pending = branch(json!({
-                "materialized":false, "inherited":true, "content_state":"PENDING",
-                "visible_content_state":if source.is_empty() { "LIVE" } else { visible }, "source_version_id":source,
-                "version_id":version, "own_version_id":null, "node_id":null,
-                "pending_file_versions":{"file":source}
-            }));
-            assert!(pending.pending());
-            assert_eq!(
-                pending.head(),
-                version,
-                "real visible version is the fallback baseline"
-            );
-        }
-    }
-    let empty = branch(
-        json!({"materialized":false, "version_id":null, "own_version_id":null, "node_id":null}),
-    );
-    assert!(empty.pending());
-    assert!(empty.head().is_none());
-    let pending = branch(
-        json!({"materialized":false, "inherited":true, "content_state":"PENDING", "node_id":"",
-        "version_id":"source", "own_version_id":null, "source_version_id":"source", "pending_file_versions":{"file":"source"}}),
-    );
-    assert_eq!(pending.head(), Some("source"));
+fn typed_body_notes_are_separate_from_path_and_metadata_notes() {
+    let content = node(json!({"node_id":"body", "kind":"content", "note":"body note"}));
+    let rename =
+        node(json!({"node_id":"rename", "version_id":"body", "kind":"rename", "note":"path note"}));
+    assert_eq!(content.body_note(), Some("body note"));
+    assert_eq!(rename.note(), "path note");
+    assert_eq!(rename.body_note(), None);
 }
 
 #[test]
-fn backup_pinning_changes_content_markers_without_reinterpreting_branches() {
-    let branch = branch_wire(json!({"current":true}));
-    let mut value = response(vec![branch], Some("branch"));
-    value["nodes"] =
-        json!([{"node_id":"stored","current":false},{"node_id":"primary","current":true}]);
-    value["versions"] =
-        json!([{"version_id":"stored","current":false},{"version_id":"primary","current":true}]);
-    let admitted = FileHistory::parse(value, "file").unwrap();
-    let branches = admitted.branches().to_vec();
-    let entry = crate::files::test_entries::entry(
-        json!({"backup":true,"version_id":"stored","node_id":"stored"}),
-    );
-    let pinned = admitted.for_entry(&entry);
-    assert_eq!(pinned.branches(), branches);
-    assert_eq!(pinned.selected(), Some("branch"));
-    assert_eq!(pinned["node_id"], "stored");
-    assert_eq!(pinned["nodes"][0]["current"], true);
-    assert_eq!(pinned["nodes"][1]["current"], false);
-    assert_eq!(pinned["read_only"], true);
+fn updating_a_ui_fixture_rebuilds_typed_records_and_preserves_parent_boundaries() {
+    let mut history = history(json!({
+        "current_node_id":"node",
+        "nodes":[{"node_id":"node","note":"before",
+            "parent_edges":[{"node_id":"outside","endpoint":"outside_window"}],
+            "parent_set":{"state":"more","cursor":"continue"}}]
+    }));
+    update_metadata(&mut history, |value| {
+        value["nodes"][0]["note"] = "after".into()
+    });
+    let node = history.node("node").unwrap();
+    assert_eq!(node.note(), "after");
+    assert_eq!(node.body_note(), Some("after"));
+    assert_eq!(node.parents()[0].endpoint(), ParentEndpoint::OutsideWindow);
+    assert!(matches!(node.parent_set(), ParentSet::More { cursor } if cursor == "continue"));
+}
+
+fn admitted_node_page(note: &str) -> HistoryWindowPage {
+    use storage_contract::history_window::{HistoryNodeKind, HistoryNodeSummary, HistoryParentSet};
+    let mut identity = identity(100_000);
+    let id = format!("ver_{:032x}", 2);
+    identity.context.current_node_id = Some(id.parse().unwrap());
+    identity.context.path = Some(name_policy::PortablePath::parse("folder/file.txt").unwrap());
+    HistoryWindowPage::Nodes {
+        identity,
+        context: HistoryContextSummary {
+            note: "file note".into(),
+            content: Some(HistoryContentDisposition {
+                version_id: Some(id.parse().unwrap()),
+                source: HistoryContentSource::Owned,
+                stored_state: None,
+            }),
+        },
+        nodes: vec![HistoryNodeSummary {
+            node_id: id.parse().unwrap(),
+            version_id: id.parse().unwrap(),
+            kind: HistoryNodeKind::Content,
+            sequence: 2,
+            current: true,
+            branch_id: None,
+            path: "folder/file.txt".into(),
+            previous_path: None,
+            note: note.into(),
+            tags: vec![],
+            size: 0,
+            content_hash: "c".repeat(64).parse().unwrap(),
+            content_state: None,
+            download_name: "file.txt".into(),
+            storage_name: "v000002_fixture.txt".into(),
+            parents: HistoryParentSet::Complete,
+            fields: HistoryNodeFields {
+                message: HistoryFieldInfo { byte_length: 0 },
+                author: HistoryFieldInfo { byte_length: 0 },
+                created_at: HistoryFieldInfo { byte_length: 0 },
+            },
+        }],
+        edges: vec![],
+        page: HistoryPageCursors {
+            previous_cursor: None,
+            next_cursor: None,
+        },
+    }
 }
 
 #[test]
-fn malformed_or_unknown_branch_fields_are_rejected_at_ingress() {
-    let valid = branch_wire(json!({}));
-    for field in valid.as_object().unwrap().keys() {
-        let mut missing = valid.clone();
-        missing.as_object_mut().unwrap().remove(field);
-        assert!(
-            FileHistory::parse(response(vec![missing], None), "file").is_err(),
-            "{field}"
-        );
-    }
-    for extra in [
-        "status",
-        "is_alias",
-        "alias",
-        "selected",
-        "head_node_id",
-        "future",
-    ] {
-        let mut value = valid.clone();
-        value[extra] = true.into();
-        assert!(
-            FileHistory::parse(response(vec![value], None), "file").is_err(),
-            "{extra}"
-        );
-    }
-    for (field, malformed) in [
-        ("state", json!("ARCHIVED")),
-        ("state", json!({"active":null})),
-        ("branch_kind", json!("full")),
-        ("file_id", json!("other")),
-        ("branch_id", json!("")),
-        ("name", json!("")),
-        ("read_only", json!("false")),
-        ("alias_of", json!("")),
-        ("current", Value::Null),
-        ("generation", json!(1)),
-        ("generation", json!("01")),
-        ("generation", json!("18446744073709551616")),
-        ("file_node_id", Value::Null),
-        ("file_node_id", json!("different")),
-        ("node_id", json!("x".repeat(257))),
-        ("version_id", json!("")),
-        ("materialized", json!(false)),
-        ("inherited", json!(true)),
-        ("content_state", json!("PENDING")),
-        ("visible_content_state", json!("pending")),
-        ("source_version_id", json!("source")),
-        ("own_version_id", Value::Null),
-    ] {
-        let mut value = valid.clone();
-        value[field] = malformed;
-        assert!(
-            FileHistory::parse(response(vec![value], None), "file").is_err(),
-            "{field}"
-        );
-    }
-    for value in [
-        Value::Null,
-        json!({}),
-        json!({"file_id":"file","branches":[]}),
-        json!({"file_id":"file","branches":null,"selected_branch_id":null}),
-        response(vec![], Some("")),
-        response(vec![json!([])], None),
-    ] {
-        assert!(FileHistory::parse(value, "file").is_err());
-    }
-    assert!(FileHistory::parse(response(vec![], None), "other").is_err());
+fn installing_a_newer_window_does_not_move_the_backup_current_identity() {
+    let stored = format!("ver_{:032x}", 1);
+    let newer = format!("ver_{:032x}", 2);
+    let entry = crate::files::test_entries::entry(json!({
+        "backup":true, "node_id":stored, "version_id":stored,
+        "file_id":format!("file_{:032x}", 1), "repository_id":format!("repo_{:032x}", 1),
+        "path":"backup/file.txt", "repository_path":"folder/file.txt"
+    }));
+    let mut history = FileHistory::default();
+    history
+        .install_nodes(admitted_node_page("newer body"), &entry, true)
+        .unwrap();
+    assert_eq!(history.current_node_id(), Some(stored.as_str()));
+    assert_eq!(history.current_version.as_deref(), Some(stored.as_str()));
+    assert_eq!(history.nodes()[0].id(), newer);
+    assert!(history.nodes().iter().all(|node| node.id() != stored));
+    assert!(entry.read_only());
 }
 
 #[test]
-fn directory_and_file_branch_contracts_are_not_interchangeable() {
-    let directory = crate::files::test_entries::branch_wire(json!({}));
-    assert!(FileHistory::parse(response(vec![directory], None), "file").is_err());
-    assert!(crate::files::page::DirectoryBranch::parse(branch_wire(json!({}))).is_err());
-}
-
-#[test]
-fn decoding_keeps_the_concrete_error_source() {
-    use std::error::Error;
-    let error = FileHistory::parse(
-        response(vec![branch_wire(json!({"read_only":0}))], None),
-        "file",
-    )
-    .unwrap_err();
-    assert_eq!(error.status, 200);
-    assert_eq!(error.code, storage_contract::ErrorCode::InvalidResponse);
-    assert!(error.source().unwrap().source().unwrap().source().is_some());
-}
-
-#[test]
-fn actual_server_branch_fixtures_enter_the_web_model_without_shape_reconstruction() {
-    // The server test compares actual capture + response serialization with
-    // these same bytes. Empty nodes/versions do not claim whole-HTTP coverage.
-    let fixtures = storage_contract::strict_json(include_bytes!(
-        "../../../../fixtures/file-history-branches.json"
-    ))
-    .unwrap();
-    let fixtures = fixtures.as_object().unwrap();
-    assert_eq!(fixtures.len(), 6);
-    for (case, selected, branch) in [
-        (
-            "explicit-node",
-            Some("branch"),
-            Some(("file-node", false, true)),
-        ),
-        ("visible-node", None, Some(("body", false, true))),
-        ("merged-pending", Some("branch"), Some(("body", true, true))),
-        (
-            "empty-source",
-            Some("full-branch"),
-            Some(("body", true, false)),
-        ),
-        ("no-selection", None, None),
-        ("full-selection", Some("full-branch"), None),
-    ] {
-        let history = FileHistory::parse(fixtures[case].clone(), "file").unwrap();
-        assert_eq!(history.selected(), selected, "{case}");
-        if let Some((head, pending, writable)) = branch {
-            assert_eq!(history.branches().len(), 1, "{case}");
-            let branch = &history.branches()[0];
-            assert_eq!(branch.id(), "branch", "{case}");
-            assert_eq!(branch.name(), "main", "{case}");
-            assert_eq!(branch.head(), Some(head), "{case}");
-            assert_eq!(branch.pending(), pending, "{case}");
-            assert_eq!(branch.writable(), writable, "{case}");
-        } else {
-            assert!(history.branches().is_empty(), "{case}");
-        }
-    }
+fn metadata_refresh_preserves_the_window_key_but_explicit_replacement_advances_it() {
+    let entry = crate::files::test_entries::entry(json!({
+        "file_id":format!("file_{:032x}", 1), "repository_id":format!("repo_{:032x}", 1),
+        "path":"folder/file.txt", "repository_path":"folder/file.txt",
+        "node_id":format!("ver_{:032x}", 2), "version_id":format!("ver_{:032x}", 2)
+    }));
+    let mut history = FileHistory::default();
+    history
+        .install_nodes(admitted_node_page("before"), &entry, true)
+        .unwrap();
+    let first_key = history.window_key();
+    history
+        .install_nodes(admitted_node_page("after"), &entry, false)
+        .unwrap();
+    assert_eq!(history.window_key(), first_key);
+    assert_eq!(history.nodes()[0].note(), "after");
+    history
+        .install_nodes(admitted_node_page("replacement"), &entry, true)
+        .unwrap();
+    assert_eq!(history.window_key(), first_key + 1);
+    assert_eq!(history.nodes().len(), 1);
 }

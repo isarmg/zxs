@@ -424,6 +424,14 @@ impl Backend for WriterProbe {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn history_window(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::history_window::HistoryWindowRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn file_history_snapshot(
         &self,
         _identity: &crate::auth::Identity,

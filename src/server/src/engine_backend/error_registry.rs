@@ -72,6 +72,7 @@ pub(super) const PUBLIC_STATUS: &[(ErrorCode, ::http::StatusCode)] = &[
     ),
     (ErrorCode::PreparationStale, ::http::StatusCode::CONFLICT),
     (ErrorCode::HeadConflict, ::http::StatusCode::CONFLICT),
+    (ErrorCode::HistoryChanged, ::http::StatusCode::CONFLICT),
     (ErrorCode::BranchNotActive, ::http::StatusCode::CONFLICT),
     (ErrorCode::Fenced, ::http::StatusCode::CONFLICT),
     (ErrorCode::LeaseExpired, ::http::StatusCode::CONFLICT),
@@ -257,6 +258,7 @@ pub(super) fn public_code(internal: ErrorCode) -> ErrorCode {
         | ErrorCode::Forbidden
         | ErrorCode::FormatUnsupported
         | ErrorCode::HeadConflict
+        | ErrorCode::HistoryChanged
         | ErrorCode::HistoricalSaveRequiresBranch
         | ErrorCode::HistoryMismatch
         | ErrorCode::HistoryNodeNotFound
@@ -599,6 +601,7 @@ pub(super) fn status(code: ErrorCode) -> ::http::StatusCode {
         | ErrorCode::FileConflict
         | ErrorCode::FileWriteBusy
         | ErrorCode::HeadConflict
+        | ErrorCode::HistoryChanged
         | ErrorCode::IdempotencyKeyReused
         | ErrorCode::LeaseExpired
         | ErrorCode::NamespaceConflict

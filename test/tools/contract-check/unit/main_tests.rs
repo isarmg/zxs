@@ -558,60 +558,31 @@ fn openapi_duplicate_operation_ids_and_unbound_paths_are_rejected() {
 }
 
 #[test]
-fn file_history_contract_requires_true_parent_arrays_without_limiting_multi_parent_edges() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts/openapi.json");
-    let mut api = read(&path).unwrap();
-    let version_pointer = "/paths/~1api~1file-manager~1files~1{file}~1history/get/responses/200/content/application~1json/schema/properties/versions/items";
-    let schema = api.pointer(version_pointer).unwrap();
-    assert!(
-        schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("source_version_ids"))
-    );
+fn history_version_contract_uses_source_counts_and_independent_bounded_members() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let api = read(&root.join("docs/contracts/openapi.json")).unwrap();
+    let version = &api["components"]["schemas"]["HistoryVersionSummary"];
     assert_eq!(
-        schema["properties"]["source_version_ids"]["uniqueItems"],
-        true
+        version["properties"]["source_count"]["$ref"],
+        "#/components/schemas/UInt64"
     );
-    assert!(
-        schema["properties"]["source_version_ids"]
-            .get("maxItems")
-            .is_none()
-    );
-    // Route braces are legal OpenAPI path keys, but are not literal URI
-    // fragment characters. Give the extracted response a plain local ref.
-    api["$defs"]["file_history_version"] = schema.clone();
-    api["$ref"] = "#/$defs/file_history_version".into();
-    let schema = validator(&api).unwrap();
-    let mut version = json!({
-        "version_id":storage_contract::new_id("ver"),"file_id":storage_contract::new_id("file"),
-        "source_version_ids":[],"branch_id":null,"created_at":"2026-10-20T00:00:00Z","message":"",
-        "size":"1","sequence":"3","current":false,"content_state":"AVAILABLE",
-        "content_hash":"a".repeat(64),"note":"","download_name":"a.txt",
-        "storage_name":"v000001_a.txt"
-    });
-    assert!(schema.is_valid(&version));
-    let mut obsolete = version.clone();
-    obsolete["legacy"] = json!(false);
-    assert!(!schema.is_valid(&obsolete));
-    for timestamp in [Value::Null, json!(1792400000)] {
-        obsolete = version.clone();
-        obsolete["created_at"] = timestamp;
-        assert!(!schema.is_valid(&obsolete));
-    }
-    let first = storage_contract::new_id("ver");
-    let second = storage_contract::new_id("ver");
-    version["source_version_ids"] = json!([first, second]);
-    assert!(schema.is_valid(&version));
-    version["source_version_ids"] = json!([first, first]);
-    assert!(!schema.is_valid(&version));
-    version["source_version_ids"] = Value::Null;
-    assert!(!schema.is_valid(&version));
-    version
-        .as_object_mut()
-        .unwrap()
-        .remove("source_version_ids");
-    assert!(!schema.is_valid(&version));
+    assert!(version["properties"].get("source_version_ids").is_none());
+    let members = &api["components"]["schemas"]["HistoryVersionSourcesPage"];
+    assert_eq!(members["properties"]["sources"]["maxItems"], 512);
+    assert_eq!(members["additionalProperties"], false);
+    let fixture =
+        read(&root.join("test/tools/contract-check/fixtures/history-window/versions.json"))
+            .unwrap();
+    let mut document = api.clone();
+    document["$ref"] = "#/components/schemas/HistoryVersionsPage".into();
+    let schema = validator(&document).unwrap();
+    assert!(schema.is_valid(&fixture));
+    let mut invalid = fixture.clone();
+    invalid["versions"][0]["source_version_ids"] = json!([]);
+    assert!(!schema.is_valid(&invalid));
+    let mut invalid = fixture;
+    invalid["versions"][0]["created_at"] = "2026-10-30T00:00:00Z".into();
+    assert!(!schema.is_valid(&invalid));
 }
 
 #[test]
@@ -658,21 +629,23 @@ fn note_read_shapes_accept_current_valid_notes() {
     let api = read(&path).unwrap();
     let entries = &api["paths"]["/api/file-manager/disks/{slot}/entries"]["get"]["responses"]["200"]
         ["content"]["application/json"]["schema"]["properties"]["entries"]["items"]["properties"]["note"];
-    let history = &api["paths"]["/api/file-manager/files/{file}/history"]["get"]["responses"]["200"]
-        ["content"]["application/json"]["schema"]["properties"];
+    let history = &api["components"]["schemas"];
     // Response shapes are deliberately broader than the current note semantics.
     // Passing a shape check does not authorize an invalid persisted note or an
     // older format; the engine validates notes at write and history-read boundaries.
     for (scope, note) in [
         ("directory entry", entries),
-        ("file history", &history["note"]),
+        (
+            "file history",
+            &history["HistoryContextSummary"]["properties"]["note"],
+        ),
         (
             "version history",
-            &history["versions"]["items"]["properties"]["note"],
+            &history["HistoryVersionSummary"]["properties"]["note"],
         ),
         (
             "history node",
-            &api["components"]["schemas"]["FileHistoryNode"]["properties"]["note"],
+            &history["HistoryNodeSummary"]["properties"]["note"],
         ),
     ] {
         let schema = validator(note).unwrap();
@@ -744,42 +717,35 @@ fn directory_batch_contract_requires_frozen_explicit_mappings() {
 }
 
 #[test]
-fn file_history_graph_distinguishes_path_nodes_from_real_content_versions() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts/openapi.json");
-    let api = read(&path).unwrap();
+fn history_node_summary_preserves_real_content_ids_without_inline_relations_or_fields() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let api = read(&root.join("docs/contracts/openapi.json")).unwrap();
+    let fixture =
+        read(&root.join("test/tools/contract-check/fixtures/history-window/nodes.json")).unwrap();
     let mut document = api.clone();
-    document["$ref"] = "#/components/schemas/FileHistoryNode".into();
+    document["$ref"] = "#/components/schemas/HistoryNodeSummary".into();
     let schema = validator(&document).unwrap();
-    let file = storage_contract::new_id("file");
-    let version = storage_contract::new_id("ver");
-    let renamed = storage_contract::new_id("fnode");
-    let content = json!({"node_id":version,"version_id":version,"file_id":file,"kind":"content","parent_node_ids":[],"path":"a/report.txt","previous_path":null,"note":"","created_at":"2026-10-20T00:00:00Z","sequence":"1","current":false});
-    let rename = json!({"node_id":renamed,"version_id":version,"file_id":file,"kind":"rename","parent_node_ids":[version],"path":"a/new.txt","previous_path":"a/report.txt","note":"Path note","created_at":"2026-10-19T08:53:20Z","sequence":"2","current":true});
-    assert!(schema.is_valid(&content));
-    assert!(schema.is_valid(&rename));
-    let mut numeric_time = rename.clone();
-    numeric_time["created_at"] = "1792400000".into();
-    assert!(!schema.is_valid(&numeric_time));
-    let mut child = content.clone();
-    child["node_id"] = storage_contract::new_id("ver").into();
-    child["version_id"] = child["node_id"].clone();
-    child["parent_node_ids"] = json!([renamed]);
-    child["source_version_ids"] = json!([version]);
-    assert!(schema.is_valid(&child));
+    let nodes = fixture["nodes"].as_array().unwrap();
+    for node in nodes {
+        assert!(schema.is_valid(node));
+        for forbidden in [
+            "parent_node_ids",
+            "source_version_ids",
+            "message",
+            "author",
+            "created_at",
+        ] {
+            let mut invalid = node.clone();
+            invalid[forbidden] = json!([]);
+            assert!(!schema.is_valid(&invalid), "{forbidden}");
+        }
+    }
+    let rename = nodes.iter().find(|node| node["kind"] == "rename").unwrap();
     let mut invalid = rename.clone();
-    invalid["version_id"] = renamed.clone().into();
+    invalid["version_id"] = rename["node_id"].clone();
     assert!(!schema.is_valid(&invalid));
-    invalid = rename.clone();
-    invalid["node_id"] = version.clone().into();
-    assert!(!schema.is_valid(&invalid));
-    invalid = rename.clone();
-    invalid["parent_node_ids"] = json!([]);
-    assert!(!schema.is_valid(&invalid));
-    invalid = child.clone();
-    invalid["source_version_ids"] = json!([renamed]);
-    assert!(!schema.is_valid(&invalid));
-    invalid = child;
-    invalid["parent_node_ids"] = json!([version, version]);
+    let mut invalid = rename.clone();
+    invalid["node_id"] = rename["version_id"].clone();
     assert!(!schema.is_valid(&invalid));
     let note = &api["paths"]["/api/file-manager/files/{file}/nodes/{node}"]["patch"]["requestBody"]
         ["content"]["application/json"]["schema"]["properties"]["note"];
@@ -792,9 +758,9 @@ fn file_history_graph_distinguishes_path_nodes_from_real_content_versions() {
     let mut source_document = api.clone();
     source_document["$ref"] = source["$ref"].clone();
     let source_schema = validator(&source_document).unwrap();
-    assert!(source_schema.is_valid(&json!(version)));
-    assert!(source_schema.is_valid(&json!(renamed)));
-    assert!(!source_schema.is_valid(&json!(file)));
+    assert!(source_schema.is_valid(&rename["version_id"]));
+    assert!(source_schema.is_valid(&rename["node_id"]));
+    assert!(!source_schema.is_valid(&fixture["identity"]["file_id"]));
 }
 
 #[test]
@@ -861,9 +827,18 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
         assert!(!backups.is_valid(&invalid));
     }
     let mut document = api.clone();
-    document["$ref"] = "#/components/schemas/FileHistoryNode".into();
+    document["$ref"] = "#/components/schemas/HistoryNodeSummary".into();
     let node = validator(&document).unwrap();
-    let body = json!({"node_id":meta,"version_id":version,"file_id":file,"kind":"tags","parent_node_ids":[version],"path":"report.txt","previous_path":null,"note":"","created_at":"2026-10-19T08:53:20Z","sequence":"5","current":true,"tags":["审核"]});
+    let fixture = read(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test/tools/contract-check/fixtures/history-window/nodes.json"),
+    )
+    .unwrap();
+    let mut body = fixture["nodes"][0].clone();
+    body["kind"] = "tags".into();
+    body["node_id"] = meta.clone().into();
+    body["version_id"] = version.clone().into();
+    body["tags"] = json!(["审核"]);
     assert!(node.is_valid(&body));
     let mut invalid = body;
     invalid["version_id"] = meta.into();

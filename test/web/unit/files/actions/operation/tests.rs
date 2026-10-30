@@ -24,7 +24,7 @@ fn navigation_clears_the_local_review_but_preserves_original_operation_recovery(
             s.management.storage = crate::management::Storage::Ready;
             s.files.writable = true;
             s.files.selected = Some(crate::files::test_entries::entry(json!({})));
-            s.files.checked_nodes.insert("node".into());
+            s.files.checked_nodes = crate::files::tags::tests::selection(&["node"]);
             s.files.file_history = crate::files::history::tests::history(
                 json!({"nodes":[{"node_id":"node","tags":[]}]}),
             );
@@ -128,7 +128,7 @@ fn missing_malformed_or_unrelated_receipts_keep_the_original_mutation_pending() 
                 s.files.selected = Some(crate::files::test_entries::entry(
                     json!({"file_id":"file", "name":"file.txt"}),
                 ));
-                s.files.checked_nodes.insert("node".into());
+                s.files.checked_nodes = crate::files::tags::tests::selection(&["node"]);
                 s.files.file_history = crate::files::history::tests::history(
                     json!({"nodes":[{"node_id":"node", "tags":[]}]}),
                 );

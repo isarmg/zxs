@@ -2164,8 +2164,8 @@
     },
     "/api/file-manager/files/{file}/history": {
       "get": {
-        "operationId": "getFileContainerHistory",
-        "description": "返回真实版本树和独立分支归属。尚未写入的分支继承父真实version_id，own_version_id=null，不新增虚假版本；current可指可见父版本。首次写入FULL才按真实source_version_ids接入版本树。文件已删除无当前条目时不返回当前内容投影字段。 repository_id与path必须一起提供，用精确逻辑路径解析此文件别名当前节点及分支；省略时优先实际归属路径，无法命中时采用确定的现存别名。不会把其他别名的分支或新HEAD当作此路径的当前节点。 nodes为统一图；versions继续只包含真实正文版本。重命名节点复用正文，node_id与version_id不可混用；当前节点按精确逻辑路径上下文判断。",
+        "operationId": "getFileHistoryWindow",
+        "description": "当前唯一管理员及对象归属先于根比较；根为目标history准确history-manifest hash。无cursor仅首页，辅助读取必须有history_root或cursor；显式根与cursor必须一致。根或实际解析上下文变化返回409 HISTORY_CHANGED并刷新，不保留跨写旧根。未知/重复查询参数明确拒绝，没有all模式、旧JSON回退或数组截断。 节点顺序为(sequence DESC,node_id ASC)，anchor_node_id定位任意合法节点所在窗口并替换当前页。",
         "parameters": [
           {
             "name": "file",
@@ -2176,12 +2176,43 @@
             }
           },
           {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            },
+            "description": "主节点/正文首页可省略；辅助首页及anchor精确跳转必须指定来源页根，续页可由cursor携带。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            },
+            "description": "有界当前位置描述，不授予权限；与显式history_root同时给出时必须一致。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64,
+              "default": 32
+            },
+            "description": "URL使用规范无符号十进制；表示本页记录数，字段读取时表示原始UTF-8字节。不是永久历史总量。"
+          },
+          {
             "name": "repository_id",
             "in": "query",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/RepositoryId"
-            }
+            },
+            "description": "必须与path成对；省略状态及实际解析上下文一并绑定游标。"
           },
           {
             "name": "path",
@@ -2189,293 +2220,115 @@
             "required": false,
             "schema": {
               "type": "string",
-              "minLength": 1
-            }
+              "minLength": 1,
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768
+            },
+            "description": "允许规范等价LookupPath拼写，以规范化键绑定精确逻辑别名。"
+          },
+          {
+            "name": "anchor_node_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/FileNodeId"
+            },
+            "description": "互斥cursor，且须提供history_root；可定位当前文件任意获授权历史节点。"
           }
         ],
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true,
+        "x-dependentQueryParameters": {
+          "repository_id": [
+            "path"
+          ],
+          "path": [
+            "repository_id"
+          ],
+          "anchor_node_id": [
+            "history_root"
+          ]
+        },
+        "x-historyRootOrCursorRequired": false,
+        "x-historyWindowBudget": {
+          "max_response_bytes": 8388608,
+          "max_records": 64,
+          "max_preview_edges": 256,
+          "cursor_ascii_bytes": 4096
+        },
         "responses": {
           "200": {
-            "description": "请求成功。",
+            "description": "有界且可继续读取的当前根窗口；空集合与未加载状态明确区分。",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "file_id": {
-                      "$ref": "#/components/schemas/FileId"
-                    },
-                    "path": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "description": "受PortablePath约束的磁盘相对路径；空字符串表示当前磁盘根目录。不得传系统绝对路径。"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "note": {
-                      "type": "string",
-                      "description": "当前备注最多128个UTF-8字节且不含控制字符，空字符串表示没有备注。响应原样输出已验证备注，不截断；本字符串schema只检查较宽的响应形状，不替代引擎读写校验，也不承诺旧格式可读。",
-                      "maxLength": 4096
-                    },
-                    "selected_branch_id": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/BranchId"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "versions": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "version_id": {
-                            "$ref": "#/components/schemas/VersionId"
-                          },
-                          "file_id": {
-                            "$ref": "#/components/schemas/FileId"
-                          },
-                          "source_version_ids": {
-                            "type": "array",
-                            "items": {
-                              "$ref": "#/components/schemas/VersionId"
-                            },
-                            "uniqueItems": true,
-                            "description": "内容创建时实际记录的全部父版本ID；每项仅指向本响应中同文件、同授权历史且事务序列严格更早的可见版本，保留多父并去重。箭头由父版本指向当前版本；空数组表示没有可验证的父版本。不得用列表排序、提交相邻或分支名称推断连线；缺失、跨文件、跨历史和非法循环边不返回。"
-                          },
-                          "branch_id": {
-                            "anyOf": [
-                              {
-                                "$ref": "#/components/schemas/BranchId"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "created_at": {
-                            "$ref": "#/components/schemas/UtcTimestamp"
-                          },
-                          "message": {
-                            "type": "string"
-                          },
-                          "size": {
-                            "$ref": "#/components/schemas/UInt64"
-                          },
-                          "sequence": {
-                            "$ref": "#/components/schemas/UInt64"
-                          },
-                          "current": {
-                            "type": "boolean"
-                          },
-                          "content_state": {
-                            "type": "string"
-                          },
-                          "content_hash": {
-                            "$ref": "#/components/schemas/Hash"
-                          },
-                          "note": {
-                            "type": "string",
-                            "description": "当前备注最多128个UTF-8字节且不含控制字符，空字符串表示没有备注。响应原样输出已验证备注，不截断；本字符串schema只检查较宽的响应形状，不替代引擎读写校验，也不承诺旧格式可读。",
-                            "maxLength": 4096
-                          },
-                          "download_name": {
-                            "type": "string"
-                          },
-                          "storage_name": {
-                            "type": "string"
-                          }
-                        },
-                        "additionalProperties": false,
-                        "required": [
-                          "version_id",
-                          "file_id",
-                          "source_version_ids",
-                          "branch_id",
-                          "created_at",
-                          "message",
-                          "size",
-                          "sequence",
-                          "current",
-                          "content_state",
-                          "content_hash",
-                          "note",
-                          "download_name",
-                          "storage_name"
-                        ],
-                        "description": "created_at为固定 YYYY-MM-DDTHH:mm:ssZ 的整秒 UTC 字符串。storage_name为不可变内部版本文件名；download_name使用当前所选视图中的逻辑名称（无当前条目时保留实体容器最后名）。source_version_ids提供真实内容谱系，响应排序不代表父子关系；普通保存连接实际前版，从待写入分支首次保存连接登记的源版；登记分支记录不增加本数组节点。"
-                      }
-                    },
-                    "branches": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/FileBranchView"
-                      }
-                    },
-                    "version_id": {
-                      "$ref": "#/components/schemas/VersionId"
-                    },
-                    "materialized": {
-                      "type": "boolean"
-                    },
-                    "content_state": {
-                      "type": "string"
-                    },
-                    "inherited": {
-                      "type": "boolean"
-                    },
-                    "own_version_id": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/VersionId"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "source_version_id": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/VersionId"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "visible_content_state": {
-                      "enum": [
-                        "LIVE",
-                        "AVAILABLE",
-                        "PURGED",
-                        "MIGRATED",
-                        "UNAVAILABLE"
-                      ]
-                    },
-                    "repository_id": {
-                      "$ref": "#/components/schemas/RepositoryId"
-                    },
-                    "nodes": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/FileHistoryNode"
-                      }
-                    },
-                    "node_id": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/FileNodeId"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "current_node_id": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/FileNodeId"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "merges": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/FileBranchMerge"
-                      }
-                    }
-                  },
-                  "additionalProperties": false,
-                  "required": [
-                    "file_id",
-                    "path",
-                    "note",
-                    "selected_branch_id",
-                    "versions",
-                    "branches"
-                  ],
-                  "dependentRequired": {
-                    "version_id": [
-                      "materialized",
-                      "content_state",
-                      "inherited",
-                      "own_version_id",
-                      "source_version_id",
-                      "visible_content_state"
-                    ]
-                  },
-                  "allOf": [
-                    {
-                      "if": {
-                        "required": [
-                          "version_id"
-                        ]
-                      },
-                      "then": {
-                        "allOf": [
-                          {
-                            "if": {
-                              "properties": {
-                                "materialized": {
-                                  "const": false
-                                }
-                              }
-                            },
-                            "then": {
-                              "properties": {
-                                "inherited": {
-                                  "const": true
-                                },
-                                "own_version_id": {
-                                  "type": "null"
-                                },
-                                "content_state": {
-                                  "const": "PENDING"
-                                },
-                                "source_version_id": {
-                                  "$ref": "#/components/schemas/VersionId"
-                                }
-                              }
-                            },
-                            "else": {
-                              "properties": {
-                                "inherited": {
-                                  "const": false
-                                },
-                                "own_version_id": {
-                                  "$ref": "#/components/schemas/VersionId"
-                                },
-                                "source_version_id": {
-                                  "type": "null"
-                                },
-                                "content_state": {
-                                  "not": {
-                                    "const": "PENDING"
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        ]
-                      }
-                    }
-                  ]
+                  "$ref": "#/components/schemas/HistoryNodesPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "未知/重复/不支持格式、类型或查询与游标不匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "当前认证、会话或撤销检查失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前对象授权失败，先于根变化。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "文件、节点、正文版本、merge或精确逻辑路径不存在/不属于请求范围。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HISTORY_CHANGED：当前目标根或解析上下文已变化，须刷新；其余当前具体业务错误保持原语义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "既有backend slot准入资源额度耗尽。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
           },
           "default": {
-            "description": "结构化错误；写操作结果不确定时按原operation_id查询，不能改key盲目重试。",
+            "description": "结构化具体错误；不返回成功空集合或旧根回退。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2484,7 +2337,13 @@
               }
             }
           }
-        }
+        },
+        "x-mutuallyExclusiveQueryParameters": [
+          [
+            "cursor",
+            "anchor_node_id"
+          ]
+        ]
       }
     },
     "/api/file-manager/files/{file}/branches": {
@@ -5636,6 +5495,1382 @@
           }
         }
       }
+    },
+    "/api/files/{file}/history": {
+      "get": {
+        "operationId": "getFileVersionHistoryWindow",
+        "description": "当前唯一管理员及对象归属先于根比较；根为目标history准确history-manifest hash。无cursor仅首页，辅助读取必须有history_root或cursor；显式根与cursor必须一致。根或实际解析上下文变化返回409 HISTORY_CHANGED并刷新，不保留跨写旧根。未知/重复查询参数明确拒绝，没有all模式、旧JSON回退或数组截断。 正文顺序为(version_sequence ASC,version_id ASC)，source由独立成员页完整读取。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            },
+            "description": "主节点/正文首页可省略；辅助首页及anchor精确跳转必须指定来源页根，续页可由cursor携带。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            },
+            "description": "有界当前位置描述，不授予权限；与显式history_root同时给出时必须一致。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 128,
+              "default": 64
+            },
+            "description": "URL使用规范无符号十进制；表示本页记录数，字段读取时表示原始UTF-8字节。不是永久历史总量。"
+          },
+          {
+            "name": "repository_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            },
+            "description": "必须与path成对；省略状态及实际解析上下文一并绑定游标。"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768
+            },
+            "description": "允许规范等价LookupPath拼写，以规范化键绑定精确逻辑别名。"
+          }
+        ],
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true,
+        "x-dependentQueryParameters": {
+          "repository_id": [
+            "path"
+          ],
+          "path": [
+            "repository_id"
+          ]
+        },
+        "x-historyRootOrCursorRequired": false,
+        "x-historyWindowBudget": {
+          "max_response_bytes": 8388608,
+          "max_records": 128,
+          "max_preview_edges": 0,
+          "cursor_ascii_bytes": 4096
+        },
+        "responses": {
+          "200": {
+            "description": "有界且可继续读取的当前根窗口；空集合与未加载状态明确区分。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryVersionsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "未知/重复/不支持格式、类型或查询与游标不匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "当前认证、会话或撤销检查失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前对象授权失败，先于根变化。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "文件、节点、正文版本、merge或精确逻辑路径不存在/不属于请求范围。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HISTORY_CHANGED：当前目标根或解析上下文已变化，须刷新；其余当前具体业务错误保持原语义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "既有backend slot准入资源额度耗尽。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化具体错误；不返回成功空集合或旧根回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/nodes/{node}/parents": {
+      "get": {
+        "operationId": "getFileHistoryNodeParents",
+        "description": "当前唯一管理员及对象归属先于根比较；根为目标history准确history-manifest hash。无cursor仅首页，辅助读取必须有history_root或cursor；显式根与cursor必须一致。根或实际解析上下文变化返回409 HISTORY_CHANGED并刷新，不保留跨写旧根。未知/重复查询参数明确拒绝，没有all模式、旧JSON回退或数组截断。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "node",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileNodeId"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            },
+            "description": "主节点/正文首页可省略；辅助首页及anchor精确跳转必须指定来源页根，续页可由cursor携带。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            },
+            "description": "有界当前位置描述，不授予权限；与显式history_root同时给出时必须一致。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 512,
+              "default": 256
+            },
+            "description": "URL使用规范无符号十进制；表示本页记录数，字段读取时表示原始UTF-8字节。不是永久历史总量。"
+          },
+          {
+            "name": "repository_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            },
+            "description": "必须与path成对；省略状态及实际解析上下文一并绑定游标。"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768
+            },
+            "description": "允许规范等价LookupPath拼写，以规范化键绑定精确逻辑别名。"
+          }
+        ],
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true,
+        "x-dependentQueryParameters": {
+          "repository_id": [
+            "path"
+          ],
+          "path": [
+            "repository_id"
+          ]
+        },
+        "x-historyRootOrCursorRequired": true,
+        "x-historyWindowBudget": {
+          "max_response_bytes": 8388608,
+          "max_records": 512,
+          "max_preview_edges": 0,
+          "cursor_ascii_bytes": 4096
+        },
+        "responses": {
+          "200": {
+            "description": "有界且可继续读取的当前根窗口；空集合与未加载状态明确区分。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryNodeParentsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "未知/重复/不支持格式、类型或查询与游标不匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "当前认证、会话或撤销检查失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前对象授权失败，先于根变化。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "文件、节点、正文版本、merge或精确逻辑路径不存在/不属于请求范围。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HISTORY_CHANGED：当前目标根或解析上下文已变化，须刷新；其余当前具体业务错误保持原语义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "既有backend slot准入资源额度耗尽。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化具体错误；不返回成功空集合或旧根回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/branches": {
+      "get": {
+        "operationId": "getFileHistoryBranches",
+        "description": "当前唯一管理员及对象归属先于根比较；根为目标history准确history-manifest hash。无cursor仅首页，辅助读取必须有history_root或cursor；显式根与cursor必须一致。根或实际解析上下文变化返回409 HISTORY_CHANGED并刷新，不保留跨写旧根。未知/重复查询参数明确拒绝，没有all模式、旧JSON回退或数组截断。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            },
+            "description": "主节点/正文首页可省略；辅助首页及anchor精确跳转必须指定来源页根，续页可由cursor携带。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            },
+            "description": "有界当前位置描述，不授予权限；与显式history_root同时给出时必须一致。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 128,
+              "default": 64
+            },
+            "description": "URL使用规范无符号十进制；表示本页记录数，字段读取时表示原始UTF-8字节。不是永久历史总量。"
+          },
+          {
+            "name": "repository_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            },
+            "description": "必须与path成对；省略状态及实际解析上下文一并绑定游标。"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768
+            },
+            "description": "允许规范等价LookupPath拼写，以规范化键绑定精确逻辑别名。"
+          }
+        ],
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true,
+        "x-dependentQueryParameters": {
+          "repository_id": [
+            "path"
+          ],
+          "path": [
+            "repository_id"
+          ]
+        },
+        "x-historyRootOrCursorRequired": true,
+        "x-historyWindowBudget": {
+          "max_response_bytes": 8388608,
+          "max_records": 128,
+          "max_preview_edges": 0,
+          "cursor_ascii_bytes": 4096
+        },
+        "responses": {
+          "200": {
+            "description": "有界且可继续读取的当前根窗口；空集合与未加载状态明确区分。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryBranchesPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "未知/重复/不支持格式、类型或查询与游标不匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "当前认证、会话或撤销检查失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前对象授权失败，先于根变化。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "文件、节点、正文版本、merge或精确逻辑路径不存在/不属于请求范围。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HISTORY_CHANGED：当前目标根或解析上下文已变化，须刷新；其余当前具体业务错误保持原语义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "既有backend slot准入资源额度耗尽。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化具体错误；不返回成功空集合或旧根回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/merges": {
+      "get": {
+        "operationId": "getFileHistoryMerges",
+        "description": "当前唯一管理员及对象归属先于根比较；根为目标history准确history-manifest hash。无cursor仅首页，辅助读取必须有history_root或cursor；显式根与cursor必须一致。根或实际解析上下文变化返回409 HISTORY_CHANGED并刷新，不保留跨写旧根。未知/重复查询参数明确拒绝，没有all模式、旧JSON回退或数组截断。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            },
+            "description": "主节点/正文首页可省略；辅助首页及anchor精确跳转必须指定来源页根，续页可由cursor携带。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            },
+            "description": "有界当前位置描述，不授予权限；与显式history_root同时给出时必须一致。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 128,
+              "default": 64
+            },
+            "description": "URL使用规范无符号十进制；表示本页记录数，字段读取时表示原始UTF-8字节。不是永久历史总量。"
+          },
+          {
+            "name": "repository_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            },
+            "description": "必须与path成对；省略状态及实际解析上下文一并绑定游标。"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768
+            },
+            "description": "允许规范等价LookupPath拼写，以规范化键绑定精确逻辑别名。"
+          }
+        ],
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true,
+        "x-dependentQueryParameters": {
+          "repository_id": [
+            "path"
+          ],
+          "path": [
+            "repository_id"
+          ]
+        },
+        "x-historyRootOrCursorRequired": true,
+        "x-historyWindowBudget": {
+          "max_response_bytes": 8388608,
+          "max_records": 128,
+          "max_preview_edges": 0,
+          "cursor_ascii_bytes": 4096
+        },
+        "responses": {
+          "200": {
+            "description": "有界且可继续读取的当前根窗口；空集合与未加载状态明确区分。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryMergesPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "未知/重复/不支持格式、类型或查询与游标不匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "当前认证、会话或撤销检查失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前对象授权失败，先于根变化。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "文件、节点、正文版本、merge或精确逻辑路径不存在/不属于请求范围。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HISTORY_CHANGED：当前目标根或解析上下文已变化，须刷新；其余当前具体业务错误保持原语义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "既有backend slot准入资源额度耗尽。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化具体错误；不返回成功空集合或旧根回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/merges/{merge}/inputs": {
+      "get": {
+        "operationId": "getFileHistoryMergeInputs",
+        "description": "当前唯一管理员及对象归属先于根比较；根为目标history准确history-manifest hash。无cursor仅首页，辅助读取必须有history_root或cursor；显式根与cursor必须一致。根或实际解析上下文变化返回409 HISTORY_CHANGED并刷新，不保留跨写旧根。未知/重复查询参数明确拒绝，没有all模式、旧JSON回退或数组截断。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "merge",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileMergeId"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            },
+            "description": "主节点/正文首页可省略；辅助首页及anchor精确跳转必须指定来源页根，续页可由cursor携带。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            },
+            "description": "有界当前位置描述，不授予权限；与显式history_root同时给出时必须一致。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 512,
+              "default": 256
+            },
+            "description": "URL使用规范无符号十进制；表示本页记录数，字段读取时表示原始UTF-8字节。不是永久历史总量。"
+          },
+          {
+            "name": "repository_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            },
+            "description": "必须与path成对；省略状态及实际解析上下文一并绑定游标。"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768
+            },
+            "description": "允许规范等价LookupPath拼写，以规范化键绑定精确逻辑别名。"
+          }
+        ],
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true,
+        "x-dependentQueryParameters": {
+          "repository_id": [
+            "path"
+          ],
+          "path": [
+            "repository_id"
+          ]
+        },
+        "x-historyRootOrCursorRequired": true,
+        "x-historyWindowBudget": {
+          "max_response_bytes": 8388608,
+          "max_records": 512,
+          "max_preview_edges": 0,
+          "cursor_ascii_bytes": 4096
+        },
+        "responses": {
+          "200": {
+            "description": "有界且可继续读取的当前根窗口；空集合与未加载状态明确区分。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryMergeInputsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "未知/重复/不支持格式、类型或查询与游标不匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "当前认证、会话或撤销检查失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前对象授权失败，先于根变化。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "文件、节点、正文版本、merge或精确逻辑路径不存在/不属于请求范围。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HISTORY_CHANGED：当前目标根或解析上下文已变化，须刷新；其余当前具体业务错误保持原语义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "既有backend slot准入资源额度耗尽。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化具体错误；不返回成功空集合或旧根回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/merges/{merge}/parents": {
+      "get": {
+        "operationId": "getFileHistoryMergeParents",
+        "description": "当前唯一管理员及对象归属先于根比较；根为目标history准确history-manifest hash。无cursor仅首页，辅助读取必须有history_root或cursor；显式根与cursor必须一致。根或实际解析上下文变化返回409 HISTORY_CHANGED并刷新，不保留跨写旧根。未知/重复查询参数明确拒绝，没有all模式、旧JSON回退或数组截断。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "merge",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileMergeId"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            },
+            "description": "主节点/正文首页可省略；辅助首页及anchor精确跳转必须指定来源页根，续页可由cursor携带。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            },
+            "description": "有界当前位置描述，不授予权限；与显式history_root同时给出时必须一致。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 512,
+              "default": 256
+            },
+            "description": "URL使用规范无符号十进制；表示本页记录数，字段读取时表示原始UTF-8字节。不是永久历史总量。"
+          },
+          {
+            "name": "repository_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            },
+            "description": "必须与path成对；省略状态及实际解析上下文一并绑定游标。"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768
+            },
+            "description": "允许规范等价LookupPath拼写，以规范化键绑定精确逻辑别名。"
+          }
+        ],
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true,
+        "x-dependentQueryParameters": {
+          "repository_id": [
+            "path"
+          ],
+          "path": [
+            "repository_id"
+          ]
+        },
+        "x-historyRootOrCursorRequired": true,
+        "x-historyWindowBudget": {
+          "max_response_bytes": 8388608,
+          "max_records": 512,
+          "max_preview_edges": 0,
+          "cursor_ascii_bytes": 4096
+        },
+        "responses": {
+          "200": {
+            "description": "有界且可继续读取的当前根窗口；空集合与未加载状态明确区分。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryMergeParentsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "未知/重复/不支持格式、类型或查询与游标不匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "当前认证、会话或撤销检查失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前对象授权失败，先于根变化。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "文件、节点、正文版本、merge或精确逻辑路径不存在/不属于请求范围。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HISTORY_CHANGED：当前目标根或解析上下文已变化，须刷新；其余当前具体业务错误保持原语义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "既有backend slot准入资源额度耗尽。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化具体错误；不返回成功空集合或旧根回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/{file}/history/versions/{version}/sources": {
+      "get": {
+        "operationId": "getFileHistoryVersionSources",
+        "description": "当前唯一管理员及对象归属先于根比较；根为目标history准确history-manifest hash。无cursor仅首页，辅助读取必须有history_root或cursor；显式根与cursor必须一致。根或实际解析上下文变化返回409 HISTORY_CHANGED并刷新，不保留跨写旧根。未知/重复查询参数明确拒绝，没有all模式、旧JSON回退或数组截断。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/VersionId"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            },
+            "description": "主节点/正文首页可省略；辅助首页及anchor精确跳转必须指定来源页根，续页可由cursor携带。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            },
+            "description": "有界当前位置描述，不授予权限；与显式history_root同时给出时必须一致。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 512,
+              "default": 256
+            },
+            "description": "URL使用规范无符号十进制；表示本页记录数，字段读取时表示原始UTF-8字节。不是永久历史总量。"
+          },
+          {
+            "name": "repository_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            },
+            "description": "必须与path成对；省略状态及实际解析上下文一并绑定游标。"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768
+            },
+            "description": "允许规范等价LookupPath拼写，以规范化键绑定精确逻辑别名。"
+          }
+        ],
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true,
+        "x-dependentQueryParameters": {
+          "repository_id": [
+            "path"
+          ],
+          "path": [
+            "repository_id"
+          ]
+        },
+        "x-historyRootOrCursorRequired": true,
+        "x-historyWindowBudget": {
+          "max_response_bytes": 8388608,
+          "max_records": 512,
+          "max_preview_edges": 0,
+          "cursor_ascii_bytes": 4096
+        },
+        "responses": {
+          "200": {
+            "description": "有界且可继续读取的当前根窗口；空集合与未加载状态明确区分。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryVersionSourcesPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "未知/重复/不支持格式、类型或查询与游标不匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "当前认证、会话或撤销检查失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前对象授权失败，先于根变化。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "文件、节点、正文版本、merge或精确逻辑路径不存在/不属于请求范围。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HISTORY_CHANGED：当前目标根或解析上下文已变化，须刷新；其余当前具体业务错误保持原语义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "既有backend slot准入资源额度耗尽。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化具体错误；不返回成功空集合或旧根回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/file-manager/files/{file}/history/nodes/{node}/fields/{field}": {
+      "get": {
+        "operationId": "getFileHistoryNodeField",
+        "description": "当前唯一管理员及对象归属先于根比较；根为目标history准确history-manifest hash。无cursor仅首页，辅助读取必须有history_root或cursor；显式根与cursor必须一致。根或实际解析上下文变化返回409 HISTORY_CHANGED并刷新，不保留跨写旧根。未知/重复查询参数明确拒绝，没有all模式、旧JSON回退或数组截断。",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileId"
+            }
+          },
+          {
+            "name": "node",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FileNodeId"
+            }
+          },
+          {
+            "name": "field",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryField"
+            }
+          },
+          {
+            "name": "history_root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryRoot"
+            },
+            "description": "主节点/正文首页可省略；辅助首页及anchor精确跳转必须指定来源页根，续页可由cursor携带。"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HistoryCursor"
+            },
+            "description": "有界当前位置描述，不授予权限；与显式history_root同时给出时必须一致。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65536,
+              "default": 32768
+            },
+            "description": "URL使用规范无符号十进制；表示本页记录数，字段读取时表示原始UTF-8字节。不是永久历史总量。"
+          },
+          {
+            "name": "repository_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            },
+            "description": "必须与path成对；省略状态及实际解析上下文一并绑定游标。"
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768
+            },
+            "description": "允许规范等价LookupPath拼写，以规范化键绑定精确逻辑别名。"
+          }
+        ],
+        "x-rejectUnknownQueryParameters": true,
+        "x-rejectDuplicateQueryParameters": true,
+        "x-dependentQueryParameters": {
+          "repository_id": [
+            "path"
+          ],
+          "path": [
+            "repository_id"
+          ]
+        },
+        "x-historyRootOrCursorRequired": true,
+        "x-historyWindowBudget": {
+          "max_response_bytes": 8388608,
+          "max_records": 65536,
+          "max_preview_edges": 0,
+          "cursor_ascii_bytes": 4096
+        },
+        "responses": {
+          "200": {
+            "description": "有界且可继续读取的当前根窗口；空集合与未加载状态明确区分。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryNodeFieldPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "未知/重复/不支持格式、类型或查询与游标不匹配。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "当前认证、会话或撤销检查失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前对象授权失败，先于根变化。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "文件、节点、正文版本、merge或精确逻辑路径不存在/不属于请求范围。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "HISTORY_CHANGED：当前目标根或解析上下文已变化，须刷新；其余当前具体业务错误保持原语义。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "既有backend slot准入资源额度耗尽。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化具体错误；不返回成功空集合或旧根回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7583,175 +8818,6 @@
         "additionalProperties": false,
         "description": "重命名形成的不可变文件路径节点。version_id复用真实正文，parent_node_ids连接内容或路径节点；创建路径节点不增加FileVersion或复制正文。"
       },
-      "FileHistoryNode": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "$ref": "#/components/schemas/FileNodeId"
-          },
-          "version_id": {
-            "$ref": "#/components/schemas/VersionId"
-          },
-          "file_id": {
-            "$ref": "#/components/schemas/FileId"
-          },
-          "kind": {
-            "enum": [
-              "content",
-              "rename",
-              "tags",
-              "merge"
-            ]
-          },
-          "parent_node_ids": {
-            "type": "array",
-            "uniqueItems": true,
-            "items": {
-              "$ref": "#/components/schemas/FileNodeId"
-            }
-          },
-          "path": {
-            "type": "string"
-          },
-          "previous_path": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "note": {
-            "type": "string"
-          },
-          "created_at": {
-            "$ref": "#/components/schemas/UtcTimestamp"
-          },
-          "sequence": {
-            "$ref": "#/components/schemas/UInt64"
-          },
-          "current": {
-            "type": "boolean"
-          },
-          "size": {
-            "$ref": "#/components/schemas/UInt64"
-          },
-          "content_hash": {
-            "$ref": "#/components/schemas/Hash"
-          },
-          "download_name": {
-            "type": "string"
-          },
-          "storage_name": {
-            "type": "string"
-          },
-          "branch_id": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/BranchId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "source_version_ids": {
-            "type": "array",
-            "uniqueItems": true,
-            "items": {
-              "$ref": "#/components/schemas/VersionId"
-            }
-          },
-          "tags": {
-            "$ref": "#/components/schemas/FileNodeTags"
-          }
-        },
-        "required": [
-          "node_id",
-          "version_id",
-          "file_id",
-          "kind",
-          "parent_node_ids",
-          "path",
-          "previous_path",
-          "note",
-          "created_at",
-          "sequence",
-          "current"
-        ],
-        "additionalProperties": true,
-        "description": "统一不可变文件节点图：content实际正文，rename路径节点，tags/merge元数据节点。后三者复用version_id正文；parent_node_ids含安全的混合图边。tags为每个节点有效继承标签，旧source_version_ids仅表示正文谱系。",
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "kind": {
-                  "const": "content"
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "node_id": {
-                  "$ref": "#/components/schemas/VersionId"
-                },
-                "previous_path": {
-                  "type": "null"
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "kind": {
-                  "const": "rename"
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "node_id": {
-                  "$ref": "#/components/schemas/FilePathNodeId"
-                },
-                "previous_path": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "parent_node_ids": {
-                  "minItems": 1
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "kind": {
-                  "enum": [
-                    "tags",
-                    "merge"
-                  ]
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "node_id": {
-                  "$ref": "#/components/schemas/FileMetadataNodeId"
-                },
-                "previous_path": {
-                  "type": "null"
-                },
-                "parent_node_ids": {
-                  "minItems": 1
-                }
-              },
-              "required": [
-                "tags"
-              ]
-            }
-          }
-        ]
-      },
       "FileMetadataNodeId": {
         "type": "string",
         "pattern": "^fmeta_[0-9a-f]{32}(?![\\s\\S])"
@@ -9333,6 +10399,2006 @@
             "$ref": "#/components/schemas/GenericOperationObservation"
           }
         ]
+      },
+      "HistoryRoot": {
+        "$ref": "#/components/schemas/Hash",
+        "description": "目标 history 的准确当前 history-manifest hash；不是授权、健康、全池序号或旧根保留凭据。"
+      },
+      "HistoryQueryHash": {
+        "$ref": "#/components/schemas/Hash",
+        "description": "绑定规范化请求上下文、实际解析上下文、集合、anchor、页大小和预算策略的摘要。"
+      },
+      "HistoryCursor": {
+        "type": "string",
+        "minLength": 2,
+        "maxLength": 4096,
+        "pattern": "^(?:[0-9a-f]{2})+(?![\\s\\S])",
+        "description": "严格history_window_v1游标的ASCII小写十六进制编码；解码后的有界payload须通过HistoryCursorPayload及当前授权/根/边界位置检查，无签名或旧格式兼容。"
+      },
+      "HistoryField": {
+        "type": "string",
+        "enum": [
+          "message",
+          "author",
+          "created_at"
+        ]
+      },
+      "HistoryCollection": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "nodes"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "versions"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "branches"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "merges"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "node_parents"
+              },
+              "node_id": {
+                "$ref": "#/components/schemas/FileNodeId"
+              }
+            },
+            "required": [
+              "kind",
+              "node_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "version_sources"
+              },
+              "version_id": {
+                "$ref": "#/components/schemas/VersionId"
+              }
+            },
+            "required": [
+              "kind",
+              "version_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "merge_inputs"
+              },
+              "merge_id": {
+                "$ref": "#/components/schemas/FileMergeId"
+              }
+            },
+            "required": [
+              "kind",
+              "merge_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "merge_parents"
+              },
+              "merge_id": {
+                "$ref": "#/components/schemas/FileMergeId"
+              }
+            },
+            "required": [
+              "kind",
+              "merge_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "node_field"
+              },
+              "node_id": {
+                "$ref": "#/components/schemas/FileNodeId"
+              },
+              "field": {
+                "$ref": "#/components/schemas/HistoryField"
+              }
+            },
+            "required": [
+              "kind",
+              "node_id",
+              "field"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "HistoryPageLimit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65536
+      },
+      "HistoryResolvedContext": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 768,
+                "x-maxUtf8Bytes": 768,
+                "x-maxUtf16Units": 200,
+                "x-maxDepth": 32,
+                "x-namePolicy": "PortablePath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current_node_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileNodeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selected_branch_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "repository_id",
+          "history_tree_id",
+          "path",
+          "current_node_id",
+          "selected_branch_id"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryPageIdentity": {
+        "type": "object",
+        "properties": {
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "collection": {
+            "$ref": "#/components/schemas/HistoryCollection"
+          },
+          "context": {
+            "$ref": "#/components/schemas/HistoryResolvedContext"
+          },
+          "query_hash": {
+            "$ref": "#/components/schemas/HistoryQueryHash"
+          },
+          "limit": {
+            "$ref": "#/components/schemas/HistoryPageLimit"
+          },
+          "action_max_entries": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "history_root",
+          "file_id",
+          "collection",
+          "context",
+          "query_hash",
+          "limit",
+          "action_max_entries"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryPageCursors": {
+        "type": "object",
+        "properties": {
+          "previous_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "previous_cursor",
+          "next_cursor"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryContentSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "owned"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "inherited"
+              },
+              "source_version_id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/VersionId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "source_version_id"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "HistoryContentDisposition": {
+        "type": "object",
+        "properties": {
+          "version_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VersionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/HistoryContentSource"
+          },
+          "stored_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "AVAILABLE",
+                  "PURGED",
+                  "MIGRATED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "version_id",
+          "source",
+          "stored_state"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryContextSummary": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "maxLength": 128,
+            "x-maxUtf8Bytes": 128,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryContentDisposition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "note",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryParentSet": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "complete"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "more"
+              },
+              "cursor": {
+                "$ref": "#/components/schemas/HistoryCursor"
+              }
+            },
+            "required": [
+              "state",
+              "cursor"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "more即使尚未预览任何边也携带该节点的父关系续读游标；complete且零已枚举边才表示真正没有父关系。"
+      },
+      "HistoryGraphEdge": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "parent_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "endpoint": {
+            "type": "string",
+            "enum": [
+              "in_window",
+              "outside_window"
+            ]
+          }
+        },
+        "required": [
+          "node_id",
+          "parent_node_id",
+          "endpoint"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryFieldInfo": {
+        "type": "object",
+        "properties": {
+          "byte_length": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "byte_length"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryNodeFields": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/HistoryFieldInfo"
+          },
+          "author": {
+            "$ref": "#/components/schemas/HistoryFieldInfo"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/HistoryFieldInfo"
+          }
+        },
+        "required": [
+          "message",
+          "author",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryNodeSummary": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "content",
+              "rename",
+              "tags",
+              "merge"
+            ]
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "branch_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 768,
+            "x-maxUtf8Bytes": 768,
+            "x-maxUtf16Units": 200,
+            "x-maxDepth": 32,
+            "x-namePolicy": "PortablePath"
+          },
+          "previous_path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 768,
+                "x-maxUtf8Bytes": 768,
+                "x-maxUtf16Units": 200,
+                "x-maxDepth": 32,
+                "x-namePolicy": "PortablePath"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 128,
+            "x-maxUtf8Bytes": 128,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+          },
+          "tags": {
+            "$ref": "#/components/schemas/FileNodeTags"
+          },
+          "size": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "content_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "AVAILABLE",
+                  "PURGED",
+                  "MIGRATED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "download_name": {
+            "type": "string",
+            "maxLength": 768,
+            "x-maxUtf8Bytes": 768,
+            "x-maxUtf16Units": 200,
+            "x-namePolicy": "PortableName"
+          },
+          "storage_name": {
+            "type": "string",
+            "maxLength": 768,
+            "x-maxUtf8Bytes": 768,
+            "x-maxUtf16Units": 200,
+            "x-namePolicy": "PortableName"
+          },
+          "parents": {
+            "$ref": "#/components/schemas/HistoryParentSet"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/HistoryNodeFields"
+          }
+        },
+        "required": [
+          "node_id",
+          "version_id",
+          "kind",
+          "sequence",
+          "current",
+          "branch_id",
+          "path",
+          "previous_path",
+          "note",
+          "tags",
+          "size",
+          "content_hash",
+          "content_state",
+          "download_name",
+          "storage_name",
+          "parents",
+          "fields"
+        ],
+        "additionalProperties": false,
+        "x-maxEncodedBytes": 65536,
+        "description": "有界节点摘要，不含完整父数组、正文source数组、message、author或created_at文本。大字段由fields字节长度描述并可分片完整读取。",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "content"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "node_id": {
+                  "$ref": "#/components/schemas/VersionId"
+                },
+                "previous_path": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "rename"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "node_id": {
+                  "$ref": "#/components/schemas/FilePathNodeId"
+                },
+                "previous_path": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "tags",
+                    "merge"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "node_id": {
+                  "$ref": "#/components/schemas/FileMetadataNodeId"
+                },
+                "previous_path": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "HistoryVersionSummary": {
+        "type": "object",
+        "properties": {
+          "version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          },
+          "version_sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "size": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "content_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "content_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "AVAILABLE",
+                  "PURGED",
+                  "MIGRATED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 128,
+            "x-maxUtf8Bytes": 128,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+          },
+          "download_name": {
+            "type": "string",
+            "maxLength": 768,
+            "x-maxUtf8Bytes": 768,
+            "x-maxUtf16Units": 200,
+            "x-namePolicy": "PortableName"
+          },
+          "storage_name": {
+            "type": "string",
+            "maxLength": 768,
+            "x-maxUtf8Bytes": 768,
+            "x-maxUtf16Units": 200,
+            "x-namePolicy": "PortableName"
+          },
+          "source_count": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/HistoryNodeFields"
+          }
+        },
+        "required": [
+          "version_id",
+          "version_sequence",
+          "size",
+          "content_hash",
+          "content_state",
+          "note",
+          "download_name",
+          "storage_name",
+          "source_count",
+          "fields"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryBranchSummary": {
+        "type": "object",
+        "properties": {
+          "branch_id": {
+            "$ref": "#/components/schemas/BranchId"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 768,
+            "x-maxUtf8Bytes": 768,
+            "x-maxUtf16Units": 200,
+            "x-namePolicy": "PortableName"
+          },
+          "head_commit_id": {
+            "$ref": "#/components/schemas/CommitId"
+          },
+          "fork_commit_id": {
+            "$ref": "#/components/schemas/CommitId"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileNodeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived",
+              "merged",
+              "migrated"
+            ]
+          },
+          "branch_kind": {
+            "type": "string",
+            "enum": [
+              "file",
+              "full"
+            ]
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "read_only": {
+            "type": "boolean"
+          },
+          "alias_of": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BranchId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "$ref": "#/components/schemas/HistoryContentDisposition"
+          }
+        },
+        "required": [
+          "branch_id",
+          "name",
+          "head_commit_id",
+          "fork_commit_id",
+          "node_id",
+          "state",
+          "branch_kind",
+          "generation",
+          "current",
+          "read_only",
+          "alias_of",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryMergeSummary": {
+        "type": "object",
+        "properties": {
+          "merge_id": {
+            "$ref": "#/components/schemas/FileMergeId"
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "chosen_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "result_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          },
+          "surviving_branch_id": {
+            "$ref": "#/components/schemas/BranchId"
+          },
+          "reused_node": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "input_count": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "parent_count": {
+            "$ref": "#/components/schemas/UInt64"
+          }
+        },
+        "required": [
+          "merge_id",
+          "sequence",
+          "chosen_node_id",
+          "result_node_id",
+          "surviving_branch_id",
+          "reused_node",
+          "operation_id",
+          "input_count",
+          "parent_count"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryParentMember": {
+        "type": "object",
+        "properties": {
+          "parent_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          }
+        },
+        "required": [
+          "parent_node_id"
+        ],
+        "additionalProperties": false
+      },
+      "HistorySourceMember": {
+        "type": "object",
+        "properties": {
+          "ordinal": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "version_id": {
+            "$ref": "#/components/schemas/VersionId"
+          }
+        },
+        "required": [
+          "ordinal",
+          "version_id"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryMergeInputMember": {
+        "type": "object",
+        "properties": {
+          "ordinal": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "branch_id": {
+            "$ref": "#/components/schemas/BranchId"
+          },
+          "node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          }
+        },
+        "required": [
+          "ordinal",
+          "branch_id",
+          "node_id"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryMergeParentMember": {
+        "type": "object",
+        "properties": {
+          "ordinal": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "parent_node_id": {
+            "$ref": "#/components/schemas/FileNodeId"
+          }
+        },
+        "required": [
+          "ordinal",
+          "parent_node_id"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryPosition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "start"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "node"
+              },
+              "sequence": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "node_id": {
+                "$ref": "#/components/schemas/FileNodeId"
+              }
+            },
+            "required": [
+              "kind",
+              "sequence",
+              "node_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "version"
+              },
+              "sequence": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "version_id": {
+                "$ref": "#/components/schemas/VersionId"
+              }
+            },
+            "required": [
+              "kind",
+              "sequence",
+              "version_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "branch"
+              },
+              "branch_id": {
+                "$ref": "#/components/schemas/BranchId"
+              }
+            },
+            "required": [
+              "kind",
+              "branch_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "merge"
+              },
+              "sequence": {
+                "$ref": "#/components/schemas/UInt64"
+              },
+              "merge_id": {
+                "$ref": "#/components/schemas/FileMergeId"
+              }
+            },
+            "required": [
+              "kind",
+              "sequence",
+              "merge_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "parent"
+              },
+              "parent_node_id": {
+                "$ref": "#/components/schemas/FileNodeId"
+              }
+            },
+            "required": [
+              "kind",
+              "parent_node_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "member"
+              },
+              "ordinal": {
+                "$ref": "#/components/schemas/UInt64"
+              }
+            },
+            "required": [
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "field"
+              },
+              "byte_offset": {
+                "$ref": "#/components/schemas/UInt64"
+              }
+            },
+            "required": [
+              "kind",
+              "byte_offset"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "HistoryCursorPayload": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "history_window_v1"
+          },
+          "history_root": {
+            "$ref": "#/components/schemas/HistoryRoot"
+          },
+          "history_tree_id": {
+            "$ref": "#/components/schemas/HistoryId"
+          },
+          "file_id": {
+            "$ref": "#/components/schemas/FileId"
+          },
+          "collection": {
+            "$ref": "#/components/schemas/HistoryCollection"
+          },
+          "query_hash": {
+            "$ref": "#/components/schemas/HistoryQueryHash"
+          },
+          "limit": {
+            "$ref": "#/components/schemas/HistoryPageLimit"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "forward",
+              "backward"
+            ]
+          },
+          "position": {
+            "$ref": "#/components/schemas/HistoryPosition"
+          },
+          "anchor_node_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileNodeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "format",
+          "history_root",
+          "history_tree_id",
+          "file_id",
+          "collection",
+          "query_hash",
+          "limit",
+          "direction",
+          "position",
+          "anchor_node_id"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "collection": {
+                  "properties": {
+                    "kind": {
+                      "const": "nodes"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "limit": {
+                  "maximum": 64
+                },
+                "position": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "node"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "collection": {
+                  "properties": {
+                    "kind": {
+                      "const": "versions"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "limit": {
+                  "maximum": 128
+                },
+                "position": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "version"
+                      ]
+                    }
+                  }
+                },
+                "anchor_node_id": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "collection": {
+                  "properties": {
+                    "kind": {
+                      "const": "branches"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "limit": {
+                  "maximum": 128
+                },
+                "position": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "branch"
+                      ]
+                    }
+                  }
+                },
+                "anchor_node_id": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "collection": {
+                  "properties": {
+                    "kind": {
+                      "const": "merges"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "limit": {
+                  "maximum": 128
+                },
+                "position": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "merge"
+                      ]
+                    }
+                  }
+                },
+                "anchor_node_id": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "collection": {
+                  "properties": {
+                    "kind": {
+                      "const": "node_parents"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "limit": {
+                  "maximum": 512
+                },
+                "position": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "start",
+                        "parent"
+                      ]
+                    }
+                  }
+                },
+                "anchor_node_id": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "collection": {
+                  "properties": {
+                    "kind": {
+                      "const": "version_sources"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "limit": {
+                  "maximum": 512
+                },
+                "position": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "member"
+                      ]
+                    }
+                  }
+                },
+                "anchor_node_id": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "collection": {
+                  "properties": {
+                    "kind": {
+                      "const": "merge_inputs"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "limit": {
+                  "maximum": 512
+                },
+                "position": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "member"
+                      ]
+                    }
+                  }
+                },
+                "anchor_node_id": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "collection": {
+                  "properties": {
+                    "kind": {
+                      "const": "merge_parents"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "limit": {
+                  "maximum": 512
+                },
+                "position": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "member"
+                      ]
+                    }
+                  }
+                },
+                "anchor_node_id": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "collection": {
+                  "properties": {
+                    "kind": {
+                      "const": "node_field"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "limit": {
+                  "maximum": 65536
+                },
+                "position": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "field"
+                      ]
+                    }
+                  }
+                },
+                "anchor_node_id": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "position": {
+                  "properties": {
+                    "kind": {
+                      "const": "start"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "direction": {
+                  "const": "forward"
+                },
+                "collection": {
+                  "properties": {
+                    "kind": {
+                      "const": "node_parents"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "无frontier/visited/旧页库存；位置种类、参数预算和anchor约束在严格解码后复核，实际边界必须属于当前获授权根内的集合。"
+      },
+      "HistoryNodesPage": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "nodes"
+          },
+          "identity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HistoryPageIdentity"
+              },
+              {
+                "properties": {
+                  "collection": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "nodes"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "limit": {
+                    "maximum": 64
+                  }
+                }
+              }
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/HistoryContextSummary"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryNodeSummary"
+            },
+            "maxItems": 64
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryGraphEdge"
+            },
+            "maxItems": 256
+          },
+          "page": {
+            "$ref": "#/components/schemas/HistoryPageCursors"
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "context",
+          "nodes",
+          "edges",
+          "page"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryVersionsPage": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "versions"
+          },
+          "identity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HistoryPageIdentity"
+              },
+              {
+                "properties": {
+                  "collection": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "versions"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "limit": {
+                    "maximum": 128
+                  }
+                }
+              }
+            ]
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryVersionSummary"
+            },
+            "maxItems": 128
+          },
+          "page": {
+            "$ref": "#/components/schemas/HistoryPageCursors"
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "versions",
+          "page"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryBranchesPage": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "branches"
+          },
+          "identity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HistoryPageIdentity"
+              },
+              {
+                "properties": {
+                  "collection": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "branches"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "limit": {
+                    "maximum": 128
+                  }
+                }
+              }
+            ]
+          },
+          "branches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryBranchSummary"
+            },
+            "maxItems": 128
+          },
+          "page": {
+            "$ref": "#/components/schemas/HistoryPageCursors"
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "branches",
+          "page"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryMergesPage": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "merges"
+          },
+          "identity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HistoryPageIdentity"
+              },
+              {
+                "properties": {
+                  "collection": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "merges"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "limit": {
+                    "maximum": 128
+                  }
+                }
+              }
+            ]
+          },
+          "merges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryMergeSummary"
+            },
+            "maxItems": 128
+          },
+          "page": {
+            "$ref": "#/components/schemas/HistoryPageCursors"
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "merges",
+          "page"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryNodeParentsPage": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "node_parents"
+          },
+          "identity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HistoryPageIdentity"
+              },
+              {
+                "properties": {
+                  "collection": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "node_parents"
+                      },
+                      "node_id": {
+                        "$ref": "#/components/schemas/FileNodeId"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "node_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "limit": {
+                    "maximum": 512
+                  }
+                }
+              }
+            ]
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryParentMember"
+            },
+            "maxItems": 512
+          },
+          "page": {
+            "$ref": "#/components/schemas/HistoryPageCursors"
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "parents",
+          "page"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryVersionSourcesPage": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "version_sources"
+          },
+          "identity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HistoryPageIdentity"
+              },
+              {
+                "properties": {
+                  "collection": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "version_sources"
+                      },
+                      "version_id": {
+                        "$ref": "#/components/schemas/VersionId"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "version_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "limit": {
+                    "maximum": 512
+                  }
+                }
+              }
+            ]
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistorySourceMember"
+            },
+            "maxItems": 512
+          },
+          "page": {
+            "$ref": "#/components/schemas/HistoryPageCursors"
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "sources",
+          "page"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryMergeInputsPage": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "merge_inputs"
+          },
+          "identity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HistoryPageIdentity"
+              },
+              {
+                "properties": {
+                  "collection": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "merge_inputs"
+                      },
+                      "merge_id": {
+                        "$ref": "#/components/schemas/FileMergeId"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "merge_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "limit": {
+                    "maximum": 512
+                  }
+                }
+              }
+            ]
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryMergeInputMember"
+            },
+            "maxItems": 512
+          },
+          "page": {
+            "$ref": "#/components/schemas/HistoryPageCursors"
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "inputs",
+          "page"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryMergeParentsPage": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "merge_parents"
+          },
+          "identity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HistoryPageIdentity"
+              },
+              {
+                "properties": {
+                  "collection": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "merge_parents"
+                      },
+                      "merge_id": {
+                        "$ref": "#/components/schemas/FileMergeId"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "merge_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "limit": {
+                    "maximum": 512
+                  }
+                }
+              }
+            ]
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryMergeParentMember"
+            },
+            "maxItems": 512
+          },
+          "page": {
+            "$ref": "#/components/schemas/HistoryPageCursors"
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "parents",
+          "page"
+        ],
+        "additionalProperties": false
+      },
+      "HistoryNodeFieldPage": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "node_field"
+          },
+          "identity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HistoryPageIdentity"
+              },
+              {
+                "properties": {
+                  "collection": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "node_field"
+                      },
+                      "node_id": {
+                        "$ref": "#/components/schemas/FileNodeId"
+                      },
+                      "field": {
+                        "$ref": "#/components/schemas/HistoryField"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "node_id",
+                      "field"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "limit": {
+                    "maximum": 65536
+                  }
+                }
+              }
+            ]
+          },
+          "field": {
+            "$ref": "#/components/schemas/HistoryField"
+          },
+          "total_bytes": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "byte_offset": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 65536,
+            "x-maxUtf8Bytes": 65536
+          },
+          "end_of_field": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "identity",
+          "field",
+          "total_bytes",
+          "byte_offset",
+          "text",
+          "end_of_field",
+          "next_cursor"
+        ],
+        "additionalProperties": false,
+        "description": "完整UTF-8片段；end_of_field只标记该片的右边界，不表示客户端持有前序片段或完整字段。空字段offset=total=0、text为空、end_of_field=true且无后续。不得截断或增加网络限额。"
+      },
+      "HistoryWindowPage": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/HistoryNodesPage"
+          },
+          {
+            "$ref": "#/components/schemas/HistoryVersionsPage"
+          },
+          {
+            "$ref": "#/components/schemas/HistoryBranchesPage"
+          },
+          {
+            "$ref": "#/components/schemas/HistoryMergesPage"
+          },
+          {
+            "$ref": "#/components/schemas/HistoryNodeParentsPage"
+          },
+          {
+            "$ref": "#/components/schemas/HistoryVersionSourcesPage"
+          },
+          {
+            "$ref": "#/components/schemas/HistoryMergeInputsPage"
+          },
+          {
+            "$ref": "#/components/schemas/HistoryMergeParentsPage"
+          },
+          {
+            "$ref": "#/components/schemas/HistoryNodeFieldPage"
+          }
+        ],
+        "x-maxEncodedBytes": 8388608,
+        "description": "单个当前根上的可替换窗口；包括外壳、转义、游标与边预览的完整JSON编码不超过既有8MiB。不是无限加载更多或整包兼容出口。"
       }
     }
   }

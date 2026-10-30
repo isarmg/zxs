@@ -336,9 +336,7 @@ impl Engine {
             &plan,
             false,
         )?;
-        std::sync::Arc::make_mut(&mut self.state)
-            .plans
-            .insert(plan.plan_id.clone(), plan.clone());
+        self.retain_local_plan(plan.clone());
         Ok(plan)
     }
 

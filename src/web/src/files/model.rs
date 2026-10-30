@@ -86,12 +86,15 @@ pub(crate) struct Model {
     pub history_loading: bool,
     pub history_generation: u64,
     pub history_cancellation: Option<crate::api::ReadCancellation>,
+    pub history_editors: usize,
+    pub history_next_draft: u64,
+    pub history_aux: super::history::Reads,
     pub checked_entries: BTreeSet<String>,
     pub batch: Option<super::batch::Draft>,
     pub merge: Option<super::merge::Draft>,
     pub backup: Option<super::backup::Draft>,
     pub tag_edit: Option<super::tags::Draft>,
-    pub checked_nodes: BTreeSet<String>,
+    pub checked_nodes: super::tags::Selection,
     pub publications: super::review::Publications,
     pub operations: Vec<FileOperation>,
     pub polling_operations: Vec<String>,
@@ -172,6 +175,7 @@ impl Model {
     }
 
     pub(crate) fn cancel_history(&mut self) {
+        self.history_aux.cancel_all();
         if let Some(cancellation) = self.history_cancellation.take() {
             cancellation.abort();
         }
@@ -190,22 +194,20 @@ impl Model {
             return;
         };
         if let Some(entry) = entry {
-            let content_changed = selected.file_id() != entry.file_id()
-                || selected.version_id() != entry.version_id()
-                || selected.node_id() != entry.node_id()
-                || selected.selected_branch_id() != entry.selected_branch_id();
-            let changed = content_changed
+            let context_changed = selected.file_id() != entry.file_id()
                 || selected.path() != entry.path()
                 || selected.context() != entry.context()
                 || selected.backup() != entry.backup();
-            if changed {
-                // A refreshed branch or renamed logical path invalidates both
-                // visible metadata and in-flight reads of the previous context.
-                if content_changed {
-                    self.file_history = Default::default();
-                }
+            let content_changed = selected.version_id() != entry.version_id()
+                || selected.node_id() != entry.node_id()
+                || selected.selected_branch_id() != entry.selected_branch_id();
+            if context_changed {
+                self.clear_selection();
+            } else if content_changed {
                 self.cancel_history();
-                self.checked_nodes.clear();
+                self.file_history.invalidate();
+                // Selections and action drafts retain their captured heads.
+                // A new root requires a complete explicit review before reuse.
             }
             self.selected = Some(entry);
         } else {
@@ -301,24 +303,6 @@ pub(crate) fn valid_name(name: &str) -> bool {
 pub(crate) fn file_kind(entry: &Entry) -> bool {
     entry.kind() == storage_contract::NamespaceEntryKind::File
 }
-/// Readability follows the visible real version, including a pending branch's
-/// inherited parent. A missing version never falls back to a source ID locally.
-pub(crate) fn visible_content(value: &Value) -> bool {
-    value["version_id"]
-        .as_str()
-        .is_some_and(|id| !id.is_empty())
-}
-/// Materialization describes ownership, independently of readable inherited
-/// content. Body-history records do not carry branch ownership markers.
-pub(crate) fn materialized(value: &Value) -> bool {
-    value["materialized"] != false
-        && value["inherited"] != true
-        && value["content_state"] != "PENDING"
-        && visible_content(value)
-}
-pub(crate) fn inherited_content(value: &Value) -> bool {
-    visible_content(value) && (value["inherited"] == true || value["materialized"] == false)
-}
 /// A stable file ID can appear at several frozen logical paths. History and
 /// branch selection must carry the view path, independently of physical owner.
 pub(crate) fn entry_key(entry: &Entry) -> String {
@@ -334,60 +318,6 @@ pub(crate) fn selected_entry_read_only(model: &Model) -> bool {
     model.selected.as_ref().is_some_and(Entry::read_only)
 }
 
-/// History metadata may describe a primary alias whose HEAD is newer than the
-/// body physically present on the selected backup disk. Keep backup inspection
-/// pinned to the exact entry while still displaying all historical nodes.
-pub(crate) fn history_for_entry(mut history: Value, entry: &Entry) -> Value {
-    if !entry.backup() {
-        return history;
-    }
-    let version = entry
-        .version_id()
-        .expect("invariant: backup file has its stored version")
-        .to_owned();
-    let node = entry
-        .node_id()
-        .expect("invariant: backup file has a node identity")
-        .to_owned();
-    history["version_id"] = version.clone().into();
-    history["node_id"] = node.clone().into();
-    history["current_node_id"] = node.clone().into();
-    history["read_only"] = true.into();
-    history["inherited"] = entry.inherited().into();
-    history["materialized"] = entry.materialized().into();
-    for (field, selected) in [("nodes", &node), ("versions", &version)] {
-        if let Some(records) = history[field].as_array_mut() {
-            for record in records {
-                let id_field = if field == "nodes" {
-                    "node_id"
-                } else {
-                    "version_id"
-                };
-                record["current"] = (record[id_field].as_str() == Some(selected.as_str())).into();
-            }
-        }
-    }
-    history
-}
-
-/// Path/content ancestry is the canonical node graph, not the body-version list.
-pub(crate) fn history_nodes(history: &Value) -> Vec<Value> {
-    history_nodes_ref(history).to_vec()
-}
-pub(crate) fn history_nodes_ref(history: &Value) -> &[Value] {
-    history
-        .get("nodes")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
-}
-pub(crate) fn history_node_id(node: &Value) -> String {
-    node["node_id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .unwrap_or_default()
-        .to_owned()
-}
 pub(crate) fn selected_branch(model: &Model) -> String {
     model
         .file_history
@@ -407,7 +337,13 @@ pub(crate) fn selected_file_branch_record(model: &Model) -> Option<(String, Stri
         .file_history
         .branches()
         .iter()
-        .find(|branch| branch.id() == id)?;
+        .find(|branch| branch.id() == id)
+        .or_else(|| {
+            model
+                .file_history
+                .current_branch()
+                .filter(|branch| branch.id() == id)
+        })?;
     if !branch.writable() {
         return None;
     }

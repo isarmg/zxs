@@ -3,6 +3,22 @@ use json_codec::json;
 
 const ROOT: DirectoryKey = DirectoryKey(String::new());
 
+impl Entry {
+    pub(in crate::files) fn note(&self) -> Option<&str> {
+        self.note.as_deref()
+    }
+
+    pub(in crate::files) fn materialized(&self) -> bool {
+        matches!(
+            self.body,
+            Body::File {
+                ownership: Ownership::Materialized,
+                ..
+            }
+        )
+    }
+}
+
 fn overlay(mut value: Value, patch: &Value) -> Value {
     for (key, field) in patch.as_object().unwrap() {
         value[key] = field.clone();

@@ -1,0 +1,36 @@
+{
+  "kind": "node_parents",
+  "identity": {
+    "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
+    "collection": {
+      "kind": "node_parents",
+      "node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368"
+    },
+    "context": {
+      "repository_id": "repo_4f185d7fabb3444ebeaf32bcd61440fa",
+      "history_tree_id": "history_47238cab7fbb497aa8f81160f3643427",
+      "path": "renamed.txt",
+      "current_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "selected_branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4"
+    },
+    "query_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "limit": 256,
+    "action_max_entries": "100000"
+  },
+  "parents": [
+    {
+      "parent_node_id": "fmeta_e6235fa19d6445f196f4d68386fefbe8"
+    },
+    {
+      "parent_node_id": "ver_8344ed7d8dce409e8241cbd7a7045371"
+    },
+    {
+      "parent_node_id": "ver_87aacbfd592e4b539fc94e3f1653367d"
+    }
+  ],
+  "page": {
+    "previous_cursor": null,
+    "next_cursor": null
+  }
+}

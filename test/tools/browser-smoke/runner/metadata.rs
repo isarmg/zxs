@@ -43,8 +43,14 @@ pub(super) fn metadata_edit(browser: &Browser) -> Result<()> {
             const history=await response.json();
             const base=history.nodes.find(node=>node.version_id&&node.node_id);
             if(!base)throw new Error('real node required for detail refresh fixture');
-            history.nodes.push(...Array.from({length:12},(_,index)=>({...base,node_id:'detail-refresh-tip-'+index,
-                parent_node_ids:[base.node_id],current:false,materialized:true,inherited:false,kind:'content'})));
+            const tips=Array.from({length:12},(_,index)=>({...base,
+                node_id:'fmeta_'+(0x1000+index).toString(16).padStart(32,'0'),
+                sequence:String(1000000-index),current:false,kind:'tags',note:'',
+                parents:{state:'complete'}}));
+            history.nodes.push(...tips);
+            history.nodes.sort((a,b)=>BigInt(a.sequence)>BigInt(b.sequence)?-1:BigInt(a.sequence)<BigInt(b.sequence)?1:a.node_id.localeCompare(b.node_id));
+            history.edges.push(...tips.map(node=>({node_id:node.node_id,parent_node_id:base.node_id,endpoint:'in_window'})));
+            if(history.nodes.length>Number(history.identity.limit))throw new Error('wide fixture exceeds the real requested node budget');
             probe.historyResponses++;
             return new Response(JSON.stringify(history),{status:200,headers:{'Content-Type':'application/json'}});
         };return true;

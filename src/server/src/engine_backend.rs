@@ -1346,6 +1346,31 @@ impl Backend for EngineBackend {
             ),
         })
     }
+    fn history_window(
+        &self,
+        identity: &Identity,
+        request: storage_contract::history_window::HistoryWindowRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, ApiError> {
+        let read = {
+            let engine = self
+                .engine
+                .lock()
+                .expect("invariant: service state lock poisoned");
+            current_protected_identity(&engine, identity)?;
+            engine
+                .capture_history_window(request, cancellation)
+                .map_err(error)?
+        };
+        let page = read.page().map_err(error);
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        engine.recheck_history_window(&read).map_err(error)?;
+        page
+    }
     fn file_history_snapshot(
         &self,
         identity: &crate::auth::Identity,

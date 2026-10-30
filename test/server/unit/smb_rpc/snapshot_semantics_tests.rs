@@ -492,6 +492,14 @@ impl Backend for NamespaceAfterWorkspace {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         self.inner.default_directory_branch(identity, repository_id)
     }
+    fn history_window(
+        &self,
+        identity: &crate::auth::Identity,
+        request: storage_contract::history_window::HistoryWindowRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, crate::ApiError> {
+        self.inner.history_window(identity, request, cancellation)
+    }
     fn file_history_snapshot(
         &self,
         identity: &crate::auth::Identity,

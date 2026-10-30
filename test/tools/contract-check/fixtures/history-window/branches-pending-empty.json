@@ -1,0 +1,47 @@
+{
+  "kind": "branches",
+  "identity": {
+    "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
+    "collection": {
+      "kind": "branches"
+    },
+    "context": {
+      "repository_id": "repo_4f185d7fabb3444ebeaf32bcd61440fa",
+      "history_tree_id": "history_47238cab7fbb497aa8f81160f3643427",
+      "path": "renamed.txt",
+      "current_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "selected_branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4"
+    },
+    "query_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "limit": 64,
+    "action_max_entries": "100000"
+  },
+  "branches": [
+    {
+      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
+      "name": "left",
+      "head_commit_id": "commit_244859da15164d7bb719e3a62b90381b",
+      "fork_commit_id": "commit_0ad62b2d294c4ab4a2eed96fd4534f19",
+      "node_id": null,
+      "state": "active",
+      "branch_kind": "file",
+      "generation": "5",
+      "current": true,
+      "read_only": false,
+      "alias_of": null,
+      "content": {
+        "version_id": null,
+        "source": {
+          "kind": "inherited",
+          "source_version_id": null
+        },
+        "stored_state": null
+      }
+    }
+  ],
+  "page": {
+    "previous_cursor": null,
+    "next_cursor": null
+  }
+}

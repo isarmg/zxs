@@ -1,6 +1,6 @@
 //! Namespace, branch and note transactions; writes never bypass the pending-save gate.
 use super::{
-    disk_path,
+    disk_path, history_write_allowed,
     operation::{record_operation, record_receipt},
     write_allowed,
 };
@@ -160,7 +160,8 @@ pub(crate) fn rename_file_branch(
     branch_id: String,
     name: String,
 ) -> Option<String> {
-    if file.is_empty()
+    if !state.with_untracked(history_write_allowed)
+        || file.is_empty()
         || branch_id.is_empty()
         || name.len() > storage_contract::MAX_NOTE_BYTES
         || !crate::files::model::valid_name(&name)
@@ -229,7 +230,7 @@ pub(crate) fn update_note(
         Some(version) => ("versions", version),
         None => ("files", file),
     };
-    if id.is_empty() || !state.with_untracked(write_allowed) {
+    if id.is_empty() || !state.with_untracked(history_write_allowed) {
         return None;
     }
     let operation_id = crate::ui::operation_id(state)?;
@@ -270,7 +271,10 @@ pub(crate) fn update_node_note(
     node: String,
     note: String,
 ) -> Option<String> {
-    if node.is_empty() || storage_contract::validate_note(&note).is_err() {
+    if !state.with_untracked(history_write_allowed)
+        || node.is_empty()
+        || storage_contract::validate_note(&note).is_err()
+    {
         return None;
     }
     let file = state.with_untracked(|s| {
@@ -338,7 +342,7 @@ fn file_mutation(
     action: &str,
     mut body: Value,
 ) -> Option<String> {
-    if !state.with_untracked(write_allowed) {
+    if !state.with_untracked(history_write_allowed) {
         return None;
     }
     let id = crate::ui::operation_id(state)?;

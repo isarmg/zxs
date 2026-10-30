@@ -752,7 +752,7 @@ impl Engine {
         }
         require_permanent_loss(self, &candidate, &plan.version_protection)?;
         let member_disks = self.members();
-        let history_objects = crate::history_package::bound_history_objects_at(
+        let (history_objects, roots) = crate::history_package::bound_history_objects_with_roots_at(
             &self.disk_resources,
             &member_disks,
             &candidate,
@@ -905,6 +905,7 @@ impl Engine {
         next.operations
             .insert(candidate.operation_id, result.clone());
         self.state = std::sync::Arc::new(next);
+        self.bind_recovered_history_roots(roots);
         self.snapshot = Some(candidate.snapshot_hash);
         self.next_slot = self.next_slot.max(
             candidate

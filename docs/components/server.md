@@ -224,7 +224,7 @@ Unix socket 测试需要运行环境允许本机 socket。[集成回归](../../t
 
 用户目录分支以稳定文件身份和精确节点组成冻结子树；登记目录分支直接引用父组成，文件首次实际写入时才登记公共文件分支。批量操作明确列出每个作用分支和基线子树，任一条件冲突整笔拒绝。已包含文件分支的历史域明确拒绝未适配的旧整树创建、历史保存和拆分。新版本正文使用真实文件容器，下载名称采用所选逻辑别名，布局与格式拒绝边界见[存储格式](../08-full-storage-and-disk-format.md)。
 
-文件历史保留真实正文的 `versions`，统一图使用 `nodes`、`node_id` 与 `parent_node_ids`。文件或文件夹重命名为受影响文件创建路径节点并复用原正文；后续真实写入沿路径节点继续连线。路径节点备注与版本备注分开保存，分支来源可明确指向路径节点，下载仍使用真实 `version_id`。
+文件历史主窗口使用 `nodes` 及独立有界父边预览，真实正文通过高级 `versions` 页读取；不把正文来源解读为图父边。文件或文件夹重命名为受影响文件创建路径节点并复用原正文；后续真实写入沿路径节点继续连线。路径节点备注与版本备注分开保存，分支来源可明确指向路径节点，下载仍使用真实 `version_id`。
 
 `POST /api/file-manager/files/{file}/merge` 提交已审阅的参与分支 head、任意同文件结果节点、归属分支及 `confirmed:true`。参与 head 改变返回409；被合并分支保留冻结历史，转为只读别名。结果恰为参与 head 时复用节点，否则创建复用正文的 `fmeta_` 合并节点；独立来源记录保存全部输入，图边过滤成环关系。只推进参与引用，父目录冻结的旧子树在自己的组成上派生，不从子目录新 head 带入未参与文件。
 
@@ -294,45 +294,39 @@ HTTP spool 必须由服务身份拥有且权限为 `0700`；现有目录不会�
 
 HTTP token 检查、授权后端和 managed 引擎准入读取[已提交鉴权快照](../architecture/auth-committed-snapshots.md)，不等待凭据写序列的 fsync。读写请求仍在引擎锁后复核当前会话，保留注销、改密、到期及不确定权威故障关闭；密码哈希与持久写仍有各自的有界阻塞任务准入。
 
-### 文件历史类型化读边界
+### 文件历史窗口边界
 
-`GET /api/file-manager/files/{file}/history` 通过 `ReadFileHistory` 和
-`Backend::file_history_snapshot` 读取，不再进入字符串／JSON action dispatcher。
-HTTP query 只接收 `repository_id`、`path`；二者成对解析，路径使用允许规范等价拼写的
-`LookupPath`，核心查询复用其 key。未知字段及静态格式错误在获得阻塞槽后、调用 Backend
-前拒绝；中间件仍先认证，合法请求在 AuthorizedBackend 和 Engine 锁内重新检查当前授权。
-阻塞任务独立持有准入许可和认证所有者，HTTP future 取消不提前释放其所需资源。
-此静态错误优先级不同于旧 dispatcher 在查询字段前先查询文件的顺序。
+两个文件历史 HTTP 路由与全部辅助读取统一调用 `Backend::history_window`，共享
+`storage_contract::history_window` 的严格类型。主文件管理页只含节点和独立边预算的预览；
+正文、分支、合并、图父关系、原始 merge 成对输入／保存父关系、正文 sources 和外置字段
+各自有界读取。默认只读首页，不保留旧整包 HTTP 分支。参数、排序、预算和错误见
+[API 规范](../15-api-and-errors.md)；完整语义和验收见 [ADR 0009](../adr/0009-bounded-file-history-windows.md)。
 
-锁内保留现有 `Engine::file_history` 的选择性 SQLite 查询及原有失效／小规模扫描回退，
-并取得当前路径、选择、正文处置和一个 Engine 创建的 `MetadataView`。视图只持有既有
-`Arc<State>`，不克隆 State；当前条目只复制一个匹配项，不复制整个 namespace。
-首次 commit 条目扫描、分支／merge 筛选、节点祖先、标签、路径 memoization 及排序全部
-使用该视图在锁外完成；现有 State-only `NodeProjection` 同样服务 Engine 和视图。
-版本数字保持 `u64`，内容节点与版本行共享 `Arc<HistoryVersionData>`，整数文本编码仍在 wire。
+EngineBackend 在锁内先复核当前身份，再由核心捕获当前对象／路径归属、准确目标
+history-manifest 根及同一 State 观察。核心页选择在锁外完成，不调用旧
+FileHistoryRead／Engine::file_history 取全量后切片。返回前回锁先复核当前身份，再由核心
+核验相同根与实际上下文；合法无关历史变化不因全池序号被拒绝。显式根、游标或 anchor
+不能授权，缺根绑定不回退到零摘要、代数或未核验 SQLite。无当前路径的历史文件继续可读。
 
-`GET /api/history-trees/{history}/graph` 也在锁内检查身份和历史归属后取得同一种视图；
-提交、分支、link、boundary 的筛选／收集及排序全部在锁外完成，提交继续共享既有
-`Arc<Commit>`。两个入口返回前回锁复核当前身份、仓库存在性和该历史自身的拆分代数；
-显式文件路径查询还复核当前路径仍属于该文件。普通写入不因全局代数变化而拒绝旧投影，
-响应也不把新的当前字段拼入旧视图。无路径的历史查询仍允许文件已离开当前 namespace。
+消息、作者和创建时间按枚举字段返回完整 UTF-8 片段；标签、备注、名称和路径沿既有
+有效边界。没有读取截断、永久历史裁剪、写入消息新上限或持久格式迁移。空 pending
+分支可以没有 head node；每页明示实际 action_max_entries，动作最终编码 1 MiB 限制独立保留。
 
-视图由既有 backend job 持有，取消 HTTP 等待仍保留其槽位、认证和视图，直到 worker 结束；
-没有新增准入层或跨请求缓存。视图不持有磁盘资源，不打开正文，不是授权或 GC 租约，
-也不能证明正文当前存活。旧视图存活时后续写入可能触发 State 的 copy-on-write；
-索引查询及当前上下文解析仍在锁内，本改动不表示所有锁内扫描或 I/O 已消除，未增加 fsync。
+页 DTO 在复制前受核心选择预算约束；server 用写入前拒绝超限的 Writer 最终编码一次，
+全响应不超过既有 8 MiB，计入 JSON 转义、外壳、cursor、字段及边预览。编码后的缓冲
+使用 Bytes owner 持有原 backend permit，直到最后一个 Body／缓冲引用释放；排队／执行中
+取消仍由 HttpBackendJob 保留 Backend、AuthStore 和许可，不新增无界响应队列或准入池。
+响应编码和资源释放不表示当前磁盘健康，元数据视图也不是正文或 GC 租约。
 
-无当前路径、无备注、未选分支、历史版本无首次 commit 均保留原有缺省语义：
-路径／选择为 null、备注／message 为空串、无当前路径不输出当前正文属性。
-稀疏 content-state 缺席的展示值仍为 `LIVE`，显式状态仍使用其原 token。
-版本按原次序倒序，统一节点按 sequence 降序及 node ID 定序；不以展示顺序创造 ancestry。
-这是读模型迁移，不改变持久化 `Commit.kind`、事务格式、内容读取证明或授权规则。
+内部完整历史方法和冻结投影回归仍服务其真实调用方，不是 HTTP 兼容出口。全局历史图
+`GET /api/history-trees/{history}/graph` 保留既有 MetadataView 投影：锁外筛选、收集和排序，
+提交共享 Arc<Commit>，返回前检查当前身份、仓库和历史拆分范围；本窗口协议不改变该端点。
+State 驻留、冷扫描／祖先解析 CPU、发布／恢复及浏览器峰值仍须分别验证，不能据有限页
+宣称整个 Engine 为 O(page)、所有锁内 I/O 已消除或吞吐已达标。
 
-测试入口：`backend_file_history` 的无 core wire／query 单测、
-`file_manager::history_nodes` 的固定图与脱离当前 namespace 场景、真实 HTTP `history_query`、
-`authorized_backend` 的参数／结果／错误转发、排队撤权四路与无凭据矩阵，以及阻塞 panic／
-取消槽位测试；`engine_backend::graph::tests` 另覆盖捕获后写入、撤权、路径删除、实际拆分、
-目标替换和取消时视图／槽位所有权。源代码接线不等于这些测试已经执行；执行结果由对应验证提交记录。
+测试接线包括 history_window_query、history_window_encode、history_window_http、共享
+history_window 契约、授权转发／撤权矩阵及真实 HTTP 窗口消费者；旧内部投影的固定图与
+顺序回归继续保留。源码、类型及格式检查不等于这些测试已经执行，运行结果由统一验证记录提供。
 
 ### 活动历史投影边界
 

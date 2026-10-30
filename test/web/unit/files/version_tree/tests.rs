@@ -1,25 +1,30 @@
 use super::*;
+use crate::files::history::tests::node;
+use json_codec::Value;
+
+fn typed(records: &[Value]) -> Vec<FileNode> {
+    records.iter().cloned().map(node).collect()
+}
+
 #[test]
-fn obsolete_body_version_graph_fields_are_not_interpreted_as_nodes() {
+fn body_version_ids_do_not_create_graph_nodes_or_parent_edges() {
     let records = vec![
-        json_codec::json!({"file_id":"file","version_id":"old","created_at":"1970-01-01T00:00:01Z","source_version_ids":[]}),
-        json_codec::json!({"file_id":"file","node_id":"new","version_id":"body","created_at":2,"source_version_ids":["old"]}),
+        json_codec::json!({"node_id":"rename","version_id":"old-body","kind":"rename","sequence":"1"}),
+        json_codec::json!({"node_id":"new","version_id":"body","sequence":"2","parent_node_ids":["rename"]}),
     ];
-    let parsed = metadata(&records, "file");
-    assert_eq!(parsed.len(), 1);
-    assert_eq!(parsed[0].id, "new");
-    assert!(parsed[0].parents.is_empty());
-    assert!(parsed[0].created.is_empty());
+    let tree = layout(&metadata(&typed(&records)));
+    assert_eq!(ids(&tree), BTreeSet::from(["rename".into(), "new".into()]));
+    assert_eq!(tree.edges, vec![("rename".into(), "new".into())]);
 }
 
 #[test]
 fn rename_nodes_reuse_body_versions_but_keep_their_own_ancestry() {
     let records = vec![
-        json_codec::json!({"file_id":"file","node_id":"ver-one","version_id":"ver-one","parent_node_ids":[],"kind":"content","created_at":"1970-01-01T00:00:01Z"}),
-        json_codec::json!({"file_id":"file","node_id":"fnode-rename","version_id":"ver-one","parent_node_ids":["ver-one"],"kind":"rename","created_at":"1970-01-01T00:00:02Z"}),
-        json_codec::json!({"file_id":"file","node_id":"ver-two","version_id":"ver-two","parent_node_ids":["fnode-rename"],"source_version_ids":["ver-one"],"kind":"content","created_at":"1970-01-01T00:00:03Z"}),
+        json_codec::json!({"node_id":"ver-one","version_id":"ver-one","parent_node_ids":[],"kind":"content","sequence":"1"}),
+        json_codec::json!({"node_id":"fnode-rename","version_id":"ver-one","parent_node_ids":["ver-one"],"kind":"rename","sequence":"2"}),
+        json_codec::json!({"node_id":"ver-two","version_id":"ver-two","parent_node_ids":["fnode-rename"],"kind":"content","sequence":"3"}),
     ];
-    let tree = layout(&metadata(&records, "file"));
+    let tree = layout(&metadata(&typed(&records)));
     assert_eq!(
         tree.levels,
         vec![
@@ -37,7 +42,7 @@ fn rename_nodes_reuse_body_versions_but_keep_their_own_ancestry() {
     );
     let model = Model {
         file_history: crate::files::history::tests::history(
-            json_codec::json!({"node_id":"fnode-rename","version_id":"ver-one","inherited":true}),
+            json_codec::json!({"current_node_id":"fnode-rename","version_id":"ver-one","inherited":true}),
         ),
         ..Default::default()
     };
@@ -45,14 +50,14 @@ fn rename_nodes_reuse_body_versions_but_keep_their_own_ancestry() {
     assert!(!inherited_current(&model, "ver-one"));
 }
 #[test]
-fn current_utc_history_nodes_sort_sibling_tips_by_time_then_identity() {
+fn history_nodes_sort_sibling_tips_by_sequence_then_identity() {
     let records = vec![
-        json_codec::json!({"file_id":"file","node_id":"root","version_id":"root","parent_node_ids":[],"kind":"content","created_at":"2025-12-31T23:59:59Z"}),
-        json_codec::json!({"file_id":"file","node_id":"older-rename","version_id":"root","parent_node_ids":["root"],"kind":"rename","created_at":"2026-01-01T00:00:00Z"}),
-        json_codec::json!({"file_id":"file","node_id":"b-newer-body","version_id":"body","parent_node_ids":["root"],"kind":"content","created_at":"2026-01-01T01:00:00Z"}),
-        json_codec::json!({"file_id":"file","node_id":"a-newer-tags","version_id":"body","parent_node_ids":["root"],"kind":"tags","created_at":"2026-01-01T01:00:00Z"}),
+        json_codec::json!({"node_id":"root","version_id":"root","parent_node_ids":[],"kind":"content","sequence":"1"}),
+        json_codec::json!({"node_id":"older-rename","version_id":"root","parent_node_ids":["root"],"kind":"rename","sequence":"2"}),
+        json_codec::json!({"node_id":"b-newer-body","version_id":"body","parent_node_ids":["root"],"kind":"content","sequence":"3"}),
+        json_codec::json!({"node_id":"a-newer-tags","version_id":"body","parent_node_ids":["root"],"kind":"tags","sequence":"3"}),
     ];
-    let tree = layout(&metadata(&records, "file"));
+    let tree = layout(&metadata(&typed(&records)));
     assert_eq!(
         tree.levels,
         vec![
@@ -62,13 +67,13 @@ fn current_utc_history_nodes_sort_sibling_tips_by_time_then_identity() {
     );
     let mut reversed = records;
     reversed.reverse();
-    assert_eq!(layout(&metadata(&reversed, "file")), tree);
+    assert_eq!(layout(&metadata(&typed(&reversed))), tree);
 }
 
-fn v(id: &str, created: u64, parents: &[&str]) -> Version {
+fn v(id: &str, sequence: u64, parents: &[&str]) -> Version {
     Version {
         id: id.into(),
-        created: format!("1970-01-01T00:{:02}:{:02}Z", created / 60, created % 60),
+        sequence,
         parents: parents.iter().map(|p| (*p).into()).collect(),
     }
 }
@@ -93,7 +98,7 @@ fn a_real_fork_has_two_siblings_and_a_merge_keeps_both_parent_edges() {
     assert!(tree.edges.contains(&("right".into(), "merge".into())));
 }
 #[test]
-fn timestamps_without_parent_evidence_never_invent_a_chain() {
+fn sequence_without_parent_evidence_never_invents_a_chain() {
     let tree = layout(&[
         v("new", 30, &[]),
         v("old", 1, &[]),
@@ -102,8 +107,79 @@ fn timestamps_without_parent_evidence_never_invent_a_chain() {
     assert_eq!(tree.levels, vec![vec!["new", "missing", "old"]]);
     assert!(tree.edges.is_empty());
 }
+
 #[test]
-fn topology_wins_over_misordered_timestamps_and_input_order_is_irrelevant() {
+fn loaded_window_layout_does_not_materialize_external_ancestors() {
+    let tree = layout(&[
+        v("loaded-parent", 7, &["outside-ancestor"]),
+        v("loaded-child", 8, &["loaded-parent", "outside-merge-input"]),
+    ]);
+    assert_eq!(
+        ids(&tree),
+        BTreeSet::from(["loaded-parent".into(), "loaded-child".into()])
+    );
+    assert_eq!(
+        tree.edges,
+        vec![("loaded-parent".into(), "loaded-child".into())]
+    );
+    assert_eq!(
+        tree.levels,
+        vec![vec!["loaded-child"], vec!["loaded-parent"]]
+    );
+}
+
+#[test]
+fn unloaded_parent_endpoints_remain_explicit_without_becoming_body_nodes() {
+    let loaded = node(json_codec::json!({
+        "node_id":"loaded", "version_id":"loaded-body", "sequence":"7"
+    }));
+    let child = node(json_codec::json!({
+        "node_id":"child", "version_id":"child-body", "sequence":"8",
+        "parent_edges":[
+            {"node_id":"loaded", "endpoint":"in_window"},
+            {"node_id":"outside", "endpoint":"outside_window"}
+        ],
+        "parent_set":{"state":"more", "cursor":"continue-parents"}
+    }));
+    let boundary = parent_boundary(&child);
+    assert_eq!(boundary.outside, vec!["outside"]);
+    assert_eq!(boundary.more.as_deref(), Some("continue-parents"));
+    assert!(!boundary.empty);
+    let tree = layout(&metadata(&[loaded, child]));
+    assert_eq!(
+        ids(&tree),
+        BTreeSet::from(["loaded".into(), "child".into()])
+    );
+    assert_eq!(tree.edges, vec![("loaded".into(), "child".into())]);
+}
+
+#[test]
+fn an_unenumerated_parent_set_is_distinct_from_complete_empty_parents() {
+    let root = node(json_codec::json!({
+        "node_id":"root", "parent_set":{"state":"complete"}
+    }));
+    assert_eq!(
+        parent_boundary(&root),
+        ParentBoundary {
+            outside: vec![],
+            more: None,
+            empty: true
+        }
+    );
+    let pending = node(json_codec::json!({
+        "node_id":"pending", "parent_set":{"state":"more", "cursor":"first-parent-page"}
+    }));
+    assert_eq!(
+        parent_boundary(&pending),
+        ParentBoundary {
+            outside: vec![],
+            more: Some("first-parent-page".into()),
+            empty: false,
+        }
+    );
+}
+#[test]
+fn topology_wins_over_misordered_sequences_and_input_order_is_irrelevant() {
     let records = vec![
         v("late-parent", 99, &[]),
         v("early-child", 1, &["late-parent"]),
@@ -135,7 +211,7 @@ fn cycles_and_duplicates_are_safe_without_losing_unrelated_edges_or_nodes() {
     assert_eq!(tree.levels, vec![vec!["d", "c", "b"], vec!["a"]]);
 }
 #[test]
-fn old_ancestors_group_by_their_newer_children_before_timestamps_and_ids() {
+fn old_ancestors_group_by_their_newer_children_before_sequences_and_ids() {
     let records = vec![
         v("root", 1, &[]),
         v("left", 2, &["root"]),
@@ -155,18 +231,18 @@ fn old_ancestors_group_by_their_newer_children_before_timestamps_and_ids() {
     assert_eq!(layout(&reversed), tree);
 }
 #[test]
-fn utc_node_timestamps_keep_a_total_stable_order_and_unknown_dates_are_last() {
+fn node_sequences_keep_a_total_stable_order_at_integer_boundaries() {
     let versions = [
         v("two", 2, &[]),
         v("ten", 10, &[]),
         Version {
             id: "recent".into(),
-            created: "2020-01-01T00:00:00Z".into(),
+            sequence: u64::MAX,
             parents: vec![],
         },
         Version {
-            id: "unknown".into(),
-            created: String::new(),
+            id: "zero".into(),
+            sequence: 0,
             parents: vec![],
         },
     ];
@@ -180,7 +256,7 @@ fn utc_node_timestamps_keep_a_total_stable_order_and_unknown_dates_are_last() {
         }
     }
     let tree = layout(&versions);
-    assert_eq!(tree.levels, vec![vec!["recent", "ten", "two", "unknown"]]);
+    assert_eq!(tree.levels, vec![vec!["recent", "ten", "two", "zero"]]);
 }
 #[test]
 fn every_branch_tip_is_above_its_ancestors_even_when_branches_have_unequal_depths() {
@@ -343,47 +419,55 @@ fn orthogonal_turns_have_circular_arcs_and_short_runs_limit_both_corner_radii() 
     assert!(rounded_route(&[(0., 0.), (0., 1.)], f64::INFINITY).is_none());
 }
 #[test]
-fn metadata_ignores_notes_current_markers_and_foreign_file_records() {
+fn typed_metadata_ignores_notes_and_current_context_markers() {
     let mut records = vec![
-        json_codec::json!({"file_id":"selected","node_id":"a","version_id":"a","created_at":"1970-01-01T00:00:01Z","parent_node_ids":[],"note":"initial"}),
-        json_codec::json!({"file_id":"other","node_id":"foreign","version_id":"foreign","created_at":"1970-01-01T00:00:00Z"}),
-        json_codec::json!({"file_id":"selected","node_id":"b","version_id":"b","created_at":"1970-01-01T00:00:02Z","parent_node_ids":["foreign","a","a",null]}),
+        json_codec::json!({"node_id":"a","version_id":"a","sequence":"1","parent_node_ids":[],"note":"initial"}),
+        json_codec::json!({"file_id":"selected","node_id":"b","version_id":"b","parent_node_ids":["outside","a","a"]}),
     ];
-    let before = metadata(&records, "selected");
+    let before = metadata(&typed(&records));
     records[0]["note"] = "typing stays mounted".into();
     records[0]["current"] = true.into();
-    assert_eq!(metadata(&records, "selected"), before);
+    assert_eq!(metadata(&typed(&records)), before);
     let tree = layout(&before);
     assert_eq!(tree.edges, vec![("a".into(), "b".into())]);
     assert_eq!(ids(&tree), BTreeSet::from(["a".into(), "b".into()]));
 }
 #[test]
-fn placeholder_records_never_create_tree_nodes_or_source_aliases() {
+fn ownership_markers_do_not_hide_real_window_nodes() {
     let records = vec![
-        json_codec::json!({"file_id":"selected","node_id":"source","version_id":"source","created_at":"1970-01-01T00:00:01Z"}),
-        json_codec::json!({"file_id":"selected","branch_id":"pending","materialized":false,"content_state":"PENDING","version_id":null,"source_version_id":"source"}),
-        json_codec::json!({"file_id":"selected","node_id":"not-real","version_id":"not-real","materialized":false,"parent_node_ids":["source"]}),
-        json_codec::json!({"file_id":"selected","node_id":"first-write","version_id":"first-write","materialized":true,"created_at":"1970-01-01T00:00:02Z","size":"0","parent_node_ids":["source"]}),
+        json_codec::json!({"node_id":"source","version_id":"source","sequence":"1"}),
+        json_codec::json!({"node_id":"inherited-body","version_id":"inherited-body","materialized":false,"inherited":true,"parent_node_ids":["source"]}),
+        json_codec::json!({"node_id":"first-write","version_id":"first-write","materialized":true,"sequence":"2","parent_node_ids":["source"]}),
     ];
-    let tree = layout(&metadata(&records, "selected"));
+    let tree = layout(&metadata(&typed(&records)));
     assert_eq!(
         ids(&tree),
-        BTreeSet::from(["source".into(), "first-write".into()])
+        BTreeSet::from([
+            "source".into(),
+            "inherited-body".into(),
+            "first-write".into()
+        ])
     );
-    assert_eq!(tree.edges, vec![("source".into(), "first-write".into())]);
+    assert_eq!(
+        tree.edges,
+        vec![
+            ("source".into(), "first-write".into()),
+            ("source".into(), "inherited-body".into())
+        ]
+    );
 }
 #[test]
 fn inherited_current_markers_do_not_change_real_version_identity_or_ancestry() {
     let versions = vec![
-        json_codec::json!({"file_id":"file","node_id":"parent","version_id":"parent","created_at":"1970-01-01T00:00:01Z","current":true}),
+        json_codec::json!({"node_id":"parent","version_id":"parent","sequence":"1","current":true}),
     ];
     let mut model = Model {
         file_history: crate::files::history::tests::history(
-            json_codec::json!({"node_id":"parent","version_id":"parent","materialized":false,"inherited":true,"own_version_id":null,"source_version_id":"parent","nodes":versions}),
+            json_codec::json!({"current_node_id":"parent","version_id":"parent","materialized":false,"inherited":true,"own_version_id":null,"source_version_id":"parent","nodes":versions}),
         ),
         ..Default::default()
     };
-    let before = metadata(history_nodes_ref(&model.file_history), "file");
+    let before = metadata(model.file_history.nodes());
     assert!(inherited_current(&model, "parent"));
     assert!(!inherited_current(&model, "other"));
     crate::files::history::tests::update_metadata(&mut model.file_history, |value| {
@@ -392,53 +476,67 @@ fn inherited_current_markers_do_not_change_real_version_identity_or_ancestry() {
         value["own_version_id"] = "parent".into();
     });
     assert!(!inherited_current(&model, "parent"));
-    assert_eq!(
-        metadata(history_nodes_ref(&model.file_history), "file"),
-        before
-    );
+    assert_eq!(metadata(model.file_history.nodes()), before);
     assert_eq!(layout(&before).levels, vec![vec!["parent"]]);
 }
 
 #[test]
-fn history_identity_indexes_payloads_once_and_preserves_node_keys_on_note_refresh() {
+fn shared_window_index_preserves_note_refresh_keys_and_replaces_old_positions() {
     Owner::new().with(|| {
-        let count = 128;
+        let count = 64;
         let nodes = (0..count)
             .map(|i| json_codec::json!({"node_id":format!("node-{i}"),"note":"original"}))
             .collect::<Vec<_>>();
-        // Previous per-node full-list projection copied n records for each of n nodes.
-        let baseline_payload_copies: usize = (0..count).map(|_| nodes.clone().len()).sum();
-        assert_eq!(baseline_payload_copies, count * count);
         let state = RwSignal::new(State::default());
         state.update(|s| {
             s.files.file_history =
                 crate::files::history::tests::history(json_codec::json!({"nodes":nodes}))
         });
-        let history = Memo::new(move |_| state.with(|s| s.files.file_history.clone()));
-        INDEX_COPIES.with(|c| c.set(0));
-        let records = index_projection(history);
-        assert_eq!(records.with(BTreeMap::len), count);
-        assert_eq!(INDEX_COPIES.with(|c| c.get()), count);
-        let keys = records.with(|r| r.keys().cloned().collect::<Vec<_>>());
+        super::super::history_index::provide(state);
+        let records = super::super::history_index::shared();
+        let keys = records.with(|index| {
+            index
+                .snapshot
+                .nodes()
+                .iter()
+                .map(|node| node.id().to_owned())
+                .collect::<Vec<_>>()
+        });
         for i in 0..20 {
             state.update(|s| {
                 s.notice = i.to_string();
-                s.files.checked_nodes.insert("node-1".into());
+                s.files.checked_nodes = crate::files::tags::tests::selection(&["node-1"]);
             });
-            assert_eq!(records.with(BTreeMap::len), count);
+            assert_eq!(records.with(|index| index.snapshot.nodes().len()), count);
         }
-        assert_eq!(INDEX_COPIES.with(|c| c.get()), count);
         state.update(|s| {
             crate::files::history::tests::update_metadata(&mut s.files.file_history, |value| {
                 value["nodes"][0]["note"] = "updated".into()
             })
         });
-        assert_eq!(records.with(|r| r["node-0"]["note"].clone()), "updated");
         assert_eq!(
-            records.with(|r| r.keys().cloned().collect::<Vec<_>>()),
+            records.with(|index| index.node("node-0").unwrap().1.note().to_owned()),
+            "updated"
+        );
+        assert_eq!(
+            records.with(|index| index
+                .snapshot
+                .nodes()
+                .iter()
+                .map(|node| node.id().to_owned())
+                .collect::<Vec<_>>()),
             keys
         );
-        assert_eq!(INDEX_COPIES.with(|c| c.get()), 2 * count);
+        state.update(|s| {
+            s.files.file_history = crate::files::history::tests::history(
+                json_codec::json!({"nodes":[{"node_id":"replacement","version_id":"new-body"}]}),
+            );
+        });
+        records.with(|index| {
+            assert_eq!(index.snapshot.nodes().len(), 1);
+            assert!(index.node("node-0").is_none());
+            assert_eq!(index.node("replacement").unwrap().0, 0);
+        });
     });
 }
 
@@ -597,16 +695,16 @@ fn indexed_layout_matches_reference_for_every_four_node_directed_graph() {
                 records[child].parents.push(names[parent].into());
             }
         }
-        for dates in [
-            ["same", "same", "same", "same"],
-            ["", "later", "earlier", ""],
-            ["z", "c", "b", "a"],
-        ] {
-            for (record, created) in records.iter_mut().zip(dates) {
-                record.created = created.into();
+        for sequences in [[7, 7, 7, 7], [0, 20, 1, 0], [u64::MAX, 3, 2, 1]] {
+            for (record, sequence) in records.iter_mut().zip(sequences) {
+                record.sequence = sequence;
             }
             let expected = reference_layout(&records);
-            assert_eq!(layout(&records), expected, "mask {mask}, dates {dates:?}");
+            assert_eq!(
+                layout(&records),
+                expected,
+                "mask {mask}, sequences {sequences:?}"
+            );
             records.reverse();
             assert_eq!(layout(&records), expected, "reversed mask {mask}");
             records.reverse();
@@ -685,7 +783,7 @@ fn a_long_chain_uses_linear_graph_visits_and_no_recursive_traversal() {
         let records = (0..count)
             .map(|index| Version {
                 id: format!("node-{index:05}"),
-                created: String::new(),
+                sequence: 0,
                 parents: if index == 0 {
                     vec![]
                 } else {
@@ -724,11 +822,7 @@ fn wide_layered_dag_visits_each_edge_once_per_layout_stage() {
         for column in 0..width {
             records.push(Version {
                 id: format!("node-{layer}-{column:04}"),
-                created: if column % 3 == 0 {
-                    String::new()
-                } else {
-                    format!("date-{:04}", column % 11)
-                },
+                sequence: (column % 11) as u64,
                 parents: if layer == 0 {
                     vec![]
                 } else {
@@ -757,7 +851,7 @@ fn a_large_cycle_keeps_nodes_without_recursive_or_per_edge_reachability() {
     let records = (0..count)
         .map(|index| Version {
             id: format!("node-{index:05}"),
-            created: String::new(),
+            sequence: 0,
             parents: vec![format!("node-{:05}", (index + count - 1) % count)],
         })
         .collect::<Vec<_>>();
@@ -785,7 +879,7 @@ fn equal_rational_centers_use_minimum_child_then_original_priority() {
     ];
     let tree = layout(&different_minimum);
     assert_eq!(tree, reference_layout(&different_minimum));
-    // Both means are one; {0, 2} precedes {1} even with an older timestamp.
+    // Both means are one; {0, 2} precedes {1} even with an older sequence.
     assert_eq!(
         tree.levels,
         vec![vec!["tip-0", "tip-1", "tip-2"], vec!["outer", "middle"]]

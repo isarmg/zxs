@@ -192,9 +192,17 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
     assert_eq!(entry["version_id"], version);
     assert_eq!(entry["node_id"], version);
     let history=success(&app,&admin,"GET",&format!("/api/file-manager/files/{file}/history?repository_id={repo}&path=archive/nested/renamed.txt"),None).await;
-    assert_eq!(history["version_id"], current_version);
+    assert_eq!(history["context"]["content"]["version_id"], current_version);
+    let versions = history_versions(
+        &app,
+        &admin,
+        file,
+        &history,
+        Some((repo, "archive/nested/renamed.txt")),
+    )
+    .await;
     assert!(
-        history["versions"]
+        versions["versions"]
             .as_array()
             .unwrap()
             .iter()
@@ -254,8 +262,14 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
         None,
     )
     .await;
-    assert!(historical["path"].is_null());
-    assert_eq!(historical["versions"].as_array().unwrap().len(), 3);
+    assert!(historical["identity"]["context"]["path"].is_null());
+    assert_eq!(
+        history_versions(&app, &admin, file, &historical, None).await["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
     assert_eq!(
         version_bytes(&app, &admin, version).await,
         b"second stored body"
@@ -566,6 +580,9 @@ async fn primary_and_backup_listings_keep_directory_first_unicode_order() {
         None,
     )
     .await;
-    assert_eq!(history["file_id"], entry["file_id"]);
-    assert_eq!(history["version_id"], entry["version_id"]);
+    assert_eq!(history["identity"]["file_id"], entry["file_id"]);
+    assert_eq!(
+        history["context"]["content"]["version_id"],
+        entry["version_id"]
+    );
 }

@@ -33,6 +33,8 @@ pub(crate) use workspace_commit::native_workspace_commit_completed;
 pub use workspace_commit::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod reads;
 pub use reads::{ContentReadPlan, RangeContent, WorkspaceReadPlan};
+mod history_window;
+pub use history_window::{HistoryWindowCancellation, HistoryWindowRead};
 mod recovery;
 use recovery::RecoveryMode;
 mod recovery_checkpoint;
@@ -92,6 +94,7 @@ pub struct Engine {
     pub(crate) blocked: bool,
     pub(crate) snapshot: Option<String>,
     published_state_base: Option<Arc<publication::PublishedStateBase>>,
+    history_window_roots: Option<Arc<history_window::HistoryRootBindings>>,
     pub(crate) metadata_integrity: Arc<provenance::MetadataIntegrity>,
     integrity_scrub_schedule: Option<std::sync::Weak<integrity_scrub::ScheduleState>>,
     pub(crate) next_slot: u64,
@@ -111,6 +114,8 @@ pub struct Engine {
 /// Keeping it alive can make a later mutation copy State's shared fields.
 pub struct MetadataView {
     state: Arc<State>,
+    history_window_roots: Option<Arc<history_window::HistoryRootBindings>>,
+    history_action_max_entries: usize,
 }
 
 impl MetadataView {
@@ -118,6 +123,10 @@ impl MetadataView {
         self.state.as_ref()
     }
 }
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/engine/history_window_root_tests.rs"]
+mod history_window_root_tests;
 #[cfg(feature = "fault-injection")]
 struct FaultInjection {
     point: String,
@@ -351,6 +360,7 @@ impl Engine {
             blocked: false,
             snapshot: None,
             published_state_base: None,
+            history_window_roots: None,
             metadata_integrity: Arc::new(provenance::MetadataIntegrity::default()),
             integrity_scrub_schedule: None,
             next_slot: 1,
@@ -426,6 +436,7 @@ impl Engine {
             blocked: false,
             snapshot: None,
             published_state_base: None,
+            history_window_roots: None,
             metadata_integrity: Arc::new(provenance::MetadataIntegrity::default()),
             integrity_scrub_schedule: None,
             next_slot: 1,
@@ -578,6 +589,8 @@ impl Engine {
     pub fn metadata_view(&self) -> MetadataView {
         MetadataView {
             state: Arc::clone(&self.state),
+            history_window_roots: self.history_window_roots.clone(),
+            history_action_max_entries: self.config.max_entries,
         }
     }
     pub fn root(&self) -> &Path {

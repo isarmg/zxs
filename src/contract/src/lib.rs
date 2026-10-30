@@ -4,6 +4,7 @@ pub mod api_path;
 pub mod client_protocol;
 mod content_hash;
 pub mod encoding;
+pub mod history_window;
 mod integer_json;
 pub use content_hash::{ContentHash, ParseContentHashError};
 mod operation_id;

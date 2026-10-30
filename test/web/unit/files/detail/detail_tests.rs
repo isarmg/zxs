@@ -7,7 +7,7 @@ use std::sync::{
 };
 
 #[test]
-fn an_unknown_or_loading_note_cannot_be_submitted_as_an_empty_note() {
+fn an_unknown_loading_or_stale_note_cannot_be_submitted_as_an_empty_note() {
     let mut model = Model::default();
     assert!(!file_note_ready(&model));
     model.file_history =
@@ -21,11 +21,35 @@ fn an_unknown_or_loading_note_cannot_be_submitted_as_an_empty_note() {
         file_note_ready(&model),
         "a known empty note remains editable"
     );
+    model.file_history.invalidate();
+    assert!(!file_note_ready(&model));
+    assert_eq!(model.file_history.file_note(), Some(""));
     model.file_history = Default::default();
     assert!(
         !file_note_ready(&model),
         "a failed first request never implies an empty note"
     );
+}
+
+#[test]
+fn branch_options_keep_page_order_without_duplicating_the_current_summary() {
+    use crate::files::history::tests::branch_wire;
+    let model = Model {
+        file_history: crate::files::history::tests::history(json!({
+        "selected_branch_id":"current",
+        "branches":[
+            branch_wire(json!({"branch_id":"other","name":"z-other","state":"merged","read_only":true})),
+            branch_wire(json!({"branch_id":"current","name":"a-current","current":true}))
+        ]
+        })),
+        ..Default::default()
+    };
+    let options = branch_options(&model);
+    assert_eq!(options.len(), 2);
+    assert_eq!(options[0].value, "other");
+    assert!(options[0].disabled);
+    assert_eq!(options[1].value, "current");
+    assert!(!options[1].disabled);
 }
 
 fn selected_state() -> State {
@@ -96,7 +120,7 @@ fn metadata_completion_keeps_the_current_detail_controls_mounted() {
 
 #[test]
 fn aliases_replacements_and_context_changes_retire_old_detail_actions() {
-    let changes: [fn(&mut State); 9] = [
+    let changes: [fn(&mut State); 10] = [
         |s| s.session_epoch += 1,
         |s| s.files.slot = "B01".into(),
         |s| s.files.directory = "elsewhere".into(),
@@ -136,6 +160,7 @@ fn aliases_replacements_and_context_changes_retire_old_detail_actions() {
                 json!({"repository_path":"alias/a.txt"}),
             )
         },
+        |s| update(s.files.selected.as_mut().unwrap(), json!({"backup":true})),
     ];
     for change in changes {
         Owner::new().with(|| {

@@ -1,29 +1,41 @@
 use super::*;
-use crate::files::history::tests::{branch_wire, history, update_metadata};
+use crate::files::history::tests::{history, update_metadata};
 use json_codec::json;
 
 #[test]
-fn indexed_records_borrow_the_snapshot_and_keep_first_match_order() {
+fn indexed_records_borrow_only_the_loaded_window_and_body_notes() {
     let snapshot = history(json!({
-        "nodes": [{"node_id":"n", "note":"first"}, {"node_id":"n", "note":"second"}],
-        "versions": [{"version_id":"v", "note":"body"}],
-        "branches": [branch_wire(json!({"branch_id":"b", "name":"first"}))]
+        "nodes": [
+            {"node_id":"metadata", "version_id":"v", "kind":"rename", "note":"path note"},
+            {"node_id":"n", "version_id":"v", "kind":"content", "note":"body note"}
+        ]
     }));
     let index = HistoryIndex::new(snapshot.clone());
     let (position, node) = index.node("n").unwrap();
-    assert_eq!(position, 0);
-    assert!(std::ptr::eq(node, &snapshot["nodes"][0]));
-    assert!(std::ptr::eq(
-        index.branch("b").unwrap(),
-        &snapshot.branches()[0]
-    ));
+    assert_eq!(position, 1);
+    assert!(std::ptr::eq(node, &snapshot.nodes()[1]));
     assert!(std::ptr::eq(
         index.version("v").unwrap(),
-        &snapshot["versions"][0]
+        &snapshot.nodes()[1]
     ));
+    assert_eq!(index.version("v").unwrap().body_note(), Some("body note"));
+    assert_eq!(index.node("metadata").unwrap().1.note(), "path note");
     assert!(index.node("missing").is_none());
-    assert!(index.branch("missing").is_none());
     assert!(index.version("missing").is_none());
+}
+
+#[test]
+fn an_independent_current_summary_does_not_enter_the_window_index() {
+    let snapshot = history(json!({
+        "current_node_id":"current-outside", "version_id":"current-body",
+        "nodes":[{"node_id":"loaded", "version_id":"loaded-body"}]
+    }));
+    let index = HistoryIndex::new(snapshot);
+    assert_eq!(index.snapshot.current_node_id(), Some("current-outside"));
+    assert!(index.snapshot.node("current-outside").is_some());
+    assert!(index.node("current-outside").is_none());
+    assert!(index.version("current-body").is_none());
+    assert_eq!(index.node("loaded").unwrap().0, 0);
 }
 
 #[test]
@@ -67,7 +79,7 @@ fn shared_history_skips_unrelated_updates_and_replaces_positions_on_new_snapshot
                 value["nodes"][0]["note"] = "updated".into()
             })
         });
-        assert_eq!(consumer.get().unwrap()["note"], "updated");
+        assert_eq!(consumer.get().unwrap().note(), "updated");
         assert_eq!(runs.load(Ordering::Relaxed), 2);
         state.update(|s| {
             s.files.file_history =
@@ -86,8 +98,8 @@ fn shared_history_skips_unrelated_updates_and_replaces_positions_on_new_snapshot
 }
 
 #[test]
-fn indexed_lookup_matches_the_previous_scan_for_large_reordered_history() {
-    for count in [1, 64, 1024] {
+fn indexed_lookup_matches_a_scan_of_each_replaced_window() {
+    for count in [1, 16, 64] {
         let nodes: Vec<_> = (0..count).rev().map(|i| json!({
             "node_id":format!("node-{i}"), "note":format!("note {i}"), "tags":[format!("tag-{i}")]
         })).collect();
@@ -95,10 +107,11 @@ fn indexed_lookup_matches_the_previous_scan_for_large_reordered_history() {
         let index = HistoryIndex::new(snapshot.clone());
         for i in 0..count {
             let id = format!("node-{i}");
-            let expected = history_nodes_ref(&snapshot)
+            let expected = snapshot
+                .nodes()
                 .iter()
                 .enumerate()
-                .find(|(_, node)| history_node_id(node) == id);
+                .find(|(_, node)| node.id() == id);
             assert_eq!(index.node(&id), expected);
         }
     }
