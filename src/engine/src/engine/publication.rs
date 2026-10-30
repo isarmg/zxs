@@ -6,9 +6,17 @@ use json_codec::json;
 use std::collections::BTreeMap;
 #[path = "verified_payloads.rs"]
 mod verified_payloads;
-use verified_payloads::{MAX_HELD_PAYLOAD_FILES, PayloadPreparation, VerifiedPayloadSet};
+use verified_payloads::{
+    PayloadPreparation, PayloadProofReservation, VerifiedPayloadSet, payload_proof_budget,
+};
 
-type ExistingCopies<'a> = Vec<Option<VerifiedExisting<'a>>>;
+type ExistingCopies<'a> = Vec<Option<RetainedExisting<'a>>>;
+
+struct RetainedExisting<'a> {
+    proof: VerifiedExisting<'a>,
+    // The proof's body FD closes before its reservation is returned.
+    reservation: PayloadProofReservation,
+}
 
 /// A publication receipt, not a hash cache. Only successful decide constructs
 /// this token, and reuse requires the exact current State allocation and config.
@@ -549,6 +557,7 @@ impl Engine {
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_container_names")?;
         let mut payload_receipts = Vec::new();
+        let mut payload_cursor = verified.map(VerifiedPayloadSet::cursor);
         for evidence in &c.versions {
             for slot in &evidence.placement.route_slot_ids {
                 let d = self.disk(slot)?;
@@ -558,8 +567,8 @@ impl Engine {
                     &evidence.version.history_tree_id,
                     &evidence.version.version_id,
                 );
-                if let Some(verified) = verified {
-                    verified.validate_payload(&self.config, &evidence.version, slot)?;
+                if let Some(cursor) = &mut payload_cursor {
+                    cursor.validate_payload(&self.config, &evidence.version, slot)?;
                 } else {
                     // Recovery has no live held-inode proof and must re-read all bytes.
                     handle.verify_payload(&directory, &evidence.version)?;
@@ -583,6 +592,9 @@ impl Engine {
                     proof_hash: object_hash("commit-proof", &proof)?,
                 });
             }
+        }
+        if let Some(cursor) = payload_cursor {
+            cursor.finish()?;
         }
         payload_receipts
             .sort_by(|a, b| (&a.version_id, &a.disk_id).cmp(&(&b.version_id, &b.disk_id)));
@@ -863,7 +875,7 @@ impl crate::engine::PlanningContext<'_> {
         let members = self.members();
         let mut required = BTreeMap::<String, u64>::new();
         // One held descriptor per proof; release all before decision proofs.
-        let mut held = 0;
+        let proof_budget = payload_proof_budget();
         let mut existing = Vec::with_capacity(prepared.len());
         for p in &prepared {
             let mut copies = Vec::with_capacity(p.placement.route_slot_ids.len());
@@ -872,11 +884,11 @@ impl crate::engine::PlanningContext<'_> {
                 let directory =
                     version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
                 let handle = self.disk_resources.get(disk)?;
+                let reservation = proof_budget.reserve(1);
                 match VerifiedExisting::read_at(&handle.root, &directory, &p.version) {
                     Ok(proof) => {
-                        if held < MAX_HELD_PAYLOAD_FILES {
-                            held += 1;
-                            copies.push(Some(proof));
+                        if let Some(reservation) = reservation {
+                            copies.push(Some(RetainedExisting { proof, reservation }));
                         } else {
                             // Large requests retain the bounded-memory reread path.
                             copies.push(None);
@@ -1108,6 +1120,11 @@ impl crate::engine::PlanningContext<'_> {
         // Versions of the same file can share a named container. Preserve their
         // order, and each version's route chain, while independent files copy
         // with bounded parallel workers. No decision is written until all join.
+        assert_eq!(
+            prepared.len(),
+            existing.len(),
+            "invariant: each prepared version has its admission results"
+        );
         let jobs: Vec<_> = prepared.iter().zip(existing).collect();
         let mut by_file = BTreeMap::new();
         for job in &jobs {
@@ -1123,27 +1140,37 @@ impl crate::engine::PlanningContext<'_> {
                 .expect("invariant: payload admission ownership poisoned")
                 .take()
                 .expect("invariant: payload group is claimed once");
-            self.prepare_payload_with_existing(payload, copies)
+            self.prepare_payload_with_existing(payload, Some(copies))
         })
     }
 }
 
 impl crate::engine::PlanningContext<'_> {
     pub(crate) fn prepare_payload(&self, p: &Prepared) -> Result<()> {
-        self.prepare_payload_with_existing(p, Vec::new())
+        self.prepare_payload_with_existing(p, None)
     }
 
     fn prepare_payload_with_existing<'a>(
         &self,
         p: &'a Prepared,
-        mut existing: ExistingCopies<'a>,
+        mut existing: Option<ExistingCopies<'a>>,
     ) -> Result<()> {
+        if let Some(copies) = &existing {
+            assert_eq!(
+                copies.len(),
+                p.placement.route_slot_ids.len(),
+                "invariant: each routed replica has an admission result"
+            );
+        }
         let mut source = None;
         for (index, slot) in p.placement.route_slot_ids.iter().enumerate() {
             let disk = self.disk(slot)?;
             let handle = self.disk_resources.get(disk)?;
             let root = &handle.root;
             let directory = version_dir(disk, &p.version.history_tree_id, &p.version.version_id);
+            // Keep the lease outside the consuming install call, including its
+            // error/unwind paths. That call drops the body FD before returning.
+            let mut reservation = None;
             let content = match root
                 .read_json_observed::<FileVersion>(&directory.join("version.json"), &mut |_| Ok(()))
             {
@@ -1154,8 +1181,11 @@ impl crate::engine::PlanningContext<'_> {
                             "version identity already exists with different bytes",
                         ));
                     }
-                    let verified = match existing.get_mut(index).and_then(Option::take) {
-                        Some(verified) => verified,
+                    let verified = match existing.as_mut().and_then(|copies| copies[index].take()) {
+                        Some(retained) => {
+                            reservation = Some(retained.reservation);
+                            retained.proof
+                        }
                         None => VerifiedExisting::read_at(root, &directory, &p.version)?,
                     };
                     verified.assert_binding(&directory, &p.version);
@@ -1216,6 +1246,7 @@ impl crate::engine::PlanningContext<'_> {
             // any protection receipt is issued. The next level reads this copy.
             let path =
                 crate::container_storage::install_version_content_at(root, &directory, content)?;
+            drop(reservation);
             if index + 1 < p.placement.route_slot_ids.len() {
                 source = Some(root.open_regular(&path)?);
             }
