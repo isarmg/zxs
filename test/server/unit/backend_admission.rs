@@ -1307,7 +1307,11 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
             | "/api/file-manager/history?ignored=true"
             | "/api/repositories/repository/default-branch"
             | "/api/branches/branch"
-            | "/api/repositories/repository/branches" => 2,
+            | "/api/repositories/repository/branches"
+                if method == "GET" =>
+            {
+                2
+            }
             _ => HTTP_BACKEND_SLOTS,
         };
         let root = crate::tests::private_tempdir();
@@ -1325,15 +1329,33 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
         .unwrap()
         .forget();
         assert_eq!(
-            workspace_request(app.clone(), method, path).await.status(),
-            StatusCode::TOO_MANY_REQUESTS
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                workspace_request(app.clone(), method, path),
+            )
+            .await
+            .unwrap_or_else(|error| {
+                panic!("typed route {method} {path} did not reject overload promptly: {error}")
+            })
+            .status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "typed route {method} {path} must reject overload"
         );
         let cancelled = jobs.pop().unwrap();
         cancelled.abort();
         assert!(cancelled.await.unwrap_err().is_cancelled());
         assert_eq!(
-            workspace_request(app.clone(), method, path).await.status(),
-            StatusCode::TOO_MANY_REQUESTS
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                workspace_request(app.clone(), method, path),
+            )
+            .await
+            .unwrap_or_else(|error| {
+                panic!("typed route {method} {path} did not reject overload promptly: {error}")
+            })
+            .status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "typed route {method} {path} must reject overload"
         );
         assert_eq!(gate.calls.load(Ordering::SeqCst), slots);
         gate.release();
@@ -1802,3 +1824,4 @@ async fn prepare_unknown_fields_reach_backend_before_its_admission_error() {
         assert_eq!(gate.calls.load(Ordering::SeqCst), 1, "{path}");
     }
 }
+
