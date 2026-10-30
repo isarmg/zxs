@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling]
 
 permissions:
   contents: read
@@ -196,6 +196,10 @@ jobs:
               'd9848d62a6bb2b1d6788c4a6b51b19d69be52261', 'aefc134c019d655c680cc0b327c91ecd0bd14bef',
           ):
               raise SystemExit('History tooling quality requires the exact tool-only source and tree')
+          if os.environ['SCOPE'] == 'scrub-periodic-scheduling' and (source, tree) != (
+              '0964101860e4d5fa530f0a91ae2763a07fcaf9ce', 'c2587d7db37e9e022012f77b2df45d58a2687474',
+          ):
+              raise SystemExit('Periodic scrub scheduling requires the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -846,6 +850,16 @@ jobs:
           ]
           groups['history-contract-repair'] = [dict(groups['mature-doc-contracts'][0], id='history-contract-repair')]
           groups['history-tool-adoption-quality'] = [dict(groups['payload-quality'][0], id='history-tool-adoption-quality')]
+          groups['scrub-periodic-scheduling'] = [
+              dict(id='scrub-periodic-server', cache='server', package='storage-server',
+                  test_filter='management::integrity_scrub::tests', expected_count=22, expected_ignored=0,
+                  required_names=json.dumps([
+                      'healthy_periodic_completion_keeps_the_anchor_after_real_reads',
+                      'manual_and_periodic_dispatch_share_one_slot_and_cancel_keeps_a_full_retry_wait',
+                      'revoked_manual_admission_waits_a_full_interval_after_rejection']),
+                  command='cargo test --locked --offline -p storage-server --lib management::integrity_scrub::tests -- --test-threads=2'),
+              dict(groups['payload-quality'][0], id='scrub-periodic-quality'),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
