@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk]
 
 permissions:
   contents: read
@@ -96,6 +96,10 @@ jobs:
               '48f1ddd92b648ef90742510957aa75176c733748', 'bcfe4fb034cc65e7ca3fea14f755acc8fb5efda8',
           ):
               raise SystemExit('SMB stream repair diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'smb-stream-sdk' and (source, tree) != (
+              '2a0b46be4457a87653cad0a597e550904f8102a3', '6ecf8f17fb1b2eca24236ccec3be946ec864dea5',
+          ):
+              raise SystemExit('SMB SDK retry requires the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -409,6 +413,11 @@ jobs:
               dict(groups['smb-stream'][2], id='smb-stream-repair-server'),
               dict(groups['smb-stream'][3], id='smb-stream-repair-real-sdk',
                   required_names=json.dumps(sdk_witnesses + seek_witnesses)),
+          ]
+          groups['smb-stream-sdk'] = [
+              dict(id='smb-stream-sdk-format',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check test/smb-vfs/unit/module/seek_tests.rs'),
+              dict(groups['smb-stream-repair'][2], id='smb-stream-sdk'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
