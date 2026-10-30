@@ -1,0 +1,15 @@
+{
+  "schema": "namespace-history-trend-inputs-v1",
+  "baseline": {
+    "sha": "e2f33d9882cf7263412d9370b6a703e0b216357d",
+    "tree": "bee9d4686088a4af6c659a983c6e711f5f62d272",
+    "adapter_path": "test/engine/bench/namespace_adoption/baseline_history_trend.rs",
+    "adapter_sha256": "014cabef6e01b99f16c548e5cd484cb70b5b90388261a4973101ef8f2d8d7086"
+  },
+  "candidate": {
+    "sha": "529efdd0e772e30668c3dfa3f6e15025592baa10",
+    "tree": "50a4013f698e77190819ae67de4a2a999add3525",
+    "adapter_path": "test/engine/bench/namespace_adoption/candidate_history_trend.rs",
+    "adapter_sha256": "31a0c56e4db7738f8970eb8335d8174b77705d150219b13883aa7c8cbb179600"
+  }
+}

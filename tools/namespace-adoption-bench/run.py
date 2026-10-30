@@ -319,6 +319,11 @@ def measure_implementation(run, binary, args, checkpoint):
                 result = run_phase(binary, phase, size, pool, evidence,
                                    run['traced'], args.deadline_unix, args.trace_observer)
                 run['phases'].append(result)
+                if args.mode == 'history-trend' and phase in ('build', 'edit', 'verify'):
+                    run.setdefault('inventory_after_phase', {})[phase] = dict(
+                        pool=allocation_size(pool), state=allocation_size(pool / 'state'),
+                        metadata=allocation_size(pool / 'd1' / 'metadata'),
+                        immutable_objects=allocation_size(pool / 'd1' / 'metadata' / 'objects'))
                 checkpoint()
                 if result['status'] != 'completed':
                     run.update(status=result['status'], reason=result['reason'])
@@ -338,7 +343,7 @@ def measure_implementation(run, binary, args, checkpoint):
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=('final', 'observer-validation', 'attribution'), required=True,
+    parser.add_argument('--mode', choices=('final', 'observer-validation', 'attribution', 'history-trend'), required=True,
                         help='observer validation cannot satisfy final candidate acceptance')
     parser.add_argument('--trace-observer', choices=('plain', 'seccomp-bpf'), default='plain')
     parser.add_argument('--observer-probe', type=Path,
@@ -361,7 +366,7 @@ def parse_arguments():
         parser.error('sizes must be unique')
     if args.mode == 'observer-validation' and (args.sizes != [500] or args.pair_index != 3):
         parser.error('observer-validation requires --sizes 500 --pair-index 3')
-    if args.mode == 'attribution' and (args.sizes != [500] or args.pair_index not in (0, 1) or args.trace_observer != 'plain'):
+    if args.mode in ('attribution', 'history-trend') and (args.sizes != [500] or args.pair_index not in (0, 1) or args.trace_observer != 'plain'):
         parser.error('attribution requires exactly500files, pair0or1 and plain/untraced observer')
     return args
 
@@ -396,6 +401,11 @@ def main():
     def checkpoint():
         write_json(args.output / 'summary.json', outcome)
 
+    if args.mode == 'history-trend':
+        outcome['fixture'] = dict(directories=97, initial_files=500, saves=218,
+            permanent_results=220, unique_content_versions=718,
+            members=['P01'], target='target1', branches=1, timed_event_limit=22)
+        outcome['scope'] = 'synthetic history trend only; no media, endpoint, capacity or physical12disk certification'
     checkpoint()
     try:
         harness = Path(__file__).resolve().parents[2]
@@ -434,3 +444,4 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
+

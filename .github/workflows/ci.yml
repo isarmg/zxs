@@ -1,5 +1,5 @@
 # Verification-only carrier; publish as ci.yml on its separate verification branch.
-name: Namespace attribution diagnostic only
+name: Namespace history-trend diagnostic only
 on:
   push:
     branches: [verify/adoption-performance-stage-a-20261030]
@@ -10,7 +10,7 @@ concurrency:
   group: namespace-stage-a-smoke-${{ github.ref }}
   cancel-in-progress: false
 env:
-  ZXS_BENCH_MODE: 'attribution'
+  ZXS_BENCH_MODE: 'history-trend'
   CARGO_NET_OFFLINE: 'true'
   CARGO_INCREMENTAL: '0'
   CARGO_BUILD_JOBS: '2'
@@ -119,7 +119,7 @@ jobs:
               selected[name] = artifacts
           (evidence / 'actual-engine-features.json').write_text(json.dumps(selected,indent=2)+'\n')
           PY
-      - name: Confirm exact base plus declared instrumentation identity
+      - name: Confirm unmodified product sources plus declared trend adapters
         if: always()
         shell: bash
         run: |
@@ -135,7 +135,7 @@ jobs:
           for label,identity in selected['products'].items():
               actual=artifacts.source_identity(root/label,root/'harness'/identity['adapter_path'],identity)
               assert actual==original['products'][label]
-          (out/'source-unchanged.txt').write_text('Exact declared base source, instrumentation overlay, standalone adapter and manifest wiring unchanged.\n')
+          (out/'source-unchanged.txt').write_text('Exact product source plus standalone trend adapter and manifest wiring unchanged; no instrumentation.\n')
           PYCODE
       - name: Seal this run's exact binary identity
         id: seal
@@ -163,7 +163,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
   paired:
-    name: Attribution control/overlay pair (${{ matrix.files }} files, repetition ${{ matrix.pair }})
+    name: History trend baseline/candidate pair (${{ matrix.files }} files, repetition ${{ matrix.pair }})
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -217,7 +217,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   aggregate:
-    name: Audit two same-source attribution pairs; adoption remains blocked
+    name: Audit two history-growth pairs; adoption remains blocked
     if: always()
     needs: [build, paired]
     runs-on: ubuntu-24.04
@@ -234,13 +234,13 @@ jobs:
           pattern: namespace-pair-*-${{ github.run_attempt }}
           path: ${{ runner.temp }}/namespace-pairs
         continue-on-error: true
-      - name: Report bounded attribution only
+      - name: Report bounded history-trend only
         if: always()
         env:
           ZXS_EXPECTED_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
         shell: bash
         run: |
-          python3 harness/tools/namespace-adoption-bench/attribution_summary.py \
+          python3 harness/tools/namespace-adoption-bench/history_trend_summary.py \
             "$RUNNER_TEMP/namespace-pairs" "$RUNNER_TEMP/namespace-summary"
       - name: Retain aggregate evidence index
         if: always()
@@ -250,3 +250,4 @@ jobs:
           path: ${{ runner.temp }}/namespace-summary/
           if-no-files-found: error
           retention-days: 14
+

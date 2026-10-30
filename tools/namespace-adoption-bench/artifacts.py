@@ -14,10 +14,10 @@ import sys
 import tomllib
 from attribution_overlay import install_overlay, overlay_identity, effective_build_tree, overlay_for
 
-MODES = ('final', 'observer-validation', 'attribution')
+MODES = ('final', 'observer-validation', 'attribution', 'history-trend')
 HARNESS_FILES = ('artifacts.py', 'run.py', 'summarize.py', 'verification.yml', 'inputs.json',
                  'observer_probe.py', 'observer-validation.yml', 'observer_compare.py',
-                 'attribution_overlay.py', 'attribution-overlay.json', 'attribution_summary.py', 'attribution-inputs.json',
+                 'history-trend-inputs.json', 'history_trend_summary.py', 'attribution_overlay.py', 'attribution-overlay.json', 'attribution_summary.py', 'attribution-inputs.json',
                  'attribution-lib.rs', 'attribution-namespace.rs', 'attribution-segment_store.rs',
                  'attribution-journal.rs', 'attribution-query.rs')
 TARGET = 'x86_64-unknown-linux-gnu'
@@ -51,10 +51,17 @@ def load_inputs(mode, path=None):
     require(mode in MODES, f'explicit validation mode required: {mode}')
     require((mode == 'attribution') == (os.environ.get('ZXS_BENCH_MODE') == 'attribution'),
             'attribution mode and environment must agree in both directions')
-    filename = 'attribution-inputs.json' if mode == 'attribution' else 'inputs.json'
+    require((mode == 'history-trend') == (os.environ.get('ZXS_BENCH_MODE') == 'history-trend'),
+            'history trend mode and environment must agree in both directions')
+    filename = ('history-trend-inputs.json' if mode == 'history-trend' else
+                'attribution-inputs.json' if mode == 'attribution' else 'inputs.json')
     path = Path(path) if path is not None else Path(__file__).with_name(filename)
     config = json.loads(path.read_text())
-    if mode == 'attribution':
+    if mode == 'history-trend':
+        require(set(config) == {'schema', 'baseline', 'candidate'} and
+                config['schema'] == 'namespace-history-trend-inputs-v1', 'invalid trend inputs')
+        products = dict(baseline=config['baseline'], candidate=config['candidate'])
+    elif mode == 'attribution':
         require(set(config) == {'schema', 'control', 'instrumented'} and
                 config['schema'] == 'namespace-attribution-inputs-v1',
                 'unsupported attribution configuration')
@@ -81,7 +88,8 @@ def load_inputs(mode, path=None):
 
 
 def selected_inputs(mode, harness):
-    filename = 'attribution-inputs.json' if mode == 'attribution' else 'inputs.json'
+    filename = ('history-trend-inputs.json' if mode == 'history-trend' else
+                'attribution-inputs.json' if mode == 'attribution' else 'inputs.json')
     config = harness / 'tools/namespace-adoption-bench' / filename
     products = load_inputs(mode, config)
     for label, identity in products.items():
@@ -342,6 +350,11 @@ def verify_bundle(bundle_dir, adapter_paths, audit_dir, *, mode):
             require(digest(adapter_paths[label]) == identity['adapter_sha256'] ==
                     digest(bundle_dir / 'adapters' / f'{label}.rs') == entry['source']['adapter_sha256'],
                     f'{label}: adapter bytes differ')
+            if mode == 'history-trend':
+                require(entry['source'].get('diagnostic_overlay') is None,
+                        f'{label}: trend forbids production instrumentation')
+                require(re.fullmatch('[0-9a-f]{40}', entry['source'].get('effective_build_tree', '')),
+                        f'{label}: trend effective build tree missing')
             if mode == 'attribution':
                 overlay = overlay_for(identity)
                 actual_overlay = entry['source'].get('diagnostic_overlay')
@@ -407,3 +420,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

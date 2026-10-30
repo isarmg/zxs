@@ -64,7 +64,7 @@ def overlay_identity(product, expected):
         files=overlay['files'])
 
 def effective_build_tree(product, paths):
-    if os.environ.get('ZXS_BENCH_MODE') != 'attribution':
+    if os.environ.get('ZXS_BENCH_MODE') not in ('attribution', 'history-trend'):
         return None
     # Separate temporary index: never alters checkout/index/ref identity.
     with tempfile.TemporaryDirectory(prefix='namespace-attribution-index-') as directory:
@@ -74,3 +74,4 @@ def effective_build_tree(product, paths):
         git('read-tree', 'HEAD')
         git('add', '--', 'src/engine/Cargo.toml', 'test/engine/bench/task1_adoption.rs', *paths)
         return git('write-tree')
+
