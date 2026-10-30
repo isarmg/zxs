@@ -136,7 +136,9 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 
 ## 锁外完整巡检
 
-正常 daemon 在存储准入后自动运行完整巡检；默认每轮结束后 24 小时再调度，实际读取限速 64 MiB/s，成功报告从扫描开始起 48 小时内有效。主机参数 `--scrub-interval-seconds`、`--scrub-max-age-seconds`、`--scrub-bytes-per-second` 分别默认 `86400`、`172800`、`67108864`；必须为正，最大年龄不能短于间隔。间隔不是扫描完成 SLA；长扫描可能完成时已过期。
+正常 daemon 在存储准入后立即运行首轮完整巡检；默认周期为 24 小时，实际读取限速 64 MiB/s，成功报告从扫描开始起 48 小时内有效。主机参数 `--scrub-interval-seconds`、`--scrub-max-age-seconds`、`--scrub-bytes-per-second` 分别默认 `86400`、`172800`、`67108864`；必须为正，最大年龄不能短于间隔。健康完成后保留单调时钟周期锚点，跳过扫描期间已错过或恰在完成时到达的周期点，等待严格晚于完成的下一周期点；不在每次完成后重等整个间隔，也不追赶积压。间隔不是扫描完成 SLA；长扫描可能完成时已过期。
+
+手动任务实际开始执行时重新锚定周期；任一不健康报告、取消、Superseded 或准入拒绝后，从该次完成起等待一个完整周期。存储尚未准入时按 `min(interval, 5 秒)` 重试就绪，真正就绪准入时重新锚定。所有触发仍共用唯一 queued/running 槽。
 
 - `POST /api/admin/scrub` 接受空对象，返回 202 和字符串 `job_id`；同时只能一个 queued/running job，重复请求返回 409。请求不能覆盖主机限速/周期。
 - `GET /api/admin/scrub` 返回 `phase`、`latest`、`last_complete_success_at`、`freshness`。运行状态包括 `baseline.sequence/snapshot_hash`、`started_at`、字符串 `bytes_read` 与 `expected_payload_bytes`。后者仅为正文期望字节，不是总 I/O，不能据此显示总完成百分比。
@@ -166,6 +168,8 @@ worker panic 都沿原 `outcome` 表达，不用诊断替换结果：
 ### 周期 owner 与内部复用资格
 
 托管 native worker 在实际周期策略下持有核心签发的 `IntegrityScrubSchedule`；注册本身不提供资格。它通过 `prepare_scheduled_integrity_scrub` 执行真实扫描，只有私有 Outcome 回到同一 writer/config/撤销 epoch 的 finish 才建立内部共享元数据覆盖。资格窗口不超过 `min(扫描开始 + max_age, 接纳完成 + interval)`；普通写入和公开报告不能刷新，错过下一轮自动失效。此资格不等于完整正文健康，也尚未启用普通发布跳过旧依赖检查。
+
+周期锚定减少完成后固定等待整个间隔造成的空窗，不延长覆盖期限。相邻扫描耗时差异、过期、故障或准入等待仍可产生无资格时间；调度修复不能代替实际 required 字节规模和扫描耗时的容量验收。
 
 资格依据真实周期 owner，而不是手动/周期触发标签：daemon 的同一周期 worker 可以接纳手动启动的真实扫描，仍在 Engine 锁内核验该用户；`ManagementOptions::default()` 的纯手动嵌入模式不创建 owner，永不据此签发内部复用资格。stop 经短控制状态立即撤销 owner，不等待 Engine；真实 I/O 仍须随后 drain/join。worker 退出或 panic 丢弃 lease，重开后必须替换 lease 并重新实际扫描；空闲 owner 只弱引用 backend，不增加 Engine/AuthStore 强计数，也不强留旧 State。
 

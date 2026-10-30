@@ -1,4 +1,6 @@
 //! One concrete scheduler owns its native worker; idle periods own no backend.
+mod cadence;
+
 use super::Inner;
 use crate::{
     ApiError,
@@ -10,6 +12,7 @@ use crate::{
         IntegrityScrubRun, IntegrityScrubStatus, ScrubAdmission, ScrubExecution,
     },
 };
+use cadence::Cadence;
 use std::{
     sync::{Arc, Condvar, Mutex, OnceLock, Weak},
     thread,
@@ -35,8 +38,7 @@ struct State {
     next_id: u64,
     latest: Option<Arc<IntegrityScrubRun>>,
     success: Option<Success>,
-    last_attempt: Option<Instant>,
-    awaiting_storage: bool,
+    cadence: Cadence,
     known_failure: bool,
     schedule: Weak<IntegrityScrubSchedule>,
 }
@@ -123,8 +125,7 @@ impl IntegrityScrubService {
                     next_id: 1,
                     latest: None,
                     success: None,
-                    last_attempt: None,
-                    awaiting_storage: false,
+                    cadence: Cadence::default(),
                     known_failure: false,
                     schedule: Weak::new(),
                 }),
@@ -508,6 +509,9 @@ fn next_job(control: &Control, inner: &Weak<Inner>) -> Option<Job> {
             else {
                 unreachable!("invariant: queued job was checked under this lock");
             };
+            state
+                .cadence
+                .dispatch(job.admission.trigger(), Instant::now());
             state.activity = Activity::Executing(Active {
                 id: job.id,
                 trigger: job.admission.trigger(),
@@ -517,16 +521,7 @@ fn next_job(control: &Control, inner: &Weak<Inner>) -> Option<Job> {
             });
             return Some(job);
         }
-        let wait = control.policy.interval().map(|interval| {
-            let interval = if state.awaiting_storage {
-                interval.min(Duration::from_secs(5))
-            } else {
-                interval
-            };
-            state.last_attempt.map_or(Duration::ZERO, |last| {
-                interval.saturating_sub(last.elapsed())
-            })
-        });
+        let wait = state.cadence.wait(control.policy, Instant::now());
         if wait == Some(Duration::ZERO) {
             drop(state);
             let owner = inner
@@ -535,16 +530,14 @@ fn next_job(control: &Control, inner: &Weak<Inner>) -> Option<Job> {
             let backend = owner.backend();
             drop(owner);
             state = crate::lock(&control.state);
-            state.last_attempt = Some(Instant::now());
-            if !matches!(state.lifecycle, Lifecycle::Ready) {
+            if !matches!(state.lifecycle, Lifecycle::Ready)
+                || !matches!(state.activity, Activity::Idle)
+            {
                 continue;
             }
             match backend {
                 Ok(backend) => {
-                    state.awaiting_storage = false;
-                    if matches!(state.activity, Activity::Idle)
-                        && let Err(error) = enqueue(&mut state, backend, ScrubAdmission::Periodic)
-                    {
+                    if let Err(error) = enqueue(&mut state, backend, ScrubAdmission::Periodic) {
                         state.lifecycle = Lifecycle::Failed(Arc::new(error));
                     }
                 }
@@ -557,7 +550,7 @@ fn next_job(control: &Control, inner: &Weak<Inner>) -> Option<Job> {
                 {
                     // The storage control plane remains the authority for this
                     // expected NotReady state; no scan has been admitted.
-                    state.awaiting_storage = true;
+                    state.cadence.storage_unavailable(Instant::now());
                 }
                 Err(error) => state.lifecycle = Lifecycle::Failed(Arc::new(error)),
             }
@@ -621,10 +614,11 @@ fn finish_job(control: &Control, job: Job, outcome: Result<CompletedScrub, ApiEr
         Ok(run) => Some(run.metadata_coverage_at_finish),
         Err(_) => None,
     };
+    let healthy = outcome.as_ref().is_ok_and(|run| run.report.is_healthy());
     let diagnostics = active.diagnostics(control.policy, coverage);
     let outcome = match outcome {
         Ok(CompletedScrub { report, .. }) => {
-            if !report.is_healthy()
+            if !healthy
                 && !matches!(
                     report.completion,
                     storage_engine::IntegrityScrubCompletion::Cancelled
@@ -633,7 +627,7 @@ fn finish_job(control: &Control, job: Job, outcome: Result<CompletedScrub, ApiEr
             {
                 tracing::warn!(job_id = job.id.0, report = ?report, "integrity scrub found incomplete or damaged storage");
             }
-            if report.is_healthy() {
+            if healthy {
                 let Activity::Executing(Active {
                     progress: Progress::Running { started, .. },
                     ..
@@ -648,7 +642,7 @@ fn finish_job(control: &Control, job: Job, outcome: Result<CompletedScrub, ApiEr
                 });
                 state.known_failure = false;
             }
-            if !report.is_healthy() {
+            if !healthy {
                 state.known_failure = true;
             }
             IntegrityScrubOutcome::Report(Box::new(report))
@@ -665,8 +659,9 @@ fn finish_job(control: &Control, job: Job, outcome: Result<CompletedScrub, ApiEr
         diagnostics,
     }));
     state.activity = Activity::Idle;
-    state.last_attempt = Some(Instant::now());
-    state.awaiting_storage = false;
+    state
+        .cadence
+        .finish(control.policy, healthy, Instant::now());
 }
 #[derive(Debug, error_definition::Error)]
 #[error("integrity scrub worker panicked: {message:?}")]

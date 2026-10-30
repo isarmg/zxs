@@ -394,11 +394,19 @@ fn paced_real_reads_leave_engine_available_and_cancel_wakes_the_budget_wait() {
 
 #[test]
 fn periodic_worker_really_runs_again_without_manual_dispatch() {
-    let fixture = Fixture::new(
-        IntegrityScrubPolicy::periodic(positive(1), positive(60), positive(67_108_864)).unwrap(),
-    );
+    let fixture = Fixture::new(periodic_policy(60));
     let first = eventually(|| fixture.status().latest);
     assert_eq!(first.trigger, IntegrityScrubTrigger::Periodic);
+    let control = &fixture.backend.scrub.control;
+    {
+        let mut state = crate::lock(&control.state);
+        state.cadence = Cadence::default();
+        state.cadence.dispatch(
+            IntegrityScrubTrigger::Periodic,
+            Instant::now() - control.policy.interval().unwrap(),
+        );
+    }
+    control.wake.notify_one();
     let second = eventually(|| {
         fixture
             .status()
@@ -411,6 +419,9 @@ fn periodic_worker_really_runs_again_without_manual_dispatch() {
     };
     assert!(report.is_healthy());
 }
+
+#[path = "integrity_scrub/scheduling_tests.rs"]
+mod scheduling;
 
 #[test]
 fn completed_success_is_not_refreshed_by_writes_and_expires_from_scan_start() {
