@@ -120,7 +120,7 @@ pub(crate) fn static_etags(root: &Path) -> Result<BTreeMap<String, String>, ApiE
 
 pub(crate) async fn static_validation(
     State(state): State<AppState>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
     // Reserved API paths never use static validators, even when an accidental
@@ -150,6 +150,14 @@ pub(crate) async fn static_validation(
             .headers_mut()
             .insert(header::VARY, HeaderValue::from_static("accept-encoding"));
         return response;
+    }
+    if matches!(*request.method(), Method::GET | Method::HEAD)
+        && etag.is_some()
+        && request.headers().contains_key(header::IF_NONE_MATCH)
+    {
+        // This layer has evaluated the entity tag. ServeDir's date validator
+        // must not override that result (RFC 9110 section 13.1.3).
+        request.headers_mut().remove(header::IF_MODIFIED_SINCE);
     }
     let mut response = next.run(request).await;
     if response.status().is_success()
