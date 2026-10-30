@@ -40,7 +40,7 @@ impl RecordingBackend {
                 .unwrap();
             let result = control.checkpoint();
             gate.finished
-                .send(result.as_ref().map(|()| ()).map_err(|error| error.code()))
+                .send(result.as_ref().copied().map_err(|error| error.code()))
                 .unwrap();
             result.map_err(|source| {
                 ApiError::new(
