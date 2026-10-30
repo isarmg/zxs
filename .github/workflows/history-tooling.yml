@@ -205,7 +205,7 @@ jobs:
           ):
               raise SystemExit('Recovery record transfer requires the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'static-asset-conditionals' and (source, tree) != (
-              'b5292fa16e850aaf4ce0d06683b013a1be8ff89a', 'efa4efe6414ec98cb920bc5e912f28076958644d',
+              '09b217f7acdffcbe436b34ace32a04b3495a1e0b', '9d05ac85b8bec69240f780474080bee7487a57c2',
           ):
               raise SystemExit('Static asset regression requires the exact source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
@@ -879,14 +879,8 @@ jobs:
                   ]), command='Writer lifecycle9, exact replay receipt1, complete recovery checkpoint27; locked offline'),
               dict(groups['payload-quality'][0], id='recovery-record-transfer-quality'),
           ]
-          static_conditional_test = 'tests::static_asset_tests::entity_tag_precedes_modified_since_for_static_get_and_head'
           groups['static-asset-conditionals'] = [
-              dict(id='static-asset-conditional-regression', cache='server', package='storage-server',
-                  test_groups=json.dumps([dict(selector=name, count=1, exact=True, required=[name]) for name in [
-                      static_conditional_test,
-                      'tests::static_assets_never_shadow_unknown_api_routes_or_their_error_envelope',
-                      'tests::auxiliary_startup_tests::missing_or_rejected_web_assets_leave_management_apis_but_not_a_fake_ui',
-                  ]]), command='Exact static validator regression plus affected API namespace and unavailable-asset consumers'),
+              # This successor only applies the formatter hunk; keep the parent functional run.
               dict(id='static-asset-server-checks', cache='server',
                   command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check '
                       'src/server/src/web_assets.rs test/server/unit/tests.rs test/server/unit/tests/static_assets.rs\n'
