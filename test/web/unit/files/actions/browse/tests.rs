@@ -220,8 +220,8 @@ fn current_history_completion_settles_loading_and_failure_discards_stale_heads()
     assert!(state.files.history_cancellation.is_none());
     state.files.history_loading = true;
     state.files.history_generation = 9;
-    let error = complete_history_load(&mut state, 3, 9, "file", Err(disk_read_error(503)))
-        .unwrap_err();
+    let error =
+        complete_history_load(&mut state, 3, 9, "file", Err(disk_read_error(503))).unwrap_err();
     assert_eq!(error.status, 503);
     assert!(state.files.file_history.is_null());
     assert!(!state.files.history_loading);
@@ -232,6 +232,8 @@ fn current_history_completion_settles_loading_and_failure_discards_stale_heads()
 fn history_response_session_authority_precedes_the_request_generation_fence() {
     Owner::new().with(|| {
         let state = RwSignal::new(history_load_state());
+        let selected = state.with_untracked(|s| s.files.selected.clone());
+        let installed = state.with_untracked(|s| s.files.file_history.clone());
         let unauthorized: Result<FileHistory, api::Error> = Err(disk_read_error(401));
         assert!(!accept_read_response(state, 2, &unauthorized));
         assert!(state.with_untracked(State::session_active));
@@ -239,7 +241,15 @@ fn history_response_session_authority_precedes_the_request_generation_fence() {
         // Even an obsolete history generation cannot hide a current-session 401.
         assert!(!accept_read_response(state, 3, &unauthorized));
         assert!(!state.with_untracked(State::session_active));
-        assert!(state.with_untracked(|s| s.files.selected.is_none()));
+        assert!(!current_session(state, 3));
+        assert!(!state.with_untracked(super::super::write_allowed));
+        // A read 401 revokes authority while retaining private recovery state.
+        // That retained state cannot admit the obsolete completion or a write.
+        state.update(|s| {
+            complete_history_load(s, 3, 7, "file", Ok(history_response("late"))).unwrap();
+        });
+        assert_eq!(state.with_untracked(|s| s.files.selected.clone()), selected);
+        assert_eq!(state.with_untracked(|s| s.files.file_history.clone()), installed);
     });
 }
 

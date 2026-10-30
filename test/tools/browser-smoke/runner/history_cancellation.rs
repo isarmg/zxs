@@ -20,7 +20,8 @@ fn select(browser: &Browser, name: &str) -> Result<()> {
 }
 
 pub(super) fn run(browser: &Browser) -> Result<()> {
-    browser.script(r#"
+    browser.script(
+        r#"
         const original = window.fetch;
         const probe = window.__zxsHistoryCancellation = {
             pending: [], seed: null,
@@ -74,7 +75,8 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 headers: {'Content-Type': 'application/json'}});
         };
         return true;
-    "#)?;
+    "#,
+    )?;
     with_cleanup(
         || {
             browser.click(&browser.button("Refresh", "刷新")?)?;
