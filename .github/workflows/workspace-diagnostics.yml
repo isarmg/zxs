@@ -1,0 +1,177 @@
+name: Workspace diagnostics
+run-name: Workspace diagnostics (${{ inputs.scope }}) @ ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character lowercase source commit SHA
+        required: true
+        type: string
+      scope:
+        description: Bounded diagnostic selection (does not replace required CI)
+        required: true
+        default: all
+        type: choice
+        options: [all, smb-close, workspace-admission, auth-owner, server, packages]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  select:
+    name: Validate source and select independent diagnostics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Check diagnostic workflow contexts
+        run: python3 .github/scripts/check-workflows.py .github/workflows/workspace-diagnostics.yml
+      - name: Validate explicit source SHA and select bounded matrix
+        id: select
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          source = os.environ['SOURCE_SHA']
+          if not re.fullmatch(r'[0-9a-f]{40}', source):
+              raise SystemExit('source_sha must be an exact 40-character lowercase commit SHA')
+          groups = {}
+          for name, test in [
+              ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
+              ('workspace-admission', 'backend_admission_tests::typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation'),
+              ('auth-owner', 'backend_admission_tests::typed_jobs_hold_auth_owner_until_cancelled_worker_finishes'),
+          ]:
+              groups[name] = [dict(id=name, cache='server', exact_test=test,
+                  command=f'cargo test --locked --offline -p storage-server --lib {test} -- --exact --nocapture')]
+          groups['server'] = [
+              dict(id='server-unit', cache='server', command='cargo test --locked --offline -p storage-server --lib --bins -- --nocapture'),
+              dict(id='server-doc', cache='server', command='cargo test --locked --offline -p storage-server --doc'),
+          ]
+          for target in ['http_engine', 'login_admission', 'telemetry_status', 'service_startup']:
+              groups['server'].append(dict(id=f'server-{target}', cache='server',
+                  command=f'cargo test --locked --offline -p storage-server --test {target} -- --nocapture'))
+          groups['packages'] = [dict(id=package, cache=package,
+              command=f'cargo test --locked --offline -p {package} -- --nocapture')
+              for package in ['authentication', 'storage-contract', 'name-policy', 'platform-io',
+                              'storage-client', 'storage-rescue', 'smb-protocol']]
+          scope = os.environ['SCOPE']
+          selected = sum(groups.values(), []) if scope == 'all' else groups[scope]
+          matrix = json.dumps(dict(include=selected), separators=(',', ':'))
+          print(f'Source: {source}; selection: {scope}; independent jobs: {len(selected)}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'matrix={matrix}\n')
+          PY
+
+  diagnostic:
+    name: Diagnostic (${{ matrix.id }})
+    needs: select
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      DIAGNOSTIC_ID: ${{ matrix.id }}
+      TEST_COMMAND: ${{ matrix.command }}
+      EXACT_TEST: ${{ matrix.exact_test }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Verify exact checkout and record source identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p .diagnostics
+          python3 - <<'PY' | tee .diagnostics/identity.json
+          import json
+          import os
+          import subprocess
+          print(json.dumps(dict(
+              source_sha=os.environ['SOURCE_SHA'],
+              checkout_sha=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              workflow_sha=os.environ['WORKFLOW_SHA'],
+              workflow_ref=os.environ['GITHUB_WORKFLOW_REF'],
+              run_id=os.environ['GITHUB_RUN_ID'],
+              run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+              diagnostic=os.environ['DIAGNOSTIC_ID'],
+              command=os.environ['TEST_COMMAND'],
+          ), indent=2))
+          PY
+          cat .diagnostics/identity.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+      # Reuse the repository's pinned cache action, with a separate namespace.
+      # Only compiled artifacts are cached; Cargo home and test results are not.
+      - name: Cache compiled native dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/native
+          key: workspace-diagnostic-ubuntu24-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', '.cargo/config.toml') }}-${{ matrix.cache }}-${{ inputs.source_sha }}
+          restore-keys: |
+            workspace-diagnostic-ubuntu24-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', '.cargo/config.toml') }}-${{ matrix.cache }}-
+      - name: Verify focused selector matches exactly one test
+        if: matrix.exact_test != ''
+        run: |
+          cargo test --locked --offline -p storage-server --lib "$EXACT_TEST" -- --exact --list 2>&1 | tee .diagnostics/list.log
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          lines = Path('.diagnostics/list.log').read_text().splitlines()
+          tests = [line for line in lines if line.endswith(': test')]
+          expected = [os.environ['EXACT_TEST'] + ': test']
+          if tests != expected:
+              raise SystemExit(f'Expected exactly {expected!r}, found {tests!r}')
+          PY
+      - name: Execute selected locked offline tests and retain failures
+        run: |
+          printf 'Source: %s\nCommand: %s\n' "$SOURCE_SHA" "$TEST_COMMAND" | tee .diagnostics/command.txt
+          set +e
+          bash -euo pipefail -c "$TEST_COMMAND" 2>&1 | tee .diagnostics/test.log
+          status=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$status" > .diagnostics/exit-code.txt
+          if [[ -n "$EXACT_TEST" ]]; then
+            python3 - <<'PY'
+          import re
+          from pathlib import Path
+          log = Path('.diagnostics/test.log').read_text()
+          results = re.findall(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', log)
+          if len(results) != 1 or sum(map(int, results[0][:2])) != 1 or int(results[0][2]) != 0:
+              raise SystemExit(f'Expected one executed, non-ignored test; found {results!r}')
+          PY
+          fi
+          exit "$status"
+      - name: Retain source identity, exact commands and test output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: workspace-${{ inputs.source_sha }}-${{ matrix.id }}-${{ github.run_attempt }}
+          path: .diagnostics/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
