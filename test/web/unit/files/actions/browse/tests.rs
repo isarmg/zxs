@@ -249,7 +249,10 @@ fn history_response_session_authority_precedes_the_request_generation_fence() {
             complete_history_load(s, 3, 7, "file", Ok(history_response("late"))).unwrap();
         });
         assert_eq!(state.with_untracked(|s| s.files.selected.clone()), selected);
-        assert_eq!(state.with_untracked(|s| s.files.file_history.clone()), installed);
+        assert_eq!(
+            state.with_untracked(|s| s.files.file_history.clone()),
+            installed
+        );
     });
 }
 
