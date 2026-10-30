@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format]
 
 permissions:
   contents: read
@@ -116,6 +116,10 @@ jobs:
               '76448d18cd8e5ffabf2c4e912260ec196fc2c399', 'ca67e3156d1b5e19f1ab4091c1e7d70a965b34d3',
           ):
               raise SystemExit('Payload proof diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'payload-proof-format' and (source, tree) != (
+              'b13ca412c0fdf9c45d154da80c9c1c7934945ffc', 'df6e406f5126797bb414ff6b0af787183f32cdf6',
+          ):
+              raise SystemExit('Payload proof formatting requires the exact formatting successor and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -538,6 +542,7 @@ jobs:
                       required_suffixes=payload_witnesses)]),
                   command='cargo test --locked --offline -p storage-engine --lib --features fault-injection engine::publication:: -- --nocapture'),
           ]
+          groups['payload-proof-format'] = [groups['payload-proof-budget'][0]]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
