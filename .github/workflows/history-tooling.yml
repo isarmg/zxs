@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub]
 
 permissions:
   contents: read
@@ -168,6 +168,10 @@ jobs:
               'bc51f061d4daa7f2a8d67f8851f913b150cfa04a', 'aeded80b572e29377d41149788f525b0eddee886',
           ):
               raise SystemExit('Scrub terminal diagnostics require the exact reviewed independent source and tree')
+          if os.environ['SCOPE'] == 'cold-web-scrub' and (source, tree) != (
+              '574b3b63fa100df126fd81f7c395241035dd00b8', '26e226df71c60d777749abd2496efe59ecf64d36',
+          ):
+              raise SystemExit('Cold/Web/scrub composition requires the exact frozen source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -764,6 +768,17 @@ jobs:
                       'terminal_diagnostics_wire_preserves_wide_counts_and_unknown_observations',
                       'terminal_diagnostics_keep_real_read_totals_and_the_running_clock'])]),
                   command='Complete server scrub policy, wire and lifecycle groups'),
+          ]
+          combined_scrub = json.loads(groups['scrub-terminal-diagnostics'][3]['test_groups'])
+          combined_scrub[0]['count'] = 25
+          combined_scrub[0]['required_suffixes'].append(
+              'cancelled_payload_planning_returns_a_report_without_estimate_or_storage_reads')
+          groups['cold-web-scrub'] = [
+              dict(groups['payload-quality'][0], id='cold-web-scrub-quality'),
+              dict(groups['mature-static'][0], id='cold-web-scrub-static'),
+              dict(groups['scrub-terminal-diagnostics'][2], id='cold-web-scrub-engine'),
+              dict(groups['scrub-terminal-diagnostics'][3], id='cold-web-scrub-server',
+                  test_groups=json.dumps(combined_scrub)),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
