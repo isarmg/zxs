@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets]
 
 permissions:
   contents: read
@@ -150,6 +150,20 @@ jobs:
                   package='storage-engine', exact_test=test,
                   command=f'cargo test --locked --offline -p storage-engine --lib {test} -- --exact --nocapture'))
           groups['file-path-format'] = [groups['file-path-records'][0]]
+          groups['snapshot-write-sets'] = []
+          for name, prefix, expected in [
+              ('journal-snapshot-set', 'journal::snapshot_incremental_oracle_tests::', 16),
+              ('history-projection-set', 'history_package::projection_delta_tests::', 8),
+          ]:
+              groups['snapshot-write-sets'].append(dict(id=name, cache='storage-engine',
+                  package='storage-engine', test_filter=prefix, release=False,
+                  expected_count=expected, required_names='[]',
+                  command=f'cargo test --locked --offline -p storage-engine --lib {prefix} -- --nocapture'))
+          groups['snapshot-write-sets'].append(dict(id='workspace-namespace-preconditions',
+              cache='storage-engine', package='storage-engine',
+              test_target='workspace_namespace_preconditions', release=False,
+              expected_count=3, required_names='[]',
+              command='cargo test --locked --offline -p storage-engine --test workspace_namespace_preconditions -- --nocapture'))
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -176,6 +190,7 @@ jobs:
       EXACT_TEST: ${{ matrix.exact_test }}
       TEST_PACKAGE: ${{ matrix.package }}
       TEST_FILTER: ${{ matrix.test_filter }}
+      TEST_TARGET: ${{ matrix.test_target }}
       TEST_RELEASE: ${{ matrix.release }}
       EXPECTED_COUNT: ${{ matrix.expected_count }}
       REQUIRED_NAMES: ${{ matrix.required_names }}
@@ -242,13 +257,17 @@ jobs:
               raise SystemExit(f'Expected exactly {expected!r}, found {tests!r}')
           PY
       - name: Inventory focused module tests and require named regression bodies
-        if: matrix.test_filter != ''
+        if: matrix.test_filter != '' || matrix.test_target != ''
         run: |
           profile=()
           if [[ "$TEST_RELEASE" == 'true' ]]; then
             profile=(--release)
           fi
-          cargo test --locked --offline "${profile[@]}" -p "$TEST_PACKAGE" --lib "$TEST_FILTER" -- --list 2>&1 | tee .diagnostics/list.log
+          target=(--lib "$TEST_FILTER")
+          if [[ -n "$TEST_TARGET" ]]; then
+            target=(--test "$TEST_TARGET")
+          fi
+          cargo test --locked --offline "${profile[@]}" -p "$TEST_PACKAGE" "${target[@]}" -- --list 2>&1 | tee .diagnostics/list.log
           python3 - <<'PY'
           import json
           import os
@@ -263,9 +282,9 @@ jobs:
               matches = [test for test in tests if test.endswith('::' + name)]
               if len(matches) != 1:
                   raise SystemExit(f'Expected one regression body named {name!r}; found {matches!r}')
-          print(f'Inventoried {len(tests)} tests for {os.environ["TEST_FILTER"]}')
+          print(f'Inventoried {len(tests)} tests for {os.environ["TEST_FILTER"] or os.environ["TEST_TARGET"]}')
           PY
-          cargo test --locked --offline "${profile[@]}" -p "$TEST_PACKAGE" --lib "$TEST_FILTER" -- --ignored --list 2>&1 | tee .diagnostics/ignored-list.log
+          cargo test --locked --offline "${profile[@]}" -p "$TEST_PACKAGE" "${target[@]}" -- --ignored --list 2>&1 | tee .diagnostics/ignored-list.log
           if [[ -n "$EXPECTED_COUNT" ]]; then
             python3 - <<'PY'
           from pathlib import Path
@@ -305,7 +324,7 @@ jobs:
               raise SystemExit(f'Expected one executed, non-ignored test; found {results!r}')
           PY
           fi
-          if [[ -n "$TEST_FILTER" ]]; then
+          if [[ -n "$TEST_FILTER" || -n "$TEST_TARGET" ]]; then
             python3 - <<'PY'
           import re
           from pathlib import Path
