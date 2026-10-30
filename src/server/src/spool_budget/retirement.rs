@@ -309,11 +309,10 @@ impl SpoolBudget {
                 .files
                 .get(&name)
                 .is_some_and(|charge| charge.owner.is_none())
+                && let Err(error) = ledger.replace(&name, None)
             {
-                if let Err(error) = ledger.replace(&name, None) {
-                    ledger.uncertain = true;
-                    return Err(error);
-                }
+                ledger.uncertain = true;
+                return Err(error);
             }
         }
         if let Err(error) = ledger.replace(&record.data_file, None) {

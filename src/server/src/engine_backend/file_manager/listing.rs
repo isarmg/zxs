@@ -15,8 +15,8 @@ enum Candidate<'a> {
 }
 
 pub(in crate::engine_backend) enum ListingRead {
-    Backup(backup_namespace::BackupListing),
-    Primary(PrimaryListing),
+    Backup(Box<backup_namespace::BackupListing>),
+    Primary(Box<PrimaryListing>),
 }
 
 /// Only request metadata is copied. The namespace and row contexts belong to
@@ -51,7 +51,7 @@ pub(in crate::engine_backend) fn capture(
     let request = PageRequest::parse(engine, input)?;
     let (slot, value) = (slot_id.as_str(), path.as_str());
     if disk(engine, slot)?.level != 1 {
-        return Ok(ListingRead::Backup(
+        return Ok(ListingRead::Backup(Box::new(
             backup_namespace::BackupListing::capture(
                 engine.published_read_view(),
                 request,
@@ -59,7 +59,7 @@ pub(in crate::engine_backend) fn capture(
                 path,
                 engine.config().max_entries,
             ),
-        ));
+        )));
     }
     let root = value.is_empty();
     let resolved = resolve_read(engine, slot, value);
@@ -133,7 +133,7 @@ pub(in crate::engine_backend) fn capture(
         None
     };
     activity::checkpoint(control)?;
-    Ok(ListingRead::Primary(PrimaryListing {
+    Ok(ListingRead::Primary(Box::new(PrimaryListing {
         view: engine.published_read_view(),
         request,
         slot_id,
@@ -144,7 +144,7 @@ pub(in crate::engine_backend) fn capture(
         directory_branches,
         directory_branches_supported,
         default_branch_scope,
-    }))
+    })))
 }
 
 impl ListingRead {
