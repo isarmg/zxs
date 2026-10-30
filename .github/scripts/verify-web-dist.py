@@ -149,7 +149,7 @@ def verify(root, stage=None):
         input_path(root, relative)
     native_binaries = ("zxs", "zxs-rescue")
     for name in native_binaries:
-        binary = input_path(root, f"target/native/release/{name}")
+        binary = input_path(root, f"target/native/x86_64-unknown-linux-gnu/release/{name}")
         if not binary.stat().st_size or not binary.stat().st_mode & 0o111:
             raise ValueError(f"release {name} binary must be nonempty and executable")
     if stage is not None:
@@ -168,7 +168,7 @@ def verify(root, stage=None):
         for relative in materials:
             write_snapshot(root, relative, stage / "material" / relative, inputs.get(relative))
         for name in native_binaries:
-            write_snapshot(root, f"target/native/release/{name}", stage / "native" / name)
+            write_snapshot(root, f"target/native/x86_64-unknown-linux-gnu/release/{name}", stage / "native" / name)
         if source_inventory(root) != current_inputs:
             raise ValueError("Web source inputs changed while staging")
     return len(outputs), len(inputs)

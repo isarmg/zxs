@@ -40,11 +40,13 @@ rustup target add wasm32-unknown-unknown
 python3 tools/rust-sources/manage.py verify --metadata
 cargo run --locked --offline -p release-tools --
 bash .github/scripts/check.sh web-production
-python3 .github/scripts/check-rust-diagnostics.py -- \
-  cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
+export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+python3 .github/scripts/release-native.py
 ```
 
-打包校验的边界：`release-package.sh` 会核对 Web 输入/输出摘要，但对原生程序仅检查普通文件、非空及可执行权限，不证明其对应当前源码。官方 Release 在干净检出中紧接上述原生构建后打包，并用解压后的二进制验收。直接本地调用打包或组装脚本前也必须重新构建两个原生程序；修改源码后不能沿用旧 `target/native/release/` 文件。`BUILD.txt` 的提交号是组装时检出的源码身份，不是原生构建收据。
+原生构建显式选择既有 `x86_64-unknown-linux-gnu` 目标和 release profile，输出在 `target/native/x86_64-unknown-linux-gnu/release/`；没有提高最低 CPU ISA，也不根据内存或核心数推断 AVX 支持。构建成功后生成 `BUILD.txt`，记录构建时提交、Rust 编译器身份、两个二进制摘要、构建配置及相关编译环境的摘要（不公开环境变量原值）。打包核对暂存二进制与该收据，并绑定原生归档摘要；组装保留构建收据，拒绝目标、提交、版本或归档不匹配。Web 输入/输出校验与 wasm32 目标独立保留。
+
+收据不保证完全可重现、不证明编译器可信或部署 CPU 兼容，也不覆盖外部编译器及系统库的全部输入。官方流程在干净检出中构建并验收解压后的程序；直接本地调用前也必须重新构建两个原生程序，修改源码后不能沿用旧产物或收据。Samba VFS 仍单独按 SDK 构建，不包含在这两个原生产品收据内。
 
 正式 Web 绑定工具来自 [绑定生成工具](tools/web-bindings.md)：从 wasm-bindgen-cli 0.2.129 提取 Web 命令，删除测试运行器、其他目标命令及网络/TLS 依赖。其版本字符串保持 `wasm-bindgen 0.2.129`，与 Web schema 匹配；原始来源、许可证及修改记录纳入[统一源码清单](THIRD_PARTY_RUST_SOURCES.md)。
 

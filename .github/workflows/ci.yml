@@ -175,8 +175,7 @@ jobs:
           ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
         run: |
           export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
+          python3 .github/scripts/release-native.py
           cargo test --locked --offline --release -p browser-smoke
           bash .github/scripts/release-package.sh
           bash .github/scripts/release-acceptance.sh

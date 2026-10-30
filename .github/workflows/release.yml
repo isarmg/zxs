@@ -115,10 +115,9 @@ jobs:
           python3 .github/scripts/check-csr-browser.py
       - name: Build Linux service and local maintenance entrypoint
         run: |
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
-          target/native/release/zxs --help
-          target/native/release/zxs-rescue --help
+          python3 .github/scripts/release-native.py
+          target/native/x86_64-unknown-linux-gnu/release/zxs --help
+          target/native/x86_64-unknown-linux-gnu/release/zxs-rescue --help
           bash .github/scripts/release-package.sh
       - name: Accept extracted release archives with the release service and browser
         run: |
