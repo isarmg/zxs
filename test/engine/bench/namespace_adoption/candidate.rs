@@ -94,6 +94,8 @@ fn read_once(engine: &Engine, branch: &str, files: usize, label: &str) -> Result
     let io = counters()?;
     let start = Instant::now();
     let tree = engine.namespace_tree(branch)?;
+    let tree_ns = start.elapsed().as_nanos();
+    let lookup_start = Instant::now();
     for round in 0..1000 {
         let path = path_for((round * 101) % files);
         let entry = lookup(&tree, &path)?;
@@ -103,7 +105,11 @@ fn read_once(engine: &Engine, branch: &str, files: usize, label: &str) -> Result
             "lookup must return the requested identity"
         );
     }
+    let lookup_ns = lookup_start.elapsed().as_nanos();
+    let page_start = Instant::now();
     let page = directory_page(&tree)?;
+    let page_ns = page_start.elapsed().as_nanos();
+    let oracle_start = Instant::now();
     let expected: Vec<_> = (0..files)
         .filter(|index| index % 97 == 1)
         .map(path_for)
@@ -113,7 +119,11 @@ fn read_once(engine: &Engine, branch: &str, files: usize, label: &str) -> Result
         page.iter().map(|entry| entry.path()).collect::<Vec<_>>(),
         expected
     );
+    let page_oracle_ns = oracle_start.elapsed().as_nanos();
+    let event_start = Instant::now();
     let events = event_page(engine)?;
+    let events_ns = event_start.elapsed().as_nanos();
+    let event_oracle_start = Instant::now();
     assert_eq!(events.len(), 22);
     assert!(
         events
@@ -125,7 +135,10 @@ fn read_once(engine: &Engine, branch: &str, files: usize, label: &str) -> Result
         files,
         start,
         io,
-        json_codec::json!({"lookups":1000,"page_len":page.len(),"events":events.len()}),
+        json_codec::json!({"lookups":1000,"page_len":page.len(),"events":events.len(),
+            "diagnostic_overlay":"components-v1","tree_ns":tree_ns,"lookup_loop_ns":lookup_ns,
+            "directory_page_ns":page_ns,"directory_oracle_ns":page_oracle_ns,
+            "events_page_ns":events_ns,"events_oracle_ns":event_oracle_start.elapsed().as_nanos()}),
     )
 }
 fn progress(milestone: &str, completed: usize) -> Result<()> {
@@ -419,3 +432,4 @@ fn main() -> Result<()> {
     }
     Ok(())
 }
+
