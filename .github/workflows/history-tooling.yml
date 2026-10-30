@@ -263,8 +263,9 @@ jobs:
       - name: Record diagnostic SHA256 manifest
         if: always()
         run: |
-          find .diagnostics -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > .diagnostics/SHA256SUMS
-          cat .diagnostics/SHA256SUMS
+          cd .diagnostics
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          cat SHA256SUMS
       - name: Retain source identity, exact commands and test output
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
