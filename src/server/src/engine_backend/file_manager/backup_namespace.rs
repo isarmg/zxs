@@ -216,7 +216,7 @@ fn project(view: &PublishedReadView, slot: &str, node: &Node<'_>) -> crate::List
 }
 
 /// Request-owned publication and its same-lock configuration limit; no authority.
-pub(super) struct BackupListing {
+pub(in crate::engine_backend) struct BackupListing {
     view: PublishedReadView,
     request: PageRequest,
     slot: String,
