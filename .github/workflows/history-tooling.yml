@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck]
 
 permissions:
   contents: read
@@ -176,6 +176,10 @@ jobs:
               '26f406dc4336d434cb68f2885ff18a39cec99105', '5f7e8f37631a41d35fea2f6f37a5ab577d85b939',
           ):
               raise SystemExit('Mature documentation closure requires the exact anchor-only successor and tree')
+          if os.environ['SCOPE'] == 'history-main-precheck' and (source, tree) != (
+              '1ad83b64e9a5e1abd57142d9cc7902426f0f37d5', '6c8740cf43b798a5629e51ff90e082becfd8c1dc',
+          ):
+              raise SystemExit('History/main precheck requires the exact reviewed composition and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -789,6 +793,11 @@ jobs:
                   'cargo test --locked --offline -p contract-check -- --nocapture 2>&1 | tee .diagnostics/contract-check-tests.log\n'
                   'grep -Eq "test result: ok\\. [1-9][0-9]* passed; 0 failed;" .diagnostics/contract-check-tests.log\n'
                   'cargo run --locked --offline -p contract-check -- --root .')]
+          groups['history-main-precheck'] = [
+              dict(groups['payload-quality'][0], id='history-main-quality'),
+              dict(groups['mature-static'][0], id='history-main-static'),
+              dict(groups['mature-doc-contracts'][0], id='history-main-doc-contracts'),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
