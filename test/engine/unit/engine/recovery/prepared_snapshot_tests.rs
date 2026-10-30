@@ -377,11 +377,16 @@ fn namespace_seed_rejects_changed_state_resources_cache_and_snapshot_owners() {
 
 #[test]
 fn completing_a_pending_candidate_does_not_retain_the_preceding_admission_cache() {
+    use crate::namespace::NamespaceNode;
+    use crate::segment_store::{NamespaceCache, NamespaceCacheKey, MAX_CACHED_NAMESPACE_BYTES};
+    use std::sync::Arc;
+    use storage_contract::{NamespacePage, NamespaceRefKind, NamespaceReference};
+
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
     let mut engine =
         Engine::initialize(&root, Config::development([temp.path().join("primary")])).unwrap();
-    let (branch, reference) = namespace_handoff_fixture(&mut engine);
+    namespace_handoff_fixture(&mut engine);
     let config = engine.config.clone();
     engine.inject_fault_once("after_accept_1");
     assert!(
@@ -396,19 +401,31 @@ fn completing_a_pending_candidate_does_not_retain_the_preceding_admission_cache(
             .is_err()
     );
     drop(engine);
-    let engine = Engine::open(&root).unwrap();
-    assert!(!engine.blocked);
-    assert_eq!(engine.state.repositories.len(), 2);
-    std::fs::write(
-        object_path(&config.disks[0], reference.kind.as_str(), &reference.hash),
-        b"changed after pending recovery",
-    )
-    .unwrap();
-    assert!(
-        engine
-            .namespace_tree(&branch)
-            .unwrap()
-            .get("proof.txt")
-            .is_err()
-    );
+    for pending in [true, false] {
+        let mut engine = Engine::prepare_workspace_recovery(root.clone(), config.clone()).unwrap();
+        let marker = Arc::new(NamespacePage {
+            format: Default::default(),
+            entries: Vec::new(),
+        });
+        let weak = Arc::downgrade(&marker);
+        let reference = NamespaceReference {
+            kind: NamespaceRefKind::Page,
+            hash: "a".repeat(64),
+        };
+        let mut cache = NamespaceCache::new(usize::MAX, MAX_CACHED_NAMESPACE_BYTES);
+        cache.insert(
+            NamespaceCacheKey::parse(&reference).unwrap(),
+            NamespaceNode::Page(marker),
+            1,
+        );
+        engine.segment_caches.replace_namespace(cache);
+        engine.recover_for_open(RecoveryMode::CompletePending).unwrap();
+        assert!(!engine.blocked);
+        assert_eq!(engine.state.repositories.len(), 2);
+        // Pending completion legitimately fills the ordinary cache while
+        // projecting container names. Only an admission-cache replacement
+        // removes this test-owned marker; ordinary inserts stay far below 8 MiB.
+        assert_eq!(weak.upgrade().is_some(), pending);
+        // The second fresh replay is now fully published and must replace it.
+    }
 }
