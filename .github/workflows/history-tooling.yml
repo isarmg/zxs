@@ -205,7 +205,7 @@ jobs:
           ):
               raise SystemExit('Recovery record transfer requires the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'static-asset-conditionals' and (source, tree) != (
-              'd5451b7e5fd4fd70c184c502d9967f91b53ab835', '72d49c77d0ee1d3da4ff8e61a845a0d30ab3cd98',
+              'c8dba1d242ed7becf426b26fbe6abe6132b673ef', 'da6004c5b3c0c94b364886d5c2e465fe7449dc23',
           ):
               raise SystemExit('Static asset regression requires the exact source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
