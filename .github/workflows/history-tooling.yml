@@ -160,10 +160,14 @@ jobs:
               '7a38df46cbec602bc097bd1cac793001a307f27c', '70c3fef9d995afd8017608bd95a966f3ae9e137d',
           ):
               raise SystemExit('History window repair requires the exact strict-parser and consumer successor')
-          if os.environ['SCOPE'] in ('history-window-web', 'history-window-web-browser') and (source, tree) != (
+          if os.environ['SCOPE'] == 'history-window-web' and (source, tree) != (
               '16fdbbcd237052858a9e895d90761e5cfe41da11', '772057af1781ac65d2e31a3a241c35f35c7dcd8b',
           ):
               raise SystemExit('History window Web checkpoint requires the exact cross-layer source and tree')
+          if os.environ['SCOPE'] == 'history-window-web-browser' and (source, tree) != (
+              '01c88040c5dd5dd9713674dc129725af87efabdc', 'c877c5015fdb6c31c34f4fa1019be726f2d85936',
+          ):
+              raise SystemExit('History browser requires the exact main/model/fixture composition and tree')
           if os.environ['SCOPE'] == 'scrub-terminal-diagnostics' and (source, tree) != (
               'bc51f061d4daa7f2a8d67f8851f913b150cfa04a', 'aeded80b572e29377d41149788f525b0eddee886',
           ):
@@ -760,7 +764,11 @@ jobs:
                   command='Exact chosen-source merge-path oracle after equivalent reverse-find lint repair'),
           ]
           groups['history-window-web-browser'] = [dict(id='history-window-web-production', web_production=True,
-              command='bash .github/scripts/check.sh web-production')]
+              command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check '
+                  'test/tools/browser-smoke/runner/fixture.rs '
+                  'test/tools/browser-smoke/runner/history_windows.rs '
+                  'test/tools/browser-smoke/unit/fixture_tests.rs\n'
+                  'bash .github/scripts/check.sh web-production')]
           groups['scrub-terminal-diagnostics'] = [
               dict(id='scrub-terminal-format', format_base='096f9a7f60025ca14781b179d9e7415f10c5b846',
                   command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
@@ -1359,7 +1367,13 @@ jobs:
           ZXS_REQUIRE_BROWSER: '1'
           ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
         run: |
+          fixture='fixture::tests::test_only_fixture_persists_two_versions_and_refuses_reuse'
+          cargo test --locked --offline -p browser-smoke --bin browser-smoke "$fixture" -- --exact --list 2>&1 | tee .native-diagnostics/fixture-list.log
+          test "$(grep -cFx "$fixture: test" .native-diagnostics/fixture-list.log)" = 1
+          cargo test --locked --offline -p browser-smoke --bin browser-smoke "$fixture" -- --exact --ignored --list 2>&1 | tee .native-diagnostics/fixture-ignored.log
+          if grep -q ': test$' .native-diagnostics/fixture-ignored.log; then exit 1; fi
           bash .github/scripts/check.sh browser-smoke 2>&1 | tee .native-diagnostics/history-window-browser.log
+          grep -Fx "test $fixture ... ok" .native-diagnostics/history-window-browser.log
           grep -Fx 'PASS synthetic history AbortSignal replacement, late completion ownership, real-file selection and navigation cleanup' .native-diagnostics/history-window-browser.log
           grep -Fx 'PASS synthetic 32-node window replacement/observer disposal, real-ID tag and merge basis review, replace-only UTF-8 fields and stale auxiliary delivery (no writes submitted)' .native-diagnostics/history-window-browser.log
       - name: Retain history window browser failure diagnostics
