@@ -121,7 +121,7 @@ fn populated_state() -> State {
         "external_commit_id": "external-commit", "source_merge_link_id": null
     }});
     value["plans"] = json_codec::json!({"plan": {
-        "plan_id": "plan", "kind": "maintenance", "principal": "作者",
+        "plan_id": "plan", "kind": "purge", "principal": "作者",
         "expected_sequence": "18446744073709551615", "digest": "digest",
         "input": {"nested": [null, false, {"\u{10000}": "supplementary", "\u{e000}": "BMP"}]},
         "state": "ready"
@@ -252,6 +252,13 @@ fn assert_explicit_empty_roots(snapshot: &Snapshot) {
     assert_eq!(encoded["format"], "radix-map-roots");
     assert!(encoded.get("pages").is_none());
     assert!(encoded.get("scalars").is_none());
+}
+
+#[test]
+fn incremental_oracle_rejects_unsupported_plan_kind() {
+    let mut value = json_codec::to_value(populated_state()).unwrap();
+    value["plans"]["plan"]["kind"] = "maintenance".into();
+    assert!(json_codec::from_value::<State>(value).unwrap_err().is_data());
 }
 
 #[test]

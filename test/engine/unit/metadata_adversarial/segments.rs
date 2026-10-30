@@ -444,13 +444,24 @@ fn disk_snapshot_rejects_segment_damage_without_rewriting_authoritative_objects(
                         std::io::ErrorKind::NotFound
                     );
                 }
-                "truncated" => match &error {
-                    Error::Contract(storage_contract::Error::Json { source, .. }) => {
-                        assert_eq!(error.code(), ErrorCode::InvalidJson);
-                        assert!(source.is_eof());
-                    }
-                    other => panic!("expected preserved truncated JSON source, got {other:?}"),
-                },
+                "truncated" => {
+                    assert_eq!(error.code(), ErrorCode::ObjectCorrupt);
+                    assert_eq!(error.message(), "immutable object JSON is invalid");
+                    let Error::Context {
+                        source,
+                        retryable: false,
+                        ..
+                    } = &error
+                    else {
+                        panic!("missing persisted-object context: {error:?}");
+                    };
+                    let Error::Contract(storage_contract::Error::Json { source: json, .. }) =
+                        source.as_ref()
+                    else {
+                        panic!("expected preserved truncated JSON source, got {source:?}");
+                    };
+                    assert!(json.is_eof());
+                }
                 _ => unreachable!(),
             }
             // These are the authoritative immutable files, including the bad
