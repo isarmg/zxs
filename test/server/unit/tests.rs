@@ -898,7 +898,23 @@ async fn authenticated_range_download_returns_exact_immutable_bytes() {
     let root = crate::tests::private_tempdir();
     let app = application(root.path());
     let (token, _, _) = authenticated(&app).await;
+    for method in ["GET", "HEAD"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri("/api/versions/test/content")
+                    .header("range", "bytes=missing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/versions/test/content")
@@ -911,11 +927,34 @@ async fn authenticated_range_download_returns_exact_immutable_bytes() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
     assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 2-5/10");
+    let etag = response.headers()[header::ETAG].clone();
     assert_eq!(
         http_routing::body::to_bytes(response.into_body(), 8192)
             .await
             .unwrap(),
         "2345"
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri("/api/versions/test/content")
+                .header("authorization", format!("Bearer {token}"))
+                .header("range", "bytes=2-5")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_LENGTH], "10");
+    assert_eq!(response.headers()[header::ETAG], etag);
+    assert!(!response.headers().contains_key(header::CONTENT_RANGE));
+    assert!(
+        http_routing::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }
 

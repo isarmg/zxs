@@ -794,15 +794,17 @@ fn content_response_with_limits(
     let hash = content.hash;
     let lease = content.lease;
     let etag = format!("\"{hash}\"");
-    let range = if headers
-        .get(header::IF_RANGE)
-        .is_some_and(|value| value.to_str().ok() != Some(etag.as_str()))
+    // RFC 9110 section 14.2 defines Range processing only for GET.
+    let range = if method != Method::GET
+        || headers
+            .get(header::IF_RANGE)
+            .is_some_and(|value| value.to_str().ok() != Some(etag.as_str()))
     {
         None
     } else {
         headers.get(header::RANGE)
     };
-    if headers.get_all(header::RANGE).iter().count() > 1 {
+    if method == Method::GET && headers.get_all(header::RANGE).iter().count() > 1 {
         return Ok(unsatisfiable_range(
             invalid_range("duplicate range header"),
             size,
