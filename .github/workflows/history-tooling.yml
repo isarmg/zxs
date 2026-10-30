@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures]
 
 permissions:
   contents: read
@@ -72,6 +72,10 @@ jobs:
           )
           if os.environ['SCOPE'].startswith('retirement-') and (source, tree) != retirement_pin:
               raise SystemExit('Retirement diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'native-release-fixtures' and (source, tree) != (
+              '7b38c66f9825bcf80bc69f3b5de8ac1b3602f6dc', '6b337f9366340abe6d47f14b3276f70787b5f4ee',
+          ):
+              raise SystemExit('Release fixtures require the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -296,6 +300,14 @@ jobs:
                       'smb_rpc::tests::close_tests::lost_close_reply_retains_original_published_operation_without_resubmitting']),
                   command='Two exact reviewed SMB retirement and frozen-publication witnesses'),
           ]
+          fixture_commands = [
+              "python3 -m unittest discover -s test/ci -p 'test_release_*.py' -v",
+              'bash test/ci/release-package.sh',
+              'bash test/ci/release-publish.sh',
+          ]
+          groups['native-release-fixtures'] = [dict(id='native-release-fixtures', tooling_only=True,
+              release_fixtures=True, command='status=0\n' + '\n'.join(
+                  command + ' || status=$?' for command in fixture_commands) + '\nexit "$status"')]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -364,8 +376,10 @@ jobs:
           git ls-files -z | xargs -0 sha256sum --zero > .diagnostics/source-before.sha256z
           sha256sum .diagnostics/source-before.sha256z | tee .diagnostics/source-before.txt
       - name: Initialize isolated Cargo home
+        if: matrix.tooling_only != true
         run: bash .github/scripts/initialize-cargo-home.sh
       - name: Install repository Rust toolchain
+        if: matrix.tooling_only != true
         run: |
           rustup show active-toolchain
           rustc --version
@@ -549,6 +563,25 @@ jobs:
           PY
           fi
           exit "$status"
+      - name: Verify nonzero release tooling fixture summaries
+        if: always() && matrix.release_fixtures == true
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          log = Path('.diagnostics/test.log').read_text()
+          counts = re.findall(r'^Ran ([1-9][0-9]*) tests? in ', log, re.MULTILINE)
+          if len(counts) != 1 or not re.search(r'^OK$', log, re.MULTILINE):
+              raise SystemExit('Release unittest fixtures did not report one nonzero passing summary')
+          package = 'PASS release archives retain complete documentation and assembly emits standalone installation instructions'
+          modes = ['new', 'resume', 'network', 'forbidden', 'public', 'foreign', 'malformed', 'corrupt', 'remote-extra', 'local-change']
+          if package not in log or any('PASS mock release publication: ' + mode not in log for mode in modes):
+              raise SystemExit('Offline package or mocked publication fixtures did not complete')
+          summary = dict(python_tests=int(counts[0]), package_fixture='passed', mock_publication_modes=modes)
+          Path('.diagnostics/fixture-summary.json').write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary))
+          PY
       - name: Execute the exact spool regression ten times and require every attempt
         if: matrix.repetitions == 10
         run: |
