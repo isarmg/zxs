@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap]
 
 permissions:
   contents: read
@@ -62,6 +62,8 @@ jobs:
           if tree and not re.fullmatch(r'[0-9a-f]{40}', tree):
               raise SystemExit('source_tree must be an exact 40-character lowercase tree SHA')
           retirement_pin = (
+              ('eb6ee0ef3450c836a8ecafb67bec66aa536ef398', '696d43df45ea9a7036e4e3019cafa38b2d94e3af')
+              if os.environ['SCOPE'] == 'retirement-overlap' else
               ('b8e6bf9e0d60bd76466d5683ab46d70878ac27b0', 'db8a3f6aedc81c108d46ce49cd1d92e7ee4a6c3a')
               if os.environ['SCOPE'] == 'retirement-repair' else
               ('778612309d3b661c044a06318761e49b75d0b47b', 'c70635a9c16f22184b7b8952dd5804c77e858afd')
@@ -277,6 +279,22 @@ jobs:
                   test_target='workspace_commit_replay', expected_count=28, expected_ignored=2,
                   required_names='[]',
                   command='cargo test --locked --offline -p storage-engine --test workspace_commit_replay -- --nocapture'),
+          ]
+          overlap_engine = [dict(selector=retirement, count=10, required=negative_names)]
+          for witness in [
+              'engine::recovery_checkpoint::tests::clean_checkpoint_reopens_decode_one_snapshot_and_preserve_state',
+              'degraded_recovery::tests::explicit_two_accept_recovery_preserves_candidate_and_reads_remaining_files_after_restart',
+          ]:
+              overlap_engine.append(dict(selector=witness, count=1, required=[witness], exact=True))
+          groups['retirement-overlap'] = [
+              dict(groups['retirement-repair'][0], id='retirement-overlap-format'),
+              dict(id='retirement-overlap-engine', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps(overlap_engine), command='Reviewed retirement overlap module and two exact recovery witnesses'),
+              dict(groups['retirement-repair'][-1], id='retirement-overlap-replay'),
+              dict(id='retirement-overlap-smb', cache='server', package='storage-server',
+                  exact_tests=json.dumps([smb_quota,
+                      'smb_rpc::tests::close_tests::lost_close_reply_retains_original_published_operation_without_resubmitting']),
+                  command='Two exact reviewed SMB retirement and frozen-publication witnesses'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
