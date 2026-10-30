@@ -793,7 +793,7 @@ jobs:
               if result.returncode or len(names) <= len(ignored_names) or summaries != [(str(len(names) - len(ignored_names)), '0', str(len(ignored_names)))]:
                   overall = 1
               for required in required_names:
-                  if not re.search(r'^test ' + re.escape(required) + r' \.\.\. ok$', result.stdout, re.MULTILINE):
+                  if not re.search(r'^test ' + re.escape(required) + r'(?: - should panic)? \.\.\. ok$', result.stdout, re.MULTILINE):
                       overall = 1
           raise SystemExit(overall)
           PY
