@@ -81,7 +81,7 @@ jobs:
           ):
               raise SystemExit('Release fixtures require the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'namespace-stage-b' and (source, tree) != (
-              '8ed1547d313c29bf1a20f44dac534274e24864bc', '13f10077fbb58af0a46f68eddb867f70982c4b20',
+              '954aeb962fcd5015ebab69cdb3d9966cbbc0ceab', 'eda5795a134d6d8c55b84475fe9593e370ac7400',
           ):
               raise SystemExit('Stage B diagnostics require the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'smb-stream' and (source, tree) != (
@@ -608,6 +608,8 @@ jobs:
                   print(result.stdout, flush=True)
                   return result
               listed = run('list', ['--list'])
+              if listed.returncode:
+                  raise SystemExit('Reviewed inventory compilation failed')
               ignored = run('ignored', ['--ignored', '--list'])
               if listed.returncode or ignored.returncode:
                   raise SystemExit('Reviewed inventory command failed')
@@ -690,7 +692,10 @@ jobs:
           ignored = [line[:-6] for line in Path('.diagnostics/sdk-ignored-list.log').read_text().splitlines() if line.endswith(': test')]
           log = Path('.diagnostics/test.log').read_text()
           counts = [tuple(map(int, row)) for row in re.findall(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', log)]
-          if len(names) <= len(ignored) or sum(map(sum, counts)) != len(names) or sum(row[2] for row in counts) != len(ignored) or any(row[1] for row in counts):
+          # The panic-isolation test prints a nested one-test process summary.
+          # Match the full SDK unit inventory rather than adding that subprocess.
+          counts = [row for row in counts if sum(row) == len(names)]
+          if len(names) <= len(ignored) or len(counts) != 1 or counts[0][2] != len(ignored) or counts[0][1]:
               raise SystemExit(f'Real SDK execution does not match actual inventory: {len(names)}, {counts!r}')
           for name in json.loads(os.environ['REQUIRED_NAMES']):
               if names.count(name) != 1 or name in ignored or not re.search(r'^test ' + re.escape(name) + r' \.\.\. ok$', log, re.MULTILINE):
