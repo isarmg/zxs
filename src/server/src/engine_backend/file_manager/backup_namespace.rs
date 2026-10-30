@@ -338,6 +338,8 @@ impl BackupListingRead {
     }
 
     pub(in crate::engine_backend) fn select(self) -> Result<SelectedListing, ApiError> {
+        #[cfg(test)]
+        lifecycle_tests::before_scan(&self.scope.view);
         let Self { scope, request } = self;
         let nodes = scope.nodes()?;
         let key = name_policy::path_key(&scope.path);
@@ -574,17 +576,6 @@ impl SelectedListing {
     }
 }
 
-pub(super) fn entries(
-    engine: &AdmissionEngine,
-    slot: &str,
-    path: &str,
-    request: PageRequest,
-) -> Result<crate::ListingSnapshot, ApiError> {
-    let selected = BackupListingRead::capture(engine, slot, path, request)?.select()?;
-    let page = selected.project(engine)?;
-    Ok(selected.finish(page))
-}
-
 #[cfg(test)]
 #[path = "../../../../../test/server/unit/engine_backend/file_manager/backup_namespace_tests.rs"]
 mod tests;
@@ -592,3 +583,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../../../test/server/unit/engine_backend/file_manager/backup_listing_lifecycle_tests.rs"]
 mod lifecycle_tests;
+
+#[cfg(test)]
+#[path = "../../../../../test/server/unit/engine_backend/file_manager/backup_listing_entry_tests.rs"]
+mod entry_tests;
