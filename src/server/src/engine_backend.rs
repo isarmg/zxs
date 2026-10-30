@@ -1169,21 +1169,34 @@ impl Backend for EngineBackend {
                 .lock()
                 .expect("invariant: service state lock poisoned");
             current_protected_identity(&engine, identity)?;
-            match file_manager::listing::capture(&engine, request)? {
-                file_manager::listing::ListingRead::Backup(snapshot) => return Ok(snapshot),
-                file_manager::listing::ListingRead::Primary(read) => read,
-            }
+            file_manager::listing::capture(&engine, request)?
         };
-        let selected = read.select();
-        let engine = self
-            .engine
-            .lock()
-            .expect("invariant: service state lock poisoned");
-        current_protected_identity(&engine, identity)?;
-        let selected = selected?;
-        let page = selected.project(&engine);
-        drop(engine);
-        Ok(selected.finish(page?))
+        match read {
+            file_manager::listing::ListingRead::Backup(read) => {
+                let selected = read.select();
+                let engine = self
+                    .engine
+                    .lock()
+                    .expect("invariant: service state lock poisoned");
+                current_protected_identity(&engine, identity)?;
+                let selected = selected?;
+                let page = selected.project(&engine);
+                drop(engine);
+                Ok(selected.finish(page?))
+            }
+            file_manager::listing::ListingRead::Primary(read) => {
+                let selected = read.select();
+                let engine = self
+                    .engine
+                    .lock()
+                    .expect("invariant: service state lock poisoned");
+                current_protected_identity(&engine, identity)?;
+                let selected = selected?;
+                let page = selected.project(&engine);
+                drop(engine);
+                Ok(selected.finish(page?))
+            }
+        }
     }
     fn mutate_disk_directory(
         &self,

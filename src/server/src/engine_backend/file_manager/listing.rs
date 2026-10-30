@@ -12,7 +12,7 @@ enum Candidate {
 }
 
 pub(in crate::engine_backend) enum ListingRead {
-    Backup(crate::ListingSnapshot),
+    Backup(backup_namespace::BackupListingRead),
     Primary(PrimaryListing),
 }
 
@@ -57,7 +57,7 @@ pub(in crate::engine_backend) fn capture(
     // Preserve cursor/query/snapshot error precedence before disk and path checks.
     let request = PageRequest::parse(engine, input)?;
     if disk(engine, &slot_id)?.level != 1 {
-        return backup_namespace::entries(engine, &slot_id, &path, request)
+        return backup_namespace::BackupListingRead::capture(engine, &slot_id, &path, request)
             .map(ListingRead::Backup);
     }
     let directory = match resolve_read(engine, &slot_id, &path) {

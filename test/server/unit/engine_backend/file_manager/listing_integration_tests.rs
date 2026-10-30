@@ -15,7 +15,11 @@ pub(super) fn listing_json(engine: &AdmissionEngine, input: &Value) -> Result<Va
     }
     let request = crate::ReadListing::parse(input["slot_id"].as_str().unwrap().into(), query)?;
     let snapshot = match listing::capture(engine, request)? {
-        listing::ListingRead::Backup(snapshot) => snapshot,
+        listing::ListingRead::Backup(read) => {
+            let selected = read.select()?;
+            let page = selected.project(engine)?;
+            selected.finish(page)
+        }
         listing::ListingRead::Primary(read) => {
             let selected = read.select()?;
             let page = selected.project(engine)?;
