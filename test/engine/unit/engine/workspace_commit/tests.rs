@@ -650,9 +650,9 @@ fn public_preparation_fences_registration_and_finish_rechecks_live_receipt() {
                     "workspace.commit",
                     "different-actor",
                     request.operation_id,
-                    json!({}),
+                    json_codec::json!({}),
                     request.request_digest.clone(),
-                    |_, _, _| Ok(json!({"branch_id": workspace.branch_id})),
+                    |_, _, _| Ok(json_codec::json!({"branch_id": workspace.branch_id})),
                 )
                 .unwrap()
         } else {

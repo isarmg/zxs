@@ -990,7 +990,8 @@ fn incomplete_log_cannot_prove_absence_and_unknown_record_types_are_rejected() {
     else {
         panic!("missing persisted-log context: {error:?}");
     };
-    let Error::Contract(storage_contract::Error::Json { source: json, .. }) = source.as_ref() else {
+    let Error::Contract(storage_contract::Error::Json { source: json, .. }) = source.as_ref()
+    else {
         panic!("missing unsupported-record JSON cause: {source:?}");
     };
     assert_eq!(source.code(), ErrorCode::InvalidJson);

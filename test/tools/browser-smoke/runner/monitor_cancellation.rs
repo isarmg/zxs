@@ -59,7 +59,9 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             check(
                 browser,
                 "monitor replacement aborts old fetch and renders",
-                &format!("return window.__zxsMonitorReads.aborted===1&&window.__zxsMonitorReads.pending.signal.aborted&&{CURRENT_CHART}"),
+                &format!(
+                    "return window.__zxsMonitorReads.aborted===1&&window.__zxsMonitorReads.pending.signal.aborted&&{CURRENT_CHART}"
+                ),
             )?;
             browser.script("window.__zxsMonitorReads.pending.release();return true")?;
             check(

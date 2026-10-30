@@ -129,10 +129,7 @@ fn truncated_json_and_wrong_digest_keep_distinct_causes_and_original_bytes() {
     let path = object_path(disk, NAMESPACE_PAGE_KIND, &hash);
     let root = DiskRoot::open(&disk.root).unwrap();
     for (bytes, truncated) in [
-        (
-            &b"{\"format\":\"namespace-page\",\"entries\":["[..],
-            true,
-        ),
+        (&b"{\"format\":\"namespace-page\",\"entries\":["[..], true),
         (
             &b"{\"format\":\"namespace-page\",\"entries\":[],\"extra\":true}"[..],
             false,

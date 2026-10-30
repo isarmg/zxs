@@ -258,7 +258,11 @@ fn assert_explicit_empty_roots(snapshot: &Snapshot) {
 fn incremental_oracle_rejects_unsupported_plan_kind() {
     let mut value = json_codec::to_value(populated_state()).unwrap();
     value["plans"]["plan"]["kind"] = "maintenance".into();
-    assert!(json_codec::from_value::<State>(value).unwrap_err().is_data());
+    assert!(
+        json_codec::from_value::<State>(value)
+            .unwrap_err()
+            .is_data()
+    );
 }
 
 #[test]

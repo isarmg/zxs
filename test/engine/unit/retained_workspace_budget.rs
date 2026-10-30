@@ -387,7 +387,10 @@ fn capacity_reports_resident_lifecycle_counts_and_only_selected_principal() {
     drop(e);
     let mut e = Engine::open(&f.root).unwrap();
     assert_eq!(capacity_report(&e, "admin"), report);
-    assert_eq!(e.published_receipt(saved.operation_id).unwrap(), Some(saved));
+    assert_eq!(
+        e.published_receipt(saved.operation_id).unwrap(),
+        Some(saved)
+    );
     let w = e.create_workspace(&repo.main_branch_id, "admin").unwrap();
     e.stage_bytes(&w.workspace_id, "retained", b"evidence")
         .unwrap();
