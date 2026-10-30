@@ -205,7 +205,7 @@ jobs:
           ):
               raise SystemExit('Recovery record transfer requires the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'static-asset-conditionals' and (source, tree) != (
-              'c8dba1d242ed7becf426b26fbe6abe6132b673ef', 'da6004c5b3c0c94b364886d5c2e465fe7449dc23',
+              'b5292fa16e850aaf4ce0d06683b013a1be8ff89a', 'efa4efe6414ec98cb920bc5e912f28076958644d',
           ):
               raise SystemExit('Static asset regression requires the exact source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
@@ -882,8 +882,19 @@ jobs:
           static_conditional_test = 'tests::static_asset_tests::entity_tag_precedes_modified_since_for_static_get_and_head'
           groups['static-asset-conditionals'] = [
               dict(id='static-asset-conditional-regression', cache='server', package='storage-server',
-                  exact_test=static_conditional_test,
-                  command=f'cargo test --locked --offline -p storage-server --lib {static_conditional_test} -- --exact --nocapture'),
+                  test_groups=json.dumps([dict(selector=name, count=1, exact=True, required=[name]) for name in [
+                      static_conditional_test,
+                      'tests::static_assets_never_shadow_unknown_api_routes_or_their_error_envelope',
+                      'tests::auxiliary_startup_tests::missing_or_rejected_web_assets_leave_management_apis_but_not_a_fake_ui',
+                  ]]), command='Exact static validator regression plus affected API namespace and unavailable-asset consumers'),
+              dict(id='static-asset-server-checks', cache='server',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check '
+                      'src/server/src/web_assets.rs test/server/unit/tests.rs test/server/unit/tests/static_assets.rs\n'
+                      "cargo tree --locked --offline -p storage-server -e normal,build,dev -i tower-http --format '{p} features={f}' | tee .diagnostics/tower-http-features.txt\n"
+                      'cargo metadata --locked --offline --no-deps --format-version 1 > .diagnostics/cargo-metadata.json\n'
+                      'cargo clippy --locked --offline -p storage-server --lib --tests -- -D warnings\n'
+                      'python3 .github/scripts/check-architecture.py\n'
+                      'python3 tools/rust-sources/manage.py verify'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
