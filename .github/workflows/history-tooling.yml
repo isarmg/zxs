@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-browser, detached-backup-listing]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-browser, detached-backup-listing, mature-static]
 
 permissions:
   contents: read
@@ -137,9 +137,13 @@ jobs:
           ):
               raise SystemExit('Scrub formatting requires the exact formatting successor and tree')
           if os.environ['SCOPE'] in ('web-history-native', 'web-history-browser') and (source, tree) != (
-              'ee0a9b08ff4b16ce2019b4b36e4153671ede91ae', '3b5d347cc36756dd5ee173818e77f6a0ae124e84',
+              '9848c4a7b3569e1bbd4dd509e266a2f24429ad6c', '306254217301e1ebcb6dafe7edd71791074aaedd',
           ):
               raise SystemExit('Web history diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'mature-static' and (source, tree) != (
+              '85fecf6149b0913f8ac53f579245102012f38ad9', 'bd99da2680440a0e8ca0a838da0d6985a4701644',
+          ):
+              raise SystemExit('Mature static closure requires the exact frozen source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -569,6 +573,8 @@ jobs:
           groups['payload-proof-format'] = [groups['payload-proof-budget'][0]]
           groups['payload-quality'] = [dict(id='payload-quality', quality=True,
               command='ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality')]
+          groups['mature-static'] = [dict(id='mature-static', tooling_only=True,
+              command='bash .github/scripts/check.sh static')]
           listing_witnesses = [
               'writers_finish_during_primary_scan_and_changed_pages_never_project_old_indices',
               'revoked_identity_wins_over_a_changed_primary_listing',
