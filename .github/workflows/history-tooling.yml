@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format]
 
 permissions:
   contents: read
@@ -122,10 +122,34 @@ jobs:
               ('server-file-manager', 'storage-server', 'engine_backend::file_manager::'),
           ]:
               groups['namespace-borrow'].append(dict(id=name, cache=package,
-                  package=package, test_filter=prefix,
+                  package=package, test_filter=prefix, release=True,
                   required_names=json.dumps(witnesses if name == 'engine-namespace' else []),
                   command=f'cargo test --locked --offline --release -p {package} --lib {prefix} -- --nocapture'))
           groups['namespace-format'] = [groups['namespace-borrow'][0]]
+          # The fifth changed path is docs/components/engine.md, not Rust.
+          record_files = ['src/contract/src/model.rs', 'test/contract/unit/shared_records.rs',
+              'test/engine/unit/business/file_paths_tests.rs',
+              'test/engine/unit/container_storage/changes_tests.rs']
+          groups['file-path-records'] = [dict(id='file-path-format',
+              command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check ' + ' '.join(record_files))]
+          for name, package, prefix, expected in [
+              ('contract-path-records', 'storage-contract', 'shared_records::tests::path_', 2),
+              ('engine-file-paths', 'storage-engine', 'business::file_paths_tests::', 8),
+              ('engine-container-changes', 'storage-engine', 'container_storage::changes::tests::', 6),
+          ]:
+              groups['file-path-records'].append(dict(id=name, cache=package,
+                  package=package, test_filter=prefix, release=False,
+                  expected_count=expected, required_names='[]',
+                  command=f'cargo test --locked --offline -p {package} --lib {prefix} -- --nocapture'))
+          for name, test in [
+              ('journal-snapshot-oracle', 'journal::snapshot_incremental_oracle_tests::incremental_snapshot_retains_fixed_publication_root_and_every_raw_object_byte'),
+              ('history-projection-oracle', 'history_package::projection_delta_tests::every_projection_map_insert_delete_and_same_value_write_matches_full_oracle'),
+              ('history-rename-proofs', 'history_package::tests::rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_restore'),
+          ]:
+              groups['file-path-records'].append(dict(id=name, cache='storage-engine',
+                  package='storage-engine', exact_test=test,
+                  command=f'cargo test --locked --offline -p storage-engine --lib {test} -- --exact --nocapture'))
+          groups['file-path-format'] = [groups['file-path-records'][0]]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -152,6 +176,8 @@ jobs:
       EXACT_TEST: ${{ matrix.exact_test }}
       TEST_PACKAGE: ${{ matrix.package }}
       TEST_FILTER: ${{ matrix.test_filter }}
+      TEST_RELEASE: ${{ matrix.release }}
+      EXPECTED_COUNT: ${{ matrix.expected_count }}
       REQUIRED_NAMES: ${{ matrix.required_names }}
       VERIFY_UNIT_INVENTORY: ${{ matrix.unit_inventory }}
     steps:
@@ -205,7 +231,7 @@ jobs:
       - name: Verify focused selector matches exactly one test
         if: matrix.exact_test != ''
         run: |
-          cargo test --locked --offline -p storage-server --lib "$EXACT_TEST" -- --exact --list 2>&1 | tee .diagnostics/list.log
+          cargo test --locked --offline -p "${TEST_PACKAGE:-storage-server}" --lib "$EXACT_TEST" -- --exact --list 2>&1 | tee .diagnostics/list.log
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -218,7 +244,11 @@ jobs:
       - name: Inventory focused module tests and require named regression bodies
         if: matrix.test_filter != ''
         run: |
-          cargo test --locked --offline --release -p "$TEST_PACKAGE" --lib "$TEST_FILTER" -- --list 2>&1 | tee .diagnostics/list.log
+          profile=()
+          if [[ "$TEST_RELEASE" == 'true' ]]; then
+            profile=(--release)
+          fi
+          cargo test --locked --offline "${profile[@]}" -p "$TEST_PACKAGE" --lib "$TEST_FILTER" -- --list 2>&1 | tee .diagnostics/list.log
           python3 - <<'PY'
           import json
           import os
@@ -226,13 +256,24 @@ jobs:
           tests = [line[:-6] for line in Path('.diagnostics/list.log').read_text().splitlines() if line.endswith(': test')]
           if not tests:
               raise SystemExit('Module selector matched zero tests')
+          expected = os.environ['EXPECTED_COUNT']
+          if expected and len(tests) != int(expected):
+              raise SystemExit(f'Expected exactly {expected} listed test bodies; found {len(tests)}')
           for name in json.loads(os.environ['REQUIRED_NAMES']):
               matches = [test for test in tests if test.endswith('::' + name)]
               if len(matches) != 1:
                   raise SystemExit(f'Expected one regression body named {name!r}; found {matches!r}')
           print(f'Inventoried {len(tests)} tests for {os.environ["TEST_FILTER"]}')
           PY
-          cargo test --locked --offline --release -p "$TEST_PACKAGE" --lib "$TEST_FILTER" -- --ignored --list 2>&1 | tee .diagnostics/ignored-list.log
+          cargo test --locked --offline "${profile[@]}" -p "$TEST_PACKAGE" --lib "$TEST_FILTER" -- --ignored --list 2>&1 | tee .diagnostics/ignored-list.log
+          if [[ -n "$EXPECTED_COUNT" ]]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          ignored = [line for line in Path('.diagnostics/ignored-list.log').read_text().splitlines() if line.endswith(': test')]
+          if ignored:
+              raise SystemExit(f'Required record-sharing bodies must all execute; found ignored bodies {ignored!r}')
+          PY
+          fi
       - name: Inventory complete server unit bodies and existing ignored tests
         if: matrix.unit_inventory == true
         run: |
