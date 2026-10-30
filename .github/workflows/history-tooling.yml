@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, packages, namespace-borrow, namespace-format, spool-retirement]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement]
 
 permissions:
   contents: read
@@ -83,6 +83,7 @@ jobs:
               for package in ['authentication', 'storage-contract', 'name-policy', 'platform-io',
                               'storage-client', 'storage-rescue', 'smb-protocol']]
           aggregate = sum(groups.values(), [])
+          groups['server-unit'] = [dict(groups['server'][0], unit_inventory=True)]
           spool_test = 'http_spool::tests::retirement_waits_for_activation_and_cancelled_owner_never_publishes'
           groups['spool-retirement'] = [
               dict(id='spool-format', command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check test/server/unit/http_spool.rs'),
@@ -152,6 +153,7 @@ jobs:
       TEST_PACKAGE: ${{ matrix.package }}
       TEST_FILTER: ${{ matrix.test_filter }}
       REQUIRED_NAMES: ${{ matrix.required_names }}
+      VERIFY_UNIT_INVENTORY: ${{ matrix.unit_inventory }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -231,6 +233,18 @@ jobs:
           print(f'Inventoried {len(tests)} tests for {os.environ["TEST_FILTER"]}')
           PY
           cargo test --locked --offline --release -p "$TEST_PACKAGE" --lib "$TEST_FILTER" -- --ignored --list 2>&1 | tee .diagnostics/ignored-list.log
+      - name: Inventory complete server unit bodies and existing ignored tests
+        if: matrix.unit_inventory == true
+        run: |
+          cargo test --locked --offline -p storage-server --lib --bins -- --list 2>&1 | tee .diagnostics/list.log
+          cargo test --locked --offline -p storage-server --lib --bins -- --ignored --list 2>&1 | tee .diagnostics/ignored-list.log
+          python3 - <<'PY'
+          from pathlib import Path
+          tests = [line for line in Path('.diagnostics/list.log').read_text().splitlines() if line.endswith(': test')]
+          if not tests:
+              raise SystemExit('Server unit selector matched zero tests')
+          print(f'Inventoried {len(tests)} server unit test bodies')
+          PY
       - name: Execute selected locked offline tests and retain failures
         if: matrix.repetitions != 10
         run: |
@@ -258,6 +272,18 @@ jobs:
           results = re.findall(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', Path('.diagnostics/test.log').read_text())
           if len(results) != 1 or sum(map(int, results[0])) != expected or sum(map(int, results[0][:2])) == 0:
               raise SystemExit(f'Executed count must match {expected} listed tests; found {results!r}')
+          PY
+          fi
+          if [[ "$VERIFY_UNIT_INVENTORY" == 'true' ]]; then
+            python3 - <<'PY'
+          import re
+          from pathlib import Path
+          expected = sum(line.endswith(': test') for line in Path('.diagnostics/list.log').read_text().splitlines())
+          ignored = sum(line.endswith(': test') for line in Path('.diagnostics/ignored-list.log').read_text().splitlines())
+          results = re.findall(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', Path('.diagnostics/test.log').read_text())
+          counts = [tuple(map(int, result)) for result in results]
+          if sum(sum(result) for result in counts) != expected or sum(result[2] for result in counts) != ignored or expected <= ignored:
+              raise SystemExit(f'Server unit execution must match {expected} listed bodies and {ignored} ignored bodies; found {results!r}')
           PY
           fi
           exit "$status"
