@@ -155,7 +155,7 @@ fn identity_reads_preserve_open_errors_and_metadata_limits() {
     let error = validate_seal(&config, disk).unwrap_err();
     assert!(matches!(
         error,
-        Error::Filesystem(platform_io::fs_safety::Error::Io(ref source))
+        Error::Contract(storage_contract::Error::Io { ref source, .. })
             if source.kind() == std::io::ErrorKind::NotFound
     ));
     assert_eq!(error.code(), ErrorCode::IoError);
