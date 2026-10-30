@@ -1,3 +1,5 @@
+# Reuse this already registered, optional workflow path on this verification
+# branch; GitHub cannot dispatch a newly named branch-only workflow.
 name: Workspace diagnostics
 run-name: Workspace diagnostics (${{ inputs.scope }}) @ ${{ inputs.source_sha }}
 
@@ -36,7 +38,7 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Check diagnostic workflow contexts
-        run: python3 .github/scripts/check-workflows.py .github/workflows/workspace-diagnostics.yml
+        run: python3 .github/scripts/check-workflows.py .github/workflows/history-tooling.yml
       - name: Validate explicit source SHA and select bounded matrix
         id: select
         env:
