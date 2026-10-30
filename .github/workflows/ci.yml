@@ -1,218 +1,173 @@
-name: CI
-
+# Verification-only carrier; no product source or workflow changes.
+name: Business batch R136 captured owner test correction
 on:
   push:
-  pull_request:
+    branches: [verify/business-smoke-20261030-r136-retry]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
+  group: business-smoke-r136
+  cancel-in-progress: false
 env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: '1'
+  CARGO_NET_OFFLINE: 'true'
+  CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
-
+  CARGO_BUILD_JOBS: '2'
+  PYTHONDONTWRITEBYTECODE: '1'
+  RUST_BACKTRACE: '1'
+  ZXS_PRODUCT_SHA: '7d15bba51cbc64ab86461f0345458050d289c180'
+  ZXS_PRODUCT_TREE: '06e6abcc3d270edd98f011f626cbf5cccd0a45cb'
+  ZXS_PRODUCT_PARENT: '04d1947f40f3a22967b6c1c987ac084c704cea97'
 jobs:
-  static:
-    name: Static workflow and tooling regressions (no Rust)
+  business-smoke:
+    name: Exact R136 bounded history authority and ownership
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: '7d15bba51cbc64ab86461f0345458050d289c180'
           persist-credentials: false
-      - name: Check workflows, source governance and script regressions
-        run: bash .github/scripts/check.sh static
-
-  tests:
-    name: Tests (${{ matrix.suite }})
-    needs: static
-    runs-on: ubuntu-24.04
-    # Cold crypto runs include ten packaged/local-generated ring cases, including
-    # both release slow-test matrices; the measured run exceeded 30 minutes.
-    # Match the release verification budget without relaxing other shards.
-    timeout-minutes: ${{ matrix.suite == 'foundation-crypto' && 60 || 30 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
-    env:
-      ZXS_REQUIRE_BROWSER: '1'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
+          fetch-depth: 2
+      - name: Prepare isolated evidence and exact input verifier
         run: |
-          rustup show active-toolchain
-          rustc --version
-          cargo --version
-      - name: Install WASM standard library for cross-target checks
-        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install system SQLite SDK for unbundled validation
-        if: matrix.suite == 'foundation-data'
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/zxs-r136-business-smoke"
+          mkdir -p "$evidence"
+          printf 'ZXS_EVIDENCE=%s\n' "$evidence" >> "$GITHUB_ENV"
+          printf 'CARGO_HOME=%s\n' "$(mktemp -d "$RUNNER_TEMP/c.XXXXXX")" >> "$GITHUB_ENV"
+          printf 'CARGO_TARGET_DIR=%s\n' "$RUNNER_TEMP/zxs-r136-target" >> "$GITHUB_ENV"
+          printf 'TMPDIR=%s\n' "$(mktemp -d "$RUNNER_TEMP/t.XXXXXX")" >> "$GITHUB_ENV"
+          cat > "$RUNNER_TEMP/r136-identity.py" <<'PY'
+          import hashlib, json, os, pathlib, subprocess, sys, tomllib
+          root, out = pathlib.Path.cwd(), pathlib.Path(os.environ['ZXS_EVIDENCE'])
+          def require(ok, message):
+              if not ok: raise RuntimeError(message)
+          def git(*args): return subprocess.check_output(['git', *args])
+          sha, tree, parent = [os.environ[n] for n in ('ZXS_PRODUCT_SHA','ZXS_PRODUCT_TREE','ZXS_PRODUCT_PARENT')]
+          require(os.environ['GITHUB_REF'] == 'refs/heads/verify/business-smoke-20261030-r136-retry', 'wrong verification ref')
+          require(git('rev-parse','HEAD').decode().strip() == sha, 'wrong product SHA')
+          require(git('rev-parse','HEAD^{tree}').decode().strip() == tree, 'wrong product tree')
+          require(git('show','-s','--format=%P','HEAD').decode().strip() == parent, 'wrong sole parent')
+          expected_paths = json.loads(r'''["test/server/unit/engine_backend/file_manager/history_pages_tests.rs"]''')
+          require(git('diff','--no-renames','--name-only',parent,sha).decode().splitlines() == expected_paths, 'unreviewed changed paths')
+          require(tomllib.loads((root/'rust-toolchain.toml').read_text())['toolchain']['channel'] == '1.99.0', 'wrong compiler pin')
+          status = git('status','--porcelain=v1','--untracked-files=all').decode()
+          (out/(sys.argv[1]+'-status.txt')).write_text(status)
+          require(not status, 'source worktree dirty: '+status)
+          rows = []
+          for item in git('ls-files','-s','-z').split(b'\0'):
+              if not item: continue
+              meta, raw = item.split(b'\t',1)
+              mode, blob, stage = meta.decode().split()
+              require(stage == '0', 'unmerged index')
+              path = root/os.fsdecode(raw)
+              content = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
+              rows.append([os.fsdecode(raw),mode,blob,hashlib.sha256(content).hexdigest(),path.lstat().st_mode])
+          identity = dict(product_sha=sha,product_tree=tree,product_parent=parent,verification_sha=os.environ['GITHUB_SHA'],run_id=os.environ['GITHUB_RUN_ID'],run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],tracked_files=len(rows),changed=expected_paths)
+          if sys.argv[1] == 'before':
+              (out/'tracked-inputs.json').write_text(json.dumps(rows)+'\n')
+              (out/'input-identity.json').write_text(json.dumps(identity,indent=2)+'\n')
+          else:
+              require(rows == json.loads((out/'tracked-inputs.json').read_text()), 'tracked source bytes, modes or index changed')
+              identity['result']='PASS'
+              (out/'source-unchanged.json').write_text(json.dumps(identity,indent=2)+'\n')
+          print(json.dumps(identity))
+          PY
+      - name: Verify frozen product
+        run: python3 "$RUNNER_TEMP/r136-identity.py" before
+      - name: Install and record pinned compiler
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
-      - name: Enable sandboxed Chrome for browser future runtime checks
-        if: matrix.suite == 'foundation-language'
-        run: bash .github/scripts/prepare-browser-contract.sh
-      - name: Cache verified security scanner
-        if: matrix.suite == 'security'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            target/security-tools/bin/cargo-audit
-            target/security-tools/verified-build.json
-          key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
-      - name: Run locked test suite
-        run: bash .github/scripts/check.sh "${{ matrix.suite }}"
-      - name: Verify isolated system SQLite consumer
-        if: matrix.suite == 'foundation-data'
-        run: python3 .github/scripts/check-sqlite-system.py
-      - name: Retain exact foundation behaviour test evidence
-        if: always() && matrix.suite == 'foundation-async'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: foundation-behaviour-evidence
-          path: |
-            target/foundation-behaviour/logs/
-            target/foundation-behaviour/summary.json
-          if-no-files-found: warn
-          retention-days: 7
-
-  web-production:
-    name: Production WASM build
-    needs: static
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain and WASM target
+          set -euo pipefail
+          test -z "$(find "$CARGO_HOME" -mindepth 1 -print -quit)"
+          rustup toolchain install 1.99.0 --profile minimal
+          rustc +1.99.0 -Vv | tee "$ZXS_EVIDENCE/rustc.txt"
+          cargo +1.99.0 -V | tee "$ZXS_EVIDENCE/cargo.txt"
+          grep -q '^rustc 1\.99\.0 ' "$ZXS_EVIDENCE/rustc.txt"
+          grep -q '^cargo 1\.99\.0 ' "$ZXS_EVIDENCE/cargo.txt"
+      - name: Compile once and run exact source-bound business witnesses
         run: |
-          rustup show active-toolchain
-          rustup target add wasm32-unknown-unknown
-          rustc --version
-      - name: Cache locally compiled Rust build helpers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/rust-build-tools
-          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
-          restore-keys: |
-            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build production Web distribution
-        run: bash .github/scripts/check.sh web-production
-      - name: Retain production assets for checks in this run
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-dist
-          path: build/web/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain browser template contract fixture
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output/
-          if-no-files-found: error
-          retention-days: 7
-
-  browser-smoke:
-    name: Extracted release browser smoke (Chrome)
-    needs: web-production
-    runs-on: ubuntu-24.04
-    # Compile one release-profile graph for both product and browser harness.
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Initialize isolated Cargo home
-        run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository Rust toolchain
-        run: rustup show active-toolchain
-      - name: Fetch production Web assets from this workflow run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: web-dist
-          path: build/web
-      - name: Fetch browser template contract fixture from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: csr-template-fixture
-          path: target/csr-template-check/output
-      - name: Verify runner Chrome and ChromeDriver
-        run: |
-          chrome="$(command -v google-chrome)"
-          driver="$(command -v chromedriver)"
-          "$chrome" --version
-          "$driver" --version
-          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
-          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
-          test "$chrome_major" = "$driver_major"
-          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
-          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
-      - name: Install CJK fonts for the Chinese screenshot
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Build and exercise extracted release packages
-        env:
-          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
-          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
-        run: |
-          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/check-rust-diagnostics.py -- \
-            cargo build --locked --offline --release --package storage-server --package storage-rescue --message-format=json
-          cargo test --locked --offline --release -p browser-smoke
-          bash .github/scripts/release-package.sh
-          bash .github/scripts/release-acceptance.sh
-          python3 .github/scripts/check-csr-browser.py
-          bash .github/scripts/release-assemble.sh
-      - name: Retain verified installation candidate (not a published release)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: installation-candidate-linux-web
-          path: release-assets/*
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain template browser result and exact input identity
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: csr-template-browser
-          path: target/csr-template-check/output/*json
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain real Web file manager screenshot
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-screenshot
-          path: artifacts/web-file-manager.png
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Retain responsive Web viewport previews
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          python3 - <<'PY'
+          import collections, json, os, pathlib, re, runpy, subprocess, sys, time, traceback
+          root, out = pathlib.Path.cwd(), pathlib.Path(os.environ['ZXS_EVIDENCE'])
+          spec = json.loads(r'''[{"target":"storage_server","source":"src/server/src/lib.rs","kind":"lib","groups":[{"file":"test/server/unit/engine_backend/file_manager/history_pages_tests.rs","names":["remaining_cold_captures_freeze_all_five_pages_and_release_captured_owner_when_consumed"]}]}]''')
+          summary = dict(result='RUNNING',commands=[],targets={},tests=[],failures=[],limits=['One renamed R136 failed body only; full default server libtest compile with zero Rust warnings/errors','34 earlier passing bodies remain bound to product 04d1947; not rerun on this test-only correction','Weak Commit lifetime and five byte-equality assertions; no R137, no full-suite or performance claim'])
+          def save(): (out/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+          def require(ok, message):
+              if not ok: raise RuntimeError(message)
+          def run(label, argv, timeout):
+              summary['commands'].append(dict(label=label,argv=argv,timeout=timeout));save()
+              print('+ '+' '.join(argv),flush=True)
+              with (out/(label+'.log')).open('w') as stdout, (out/(label+'-stderr.log')).open('w') as stderr:
+                  done=subprocess.run(argv,stdout=stdout,stderr=stderr,text=True,timeout=timeout)
+              print((out/(label+'-stderr.log')).read_text(),end='',flush=True)
+              if label not in ('compile','browser-check'): print((out/(label+'.log')).read_text(),end='',flush=True)
+              return done.returncode
+          try:
+              rc=run('compile',['cargo','+1.99.0','test','--locked','--offline','-p','storage-server','--lib','--no-run','--message-format=json'],720)
+              diagnostic=runpy.run_path(str(root/'.github/scripts/check-rust-diagnostics.py'))['CargoDiagnostics'](sys.stdout)
+              lines=(out/'compile.log').read_text().splitlines()
+              for number,line in enumerate(lines,1): diagnostic.consume(line,number)
+              require(diagnostic.result(rc)==0,'strict compile failed')
+              messages=[json.loads(line) for line in lines]
+              artifacts=[m for m in messages if m.get('reason')=='compiler-artifact' and m.get('profile',{}).get('test') and m.get('executable')]
+              (out/'compiler-test-artifacts.json').write_text(json.dumps(artifacts,indent=2)+'\n')
+              selected=[]
+              for target in spec:
+                  label=target['target']
+                  matches=[m for m in artifacts if m['target']['name']==label and target['kind'] in m['target']['kind'] and pathlib.Path(m['target']['src_path']).resolve()==root/target['source']]
+                  require(len(matches)==1,'expected one exact test artifact: '+label)
+                  artifact=matches[0];binary=artifact['executable']
+                  require(run(label+'-inventory',[binary,'--list','--format','terse'],30)==0,'inventory failed: '+label)
+                  require(run(label+'-ignored',[binary,'--list','--ignored','--format','terse'],30)==0,'ignored inventory failed: '+label)
+                  def names(suffix): return [l.removesuffix(': test') for l in (out/(label+suffix+'.log')).read_text().splitlines() if l.endswith(': test')]
+                  inventory,ignored=names('-inventory'),names('-ignored')
+                  require(inventory and len(inventory)==len(set(inventory)),'empty or duplicate inventory: '+label)
+                  resolved=[]
+                  for group in target['groups']:
+                      source=(root/group['file']).read_text()
+                      for short in group['names']:
+                          require(re.search(r'\bfn '+re.escape(short)+r'\s*\(',source) is not None,'missing source function: '+short)
+                          found=[n for n in inventory if n.rsplit('::',1)[-1]==short]
+                          require(len(found)==1,'expected one exact discovered body: '+label+'::'+short)
+                          name=found[0]
+                          require(name not in ignored,'selected body is ignored: '+name)
+                          resolved.append(name)
+                          selected.append(dict(target=label,binary=binary,name=name,source=group['file']))
+                  require(len(resolved)==len(set(resolved)),'duplicate selected names: '+label)
+                  summary['targets'][label]=dict(binary=binary,source=target['source'],features=artifact.get('features',[]),inventory=len(inventory),ignored=ignored,selected=resolved)
+              require(len(selected)==1,'wrong selected test count')
+              (out/'selected-tests.json').write_text(json.dumps(selected,indent=2)+'\n')
+              save()
+              deadline=time.monotonic()+600
+              for index,test in enumerate(selected):
+                  require(time.monotonic()<deadline,'ordinary-test budget exhausted')
+                  label='case-'+str(index).zfill(3)
+                  rc=run(label,[test['binary'],'--exact',test['name'],'--test-threads=1','--color','never'],max(1,min(90,int(deadline-time.monotonic()))))
+                  log=(out/(label+'.log')).read_text()
+                  passed=[n.removesuffix(' - should panic') for n in re.findall(r'^test (.+) \.\.\. ok$',log,re.M)]
+                  totals=re.findall(r'^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;',log,re.M)
+                  ok=rc==0 and passed==[test['name']] and len(totals)==1 and totals[0][:4]==('1','0','0','0')
+                  record=dict(target=test['target'],name=test['name'],source=test['source'],log=label+'.log',result='PASS' if ok else 'FAIL',returncode=rc)
+                  summary['tests'].append(record)
+                  if not ok: summary['failures'].append(record)
+                  save()
+              require(not summary['failures'],'one or more exact ordinary bodies failed')
+              require(len(summary['tests'])==1,'incomplete ordinary execution')
+              summary['result']='PASS'
+          except BaseException:
+              summary['result']='FAIL';(out/'failure.txt').write_text(traceback.format_exc());raise
+          finally: save()
+          PY
+      - name: Verify source input remained unchanged
         if: always()
+        run: python3 "$RUNNER_TEMP/r136-identity.py" after
+      - name: Retain exact smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: viewport-previews
-          path: artifacts/viewport-previews/
-          if-no-files-found: warn
+          name: business-smoke-r136
+          path: ${{ env.ZXS_EVIDENCE }}
+          if-no-files-found: error
           retention-days: 7
-
-  smb-sdk:
-    needs: static
-    uses: ./.github/workflows/smb-sdk.yml
