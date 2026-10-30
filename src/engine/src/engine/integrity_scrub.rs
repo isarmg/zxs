@@ -390,27 +390,30 @@ impl IntegrityScrubPlan {
     }
 
     /// Baseline required body bytes only, not a misleading exact total I/O estimate.
-    /// Compute outside the Engine lock. Metadata/proofs/manifests add actual bytes.
-    pub fn estimated_payload_bytes(&self) -> Result<u64> {
-        self.state
-            .versions
-            .iter()
-            .try_fold(0u64, |total, (id, version)| {
-                if !matches!(
+    /// Compute outside the Engine lock, observing cancellation at each version.
+    /// Metadata/proofs/manifests add actual bytes.
+    ///
+    /// # Errors
+    /// Returns OperationAborted without a partial estimate when cancelled, or
+    /// ResourceLimit if the required body byte total exceeds u64.
+    pub fn estimated_payload_bytes(
+        &self,
+        cancellation: &IntegrityScrubCancellation,
+    ) -> Result<u64> {
+        estimate_required_payload_bytes(
+            cancellation,
+            self.state.versions.iter().map(|(id, version)| {
+                let copies = if matches!(
                     self.state.content_states.get(id),
                     None | Some(ContentState::Available)
                 ) {
-                    return Ok(total);
-                }
-                let copies = self.state.placements[id].route_slot_ids.len() as u64;
-                version
-                    .logical_size
-                    .checked_mul(copies)
-                    .and_then(|bytes| total.checked_add(bytes))
-                    .ok_or_else(|| {
-                        Error::new(ErrorCode::ResourceLimit, "scrub byte estimate exceeds u64")
-                    })
-            })
+                    self.state.placements[id].route_slot_ids.len()
+                } else {
+                    0
+                };
+                (version.logical_size, copies)
+            }),
+        )
     }
 
     /// Run outside the Engine lock; acquire exactly one version batch at a time.
@@ -777,6 +780,25 @@ fn disk_target(disk: &DiskConfig) -> IntegrityScrubTarget {
     IntegrityScrubTarget::Disk {
         slot_id: disk.slot_id.clone(),
     }
+}
+
+fn estimate_required_payload_bytes(
+    cancellation: &IntegrityScrubCancellation,
+    versions: impl IntoIterator<Item = (u64, usize)>,
+) -> Result<u64> {
+    cancellation.checkpoint()?;
+    let mut total = 0u64;
+    for (logical_size, copies) in versions {
+        cancellation.checkpoint()?;
+        total = logical_size
+            .checked_mul(copies as u64)
+            .and_then(|bytes| total.checked_add(bytes))
+            .ok_or_else(|| {
+                Error::new(ErrorCode::ResourceLimit, "scrub byte estimate exceeds u64")
+            })?;
+    }
+    cancellation.checkpoint()?;
+    Ok(total)
 }
 
 // These two causes mean the scan did not finish, not that an object was unhealthy.

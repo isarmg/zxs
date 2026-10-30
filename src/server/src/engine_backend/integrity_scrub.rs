@@ -44,12 +44,23 @@ impl EngineBackend {
             }
             .map_err(error)?
         };
-        let expected_payload_bytes = plan.estimated_payload_bytes().map_err(error)?;
+        let expected_payload_bytes = match plan.estimated_payload_bytes(cancellation) {
+            Ok(bytes) => Some(bytes),
+            Err(cause) if cause.code() == storage_engine::ErrorCode::OperationAborted => None,
+            Err(cause) => return Err(error(cause)),
+        };
+        // An interrupted estimate has no total to publish. The same one-way
+        // token makes run return Cancelled before storage reads; retain that
+        // report and the ordinary live-owner finish instead of rejecting it.
         let outcome = plan.run(
             cancellation,
             |plan, version| crate::lock(&self.engine).admit_integrity_scrub_batch(plan, version),
             read,
-            |report| observe(report, expected_payload_bytes),
+            |report| {
+                if let Some(bytes) = expected_payload_bytes {
+                    observe(report, bytes);
+                }
+            },
         );
         Ok(crate::lock(&self.engine).finish_integrity_scrub(outcome))
     }

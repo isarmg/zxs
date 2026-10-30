@@ -52,8 +52,13 @@ payload availability 分开，消费者不得混为“一切写入都失效”�
 `prepare_integrity_scrub`，O(member) 捕获 `Arc<State>`、已准入 config、snapshot
 和各 member 的准确 writer tail，不复制整棵 State、不做磁盘 I/O。
 已有 detached commit preparation 由具体 `CommitPreparationBusy` 拒绝。
-`estimated_payload_bytes` 在锁外计算 required payload 字节下界；不是 metadata、
-proof、checksum 在内总 I/O 的伪精确估计。
+`estimated_payload_bytes(&cancellation)` 在锁外计算 required payload 字节下界；
+进入遍历前、每个版本及结束时检查取消，取消返回 `OperationAborted`，不返回部分
+字节总数。稀疏缺省与显式 AVAILABLE 都按 required route 计费，PURGED/MIGRATED
+不计正文；乘法及累加溢出仍为 `ResourceLimit`。不是 metadata、proof、checksum
+在内总 I/O 的伪精确估计。在线 adapter 在估计被取消时保留“无完整估计”，沿同一
+单向 token 运行并由原 live Engine 接纳 `Cancelled` 报告；不发布虚构总数、不进行
+存储读取，也不把正常取消改成准入拒绝。
 
 `plan.run` 在锁外真实读取 metadata，继续复用唯一 schema/hash/closure 验证器。
 当前无删除这些已发布 immutable metadata 的 runtime GC；将来添加时必须同时
@@ -126,6 +131,9 @@ State-only 与历史-only metadata 缺失/损坏、history root 丢失、全副�
 取消、preparation fencing、真实身份替换边界、journal 锚与截断、悬空链接父目录和 issue 上限。
 `degraded_recovery/tests.rs` 另覆盖真实降级恢复后合法缺 proof 的精确分类及其它版本的反例。
 `integrity_scrub/metadata_tests.rs` 覆盖对象预算和单次扫描共享页去重。
+主巡检测试另覆盖估计遍历前、版本之间及结束时取消，AVAILABLE/稀疏状态与
+PURGED/MIGRATED 计费，以及乘法/累加溢出；服务端专属巡检测试覆盖手动及周期
+估计取消后无估计进度、无存储读取且保留 `Cancelled` 报告。
 这些是源码测试项目，执行结果以中央验证记录为准；本文不把静态存在当作已通过。
 
 锁外测试还覆盖真实线程上的并发 publication 与固定 frontier、读回调不持 Engine

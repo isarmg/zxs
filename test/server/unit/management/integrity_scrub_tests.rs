@@ -181,6 +181,48 @@ fn single_job_controls_do_not_wait_for_engine_and_cancel_does_not_detach() {
 }
 
 #[test]
+fn cancelled_payload_planning_returns_a_report_without_estimate_or_storage_reads() {
+    let fixture = Fixture::dormant(IntegrityScrubPolicy::default());
+    let engine = fixture.engine();
+    let policy =
+        IntegrityScrubPolicy::periodic(positive(60), positive(120), positive(1024)).unwrap();
+    let schedule = engine.begin_integrity_scrub_schedule(policy).unwrap();
+    std::fs::remove_file(fixture._directory.path().join("disk/disk.json")).unwrap();
+    for admission in [
+        ScrubExecution::Standalone(&fixture.identity),
+        ScrubExecution::Scheduled {
+            identity: Some(&fixture.identity),
+            owner: &schedule,
+        },
+    ] {
+        let cancellation = IntegrityScrubCancellation::new();
+        cancellation.cancel();
+        let report = engine
+            .run_integrity_scrub(
+                admission,
+                &cancellation,
+                |_, _| panic!("interrupted planning has no completed estimate to publish"),
+                |_| panic!("cancelled planning must finish before storage reads"),
+            )
+            .unwrap();
+        assert!(matches!(
+            report.completion,
+            IntegrityScrubCompletion::Cancelled
+        ));
+        assert!(!report.is_healthy());
+        assert_eq!(report.metadata_members_checked, 0);
+        assert_eq!(report.metadata_objects_verified, 0);
+        assert_eq!(report.journal_frames_verified, 0);
+        assert_eq!(report.identity_failures, 0);
+        assert_eq!(report.metadata_failures, 0);
+        assert_eq!(report.payload_copies_required, 0);
+    }
+    engine.test_with_engine_locked(|engine| {
+        assert!(!engine.has_current_integrity_scrub_coverage());
+    });
+}
+
+#[test]
 fn queued_manual_identity_is_revalidated_before_any_scan() {
     let mut fixture = Fixture::new(IntegrityScrubPolicy::default());
     let (release, holder) = hold_engine(fixture.engine());
