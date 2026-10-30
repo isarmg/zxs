@@ -64,13 +64,44 @@ fn path_node_receipts_are_ordered_isolated_and_replayed_after_later_renames() {
         .collect::<Vec<_>>();
     assert_eq!(expected.len(), 2);
     assert_eq!(receipt.result["file_node_ids"], json_codec::json!(expected));
+    let older_nodes = engine.state().file_path_nodes.clone();
+    let older_bytes = canonical_json(&older_nodes).unwrap();
     rename(&mut engine, &repo, "second", "third");
     assert_eq!(engine.state().file_path_nodes.len(), 6);
+    assert_eq!(older_nodes.len(), 4);
+    assert_eq!(canonical_json(&older_nodes).unwrap(), older_bytes);
+    for (id, node) in older_nodes.iter() {
+        assert!(std::ptr::eq(node, &engine.state().file_path_nodes[id]));
+    }
+    let storage_contract::MapChanges::Keys(changed) =
+        engine.state().file_path_nodes.changes_since(&older_nodes)
+    else {
+        panic!("rename lost its exact path record write set")
+    };
+    let inserted = engine
+        .state()
+        .file_path_nodes
+        .keys()
+        .filter(|id| !older_nodes.contains_key(*id))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(changed.as_ref(), &inserted);
+    assert_eq!(inserted.len(), 2);
+    let path_bytes = canonical_json(&engine.state().file_path_nodes).unwrap();
+    let path_hash = object_hash("state-page", &engine.state().file_path_nodes).unwrap();
     for reopened in [false, true] {
         if reopened {
             drop(engine);
             engine = Engine::open(&temporary.path().join("system")).unwrap();
         }
+        assert_eq!(
+            canonical_json(&engine.state().file_path_nodes).unwrap(),
+            path_bytes
+        );
+        assert_eq!(
+            object_hash("state-page", &engine.state().file_path_nodes).unwrap(),
+            path_hash
+        );
         let before = canonical_json(engine.state()).unwrap();
         let replay = engine
             .file_namespace(&repo.repository_id, change.clone(), "admin", operation)

@@ -159,6 +159,195 @@ fn merge_state_clones_share_payloads_but_keep_exact_writes_and_old_snapshots() {
     );
 }
 
+fn path_records() -> BTreeMap<String, crate::FilePathNode> {
+    [("path-a", 0), ("path-文件", u64::MAX)]
+        .into_iter()
+        .map(|(id, sequence)| {
+            (
+                id.into(),
+                crate::FilePathNode {
+                    node_id: id.into(),
+                    history_tree_id: "history".into(),
+                    file_id: "file".into(),
+                    version_id: "version".into(),
+                    parent_node_ids: vec!["parent-a".into(), "父".into()],
+                    branch_id: "branch".into(),
+                    path: "目录/新📁.txt".into(),
+                    previous_path: "目录/旧.txt".into(),
+                    operation_id: "op_00000000000000000000000000000001".parse().unwrap(),
+                    author: "作者\n\"\\".into(),
+                    sequence,
+                    created_at: sequence,
+                },
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn path_records_preserve_exact_map_bytes_hashes_and_sparse_state_roundtrip() {
+    const EXPECTED: &str = concat!(
+        r#"{"path-a":{"author":"作者\n\"\\","branch_id":"branch","created_at":"0","#,
+        r#""file_id":"file","history_tree_id":"history","node_id":"path-a","#,
+        r#""operation_id":"op_00000000000000000000000000000001","#,
+        r#""parent_node_ids":["parent-a","父"],"path":"目录/新📁.txt","#,
+        r#""previous_path":"目录/旧.txt","sequence":"0","version_id":"version"},"#,
+        r#""path-文件":{"author":"作者\n\"\\","branch_id":"branch","#,
+        r#""created_at":"18446744073709551615","file_id":"file","#,
+        r#""history_tree_id":"history","node_id":"path-文件","#,
+        r#""operation_id":"op_00000000000000000000000000000001","#,
+        r#""parent_node_ids":["parent-a","父"],"path":"目录/新📁.txt","#,
+        r#""previous_path":"目录/旧.txt","sequence":"18446744073709551615","#,
+        r#""version_id":"version"}}"#,
+    );
+    let map = path_records();
+    let old: crate::TrackedMap<_> = map.clone().into();
+    let records: crate::TrackedRecords<_> = map.clone().into_iter().collect();
+    assert_eq!(
+        json_codec::to_vec(&old).unwrap(),
+        json_codec::to_vec(&records).unwrap()
+    );
+    let (old_bytes, old_hash) = crate::encode_hashed_object("state-page", &old).unwrap();
+    let (new_bytes, new_hash) = crate::encode_hashed_object("state-page", &records).unwrap();
+    assert_eq!(old_bytes, EXPECTED.as_bytes());
+    assert_eq!(new_bytes, old_bytes);
+    assert_eq!(new_hash, old_hash);
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"zxs:state-page\0");
+    digest.update(EXPECTED.as_bytes());
+    assert_eq!(old_hash, digest.finalize().to_hex().as_str());
+
+    let state = crate::State {
+        file_path_nodes: records,
+        ..Default::default()
+    };
+    let mut old_wire = json_codec::to_value(crate::State::default()).unwrap();
+    assert!(old_wire.get("file_path_nodes").is_none());
+    old_wire["file_path_nodes"] = json_codec::to_value(&map).unwrap();
+    let (old_state_bytes, old_state_hash) =
+        crate::encode_hashed_object("state", &old_wire).unwrap();
+    let (new_state_bytes, new_state_hash) = crate::encode_hashed_object("state", &state).unwrap();
+    assert_eq!(new_state_bytes, old_state_bytes);
+    assert_eq!(new_state_hash, old_state_hash);
+    println!("file_path_nodes state-page hash before/after: {old_hash}");
+    println!("file_path_nodes State hash before/after: {old_state_hash}");
+    let decoded: crate::State = json_codec::from_slice(&old_state_bytes).unwrap();
+    assert_eq!(decoded, state);
+    assert!(
+        !decoded
+            .file_path_nodes
+            .shares_storage_with(&state.file_path_nodes)
+    );
+    assert_eq!(
+        decoded
+            .file_path_nodes
+            .changes_since(&state.file_path_nodes),
+        crate::MapChanges::All
+    );
+    old_wire["file_path_nodes"] = json_codec::json!({});
+    let empty: crate::State = json_codec::from_value(old_wire).unwrap();
+    assert_eq!(empty, crate::State::default());
+    assert!(
+        json_codec::to_value(empty)
+            .unwrap()
+            .get("file_path_nodes")
+            .is_none()
+    );
+}
+
+#[test]
+fn path_state_clones_share_unchanged_records_and_track_isolated_writes() {
+    let before = crate::State {
+        file_path_nodes: path_records().into_iter().collect(),
+        ..Default::default()
+    };
+    let held = before.file_path_nodes.get_shared("path-a").unwrap();
+    let untouched = before.file_path_nodes.get_shared("path-文件").unwrap();
+    let bytes = crate::canonical_json(&before).unwrap();
+    let mut next = before.clone();
+    next.begin_tracking();
+    assert!(
+        next.file_path_nodes
+            .shares_storage_with(&before.file_path_nodes)
+    );
+    assert!(Arc::ptr_eq(
+        &held,
+        &next.file_path_nodes.get_shared("path-a").unwrap()
+    ));
+    assert!(next.file_path_nodes.get_mut("absent").is_none());
+    assert!(next.file_path_nodes.remove("absent").is_none());
+    assert!(!next.file_path_nodes.remove_discard("absent"));
+    assert!(
+        next.file_path_nodes
+            .changes_since(&before.file_path_nodes)
+            .is_empty()
+    );
+    assert!(
+        next.file_path_nodes
+            .shares_storage_with(&before.file_path_nodes)
+    );
+
+    next.file_path_nodes
+        .get_mut("path-a")
+        .unwrap()
+        .parent_node_ids
+        .push("new-parent".into());
+    assert!(!Arc::ptr_eq(
+        &held,
+        &next.file_path_nodes.get_shared("path-a").unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        &untouched,
+        &next.file_path_nodes.get_shared("path-文件").unwrap()
+    ));
+    next.file_path_nodes
+        .insert("temporary".into(), (*held).clone());
+    assert_eq!(next.file_path_nodes.remove("temporary").unwrap(), *held);
+    // History import uses Extend over owned records from its BTreeMap.
+    next.file_path_nodes
+        .extend([("imported".into(), (*held).clone())]);
+    let crate::MapChanges::Keys(keys) = next.file_path_nodes.changes_since(&before.file_path_nodes)
+    else {
+        panic!("precise path record writes became All")
+    };
+    assert_eq!(
+        keys.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["imported", "path-a", "temporary"]
+    );
+    assert_eq!(crate::canonical_json(&before).unwrap(), bytes);
+    assert_eq!(held.parent_node_ids, ["parent-a", "父"]);
+
+    let mut sibling = before.clone();
+    sibling.begin_tracking();
+    sibling
+        .file_path_nodes
+        .get_mut("path-a")
+        .unwrap()
+        .path
+        .push_str(".sibling");
+    assert_eq!(next.file_path_nodes["path-a"].path, held.path);
+    assert_eq!(before.file_path_nodes["path-a"].path, held.path);
+    drop(next);
+    assert_eq!(crate::canonical_json(&before).unwrap(), bytes);
+
+    let removed = sibling.file_path_nodes.remove("path-a").unwrap();
+    assert!(removed.path.ends_with(".sibling"));
+    assert!(sibling.file_path_nodes.remove_discard("path-文件"));
+    let crate::MapChanges::Keys(keys) = sibling
+        .file_path_nodes
+        .changes_since(&before.file_path_nodes)
+    else {
+        panic!("path record removals lost their write set")
+    };
+    assert_eq!(
+        keys.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["path-a", "path-文件"]
+    );
+    assert!(sibling.file_path_nodes.is_empty());
+    assert_eq!(crate::canonical_json(&before).unwrap(), bytes);
+    assert_eq!(untouched.parent_node_ids, ["parent-a", "父"]);
+}
+
 #[derive(Debug)]
 struct Counted {
     value: String,

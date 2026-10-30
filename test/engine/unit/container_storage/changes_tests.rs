@@ -43,7 +43,11 @@ fn full_changed_files(previous: &State, next: &State) -> BTreeSet<String> {
             files.insert(file.clone());
         }
     }
-    for (id, node) in previous.file_path_nodes.iter().chain(&next.file_path_nodes) {
+    for (id, node) in previous
+        .file_path_nodes
+        .iter()
+        .chain(next.file_path_nodes.iter())
+    {
         if !previous.file_path_nodes.contains_key(id) || !next.file_path_nodes.contains_key(id) {
             files.insert(node.file_id.clone());
         }
