@@ -14,7 +14,14 @@ pub(super) fn listing_json(engine: &AdmissionEngine, input: &Value) -> Result<Va
         );
     }
     let request = crate::ReadListing::parse(input["slot_id"].as_str().unwrap().into(), query)?;
-    let snapshot = listing::entries(engine, request)?;
+    let snapshot = match listing::capture(engine, request)? {
+        listing::ListingRead::Backup(snapshot) => snapshot,
+        listing::ListingRead::Primary(read) => {
+            let selected = read.select()?;
+            let page = selected.project(engine)?;
+            selected.finish(page)
+        }
+    };
     Ok(json_codec::to_value(crate::backend_listing::ListingResponse::from(snapshot)).unwrap())
 }
 
@@ -273,11 +280,16 @@ fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_with
     )
     .unwrap_err();
     assert_eq!(stale.code, storage_contract::ErrorCode::ListingChanged);
-    let snapshot = listing::entries(
+    let listing::ListingRead::Primary(read) = listing::capture(
         &engine,
         crate::ReadListing::parse("P01".into(), Default::default()).unwrap(),
     )
-    .unwrap();
+    .unwrap() else {
+        panic!("primary disk must select primary enumeration");
+    };
+    let selected = read.select().unwrap();
+    let page = selected.project(&engine).unwrap();
+    let snapshot = selected.finish(page);
     drop(engine);
     let wire =
         json_codec::to_value(crate::backend_listing::ListingResponse::from(snapshot)).unwrap();
