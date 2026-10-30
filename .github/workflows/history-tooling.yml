@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing]
 
 permissions:
   contents: read
@@ -124,6 +124,10 @@ jobs:
               '096f9a7f60025ca14781b179d9e7415f10c5b846', '22844376a82d99dc3c8f6422566eed21d02c932d',
           ):
               raise SystemExit('Quality reproduction requires the exact frozen source and tree')
+          if os.environ['SCOPE'] == 'detached-listing' and (source, tree) != (
+              '5ee74edd577c4ea1ba1568e667ae1bcc19549134', '9d79967107c42cf4c16df73aa93aa79f87bb878f',
+          ):
+              raise SystemExit('Detached listing diagnostics require the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -549,6 +553,35 @@ jobs:
           groups['payload-proof-format'] = [groups['payload-proof-budget'][0]]
           groups['payload-quality'] = [dict(id='payload-quality', quality=True,
               command='ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality')]
+          listing_witnesses = [
+              'writers_finish_during_primary_scan_and_changed_pages_never_project_old_indices',
+              'revoked_identity_wins_over_a_changed_primary_listing',
+              'auth_only_publication_keeps_primary_snapshot_selection_and_bounded_projection',
+              'same_snapshot_after_engine_reopen_rejects_namespace_and_virtual_repository_candidates',
+              'primary_capture_keeps_cursor_error_precedence_before_disk_and_directory_errors',
+              'primary_scan_preserves_virtual_root_recursive_counts_unicode_and_directory_choices',
+              'canceled_primary_listing_retains_existing_slot_auth_and_view_until_worker_exits',
+          ]
+          groups['detached-listing'] = [
+              dict(id='detached-listing-format', format_base='286ff86e73f52657fbf6f96b1fcc846fee1a4173',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='detached-listing-server', cache='server', package='storage-server',
+                  test_groups=json.dumps([
+                      dict(selector='engine_backend::file_manager::listing::detached_tests::', count=7,
+                          required_suffixes=listing_witnesses),
+                      dict(selector='engine_backend::file_manager::listing_integration_tests::', count=4),
+                      dict(selector='engine_backend::file_manager::pagination::tests::', count=9),
+                      dict(selector='engine_backend::file_manager::listing::tests::', count=1),
+                  ]), command='Detached listing seven witnesses and complete existing listing/pagination preservation groups'),
+              dict(id='detached-listing-http', cache='server', package='storage-server',
+                  test_groups=json.dumps([
+                      dict(selector='paginated_listing::', test_target='http_engine', count=2, required_suffixes=[
+                          'paginated_listing_rechecks_auth_and_rejects_changed_snapshots',
+                          'canonical_equivalent_queries_resolve_and_browse_without_rewriting_display_names']),
+                      dict(selector='backup_namespace::', test_target='http_engine', count=4, required_suffixes=[
+                          'backup_path_collisions_are_rejected_for_every_session_without_overwriting_bodies']),
+                  ]), command='Real HTTP paginated listing and backup namespace/collision groups'),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
