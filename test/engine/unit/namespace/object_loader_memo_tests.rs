@@ -71,7 +71,7 @@ fn admission_node_memo_keeps_domains_separate_and_rejects_invalid_references() {
     assert_eq!(reads.get(), 2);
     let invalid = NamespaceReference {
         kind: NamespaceRefKind::Page,
-        hash: "invalid".into(),
+        hash: "g".repeat(64),
     };
     let cached = source.node(&root.root).unwrap();
     source
@@ -79,7 +79,7 @@ fn admission_node_memo_keeps_domains_separate_and_rejects_invalid_references() {
         .as_ref()
         .unwrap()
         .borrow_mut()
-        .insert("namespace-page/invalid".into(), cached, 1);
+        .insert(crate::segment_store::NamespaceCacheKey::Page([b'g'; 64]), cached, 1);
     assert!(source.node(&invalid).is_err());
     assert_eq!(reads.get(), 2);
     source.node(&root.root).unwrap();
