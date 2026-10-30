@@ -72,12 +72,7 @@ fn healthy_scan_completed_after_max_age_has_no_usable_coverage() {
     let report = engine.finish_integrity_scrub(outcome);
     assert!(report.is_healthy(), "{report:?}");
     assert!(!engine.has_current_integrity_scrub_coverage());
-    assert!(
-        engine
-            .planning_context()
-            .capture_scrub_coverage()
-            .is_none()
-    );
+    assert!(engine.planning_context().capture_scrub_coverage().is_none());
 }
 
 #[test]

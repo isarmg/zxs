@@ -160,7 +160,12 @@ fn terminal_diagnostics_keep_real_read_totals_and_the_running_clock() {
         bytes
     });
     let control = &fixture.backend.scrub.control;
-    assert!(control.auth.set(crate::lock(&fixture.auth).reader()).is_ok());
+    assert!(
+        control
+            .auth
+            .set(crate::lock(&fixture.auth).reader())
+            .is_ok()
+    );
     {
         let mut state = crate::lock(&control.state);
         state.lifecycle = Lifecycle::Ready;
@@ -208,7 +213,10 @@ fn terminal_diagnostics_keep_real_read_totals_and_the_running_clock() {
         wire["latest"]["diagnostics"]["bytes_read"],
         expected_reads.to_string()
     );
-    assert_eq!(wire["latest"]["diagnostics"]["feasibility"], "unknown_total");
+    assert_eq!(
+        wire["latest"]["diagnostics"]["feasibility"],
+        "unknown_total"
+    );
 }
 
 #[test]
