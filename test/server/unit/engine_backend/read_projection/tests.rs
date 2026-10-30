@@ -1446,6 +1446,7 @@ fn directory_scope_order_agrees_across_full_summary_listing_and_selection() {
                 ]),
             )
             .unwrap(),
+            &crate::tests::history_read_control(),
         )
         .unwrap();
     assert_eq!(

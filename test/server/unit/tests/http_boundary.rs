@@ -768,6 +768,7 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadListing,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::ListingSnapshot, crate::ApiError> {
         panic!("private listing panic detail")
     }

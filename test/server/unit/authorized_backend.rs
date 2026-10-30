@@ -856,7 +856,9 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadListing,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::ListingSnapshot, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record(
             "listing",
             Some(identity),
@@ -1909,7 +1911,7 @@ impl Fixture {
                     json!({"returned_by":"directory_selection"})
                 })
             }),
-            ("listing", backend.listing(identity, crate::ReadListing::parse("P01".into(), [("path".into(), "Folder".into())].into()).unwrap()).map(|snapshot| { assert_eq!(snapshot.path, "Folder"); json!({"returned_by":"listing"}) })),
+            ("listing", backend.listing(identity, crate::ReadListing::parse("P01".into(), [("path".into(), "Folder".into())].into()).unwrap(), &crate::tests::history_read_control()).map(|snapshot| { assert_eq!(snapshot.path, "Folder"); json!({"returned_by":"listing"}) })),
             ("directory_scopes",backend.directory_scopes(identity,crate::ReadDirectoryScopes {repository_id:"repository",filter:&crate::DirectoryBranchFilter::Directory(name_policy::LookupPath::parse("Folder").unwrap()),projection:crate::DirectoryBranchProjection::Summary}).map(|snapshot|{assert_eq!(snapshot.repository_id,"repository");assert!(matches!(snapshot.branches,crate::DirectoryScopeRows::Summary(rows) if rows.is_empty()));json!({"returned_by":"directory_scopes"})})),
             (
                 "default_directory_branch",
@@ -2843,6 +2845,34 @@ async fn graph_route_cancellation_retains_capacity_until_worker_checkpoint() {
     cancelled_history_route_keeps_capacity(graph_request()).await;
 }
 
+#[tokio::test]
+async fn listing_route_cancellation_retains_shared_capacity_until_worker_checkpoint() {
+    cancelled_history_route_keeps_capacity(listing_request()).await;
+}
+
+#[tokio::test]
+async fn listing_response_retains_backend_permit_until_collected_bytes_drop() {
+    use service_stack::ServiceExt;
+    let fixture = Fixture::new();
+    let (app, scans, backends) = history_route_fixture(&fixture);
+    let response = app.oneshot(listing_request()).await.unwrap();
+    assert_eq!(response.status(), ::http::StatusCode::OK);
+    assert_eq!(scans.available_permits(), 2);
+    assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS - 1);
+    let bytes = http_routing::body::to_bytes(
+        response.into_body(),
+        storage_contract::client_protocol::MAX_RESPONSE_BYTES,
+    )
+    .await
+    .unwrap();
+    let value: Value = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(value["slot_id"], "P01");
+    assert_eq!(value["entries"], json!([]));
+    assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS - 1);
+    drop(bytes);
+    assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS);
+}
+
 async fn cancelled_history_route_keeps_capacity(
     first_request: http_routing::http::Request<http_routing::body::Body>,
 ) {
@@ -2884,6 +2914,8 @@ async fn cancelled_history_route_keeps_capacity(
     let overloaded = app.clone().oneshot(graph_request()).await.unwrap();
     assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
     let overloaded = app.clone().oneshot(activity_request()).await.unwrap();
+    assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
+    let overloaded = app.clone().oneshot(listing_request()).await.unwrap();
     assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(history_read_slots.available_permits(), 0);
     assert_eq!(backend_slots.available_permits(), HTTP_BACKEND_SLOTS - 2);
@@ -2974,6 +3006,13 @@ fn graph_request() -> http_routing::http::Request<http_routing::body::Body> {
 fn activity_request() -> http_routing::http::Request<http_routing::body::Body> {
     http_routing::http::Request::builder()
         .uri("/api/file-manager/history?unused=unchanged")
+        .body(http_routing::body::Body::empty())
+        .unwrap()
+}
+
+fn listing_request() -> http_routing::http::Request<http_routing::body::Body> {
+    http_routing::http::Request::builder()
+        .uri("/api/file-manager/disks/P01/entries")
         .body(http_routing::body::Body::empty())
         .unwrap()
 }

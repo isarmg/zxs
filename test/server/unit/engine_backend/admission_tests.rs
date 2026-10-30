@@ -339,7 +339,11 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
             )
             .unwrap();
         backend
-            .listing(&caller(), listing_request("P01", &repo.name))
+            .listing(
+                &caller(),
+                listing_request("P01", &repo.name),
+                &crate::tests::history_read_control(),
+            )
             .unwrap();
         backend
             .backup_configuration(
@@ -450,7 +454,11 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
     );
     assert_eq!(
         backend
-            .listing(&caller(), listing_request("P01", &repo.name))
+            .listing(
+                &caller(),
+                listing_request("P01", &repo.name),
+                &crate::tests::history_read_control()
+            )
             .err()
             .unwrap()
             .status,
@@ -532,7 +540,11 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
         for (slot, path) in [("P01", "missing"), ("missing", "")] {
             assert!(
                 backend
-                    .listing(&caller(), listing_request(slot, path))
+                    .listing(
+                        &caller(),
+                        listing_request(slot, path),
+                        &crate::tests::history_read_control()
+                    )
                     .is_err()
             );
         }
@@ -579,7 +591,11 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
         );
         assert_eq!(
             backend
-                .listing(&caller(), listing_request("P01", &repo.name))
+                .listing(
+                    &caller(),
+                    listing_request("P01", &repo.name),
+                    &crate::tests::history_read_control()
+                )
                 .err()
                 .unwrap()
                 .code,
@@ -675,7 +691,11 @@ fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() 
             .any(|r| r.file_manager_root)
     );
     backend
-        .listing(&caller(), listing_request("P01", "new-folder"))
+        .listing(
+            &caller(),
+            listing_request("P01", "new-folder"),
+            &crate::tests::history_read_control(),
+        )
         .unwrap();
     assert_eq!(
         backend
@@ -710,7 +730,11 @@ fn file_manager_borrowed_tree_reads_preserve_listing_and_path_context() {
     use crate::Backend;
     let (_root, backend, repo, entry) = backend_fixture();
     let listing = backend
-        .listing(&caller(), listing_request("P01", &repo.name))
+        .listing(
+            &caller(),
+            listing_request("P01", &repo.name),
+            &crate::tests::history_read_control(),
+        )
         .unwrap();
     let listing =
         json_codec::to_value(crate::backend_listing::ListingResponse::from(listing)).unwrap();
@@ -748,6 +772,7 @@ fn file_manager_borrowed_tree_reads_preserve_listing_and_path_context() {
         .listing(
             &caller(),
             listing_request("P01", &format!("{}/missing", repo.name)),
+            &crate::tests::history_read_control(),
         )
         .err()
         .unwrap();

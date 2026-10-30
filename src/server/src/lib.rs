@@ -815,6 +815,7 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         request: ReadListing,
+        control: &crate::HistoryReadControl,
     ) -> Result<ListingSnapshot, ApiError>;
     fn mutate_disk_directory(
         &self,
@@ -1480,8 +1481,10 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &Identity,
         request: ReadListing,
+        control: &crate::HistoryReadControl,
     ) -> Result<ListingSnapshot, ApiError> {
-        self.backend.listing(&self.current(identity)?, request)
+        self.backend
+            .listing(&self.current(identity)?, request, control)
     }
     fn mutate_disk_directory(
         &self,

@@ -401,6 +401,7 @@ impl Backend for TestBackend {
         &self,
         _identity: &crate::auth::Identity,
         request: crate::ReadListing,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::ListingSnapshot, crate::ApiError> {
         Ok(crate::ListingSnapshot {
             slot_id: request.slot_id().into(),
@@ -1696,8 +1697,9 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             &self,
             identity: &crate::auth::Identity,
             request: crate::ReadListing,
+            control: &crate::HistoryReadControl,
         ) -> Result<crate::ListingSnapshot, crate::ApiError> {
-            self.delegate.listing(identity, request)
+            self.delegate.listing(identity, request, control)
         }
         fn mutate_disk_directory(
             &self,

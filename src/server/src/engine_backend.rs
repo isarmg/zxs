@@ -66,6 +66,23 @@ pub struct EngineBackend {
     operation_health_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 impl EngineBackend {
+    fn finish_listing(
+        &self,
+        identity: &Identity,
+        result: Result<crate::ListingSnapshot, ApiError>,
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ListingSnapshot, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::activity::checkpoint(control)?;
+        // Business mutations do not invalidate an already captured response.
+        // Its original token still rejects subsequent stale cursor requests.
+        result
+    }
+
     fn finish_tree_snapshot(
         &self,
         identity: &Identity,
@@ -1318,16 +1335,17 @@ impl Backend for EngineBackend {
         &self,
         identity: &Identity,
         request: crate::ReadListing,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::ListingSnapshot, ApiError> {
         let engine = self
             .engine
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        let mut snapshot = file_manager::listing::entries(&engine, request)?;
+        let plan = file_manager::listing::capture(&engine, request, control)?;
         drop(engine);
-        directory_scopes::sort_choices(&mut snapshot.directory_branches);
-        Ok(snapshot)
+        let result = plan.read(control);
+        self.finish_listing(identity, result, control)
     }
     fn mutate_disk_directory(
         &self,

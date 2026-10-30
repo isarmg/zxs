@@ -559,8 +559,9 @@ impl Backend for LostCommitReply {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadListing,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::ListingSnapshot, crate::ApiError> {
-        self.inner.listing(identity, request)
+        self.inner.listing(identity, request, control)
     }
     fn mutate_disk_directory(
         &self,

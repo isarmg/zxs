@@ -218,6 +218,33 @@ fn listed_current_entry(
     entry: &storage_contract::Entry,
     prefix: &str,
 ) -> Result<crate::ListingEntry, ApiError> {
+    let context = engine.file_context_for_current_entry(&repo.repository_id, entry);
+    let source = super::wire::current_entry_source_resolved(
+        engine,
+        &repo.main_branch_id,
+        entry,
+        context.as_deref(),
+    )
+    .map_err(error)?;
+    Ok(listed_entry(
+        engine.state(),
+        repo,
+        entry,
+        prefix,
+        context.as_deref(),
+        source.as_deref(),
+    ))
+}
+
+/// Project the already resolved current entry without reading another namespace.
+fn listed_entry(
+    state: &storage_contract::State,
+    repo: &Repository,
+    entry: &storage_contract::Entry,
+    prefix: &str,
+    context: Option<&storage_contract::FileContext>,
+    source: Option<&str>,
+) -> crate::ListingEntry {
     use crate::{ListingEntry, ListingLocation, ListingVersion};
     #[cfg(test)]
     LISTED_ENTRY_PROJECTIONS.set(LISTED_ENTRY_PROJECTIONS.get() + 1);
@@ -226,7 +253,6 @@ fn listed_current_entry(
     } else {
         format!("{prefix}/{}", entry.path)
     };
-    let context = engine.file_context_for_current_entry(&repo.repository_id, entry);
     let (version, node_id, read_only) = match entry.kind {
         storage_contract::NamespaceEntryKind::Directory => (
             ListingVersion::Directory(entry.version_id.clone()),
@@ -234,26 +260,13 @@ fn listed_current_entry(
             None,
         ),
         storage_contract::NamespaceEntryKind::File => {
-            let content = super::branch::capture_content(
-                engine.state(),
-                Some(&entry.version_id),
-                super::wire::current_entry_source_resolved(
-                    engine,
-                    &repo.main_branch_id,
-                    entry,
-                    context.as_deref(),
-                )
-                .map_err(error)?
-                .as_deref(),
-            );
+            let content = super::branch::capture_content(state, Some(&entry.version_id), source);
             let node = context
-                .as_ref()
                 .and_then(|context| context.node_id.clone())
                 .unwrap_or_else(|| entry.version_id.clone());
-            let read_only = context.as_ref().is_some_and(|context| {
+            let read_only = context.is_some_and(|context| {
                 context.inherited_from.is_none()
-                    && engine
-                        .state()
+                    && state
                         .branches
                         .get(&context.branch_id)
                         .is_some_and(|branch| branch.state != storage_contract::BranchState::Active)
@@ -268,7 +281,7 @@ fn listed_current_entry(
             )
         }
     };
-    Ok(ListingEntry {
+    ListingEntry {
         entry_id: entry.entry_id.clone(),
         name: entry.name().into(),
         path: display,
@@ -281,13 +294,11 @@ fn listed_current_entry(
             repository_path: Some(entry.path().into()),
             container: entry.kind == storage_contract::NamespaceEntryKind::File,
             selected_branch_id: context
-                .as_ref()
                 .map(|context| context.branch_id.clone())
-                .or_else(|| engine.state().file_selections.get(&entry.file_id).cloned()),
+                .or_else(|| state.file_selections.get(&entry.file_id).cloned()),
         }),
         note: Some(
-            engine
-                .state()
+            state
                 .file_notes
                 .get(&entry.file_id)
                 .cloned()
@@ -297,7 +308,7 @@ fn listed_current_entry(
         read_only,
         backup: false,
         historical_only: None,
-    })
+    }
 }
 fn directory(name: &str, display: &str, id: &str) -> crate::ListingEntry {
     crate::ListingEntry {

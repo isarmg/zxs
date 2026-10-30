@@ -423,9 +423,10 @@ impl Backend for PausedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadListing,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::ListingSnapshot, crate::ApiError> {
         self.enter();
-        self.inner.listing(identity, request)
+        self.inner.listing(identity, request, control)
     }
     fn mutate_disk_directory(
         &self,
@@ -1470,6 +1471,7 @@ impl Request {
                 .listing(
                     identity,
                     crate::ReadListing::parse("missing-slot".into(), Default::default()).unwrap(),
+                    &crate::tests::history_read_control(),
                 )
                 .map(|_| ()),
             Self::DirectoryScopes => {

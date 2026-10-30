@@ -39,6 +39,8 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 
 文件列表分页使用 `path/query/limit/cursor`；`limit` 默认 200、范围 1–500。`query` 是名称的 Unicode 小写子串，先在完整直接子项集合过滤，再按目录优先、小写名称、规范化名称、原名称、显示路径、身份确定排序。响应 `total_entries` 是匹配直接子项十进制字符串，`directory_file_count` 仍为未过滤后代文件数。`next_cursor/previous_cursor` 为空表示相应方向结束；`snapshot` 绑定业务代数和磁盘配置。改变盘位、目录、搜索或页大小须丢弃游标；业务状态变化返回 `409 LISTING_CHANGED`，不得静默拼接不同快照。认证发布不改变业务代数，每页仍重新校验当前管理员。游标不是授权凭据，不保持服务端大缓存。
 
+主盘列表读取捕获同一业务代数与命名空间，锁外扫描直接子项，完成前重验当前身份。并发写入后已捕获响应仍可返回，其后续旧游标按上述规则拒绝。列表 HTTP 与图、活动、整树读取共享扫描并发槽与既有工作期限；取消信号在主盘每页、每项及元数据页读取中检查。完整响应编码上限采用现有 `MAX_RESPONSE_BYTES` = 8 MiB，超过时返回 `RESOURCE_LIMIT_EXCEEDED`，不截断条目或目录分支摘要。备份目录的全局冲突扫描仍持锁，取消在其前后检查。
+
 成对提供 `selected_path/selected_entry_id` 时，`selected_entry` 独立于页和搜索按精确条目身份及路径的规范等价键解析当前目录中的条目，并返回已保存的显示拼写；返回 `null` 才表示不存在，不能根据条目不在当前页推断删除。同一身份的不同路径别名仍分别匹配。`selected_path` 的末级名称使用已有名称引用校验，父路径须与本次目录的键一致；显示路径可能额外包含仓库名称前缀，不能把这个前缀计入仓库内存储路径的 200 个 UTF-16 代码单元预算而误拒合法条目。每次最多增加一项投影。目录分支只返回摘要，不携带 `entries/file_contexts/file_branches/inherited_files/directory_refs`；分支数量本身尚未分页。
 
 批量准备通过只读 `POST /api/repositories/{repo}/directory-branches` 提交 `{path,sources:[{directory_branch_id,expected_tree_id}],entries:[{entry_id,path}]}`。服务器核对捕获的作用域、子树头和直接子项，返回摘要及 `{entry_id,path,selected_path}`；`selected_path` 关联原选择，避免别名子集被误认为唯一身份。源集合为空是权威结果，不得用同路径旧作用域补齐。每个数组最多 500 项、乘积最多 10000，超限明确拒绝；目标选择用 `GET .../directory-branches?path=...&summary=true`。这不是写入授权，最终变更仍重新核对全部身份与树基线，Cookie POST 仍要求 CSRF。 同身份的 NFC / NFD 等价选择视为重复输入；别名匹配按路径键区分，返回的 `selected_path` 保留请求拼写用于关联，`path` 保留已存储拼写。

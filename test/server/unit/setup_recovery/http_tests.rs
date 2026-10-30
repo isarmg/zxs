@@ -370,6 +370,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadListing,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::ListingSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
