@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser]
 
 permissions:
   contents: read
@@ -160,8 +160,8 @@ jobs:
               '7a38df46cbec602bc097bd1cac793001a307f27c', '70c3fef9d995afd8017608bd95a966f3ae9e137d',
           ):
               raise SystemExit('History window repair requires the exact strict-parser and consumer successor')
-          if os.environ['SCOPE'] == 'history-window-web' and (source, tree) != (
-              'db0a2a45ce713d987adeebbcb2b51b650e7c49d2', '9383f4b8dd3bf111a77608244a582bc002e5c802',
+          if os.environ['SCOPE'] in ('history-window-web', 'history-window-web-browser') and (source, tree) != (
+              '863efb53dcb600443fbcb759d0ea204e5e943d4a', '3068e96d78e59dfc5cdccc3e71d81106167c65e2',
           ):
               raise SystemExit('History window Web checkpoint requires the exact cross-layer source and tree')
           if os.environ['SCOPE'] == 'scrub-terminal-diagnostics' and (source, tree) != (
@@ -746,16 +746,16 @@ jobs:
               dict(groups['payload-quality'][0], id='history-window-web-quality'),
               dict(id='history-window-web-native', cache='web-app', package='web-app',
                   test_groups=json.dumps([
-                      dict(selector='files::', required_suffixes=[
+                      dict(selector='files::', count=277, required_suffixes=[
                           'stale_auxiliary_failure_cannot_invalidate_or_release_a_newer_read',
                           'current_session_401_is_checked_before_any_obsolete_resource_fence',
                           'page_identity_cannot_change_file_root_collection_limit_query_or_action_capability',
                           'utf8_fragments_are_replaced_with_exact_ranges_and_explicit_right_boundary',
                           'a_session_transition_releases_every_history_read_generation']),
                   ]), command='Actual file-history consumer and UI session test inventories and native execution'),
-              dict(id='history-window-web-production', web_production=True,
-                  command='bash .github/scripts/check.sh web-production'),
           ]
+          groups['history-window-web-browser'] = [dict(id='history-window-web-production', web_production=True,
+              command='bash .github/scripts/check.sh web-production')]
           groups['scrub-terminal-diagnostics'] = [
               dict(id='scrub-terminal-format', format_base='096f9a7f60025ca14781b179d9e7415f10c5b846',
                   command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
@@ -1238,8 +1238,8 @@ jobs:
           retention-days: 7
 
   native-release-browser:
-    name: ${{ inputs.scope == 'history-window-web' && 'Real Chrome history windows and observer lifetime' || 'Extracted native release and browser acceptance' }}
-    if: inputs.scope == 'native-release-acceptance' || inputs.scope == 'history-window-web'
+    name: ${{ inputs.scope == 'history-window-web-browser' && 'Real Chrome history windows and observer lifetime' || 'Extracted native release and browser acceptance' }}
+    if: inputs.scope == 'native-release-acceptance' || inputs.scope == 'history-window-web-browser'
     needs: diagnostic
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1320,7 +1320,7 @@ jobs:
           python3 .github/scripts/check-csr-browser.py 2>&1 | tee .native-diagnostics/csr-browser.log
           bash .github/scripts/release-assemble.sh 2>&1 | tee .native-diagnostics/assembly.log
       - name: Exercise real Chrome history windows and owner disposal
-        if: inputs.scope == 'history-window-web'
+        if: inputs.scope == 'history-window-web-browser'
         env:
           ZXS_REQUIRE_BROWSER: '1'
           ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
@@ -1329,7 +1329,7 @@ jobs:
           grep -Fx 'PASS synthetic history AbortSignal replacement, late completion ownership, real-file selection and navigation cleanup' .native-diagnostics/history-window-browser.log
           grep -Fx 'PASS synthetic 32-node window replacement/observer disposal, real-ID tag and merge basis review, replace-only UTF-8 fields and stale auxiliary delivery (no writes submitted)' .native-diagnostics/history-window-browser.log
       - name: Retain history window browser failure diagnostics
-        if: always() && inputs.scope == 'history-window-web'
+        if: always() && inputs.scope == 'history-window-web-browser'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: history-window-browser-failure-${{ inputs.source_sha }}
