@@ -338,7 +338,7 @@ def measure_implementation(run, binary, args, checkpoint):
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=('final', 'observer-validation'), required=True,
+    parser.add_argument('--mode', choices=('final', 'observer-validation', 'attribution'), required=True,
                         help='observer validation cannot satisfy final candidate acceptance')
     parser.add_argument('--trace-observer', choices=('plain', 'seccomp-bpf'), default='plain')
     parser.add_argument('--observer-probe', type=Path,
@@ -361,6 +361,8 @@ def parse_arguments():
         parser.error('sizes must be unique')
     if args.mode == 'observer-validation' and (args.sizes != [500] or args.pair_index != 3):
         parser.error('observer-validation requires --sizes 500 --pair-index 3')
+    if args.mode == 'attribution' and (args.sizes != [500] or args.pair_index not in (0, 1) or args.trace_observer != 'plain'):
+        parser.error('attribution requires exactly500files, pair0or1 and plain/untraced observer')
     return args
 
 

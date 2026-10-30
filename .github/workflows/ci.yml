@@ -1,5 +1,5 @@
 # Verification-only carrier; publish as ci.yml on its separate verification branch.
-name: Owned-decode namespace 500-file smoke only
+name: Namespace attribution diagnostic only
 on:
   push:
     branches: [verify/adoption-performance-stage-a-20261030]
@@ -10,7 +10,7 @@ concurrency:
   group: namespace-stage-a-smoke-${{ github.ref }}
   cancel-in-progress: false
 env:
-  ZXS_BENCH_MODE: 'final'
+  ZXS_BENCH_MODE: 'attribution'
   CARGO_NET_OFFLINE: 'true'
   CARGO_INCREMENTAL: '0'
   CARGO_BUILD_JOBS: '2'
@@ -60,8 +60,8 @@ jobs:
           path: candidate
       - name: Run actual tooling boundary regressions
         run: |
-          python3 harness/test/engine/bench/namespace_adoption/test_harness.py
-          python3 harness/test/engine/bench/namespace_adoption/test_controller.py
+          env -u ZXS_BENCH_MODE python3 harness/test/engine/bench/namespace_adoption/test_harness.py
+          env -u ZXS_BENCH_MODE python3 harness/test/engine/bench/namespace_adoption/test_controller.py
       - name: Authenticate products and install exact standalone adapters
         id: prepare
         shell: bash
@@ -119,7 +119,7 @@ jobs:
               selected[name] = artifacts
           (evidence / 'actual-engine-features.json').write_text(json.dumps(selected,indent=2)+'\n')
           PY
-      - name: Confirm source identity after compilation
+      - name: Confirm exact base plus declared instrumentation identity
         if: always()
         shell: bash
         run: |
@@ -135,7 +135,7 @@ jobs:
           for label,identity in selected['products'].items():
               actual=artifacts.source_identity(root/label,root/'harness'/identity['adapter_path'],identity)
               assert actual==original['products'][label]
-          (out/'source-unchanged.txt').write_text('Exact selected source, standalone adapter and manifest wiring unchanged.\n')
+          (out/'source-unchanged.txt').write_text('Exact declared base source, instrumentation overlay, standalone adapter and manifest wiring unchanged.\n')
           PYCODE
       - name: Seal this run's exact binary identity
         id: seal
@@ -163,7 +163,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
   paired:
-    name: Owned-decode smoke pair (${{ matrix.files }} files, repetition ${{ matrix.pair }})
+    name: Attribution control/overlay pair (${{ matrix.files }} files, repetition ${{ matrix.pair }})
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -172,7 +172,7 @@ jobs:
       max-parallel: 2
       matrix:
         files: [500]
-        pair: [0, 1, 2, 3]
+        pair: [0, 1]
     env:
       ZXS_EXPECTED_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
       ZXS_MEASUREMENT_DEADLINE_UNIX: ${{ needs.build.outputs.measurement_deadline_unix }}
@@ -199,21 +199,12 @@ jobs:
           lscpu > "$RUNNER_TEMP/namespace-evidence/lscpu.txt"
           free -b > "$RUNNER_TEMP/namespace-evidence/memory-before.txt"
           df -B1 > "$RUNNER_TEMP/namespace-evidence/disk-before.txt"
-      - name: Validate observer contract on this exact measurement runner
-        if: matrix.pair == 3
-        continue-on-error: true
-        shell: bash
-        run: |
-          python3 -B harness/tools/namespace-adoption-bench/observer_probe.py \
-            --output "$RUNNER_TEMP/namespace-evidence/observer-probe" \
-            --deadline-unix "$ZXS_MEASUREMENT_DEADLINE_UNIX"
       - name: Authenticate binaries and actually run the full requested pair
         shell: bash
         run: |
           set -euo pipefail
           python3 harness/tools/namespace-adoption-bench/run.py \
-            --mode "$ZXS_BENCH_MODE" --trace-observer seccomp-bpf \
-            --observer-probe "$RUNNER_TEMP/namespace-evidence/observer-probe/probe.json" \
+            --mode "$ZXS_BENCH_MODE" --trace-observer plain \
             --bundle-dir "$RUNNER_TEMP/namespace-bundle" --audit-dir "$RUNNER_TEMP/namespace-evidence/artifact-audit" \
             --output "$RUNNER_TEMP/namespace-evidence/results" --pool-parent "$RUNNER_TEMP/namespace-pools" \
             --deadline-unix "$ZXS_MEASUREMENT_DEADLINE_UNIX" --sizes '${{ matrix.files }}' --pair-index '${{ matrix.pair }}'
@@ -226,7 +217,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   aggregate:
-    name: Audit four Owned-decode smoke pairs; full suite not run
+    name: Audit two same-source attribution pairs; adoption remains blocked
     if: always()
     needs: [build, paired]
     runs-on: ubuntu-24.04
@@ -243,43 +234,14 @@ jobs:
           pattern: namespace-pair-*-${{ github.run_attempt }}
           path: ${{ runner.temp }}/namespace-pairs
         continue-on-error: true
-      - name: Preserve unchanged full-suite accounting (expected incomplete)
-        continue-on-error: true
+      - name: Report bounded attribution only
         if: always()
         env:
-          ZXS_BUILD_RESULT: ${{ needs.build.result }}
           ZXS_EXPECTED_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
         shell: bash
         run: |
-          python3 harness/tools/namespace-adoption-bench/summarize.py \
-            --input "$RUNNER_TEMP/namespace-pairs" --output "$RUNNER_TEMP/namespace-summary"
-      - name: Report only the four requested Owned-decode smoke pairs
-        if: always()
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import json, os, pathlib
-          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'namespace-summary'
-          full = json.loads((out / 'summary.json').read_text())
-          requested = [row for row in full['pairs'] if row['files'] == 500 and row['pair'] in (0, 1, 2, 3)]
-          good = (full['build_result'] == 'success' and full['status'] == 'incomplete' and len(requested) == 4
-                  and all(row['status'] == 'completed_measurements' and not row.get('errors') for row in requested))
-          report = dict(schema='namespace-owned-decode-smoke-v1',
-                        scope='Owned decode plus real predicate projection; 500 files plus 97 directories; pairs 0/1/2 untraced AB/BA/AB and pair 3 BPF BA',
-                        status='completed_requested_smoke' if good else 'incomplete_or_failed_smoke',
-                        full_suite='NOT RUN; unchanged full-suite report remains incomplete',
-                        adoption_verdict='NOT EVALUATED', candidate_scope='529ef formatting successor of45ecc owned decode and875298 real predicates on6d19 Stage A; R136 plus test/governance470ea, excludes R137/R138', current_main='frozen e2f33d9',
-                        baseline_sha='e2f33d9882cf7263412d9370b6a703e0b216357d',
-                        candidate_sha='529efdd0e772e30668c3dfa3f6e15025592baa10',
-                        run_id=full['github_run_id'], run_attempt=full['github_run_attempt'],
-                        carrier_sha=full['carrier_sha'], manifest_sha256=full['artifact_manifest_sha256'],
-                        requested_pairs=requested, size500=full['sizes']['500'])
-          print('PAIRED_RESULTS', json.dumps(report))
-          (out / 'stage-a-smoke.json').write_text(json.dumps(report, indent=2) + '\n')
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('\nOwned-decode bounded smoke: ' + report['status'] + '. Full suite NOT RUN; no adoption verdict.\n')
-          raise SystemExit(0 if good else 1)
-          PY
+          python3 harness/tools/namespace-adoption-bench/attribution_summary.py \
+            "$RUNNER_TEMP/namespace-pairs" "$RUNNER_TEMP/namespace-summary"
       - name: Retain aggregate evidence index
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

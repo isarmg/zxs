@@ -1,0 +1,41 @@
+{
+  "schema": "namespace-attribution-overlay-v1",
+  "candidate": {
+    "sha": "529efdd0e772e30668c3dfa3f6e15025592baa10",
+    "tree": "50a4013f698e77190819ae67de4a2a999add3525",
+    "adapter_path": "test/engine/bench/namespace_adoption/candidate_attribution.rs",
+    "adapter_sha256": "4d6eff60dd879a34d9d2289a82e5f2bbfe11587bc6326c56b71f3f37a561bcd8"
+  },
+  "files": {
+    "src/engine/src/lib.rs": {
+      "before_sha256": "0b0f5e543a0295d0eef80497b9a2af1e416221d134b8ba67df528d971063d183",
+      "after_sha256": "e6b1869a0dd18c1192d9cd7362270f88e4c19fcf0c50be7c347ba313c08ef099",
+      "before_blob": "a6a636ba24311f361512e163405bb4ca4c66229a",
+      "content_path": "attribution-lib.rs"
+    },
+    "src/engine/src/namespace.rs": {
+      "before_sha256": "adfbe078daa995f7f30c19eb306278072f214cd72465814075fd6341db20c012",
+      "after_sha256": "93dbcbce90da09db479e55613c87d215bc828f11cdf510e65db8a802d39869c9",
+      "before_blob": "e223c73fd4da1be2c5cdbe286dfec757dc320f1f",
+      "content_path": "attribution-namespace.rs"
+    },
+    "src/engine/src/segment_store.rs": {
+      "before_sha256": "fa7513e0842ea3294f22e639b208b41f73490961f030bb491ad4d8ab6ae44aad",
+      "after_sha256": "6308b4155b6c633b1d86bfad52da04b4bb3ba571e27d3d631378138334a67b96",
+      "before_blob": "4e3ac12e88819bb093fd8f8df22c77cda5890c8d",
+      "content_path": "attribution-segment_store.rs"
+    },
+    "src/engine/src/journal.rs": {
+      "before_sha256": "7a0b0cb11a9542e51aed7793379049bad6a3a3388ae86c3edfe40d76f08cde20",
+      "after_sha256": "913762ef7a465194e258ccfe5e20cb872703eaf729ff1d52d430cf532482093d",
+      "before_blob": "ecf5fcba622c0d06f45b438de6e50dc32cc270d2",
+      "content_path": "attribution-journal.rs"
+    },
+    "src/engine/src/business/namespace/query.rs": {
+      "before_sha256": "719ac39d6dbcd94a5fc71a9c10a124bdcc11724250f8511a052cbaf5fcc19092",
+      "after_sha256": "ca5ae9302d3bf2d7c87d36b6cac84170d4dfc44e020095716af26fa9812a2c93",
+      "before_blob": "2e1fcb140fc28b9635a30a1282e8c76fb598f45a",
+      "content_path": "attribution-query.rs"
+    }
+  }
+}

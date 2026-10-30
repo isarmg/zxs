@@ -12,10 +12,14 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from attribution_overlay import install_overlay, overlay_identity, effective_build_tree, overlay_for
 
-MODES = ('final', 'observer-validation')
+MODES = ('final', 'observer-validation', 'attribution')
 HARNESS_FILES = ('artifacts.py', 'run.py', 'summarize.py', 'verification.yml', 'inputs.json',
-                 'observer_probe.py', 'observer-validation.yml', 'observer_compare.py')
+                 'observer_probe.py', 'observer-validation.yml', 'observer_compare.py',
+                 'attribution_overlay.py', 'attribution-overlay.json', 'attribution_summary.py', 'attribution-inputs.json',
+                 'attribution-lib.rs', 'attribution-namespace.rs', 'attribution-segment_store.rs',
+                 'attribution-journal.rs', 'attribution-query.rs')
 TARGET = 'x86_64-unknown-linux-gnu'
 RUST_FLAGS = '-C\x1ftarget-cpu=x86-64'
 C_FLAGS = '-march=x86-64 -mtune=generic'
@@ -43,15 +47,24 @@ def write_json(path, value):
 
 
 def load_inputs(mode, path=None):
-    """Read the sole pinned product configuration; a pending final candidate rejects admission."""
+    """Attribution has separate pins and cannot enter the final/observer gate."""
     require(mode in MODES, f'explicit validation mode required: {mode}')
-    path = Path(path) if path is not None else Path(__file__).with_name('inputs.json')
+    require((mode == 'attribution') == (os.environ.get('ZXS_BENCH_MODE') == 'attribution'),
+            'attribution mode and environment must agree in both directions')
+    filename = 'attribution-inputs.json' if mode == 'attribution' else 'inputs.json'
+    path = Path(path) if path is not None else Path(__file__).with_name(filename)
     config = json.loads(path.read_text())
-    require(set(config) == {'schema', 'baseline', 'final_candidate', 'observer_validation_candidate'} and
-            config['schema'] == 'namespace-adoption-inputs-v1', 'unsupported pinned input configuration')
-    candidate = config['final_candidate' if mode == 'final' else 'observer_validation_candidate']
-    require(candidate is not None, f'{mode}: candidate SHA/tree/adapter identity is pending; execution forbidden')
-    products = dict(baseline=config['baseline'], candidate=candidate)
+    if mode == 'attribution':
+        require(set(config) == {'schema', 'control', 'instrumented'} and
+                config['schema'] == 'namespace-attribution-inputs-v1',
+                'unsupported attribution configuration')
+        products = dict(baseline=config['control'], candidate=config['instrumented'])
+    else:
+        require(set(config) == {'schema', 'baseline', 'final_candidate', 'observer_validation_candidate'} and
+                config['schema'] == 'namespace-adoption-inputs-v1', 'unsupported pinned input configuration')
+        candidate = config['final_candidate' if mode == 'final' else 'observer_validation_candidate']
+        require(candidate is not None, f'{mode}: candidate SHA/tree/adapter identity is pending; execution forbidden')
+        products = dict(baseline=config['baseline'], candidate=candidate)
     for label, identity in products.items():
         require(isinstance(identity, dict) and
                 set(identity) == {'sha', 'tree', 'adapter_path', 'adapter_sha256'},
@@ -68,12 +81,17 @@ def load_inputs(mode, path=None):
 
 
 def selected_inputs(mode, harness):
-    config = harness / 'tools/namespace-adoption-bench/inputs.json'
+    filename = 'attribution-inputs.json' if mode == 'attribution' else 'inputs.json'
+    config = harness / 'tools/namespace-adoption-bench' / filename
     products = load_inputs(mode, config)
     for label, identity in products.items():
         require(digest(harness / identity['adapter_path']) == identity['adapter_sha256'],
                 f'{label}: adapter does not match pinned bytes')
-    return dict(mode=mode, config_sha256=digest(config), products=products)
+    require(mode != 'attribution' or os.environ.get('ZXS_BENCH_MODE') == 'attribution',
+            'attribution mode requires explicit attribution environment')
+    return dict(mode=mode, config_sha256=digest(config), products=products,
+                diagnostic_overlay_sha256=(digest(config.with_name('attribution-overlay.json'))
+                                           if mode == 'attribution' else None))
 
 
 def prepare_products(workspace, harness, evidence, mode):
@@ -90,6 +108,7 @@ def prepare_products(workspace, harness, evidence, mode):
     for label, identity in selected['products'].items():
         product = workspace / label
         adapter = harness / identity['adapter_path']
+        install_overlay(product, identity)
         manifest = product / 'src/engine/Cargo.toml'
         original = manifest.read_bytes()
         require(b'task1_adoption' not in original, f'{label}: benchmark wiring already exists')
@@ -154,7 +173,8 @@ def source_identity(product, adapter, expected):
     sha, tree = expected['sha'], expected['tree']
     require(git('rev-parse', 'HEAD') == sha and git('rev-parse', 'HEAD^{tree}') == tree,
             f'{label}: product SHA/tree mismatch')
-    require(git('diff', 'HEAD', '--name-only').splitlines() == ['src/engine/Cargo.toml'],
+    overlay_paths, diagnostic_overlay = overlay_identity(product, expected)
+    require(git('diff', 'HEAD', '--name-only').splitlines() == sorted(['src/engine/Cargo.toml', *overlay_paths]),
             f'{label}: unexpected tracked source changes')
     require(git('ls-files', '--others', '--exclude-standard').splitlines() ==
             ['test/engine/bench/task1_adoption.rs'], f'{label}: unexpected untracked source')
@@ -170,6 +190,9 @@ def source_identity(product, adapter, expected):
     inputs = ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml',
               'compliance/rust-sources.json', 'src/engine/Cargo.toml')
     return dict(sha=sha, tree=tree, adapter_sha256=expected['adapter_sha256'],
+                diagnostic_overlay=diagnostic_overlay,
+                effective_build_tree=effective_build_tree(product, overlay_paths),
+                tracked_inventory_scope='base_git_tree_only; effective_build_tree includes all admitted overlays',
                 manifest_before_sha256=hashlib.sha256(original).hexdigest(),
                 inputs={name: dict(sha256=digest(product / name),
                                   source_blob=git('rev-parse', f'HEAD:{name}')) for name in inputs},
@@ -319,6 +342,17 @@ def verify_bundle(bundle_dir, adapter_paths, audit_dir, *, mode):
             require(digest(adapter_paths[label]) == identity['adapter_sha256'] ==
                     digest(bundle_dir / 'adapters' / f'{label}.rs') == entry['source']['adapter_sha256'],
                     f'{label}: adapter bytes differ')
+            if mode == 'attribution':
+                overlay = overlay_for(identity)
+                actual_overlay = entry['source'].get('diagnostic_overlay')
+                require((actual_overlay is None) == (overlay is None),
+                        f'{label}: diagnostic overlay identity missing or unexpected')
+                if overlay is not None:
+                    require(actual_overlay['descriptor_sha256'] == selected['diagnostic_overlay_sha256'] and
+                            actual_overlay['files'] == overlay['files'],
+                            f'{label}: instrumented overlay differs from selected diagnostic')
+                require(re.fullmatch('[0-9a-f]{40}', entry['source'].get('effective_build_tree', '')),
+                        f'{label}: effective build tree missing')
             binary = bundle_dir / 'bin' / label
             require(digest(binary) == entry['binary_sha256'], f'{label}: binary hash differs')
             binary.chmod(0o755)  # Actions download restores files without executable mode.
@@ -326,7 +360,9 @@ def verify_bundle(bundle_dir, adapter_paths, audit_dir, *, mode):
             for field in ('header', 'program_headers', 'dynamic', 'versions', 'notes'):
                 require(runtime[field] == entry['elf'][field], f'{label}: ELF {field} differs')
             audit['products'][label] = dict(binary_sha256=digest(binary), source_sha=sha,
-                                           source_tree=tree, runtime=runtime)
+                                           source_tree=tree, runtime=runtime,
+                                           diagnostic_overlay=entry['source'].get('diagnostic_overlay'),
+                                           effective_build_tree=entry['source'].get('effective_build_tree'))
             binaries[label] = binary.resolve()
         audit['status'] = 'verified'
         return binaries

@@ -1,0 +1,15 @@
+{
+  "schema": "namespace-attribution-inputs-v1",
+  "control": {
+    "sha": "529efdd0e772e30668c3dfa3f6e15025592baa10",
+    "tree": "50a4013f698e77190819ae67de4a2a999add3525",
+    "adapter_path": "test/engine/bench/namespace_adoption/candidate.rs",
+    "adapter_sha256": "c2e05b8bc6e889e11c168197026cba334409007263186084f74fc8eec677a8c3"
+  },
+  "instrumented": {
+    "sha": "529efdd0e772e30668c3dfa3f6e15025592baa10",
+    "tree": "50a4013f698e77190819ae67de4a2a999add3525",
+    "adapter_path": "test/engine/bench/namespace_adoption/candidate_attribution.rs",
+    "adapter_sha256": "4d6eff60dd879a34d9d2289a82e5f2bbfe11587bc6326c56b71f3f37a561bcd8"
+  }
+}
