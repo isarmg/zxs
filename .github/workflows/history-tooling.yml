@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions]
 
 permissions:
   contents: read
@@ -104,7 +104,7 @@ jobs:
               '15b4b04b2e33cfd91abc398c391ad4442c28452f', '3ae7fc6e0a8a23fc9af5a232d235af4a64cf675c',
           ):
               raise SystemExit('Combined overlap requires the exact reviewed source and tree')
-          if os.environ['SCOPE'] == 'detached-history' and (source, tree) != (
+          if os.environ['SCOPE'] in ('detached-history', 'detached-history-additions') and (source, tree) != (
               'd2c93af9a63985f43e58dce600aa5aaa6cf4d154', '8b1348e9341d40394bb570a1508c6d2463ca7c37',
           ):
               raise SystemExit('Detached history diagnostics require the exact reviewed source and tree')
@@ -468,6 +468,35 @@ jobs:
                       dict(selector='engine_backend::read_projection::tests::history_tests::', count=1),
                   ]), command='Complete bounded graph/history/query/time projection test groups'),
           ]
+          history_extra = [dict(selector='engine::index::tests::' + name, package='storage-engine',
+              count=1, exact=True, required=['engine::index::tests::' + name]) for name in [
+                  'actual_history_route_uses_index_only_for_large_selective_stores',
+                  'indexed_history_matches_scan_with_unsigned_extremes_ties_and_scoped_query',
+              ]]
+          history_extra.extend([
+              dict(selector='engine_backend::branch::tests::', count=2),
+              dict(selector='backend_file_history::tests::', count=2),
+              dict(selector='backend_graph::tests::', count=1),
+          ])
+          for name in [
+              'protected_overrides_preserve_identity_arguments_results_and_errors',
+              'revoked_sessions_never_reach_protected_backend_methods',
+          ]:
+              witness = 'authorized_backend_tests::' + name
+              history_extra.append(dict(selector=witness, count=1, exact=True, required=[witness]))
+          http_history = [dict(selector=name, test_target='http_engine', count=1, exact=True, required=[name]) for name in [
+              'history_query::history_query_rejects_unknown_fields_and_preserves_paired_context',
+              'file_history_exposes_durable_content_edges_and_rechecks_authentication',
+              'moved_file_aliases_keep_independent_path_contexts_for_history_and_write',
+              'rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_sources',
+              'file_metadata_operations::tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies',
+          ]]
+          groups['detached-history-additions'] = [
+              dict(id='detached-history-index-authority-wire', cache='server', package='storage-server',
+                  test_groups=json.dumps(history_extra), command='Two exact engine index, branch/wire and two exact backend authority witnesses'),
+              dict(id='detached-history-http', cache='server', package='storage-server',
+                  test_groups=json.dumps(http_history), command='Five exact real HTTP history and metadata projection witnesses'),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -660,7 +689,7 @@ jobs:
               raise SystemExit('Server unit selector matched zero tests')
           print(f'Inventoried {len(tests)} server unit test bodies')
           PY
-      - name: Execute grouped reviewed selectors in one engine job
+      - name: Execute grouped reviewed selectors
         if: matrix.exact_tests != '' || matrix.test_groups != ''
         run: |
           python3 - <<'PY'
@@ -676,7 +705,11 @@ jobs:
           ]
           for index, group in enumerate(groups, 1):
               name = group['selector']
-              base = ['cargo', 'test', '--locked', '--offline', '-p', group.get('package', os.environ['TEST_PACKAGE']), '--lib']
+              base = ['cargo', 'test', '--locked', '--offline', '-p', group.get('package', os.environ['TEST_PACKAGE'])]
+              if group.get('test_target'):
+                  base.extend(['--test', group['test_target']])
+              else:
+                  base.append('--lib')
               if name:
                   base.append(name)
               base.append('--')
