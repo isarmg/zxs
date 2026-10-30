@@ -10,12 +10,16 @@ on:
         description: Exact 40-character lowercase source commit SHA
         required: true
         type: string
+      source_tree:
+        description: Optional exact source tree SHA
+        required: false
+        type: string
       scope:
         description: Bounded diagnostic selection (does not replace required CI)
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, packages]
+        options: [all, smb-close, workspace-admission, auth-owner, server, packages, namespace-borrow]
 
 permissions:
   contents: read
@@ -43,6 +47,7 @@ jobs:
         id: select
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
           SCOPE: ${{ inputs.scope }}
         run: |
           python3 - <<'PY'
@@ -53,6 +58,9 @@ jobs:
           source = os.environ['SOURCE_SHA']
           if not re.fullmatch(r'[0-9a-f]{40}', source):
               raise SystemExit('source_sha must be an exact 40-character lowercase commit SHA')
+          tree = os.environ['SOURCE_TREE']
+          if tree and not re.fullmatch(r'[0-9a-f]{40}', tree):
+              raise SystemExit('source_tree must be an exact 40-character lowercase tree SHA')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -72,8 +80,38 @@ jobs:
               command=f'cargo test --locked --offline -p {package} -- --nocapture')
               for package in ['authentication', 'storage-contract', 'name-policy', 'platform-io',
                               'storage-client', 'storage-rescue', 'smb-protocol']]
+          aggregate = sum(groups.values(), [])
+          files = [
+              'src/engine/src/namespace.rs',
+              'src/engine/src/business/namespace/query.rs',
+              'src/engine/src/business/file_requests.rs',
+              'src/server/src/engine_backend/file_manager/listing.rs',
+              'src/server/src/engine_backend/read_projection.rs',
+              'test/engine/unit/namespace/borrowed_lookup_tests.rs',
+              'test/engine/unit/business/namespace/query_tests.rs',
+          ]
+          groups['namespace-borrow'] = [
+              dict(id='namespace-format', command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check ' + ' '.join(files)),
+              dict(id='namespace-compile', cache='namespace-engine',
+                  command='cargo check --locked --offline -p storage-engine -p storage-server'),
+          ]
+          witnesses = [
+              'identity_predicates_match_owned_lookup_for_unicode_missing_and_wrong_kinds',
+              'projection_borrows_leaf_ids_until_callback_returns',
+              'lookup_preserves_reference_failure_before_a_delayed_composed_path_error',
+          ]
+          for name, package, prefix in [
+              ('engine-namespace', 'storage-engine', 'namespace::'),
+              ('engine-file-requests', 'storage-engine', 'business::file_requests::'),
+              ('server-read-projection', 'storage-server', 'engine_backend::read_projection::'),
+              ('server-file-manager', 'storage-server', 'engine_backend::file_manager::'),
+          ]:
+              groups['namespace-borrow'].append(dict(id=name, cache=package,
+                  package=package, test_filter=prefix,
+                  required_names=json.dumps(witnesses if name == 'engine-namespace' else []),
+                  command=f'cargo test --locked --offline --release -p {package} --lib {prefix} -- --nocapture'))
           scope = os.environ['SCOPE']
-          selected = sum(groups.values(), []) if scope == 'all' else groups[scope]
+          selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
           print(f'Source: {source}; selection: {scope}; independent jobs: {len(selected)}')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
@@ -91,10 +129,14 @@ jobs:
       matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
+      SOURCE_TREE: ${{ inputs.source_tree }}
       WORKFLOW_SHA: ${{ github.workflow_sha }}
       DIAGNOSTIC_ID: ${{ matrix.id }}
       TEST_COMMAND: ${{ matrix.command }}
       EXACT_TEST: ${{ matrix.exact_test }}
+      TEST_PACKAGE: ${{ matrix.package }}
+      TEST_FILTER: ${{ matrix.test_filter }}
+      REQUIRED_NAMES: ${{ matrix.required_names }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,6 +145,9 @@ jobs:
       - name: Verify exact checkout and record source identity
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          if [[ -n "$SOURCE_TREE" ]]; then
+            test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          fi
           mkdir -p .diagnostics
           python3 - <<'PY' | tee .diagnostics/identity.json
           import json
@@ -111,6 +156,7 @@ jobs:
           print(json.dumps(dict(
               source_sha=os.environ['SOURCE_SHA'],
               checkout_sha=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              tree_sha=subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
               workflow_sha=os.environ['WORKFLOW_SHA'],
               workflow_ref=os.environ['GITHUB_WORKFLOW_REF'],
               run_id=os.environ['GITHUB_RUN_ID'],
@@ -130,6 +176,7 @@ jobs:
       # Reuse the repository's pinned cache action, with a separate namespace.
       # Only compiled artifacts are cached; Cargo home and test results are not.
       - name: Cache compiled native dependencies
+        if: matrix.cache != ''
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/native
@@ -149,6 +196,23 @@ jobs:
           if tests != expected:
               raise SystemExit(f'Expected exactly {expected!r}, found {tests!r}')
           PY
+      - name: Inventory focused module tests and require named regression bodies
+        if: matrix.test_filter != ''
+        run: |
+          cargo test --locked --offline --release -p "$TEST_PACKAGE" --lib "$TEST_FILTER" -- --list 2>&1 | tee .diagnostics/list.log
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          tests = [line[:-6] for line in Path('.diagnostics/list.log').read_text().splitlines() if line.endswith(': test')]
+          if not tests:
+              raise SystemExit('Module selector matched zero tests')
+          for name in json.loads(os.environ['REQUIRED_NAMES']):
+              matches = [test for test in tests if test.endswith('::' + name)]
+              if len(matches) != 1:
+                  raise SystemExit(f'Expected one regression body named {name!r}; found {matches!r}')
+          print(f'Inventoried {len(tests)} tests for {os.environ["TEST_FILTER"]}')
+          PY
       - name: Execute selected locked offline tests and retain failures
         run: |
           printf 'Source: %s\nCommand: %s\n' "$SOURCE_SHA" "$TEST_COMMAND" | tee .diagnostics/command.txt
@@ -167,6 +231,17 @@ jobs:
               raise SystemExit(f'Expected one executed, non-ignored test; found {results!r}')
           PY
           fi
+          if [[ -n "$TEST_FILTER" ]]; then
+            python3 - <<'PY'
+          import re
+          from pathlib import Path
+          expected = sum(line.endswith(': test') for line in Path('.diagnostics/list.log').read_text().splitlines())
+          results = re.findall(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', Path('.diagnostics/test.log').read_text())
+          if len(results) != 1 or sum(map(int, results[0])) != expected or sum(map(int, results[0][:2])) == 0:
+              raise SystemExit(f'Executed count must match {expected} listed tests; found {results!r}')
+          PY
+          fi
+          git diff --exit-code HEAD
           exit "$status"
       - name: Retain source identity, exact commands and test output
         if: always()
