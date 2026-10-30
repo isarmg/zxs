@@ -56,16 +56,44 @@ jobs:
       - name: Execute all preserved naming unit tests
         working-directory: product
         run: cargo test --locked --offline -p name-policy --lib
-      - name: Export generated source bytes
-        working-directory: product
+      - name: Retain exact generated catalog for bounded byte export
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: reviewed-source-refresh
+          path: |
+            product/compliance/external-tests/integrated.json
+            product/compliance/rust-sources.json
+            product/docs/THIRD_PARTY_RUST_SOURCES.md
+          if-no-files-found: error
+          retention-days: 7
+  export:
+    needs: refresh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: reviewed-source-refresh
+          path: generated
+      - name: Export bounded exact catalog slice
+        env:
+          PART: ${{ matrix.part }}
         run: |
           python3 - <<'PY'
-          import base64, subprocess
+          import base64, hashlib, os
           from pathlib import Path
-          for path in subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines():
-              data = Path(path).read_bytes()
-              print("GENERATED_FILE_BEGIN", path, len(data))
-              for offset in range(0, len(data), 24000):
-                  print("GENERATED_BYTES", path, offset, base64.b64encode(data[offset:offset+24000]).decode())
-              print("GENERATED_FILE_END", path)
+          data = Path("generated/compliance/rust-sources.json").read_bytes()
+          part = int(os.environ["PART"])
+          start = part * 1000000
+          end = min(start + 1000000, len(data))
+          assert len(data) == 10630141
+          assert hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest() == "2a876a4f6436c8597e30367b87917b660dd79138"
+          print("CATALOG_PART_BEGIN", part, start, end, len(data))
+          for offset in range(start, end, 24000):
+              print("CATALOG_PART_BYTES", offset, base64.b64encode(data[offset:min(offset+24000,end)]).decode())
+          print("CATALOG_PART_END", part)
           PY
