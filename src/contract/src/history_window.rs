@@ -627,3 +627,6 @@ pub enum HistoryWindowPage {
     },
 }
 
+#[cfg(test)]
+#[path = "../../../test/contract/unit/history_window.rs"]
+mod tests;
