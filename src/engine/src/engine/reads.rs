@@ -331,54 +331,78 @@ impl ContentReadPlan {
         }
     }
 
-    fn authenticated_replicas(&self) -> Result<Vec<(std::fs::File, Vec<u8>, ChecksumManifest)>> {
-        let mut replicas = Vec::new();
+    /// Encoded proof size for admission before allocating or reading disk bytes.
+    /// Rejects sizes beyond the current checksum format's resource ceiling.
+    pub fn checksum_manifest_bytes(&self) -> Result<usize> {
+        checksum_manifest_length(&self.version)
+    }
+
+    fn authenticate_replica(&self, disk: &DiskConfig) -> Result<(&DiskHandle, PathBuf)> {
+        let handle = self.disk_resources.get(disk)?;
+        let dir = version_dir(
+            disk,
+            &self.version.history_tree_id,
+            &self.version.version_id,
+        );
+        let metadata = MetadataReadContext::for_disk(
+            &self.config,
+            &handle.seal,
+            disk.metadata_member
+                .then_some(self.metadata_integrity.as_ref()),
+        );
+        handle.verify_publication(&dir, &self.version, &metadata)?;
+        Ok((handle, dir))
+    }
+
+    /// One decoded proof for all exact-version replicas; each member's local
+    /// manifest must still authenticate before its held payload is admitted.
+    /// Consumers must verify each complete chunk before exposing its bytes.
+    pub fn open(self) -> Result<RangeContent> {
+        let mut selected = None;
+        let mut fallback_files = Vec::new();
         let mut first_error: Option<Error> = None;
         for disk in &self.disks {
             let candidate = (|| {
-                let handle = self.disk_resources.get(disk)?;
-                let dir = version_dir(
-                    disk,
-                    &self.version.history_tree_id,
-                    &self.version.version_id,
-                );
-                let metadata = MetadataReadContext::for_disk(
-                    &self.config,
-                    &handle.seal,
-                    disk.metadata_member
-                        .then_some(self.metadata_integrity.as_ref()),
-                );
-                handle.verify_publication(&dir, &self.version, &metadata)?;
-                handle.open_payload(&dir, &self.version)
+                let (handle, dir) = self.authenticate_replica(disk)?;
+                if selected.is_some() {
+                    // Digest equality binds these bytes to the same descriptor;
+                    // decoding the identical hash array again adds no proof.
+                    drop(read_authenticated_checksums_at(
+                        &handle.root,
+                        &dir,
+                        &self.version,
+                    )?);
+                    let file = open_payload_file_observed_at(
+                        &handle.root,
+                        &dir,
+                        &self.version,
+                        &mut |_| Ok(()),
+                    )?;
+                    fallback_files.push(file);
+                } else {
+                    let (file, checks, manifest) = handle.open_payload(&dir, &self.version)?;
+                    drop(checks);
+                    selected = Some((file, manifest));
+                }
+                Ok(())
             })();
             match candidate {
-                Ok(candidate) => replicas.push(candidate),
+                Ok(()) => (),
                 Err(error) => {
                     first_error.get_or_insert(error);
                 }
             }
         }
-        if replicas.is_empty() {
-            Err(match first_error {
-                Some(error) => error.context(
-                    storage_contract::ErrorCode::ContentUnavailable,
-                    "no authenticated replica is available",
-                ),
-                None => Error::new(
-                    storage_contract::ErrorCode::ContentUnavailable,
-                    "version placement has no replica routes",
-                ),
-            })
-        } else {
-            Ok(replicas)
-        }
-    }
-    /// Authenticate the checksum manifest without reading the payload. Consumers
-    /// must verify each complete checksum chunk before exposing any of its bytes.
-    pub fn open(self) -> Result<RangeContent> {
-        let mut replicas = self.authenticated_replicas()?.into_iter();
-        let (file, _, manifest) = replicas.next().expect("nonempty replicas");
-        let fallback_files = replicas.map(|(file, _, _)| file).collect();
+        let (file, manifest) = selected.ok_or_else(|| match first_error {
+            Some(error) => error.context(
+                storage_contract::ErrorCode::ContentUnavailable,
+                "no authenticated replica is available",
+            ),
+            None => Error::new(
+                storage_contract::ErrorCode::ContentUnavailable,
+                "version placement has no replica routes",
+            ),
+        })?;
         Ok(RangeContent {
             fallback_files,
             file,
@@ -389,8 +413,28 @@ impl ContentReadPlan {
         })
     }
     pub fn checksums(self) -> Result<Vec<u8>> {
-        self.authenticated_replicas()
-            .map(|replicas| replicas.into_iter().next().expect("nonempty replicas").1)
+        let mut first_error = None;
+        for disk in &self.disks {
+            match self
+                .authenticate_replica(disk)
+                .and_then(|(handle, dir)| handle.open_payload(&dir, &self.version))
+            {
+                Ok((_, checks, _)) => return Ok(checks),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        Err(match first_error {
+            Some(error) => error.context(
+                storage_contract::ErrorCode::ContentUnavailable,
+                "no authenticated replica is available",
+            ),
+            None => Error::new(
+                storage_contract::ErrorCode::ContentUnavailable,
+                "version placement has no replica routes",
+            ),
+        })
     }
 }
 

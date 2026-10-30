@@ -251,12 +251,12 @@ fn authorize_read_keeps_read_semantics_after_normal_writes_and_default_selection
     }
     check_read_authorization(&mut client, &backend, &branch, &handles, None);
     let mut bytes = [0; 3];
-    handles[0].1.read_exact_at(&mut bytes, 0).unwrap();
+    bytes.copy_from_slice(&read_rpc(&mut client, handles[0].0.handle, 0, 3));
     assert_eq!(&bytes, b"old", "immutable reader keeps its opened version");
     select_directory(&shared, &repository, &draft);
     // A changed write destination must not prevent reading an existing FD.
     check_read_authorization(&mut client, &backend, &branch, &handles, None);
-    handles[0].1.read_exact_at(&mut bytes, 0).unwrap();
+    bytes.copy_from_slice(&read_rpc(&mut client, handles[0].0.handle, 0, 3));
     assert_eq!(&bytes, b"old");
     file.read_exact_at(&mut bytes, 0).unwrap();
     assert_eq!(
@@ -400,7 +400,7 @@ fn existing_reader_keeps_its_version_on_normal_writes_but_stops_after_binding_ch
         panic!("read open failed")
     };
     let opened: OpenResult = json_codec::from_value(result).unwrap();
-    let read = File::from(fd.unwrap());
+    let _read = File::from(fd.unwrap());
     let mut writer = session(shared.clone(), &branch);
     let (write, bytes) = open_file(&mut writer, true);
     bytes.write_all_at(b"new", 0).unwrap();
@@ -416,8 +416,7 @@ fn existing_reader_keeps_its_version_on_normal_writes_but_stops_after_binding_ch
         .0,
         Response::Ok { .. }
     ));
-    let mut old = [0; 3];
-    read.read_exact_at(&mut old, 0).unwrap();
+    let old = read_rpc(&mut wire, opened.handle, 0, 3);
     assert_eq!(&old, b"old");
     rebind(&shared, &branch, true);
     refused(

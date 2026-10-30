@@ -42,6 +42,8 @@ mod reconciliation_tests;
 mod recovery_record_tests;
 #[path = "write_generation_tests.rs"]
 mod write_generation_tests;
+#[path = "stream_read_tests.rs"]
+mod stream_read_tests;
 
 const RECONCILIATION_SNAPSHOT: usize = 1;
 const RECONCILIATION_CONTENT: usize = 2;
@@ -860,6 +862,7 @@ fn session(shared: Arc<Shared>, branch: &str) -> Session {
         next_handle: 1,
         writer_locks: BTreeSet::new(),
         max_file_bytes: 4096,
+        read_cache: None,
     }
 }
 fn open_file(session: &mut Session, writable: bool) -> (OpenResult, File) {
@@ -870,6 +873,31 @@ fn open_file(session: &mut Session, writable: bool) -> (OpenResult, File) {
         json_codec::from_value(result).unwrap(),
         File::from(fd.unwrap()),
     )
+}
+
+fn read_session(session: &mut Session, handle: u64, offset: u64, length: u32) -> Vec<u8> {
+    let result = session.read(handle, offset, length).unwrap();
+    json_codec::from_value::<smb_protocol::protocol::ReadResult>(result)
+        .unwrap()
+        .bytes
+}
+
+fn read_rpc(wire: &mut FrameStream, handle: u64, offset: u64, length: u32) -> Vec<u8> {
+    let (reply, fd) = binding_tests::exchange(
+        wire,
+        Request::Read {
+            handle,
+            offset,
+            length,
+        },
+    );
+    assert!(fd.is_none());
+    let Response::Ok { result } = reply else {
+        panic!("read failed: {reply:?}")
+    };
+    json_codec::from_value::<smb_protocol::protocol::ReadResult>(result)
+        .unwrap()
+        .bytes
 }
 
 fn select_pending_file(shared: &Shared, branch: &str) -> String {
@@ -1088,7 +1116,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
         .open("a/report.txt".into(), false, false, false, false, false)
         .unwrap();
     let opened: OpenResult = json_codec::from_value(opened).unwrap();
-    let reader = File::from(fd.unwrap());
+    let _reader = File::from(fd.unwrap());
     client
         .dispatch(Request::Namespace {
             operation_id: new_id("op"),
@@ -1117,7 +1145,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     assert_eq!(scope(&a_n).head_tree_id, n0.head_tree_id);
     assert_eq!(scope(&b_p).head_tree_id, p0.head_tree_id);
     let mut bytes = [0; 6];
-    reader.read_exact_at(&mut bytes, 0).unwrap();
+    bytes.copy_from_slice(&read_session(&mut client, opened.handle, 0, 6));
     assert_eq!(&bytes, b"source");
     client.close(opened.handle, false).unwrap();
     let (opened, fd) = client
@@ -1275,20 +1303,19 @@ fn unix_rpc_default_switch_preserves_read_fds_and_targets_new_writes() {
         panic!("read open failed")
     };
     let pinned_open: OpenResult = json_codec::from_value(result).unwrap();
-    let pinned = File::from(pinned.unwrap());
+    let _pinned = File::from(pinned.unwrap());
     let mut bytes = [0; 3];
-    pinned.read_exact_at(&mut bytes, 0).unwrap();
+    bytes.copy_from_slice(&read_rpc(&mut wire, pinned_open.handle, 0, 3));
     assert_eq!(&bytes, b"new");
     select_directory(&shared, &repository, &main);
     let (Response::Ok { result }, visible) = rpc(&mut wire, open()) else {
         panic!("read after switch failed")
     };
     let visible_open: OpenResult = json_codec::from_value(result).unwrap();
-    File::from(visible.unwrap())
-        .read_exact_at(&mut bytes, 0)
-        .unwrap();
+    let _visible = File::from(visible.unwrap());
+    bytes.copy_from_slice(&read_rpc(&mut wire, visible_open.handle, 0, 3));
     assert_eq!(&bytes, b"old");
-    pinned.read_exact_at(&mut bytes, 0).unwrap();
+    bytes.copy_from_slice(&read_rpc(&mut wire, pinned_open.handle, 0, 3));
     assert_eq!(&bytes, b"new", "existing immutable read FD stays pinned");
     let (Response::Ok { result }, writable_fd) = rpc(
         &mut wire,
@@ -1381,9 +1408,9 @@ fn unwritten_branch_reads_parent_and_materializes_only_on_dirty_save() {
     let mut session = session(shared.clone(), &branch);
     assert_eq!(before["inherited"], true);
     assert!(before["own_version_id"].is_null());
-    let (parent_read, parent_content) = open_file(&mut session, false);
+    let (parent_read, _parent_content) = open_file(&mut session, false);
     let mut parent_bytes = [0u8; 3];
-    parent_content.read_exact_at(&mut parent_bytes, 0).unwrap();
+    parent_bytes.copy_from_slice(&read_session(&mut session, parent_read.handle, 0, 3));
     assert_eq!(&parent_bytes, b"old");
     let (opened, staged) = open_file(&mut session, true);
     assert_eq!(opened.size, 3);
@@ -1429,14 +1456,13 @@ fn unwritten_branch_reads_parent_and_materializes_only_on_dirty_save() {
         current["source_version_ids"],
         json!([before["versions"][0]["version_id"]])
     );
-    let (read, mut content) = open_file(&mut session, false);
-    let mut bytes = Vec::new();
-    content.read_to_end(&mut bytes).unwrap();
+    let (read, _content) = open_file(&mut session, false);
+    let bytes = read_session(&mut session, read.handle, 0, 3);
     assert_eq!(bytes, b"Xld");
     assert_eq!(after["inherited"], false);
     assert_eq!(after["materialized"], true);
     assert_eq!(after["own_version_id"], current["version_id"]);
-    parent_content.read_exact_at(&mut parent_bytes, 0).unwrap();
+    parent_bytes.copy_from_slice(&read_session(&mut session, parent_read.handle, 0, 3));
     assert_eq!(
         &parent_bytes, b"old",
         "the inherited read handle keeps the parent version"
@@ -1490,16 +1516,16 @@ fn explicit_truncation_materializes_an_empty_pending_branch() {
 fn actual_core_flush_publishes_full_file_and_old_reader_keeps_its_version() {
     let (_temp, shared, backend, branch) = fixture();
     let mut one = session(shared.clone(), &branch);
-    let (read, old) = open_file(&mut one, false);
+    let (read, _old) = open_file(&mut one, false);
     let (write, file) = open_file(&mut one, true);
     file.write_all_at(b"new", 0).unwrap();
     one.dirty(write.handle).unwrap();
     let mut bytes = [0u8; 3];
-    old.read_exact_at(&mut bytes, 0).unwrap();
+    bytes.copy_from_slice(&read_session(&mut one, read.handle, 0, 3));
     assert_eq!(&bytes, b"old");
     let saved = one.flush(write.handle).unwrap();
     assert_eq!(saved["commit_state"], "PUBLISHED");
-    old.read_exact_at(&mut bytes, 0).unwrap();
+    bytes.copy_from_slice(&read_session(&mut one, read.handle, 0, 3));
     assert_eq!(&bytes, b"old");
     let new_entry = one
         .entries()
@@ -1963,39 +1989,33 @@ fn immutable_fixture_payloads(root: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-fn raw_fd_and_writer_copy_reject_corruption_and_use_verified_fallback() {
-    for writable in [false, true] {
-        let (temp, shared, _backend, branch) = fixture();
-        let payloads = immutable_fixture_payloads(temp.path());
-        assert_eq!(payloads.len(), 3);
-        // Corrupt the primary specifically, leaving the backup replicas valid.
-        let primary = payloads
-            .iter()
-            .find(|path| path.starts_with(temp.path().join("p")))
-            .unwrap();
-        fs::set_permissions(primary, fs::Permissions::from_mode(0o600)).unwrap();
-        fs::write(primary, b"bad").unwrap();
-        let mut active = session(shared.clone(), &branch);
-        let (opened, file) = open_file(&mut active, writable);
-        let mut bytes = [0u8; 3];
-        file.read_exact_at(&mut bytes, 0).unwrap();
-        assert_eq!(
-            &bytes, b"old",
-            "raw FD or writer copy exposed corrupted bytes"
-        );
-        active.close(opened.handle, true).unwrap();
-        drop(active);
-        for path in payloads {
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-            fs::write(path, b"bad").unwrap();
-        }
-        let mut denied = session(shared, &branch);
-        let result = denied.open("report.txt".into(), writable, false, false, false, false);
-        assert!(
-            matches!(result, Err(ref error) if error.code == storage_contract::ErrorCode::ContentUnavailable)
-        );
-        assert!(denied.handles.is_empty(), "corrupt descriptor was admitted");
+fn writer_copy_rejects_corruption_and_uses_fully_verified_fallback() {
+    let (temp, shared, _backend, branch) = fixture();
+    let payloads = immutable_fixture_payloads(temp.path());
+    assert_eq!(payloads.len(), 3);
+    let primary = payloads
+        .iter()
+        .find(|path| path.starts_with(temp.path().join("p")))
+        .unwrap();
+    fs::set_permissions(primary, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(primary, b"bad").unwrap();
+    let mut active = session(shared.clone(), &branch);
+    let (opened, file) = open_file(&mut active, true);
+    let mut bytes = [0u8; 3];
+    file.read_exact_at(&mut bytes, 0).unwrap();
+    assert_eq!(&bytes, b"old", "writer copy exposed corrupted bytes");
+    active.close(opened.handle, true).unwrap();
+    drop(active);
+    for path in payloads {
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(path, b"bad").unwrap();
     }
+    let mut denied = session(shared, &branch);
+    let result = denied.open("report.txt".into(), true, false, false, false, false);
+    assert!(
+        matches!(result, Err(ref error) if error.code == storage_contract::ErrorCode::ContentUnavailable)
+    );
+    assert!(denied.handles.is_empty(), "corrupt descriptor was admitted");
 }
 
 #[test]
@@ -2273,8 +2293,7 @@ fn established_sessions_preserve_idle_no_handle_read_and_unsaved_write() {
                     handle: opened.handle,
                 },
             );
-            let mut bytes = [0; 3];
-            file.read_exact_at(&mut bytes, 0).unwrap();
+            let bytes = read_rpc(&mut wire, opened.handle, 0, 3);
             assert_eq!(&bytes, b"old");
         }
         rpc(

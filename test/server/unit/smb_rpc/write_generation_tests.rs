@@ -458,6 +458,7 @@ mod measurement {
             next_handle: 1,
             writer_locks: BTreeSet::new(),
             max_file_bytes: limit,
+            read_cache: None,
         }
     }
 

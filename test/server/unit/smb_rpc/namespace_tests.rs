@@ -2088,7 +2088,7 @@ fn malformed_raw_operation_ids_keep_handles_and_reject_before_side_effects() {
         .open("report.txt".into(), false, false, false, false, false)
         .unwrap();
     let opened: OpenResult = json_codec::from_value(opened).unwrap();
-    let file = File::from(descriptor.unwrap());
+    let _file = File::from(descriptor.unwrap());
     let spool = || {
         fs::read_dir(&shared.spool)
             .unwrap()
@@ -2119,8 +2119,7 @@ fn malformed_raw_operation_ids_keep_handles_and_reject_before_side_effects() {
                 handle: opened.handle,
             })
             .unwrap();
-        let mut byte = [0];
-        assert_eq!(file.read_at(&mut byte, 0).unwrap(), 1);
+        assert_eq!(read_session(&mut session, opened.handle, 0, 1), b"o");
         assert_eq!(spool(), before);
         assert!(backend.change_before_workspace.load(Ordering::SeqCst));
         assert!(session.writer_locks.is_empty());
@@ -2155,7 +2154,7 @@ fn malformed_namespace_id_frames_keep_the_authenticated_stream_and_reader_alive(
         panic!("reader must open")
     };
     let opened: OpenResult = json_codec::from_value(result).unwrap();
-    let file = File::from(descriptor.unwrap());
+    let _file = File::from(descriptor.unwrap());
     let spool = || {
         fs::read_dir(&shared.spool)
             .unwrap()
@@ -2195,8 +2194,7 @@ fn malformed_namespace_id_frames_keep_the_authenticated_stream_and_reader_alive(
             },
         )
         .unwrap();
-        let mut byte = [0];
-        assert_eq!(file.read_at(&mut byte, 0).unwrap(), 1);
+        assert_eq!(read_rpc(&mut wire, opened.handle, 0, 1), b"o");
         assert_eq!(spool(), before);
         assert!(backend.change_before_workspace.load(Ordering::SeqCst));
     }

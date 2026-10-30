@@ -29,7 +29,7 @@ unsafe fn send(
 // serialized: independent request execution and cancellation stay concurrent.
 static EVENT_INITIALIZATION: Mutex<()> = Mutex::new(());
 
-fn event_context() -> *mut sdk::tevent_context {
+pub(crate) fn event_context() -> *mut sdk::tevent_context {
     let _initialization = EVENT_INITIALIZATION.lock().unwrap();
     // SAFETY: a null talloc parent requests a new independently owned event
     // context; the global backend initialization is serialized above.

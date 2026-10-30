@@ -309,12 +309,25 @@ unsafe extern "C" fn pread(
                 return Err(bad());
             }
             let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-            context.client.call(Request::AuthorizeRead {
-                handle: opened.info.handle,
-            })?;
             let count = opened
                 .info
                 .read_count(opened.writable, offset as u64, count);
+            if !opened.writable {
+                let output = if count == 0 {
+                    &mut []
+                } else {
+                    // SAFETY: the synchronous host contract supplies exclusive
+                    // writable storage; null and length checks passed above.
+                    unsafe { std::slice::from_raw_parts_mut(data.cast::<u8>(), count) }
+                };
+                return context
+                    .client
+                    .read(opened.info.handle, offset as u64, output)
+                    .map(|read| read as isize);
+            }
+            context.client.call(Request::AuthorizeRead {
+                handle: opened.info.handle,
+            })?;
             // SAFETY: The host guarantees data is writable for count bytes for this synchronous
             // call; the descriptor remains owned and the I/O lock is held.
             let result = unsafe { libc::pread(opened.fd.as_raw_fd(), data, count, offset) };
@@ -498,18 +511,25 @@ unsafe extern "C" fn pread_send(
             prepare,
             move |(opened, mut bytes)| {
                 let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-                opened.client.call(Request::AuthorizeRead {
-                    handle: opened.info.handle,
-                })?;
-                let result = libc::pread(
-                    opened.fd.as_raw_fd(),
-                    bytes.as_mut_ptr().cast(),
-                    bytes.len(),
-                    offset,
-                );
-                if result < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
+                let result = if opened.writable {
+                    opened.client.call(Request::AuthorizeRead {
+                        handle: opened.info.handle,
+                    })?;
+                    let result = libc::pread(
+                        opened.fd.as_raw_fd(),
+                        bytes.as_mut_ptr().cast(),
+                        bytes.len(),
+                        offset,
+                    );
+                    if result < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    result
+                } else {
+                    opened
+                        .client
+                        .read(opened.info.handle, offset as u64, &mut bytes)? as isize
+                };
                 bytes.truncate(result as usize);
                 Ok(asynchronous::Completion { result, bytes })
             },

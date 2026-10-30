@@ -1,5 +1,6 @@
 //! zxs HTTP boundary. Storage semantics stay in the synchronous core backend.
 pub mod auth;
+mod content_proof_budget;
 #[cfg(feature = "core")]
 pub mod engine_backend;
 mod file_manager;
@@ -28,6 +29,7 @@ mod transfer;
 mod transfer_limits;
 pub use transfer_limits::TransferLimits;
 mod uploads;
+mod verified_chunk;
 mod web_assets;
 
 mod backend_file_history;
@@ -769,9 +771,9 @@ pub trait Backend: Send + Sync {
         path: &name_policy::PortablePath,
         source: &crate::UploadSource,
     ) -> Result<storage_contract::StagedFile, ApiError>;
-    /// Return a fully verified raw descriptor (used by SMB and local consumers).
+    /// Return a fully verified raw descriptor for writable staging and local consumers.
     fn content(&self, identity: &Identity, version: &str) -> Result<Content, ApiError>;
-    /// HTTP may authenticate only requested chunks, while retaining the read lease.
+    /// HTTP and SMB readers verify each requested chunk and retain the read lease.
     fn range_content(
         &self,
         identity: &Identity,

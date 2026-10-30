@@ -9,6 +9,7 @@ pub(super) struct Session {
     pub(super) next_handle: u64,
     pub(super) writer_locks: BTreeSet<String>,
     pub(super) max_file_bytes: u64,
+    pub(super) read_cache: Option<(u64, crate::verified_chunk::VerifiedChunk)>,
 }
 
 #[derive(Debug)]
@@ -172,6 +173,11 @@ impl Session {
                 write_through,
             } => return self.open(path, writable, create, truncate, exclusive, write_through),
             Request::AuthorizeRead { handle } => self.authorize_read(handle)?,
+            Request::Read {
+                handle,
+                offset,
+                length,
+            } => self.read(handle, offset, length)?,
             Request::PrepareWrite { handle, end, bytes } => {
                 self.prepare_write(handle, end, bytes)?
             }

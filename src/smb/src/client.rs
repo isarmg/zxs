@@ -1,5 +1,6 @@
 use crate::protocol::{
-    FrameStream, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, Request as RawRequest, Response,
+    FrameStream, MAX_READ_BYTES, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, ReadResult,
+    Request as RawRequest, Response,
 };
 
 type Request = RawRequest<storage_contract::OperationId>;
@@ -21,6 +22,7 @@ pub struct Client(Arc<Mutex<Option<FrameStream>>>);
 enum AdmittedResult {
     Value(Value),
     Open(OpenResult, OwnedFd),
+    Read(ReadResult),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -460,23 +462,23 @@ impl Client {
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "SMB bridge did not negotiate authenticated single-account sessions, durable write reservations and generation Dirty writes",
+                "SMB bridge did not negotiate authenticated sessions, durable generation writes and verified range reads",
             ));
         }
         Ok(client)
     }
-    /// Exchange a request without transferring a descriptor; use `open` for Open.
+    /// Exchange an ordinary request; `open` and `read` own their typed admission.
     pub fn call(&self, request: Request) -> io::Result<Value> {
-        if matches!(request, Request::Open { .. }) {
+        if matches!(request, Request::Open { .. } | Request::Read { .. }) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "open requests require Client::open",
+                "descriptor and byte reads require their typed client method",
             ));
         }
         match self.exchange(request)? {
             AdmittedResult::Value(value) => Ok(value),
-            AdmittedResult::Open(..) => {
-                unreachable!("invariant: non-open requests cannot admit an open result")
+            AdmittedResult::Open(..) | AdmittedResult::Read(..) => {
+                unreachable!("invariant: ordinary requests admit untyped values")
             }
         }
     }
@@ -514,6 +516,18 @@ impl Client {
                             result,
                             fd.expect("invariant: successful open response has a descriptor"),
                         )
+                    } else if let Request::Read { length, .. } = request {
+                        let result: ReadResult = json_codec::from_value(result)
+                            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                        if result.bytes.len() > length as usize
+                            || result.bytes.len() > MAX_READ_BYTES
+                        {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "RPC read exceeds requested extent",
+                            ));
+                        }
+                        AdmittedResult::Read(result)
                     } else {
                         AdmittedResult::Value(result)
                     }),
@@ -572,9 +586,37 @@ impl Client {
         }
         match self.exchange(request)? {
             AdmittedResult::Open(result, descriptor) => Ok((result, descriptor)),
-            AdmittedResult::Value(_) => {
+            AdmittedResult::Value(_) | AdmittedResult::Read(_) => {
                 unreachable!("invariant: successful open requests admit typed metadata and an FD")
             }
+        }
+    }
+
+    /// Fill a host-owned read buffer using bounded verified replies. A short
+    /// positive reply can be a checksum-chunk boundary; only zero denotes EOF.
+    /// Revocation, unavailable bytes, transport and malformed replies fail the
+    /// read. On failure the buffer can contain a verified prefix, which callers
+    /// must not report as a successful complete read.
+    pub fn read(&self, handle: u64, mut offset: u64, output: &mut [u8]) -> io::Result<usize> {
+        let mut copied = 0;
+        loop {
+            let length = (output.len() - copied).min(MAX_READ_BYTES) as u32;
+            let AdmittedResult::Read(result) = self.exchange(Request::Read {
+                handle,
+                offset,
+                length,
+            })? else {
+                unreachable!("invariant: successful reads admit typed bounded bytes")
+            };
+            let count = result.bytes.len();
+            output[copied..copied + count].copy_from_slice(&result.bytes);
+            copied += count;
+            if count == 0 || copied == output.len() {
+                return Ok(copied);
+            }
+            offset = offset.checked_add(count as u64).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "read offset overflow")
+            })?;
         }
     }
 }
