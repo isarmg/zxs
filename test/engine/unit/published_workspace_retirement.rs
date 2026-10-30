@@ -545,3 +545,345 @@ fn damaged_request_mirror_replays_admitted_cold_but_restart_keeps_record_residen
     assert_eq!(engine.state().sequence, sequence);
     engine.assert_workspace_budget_consistent();
 }
+
+#[test]
+fn historical_workspace_commit_abort_and_restart_keep_resident_charge() {
+    let mut f = Fixture::new();
+    f.config.max_retained_workspaces = 1;
+    f.config.max_retained_workspaces_per_principal = 1;
+    let mut engine = f.initialize();
+    let repo = repository(&mut engine, 1);
+    let head = engine.state().branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    let workspace = engine
+        .create_historical_workspace(&repo.main_branch_id, &head, "admin")
+        .unwrap();
+    let staged = engine
+        .stage_bytes(
+            &workspace.workspace_id,
+            "historical",
+            b"retained historical FULL",
+        )
+        .unwrap();
+    assert_eq!(
+        engine.workspace(&workspace.workspace_id).unwrap().purpose,
+        WorkspacePurpose::HistoricalBranch
+    );
+    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
+    assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 0);
+    let plan = engine
+        .create_historical_save_plan(
+            &repo.history_tree_id,
+            crate::HistoricalSaveOptions {
+                source_commit_id: head,
+                name: "historical resident witness".into(),
+                workspace_id: Some(workspace.workspace_id.clone()),
+                primary_slot_id: None,
+                target_copies: None,
+            },
+            "admin",
+        )
+        .unwrap();
+    assert_eq!(
+        engine.workspace(&workspace.workspace_id).unwrap().state,
+        WorkspaceState::Sealed
+    );
+    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
+    assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 0);
+    let operation = OperationId::generate();
+    let published = engine
+        .commit_historical_save_plan(&plan.plan_id, "admin", operation)
+        .unwrap();
+    assert_eq!(published.commit_state, CommitState::Published);
+    let committed = engine.workspace(&workspace.workspace_id).unwrap();
+    assert_eq!(committed.purpose, WorkspacePurpose::HistoricalBranch);
+    assert_eq!(committed.state, WorkspaceState::Committed);
+    assert!(engine.workspaces.contains_key(&workspace.workspace_id));
+    let capacity = engine.workspace_capacity("admin");
+    assert_eq!(capacity.principal.records.used, 1);
+    assert_eq!(capacity.principal.cold_records, 0);
+    assert!(capacity.principal.metadata_bytes.used > 0);
+    assert_eq!(
+        engine
+            .create_workspace(&repo.main_branch_id, "admin")
+            .unwrap_err()
+            .code(),
+        ErrorCode::ResourceLimit
+    );
+    let sequence = engine.state().sequence;
+    engine.assert_workspace_budget_consistent();
+    drop(engine);
+    let mut engine = Engine::open(&f.root).unwrap();
+    assert_eq!(engine.workspace_capacity("admin"), capacity);
+    assert!(engine.workspaces.contains_key(&workspace.workspace_id));
+    assert_eq!(
+        canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        canonical_json(&committed).unwrap()
+    );
+    assert_eq!(
+        engine
+            .commit_historical_save_plan(&plan.plan_id, "admin", operation)
+            .unwrap(),
+        published
+    );
+    assert_eq!(engine.state().sequence, sequence);
+    assert_eq!(
+        fs::read(&staged.source_path).unwrap(),
+        b"retained historical FULL"
+    );
+    engine
+        .abort_workspace(&workspace.workspace_id, "admin")
+        .unwrap();
+    let aborted = engine.workspace(&workspace.workspace_id).unwrap();
+    assert_eq!(aborted.purpose, WorkspacePurpose::HistoricalBranch);
+    assert_eq!(aborted.state, WorkspaceState::Aborted);
+    assert!(engine.workspaces.contains_key(&workspace.workspace_id));
+    assert_eq!(engine.workspace_capacity("admin"), capacity);
+    for path in manifests(&f, &workspace.workspace_id) {
+        assert_eq!(fs::read(path).unwrap(), canonical_json(&aborted).unwrap());
+    }
+    engine.assert_workspace_budget_consistent();
+    drop(engine);
+    let mut engine = Engine::open(&f.root).unwrap();
+    assert_eq!(engine.workspace_capacity("admin"), capacity);
+    assert!(engine.workspaces.contains_key(&workspace.workspace_id));
+    assert_eq!(
+        canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        canonical_json(&aborted).unwrap()
+    );
+    assert_eq!(
+        engine
+            .create_workspace(&repo.main_branch_id, "admin")
+            .unwrap_err()
+            .code(),
+        ErrorCode::ResourceLimit
+    );
+    assert_eq!(
+        engine
+            .commit_historical_save_plan(&plan.plan_id, "admin", operation)
+            .unwrap(),
+        published
+    );
+    assert_eq!(engine.state().sequence, sequence);
+    assert_eq!(engine.workspace_capacity("admin"), capacity);
+    assert_eq!(
+        fs::read(&staged.source_path).unwrap(),
+        b"retained historical FULL"
+    );
+    engine.assert_workspace_budget_consistent();
+}
+
+fn evidence_entries(
+    root: &std::path::Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, Option<blake3::Hash>> {
+    let mut entries = std::collections::BTreeMap::new();
+    for entry in fs::read_dir(root).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if entry.file_type().unwrap().is_dir() {
+            entries.insert(path.clone(), None);
+            entries.extend(evidence_entries(&path));
+        } else {
+            entries.insert(path.clone(), Some(blake3::hash(&fs::read(path).unwrap())));
+        }
+    }
+    entries
+}
+
+#[test]
+fn terminal_manifest_beyond_verified_publication_prefix_cannot_release_quota_or_write() {
+    for (point, publication_count) in [("after_publication_1", 1), ("after_publication_2", 2)] {
+        let mut f = Fixture::new();
+        f.config.max_retained_workspaces = 1;
+        f.config.max_retained_workspaces_per_principal = 1;
+        let raised = crate::RetainedWorkspaceLimits {
+            max_retained_workspaces: 2,
+            max_retained_workspaces_per_principal: 2,
+            max_retained_workspace_metadata_bytes: f.config.max_retained_workspace_metadata_bytes,
+            max_retained_workspace_metadata_bytes_per_principal: f
+                .config
+                .max_retained_workspace_metadata_bytes_per_principal,
+        };
+        // Build two real resident records under an explicit runtime override;
+        // the saved pool baseline remains one record for restart and restore.
+        let mut engine =
+            Engine::initialize_with_workspace_limits(&f.root, f.config.clone(), Some(raised))
+                .unwrap();
+        let repo = repository(&mut engine, 3);
+        let anchor = engine
+            .create_workspace(&repo.main_branch_id, "admin")
+            .unwrap();
+        let anchor_full = engine
+            .stage_bytes(&anchor.workspace_id, "anchor", b"unpublished quota anchor")
+            .unwrap();
+        engine
+            .abort_workspace(&anchor.workspace_id, "admin")
+            .unwrap();
+        let pending = engine
+            .create_workspace(&repo.main_branch_id, "admin")
+            .unwrap();
+        let staged = engine
+            .stage_bytes(&pending.workspace_id, "file", b"unproven publication FULL")
+            .unwrap();
+        let request = CommitRequest {
+            workspace_id: pending.workspace_id.clone(),
+            operation_id: OperationId::generate(),
+            principal: "admin".into(),
+            expected_head: pending.base_head,
+            fencing_token: pending.fencing_token,
+            message: "incomplete member publication".into(),
+            request_digest: None,
+        };
+        let prefix_sequence = engine.state().sequence;
+        engine.inject_fault_once(point);
+        let failure = engine.commit_workspace(request.clone()).unwrap_err();
+        assert_eq!(failure.code(), ErrorCode::InDoubt);
+        let Error::Context { source, .. } = &failure else {
+            panic!("publication fault lost its concrete source: {failure:?}");
+        };
+        assert_eq!(source.code(), ErrorCode::InjectedFailure);
+        assert_eq!(source.message(), format!("interrupted at {point}"));
+        assert_eq!(engine.state().sequence, prefix_sequence);
+        assert!(
+            !engine
+                .state()
+                .operations
+                .contains_key(&request.operation_id)
+        );
+        let scans: Vec<_> = f
+            .config
+            .disks
+            .iter()
+            .map(|disk| crate::journal::scan(disk).unwrap())
+            .collect();
+        let record = &scans[0]
+            .records
+            .iter()
+            .rev()
+            .find(|(record, _)| record.record_type == RecordType::Publication)
+            .unwrap()
+            .0;
+        let member = &f.config.disks[0];
+        let held = &engine.disk_resources.get(member).unwrap().root;
+        let candidate: crate::journal::Candidate =
+            crate::journal::load_object_at(held, member, "candidate", &record.candidate_hash)
+                .unwrap();
+        let publication: crate::journal::Publication =
+            crate::journal::load_object_at(held, member, "publication", &record.object_hash)
+                .unwrap();
+        assert_eq!(candidate.operation_id, request.operation_id);
+        assert!(candidate.sequence > prefix_sequence);
+        assert_eq!(publication.result.operation_id, request.operation_id);
+        assert_eq!(
+            scans
+                .iter()
+                .flat_map(|scan| &scan.records)
+                .filter(|(frame, _)| frame.record_type == RecordType::Publication
+                    && frame.candidate_hash == record.candidate_hash)
+                .count(),
+            publication_count
+        );
+        let barrier_error = crate::publication_evidence::verified_publication_seal_at(
+            &engine.disk_resources,
+            &f.config.disks,
+            &candidate,
+            &publication,
+        )
+        .unwrap_err();
+        match barrier_error {
+            Error::Filesystem(platform_io::fs_safety::Error::Io(source))
+            | Error::Contract(storage_contract::Error::Io { source, .. }) => {
+                assert_eq!(source.kind(), std::io::ErrorKind::NotFound)
+            }
+            other => panic!("missing publication barrier lost its I/O cause: {other:?}"),
+        }
+        // Only the on-disk manifest claims completion. No State receipt is
+        // fabricated or installed; the real publication lacks the full barrier.
+        let mut claimed = engine.workspace(&request.workspace_id).unwrap();
+        claimed.state = WorkspaceState::Committed;
+        claimed.fencing_token += 1;
+        assert!(
+            crate::engine::native_workspace_commit_completed(
+                &claimed,
+                &request,
+                &publication.result
+            )
+            .unwrap()
+        );
+        for path in manifests(&f, &request.workspace_id) {
+            crate::disk::write_json(&path, &claimed, true).unwrap();
+        }
+        assert_eq!(engine.workspace_capacity("admin").principal.records.used, 2);
+        assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 0);
+        drop(engine);
+        let missing_journal = crate::journal::log_path(&f.config.disks[2]);
+        let retained_journal = missing_journal.with_extension("retained");
+        fs::rename(&missing_journal, &retained_journal).unwrap();
+        let retained_bytes = fs::read(&retained_journal).unwrap();
+        // Writer conversion would recreate the missing journal; replay would
+        // truncate these tails or fill the missing publication replicas.
+        for disk in &f.config.disks[..2] {
+            fs::OpenOptions::new()
+                .append(true)
+                .open(crate::journal::log_path(disk))
+                .unwrap()
+                .write_all(b"ZXS")
+                .unwrap();
+        }
+        let roots: Vec<_> = std::iter::once(f.root.clone())
+            .chain(f.config.disks.iter().map(|disk| disk.root.clone()))
+            .collect();
+        let before: Vec<_> = roots.iter().map(|root| evidence_entries(root)).collect();
+        let restored = f.temp.path().join("unproven-restore");
+        let disks: Vec<_> = f
+            .config
+            .disks
+            .iter()
+            .map(|disk| disk.root.clone())
+            .collect();
+        for mode in ["open", "preserve", "restore"] {
+            let result = match mode {
+                "open" => Engine::open(&f.root),
+                "preserve" => Engine::open_for_recovery(&f.root),
+                "restore" => Engine::restore_from_disks(&restored, &disks),
+                _ => unreachable!(),
+            };
+            let error = result
+                .err()
+                .expect("unproven terminal record must consume resident quota");
+            assert_eq!(error.code(), ErrorCode::ResourceLimit, "{point}: {mode}");
+            assert!(error.message().contains("global record count"));
+            assert!(
+                !missing_journal.exists(),
+                "writer conversion ran before quota refusal"
+            );
+            assert_eq!(fs::read(&retained_journal).unwrap(), retained_bytes);
+            assert_eq!(
+                roots
+                    .iter()
+                    .map(|root| evidence_entries(root))
+                    .collect::<Vec<_>>(),
+                before
+            );
+            assert!(!restored.join("config.json").exists());
+            assert!(!restored.join("index.sqlite").exists());
+            for path in manifests(&f, &request.workspace_id) {
+                assert_eq!(fs::read(path).unwrap(), canonical_json(&claimed).unwrap());
+            }
+            assert_eq!(
+                fs::read(&staged.source_path).unwrap(),
+                b"unproven publication FULL"
+            );
+            assert_eq!(
+                fs::read(&anchor_full.source_path).unwrap(),
+                b"unpublished quota anchor"
+            );
+        }
+        assert!(
+            fs::read_dir(restored)
+                .unwrap()
+                .all(|entry| entry.unwrap().file_name() == "writer.lock")
+        );
+    }
+}
