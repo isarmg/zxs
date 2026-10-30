@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, packages, namespace-borrow]
+        options: [all, smb-close, workspace-admission, auth-owner, server, packages, namespace-borrow, namespace-format, spool-retirement]
 
 permissions:
   contents: read
@@ -83,6 +83,12 @@ jobs:
               for package in ['authentication', 'storage-contract', 'name-policy', 'platform-io',
                               'storage-client', 'storage-rescue', 'smb-protocol']]
           aggregate = sum(groups.values(), [])
+          spool_test = 'http_spool::tests::retirement_waits_for_activation_and_cancelled_owner_never_publishes'
+          groups['spool-retirement'] = [
+              dict(id='spool-format', command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check test/server/unit/http_spool.rs'),
+              dict(id='spool-retirement', cache='server', exact_test=spool_test, repetitions=10,
+                  command=f'cargo test --locked --offline -p storage-server --lib {spool_test} -- --exact --nocapture'),
+          ]
           files = [
               'src/engine/src/namespace.rs',
               'src/engine/src/business/namespace/query.rs',
@@ -118,6 +124,7 @@ jobs:
                   package=package, test_filter=prefix,
                   required_names=json.dumps(witnesses if name == 'engine-namespace' else []),
                   command=f'cargo test --locked --offline --release -p {package} --lib {prefix} -- --nocapture'))
+          groups['namespace-format'] = [groups['namespace-borrow'][0]]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -225,6 +232,7 @@ jobs:
           PY
           cargo test --locked --offline --release -p "$TEST_PACKAGE" --lib "$TEST_FILTER" -- --ignored --list 2>&1 | tee .diagnostics/ignored-list.log
       - name: Execute selected locked offline tests and retain failures
+        if: matrix.repetitions != 10
         run: |
           printf 'Source: %s\nCommand: %s\n' "$SOURCE_SHA" "$TEST_COMMAND" | tee .diagnostics/command.txt
           set +e
@@ -253,6 +261,37 @@ jobs:
           PY
           fi
           exit "$status"
+      - name: Execute the exact spool regression ten times and require every attempt
+        if: matrix.repetitions == 10
+        run: |
+          printf 'Source: %s\nCommand: %s\n' "$SOURCE_SHA" "$TEST_COMMAND" | tee .diagnostics/command.txt
+          overall_status=0
+          for attempt in {1..10}; do
+            log=".diagnostics/attempt-$attempt.log"
+            printf 'Source: %s\nAttempt: %s/10\nCommand: %s\n' "$SOURCE_SHA" "$attempt" "$TEST_COMMAND" | tee "$log"
+            set +e
+            bash -euo pipefail -c "$TEST_COMMAND" 2>&1 | tee -a "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            printf '%s\n' "$status" > ".diagnostics/attempt-$attempt.exit-code"
+            if [[ "$status" != 0 ]]; then
+              overall_status=$status
+            fi
+            if ! python3 - "$log" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+          results = re.findall(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', Path(sys.argv[1]).read_text())
+          if len(results) != 1 or sum(map(int, results[0][:2])) != 1 or int(results[0][2]) != 0:
+              raise SystemExit(f'Expected exactly one executed, non-ignored spool test; found {results!r}')
+          PY
+            then
+              overall_status=1
+            fi
+            printf '%s\t%s\n' "$attempt" "$status" >> .diagnostics/attempts.tsv
+          done
+          printf '%s\n' "$overall_status" > .diagnostics/exit-code.txt
+          exit "$overall_status"
       - name: Verify tracked source contents are unchanged
         if: always()
         run: |
