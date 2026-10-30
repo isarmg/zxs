@@ -42,9 +42,9 @@ pub use disk::{offline_check, offline_export};
 #[cfg(feature = "fault-injection")]
 pub use engine::MemberFault;
 pub use engine::{
-    ContentReadPlan, DiskObservation, DiskObservationPlan, Engine, EventPageReadPlan,
-    FileHistoryReadView, HistoryRoot, IndexFailure, IndexFailureStage, IndexHealth,
-    IntegrityScrubArea, IntegrityScrubBatch, IntegrityScrubBatchAdmission,
+    BackupConfigurationReadView, ContentReadPlan, DiskObservation, DiskObservationPlan, Engine,
+    EventPageReadPlan, FileHistoryReadView, HistoryRoot, IndexFailure, IndexFailureStage,
+    IndexHealth, IntegrityScrubArea, IntegrityScrubBatch, IntegrityScrubBatchAdmission,
     IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
     IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport, IntegrityScrubSchedule,
     IntegrityScrubTarget, MetadataMemberProbe, OpenedContent, OperationLookup,

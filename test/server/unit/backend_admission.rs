@@ -364,6 +364,7 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadBackupConfiguration,
+        _control: &crate::HistoryReadControl,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -1276,6 +1277,7 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
 async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation() {
     for &(method, path) in TYPED_BACKEND_ROUTES {
         let slots = match path {
+            "/api/repositories/repo/backup-configuration" if method == "GET" => 2,
             "/api/branches/branch/tree?commit_id=commit"
             | "/api/history-trees/history/graph?collection=commits"
             | "/api/file-manager/history?ignored=true" => 2,

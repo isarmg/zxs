@@ -26,6 +26,43 @@ pub struct PublishedReadView {
     owners: Option<DerivedOwners>,
 }
 
+/// One backup configuration observation with its exact admitted topology.
+/// This owner grants no authority; callers bound its lifetime and revalidate
+/// current authorization before exposing the completed result.
+pub struct BackupConfigurationReadView {
+    view: PublishedReadView,
+    config: crate::ValidatedConfig,
+}
+
+impl BackupConfigurationReadView {
+    /// Read scope, policy and all relevant historical/future routes.
+    ///
+    /// # Errors
+    /// Preserves scope, namespace and route errors, including their sources;
+    /// also propagates cancellation from `observe` without a partial snapshot.
+    pub fn read(
+        &self,
+        repository: &str,
+        path: &str,
+        observe: &dyn Fn() -> Result<()>,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot> {
+        observe()?;
+        let reader = self.view.reader(observe);
+        let source =
+            crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {
+                reader.namespace_node(reference)
+            });
+        crate::protection::backup_configuration(
+            &self.view.state,
+            &self.config,
+            repository,
+            path,
+            &source,
+            Some(observe),
+        )
+    }
+}
+
 /// A file-history read owns the same captured resources and the existing
 /// generation-bound cold index cell. It grants no authority.
 pub struct FileHistoryReadView {
@@ -78,6 +115,16 @@ impl FileHistoryReadView {
 }
 
 impl Engine {
+    /// Capture the same publication and admitted topology without namespace I/O.
+    /// Configuration cloning shares its immutable admission; member descriptors
+    /// still follow the existing published-view capture budget.
+    pub fn backup_configuration_read_view(&self) -> BackupConfigurationReadView {
+        BackupConfigurationReadView {
+            view: self.published_read_view(),
+            config: self.config.clone(),
+        }
+    }
+
     /// Capture one exact admitted catalog's existing index owner without I/O.
     ///
     /// # Errors
@@ -225,3 +272,7 @@ impl PublishedReadView {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/published_read_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/backup_configuration_read_tests.rs"]
+mod backup_configuration_tests;

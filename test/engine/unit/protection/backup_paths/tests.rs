@@ -1,4 +1,6 @@
 use super::*;
+#[path = "detached_parity.rs"]
+mod detached_parity;
 use std::{fs, os::unix::fs::MetadataExt, path::Path};
 #[path = "precedence_tests.rs"]
 mod precedence_tests;
@@ -831,6 +833,7 @@ fn admission_rejects_missing_namespace_or_bound_policy_before_copy_selection() {
                 Some(&file.file_id),
                 "docs/file",
                 source,
+                None,
             )
             .map(|policy| policy.unwrap().target_copies))
             .unwrap(),
@@ -909,7 +912,7 @@ fn removed_scope_is_absent_but_its_retained_file_binding_still_applies() {
     let policy = &state.protection_policies[&state.file_backup_policies[&file.file_id]];
     engine
         .with_namespace_source(|source| {
-            assert_eq!(scope_path(state, policy, source)?, None);
+            assert_eq!(scope_path(state, policy, source, None)?, None);
             assert_eq!(
                 effective_policy(
                     state,
@@ -917,13 +920,15 @@ fn removed_scope_is_absent_but_its_retained_file_binding_still_applies() {
                     Some(&file.file_id),
                     "elsewhere/file",
                     source,
+                    None,
                 )?
                 .unwrap()
                 .target_copies,
                 3
             );
             assert!(
-                effective_policy(state, &repo.repository_id, None, "docs/new", source)?.is_none()
+                effective_policy(state, &repo.repository_id, None, "docs/new", source, None)?
+                    .is_none()
             );
             Ok(())
         })

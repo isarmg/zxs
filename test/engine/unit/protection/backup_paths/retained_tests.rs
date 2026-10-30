@@ -62,6 +62,7 @@ fn source_reconfiguration_preserves_one_shared_snapshot_for_moved_files() {
         let read = engine
             .backup_configuration(&repo.repository_id, path)
             .unwrap();
+        super::detached_parity::check(&engine, &repo.repository_id, path, &read);
         assert_eq!(read.target_copies, 2);
         assert!(!read.inherited);
         assert_eq!(read.effective_policy_id.as_deref().unwrap(), retained);

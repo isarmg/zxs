@@ -8,6 +8,7 @@ use data_serialization::{Deserialize, Deserializer};
 use http_routing::{
     Extension, Json,
     extract::{Request, State},
+    response::Response,
 };
 use json_codec::Value;
 use std::collections::BTreeMap;
@@ -76,24 +77,23 @@ pub(crate) async fn read(
     Extension(identity): Extension<Identity>,
     ApiPath(repository_id): ApiPath<String>,
     ApiQuery(mut query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<crate::backend_backup_configuration::BackupConfigurationResponse>, ApiError> {
+    connection: Option<Extension<crate::http_shutdown::ResponseConnection>>,
+) -> Result<Response, ApiError> {
     let request = crate::ReadBackupConfiguration {
         repository_id,
         path: query.remove("path").unwrap_or_default(),
     };
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
-            backend
-                .backup_configuration(&identity, request)
-                .map(crate::backend_backup_configuration::BackupConfigurationResponse::from)
-        })
-        .await
-        .map(Json)
+    crate::history_read::run(
+        state,
+        connection.map(|Extension(connection)| connection),
+        move |backend, control| backend.backup_configuration(&identity, request, control),
+        |snapshot| {
+            crate::backend_file_history::encode_response_bounded(
+                crate::backend_backup_configuration::BackupConfigurationResponse::from(snapshot),
+            )
+        },
+    )
+    .await
 }
 
 pub(crate) async fn configure(

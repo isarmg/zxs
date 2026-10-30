@@ -318,6 +318,7 @@ impl Backend for TestBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadBackupConfiguration,
+        _control: &crate::HistoryReadControl,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -1617,8 +1618,10 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             &self,
             identity: &crate::auth::Identity,
             request: crate::ReadBackupConfiguration,
+            control: &crate::HistoryReadControl,
         ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
-            self.delegate.backup_configuration(identity, request)
+            self.delegate
+                .backup_configuration(identity, request, control)
         }
         fn configure_backups(
             &self,

@@ -67,6 +67,7 @@ fn moved_file_configuration_remains_readable_when_current_chain_is_shorter() {
     let read = engine
         .backup_configuration(&repo.repository_id, "moved.txt")
         .unwrap();
+    super::detached_parity::check(&engine, &repo.repository_id, "moved.txt", &read);
     assert_eq!(read.target_copies, 3);
     assert_eq!(read.max_copies, 2);
     assert_eq!(json_codec::json!(read.route_slot_ids), json!([]));
@@ -105,6 +106,7 @@ fn directory_configuration_includes_child_future_placement_chain() {
     let read = engine
         .backup_configuration(&repo.repository_id, "docs")
         .unwrap();
+    super::detached_parity::check(&engine, &repo.repository_id, "docs", &read);
     assert_eq!(
         json_codec::json!(read.backup_routes),
         json!([["P01", "B01", "C01"], ["P02", "B02"]])
@@ -181,6 +183,7 @@ fn directory_routes_exclude_files_with_independent_backup_settings() {
     let read = engine
         .backup_configuration(&repo.repository_id, "docs")
         .unwrap();
+    super::detached_parity::check(&engine, &repo.repository_id, "docs", &read);
     assert_eq!(
         json_codec::json!(read.backup_routes),
         json!([["P01", "B01", "C01"]])

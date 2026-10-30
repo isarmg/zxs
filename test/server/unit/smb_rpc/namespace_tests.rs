@@ -600,8 +600,9 @@ impl Backend for NamespaceFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadBackupConfiguration,
+        control: &crate::HistoryReadControl,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
-        self.inner.backup_configuration(identity, request)
+        self.inner.backup_configuration(identity, request, control)
     }
     fn configure_backups(
         &self,
@@ -1686,8 +1687,9 @@ impl Backend for PreparationFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadBackupConfiguration,
+        control: &crate::HistoryReadControl,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
-        self.inner.backup_configuration(identity, request)
+        self.inner.backup_configuration(identity, request, control)
     }
     fn configure_backups(
         &self,

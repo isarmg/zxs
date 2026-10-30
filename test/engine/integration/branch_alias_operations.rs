@@ -1317,3 +1317,55 @@ fn inherited_first_write_truncates_a_multibyte_collision_label_and_reopens() {
             .unwrap();
     });
 }
+
+#[test]
+fn detached_backup_configuration_preserves_aliases_and_inactive_directory_files() {
+    let mut pool = Pool::new();
+    let (_, _, original) = selected_aliases(&mut pool);
+    let paths = ["", "a", "a/report.txt", "b/report.txt"];
+    let before = paths.map(|path| {
+        pool.engine
+            .backup_configuration(&pool.repo.repository_id, path)
+            .unwrap()
+    });
+    assert_eq!(before[0].file_count, 2);
+    assert_eq!(before[2].scope.id, original.file_id);
+    assert_eq!(before[3].scope.id, original.file_id);
+    assert_eq!(before[2].file_count, 1);
+    assert_eq!(before[3].file_count, 1);
+    let view = pool.engine.backup_configuration_read_view();
+    // The moved-from named view is empty, while the other named view retains
+    // the old file. The directory's backup scope must still include that file.
+    pool.select("a", "m");
+    assert!(
+        pool.engine
+            .list_tree(&pool.repo.main_branch_id)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.path != "a/report.txt")
+    );
+    let retained = pool
+        .engine
+        .backup_configuration(&pool.repo.repository_id, "a")
+        .unwrap();
+    assert_eq!(retained.file_count, 1);
+    let visits = std::cell::Cell::new(0usize);
+    let observe = || {
+        visits.set(visits.get() + 1);
+        Ok(())
+    };
+    assert_eq!(
+        pool.engine
+            .backup_configuration_read_view()
+            .read(&pool.repo.repository_id, "a", &observe)
+            .unwrap(),
+        retained
+    );
+    for (path, expected) in paths.into_iter().zip(before) {
+        assert_eq!(
+            view.read(&pool.repo.repository_id, path, &observe).unwrap(),
+            expected
+        );
+    }
+    assert!(visits.get() > 0);
+}

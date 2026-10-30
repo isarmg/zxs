@@ -74,6 +74,76 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    pub(crate) fn disk(&self, slot: &str) -> Result<&DiskConfig> {
+        self.disk_observed(slot, None)
+    }
+
+    fn disk_observed(
+        &self,
+        slot: &str,
+        observe: Option<&dyn Fn() -> Result<()>>,
+    ) -> Result<&DiskConfig> {
+        for disk in &self.disks {
+            if let Some(observe) = observe {
+                observe()?;
+            }
+            if disk.slot_id.eq_ignore_ascii_case(slot) {
+                return Ok(disk);
+            }
+        }
+        Err(Error::new(
+            storage_contract::ErrorCode::SlotNotFound,
+            "storage slot is not registered",
+        ))
+    }
+
+    pub(crate) fn route(&self, primary: &str, copies: u32) -> Result<Vec<String>> {
+        self.route_observed(primary, copies, None)
+    }
+
+    pub(crate) fn route_observed(
+        &self,
+        primary: &str,
+        copies: u32,
+        observe: Option<&dyn Fn() -> Result<()>>,
+    ) -> Result<Vec<String>> {
+        let first = self.disk_observed(primary, observe)?;
+        if first.level != 1 || copies == 0 {
+            return Err(Error::new(
+                storage_contract::ErrorCode::PlacementInvalid,
+                "placement requires a primary slot and at least one copy",
+            ));
+        }
+        let mut route = vec![first.slot_id.clone()];
+        let mut current = first;
+        while route.len() < copies as usize {
+            let mut next = None;
+            for disk in &self.disks {
+                if let Some(observe) = observe {
+                    observe()?;
+                }
+                if disk.level == current.level + 1
+                    && disk
+                        .upstream_slot_id
+                        .as_deref()
+                        .is_some_and(|slot| slot.eq_ignore_ascii_case(&current.slot_id))
+                {
+                    next = Some(disk);
+                    break;
+                }
+            }
+            let next = next.ok_or_else(|| {
+                Error::new(
+                    storage_contract::ErrorCode::RouteIncomplete,
+                    "requested copies exceed the configured fixed route",
+                )
+            })?;
+            route.push(next.slot_id.clone());
+            current = next;
+        }
+        Ok(route)
+    }
+
     pub(super) fn same_admission(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.admitted, &other.admitted)
     }

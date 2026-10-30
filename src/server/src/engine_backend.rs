@@ -66,6 +66,21 @@ pub struct EngineBackend {
     operation_health_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 impl EngineBackend {
+    fn finish_backup_configuration(
+        &self,
+        identity: &Identity,
+        result: Result<storage_contract::BackupConfigurationSnapshot, ApiError>,
+        control: &crate::HistoryReadControl,
+    ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::activity::checkpoint(control)?;
+        result
+    }
+
     fn finish_directory_scopes(
         &self,
         identity: &Identity,
@@ -1255,6 +1270,7 @@ impl Backend for EngineBackend {
         &self,
         identity: &Identity,
         request: crate::ReadBackupConfiguration,
+        control: &crate::HistoryReadControl,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError> {
         let engine = self
             .engine
@@ -1262,9 +1278,14 @@ impl Backend for EngineBackend {
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         repository(&engine, &request.repository_id)?;
-        engine
-            .backup_configuration(&request.repository_id, &request.path)
-            .map_err(error)
+        file_manager::activity::checkpoint(control)?;
+        let view = engine.backup_configuration_read_view();
+        drop(engine);
+        let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+        let result = view
+            .read(&request.repository_id, &request.path, &observe)
+            .map_err(file_manager::activity::read_error);
+        self.finish_backup_configuration(identity, result, control)
     }
     fn configure_backups(
         &self,
@@ -2151,3 +2172,7 @@ fn upload_time(time: std::time::SystemTime) -> Result<u64, ApiError> {
             .with_source(source)
         })
 }
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/engine_backend/backup_configuration_tests.rs"]
+mod backup_configuration_tests;

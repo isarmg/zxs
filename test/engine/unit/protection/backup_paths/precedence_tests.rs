@@ -83,6 +83,7 @@ fn generic_policy_collisions_follow_the_current_directory_or_file_scope_path() {
         let read = engine
             .backup_configuration(&repo.repository_id, destination)
             .unwrap();
+        super::detached_parity::check(&engine, &repo.repository_id, destination, &read);
         assert_eq!(read.policy_id.as_deref().unwrap(), scoped);
         assert_eq!(read.effective_policy_id.as_deref().unwrap(), scoped);
         assert_eq!(read.target_copies, 2);
@@ -122,6 +123,7 @@ fn renamed_stable_scope_wins_equal_depth_in_either_creation_and_id_order() {
             let read = engine
                 .backup_configuration(&repo.repository_id, "renamed")
                 .unwrap();
+            super::detached_parity::check(&engine, &repo.repository_id, "renamed", &read);
             assert_eq!(read.policy_id.as_deref().unwrap(), scoped);
             assert_eq!(read.effective_policy_id.as_deref().unwrap(), scoped);
             assert_eq!(read.target_copies, 2);
@@ -144,6 +146,7 @@ fn renamed_stable_scope_wins_equal_depth_in_either_creation_and_id_order() {
             let read = engine
                 .backup_configuration(&repo.repository_id, "renamed/child")
                 .unwrap();
+            super::detached_parity::check(&engine, &repo.repository_id, "renamed/child", &read);
             assert_eq!(read.effective_policy_id.as_deref().unwrap(), child_policy);
             assert_eq!(read.target_copies, 3);
             assert_eq!(configure_scope(&mut engine, &repo, "renamed", 2, 1), scoped);
@@ -187,6 +190,7 @@ fn root_scope_adopts_existing_path_rule_and_rejects_parallel_rules() {
         let read = engine
             .backup_configuration(&repo.repository_id, "")
             .unwrap();
+        super::detached_parity::check(&engine, &repo.repository_id, "", &read);
         assert_eq!(read.policy_id.as_deref().unwrap(), scoped);
         assert_eq!(read.effective_policy_id.as_deref().unwrap(), scoped);
         assert_eq!(read.generation, u64::from(generic_first) + 1);
@@ -221,6 +225,7 @@ fn exact_path_rule_does_not_hide_effective_file_binding_or_retained_settings() {
         let read = engine
             .backup_configuration(&repo.repository_id, "moved.txt")
             .unwrap();
+        super::detached_parity::check(&engine, &repo.repository_id, "moved.txt", &read);
         assert_eq!(read.policy_id.as_deref().unwrap(), path_policy_id);
         assert_eq!(read.generation, 1);
         assert_eq!(
@@ -245,6 +250,7 @@ fn exact_path_rule_does_not_hide_effective_file_binding_or_retained_settings() {
     let read = engine
         .backup_configuration(&repo.repository_id, "moved.txt")
         .unwrap();
+    super::detached_parity::check(&engine, &repo.repository_id, "moved.txt", &read);
     assert_eq!(read.effective_policy_id.as_deref().unwrap(), path_policy_id);
     assert_eq!(read.generation, 2);
     assert!(!read.inherited);

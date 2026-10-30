@@ -352,6 +352,7 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
                     repository_id: repo.repository_id.clone(),
                     path: String::new(),
                 },
+                &crate::tests::history_read_control(),
             )
             .unwrap();
         backend.repositories_snapshot(&caller()).unwrap();
@@ -415,7 +416,8 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
                 crate::ReadBackupConfiguration {
                     repository_id: repo.repository_id.clone(),
                     path: String::new()
-                }
+                },
+                &crate::tests::history_read_control()
             )
             .unwrap_err()
             .status,
@@ -473,7 +475,8 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
                 crate::ReadBackupConfiguration {
                     repository_id: repo.repository_id.clone(),
                     path: String::new()
-                }
+                },
+                &crate::tests::history_read_control()
             )
             .unwrap_err()
             .status,
@@ -535,7 +538,8 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
                     crate::ReadBackupConfiguration {
                         repository_id: "missing".into(),
                         path: String::new()
-                    }
+                    },
+                    &crate::tests::history_read_control()
                 )
                 .is_err()
         );
@@ -610,7 +614,8 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
                     crate::ReadBackupConfiguration {
                         repository_id: repo.repository_id.clone(),
                         path: String::new()
-                    }
+                    },
+                    &crate::tests::history_read_control()
                 )
                 .unwrap_err()
                 .code,

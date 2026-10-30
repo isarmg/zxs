@@ -687,7 +687,9 @@ impl Backend for RecordingBackend {
         &self,
         identity: &Identity,
         request: crate::ReadBackupConfiguration,
+        control: &crate::HistoryReadControl,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError> {
+        control.checkpoint().map_err(ApiError::invalid_source)?;
         self.record(
             "backup_configuration",
             Some(identity),
@@ -1836,7 +1838,7 @@ impl Fixture {
             ("create_disk_write_session", {backend.create_disk_write_session(identity,crate::CreateDiskWriteSession {slot_id:"P01".into(),path:name_policy::PortablePath::parse("Café/file.txt").unwrap(),branch_id:None}).map(|session|{assert_eq!(session.workspace.workspace_id,"disk-workspace");assert_eq!(session.relative_path,"file.txt");assert_eq!(session.display_path,"Café/file.txt");json!({"returned_by":"create_disk_write_session"})})}),
             ("create_disk_write_session", {backend.create_disk_write_session(identity,crate::CreateDiskWriteSession {slot_id:"P01".into(),path:name_policy::PortablePath::parse("Café/file.txt").unwrap(),branch_id:Some("br_00000000000000000000000000000000".to_owned().try_into().unwrap())}).map(|session|{assert_eq!(session.workspace.workspace_id,"disk-workspace");assert_eq!(session.relative_path,"file.txt");assert_eq!(session.display_path,"Café/file.txt");json!({"returned_by":"create_disk_write_session"})})}),
             ("backup_configuration", {
-                backend.backup_configuration(identity, crate::ReadBackupConfiguration {repository_id:"repository".into(),path:"docs".into()}).map(|result| {assert_eq!(result,recorded_backup_configuration());json!({"returned_by":"backup_configuration"})})
+                backend.backup_configuration(identity, crate::ReadBackupConfiguration {repository_id:"repository".into(),path:"docs".into()}, &crate::tests::history_read_control()).map(|result| {assert_eq!(result,recorded_backup_configuration());json!({"returned_by":"backup_configuration"})})
             }),
             ("configure_backups", {
                 backend.configure_backups(identity,crate::ConfigureBackups {repository_id:"repository".into(),path:"docs".into(),target_copies:2,backup_prefixes:BTreeMap::from([("B01".into(),"backup".into())]),expected_generation:7,expected_scope_id:"scope".into(),operation_id}).map(|result| {assert_eq!(result,recorded_operation(operation_id,"configure_backups"));json!({"returned_by":"configure_backups"})})

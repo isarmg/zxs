@@ -277,6 +277,7 @@ impl crate::Backend for UnusedBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadBackupConfiguration,
+        _control: &crate::HistoryReadControl,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

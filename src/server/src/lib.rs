@@ -755,6 +755,7 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         request: ReadBackupConfiguration,
+        control: &crate::HistoryReadControl,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError>;
     fn configure_backups(
         &self,
@@ -1400,9 +1401,10 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &Identity,
         request: ReadBackupConfiguration,
+        control: &crate::HistoryReadControl,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError> {
         self.backend
-            .backup_configuration(&self.current(identity)?, request)
+            .backup_configuration(&self.current(identity)?, request, control)
     }
     fn configure_backups(
         &self,

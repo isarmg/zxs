@@ -63,48 +63,10 @@ impl<'a> PlanningContext<'a> {
         members
     }
     pub(crate) fn disk(&self, slot: &str) -> Result<&'a DiskConfig> {
-        self.config
-            .disks
-            .iter()
-            .find(|d| d.slot_id.eq_ignore_ascii_case(slot))
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::SlotNotFound,
-                    "storage slot is not registered",
-                )
-            })
+        self.config.disk(slot)
     }
     pub(crate) fn route(&self, primary: &str, copies: u32) -> Result<Vec<String>> {
-        let first = self.disk(primary)?;
-        if first.level != 1 || copies == 0 {
-            return Err(Error::new(
-                storage_contract::ErrorCode::PlacementInvalid,
-                "placement requires a primary slot and at least one copy",
-            ));
-        }
-        let mut route = vec![first.slot_id.clone()];
-        let mut current = first;
-        while route.len() < copies as usize {
-            let next = self
-                .config
-                .disks
-                .iter()
-                .find(|d| {
-                    d.level == current.level + 1
-                        && d.upstream_slot_id
-                            .as_deref()
-                            .is_some_and(|s| s.eq_ignore_ascii_case(&current.slot_id))
-                })
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::RouteIncomplete,
-                        "requested copies exceed the configured fixed route",
-                    )
-                })?;
-            route.push(next.slot_id.clone());
-            current = next;
-        }
-        Ok(route)
+        self.config.route(primary, copies)
     }
     pub(crate) fn repository_for_history(&self, history: &str) -> Result<&'a Repository> {
         let h = self.state.histories.get(history).ok_or_else(|| {

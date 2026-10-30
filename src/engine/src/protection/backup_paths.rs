@@ -3,6 +3,13 @@ use super::*;
 use crate::{business::now, engine::Prepared};
 use std::collections::{BTreeMap, BTreeSet};
 
+fn checkpoint(observe: Option<&dyn Fn() -> Result<()>>) -> Result<()> {
+    if let Some(observe) = observe {
+        observe()?;
+    }
+    Ok(())
+}
+
 /// Backup placement for a path, fenced by the current policy generation.
 #[derive(Clone, Copy, Debug)]
 pub struct BackupConfigurationRequest<'a> {
@@ -55,6 +62,7 @@ pub(super) fn scope_path(
     state: &State,
     policy: &ProtectionPolicy,
     source: &dyn crate::namespace::NamespaceSource,
+    observe: Option<&dyn Fn() -> Result<()>>,
 ) -> Result<Option<String>> {
     if policy.scope_directory_id.as_deref() == Some(policy.repository_id.as_str()) {
         return Ok(Some(String::new()));
@@ -67,6 +75,7 @@ pub(super) fn scope_path(
         // walk of the head finds the scope, or the policy no longer applies.
         let mut found = None;
         view.walk(|location, entry| {
+            checkpoint(observe)?;
             if let storage_contract::NamespacePageEntry::Directory { entry_id, .. } = entry
                 && entry_id == directory
             {
@@ -97,6 +106,7 @@ fn policy_applies(
     file: Option<&str>,
     path: &str,
     source: &dyn crate::namespace::NamespaceSource,
+    observe: Option<&dyn Fn() -> Result<()>>,
 ) -> Result<bool> {
     if !policy.inheritable {
         return Ok(false);
@@ -104,7 +114,7 @@ fn policy_applies(
     if let Some(expected) = &policy.scope_file_id {
         return Ok(file.is_some_and(|file| file == expected));
     }
-    Ok(scope_path(state, policy, source)?.is_some_and(|root| within(&root, path)))
+    Ok(scope_path(state, policy, source, observe)?.is_some_and(|root| within(&root, path)))
 }
 pub(super) fn effective_policy<'a>(
     state: &'a State,
@@ -112,6 +122,7 @@ pub(super) fn effective_policy<'a>(
     file: Option<&str>,
     path: &str,
     source: &dyn crate::namespace::NamespaceSource,
+    observe: Option<&dyn Fn() -> Result<()>>,
 ) -> Result<Option<&'a ProtectionPolicy>> {
     let located;
     let file = match file {
@@ -145,11 +156,13 @@ pub(super) fn effective_policy<'a>(
     }
     let mut best: Option<(usize, bool, &ProtectionPolicy)> = None;
     for policy in state.protection_policies.values() {
-        if policy.repository_id != repository || !policy_applies(state, policy, file, path, source)?
+        checkpoint(observe)?;
+        if policy.repository_id != repository
+            || !policy_applies(state, policy, file, path, source, observe)?
         {
             continue;
         }
-        let depth = scope_path(state, policy, source)?.map_or(0, |path| {
+        let depth = scope_path(state, policy, source, observe)?.map_or(0, |path| {
             path.split('/').filter(|part| !part.is_empty()).count()
         });
         // A rename can bring a stable scope onto an existing path rule.
@@ -178,6 +191,7 @@ fn source_scope(
     repository: &str,
     path: &str,
     source: &dyn crate::namespace::NamespaceSource,
+    observe: Option<&dyn Fn() -> Result<()>>,
 ) -> Result<Scope> {
     let requested = if path.is_empty() {
         None
@@ -242,11 +256,13 @@ fn source_scope(
         };
         if scope_kind == NamespaceEntryKind::Directory && !scope_key.is_empty() {
             view.walk_subtree(scope_key, |_, entry| {
+                checkpoint(observe)?;
                 collect(entry);
                 Ok(true)
             })?;
         } else {
             view.walk(|location, entry| {
+                checkpoint(observe)?;
                 collect(&crate::namespace::materialized_entry(
                     location.clone(),
                     entry,
@@ -259,21 +275,21 @@ fn source_scope(
     // A configured directory protects files retained by its other named views,
     // including versions absent from the currently selected subtree.
     if scope.kind == NamespaceEntryKind::Directory {
-        for branch in state
-            .directory_branches
-            .values()
-            .filter(|branch| branch.repository_id == repository && branch.directory_id == scope.id)
-        {
+        for branch in state.directory_branches.values() {
+            checkpoint(observe)?;
+            if branch.repository_id != repository || branch.directory_id != scope.id {
+                continue;
+            }
             let depth = if branch.path.is_empty() {
                 0
             } else {
                 branch.path.split('/').count()
             };
-            for entry in branch
-                .entries
-                .iter()
-                .filter(|entry| entry.kind == NamespaceEntryKind::File)
-            {
+            for entry in &branch.entries {
+                checkpoint(observe)?;
+                if entry.kind != NamespaceEntryKind::File {
+                    continue;
+                }
                 if let std::collections::btree_map::Entry::Vacant(slot) =
                     scope.files.entry(entry.file_id.clone())
                 {
@@ -298,29 +314,33 @@ fn exact_policy<'a>(
     state: &'a State,
     repository: &str,
     scope: &Scope,
-) -> Option<&'a ProtectionPolicy> {
-    state
-        .protection_policies
-        .values()
-        .find(|policy| {
-            policy.inheritable
-                && policy.repository_id == repository
-                && if scope.kind == NamespaceEntryKind::File {
-                    policy.scope_file_id.as_deref() == Some(&scope.id)
-                } else {
-                    policy.scope_directory_id.as_deref() == Some(&scope.id)
-                }
-        })
-        .or_else(|| {
-            state.protection_policies.values().find(|policy| {
-                policy.inheritable
-                    && policy.repository_id == repository
-                    && policy.scope_file_id.is_none()
-                    && policy.scope_directory_id.is_none()
-                    && name_policy::path_key(&policy.path_prefix)
-                        == name_policy::path_key(&scope.path)
-            })
-        })
+    observe: Option<&dyn Fn() -> Result<()>>,
+) -> Result<Option<&'a ProtectionPolicy>> {
+    for policy in state.protection_policies.values() {
+        checkpoint(observe)?;
+        if policy.inheritable
+            && policy.repository_id == repository
+            && if scope.kind == NamespaceEntryKind::File {
+                policy.scope_file_id.as_deref() == Some(&scope.id)
+            } else {
+                policy.scope_directory_id.as_deref() == Some(&scope.id)
+            }
+        {
+            return Ok(Some(policy));
+        }
+    }
+    for policy in state.protection_policies.values() {
+        checkpoint(observe)?;
+        if policy.inheritable
+            && policy.repository_id == repository
+            && policy.scope_file_id.is_none()
+            && policy.scope_directory_id.is_none()
+            && name_policy::path_key(&policy.path_prefix) == name_policy::path_key(&scope.path)
+        {
+            return Ok(Some(policy));
+        }
+    }
+    Ok(None)
 }
 fn inherited_by_scope(
     state: &State,
@@ -328,6 +348,7 @@ fn inherited_by_scope(
     previous: Option<&ProtectionPolicy>,
     effective: Option<&ProtectionPolicy>,
     source: &dyn crate::namespace::NamespaceSource,
+    observe: Option<&dyn Fn() -> Result<()>>,
 ) -> Result<bool> {
     let Some(effective) = effective else {
         return Ok(true);
@@ -335,7 +356,7 @@ fn inherited_by_scope(
     Ok(effective.inheritable
         && (previous.is_some_and(|own| own.policy_id == effective.policy_id)
             || (effective.scope_file_id.is_none()
-                && scope_path(state, effective, source)?
+                && scope_path(state, effective, source, observe)?
                     .is_some_and(|root| within(&root, scope_root)))))
 }
 fn retain_inherited_files(
@@ -344,18 +365,28 @@ fn retain_inherited_files(
     scope: &mut Scope,
     previous: Option<&ProtectionPolicy>,
     source: &dyn crate::namespace::NamespaceSource,
+    observe: Option<&dyn Fn() -> Result<()>>,
 ) -> Result<()> {
     if scope.kind != NamespaceEntryKind::Directory {
         return Ok(());
     }
     let mut retained = BTreeMap::new();
     for (file, entry) in std::mem::take(&mut scope.files) {
+        checkpoint(observe)?;
         if inherited_by_scope(
             state,
             &scope.path,
             previous,
-            effective_policy(state, repository, Some(&file), entry.path(), source)?,
+            effective_policy(
+                state,
+                repository,
+                Some(&file),
+                entry.path(),
+                source,
+                observe,
+            )?,
             source,
+            observe,
         )? {
             retained.insert(file, entry);
         }
@@ -365,59 +396,72 @@ fn retain_inherited_files(
 }
 
 fn backup_primaries(
-    engine: &Engine,
+    state: &State,
     repository: &str,
     scope: &Scope,
     source: &dyn crate::namespace::NamespaceSource,
+    observe: Option<&dyn Fn() -> Result<()>>,
 ) -> Result<BTreeSet<String>> {
-    let mut primaries = BTreeSet::from([engine
-        .file_placement_settings(repository, None, &scope.path)?
-        .0]);
-    // Empty and future descendants also inherit this directory's settings.
-    // Independent child backup policies do not constrain the parent's routes.
+    let mut primaries = BTreeSet::from([super::file_placement_settings(
+        state,
+        repository,
+        None,
+        &scope.path,
+        source,
+        observe,
+    )?
+    .0]);
+    // Empty/future descendants inherit settings, but independent children do not.
     if scope.kind == NamespaceEntryKind::Directory {
-        let previous = exact_policy(&engine.state, repository, scope);
-        for rule in engine.state.placement_rules.values().filter(|rule| {
-            rule.repository_id == repository && within(&scope.path, &rule.path_prefix)
-        }) {
+        let previous = exact_policy(state, repository, scope, observe)?;
+        for rule in state.placement_rules.values() {
+            checkpoint(observe)?;
+            if rule.repository_id != repository || !within(&scope.path, &rule.path_prefix) {
+                continue;
+            }
             if inherited_by_scope(
-                &engine.state,
+                state,
                 &scope.path,
                 previous,
-                effective_policy(&engine.state, repository, None, &rule.path_prefix, source)?,
+                effective_policy(state, repository, None, &rule.path_prefix, source, observe)?,
                 source,
+                observe,
             )? {
                 primaries.insert(rule.primary_slot_id.clone());
             }
         }
     }
-    // Existing files may have a more specific future placement rule than the
-    // directory itself, even before their first version on that primary.
     for (file, entry) in &scope.files {
+        checkpoint(observe)?;
         primaries.insert(
-            engine
-                .file_placement_settings(repository, Some(file), entry.path())?
-                .0,
+            super::file_placement_settings(
+                state,
+                repository,
+                Some(file),
+                entry.path(),
+                source,
+                observe,
+            )?
+            .0,
         );
     }
-    for version in engine.state.versions.values().filter(|version| {
-        scope.files.contains_key(&version.file_id)
-            && engine
-                .state
+    // Historical placement is global for these file identities, not a head filter.
+    for version in state.versions.values() {
+        checkpoint(observe)?;
+        if !scope.files.contains_key(&version.file_id)
+            || !state
                 .content_states
                 .get(&version.version_id)
                 .is_none_or(|state| *state == storage_contract::ContentState::Available)
-    }) {
-        let placement = engine
-            .state
-            .placements
-            .get(&version.version_id)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::PlacementNotFound,
-                    "backup source placement missing",
-                )
-            })?;
+        {
+            continue;
+        }
+        let placement = state.placements.get(&version.version_id).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::PlacementNotFound,
+                "backup source placement missing",
+            )
+        })?;
         primaries.insert(placement.primary_slot_id.clone());
     }
     Ok(primaries)
@@ -473,7 +517,9 @@ pub(crate) fn apply_backup_paths(
     route: &[String],
     source: &dyn crate::namespace::NamespaceSource,
 ) -> Result<()> {
-    let Some(policy) = effective_policy(state, repository, Some(file), path, source)?.cloned()
+    let observe = None;
+    let Some(policy) =
+        effective_policy(state, repository, Some(file), path, source, observe)?.cloned()
     else {
         return Ok(());
     };
@@ -487,7 +533,8 @@ pub(crate) fn apply_backup_paths(
         }
         return Ok(());
     }
-    let root = scope_path(state, &policy, source)?.unwrap_or_else(|| policy.path_prefix.clone());
+    let root =
+        scope_path(state, &policy, source, observe)?.unwrap_or_else(|| policy.path_prefix.clone());
     let relative = relative_path(&root, path, policy.scope_file_id.is_some());
     let locations = route
         .iter()
@@ -517,105 +564,117 @@ pub(crate) fn apply_backup_paths(
     Ok(())
 }
 
+pub(crate) fn backup_configuration(
+    state: &State,
+    config: &ValidatedConfig,
+    repository: &str,
+    path: &str,
+    source: &dyn crate::namespace::NamespaceSource,
+    observe: Option<&dyn Fn() -> Result<()>>,
+) -> Result<storage_contract::BackupConfigurationSnapshot> {
+    checkpoint(observe)?;
+    let mut scope = source_scope(state, repository, path, source, observe)?;
+    let exact = exact_policy(state, repository, &scope, observe)?;
+    let effective = effective_policy(
+        state,
+        repository,
+        (scope.kind == NamespaceEntryKind::File).then_some(scope.id.as_str()),
+        &scope.path,
+        source,
+        observe,
+    )?;
+    let inherited = effective.is_some_and(|policy| {
+        policy.inheritable && exact.is_none_or(|exact| exact.policy_id != policy.policy_id)
+    });
+    retain_inherited_files(state, repository, &mut scope, exact, source, observe)?;
+    let (primary, copies) = super::file_placement_settings(
+        state,
+        repository,
+        (scope.kind == NamespaceEntryKind::File).then_some(scope.id.as_str()),
+        &scope.path,
+        source,
+        observe,
+    )?;
+    // GET and PUT use the same future and historical source chains.
+    let primaries = backup_primaries(state, repository, &scope, source, observe)?;
+    let mut routes = Vec::new();
+    for source in primaries {
+        checkpoint(observe)?;
+        let mut route = config.route_observed(&source, 1, observe)?;
+        while route.len() < config.disks.len() {
+            match config.route_observed(&source, route.len() as u32 + 1, observe) {
+                Ok(next) => route = next,
+                Err(error) if error.code() == storage_contract::ErrorCode::RouteIncomplete => {
+                    break;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        routes.push(route);
+    }
+    checkpoint(observe)?;
+    let available_route = routes
+        .iter()
+        .find(|route| route.first() == Some(&primary))
+        .cloned()
+        .expect("invariant: default primary chain is included");
+    let maximum = routes
+        .iter()
+        .map(Vec::len)
+        .min()
+        .expect("invariant: routes include the default primary chain");
+    let requested_route = match config.route_observed(&primary, copies, observe) {
+        Ok(route) => route,
+        Err(error) if error.code() == storage_contract::ErrorCode::RouteIncomplete => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    let backup_slots = routes
+        .iter()
+        .flat_map(|route| route.iter().skip(1))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let backup_paths = if scope.kind == NamespaceEntryKind::File {
+        state
+            .file_backup_paths
+            .get(&scope.id)
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    };
+    Ok(storage_contract::BackupConfigurationSnapshot {
+        scope: storage_contract::BackupScope {
+            id: scope.id,
+            kind: scope.kind,
+            path: scope.path,
+        },
+        policy_id: exact.map(|policy| policy.policy_id.clone()),
+        effective_policy_id: effective.map(|policy| policy.policy_id.clone()),
+        generation: exact.map_or(0, |policy| policy.generation),
+        effective_generation: effective.map_or(0, |policy| policy.generation),
+        inherited,
+        target_copies: copies,
+        backup_prefixes: effective
+            .map(|policy| policy.backup_prefixes.clone())
+            .unwrap_or_default(),
+        route_slot_ids: requested_route,
+        available_route_slot_ids: available_route,
+        backup_routes: routes,
+        backup_slot_ids: backup_slots,
+        max_copies: maximum,
+        file_count: scope.files.len() as u64,
+        backup_paths,
+    })
+}
+
 impl Engine {
     pub fn backup_configuration(
         &self,
         repository: &str,
         path: &str,
     ) -> Result<storage_contract::BackupConfigurationSnapshot> {
-        let members = self.members();
-        let reader = self.segment_reader(&members);
-        let published =
-            crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {
-                reader.namespace_node(reference)
-            });
-        let mut scope = source_scope(&self.state, repository, path, &published)?;
-        let exact = exact_policy(&self.state, repository, &scope);
-        let effective = effective_policy(
-            &self.state,
-            repository,
-            (scope.kind == NamespaceEntryKind::File).then_some(scope.id.as_str()),
-            &scope.path,
-            &published,
-        )?;
-        let inherited = effective.is_some_and(|policy| {
-            policy.inheritable && exact.is_none_or(|exact| exact.policy_id != policy.policy_id)
-        });
-        retain_inherited_files(&self.state, repository, &mut scope, exact, &published)?;
-        let (primary, copies) = self.file_placement_settings(
-            repository,
-            (scope.kind == NamespaceEntryKind::File).then_some(scope.id.as_str()),
-            &scope.path,
-        )?;
-        // GET and PUT use the same future and historical source chains.
-        let primaries = backup_primaries(self, repository, &scope, &published)?;
-        let mut routes = Vec::new();
-        for source in primaries {
-            let mut route = self.route(&source, 1)?;
-            while route.len() < self.config.disks.len() {
-                match self.route(&source, route.len() as u32 + 1) {
-                    Ok(next) => route = next,
-                    Err(error) if error.code() == storage_contract::ErrorCode::RouteIncomplete => {
-                        break;
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-            routes.push(route);
-        }
-        let available_route = routes
-            .iter()
-            .find(|route| route.first() == Some(&primary))
-            .cloned()
-            .expect("invariant: default primary chain is included");
-        let maximum = routes
-            .iter()
-            .map(Vec::len)
-            .min()
-            .expect("invariant: routes include the default primary chain");
-        let requested_route = match self.route(&primary, copies) {
-            Ok(route) => route,
-            Err(error) if error.code() == storage_contract::ErrorCode::RouteIncomplete => {
-                Vec::new()
-            }
-            Err(error) => return Err(error),
-        };
-        let backup_slots = routes
-            .iter()
-            .flat_map(|route| route.iter().skip(1))
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let backup_paths = if scope.kind == NamespaceEntryKind::File {
-            self.state
-                .file_backup_paths
-                .get(&scope.id)
-                .cloned()
-                .unwrap_or_default()
-        } else {
-            BTreeMap::new()
-        };
-        Ok(storage_contract::BackupConfigurationSnapshot {
-            scope: storage_contract::BackupScope {
-                id: scope.id,
-                kind: scope.kind,
-                path: scope.path,
-            },
-            policy_id: exact.map(|policy| policy.policy_id.clone()),
-            effective_policy_id: effective.map(|policy| policy.policy_id.clone()),
-            generation: exact.map_or(0, |policy| policy.generation),
-            effective_generation: effective.map_or(0, |policy| policy.generation),
-            inherited,
-            target_copies: copies,
-            backup_prefixes: effective
-                .map(|policy| policy.backup_prefixes.clone())
-                .unwrap_or_default(),
-            route_slot_ids: requested_route,
-            available_route_slot_ids: available_route,
-            backup_routes: routes,
-            backup_slot_ids: backup_slots,
-            max_copies: maximum,
-            file_count: scope.files.len() as u64,
-            backup_paths,
+        self.with_namespace_source(|source| {
+            backup_configuration(&self.state, &self.config, repository, path, source, None)
         })
     }
 
@@ -664,18 +723,18 @@ impl Engine {
                 let repo = state.repositories.get(repository).cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::RepositoryNotFound, "backup repository missing"))?;
 
-                let mut scope = source_scope(state, repository, path, published)?;
+                let mut scope = source_scope(state, repository, path, published, None)?;
                 if expected_scope_id.is_some_and(|expected| expected != scope.id) {
                     return Err(Error::new(storage_contract::ErrorCode::ScopeChanged, "backup path now describes a different file or directory"));
                 }
-                let previous = exact_policy(state, repository, &scope).cloned();
+                let previous = exact_policy(state, repository, &scope, None)?.cloned();
                 let generation = previous.as_ref().map_or(0, |policy| policy.generation);
                 if generation != expected_generation {
                     return Err(Error::new(storage_contract::ErrorCode::GenerationMismatch, "backup configuration changed; reread before updating"));
                 }
                 // An ancestor cannot silently replace independent child rules
                 // or the binding of a file moved from another protected scope.
-                retain_inherited_files(state, repository, &mut scope, previous.as_ref(), published)?;
+                retain_inherited_files(state, repository, &mut scope, previous.as_ref(), published, None)?;
                 let mut normalized = BTreeMap::new();
                 for (slot, prefix) in prefixes {
                     let disk = engine.disk(slot)?;
@@ -688,7 +747,7 @@ impl Engine {
                     }
                 }
                 let mut required = BTreeSet::new();
-                for primary in backup_primaries(engine, repository, &scope, published)? {
+                for primary in backup_primaries(&engine.state, repository, &scope, published, None)? {
                     required.extend(engine.route(&primary, copies)?.into_iter().skip(1));
                 }
                 let versions = state.versions.values().filter(|version| {

@@ -3,7 +3,7 @@ use crate::*;
 use json_codec::json;
 mod backup_paths;
 pub use backup_paths::{BackupConfigurationRequest, ScopedBackupConfigurationRequest};
-pub(crate) use backup_paths::{apply_backup_paths, prune_retained_policies};
+pub(crate) use backup_paths::{apply_backup_paths, backup_configuration, prune_retained_policies};
 
 /// A conditional placement update, including its authenticated actor and replay identity.
 #[derive(Clone, Copy, Debug)]
@@ -117,7 +117,7 @@ impl Engine {
             if state.protection_policies.get(id).is_some_and(|p|!p.inheritable||p.scope_directory_id.is_some()||p.scope_file_id.is_some()) { return Err(Error::new(storage_contract::ErrorCode::BackupConfigurationRequired,"scoped and retained settings must be changed through file or directory backup configuration")); }
             let equivalent=engine.with_namespace_source(|source|{
                 for p in state.protection_policies.values() {
-                    if p.inheritable&&p.policy_id!=id&&p.repository_id==repository&&backup_paths::scope_path(state,p,source)?.is_some_and(|path|name_policy::path_key(&path)==name_policy::path_key(path_prefix)) { return Ok(true); }
+                    if p.inheritable&&p.policy_id!=id&&p.repository_id==repository&&backup_paths::scope_path(state,p,source,None)?.is_some_and(|path|name_policy::path_key(&path)==name_policy::path_key(path_prefix)) { return Ok(true); }
                 }
                 Ok(false)
             })?;
@@ -151,26 +151,49 @@ impl crate::engine::PlanningContext<'_> {
         file_id: Option<&str>,
         path: &str,
     ) -> Result<(String, u32)> {
-        let repo = self.state.repositories.get(repository).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::RepositoryNotFound,
-                "repository does not exist",
-            )
-        })?;
-        let primary = self
-            .state
-            .placement_rules
-            .values()
-            .filter(|r| r.repository_id == repository && applies(&r.path_prefix, path))
-            .max_by_key(|r| r.path_prefix.len())
-            .map(|r| r.primary_slot_id.clone())
-            .unwrap_or_else(|| repo.primary_slot_id.clone());
-        let copies = self
-            .with_namespace_source(|source| {
-                backup_paths::effective_policy(self.state, repository, file_id, path, source)
-                    .map(|policy| policy.map(|p| p.target_copies))
-            })?
-            .unwrap_or(repo.target_copies);
-        Ok((primary, copies))
+        self.with_namespace_source(|source| {
+            file_placement_settings(self.state, repository, file_id, path, source, None)
+        })
     }
 }
+
+/// Shared settings resolution; complete-route validation remains the caller's choice.
+pub(super) fn file_placement_settings(
+    state: &State,
+    repository: &str,
+    file_id: Option<&str>,
+    path: &str,
+    source: &dyn crate::namespace::NamespaceSource,
+    observe: Option<&dyn Fn() -> Result<()>>,
+) -> Result<(String, u32)> {
+    let repo = state.repositories.get(repository).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::RepositoryNotFound,
+            "repository does not exist",
+        )
+    })?;
+    let mut selected: Option<&PlacementRule> = None;
+    for rule in state.placement_rules.values() {
+        if let Some(observe) = observe {
+            observe()?;
+        }
+        if rule.repository_id == repository
+            && applies(&rule.path_prefix, path)
+            && selected.is_none_or(|previous| rule.path_prefix.len() >= previous.path_prefix.len())
+        {
+            // max_by_key chooses the last matching rule on equal length.
+            selected = Some(rule);
+        }
+    }
+    let primary = selected.map_or_else(
+        || repo.primary_slot_id.clone(),
+        |rule| rule.primary_slot_id.clone(),
+    );
+    let copies = backup_paths::effective_policy(state, repository, file_id, path, source, observe)?
+        .map_or(repo.target_copies, |policy| policy.target_copies);
+    Ok((primary, copies))
+}
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/protection/read_kernels_tests.rs"]
+mod read_kernels_tests;

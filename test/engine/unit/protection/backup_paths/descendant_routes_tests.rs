@@ -66,6 +66,7 @@ fn empty_descendant_routes_use_normalized_identity_and_root_scope() {
         let read = engine
             .backup_configuration(&repo.repository_id, scope)
             .unwrap();
+        super::super::detached_parity::check(&engine, &repo.repository_id, scope, &read);
         assert_eq!(
             json_codec::json!(read.backup_routes),
             json!([["P01", "B01", "C01"], ["P02", "B02"]])
@@ -130,6 +131,7 @@ fn existing_parent_configuration_can_add_a_later_descendant_route() {
     let read = engine
         .backup_configuration(&repo.repository_id, "docs")
         .unwrap();
+    super::super::detached_parity::check(&engine, &repo.repository_id, "docs", &read);
     assert_eq!(
         json_codec::json!(read.backup_routes),
         json!([["P01", "B01", "C01"], ["P02", "B02"]])
@@ -187,6 +189,7 @@ fn independent_empty_child_policies_do_not_limit_parent_routes() {
         let read = engine
             .backup_configuration(&repo.repository_id, "docs")
             .unwrap();
+        super::super::detached_parity::check(&engine, &repo.repository_id, "docs", &read);
         assert_eq!(
             json_codec::json!(read.backup_routes),
             json!([["P01", "B01", "C01"]])
@@ -249,6 +252,7 @@ fn sibling_prefixes_and_other_repositories_do_not_add_parent_routes() {
     let read = engine
         .backup_configuration(&repo.repository_id, "docs")
         .unwrap();
+    super::super::detached_parity::check(&engine, &repo.repository_id, "docs", &read);
     assert_eq!(
         json_codec::json!(read.backup_routes),
         json!([["P01", "B01", "C01"]])
@@ -290,6 +294,7 @@ fn shadowed_ancestor_placement_does_not_add_a_phantom_route() {
     let read = engine
         .backup_configuration(&repo.repository_id, "docs/selected")
         .unwrap();
+    super::super::detached_parity::check(&engine, &repo.repository_id, "docs/selected", &read);
     assert_eq!(
         json_codec::json!(read.backup_routes),
         json!([["P01", "B01", "C01"]])
