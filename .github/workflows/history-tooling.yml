@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics]
 
 permissions:
   contents: read
@@ -208,6 +208,10 @@ jobs:
               '09b217f7acdffcbe436b34ace32a04b3495a1e0b', '9d05ac85b8bec69240f780474080bee7487a57c2',
           ):
               raise SystemExit('Static asset regression requires the exact source and tree')
+          if os.environ['SCOPE'] == 'head-range-semantics' and (source, tree) != (
+              '22855c19fcdbb9ab3ee07c3343044f9461846ac9', '68e6cc670d358fd794a9d47b8912ed45e24dad6f',
+          ):
+              raise SystemExit('HEAD Range semantics requires the exact source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -889,6 +893,18 @@ jobs:
                       'cargo clippy --locked --offline -p storage-server --lib --tests -- -D warnings\n'
                       'python3 .github/scripts/check-architecture.py\n'
                       'python3 tools/rust-sources/manage.py verify'),
+          ]
+          head_range_tests = [
+              'transfer::tests::malformed_duplicate_and_unsatisfiable_ranges_include_size_and_head_is_empty',
+              'transfer::tests::stale_if_range_returns_complete_content_and_head_retains_length',
+          ]
+          groups['head-range-semantics'] = [
+              dict(id='head-range-regression', cache='server', package='storage-server',
+                  test_groups=json.dumps([dict(selector=name, exact=True, count=1, required=[name])
+                      for name in head_range_tests]),
+                  command='Exact two existing Range/HEAD tests with corrected semantics and GET controls'),
+              dict(id='head-range-format', command='rustfmt +1.99.0 --edition 2024 --config skip_children=true '
+                  '--check test/server/unit/transfer/tests.rs'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
