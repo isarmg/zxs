@@ -12,8 +12,8 @@ enum Candidate {
 }
 
 pub(in crate::engine_backend) enum ListingRead {
-    Backup(backup_namespace::BackupListingRead),
-    Primary(PrimaryListing),
+    Backup(Box<backup_namespace::BackupListingRead>),
+    Primary(Box<PrimaryListing>),
 }
 
 struct DirectoryCapture {
@@ -58,6 +58,7 @@ pub(in crate::engine_backend) fn capture(
     let request = PageRequest::parse(engine, input)?;
     if disk(engine, &slot_id)?.level != 1 {
         return backup_namespace::BackupListingRead::capture(engine, &slot_id, &path, request)
+            .map(Box::new)
             .map(ListingRead::Backup);
     }
     let directory = match resolve_read(engine, &slot_id, &path) {
@@ -73,7 +74,7 @@ pub(in crate::engine_backend) fn capture(
         }
         Err(error) => return Err(error),
     };
-    Ok(ListingRead::Primary(PrimaryListing {
+    Ok(ListingRead::Primary(Box::new(PrimaryListing {
         scope: ListingScope {
             view: engine.metadata_view(),
             slot_id,
@@ -81,7 +82,7 @@ pub(in crate::engine_backend) fn capture(
             directory,
         },
         request,
-    }))
+    })))
 }
 
 impl DirectoryCapture {
