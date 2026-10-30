@@ -1,11 +1,22 @@
 //! Bounded history projection over one admitted immutable metadata observation.
+//!
+//! Request-owned space is O(L + E + F): selected records, preview edges and one
+//! UTF-8 fragment, with each bound taken from the shared policy. State and its
+//! admitted root catalog are shared, not projected or copied for each request.
+//! CPU is deliberately not O(L). With S total nodes, N scoped nodes and C
+//! commits plus commit entries, cold node selection is O(S + N*C), plus bounded
+//! selector comparisons. Selected path/tag facts can walk ancestor chains;
+//! path and head lookup scan merge/branch/commit records, and parent/source/input
+//! reads scan their borrowed member arrays. Every such scan has cancellation
+//! checkpoints. Publication, resident State and cold recovery remain unbounded
+//! in total retained history, as before this read protocol.
 use super::{Engine, MetadataView, State};
 use crate::{Error, Result};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Weak},
 };
+pub use storage_contract::history_window::HistoryWindowCancellation;
 use storage_contract::history_window::*;
 mod nodes;
 mod projection;
@@ -18,24 +29,12 @@ pub use read::HistoryWindowRead;
 #[path = "../../../../test/engine/unit/engine/history_window_oracle_tests.rs"]
 mod oracle_tests;
 
-/// Create this signal before queuing a managed history read. All clones cancel
-/// the same request, including initial capture and long single-record scans.
-#[derive(Clone, Debug, Default)]
-pub struct HistoryWindowCancellation(Arc<AtomicBool>);
+/// Keep engine errors local while every transport/worker uses the shared token.
+trait HistoryCancellationCheckpoint {
+    fn checkpoint(&self) -> Result<()>;
+}
 
-impl HistoryWindowCancellation {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-
+impl HistoryCancellationCheckpoint for HistoryWindowCancellation {
     fn checkpoint(&self) -> Result<()> {
         if self.is_cancelled() {
             return Err(Error::new(
