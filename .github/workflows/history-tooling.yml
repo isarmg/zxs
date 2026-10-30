@@ -161,7 +161,7 @@ jobs:
           ):
               raise SystemExit('History window repair requires the exact strict-parser and consumer successor')
           if os.environ['SCOPE'] in ('history-window-web', 'history-window-web-browser') and (source, tree) != (
-              '863efb53dcb600443fbcb759d0ea204e5e943d4a', '3068e96d78e59dfc5cdccc3e71d81106167c65e2',
+              '16fdbbcd237052858a9e895d90761e5cfe41da11', '772057af1781ac65d2e31a3a241c35f35c7dcd8b',
           ):
               raise SystemExit('History window Web checkpoint requires the exact cross-layer source and tree')
           if os.environ['SCOPE'] == 'scrub-terminal-diagnostics' and (source, tree) != (
@@ -742,17 +742,14 @@ jobs:
               dict(id='history-window-repair-smb', cache='smb-protocol', package='smb-protocol', exact_test=history_errno,
                   command=f'cargo test --locked --offline -p smb-protocol --lib {history_errno} -- --exact --nocapture'),
           ]
+          history_oracle = 'engine::history_window::oracle_tests::merge_path_uses_the_chosen_source_and_keeps_the_referenced_real_body'
+          # Web's 277 bodies passed on parent 863efb53; only this oracle helper changed.
           groups['history-window-web'] = [
               dict(groups['payload-quality'][0], id='history-window-web-quality'),
-              dict(id='history-window-web-native', cache='web-app', package='web-app',
-                  test_groups=json.dumps([
-                      dict(selector='files::', count=277, required_suffixes=[
-                          'stale_auxiliary_failure_cannot_invalidate_or_release_a_newer_read',
-                          'current_session_401_is_checked_before_any_obsolete_resource_fence',
-                          'page_identity_cannot_change_file_root_collection_limit_query_or_action_capability',
-                          'utf8_fragments_are_replaced_with_exact_ranges_and_explicit_right_boundary',
-                          'a_session_transition_releases_every_history_read_generation']),
-                  ]), command='Actual file-history consumer and UI session test inventories and native execution'),
+              dict(id='history-window-web-oracle', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([dict(selector=history_oracle, count=1, exact=True,
+                      features=['fault-injection'], required=[history_oracle])]),
+                  command='Exact chosen-source merge-path oracle after equivalent reverse-find lint repair'),
           ]
           groups['history-window-web-browser'] = [dict(id='history-window-web-production', web_production=True,
               command='bash .github/scripts/check.sh web-production')]
