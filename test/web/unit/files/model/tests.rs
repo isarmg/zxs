@@ -4,6 +4,26 @@ use crate::files::test_entries::{branch, entry, update};
 use json_codec::json;
 
 #[test]
+fn a_session_transition_releases_every_history_read_generation() {
+    use crate::files::history::reads::Resource;
+    use crate::ui::State;
+    let mut state = State {
+        authenticated: true,
+        session_epoch: 7,
+        ..Default::default()
+    };
+    state.files.history_loading = true;
+    state.files.history_generation = 11;
+    let generation = state.files.history_aux.begin(Resource::Field, None);
+    assert!(state.files.history_aux.current(Resource::Field, generation));
+    assert_eq!(crate::ui::begin_logout(&mut state), Some(8));
+    assert!(!state.files.history_loading);
+    assert_eq!(state.files.history_generation, 12);
+    assert!(!state.files.history_aux.current(Resource::Field, generation));
+    assert!(!state.files.history_aux.loading());
+}
+
+#[test]
 fn navigation_resets_only_location_owned_state() {
     use crate::files::review::{Kind, Publication};
     for (destination, slot, directory, query, loaded) in [
@@ -66,6 +86,7 @@ fn navigation_resets_only_location_owned_state() {
             history_generation: 11,
             history_cancellation: None,
             history_editors: 0,
+            history_next_draft: 0,
             history_aux: Default::default(),
             checked_entries: [entry_key(&selected)].into_iter().collect(),
             batch: None,
@@ -207,19 +228,23 @@ fn backup_details_keep_stored_identity_independent_from_a_newer_node_window() {
     let mut model = Model {
         writable: true,
         selected: Some(selected_entry),
-        file_history: crate::files::history::tests::history(
-            json!({
-                "current_node_id":"stored-old", "version_id":"stored-old",
-                "nodes":[{"node_id":"primary-new","version_id":"primary-new"}],
-                "selected_branch_id":"main",
-                "branches":[branch_wire(json!({"branch_id":"main","current":true}))]
-            }),
-        ),
+        file_history: crate::files::history::tests::history(json!({
+            "current_node_id":"stored-old", "version_id":"stored-old",
+            "nodes":[{"node_id":"primary-new","version_id":"primary-new"}],
+            "selected_branch_id":"main",
+            "branches":[branch_wire(json!({"branch_id":"main","current":true}))]
+        })),
         ..Default::default()
     };
-    assert_eq!(model.selected.as_ref().unwrap().version_id(), Some("stored-old"));
+    assert_eq!(
+        model.selected.as_ref().unwrap().version_id(),
+        Some("stored-old")
+    );
     assert_eq!(model.file_history.current_node_id(), Some("stored-old"));
-    assert_eq!(model.file_history.node("stored-old").unwrap().version_id(), Some("stored-old"));
+    assert_eq!(
+        model.file_history.node("stored-old").unwrap().version_id(),
+        Some("stored-old")
+    );
     assert_eq!(model.file_history.nodes()[0].id(), "primary-new");
     assert!(selected_entry_read_only(&model));
     model.selected = Some(entry(json_codec::json!({"read_only":true})));
@@ -387,7 +412,10 @@ fn window_nodes_do_not_duplicate_body_versions_or_the_current_summary() {
     assert!(snapshot.node("ver-one").is_none());
     update_metadata(&mut snapshot, |value| value["nodes"] = json!([]));
     assert!(snapshot.nodes().is_empty());
-    assert_eq!(snapshot.node("current").unwrap().version_id(), Some("current-body"));
+    assert_eq!(
+        snapshot.node("current").unwrap().version_id(),
+        Some("current-body")
+    );
 }
 #[test]
 fn generated_public_file_branch_names_are_editable_only_after_loading_a_real_record() {

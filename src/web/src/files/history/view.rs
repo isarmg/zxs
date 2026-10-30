@@ -1,11 +1,18 @@
 //! Auxiliary history reads replace their single relation page or field fragment.
 use super::{FieldFragment, FileHistory};
-use crate::{files::{actions, page::Entry}, ui::State};
+use crate::{
+    files::{actions, page::Entry},
+    ui::State,
+};
 use std::sync::Arc;
 use storage_contract::history_window::{
     HistoryCollection, HistoryField, HistoryPageCursors, HistoryResolvedContext, HistoryWindowPage,
 };
-use web_interface::{components::{LoadingState, Select, SelectOption}, i18n::t, prelude::*};
+use web_interface::{
+    components::{LoadingState, Select, SelectOption},
+    i18n::t,
+    prelude::*,
+};
 
 /// Event payloads retain one bounded selection identity, never an old history page.
 #[derive(Clone, PartialEq)]
@@ -97,8 +104,14 @@ impl RelationKey {
     fn new(collection: &HistoryCollection, page: &HistoryPageCursors) -> Self {
         Self {
             collection: collection.clone(),
-            previous: page.previous_cursor.as_ref().map(|cursor| cursor.as_str().to_owned()),
-            next: page.next_cursor.as_ref().map(|cursor| cursor.as_str().to_owned()),
+            previous: page
+                .previous_cursor
+                .as_ref()
+                .map(|cursor| cursor.as_str().to_owned()),
+            next: page
+                .next_cursor
+                .as_ref()
+                .map(|cursor| cursor.as_str().to_owned()),
         }
     }
 
@@ -144,31 +157,64 @@ fn relation_view(history: &FileHistory) -> Option<RelationView> {
     let page = history.relation()?;
     let (collection, cursors) = relation_metadata(page);
     let (title, rows) = match page {
-        HistoryWindowPage::NodeParents { identity, parents, .. } => (
-            format!("{} · {}", t("节点父关系", "Node parents"), relation_subject(&identity.collection)),
-            parents.iter().map(|parent| {
-                let node = parent.parent_node_id.to_string();
-                relation_node(history, node.clone(), node)
-            }).collect(),
+        HistoryWindowPage::NodeParents {
+            identity, parents, ..
+        } => (
+            format!(
+                "{} · {}",
+                t("节点父关系", "Node parents"),
+                relation_subject(&identity.collection)
+            ),
+            parents
+                .iter()
+                .map(|parent| {
+                    let node = parent.parent_node_id.to_string();
+                    relation_node(history, node.clone(), node)
+                })
+                .collect(),
         ),
-        HistoryWindowPage::MergeInputs { identity, inputs, .. } => (
-            format!("{} · {}", t("合并输入", "Merge inputs"), relation_subject(&identity.collection)),
+        HistoryWindowPage::MergeInputs {
+            identity, inputs, ..
+        } => (
+            format!(
+                "{} · {}",
+                t("合并输入", "Merge inputs"),
+                relation_subject(&identity.collection)
+            ),
             input_rows(history, inputs),
         ),
-        HistoryWindowPage::MergeParents { identity, parents, .. } => (
-            format!("{} · {}", t("保存的合并父关系", "Saved merge parents"), relation_subject(&identity.collection)),
-            parents.iter().map(|parent| {
-                let node = parent.parent_node_id.to_string();
-                relation_node(history, format!("#{} · {}", parent.ordinal, node), node)
-            }).collect(),
+        HistoryWindowPage::MergeParents {
+            identity, parents, ..
+        } => (
+            format!(
+                "{} · {}",
+                t("保存的合并父关系", "Saved merge parents"),
+                relation_subject(&identity.collection)
+            ),
+            parents
+                .iter()
+                .map(|parent| {
+                    let node = parent.parent_node_id.to_string();
+                    relation_node(history, format!("#{} · {}", parent.ordinal, node), node)
+                })
+                .collect(),
         ),
-        HistoryWindowPage::VersionSources { identity, sources, .. } => (
-            format!("{} · {}", t("正文来源版本", "Body source versions"), relation_subject(&identity.collection)),
-            sources.iter().map(|source| RelationRow {
-                label: format!("#{} · {}", source.ordinal, source.version_id),
-                node: None,
-                outside: false,
-            }).collect(),
+        HistoryWindowPage::VersionSources {
+            identity, sources, ..
+        } => (
+            format!(
+                "{} · {}",
+                t("正文来源版本", "Body source versions"),
+                relation_subject(&identity.collection)
+            ),
+            sources
+                .iter()
+                .map(|source| RelationRow {
+                    label: format!("#{} · {}", source.ordinal, source.version_id),
+                    node: None,
+                    outside: false,
+                })
+                .collect(),
         ),
         HistoryWindowPage::Nodes { .. }
         | HistoryWindowPage::Versions { .. }
@@ -178,7 +224,11 @@ fn relation_view(history: &FileHistory) -> Option<RelationView> {
             unreachable!("invariant: the relation owner contains only a relation page")
         }
     };
-    Some(RelationView { key: RelationKey::new(collection, cursors), title, rows })
+    Some(RelationView {
+        key: RelationKey::new(collection, cursors),
+        title,
+        rows,
+    })
 }
 
 fn relation_node(history: &FileHistory, label: String, node: String) -> RelationRow {
@@ -193,16 +243,24 @@ fn input_rows(
     history: &FileHistory,
     inputs: &[storage_contract::history_window::HistoryMergeInputMember],
 ) -> Vec<RelationRow> {
-    inputs.iter().map(|input| {
-        let node = input.node_id.to_string();
-        relation_node(history, format!("#{} · {} → {}", input.ordinal, input.branch_id, node), node)
-    }).collect()
+    inputs
+        .iter()
+        .map(|input| {
+            let node = input.node_id.to_string();
+            relation_node(
+                history,
+                format!("#{} · {} → {}", input.ordinal, input.branch_id, node),
+                node,
+            )
+        })
+        .collect()
 }
 
 fn relation_subject(collection: &HistoryCollection) -> String {
     match collection {
         HistoryCollection::NodeParents { node_id } => node_id.to_string(),
-        HistoryCollection::MergeInputs { merge_id } | HistoryCollection::MergeParents { merge_id } => merge_id.to_string(),
+        HistoryCollection::MergeInputs { merge_id }
+        | HistoryCollection::MergeParents { merge_id } => merge_id.to_string(),
         HistoryCollection::VersionSources { version_id } => version_id.to_string(),
         HistoryCollection::Nodes
         | HistoryCollection::Versions
@@ -218,13 +276,27 @@ fn change_relation(state: RwSignal<State>, owner: &HistoryOwner, key: &RelationK
     if !state.with_untracked(|s| owner.allows(s) && key.matches(&s.files.file_history)) {
         return;
     }
-    let cursor = if next { key.next.clone() } else { key.previous.clone() };
-    let Some(cursor) = cursor else { return; };
+    let cursor = if next {
+        key.next.clone()
+    } else {
+        key.previous.clone()
+    };
+    let Some(cursor) = cursor else {
+        return;
+    };
     match &key.collection {
-        HistoryCollection::NodeParents { node_id } => actions::open_history_parents(state, node_id.to_string(), Some(cursor)),
-        HistoryCollection::MergeInputs { merge_id } => actions::open_history_merge_inputs(state, merge_id.to_string(), Some(cursor)),
-        HistoryCollection::MergeParents { merge_id } => actions::open_history_merge_parents(state, merge_id.to_string(), Some(cursor)),
-        HistoryCollection::VersionSources { version_id } => actions::open_history_version_sources(state, version_id.to_string(), Some(cursor)),
+        HistoryCollection::NodeParents { node_id } => {
+            actions::open_history_parents(state, node_id.to_string(), Some(cursor))
+        }
+        HistoryCollection::MergeInputs { merge_id } => {
+            actions::open_history_merge_inputs(state, merge_id.to_string(), Some(cursor))
+        }
+        HistoryCollection::MergeParents { merge_id } => {
+            actions::open_history_merge_parents(state, merge_id.to_string(), Some(cursor))
+        }
+        HistoryCollection::VersionSources { version_id } => {
+            actions::open_history_version_sources(state, version_id.to_string(), Some(cursor))
+        }
         HistoryCollection::Nodes
         | HistoryCollection::Versions
         | HistoryCollection::Branches
@@ -235,7 +307,11 @@ fn change_relation(state: RwSignal<State>, owner: &HistoryOwner, key: &RelationK
     }
 }
 
-fn relation_panel(state: RwSignal<State>, owner: Arc<HistoryOwner>, page: RelationView) -> impl IntoView {
+fn relation_panel(
+    state: RwSignal<State>,
+    owner: Arc<HistoryOwner>,
+    page: RelationView,
+) -> impl IntoView {
     let key = Arc::new(page.key);
     let previous_owner = Arc::clone(&owner);
     let previous_key = Arc::clone(&key);
@@ -271,29 +347,67 @@ fn relation_panel(state: RwSignal<State>, owner: Arc<HistoryOwner>, page: Relati
     </section>}
 }
 
-fn load_selected_field(state: RwSignal<State>, owner: &HistoryOwner, selected: RwSignal<String>, field: HistoryField) {
+fn load_selected_field(
+    state: RwSignal<State>,
+    owner: &HistoryOwner,
+    selected: RwSignal<String>,
+    field: HistoryField,
+) {
     let selected = selected.get_untracked();
     let node = state.with_untracked(|s| {
-        owner.allows(s).then(|| s.files.file_history.nodes().iter()
-            .find(|node| node.id() == selected).map(|node|node.id().to_owned())).flatten()
+        owner
+            .allows(s)
+            .then(|| {
+                s.files
+                    .file_history
+                    .nodes()
+                    .iter()
+                    .find(|node| node.id() == selected)
+                    .map(|node| node.id().to_owned())
+            })
+            .flatten()
     });
-    if let Some(node) = node { actions::load_history_field(state,node,field,None); }
+    if let Some(node) = node {
+        actions::load_history_field(state, node, field, None);
+    }
 }
 
 fn field_controls(state: RwSignal<State>, owner: Arc<HistoryOwner>) -> impl IntoView {
     let selected = RwSignal::new(String::new());
-    let options = Signal::derive(move ||state.with(|s|s.files.file_history.nodes().iter()
-        .map(|node|SelectOption::new(node.id(),format!("#{} · {}",node.sequence(),node.id()))).collect()));
-    let selected_value = Signal::derive(move ||selected.get());
-    let disabled = Signal::derive(move ||state.with(navigation_disabled));
+    let options = Signal::derive(move || {
+        state.with(|s| {
+            s.files
+                .file_history
+                .nodes()
+                .iter()
+                .map(|node| {
+                    SelectOption::new(node.id(), format!("#{} · {}", node.sequence(), node.id()))
+                })
+                .collect()
+        })
+    });
+    let selected_value = Signal::derive(move || selected.get());
+    let disabled = Signal::derive(move || state.with(navigation_disabled));
     let missing = Signal::derive(move || {
         let selected = selected.get();
-        state.with(|s|!s.files.file_history.nodes().iter().any(|node|node.id()==selected))
+        state.with(|s| {
+            !s.files
+                .file_history
+                .nodes()
+                .iter()
+                .any(|node| node.id() == selected)
+        })
     });
     let missing_body = Signal::derive(move || {
         let selected = selected.get();
-        state.with(|s|s.files.file_history.nodes().iter().find(|node|node.id()==selected)
-            .is_none_or(|node|node.version_id().is_none()))
+        state.with(|s| {
+            s.files
+                .file_history
+                .nodes()
+                .iter()
+                .find(|node| node.id() == selected)
+                .is_none_or(|node| node.version_id().is_none())
+        })
     });
     let fields = [HistoryField::Message,HistoryField::Author,HistoryField::CreatedAt].into_iter().map(|field| {
         let owner = Arc::clone(&owner);
@@ -328,12 +442,18 @@ struct FieldKey {
 }
 impl FieldKey {
     fn new(fragment: &FieldFragment) -> Self {
-        Self { node: fragment.node.clone(), field: fragment.field,
-            offset: fragment.offset, next: fragment.next.clone() }
+        Self {
+            node: fragment.node.clone(),
+            field: fragment.field,
+            offset: fragment.offset,
+            next: fragment.next.clone(),
+        }
     }
 
     fn matches(&self, history: &FileHistory) -> bool {
-        history.fragment().is_some_and(|fragment| Self::new(fragment) == *self)
+        history
+            .fragment()
+            .is_some_and(|fragment| Self::new(fragment) == *self)
     }
 }
 
@@ -375,15 +495,15 @@ fn field_fragment_panel(
 }
 
 fn field_panel(state: RwSignal<State>, owner: Arc<HistoryOwner>) -> impl IntoView {
-    let history = Memo::new(move |_|state.with(|s|s.files.file_history.clone()));
-    let key = Memo::new(move |_|history.with(|h|h.fragment().map(FieldKey::new)));
+    let history = Memo::new(move |_| state.with(|s| s.files.file_history.clone()));
+    let key = Memo::new(move |_| history.with(|h| h.fragment().map(FieldKey::new)));
     view! {{move ||key.get().map(|key|field_fragment_panel(state,Arc::clone(&owner),key,history))}}
 }
 
 pub(crate) fn auxiliary_view(state: RwSignal<State>) -> impl IntoView {
-    let owner = Memo::new(move |_|state.with(HistoryOwner::capture));
-    let history = Memo::new(move |_|state.with(|s|s.files.file_history.clone()));
-    let relation = Memo::new(move |_|history.with(|h|relation_view(h)));
+    let owner = Memo::new(move |_| state.with(HistoryOwner::capture));
+    let history = Memo::new(move |_| state.with(|s| s.files.file_history.clone()));
+    let relation = Memo::new(move |_| history.with(|h| relation_view(h)));
     view! {{move ||owner.get().map(|owner|{
         let owner=Arc::new(owner);
         let relation_owner=Arc::clone(&owner);
@@ -397,7 +517,7 @@ pub(crate) fn auxiliary_view(state: RwSignal<State>) -> impl IntoView {
 }
 
 pub(crate) fn provenance_view(state: RwSignal<State>) -> impl IntoView {
-    let owner = Memo::new(move |_|state.with(HistoryOwner::capture));
+    let owner = Memo::new(move |_| state.with(HistoryOwner::capture));
     view! {{move ||owner.get().map(|owner|{
         let owner=Arc::new(owner);
         let load_owner=Arc::clone(&owner);

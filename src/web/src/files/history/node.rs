@@ -47,8 +47,6 @@ pub(crate) struct FileNode {
     pub(super) previous_path: Option<String>,
     pub(super) parents: Vec<Parent>,
     pub(super) parent_set: ParentSet,
-    pub(super) materialized: bool,
-    pub(super) inherited: bool,
     pub(super) content_state: Option<storage_contract::ContentState>,
     pub(super) fields: storage_contract::history_window::HistoryNodeFields,
 }
@@ -65,10 +63,7 @@ impl FileNode {
         self.sequence
     }
 
-    pub(crate) fn field_bytes(
-        &self,
-        field: storage_contract::history_window::HistoryField,
-    ) -> u64 {
+    pub(crate) fn field_bytes(&self, field: storage_contract::history_window::HistoryField) -> u64 {
         use storage_contract::history_window::HistoryField;
         match field {
             HistoryField::Message => self.fields.message.byte_length,
@@ -111,14 +106,6 @@ impl FileNode {
 
     pub(crate) fn visible_content(&self) -> bool {
         self.version.is_some()
-    }
-
-    pub(crate) fn materialized(&self) -> bool {
-        self.materialized
-    }
-
-    pub(crate) fn inherited(&self) -> bool {
-        self.inherited
     }
 
     pub(crate) fn content_state(&self) -> Option<storage_contract::ContentState> {

@@ -33,6 +33,7 @@
 .zxs-entry-navigation > .zxs-button { flex-shrink: 0; }
 .zxs-entry-navigation > :not(.zxs-button) { min-width: 0; overflow-wrap: anywhere; }
 .zxs-entry-content .zxs-input { width: 100%; }
+.zxs-history-field pre { min-width: 0; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .zxs-version-tree-scroll { container-type: inline-size; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; }
 .zxs-version-tree-canvas { position: relative; display: flex; flex-direction: column; align-items: center; gap: var(--zxs-block-gap); box-sizing: border-box; width: max-content; min-width: 100%; padding: 0 var(--zxs-block-gap); }
 .zxs-version-tree-level { position: relative; z-index: 1; display: flex; justify-content: center; align-items: flex-start; gap: var(--zxs-block-gap); box-sizing: border-box; width: max-content; min-width: calc(100% - var(--zxs-compact-row-height)); }

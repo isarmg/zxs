@@ -87,6 +87,7 @@ pub(crate) struct Model {
     pub history_generation: u64,
     pub history_cancellation: Option<crate::api::ReadCancellation>,
     pub history_editors: usize,
+    pub history_next_draft: u64,
     pub history_aux: super::history::Reads,
     pub checked_entries: BTreeSet<String>,
     pub batch: Option<super::batch::Draft>,
@@ -337,7 +338,12 @@ pub(crate) fn selected_file_branch_record(model: &Model) -> Option<(String, Stri
         .branches()
         .iter()
         .find(|branch| branch.id() == id)
-        .or_else(|| model.file_history.current_branch().filter(|branch| branch.id() == id))?;
+        .or_else(|| {
+            model
+                .file_history
+                .current_branch()
+                .filter(|branch| branch.id() == id)
+        })?;
     if !branch.writable() {
         return None;
     }

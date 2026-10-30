@@ -7,10 +7,7 @@ use super::{
     },
     tags, version_tree,
 };
-use crate::{
-    icons::FileIcon,
-    ui::State,
-};
+use crate::{icons::FileIcon, ui::State};
 use web_interface::components::{EmptyState, LoadingState, Select, SelectOption};
 use web_interface::{i18n::t, prelude::*};
 
@@ -90,16 +87,13 @@ fn file_note_ready(model: &Model) -> bool {
 }
 
 fn branch_options(model: &Model) -> Vec<SelectOption> {
-    let current = model
-        .file_history
-        .current_branch()
-        .filter(|current| {
-            !model
-                .file_history
-                .branches()
-                .iter()
-                .any(|branch| branch.id() == current.id())
-        });
+    let current = model.file_history.current_branch().filter(|current| {
+        !model
+            .file_history
+            .branches()
+            .iter()
+            .any(|branch| branch.id() == current.id())
+    });
     model
         .file_history
         .branches()

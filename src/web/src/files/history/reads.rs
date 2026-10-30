@@ -1,5 +1,12 @@
 //! A fixed number of owned reads; every relation kind shares one slot.
 use crate::api::ReadCancellation;
+use crate::files::review::Kind;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReviewOwner {
+    pub(crate) kind: Kind,
+    pub(crate) instance: u64,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Resource {
@@ -24,6 +31,7 @@ pub(crate) struct Reads {
     relation: Slot,
     field: Slot,
     review: Slot,
+    review_owner: Option<ReviewOwner>,
 }
 
 impl Reads {
@@ -86,6 +94,9 @@ impl Reads {
         if !self.current(resource, generation) {
             return false;
         }
+        if resource == Resource::Review {
+            self.review_owner = None;
+        }
         let slot = self.slot_mut(resource);
         slot.loading = false;
         slot.cancellation = None;
@@ -93,12 +104,33 @@ impl Reads {
     }
 
     pub(crate) fn cancel(&mut self, resource: Resource) {
+        if resource == Resource::Review {
+            self.review_owner = None;
+        }
         let slot = self.slot_mut(resource);
         if let Some(cancellation) = slot.cancellation.take() {
             cancellation.abort();
         }
         slot.generation += 1;
         slot.loading = false;
+    }
+
+    pub(crate) fn begin_review(&mut self, owner: ReviewOwner) -> u64 {
+        let generation = self.begin(Resource::Review, None);
+        self.review_owner = Some(owner);
+        generation
+    }
+
+    pub(crate) fn current_review(&self, owner: ReviewOwner, generation: u64) -> bool {
+        self.review_owner == Some(owner) && self.current(Resource::Review, generation)
+    }
+
+    pub(crate) fn cancel_review(&mut self, owner: ReviewOwner) -> bool {
+        if self.review_owner != Some(owner) {
+            return false;
+        }
+        self.cancel(Resource::Review);
+        true
     }
 
     pub(crate) fn cancel_all(&mut self) {
@@ -110,7 +142,10 @@ impl Reads {
     }
 
     pub(crate) fn loading(&self) -> bool {
-        self.branches.loading || self.merges.loading || self.relation.loading
-            || self.field.loading || self.review.loading
+        self.branches.loading
+            || self.merges.loading
+            || self.relation.loading
+            || self.field.loading
+            || self.review.loading
     }
 }

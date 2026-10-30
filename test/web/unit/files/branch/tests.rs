@@ -84,7 +84,10 @@ fn an_unloaded_history_does_not_admit_a_branch_from_cached_selected_content() {
         ..Default::default()
     };
     assert_eq!(file_source(&model, &Target::CurrentFileVersion), None);
-    assert_eq!(file_source(&model, &Target::HistoryNode("current-node".into())), None);
+    assert_eq!(
+        file_source(&model, &Target::HistoryNode("current-node".into())),
+        None
+    );
 }
 
 #[test]

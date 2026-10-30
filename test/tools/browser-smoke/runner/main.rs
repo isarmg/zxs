@@ -29,6 +29,7 @@ mod fixture;
 use fixture::seed_files;
 mod fonts;
 mod history_cancellation;
+mod history_windows;
 mod integrity_scrub;
 mod lifecycle;
 mod management;
@@ -313,6 +314,7 @@ fn exercise(
     file_viewports::run(browser, viewport_previews.as_deref())?;
     let current_history = session_delivery::begin_paused_history(browser)?;
     session_delivery::finish(current_history, true)?;
+    history_windows::run(browser)?;
     assert_metadata_only(browser)?;
     metadata_edit(browser)?;
     browser.click(&browser.button("History", "历史记录")?)?;

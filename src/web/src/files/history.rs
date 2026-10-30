@@ -9,12 +9,12 @@ use storage_contract::history_window::{
 };
 
 mod ingress;
-mod wire;
 mod node;
-mod view;
 pub(in crate::files) mod reads;
-pub(crate) use reads::Reads;
+mod view;
+mod wire;
 pub(crate) use node::{FileNode, NodeKind, Parent, ParentEndpoint, ParentSet};
+pub(crate) use reads::Reads;
 pub(crate) use view::{auxiliary_view, provenance_view};
 
 #[derive(Debug, error_definition::Error)]
@@ -110,53 +110,112 @@ pub(crate) struct FileHistory {
     window_key: u64,
 }
 impl FileHistory {
-    pub(crate) fn root(&self) -> Option<&str> { self.root.as_deref() }
-    pub(crate) fn loaded(&self) -> bool { self.identity.is_some() }
-    pub(crate) fn ready(&self) -> bool { self.ready }
-    pub(crate) fn invalidate(&mut self) { self.ready = false; }
-    pub(crate) fn nodes(&self) -> &[FileNode] { &self.nodes }
+    pub(crate) fn root(&self) -> Option<&str> {
+        self.root.as_deref()
+    }
+    pub(crate) fn loaded(&self) -> bool {
+        self.identity.is_some()
+    }
+    pub(crate) fn ready(&self) -> bool {
+        self.ready
+    }
+    pub(crate) fn invalidate(&mut self) {
+        self.ready = false;
+    }
+    pub(crate) fn nodes(&self) -> &[FileNode] {
+        &self.nodes
+    }
     pub(crate) fn node(&self, id: &str) -> Option<&FileNode> {
-        self.nodes.iter().find(|node| node.id() == id)
+        self.nodes
+            .iter()
+            .find(|node| node.id() == id)
             .or_else(|| self.current_node.as_ref().filter(|node| node.id() == id))
     }
     pub(crate) fn body_note(&self, version: &str) -> Option<&str> {
-        self.nodes.iter().chain(self.current_node.iter())
+        self.nodes
+            .iter()
+            .chain(self.current_node.iter())
             .find(|node| node.version_id() == Some(version) && node.body_note().is_some())
             .and_then(FileNode::body_note)
     }
-    pub(crate) fn branches(&self) -> &[FileBranch] { &self.branches }
-    pub(crate) fn current_branch(&self) -> Option<&FileBranch> { self.current_branch.as_ref() }
+    pub(crate) fn branches(&self) -> &[FileBranch] {
+        &self.branches
+    }
+    pub(crate) fn current_branch(&self) -> Option<&FileBranch> {
+        self.current_branch.as_ref()
+    }
     pub(crate) fn selected(&self) -> Option<&str> {
         self.selected.as_deref()
     }
-    pub(crate) fn file_note(&self) -> Option<&str> { self.context.as_ref().map(|c| c.note.as_str()) }
-    pub(crate) fn current_node_id(&self) -> Option<&str> { self.current_id.as_deref() }
-    pub(crate) fn current_version_id(&self) -> Option<&str> { self.current_version.as_deref() }
-    pub(crate) fn current_inherited(&self) -> bool { self.current_inherited }
-    pub(crate) fn window_key(&self) -> u64 { self.window_key }
+    pub(crate) fn file_note(&self) -> Option<&str> {
+        self.context.as_ref().map(|c| c.note.as_str())
+    }
+    pub(crate) fn current_node_id(&self) -> Option<&str> {
+        self.current_id.as_deref()
+    }
+    pub(crate) fn current_version_id(&self) -> Option<&str> {
+        self.current_version.as_deref()
+    }
+    pub(crate) fn current_inherited(&self) -> bool {
+        self.current_inherited
+    }
+    pub(crate) fn window_key(&self) -> u64 {
+        self.window_key
+    }
     pub(crate) fn action_max_entries(&self) -> Option<usize> {
         // The 1 MiB action envelope gives a much smaller count bound on WASM32.
-        Some(self.identity.as_ref()?.action_max_entries.min(usize::MAX as u64) as usize)
+        Some(
+            self.identity
+                .as_ref()?
+                .action_max_entries
+                .min(usize::MAX as u64) as usize,
+        )
     }
-    pub(crate) fn identity(&self) -> Option<&HistoryPageIdentity> { self.identity.as_ref() }
+    pub(crate) fn identity(&self) -> Option<&HistoryPageIdentity> {
+        self.identity.as_ref()
+    }
     pub(crate) fn next_cursor(&self) -> Option<&str> {
         self.page.as_ref()?.next_cursor.as_ref().map(|c| c.as_str())
     }
     pub(crate) fn previous_cursor(&self) -> Option<&str> {
-        self.page.as_ref()?.previous_cursor.as_ref().map(|c| c.as_str())
+        self.page
+            .as_ref()?
+            .previous_cursor
+            .as_ref()
+            .map(|c| c.as_str())
     }
     pub(crate) fn next_branch_cursor(&self) -> Option<&str> {
-        self.branch_page.as_ref()?.next_cursor.as_ref().map(|c| c.as_str())
+        self.branch_page
+            .as_ref()?
+            .next_cursor
+            .as_ref()
+            .map(|c| c.as_str())
     }
     pub(crate) fn previous_branch_cursor(&self) -> Option<&str> {
-        self.branch_page.as_ref()?.previous_cursor.as_ref().map(|c| c.as_str())
+        self.branch_page
+            .as_ref()?
+            .previous_cursor
+            .as_ref()
+            .map(|c| c.as_str())
     }
-    pub(crate) fn merges(&self) -> &[HistoryMergeSummary] { &self.merges }
-    pub(crate) fn merge_cursors(&self) -> Option<&HistoryPageCursors> { self.merge_page.as_ref() }
-    pub(crate) fn relation(&self) -> Option<&HistoryWindowPage> { self.relation.as_ref() }
-    pub(crate) fn fragment(&self) -> Option<&FieldFragment> { self.fragment.as_ref() }
-    pub(crate) fn close_relation(&mut self) { self.relation = None; }
-    pub(crate) fn close_fragment(&mut self) { self.fragment = None; }
+    pub(crate) fn merges(&self) -> &[HistoryMergeSummary] {
+        &self.merges
+    }
+    pub(crate) fn merge_cursors(&self) -> Option<&HistoryPageCursors> {
+        self.merge_page.as_ref()
+    }
+    pub(crate) fn relation(&self) -> Option<&HistoryWindowPage> {
+        self.relation.as_ref()
+    }
+    pub(crate) fn fragment(&self) -> Option<&FieldFragment> {
+        self.fragment.as_ref()
+    }
+    pub(crate) fn close_relation(&mut self) {
+        self.relation = None;
+    }
+    pub(crate) fn close_fragment(&mut self) {
+        self.fragment = None;
+    }
 
     pub(crate) fn install_nodes(
         &mut self,
@@ -164,8 +223,17 @@ impl FileHistory {
         entry: &super::page::Entry,
         replace: bool,
     ) -> Result<(), DecodeError> {
-        let HistoryWindowPage::Nodes { identity, context, nodes, edges, page } = page else {
-            return Err(DecodeError::Relation("node loader received another collection"));
+        let HistoryWindowPage::Nodes {
+            identity,
+            context,
+            nodes,
+            edges,
+            page,
+        } = page
+        else {
+            return Err(DecodeError::Relation(
+                "node loader received another collection",
+            ));
         };
         let root = identity.history_root.to_string();
         let same_root = self.root.as_deref() == Some(root.as_str());
@@ -175,11 +243,14 @@ impl FileHistory {
                 Some(node.id()) == entry.node_id() && node.version_id() != entry.version_id()
             })
         {
-            return Err(DecodeError::Relation("backup node differs from its stored body version"));
+            return Err(DecodeError::Relation(
+                "backup node differs from its stored body version",
+            ));
         }
         let same_structure = self.nodes.len() == nodes.len()
             && self.nodes.iter().zip(&nodes).all(|(old, new)| {
-                old.id() == new.id() && old.parents() == new.parents()
+                old.id() == new.id()
+                    && old.parents() == new.parents()
                     && old.parent_set() == new.parent_set()
             });
         if replace || !same_structure || !self.loaded() {
@@ -198,22 +269,40 @@ impl FileHistory {
         self.current_id = if entry.backup() {
             entry.node_id().map(str::to_owned)
         } else {
-            identity.context.current_node_id.as_ref().map(ToString::to_string)
+            identity
+                .context
+                .current_node_id
+                .as_ref()
+                .map(ToString::to_string)
         };
         self.current_version = if entry.backup() {
             entry.version_id().map(str::to_owned)
         } else {
-            context.content.as_ref().and_then(|c| c.version_id.as_ref()).map(ToString::to_string)
+            context
+                .content
+                .as_ref()
+                .and_then(|c| c.version_id.as_ref())
+                .map(ToString::to_string)
         };
         self.current_inherited = if entry.backup() {
             entry.inherited_content()
         } else {
-            context.content.as_ref().is_some_and(|c| matches!(c.source, HistoryContentSource::Inherited { .. }))
+            context
+                .content
+                .as_ref()
+                .is_some_and(|c| matches!(c.source, HistoryContentSource::Inherited { .. }))
         };
-        if let Some(node) = nodes.iter().find(|node| Some(node.id()) == self.current_id.as_deref()) {
+        if let Some(node) = nodes
+            .iter()
+            .find(|node| Some(node.id()) == self.current_id.as_deref())
+        {
             self.current_node = Some(node.clone());
         }
-        self.selected = identity.context.selected_branch_id.as_ref().map(ToString::to_string);
+        self.selected = identity
+            .context
+            .selected_branch_id
+            .as_ref()
+            .map(ToString::to_string);
         self.identity = Some(identity);
         self.root = Some(root);
         self.context = Some(context);
@@ -225,7 +314,11 @@ impl FileHistory {
 
     pub(crate) fn install_auxiliary(&mut self, page: HistoryWindowPage) -> Result<(), DecodeError> {
         match page {
-            HistoryWindowPage::Branches { identity: _, branches, page } => {
+            HistoryWindowPage::Branches {
+                identity: _,
+                branches,
+                page,
+            } => {
                 let branches = branches.into_iter().map(wire::branch).collect::<Vec<_>>();
                 if let Some(branch) = branches.iter().find(|b| Some(b.id()) == self.selected()) {
                     self.current_branch = Some(branch.clone());
@@ -233,23 +326,51 @@ impl FileHistory {
                 self.branches = branches.into();
                 self.branch_page = Some(page);
             }
-            HistoryWindowPage::Merges { identity: _, merges, page } => {
+            HistoryWindowPage::Merges {
+                identity: _,
+                merges,
+                page,
+            } => {
                 self.merges = merges.into();
                 self.merge_page = Some(page);
             }
-            HistoryWindowPage::NodeField { identity, field, total_bytes, byte_offset, text, end_of_field, next_cursor } => {
-                let storage_contract::history_window::HistoryCollection::NodeField { node_id, .. } = identity.collection else {
-                    return Err(DecodeError::Relation("field fragment has another collection"));
+            HistoryWindowPage::NodeField {
+                identity,
+                field,
+                total_bytes,
+                byte_offset,
+                text,
+                end_of_field,
+                next_cursor,
+            } => {
+                let storage_contract::history_window::HistoryCollection::NodeField {
+                    node_id, ..
+                } = identity.collection
+                else {
+                    return Err(DecodeError::Relation(
+                        "field fragment has another collection",
+                    ));
                 };
-                self.fragment = Some(FieldFragment { node: node_id.to_string(), field, total: total_bytes,
-                    offset: byte_offset, text, end: end_of_field, next: next_cursor.map(|c| c.as_str().to_owned()) });
+                self.fragment = Some(FieldFragment {
+                    node: node_id.to_string(),
+                    field,
+                    total: total_bytes,
+                    offset: byte_offset,
+                    text,
+                    end: end_of_field,
+                    next: next_cursor.map(|c| c.as_str().to_owned()),
+                });
             }
-            page @ (HistoryWindowPage::NodeParents { .. } | HistoryWindowPage::MergeInputs { .. }
-                | HistoryWindowPage::MergeParents { .. } | HistoryWindowPage::VersionSources { .. }) => {
+            page @ (HistoryWindowPage::NodeParents { .. }
+            | HistoryWindowPage::MergeInputs { .. }
+            | HistoryWindowPage::MergeParents { .. }
+            | HistoryWindowPage::VersionSources { .. }) => {
                 self.relation = Some(page);
             }
             HistoryWindowPage::Nodes { .. } | HistoryWindowPage::Versions { .. } => {
-                return Err(DecodeError::Relation("auxiliary loader received another collection"));
+                return Err(DecodeError::Relation(
+                    "auxiliary loader received another collection",
+                ));
             }
         }
         Ok(())

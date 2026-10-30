@@ -162,16 +162,28 @@ fn body_note_editors_use_body_versions_and_never_the_graph_node_identity() {
         Target::VersionNote("body-version".into()).initial(&state),
         Some("body note".into())
     );
-    assert_eq!(Target::VersionNote("rename-node".into()).initial(&state), None);
-    assert_eq!(Target::NodeNote("body-version".into()).initial(&state), None);
+    assert_eq!(
+        Target::VersionNote("rename-node".into()).initial(&state),
+        None
+    );
+    assert_eq!(
+        Target::NodeNote("body-version".into()).initial(&state),
+        None
+    );
 }
 
 #[test]
 fn unloaded_note_targets_do_not_become_known_empty_notes() {
     let state = State::default();
     assert_eq!(Target::FileNote.initial(&state), None);
-    assert_eq!(Target::NodeNote("unloaded-node".into()).initial(&state), None);
-    assert_eq!(Target::VersionNote("unloaded-body".into()).initial(&state), None);
+    assert_eq!(
+        Target::NodeNote("unloaded-node".into()).initial(&state),
+        None
+    );
+    assert_eq!(
+        Target::VersionNote("unloaded-body".into()).initial(&state),
+        None
+    );
 }
 
 #[test]
@@ -515,7 +527,10 @@ fn scheduled_shared_context_effects_preserve_pending_drafts_and_follow_page_owne
     let remounted = root.with(Owner::new);
     let (fresh, fresh_context) = remounted.with(|| {
         provide_context(state);
-        (Draft::new(state, EditScope::Location), use_context::<SharedContext>().unwrap().0)
+        (
+            Draft::new(state, EditScope::Location),
+            use_context::<SharedContext>().unwrap().0,
+        )
     });
     assert!(old_context != fresh_context);
     Executor::poll_local();

@@ -1,5 +1,5 @@
 use super::*;
-use crate::files::history::tests::{branch_wire, history, update_metadata};
+use crate::files::history::tests::{history, update_metadata};
 use json_codec::json;
 
 #[test]
@@ -8,17 +8,12 @@ fn indexed_records_borrow_only_the_loaded_window_and_body_notes() {
         "nodes": [
             {"node_id":"metadata", "version_id":"v", "kind":"rename", "note":"path note"},
             {"node_id":"n", "version_id":"v", "kind":"content", "note":"body note"}
-        ],
-        "branches": [branch_wire(json!({"branch_id":"b", "name":"first"}))]
+        ]
     }));
     let index = HistoryIndex::new(snapshot.clone());
     let (position, node) = index.node("n").unwrap();
     assert_eq!(position, 1);
     assert!(std::ptr::eq(node, &snapshot.nodes()[1]));
-    assert!(std::ptr::eq(
-        index.branch("b").unwrap(),
-        &snapshot.branches()[0]
-    ));
     assert!(std::ptr::eq(
         index.version("v").unwrap(),
         &snapshot.nodes()[1]
@@ -26,7 +21,6 @@ fn indexed_records_borrow_only_the_loaded_window_and_body_notes() {
     assert_eq!(index.version("v").unwrap().body_note(), Some("body note"));
     assert_eq!(index.node("metadata").unwrap().1.note(), "path note");
     assert!(index.node("missing").is_none());
-    assert!(index.branch("missing").is_none());
     assert!(index.version("missing").is_none());
 }
 
@@ -113,7 +107,8 @@ fn indexed_lookup_matches_a_scan_of_each_replaced_window() {
         let index = HistoryIndex::new(snapshot.clone());
         for i in 0..count {
             let id = format!("node-{i}");
-            let expected = snapshot.nodes()
+            let expected = snapshot
+                .nodes()
                 .iter()
                 .enumerate()
                 .find(|(_, node)| node.id() == id);

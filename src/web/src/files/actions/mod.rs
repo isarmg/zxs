@@ -1,9 +1,9 @@
 //! File-manager actions. Views call this facade; private modules separate reads,
 //! mutations and publication recovery without owning UI state.
 mod browse;
+mod history;
 mod mutation;
 mod operation;
-mod history;
 
 pub(crate) use history::{
     anchor_history_node, close_history_field, close_history_relation, history_aux_loading,

@@ -1,5 +1,5 @@
 //! Disk/folder navigation and generation-guarded metadata reads.
-use super::{disk_path, history::load_file_history};
+use super::{disk_path, load_file_history};
 use crate::{
     api,
     files::{

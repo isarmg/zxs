@@ -1,8 +1,8 @@
 //! The action owns only selected branch facts, never a candidate page.
+use crate::files::history::{FileBranch, FileNode};
 use data_serialization::Serialize;
 use json_codec::Value;
 use std::io::{self, Write};
-use crate::files::history::{FileBranch, FileNode};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::files) struct SelectedBranch {
@@ -39,6 +39,7 @@ impl ChosenNode {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReviewInventory {
+    pub(crate) instance: u64,
     pub(crate) node_ids: Vec<String>,
     pub(crate) branch_ids: Vec<String>,
 }
@@ -117,7 +118,10 @@ pub(in crate::files) fn check_selection(
     if reserved.get("chosen_node_id").is_some_and(|id| id == "") {
         reserved["chosen_node_id"] = "fnode_00000000000000000000000000000000".into();
     }
-    if reserved.get("surviving_branch_id").is_some_and(|id| id == "") {
+    if reserved
+        .get("surviving_branch_id")
+        .is_some_and(|id| id == "")
+    {
         reserved["surviving_branch_id"] = "br_00000000000000000000000000000000".into();
     }
     if let Some(targets) = reserved.get_mut("targets").and_then(Value::as_array_mut) {

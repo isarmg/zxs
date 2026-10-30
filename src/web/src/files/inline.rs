@@ -1,9 +1,6 @@
 //! Single-line metadata edits share the branch editor's commit/cancel behavior.
 use super::{actions, history::NodeKind, model::NamespaceAction};
-use crate::{
-    icons::FileIcon,
-    ui::State,
-};
+use crate::{icons::FileIcon, ui::State};
 use web_interface::{html, i18n::t, prelude::*};
 
 // Branch labels and notes retain their metadata budget; namespace names use name-policy.
@@ -362,9 +359,10 @@ impl Draft {
         }
         self.state.update(|state| state.files.history_editors += 1);
         self.context.set(Some(context));
-        self.history_root.set(self.state.with_untracked(|state| {
-            state.files.file_history.root().map(str::to_owned)
-        }));
+        self.history_root.set(
+            self.state
+                .with_untracked(|state| state.files.file_history.root().map(str::to_owned)),
+        );
         self.value.set(value);
         self.error.set(false);
         self.editing.set(true);
@@ -386,9 +384,9 @@ impl Draft {
         if self.scope == EditScope::History
             && !self.state.with_untracked(|state| {
                 actions::history_write_allowed(state)
-                    && self.history_root.with_untracked(|root| {
-                        root.as_deref() == state.files.file_history.root()
-                    })
+                    && self
+                        .history_root
+                        .with_untracked(|root| root.as_deref() == state.files.file_history.root())
             })
         {
             self.state.update(|state| {

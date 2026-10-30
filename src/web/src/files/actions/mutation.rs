@@ -1,8 +1,8 @@
 //! Namespace, branch and note transactions; writes never bypass the pending-save gate.
 use super::{
-    disk_path,
+    disk_path, history_write_allowed,
     operation::{record_operation, record_receipt},
-    history_write_allowed, write_allowed,
+    write_allowed,
 };
 use crate::{
     api,

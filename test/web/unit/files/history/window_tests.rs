@@ -71,7 +71,10 @@ fn cursor(
         direction,
         position,
         anchor_node_id: request.anchor_node_id.clone().or_else(|| {
-            request.cursor.as_ref().and_then(|cursor| cursor.payload().anchor_node_id.clone())
+            request
+                .cursor
+                .as_ref()
+                .and_then(|cursor| cursor.payload().anchor_node_id.clone())
         }),
     })
     .unwrap()
@@ -157,7 +160,10 @@ fn page_identity_cannot_change_file_root_collection_limit_query_or_action_capabi
     ] {
         let mut page = value(&nodes(&request, 1));
         page["identity"][field] = replacement;
-        assert!(admit(page, &request, None).is_err(), "accepted changed {field}");
+        assert!(
+            admit(page, &request, None).is_err(),
+            "accepted changed {field}"
+        );
     }
     let mut page = value(&nodes(&request, 1));
     page["kind"] = "node_parents".into();
@@ -185,19 +191,50 @@ fn exact_requested_and_previously_resolved_contexts_remain_bound() {
 fn nullable_page_and_record_fields_must_be_present() {
     let request = read_request(wire::HistoryCollection::Nodes);
     let removals: [fn(&mut Value); 6] = [
-        |page| { page["identity"]["context"].as_object_mut().unwrap().remove("current_node_id"); },
-        |page| { page["page"].as_object_mut().unwrap().remove("next_cursor"); },
-        |page| { page["context"].as_object_mut().unwrap().remove("content"); },
-        |page| { page["context"]["content"].as_object_mut().unwrap().remove("stored_state"); },
-        |page| { page["nodes"][0].as_object_mut().unwrap().remove("branch_id"); },
-        |page| { page["nodes"][0].as_object_mut().unwrap().remove("previous_path"); },
+        |page| {
+            page["identity"]["context"]
+                .as_object_mut()
+                .unwrap()
+                .remove("current_node_id");
+        },
+        |page| {
+            page["page"].as_object_mut().unwrap().remove("next_cursor");
+        },
+        |page| {
+            page["context"].as_object_mut().unwrap().remove("content");
+        },
+        |page| {
+            page["context"]["content"]
+                .as_object_mut()
+                .unwrap()
+                .remove("stored_state");
+        },
+        |page| {
+            page["nodes"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("branch_id");
+        },
+        |page| {
+            page["nodes"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("previous_path");
+        },
     ];
     for remove in removals {
         let mut page = value(&nodes(&request, 1));
         remove(&mut page);
         assert!(admit(page, &request, None).is_err());
     }
-    assert!(admit(json!({"file_id":id("file",1),"versions":[],"nodes":[],"branches":[]}), &request, None).is_err());
+    assert!(
+        admit(
+            json!({"file_id":id("file",1),"versions":[],"nodes":[],"branches":[]}),
+            &request,
+            None
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -211,7 +248,10 @@ fn node_identity_order_current_markers_and_small_fields_are_admitted_together() 
         json!({"created_at":"2026-01-01T00:00:00Z"}),
     ] {
         let mut page = value(&nodes(&request, 1));
-        page["nodes"][0].as_object_mut().unwrap().extend(change.as_object().unwrap().clone());
+        page["nodes"][0]
+            .as_object_mut()
+            .unwrap()
+            .extend(change.as_object().unwrap().clone());
         assert!(admit(page, &request, None).is_err());
     }
     let mut page = value(&nodes(&request, 2));
@@ -241,9 +281,14 @@ fn an_initial_anchor_must_be_present_but_continuation_pages_do_not_retain_it() {
     request.anchor_node_id = Some(node(2).node_id);
     assert!(!accepted(&nodes(&request, 1), &request));
     assert!(accepted(&nodes(&request, 2), &request));
-    request.cursor = Some(cursor(&request, wire::HistoryPosition::Node {
-        sequence: 998, node_id: node(2).node_id,
-    }, wire::HistoryDirection::Forward));
+    request.cursor = Some(cursor(
+        &request,
+        wire::HistoryPosition::Node {
+            sequence: 998,
+            node_id: node(2).node_id,
+        },
+        wire::HistoryDirection::Forward,
+    ));
     request.anchor_node_id = None;
     let mut page = nodes(&request, 1);
     if let wire::HistoryWindowPage::Nodes { nodes, .. } = &mut page {
@@ -257,11 +302,13 @@ fn edge_preview_has_its_own_budget_and_explicit_endpoint_membership() {
     let request = read_request(wire::HistoryCollection::Nodes);
     let mut page = nodes(&request, 1);
     if let wire::HistoryWindowPage::Nodes { edges, .. } = &mut page {
-        *edges = (2..258).map(|number| wire::HistoryGraphEdge {
-            node_id: node(1).node_id,
-            parent_node_id: node(number).node_id,
-            endpoint: wire::HistoryEndpoint::OutsideWindow,
-        }).collect();
+        *edges = (2..258)
+            .map(|number| wire::HistoryGraphEdge {
+                node_id: node(1).node_id,
+                parent_node_id: node(number).node_id,
+                endpoint: wire::HistoryEndpoint::OutsideWindow,
+            })
+            .collect();
     }
     assert!(accepted(&page, &request));
     let mut oversized = value(&page);
@@ -280,31 +327,54 @@ fn edge_preview_has_its_own_budget_and_explicit_endpoint_membership() {
 #[test]
 fn parent_more_cursor_uses_its_own_collection_query_and_inclusive_start() {
     let request = read_request(wire::HistoryCollection::Nodes);
-    let mut parent_request = read_request(wire::HistoryCollection::NodeParents { node_id: node(1).node_id });
+    let mut parent_request = read_request(wire::HistoryCollection::NodeParents {
+        node_id: node(1).node_id,
+    });
     parent_request.location = request.location.clone();
-    let more = cursor(&parent_request, wire::HistoryPosition::Start, wire::HistoryDirection::Forward);
+    let more = cursor(
+        &parent_request,
+        wire::HistoryPosition::Start,
+        wire::HistoryDirection::Forward,
+    );
     let mut page = nodes(&request, 1);
     if let wire::HistoryWindowPage::Nodes { nodes, .. } = &mut page {
         nodes[0].parents = wire::HistoryParentSet::More { cursor: more };
     }
     assert!(accepted(&page, &request));
-    let wrong = read_request(wire::HistoryCollection::NodeParents { node_id: node(2).node_id });
+    let wrong = read_request(wire::HistoryCollection::NodeParents {
+        node_id: node(2).node_id,
+    });
     let mut forged = value(&page);
-    forged["nodes"][0]["parents"]["cursor"] = json!(cursor(&wrong, wire::HistoryPosition::Start, wire::HistoryDirection::Forward));
+    forged["nodes"][0]["parents"]["cursor"] = json!(cursor(
+        &wrong,
+        wire::HistoryPosition::Start,
+        wire::HistoryDirection::Forward
+    ));
     assert!(admit(forged, &request, None).is_err());
 }
 
 #[test]
 fn page_cursors_bind_query_direction_and_cannot_repeat_a_pending_position() {
     let mut request = read_request(wire::HistoryCollection::Nodes);
-    let next = cursor(&request, wire::HistoryPosition::Node { sequence: 999, node_id: node(1).node_id }, wire::HistoryDirection::Forward);
+    let next = cursor(
+        &request,
+        wire::HistoryPosition::Node {
+            sequence: 999,
+            node_id: node(1).node_id,
+        },
+        wire::HistoryDirection::Forward,
+    );
     let mut page = nodes(&request, 1);
     if let wire::HistoryWindowPage::Nodes { page, .. } = &mut page {
         page.next_cursor = Some(next.clone());
     }
     assert!(accepted(&page, &request));
     let mut wrong = value(&page);
-    let backward = cursor(&request, next.payload().position.clone(), wire::HistoryDirection::Backward);
+    let backward = cursor(
+        &request,
+        next.payload().position.clone(),
+        wire::HistoryDirection::Backward,
+    );
     wrong["page"]["next_cursor"] = json!(backward);
     assert!(admit(wrong, &request, None).is_err());
     let mut payload = next.payload().clone();
@@ -336,16 +406,23 @@ fn field_page(
         byte_offset,
         text: text.into(),
         end_of_field,
-        next_cursor: (!end_of_field).then(|| cursor(request, wire::HistoryPosition::Field {
-            byte_offset: byte_offset + text.len() as u64,
-        }, wire::HistoryDirection::Forward)),
+        next_cursor: (!end_of_field).then(|| {
+            cursor(
+                request,
+                wire::HistoryPosition::Field {
+                    byte_offset: byte_offset + text.len() as u64,
+                },
+                wire::HistoryDirection::Forward,
+            )
+        }),
     }
 }
 
 #[test]
 fn utf8_fragments_are_replaced_with_exact_ranges_and_explicit_right_boundary() {
     let mut request = read_request(wire::HistoryCollection::NodeField {
-        node_id: node(1).node_id, field: wire::HistoryField::Author,
+        node_id: node(1).node_id,
+        field: wire::HistoryField::Author,
     });
     request.limit = wire::HistoryPageLimit::new(4).unwrap();
     let first = field_page(&request, 6, 0, "界", false);
@@ -366,7 +443,8 @@ fn utf8_fragments_are_replaced_with_exact_ranges_and_explicit_right_boundary() {
 #[test]
 fn fragment_empty_overflow_budget_and_next_cursor_relations_are_strict() {
     let mut request = read_request(wire::HistoryCollection::NodeField {
-        node_id: node(1).node_id, field: wire::HistoryField::Message,
+        node_id: node(1).node_id,
+        field: wire::HistoryField::Message,
     });
     assert!(accepted(&field_page(&request, 0, 0, "", true), &request));
     let mut wrong = value(&field_page(&request, 3, 0, "界", true));
@@ -376,10 +454,23 @@ fn fragment_empty_overflow_budget_and_next_cursor_relations_are_strict() {
     assert!(!accepted(&field_page(&request, 3, 0, "界", true), &request));
     request.limit = wire::HistoryPageLimit::new(4).unwrap();
     let mut wrong = value(&field_page(&request, 6, 0, "界", false));
-    wrong["next_cursor"] = json!(cursor(&request, wire::HistoryPosition::Field { byte_offset: 4 }, wire::HistoryDirection::Forward));
+    wrong["next_cursor"] = json!(cursor(
+        &request,
+        wire::HistoryPosition::Field { byte_offset: 4 },
+        wire::HistoryDirection::Forward
+    ));
     assert!(admit(wrong, &request, None).is_err());
-    request.cursor = Some(cursor(&request, wire::HistoryPosition::Field { byte_offset: u64::MAX }, wire::HistoryDirection::Forward));
-    assert!(!accepted(&field_page(&request, u64::MAX, u64::MAX, "x", true), &request));
+    request.cursor = Some(cursor(
+        &request,
+        wire::HistoryPosition::Field {
+            byte_offset: u64::MAX,
+        },
+        wire::HistoryDirection::Forward,
+    ));
+    assert!(!accepted(
+        &field_page(&request, u64::MAX, u64::MAX, "x", true),
+        &request
+    ));
 }
 
 fn empty_branch() -> wire::HistoryBranchSummary {
@@ -397,7 +488,9 @@ fn empty_branch() -> wire::HistoryBranchSummary {
         alias_of: None,
         content: wire::HistoryContentDisposition {
             version_id: None,
-            source: wire::HistoryContentSource::Inherited { source_version_id: None },
+            source: wire::HistoryContentSource::Inherited {
+                source_version_id: None,
+            },
             stored_state: None,
         },
     }
@@ -407,12 +500,19 @@ fn empty_branch() -> wire::HistoryBranchSummary {
 fn an_explicit_empty_source_branch_keeps_its_missing_head_and_write_disposition() {
     let request = read_request(wire::HistoryCollection::Branches);
     let page = wire::HistoryWindowPage::Branches {
-        identity: page_identity(&request), branches: vec![empty_branch()],
-        page: wire::HistoryPageCursors { previous_cursor: None, next_cursor: None },
+        identity: page_identity(&request),
+        branches: vec![empty_branch()],
+        page: wire::HistoryPageCursors {
+            previous_cursor: None,
+            next_cursor: None,
+        },
     };
     assert!(accepted(&page, &request));
     let mut missing = value(&page);
-    missing["branches"][0].as_object_mut().unwrap().remove("node_id");
+    missing["branches"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("node_id");
     assert!(admit(missing, &request, None).is_err());
     let mut wrong = value(&page);
     wrong["branches"][0]["alias_of"] = id("br", 2).into();
@@ -421,6 +521,27 @@ fn an_explicit_empty_source_branch_keeps_its_missing_head_and_write_disposition(
     alias["branches"][0]["alias_of"] = id("br", 2).into();
     alias["branches"][0]["read_only"] = true.into();
     assert!(admit(alias, &request, None).is_ok());
+}
+
+#[test]
+fn inherited_body_versions_do_not_fabricate_or_replace_branch_heads() {
+    let mut inherited = empty_branch();
+    let version = wire::HistoryVersionId::parse(&id("ver", 7)).unwrap();
+    inherited.content.version_id = Some(version.clone());
+    inherited.content.source = wire::HistoryContentSource::Inherited {
+        source_version_id: Some(version),
+    };
+    let missing = crate::files::history::wire::branch(inherited.clone());
+    assert!(missing.head().is_none());
+    assert!(missing.pending());
+    assert!(missing.writable());
+    assert!(crate::files::merge::selection::SelectedBranch::capture(&missing).is_none());
+
+    let node = id("fmeta", 2);
+    inherited.node_id = Some(wire::HistoryNodeId::parse(&node).unwrap());
+    let recorded = crate::files::history::wire::branch(inherited);
+    assert_eq!(recorded.head(), Some(node.as_str()));
+    assert_ne!(recorded.head(), Some(id("ver", 7).as_str()));
 }
 
 #[test]
@@ -435,7 +556,10 @@ fn relation_members_are_bounded_contiguous_and_keep_input_pairs_together() {
             branch_id: wire::HistoryBranchId::parse(&id("br", 1)).unwrap(),
             node_id: node(1).node_id,
         }],
-        page: wire::HistoryPageCursors { previous_cursor: None, next_cursor: None },
+        page: wire::HistoryPageCursors {
+            previous_cursor: None,
+            next_cursor: None,
+        },
     };
     assert!(accepted(&page, &request));
     let mut wrong = value(&page);
@@ -467,8 +591,12 @@ fn body_versions_preserve_ascending_order_and_reject_node_ids_as_versions() {
         }
     });
     let page = wire::HistoryWindowPage::Versions {
-        identity: page_identity(&request), versions: versions.into(),
-        page: wire::HistoryPageCursors { previous_cursor: None, next_cursor: None },
+        identity: page_identity(&request),
+        versions: versions.into(),
+        page: wire::HistoryPageCursors {
+            previous_cursor: None,
+            next_cursor: None,
+        },
     };
     assert!(accepted(&page, &request));
     let mut wrong = value(&page);
@@ -482,20 +610,22 @@ fn body_versions_preserve_ascending_order_and_reject_node_ids_as_versions() {
 #[test]
 fn merge_summaries_keep_descending_sequence_and_unique_identities() {
     let request = read_request(wire::HistoryCollection::Merges);
-    let merge = |number: u64| json!({
-        "merge_id":id("fmerge",number),"sequence":(100-number).to_string(),
-        "chosen_node_id":id("ver",1),"result_node_id":id("ver",1),
-        "surviving_branch_id":id("br",1),"reused_node":true,
-        "operation_id":id("op",number),"input_count":"2","parent_count":"0"
-    });
+    let merge = |number: u64| {
+        json!({
+            "merge_id":id("fmerge",number),"sequence":(100-number).to_string(),
+            "chosen_node_id":id("ver",1),"result_node_id":id("ver",1),
+            "surviving_branch_id":id("br",1),"reused_node":true,
+            "operation_id":id("op",number),"input_count":"2","parent_count":"0"
+        })
+    };
     let page = json!({"kind":"merges","identity":page_identity(&request),
         "merges":[merge(1),merge(2)],"page":{"previous_cursor":null,"next_cursor":null}});
     assert!(admit(page.clone(), &request, None).is_ok());
     let mut wrong = page.clone();
-    wrong["merges"].as_array_mut().unwrap().swap(0,1);
+    wrong["merges"].as_array_mut().unwrap().swap(0, 1);
     assert!(admit(wrong, &request, None).is_err());
     let mut wrong = page;
-    wrong["merges"][1]["merge_id"] = id("fmerge",1).into();
+    wrong["merges"][1]["merge_id"] = id("fmerge", 1).into();
     assert!(admit(wrong, &request, None).is_err());
 }
 
@@ -504,8 +634,14 @@ fn invalid_paths_and_notes_retain_their_boundary_error_sources() {
     let request = read_request(wire::HistoryCollection::Nodes);
     let mut page = value(&nodes(&request, 1));
     page["nodes"][0]["path"] = "../invalid".into();
-    assert!(matches!(admit(page, &request, None), Err(DecodeError::Path(_))));
+    assert!(matches!(
+        admit(page, &request, None),
+        Err(DecodeError::Path(_))
+    ));
     let mut page = value(&nodes(&request, 1));
     page["nodes"][0]["note"] = "x".repeat(129).into();
-    assert!(matches!(admit(page, &request, None), Err(DecodeError::Name(_))));
+    assert!(matches!(
+        admit(page, &request, None),
+        Err(DecodeError::Name(_))
+    ));
 }

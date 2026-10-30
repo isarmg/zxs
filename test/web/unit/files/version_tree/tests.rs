@@ -122,7 +122,10 @@ fn loaded_window_layout_does_not_materialize_external_ancestors() {
         tree.edges,
         vec![("loaded-parent".into(), "loaded-child".into())]
     );
-    assert_eq!(tree.levels, vec![vec!["loaded-child"], vec!["loaded-parent"]]);
+    assert_eq!(
+        tree.levels,
+        vec![vec!["loaded-child"], vec!["loaded-parent"]]
+    );
 }
 
 #[test]
@@ -143,7 +146,10 @@ fn unloaded_parent_endpoints_remain_explicit_without_becoming_body_nodes() {
     assert_eq!(boundary.more.as_deref(), Some("continue-parents"));
     assert!(!boundary.empty);
     let tree = layout(&metadata(&[loaded, child]));
-    assert_eq!(ids(&tree), BTreeSet::from(["loaded".into(), "child".into()]));
+    assert_eq!(
+        ids(&tree),
+        BTreeSet::from(["loaded".into(), "child".into()])
+    );
     assert_eq!(tree.edges, vec![("loaded".into(), "child".into())]);
 }
 
@@ -154,7 +160,11 @@ fn an_unenumerated_parent_set_is_distinct_from_complete_empty_parents() {
     }));
     assert_eq!(
         parent_boundary(&root),
-        ParentBoundary { outside: vec![], more: None, empty: true }
+        ParentBoundary {
+            outside: vec![],
+            more: None,
+            empty: true
+        }
     );
     let pending = node(json_codec::json!({
         "node_id":"pending", "parent_set":{"state":"more", "cursor":"first-parent-page"}
@@ -432,9 +442,19 @@ fn ownership_markers_do_not_hide_real_window_nodes() {
     let tree = layout(&metadata(&typed(&records)));
     assert_eq!(
         ids(&tree),
-        BTreeSet::from(["source".into(), "inherited-body".into(), "first-write".into()])
+        BTreeSet::from([
+            "source".into(),
+            "inherited-body".into(),
+            "first-write".into()
+        ])
     );
-    assert_eq!(tree.edges, vec![("source".into(), "first-write".into()), ("source".into(), "inherited-body".into())]);
+    assert_eq!(
+        tree.edges,
+        vec![
+            ("source".into(), "first-write".into()),
+            ("source".into(), "inherited-body".into())
+        ]
+    );
 }
 #[test]
 fn inherited_current_markers_do_not_change_real_version_identity_or_ancestry() {
@@ -456,10 +476,7 @@ fn inherited_current_markers_do_not_change_real_version_identity_or_ancestry() {
         value["own_version_id"] = "parent".into();
     });
     assert!(!inherited_current(&model, "parent"));
-    assert_eq!(
-        metadata(model.file_history.nodes()),
-        before
-    );
+    assert_eq!(metadata(model.file_history.nodes()), before);
     assert_eq!(layout(&before).levels, vec![vec!["parent"]]);
 }
 
@@ -477,7 +494,14 @@ fn shared_window_index_preserves_note_refresh_keys_and_replaces_old_positions() 
         });
         super::super::history_index::provide(state);
         let records = super::super::history_index::shared();
-        let keys = records.with(|index| index.snapshot.nodes().iter().map(|node| node.id().to_owned()).collect::<Vec<_>>());
+        let keys = records.with(|index| {
+            index
+                .snapshot
+                .nodes()
+                .iter()
+                .map(|node| node.id().to_owned())
+                .collect::<Vec<_>>()
+        });
         for i in 0..20 {
             state.update(|s| {
                 s.notice = i.to_string();
@@ -490,9 +514,17 @@ fn shared_window_index_preserves_note_refresh_keys_and_replaces_old_positions() 
                 value["nodes"][0]["note"] = "updated".into()
             })
         });
-        assert_eq!(records.with(|index| index.node("node-0").unwrap().1.note().to_owned()), "updated");
         assert_eq!(
-            records.with(|index| index.snapshot.nodes().iter().map(|node| node.id().to_owned()).collect::<Vec<_>>()),
+            records.with(|index| index.node("node-0").unwrap().1.note().to_owned()),
+            "updated"
+        );
+        assert_eq!(
+            records.with(|index| index
+                .snapshot
+                .nodes()
+                .iter()
+                .map(|node| node.id().to_owned())
+                .collect::<Vec<_>>()),
             keys
         );
         state.update(|s| {
@@ -663,16 +695,16 @@ fn indexed_layout_matches_reference_for_every_four_node_directed_graph() {
                 records[child].parents.push(names[parent].into());
             }
         }
-        for sequences in [
-            [7, 7, 7, 7],
-            [0, 20, 1, 0],
-            [u64::MAX, 3, 2, 1],
-        ] {
+        for sequences in [[7, 7, 7, 7], [0, 20, 1, 0], [u64::MAX, 3, 2, 1]] {
             for (record, sequence) in records.iter_mut().zip(sequences) {
                 record.sequence = sequence;
             }
             let expected = reference_layout(&records);
-            assert_eq!(layout(&records), expected, "mask {mask}, sequences {sequences:?}");
+            assert_eq!(
+                layout(&records),
+                expected,
+                "mask {mask}, sequences {sequences:?}"
+            );
             records.reverse();
             assert_eq!(layout(&records), expected, "reversed mask {mask}");
             records.reverse();

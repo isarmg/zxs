@@ -27,7 +27,10 @@ pub(crate) fn branch_wire(overrides: Value) -> Value {
         "own_version_id":"version", "source_version_id":null, "content_state":"LIVE",
         "node_id":"version", "current":false
     });
-    value.as_object_mut().unwrap().extend(overrides.as_object().unwrap().clone());
+    value
+        .as_object_mut()
+        .unwrap()
+        .extend(overrides.as_object().unwrap().clone());
     value
 }
 
@@ -39,10 +42,14 @@ pub(crate) fn branch(overrides: Value) -> FileBranch {
         .or_else(|| text(&value, "file_node_id").filter(|value| !value.is_empty()))
         .or_else(|| version.clone());
     let pending = value["pending"].as_bool().unwrap_or_else(|| {
-        version.is_none() || value["inherited"] == true || value["materialized"] == false
+        version.is_none()
+            || value["inherited"] == true
+            || value["materialized"] == false
             || value["content_state"] == "PENDING"
     });
-    let writable = value["read_only"].as_bool().map(|read_only| !read_only)
+    let writable = value["read_only"]
+        .as_bool()
+        .map(|read_only| !read_only)
         .unwrap_or_else(|| value["state"] == "active" && value["alias_of"].is_null());
     FileBranch {
         id: text(&value, "branch_id").unwrap(),
@@ -76,39 +83,61 @@ pub(crate) fn node(value: Value) -> FileNode {
         None => (kind == NodeKind::Content && version.is_some()).then(|| note.clone()),
     };
     let parents = if let Some(edges) = value["parent_edges"].as_array() {
-        edges.iter().map(|edge| Parent {
-            id: text(edge, "node_id").unwrap(),
-            endpoint: match edge["endpoint"].as_str().unwrap() {
-                "in_window" => ParentEndpoint::InWindow,
-                "outside_window" => ParentEndpoint::OutsideWindow,
-                endpoint => panic!("unknown UI fixture endpoint: {endpoint}"),
-            },
-        }).collect()
+        edges
+            .iter()
+            .map(|edge| Parent {
+                id: text(edge, "node_id").unwrap(),
+                endpoint: match edge["endpoint"].as_str().unwrap() {
+                    "in_window" => ParentEndpoint::InWindow,
+                    "outside_window" => ParentEndpoint::OutsideWindow,
+                    endpoint => panic!("unknown UI fixture endpoint: {endpoint}"),
+                },
+            })
+            .collect()
     } else {
-        value["parent_node_ids"].as_array().into_iter().flatten().map(|id| Parent {
-            id: id.as_str().unwrap().to_owned(),
-            endpoint: ParentEndpoint::InWindow,
-        }).collect()
+        value["parent_node_ids"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|id| Parent {
+                id: id.as_str().unwrap().to_owned(),
+                endpoint: ParentEndpoint::InWindow,
+            })
+            .collect()
     };
     let parent_set = match value["parent_set"]["state"].as_str().unwrap_or("complete") {
         "complete" => ParentSet::Complete,
-        "more" => ParentSet::More { cursor: text(&value["parent_set"], "cursor").unwrap() },
+        "more" => ParentSet::More {
+            cursor: text(&value["parent_set"], "cursor").unwrap(),
+        },
         state => panic!("unknown UI fixture parent set: {state}"),
     };
-    let tags = value["tags"].as_array().into_iter().flatten()
-        .map(|tag| tag.as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    let tags = value["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|tag| tag.as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
     assert!(tags.len() <= storage_contract::MAX_FILE_TAGS);
-    assert!(tags.iter().all(|tag| tag.len() <= storage_contract::MAX_TAG_BYTES));
-    let inherited = value["inherited"] == true;
-    let materialized = value["materialized"].as_bool()
-        .unwrap_or(version.is_some() && !inherited && value["content_state"] != "PENDING");
+    assert!(
+        tags.iter()
+            .all(|tag| tag.len() <= storage_contract::MAX_TAG_BYTES)
+    );
     let field = |name| HistoryFieldInfo {
         byte_length: number(&value["fields"][name], "byte_length", 0),
     };
     FileNode {
-        id, version, sequence: number(&value, "sequence", 0), kind, note, body_note,
-        tags, path: text(&value, "path"), previous_path: text(&value, "previous_path"),
-        parents, parent_set, materialized, inherited,
+        id,
+        version,
+        sequence: number(&value, "sequence", 0),
+        kind,
+        note,
+        body_note,
+        tags,
+        path: text(&value, "path"),
+        previous_path: text(&value, "previous_path"),
+        parents,
+        parent_set,
         content_state: match value["content_state"].as_str() {
             Some("AVAILABLE") => Some(storage_contract::ContentState::Available),
             Some("PURGED") => Some(storage_contract::ContentState::Purged),
@@ -116,7 +145,9 @@ pub(crate) fn node(value: Value) -> FileNode {
             _ => None,
         },
         fields: HistoryNodeFields {
-            message: field("message"), author: field("author"), created_at: field("created_at"),
+            message: field("message"),
+            author: field("author"),
+            created_at: field("created_at"),
         },
     }
 }
@@ -129,7 +160,9 @@ fn identity(max_entries: u64) -> HistoryPageIdentity {
         context: HistoryResolvedContext {
             repository_id: HistoryRepositoryId::parse(&format!("repo_{:032x}", 1)).unwrap(),
             history_tree_id: HistoryTreeId::parse(&format!("history_{:032x}", 1)).unwrap(),
-            path: None, current_node_id: None, selected_branch_id: None,
+            path: None,
+            current_node_id: None,
+            selected_branch_id: None,
         },
         query_hash: HistoryQueryHash::parse(&"b".repeat(64)).unwrap(),
         limit: HistoryPageLimit::default_for(&HistoryCollection::Nodes),
@@ -142,41 +175,83 @@ pub(crate) fn history(value: Value) -> Snapshot<FileHistory> {
     if value.is_null() {
         return Default::default();
     }
-    let nodes = value["nodes"].as_array().into_iter().flatten().enumerate()
+    let nodes = value["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
         .map(|(position, value)| {
             let mut value = value.clone();
             if value.get("node_id").is_none() && value.get("version_id").is_none() {
                 value["node_id"] = format!("fixture-node-{position}").into();
             }
             node(value)
-        }).collect::<Vec<_>>();
-    let branches = value["branches"].as_array().into_iter().flatten()
-        .cloned().map(branch).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
+    let branches = value["branches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .cloned()
+        .map(branch)
+        .collect::<Vec<_>>();
     let selected = text(&value, "selected_branch_id");
-    let current_id = text(&value, "current_node_id").or_else(|| text(&value, "node_id"))
-        .or_else(|| value["nodes"].as_array().into_iter().flatten()
-            .find(|node| node["current"] == true).and_then(|node| text(node, "node_id")));
+    let current_id = text(&value, "current_node_id")
+        .or_else(|| text(&value, "node_id"))
+        .or_else(|| {
+            value["nodes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|node| node["current"] == true)
+                .and_then(|node| text(node, "node_id"))
+        });
     let current_version = match value.get("version_id") {
         Some(Value::Null) => None,
         Some(value) => Some(value.as_str().unwrap().to_owned()),
-        None => nodes.iter().find(|node| Some(node.id()) == current_id.as_deref())
-            .and_then(FileNode::version_id).map(str::to_owned),
+        None => nodes
+            .iter()
+            .find(|node| Some(node.id()) == current_id.as_deref())
+            .and_then(FileNode::version_id)
+            .map(str::to_owned),
     };
-    let current_inherited = value["inherited"] == true
-        || current_version.is_some() && value["materialized"] == false;
-    let current_node = nodes.iter().find(|node| Some(node.id()) == current_id.as_deref())
-        .cloned().or_else(|| value["current_node"].as_object().map(|_| node(value["current_node"].clone())))
-        .or_else(|| current_id.as_ref().map(|id| node(json!({
-            "node_id":id, "version_id":current_version, "inherited":current_inherited,
-            "note":value["current_note"].as_str().unwrap_or("")
-        }))));
-    let current_branch = branches.iter().find(|branch| Some(branch.id()) == selected.as_deref()).cloned()
-        .or_else(|| value["current_branch"].as_object().map(|_| branch(value["current_branch"].clone())));
+    let current_inherited =
+        value["inherited"] == true || current_version.is_some() && value["materialized"] == false;
+    let current_node = nodes
+        .iter()
+        .find(|node| Some(node.id()) == current_id.as_deref())
+        .cloned()
+        .or_else(|| {
+            value["current_node"]
+                .as_object()
+                .map(|_| node(value["current_node"].clone()))
+        })
+        .or_else(|| {
+            current_id.as_ref().map(|id| {
+                node(json!({
+                    "node_id":id, "version_id":current_version, "inherited":current_inherited,
+                    "note":value["current_note"].as_str().unwrap_or("")
+                }))
+            })
+        });
+    let current_branch = branches
+        .iter()
+        .find(|branch| Some(branch.id()) == selected.as_deref())
+        .cloned()
+        .or_else(|| {
+            value["current_branch"]
+                .as_object()
+                .map(|_| branch(value["current_branch"].clone()))
+        });
     let content = current_version.as_ref().map(|_| HistoryContentDisposition {
         version_id: Some(HistoryVersionId::parse(&format!("ver_{:032x}", 1)).unwrap()),
         source: if current_inherited {
-            HistoryContentSource::Inherited { source_version_id: None }
-        } else { HistoryContentSource::Owned },
+            HistoryContentSource::Inherited {
+                source_version_id: None,
+            }
+        } else {
+            HistoryContentSource::Owned
+        },
         stored_state: None,
     });
     let loaded = value["loaded"] != false;
@@ -185,15 +260,25 @@ pub(crate) fn history(value: Value) -> Snapshot<FileHistory> {
         root: loaded.then(|| text(&value, "history_root").unwrap_or_else(|| "root-one".into())),
         selected,
         context: loaded.then(|| HistoryContextSummary {
-            note: text(&value, "note").unwrap_or_default(), content,
+            note: text(&value, "note").unwrap_or_default(),
+            content,
         }),
-        current_id, current_version, current_inherited, current_node,
-        nodes: nodes.into(), branches: branches.into(), current_branch,
-        page: loaded.then(|| HistoryPageCursors { previous_cursor: None, next_cursor: None }),
+        current_id,
+        current_version,
+        current_inherited,
+        current_node,
+        nodes: nodes.into(),
+        branches: branches.into(),
+        current_branch,
+        page: loaded.then(|| HistoryPageCursors {
+            previous_cursor: None,
+            next_cursor: None,
+        }),
         ready: loaded && value["ready"] != false,
         window_key: number(&value, "window_key", 1),
         ..Default::default()
-    }.into()
+    }
+    .into()
 }
 
 fn node_value(node: &FileNode) -> Value {
@@ -204,7 +289,6 @@ fn node_value(node: &FileNode) -> Value {
             NodeKind::Tags => "tags", NodeKind::Merge => "merge",
         },
         "note":node.note(), "tags":node.tags(), "path":node.path(), "previous_path":node.previous_path(),
-        "materialized":node.materialized(), "inherited":node.inherited(),
         "content_state":node.content_state(),
         "parent_edges":node.parents().iter().map(|parent| json!({
             "node_id":parent.id(), "endpoint":match parent.endpoint() {
@@ -221,7 +305,9 @@ fn node_value(node: &FileNode) -> Value {
             "created_at":{"byte_length":node.field_bytes(HistoryField::CreatedAt).to_string()}
         }
     });
-    if node.body_note() != (node.kind() == NodeKind::Content && node.visible_content()).then(|| node.note()) {
+    if node.body_note()
+        != (node.kind() == NodeKind::Content && node.visible_content()).then(|| node.note())
+    {
         value["body_note"] = json!(node.body_note());
     }
     value
@@ -273,7 +359,10 @@ fn current_summary_stays_independent_from_a_replaced_node_window() {
     }));
     assert_eq!(history.current_node_id(), Some("stored"));
     assert!(history.current_inherited());
-    assert_eq!(history.node("stored").unwrap().version_id(), Some("stored-body"));
+    assert_eq!(
+        history.node("stored").unwrap().version_id(),
+        Some("stored-body")
+    );
     assert_eq!(history.nodes().len(), 1);
     assert_eq!(history.nodes()[0].id(), "newer");
 }
@@ -281,7 +370,8 @@ fn current_summary_stays_independent_from_a_replaced_node_window() {
 #[test]
 fn typed_body_notes_are_separate_from_path_and_metadata_notes() {
     let content = node(json!({"node_id":"body", "kind":"content", "note":"body note"}));
-    let rename = node(json!({"node_id":"rename", "version_id":"body", "kind":"rename", "note":"path note"}));
+    let rename =
+        node(json!({"node_id":"rename", "version_id":"body", "kind":"rename", "note":"path note"}));
     assert_eq!(content.body_note(), Some("body note"));
     assert_eq!(rename.note(), "path note");
     assert_eq!(rename.body_note(), None);
@@ -295,7 +385,9 @@ fn updating_a_ui_fixture_rebuilds_typed_records_and_preserves_parent_boundaries(
             "parent_edges":[{"node_id":"outside","endpoint":"outside_window"}],
             "parent_set":{"state":"more","cursor":"continue"}}]
     }));
-    update_metadata(&mut history, |value| value["nodes"][0]["note"] = "after".into());
+    update_metadata(&mut history, |value| {
+        value["nodes"][0]["note"] = "after".into()
+    });
     let node = history.node("node").unwrap();
     assert_eq!(node.note(), "after");
     assert_eq!(node.body_note(), Some("after"));
@@ -320,11 +412,21 @@ fn admitted_node_page(note: &str) -> HistoryWindowPage {
             }),
         },
         nodes: vec![HistoryNodeSummary {
-            node_id: id.parse().unwrap(), version_id: id.parse().unwrap(),
-            kind: HistoryNodeKind::Content, sequence: 2, current: true, branch_id: None,
-            path: "folder/file.txt".into(), previous_path: None, note: note.into(), tags: vec![],
-            size: 0, content_hash: "c".repeat(64).parse().unwrap(), content_state: None,
-            download_name: "file.txt".into(), storage_name: "v000002_fixture.txt".into(),
+            node_id: id.parse().unwrap(),
+            version_id: id.parse().unwrap(),
+            kind: HistoryNodeKind::Content,
+            sequence: 2,
+            current: true,
+            branch_id: None,
+            path: "folder/file.txt".into(),
+            previous_path: None,
+            note: note.into(),
+            tags: vec![],
+            size: 0,
+            content_hash: "c".repeat(64).parse().unwrap(),
+            content_state: None,
+            download_name: "file.txt".into(),
+            storage_name: "v000002_fixture.txt".into(),
             parents: HistoryParentSet::Complete,
             fields: HistoryNodeFields {
                 message: HistoryFieldInfo { byte_length: 0 },
@@ -333,7 +435,10 @@ fn admitted_node_page(note: &str) -> HistoryWindowPage {
             },
         }],
         edges: vec![],
-        page: HistoryPageCursors { previous_cursor: None, next_cursor: None },
+        page: HistoryPageCursors {
+            previous_cursor: None,
+            next_cursor: None,
+        },
     }
 }
 
@@ -347,7 +452,9 @@ fn installing_a_newer_window_does_not_move_the_backup_current_identity() {
         "path":"backup/file.txt", "repository_path":"folder/file.txt"
     }));
     let mut history = FileHistory::default();
-    history.install_nodes(admitted_node_page("newer body"), &entry, true).unwrap();
+    history
+        .install_nodes(admitted_node_page("newer body"), &entry, true)
+        .unwrap();
     assert_eq!(history.current_node_id(), Some(stored.as_str()));
     assert_eq!(history.current_version.as_deref(), Some(stored.as_str()));
     assert_eq!(history.nodes()[0].id(), newer);
@@ -363,12 +470,18 @@ fn metadata_refresh_preserves_the_window_key_but_explicit_replacement_advances_i
         "node_id":format!("ver_{:032x}", 2), "version_id":format!("ver_{:032x}", 2)
     }));
     let mut history = FileHistory::default();
-    history.install_nodes(admitted_node_page("before"), &entry, true).unwrap();
+    history
+        .install_nodes(admitted_node_page("before"), &entry, true)
+        .unwrap();
     let first_key = history.window_key();
-    history.install_nodes(admitted_node_page("after"), &entry, false).unwrap();
+    history
+        .install_nodes(admitted_node_page("after"), &entry, false)
+        .unwrap();
     assert_eq!(history.window_key(), first_key);
     assert_eq!(history.nodes()[0].note(), "after");
-    history.install_nodes(admitted_node_page("replacement"), &entry, true).unwrap();
+    history
+        .install_nodes(admitted_node_page("replacement"), &entry, true)
+        .unwrap();
     assert_eq!(history.window_key(), first_key + 1);
     assert_eq!(history.nodes().len(), 1);
 }

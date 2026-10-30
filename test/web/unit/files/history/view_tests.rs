@@ -66,8 +66,7 @@ fn node(ordinal: u64) -> FileNode {
         previous_path: None,
         parents: Vec::new(),
         parent_set: ParentSet::Complete,
-        materialized: true,
-        inherited: false,
+        content_state: None,
         fields: HistoryNodeFields {
             message: HistoryFieldInfo { byte_length: 0 },
             author: HistoryFieldInfo { byte_length: 0 },
@@ -97,7 +96,13 @@ fn merge_input_rows_preserve_ordinal_branch_and_node_pairs_in_response_order() {
     let rows = input_rows(&history, &inputs);
     assert_eq!(rows.len(), 2);
     for (row, input) in rows.iter().zip(&inputs) {
-        assert_eq!(row.label, format!("#{} · {} → {}", input.ordinal, input.branch_id, input.node_id));
+        assert_eq!(
+            row.label,
+            format!(
+                "#{} · {} → {}",
+                input.ordinal, input.branch_id, input.node_id
+            )
+        );
         assert_eq!(row.node.as_deref(), Some(input.node_id.as_str()));
     }
     assert!(rows[0].outside);

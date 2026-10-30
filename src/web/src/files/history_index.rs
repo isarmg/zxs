@@ -1,5 +1,5 @@
 //! Page-owned lookup positions borrow records from the existing immutable snapshot.
-use super::history::{FileBranch, FileHistory, FileNode};
+use super::history::{FileHistory, FileNode};
 use crate::{snapshot::Snapshot, ui::State};
 use std::collections::BTreeMap;
 use web_interface::prelude::*;
@@ -8,7 +8,6 @@ use web_interface::prelude::*;
 pub(super) struct HistoryIndex {
     pub(super) snapshot: Snapshot<FileHistory>,
     nodes: BTreeMap<String, usize>,
-    branches: BTreeMap<String, usize>,
     versions: BTreeMap<String, usize>,
 }
 
@@ -17,10 +16,6 @@ impl HistoryIndex {
         let mut nodes = BTreeMap::new();
         for (position, node) in snapshot.nodes().iter().enumerate() {
             nodes.insert(node.id().to_owned(), position);
-        }
-        let mut branches = BTreeMap::new();
-        for (position, branch) in snapshot.branches().iter().enumerate() {
-            branches.insert(branch.id().to_owned(), position);
         }
         let mut versions = BTreeMap::new();
         for (position, node) in snapshot.nodes().iter().enumerate() {
@@ -33,7 +28,6 @@ impl HistoryIndex {
         Self {
             snapshot,
             nodes,
-            branches,
             versions,
         }
     }
@@ -48,12 +42,6 @@ impl HistoryIndex {
         self.versions
             .get(id)
             .map(|&position| &self.snapshot.nodes()[position])
-    }
-
-    pub(super) fn branch(&self, id: &str) -> Option<&FileBranch> {
-        self.branches
-            .get(id)
-            .map(|&position| &self.snapshot.branches()[position])
     }
 }
 

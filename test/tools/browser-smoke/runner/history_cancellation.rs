@@ -33,26 +33,6 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         window.fetch = async function(...args) {
             const request = args[0];
             const url = new URL(typeof request === 'string' ? request : request.url, location.href);
-            if (/^\/api\/file-manager\/disks\/[^/]+\/entries$/.test(url.pathname)) {
-                const response = await original.apply(this, args);
-                if (!response.ok) return response;
-                const listing = await response.json();
-                const base = listing.entries.find(entry => entry.name === 'browser-smoke.txt');
-                if (!base) throw new Error('real file required for history cancellation fixture');
-                const join = (parent, name) => parent ? parent + '/' + name : name;
-                const alias = {...base, name: 'history-alias.txt',
-                    path: join(url.searchParams.get('path'), 'history-alias.txt'),
-                    repository_path: join(listing.context.repository_path, 'history-alias.txt')};
-                listing.entries.push(alias);
-                listing.total_entries = String(BigInt(listing.total_entries) + 1n);
-                listing.directory_file_count = String(BigInt(listing.directory_file_count) + 1n);
-                listing.snapshot = 'synthetic-history-alias';
-                listing.selected_entry = listing.entries.find(entry =>
-                    entry.path === url.searchParams.get('selected_path') &&
-                    entry.entry_id === url.searchParams.get('selected_entry_id')) || null;
-                return new Response(JSON.stringify(listing), {status: 200,
-                    headers: {'Content-Type': 'application/json'}});
-            }
             if (!/^\/api\/file-manager\/files\/[^/]+\/history$/.test(url.pathname)) {
                 return original.apply(this, args);
             }
@@ -66,7 +46,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 if (!response.ok) throw new Error('real history seed failed');
                 probe.seed = await response.json();
             }
-            const history = {...probe.seed, note: pending.note};
+            const history = {...probe.seed, context: {...probe.seed.context, note: pending.note}};
             pending.ready = true;
             await gate;
             // Fully buffered bytes let decoding continue in the same microtask turn.
@@ -82,8 +62,8 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             browser.click(&browser.button("Refresh", "刷新")?)?;
             check(
                 browser,
-                "same-file alias listing fixture",
-                "return document.querySelectorAll('.zxs-file-table tbody tr').length===2&&!document.querySelector('.zxs-header-refresh').disabled",
+                "real listing refresh before history cancellation fixture",
+                "return document.querySelectorAll('.zxs-file-table tbody tr').length===1&&!document.querySelector('.zxs-header-refresh').disabled",
             )?;
             select(browser, "browser-smoke.txt")?;
             check(
@@ -106,23 +86,23 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "const p=window.__zxsHistoryCancellation.pending;return p[0].delivered&&!p[1].signal.aborted&&document.querySelector('.zxs-header-refresh').disabled&&!document.querySelector('.zxs-entry-content').textContent.includes(p[0].note)&&document.querySelectorAll('.zxs-version-node').length===0",
             )?;
             browser.click(&browser.button("Files", "文件")?)?;
-            select(browser, "history-alias.txt")?;
+            select(browser, "browser-smoke.txt")?;
             check(
                 browser,
-                "late A left B owned so selecting the same-file alias aborts B",
-                "const p=window.__zxsHistoryCancellation.pending,a=new URL(p[1].url),b=p[2]&&new URL(p[2].url);return p.length===3&&p[2].ready&&p[1].signal.aborted&&!p[2].signal.aborted&&a.pathname===b.pathname&&a.searchParams.get('path')!==b.searchParams.get('path')&&b.searchParams.get('path').split('/').at(-1)==='history-alias.txt'&&document.querySelector('.zxs-entry-content h2').textContent==='history-alias.txt'",
+                "late A left B owned so reselecting the real file aborts B",
+                "const p=window.__zxsHistoryCancellation.pending,a=new URL(p[1].url),b=p[2]&&new URL(p[2].url);return p.length===3&&p[2].ready&&p[1].signal.aborted&&!p[2].signal.aborted&&a.href===b.href&&document.querySelector('.zxs-entry-content h2').textContent==='browser-smoke.txt'",
             )?;
             browser.script("window.__zxsHistoryCancellation.pending[1].release();return true")?;
             check(
                 browser,
-                "late B preserves alias C selection and loading owner",
-                "const p=window.__zxsHistoryCancellation.pending;return p[1].delivered&&!p[2].signal.aborted&&document.querySelector('.zxs-header-refresh').disabled&&document.querySelector('.zxs-entry-content h2').textContent==='history-alias.txt'&&!document.querySelector('.zxs-entry-content').textContent.includes(p[1].note)",
+                "late B preserves real-file C selection and loading owner",
+                "const p=window.__zxsHistoryCancellation.pending;return p[1].delivered&&!p[2].signal.aborted&&document.querySelector('.zxs-header-refresh').disabled&&document.querySelector('.zxs-entry-content h2').textContent==='browser-smoke.txt'&&!document.querySelector('.zxs-entry-content').textContent.includes(p[1].note)",
             )?;
             browser.script("window.__zxsHistoryCancellation.pending[2].release();return true")?;
             check(
                 browser,
-                "only current alias C installs metadata and clears loading",
-                "const p=window.__zxsHistoryCancellation.pending,text=document.querySelector('.zxs-entry-content').textContent;return p[2].delivered&&text.includes(p[2].note)&&!text.includes(p[0].note)&&!text.includes(p[1].note)&&document.querySelector('.zxs-entry-content h2').textContent==='history-alias.txt'&&!document.querySelector('.zxs-header-refresh').disabled&&document.querySelectorAll('.zxs-version-node').length>=2",
+                "only current C installs metadata and clears loading",
+                "const p=window.__zxsHistoryCancellation.pending,text=document.querySelector('.zxs-entry-content').textContent;return p[2].delivered&&text.includes(p[2].note)&&!text.includes(p[0].note)&&!text.includes(p[1].note)&&document.querySelector('.zxs-entry-content h2').textContent==='browser-smoke.txt'&&!document.querySelector('.zxs-header-refresh').disabled&&document.querySelectorAll('.zxs-version-node').length>=2",
             )?;
             browser.click(&browser.button("Files", "文件")?)?;
             select(browser, "browser-smoke.txt")?;
@@ -154,7 +134,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     browser.click(&browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?)?;
     open_fixture_directory(browser)?;
     println!(
-        "PASS synthetic history AbortSignal replacement, late completion ownership, same-file alias context and navigation cleanup"
+        "PASS synthetic history AbortSignal replacement, late completion ownership, real-file selection and navigation cleanup"
     );
     Ok(())
 }

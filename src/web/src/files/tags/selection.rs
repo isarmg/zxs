@@ -1,6 +1,6 @@
 //! Only explicitly checked nodes survive replacement of their history page.
-use std::collections::{BTreeMap, BTreeSet};
 use crate::files::history::FileNode;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SelectedNode {
@@ -69,12 +69,12 @@ impl Selection {
         self.nodes.get(id)
     }
 
-    pub(super) fn insert(
-        &mut self,
-        root: &str,
-        node: SelectedNode,
-    ) -> Result<(), SelectionError> {
-        if self.root.as_deref().is_some_and(|captured| captured != root) {
+    pub(super) fn insert(&mut self, root: &str, node: SelectedNode) -> Result<(), SelectionError> {
+        if self
+            .root
+            .as_deref()
+            .is_some_and(|captured| captured != root)
+        {
             return Err(SelectionError::Changed);
         }
         self.root = Some(root.to_owned());

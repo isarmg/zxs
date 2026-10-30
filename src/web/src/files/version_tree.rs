@@ -8,11 +8,11 @@ use super::{
     model::Model,
 };
 use crate::ui::State;
-use storage_contract::history_window::HistoryField;
 use std::{
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
+use storage_contract::history_window::HistoryField;
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_interface::{html, i18n::t, prelude::*, svg};
 
@@ -57,9 +57,7 @@ fn metadata(records: &[FileNode]) -> Vec<Version> {
 }
 
 fn newer_first(a: &Version, b: &Version) -> std::cmp::Ordering {
-    b.sequence
-        .cmp(&a.sequence)
-        .then_with(|| a.id.cmp(&b.id))
+    b.sequence.cmp(&a.sequence).then_with(|| a.id.cmp(&b.id))
 }
 
 /// This marker belongs to the selected branch projection, not the immutable
@@ -730,11 +728,7 @@ fn window(state: RwSignal<State>) -> impl IntoView {
     }
 }
 
-fn node(
-    state: RwSignal<State>,
-    records: Memo<HistoryIndex>,
-    version_id: String,
-) -> impl IntoView {
+fn node(state: RwSignal<State>, records: Memo<HistoryIndex>, version_id: String) -> impl IntoView {
     let id = StoredValue::new(version_id);
     let version = Memo::new(move |_| {
         records.with(|records| id.with_value(|id| records.node(id).map(|(_, node)| node.clone())))
@@ -742,10 +736,10 @@ fn node(
     let can_modify = Signal::derive(move || {
         state.with(|s| s.files.writable && !super::model::selected_entry_read_only(&s.files))
     });
-    let disabled = Signal::derive(move || {
-        !can_modify.get() || !state.with(actions::history_write_allowed)
-    });
-    let navigation_disabled = Signal::derive(move || !state.with(actions::history_navigation_ready));
+    let disabled =
+        Signal::derive(move || !can_modify.get() || !state.with(actions::history_write_allowed));
+    let navigation_disabled =
+        Signal::derive(move || !state.with(actions::history_navigation_ready));
     let current = Signal::derive(move || {
         state.with(|s| s.files.file_history.current_node_id() == Some(id.get_value().as_str()))
     });
