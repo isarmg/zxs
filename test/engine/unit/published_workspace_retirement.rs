@@ -751,9 +751,11 @@ fn terminal_manifest_beyond_verified_publication_prefix_cannot_release_quota_or_
                 .operations
                 .contains_key(&request.operation_id)
         );
-        let scans: Vec<_> = f
-            .config
-            .disks
+        // Publication failpoints count members in the publisher's disk-ID
+        // order, independently of their configured primary/backup positions.
+        let members = engine.members();
+        assert_eq!(members.len(), 3);
+        let scans: Vec<_> = members
             .iter()
             .map(|disk| crate::journal::scan(disk).unwrap())
             .collect();
@@ -761,10 +763,12 @@ fn terminal_manifest_beyond_verified_publication_prefix_cannot_release_quota_or_
             .records
             .iter()
             .rev()
-            .find(|(record, _)| record.record_type == RecordType::Publication)
+            .find(|(record, _)| {
+                record.record_type == RecordType::Publication && record.sequence > prefix_sequence
+            })
             .unwrap()
             .0;
-        let member = &f.config.disks[0];
+        let member = &members[0];
         let held = &engine.disk_resources.get(member).unwrap().root;
         let candidate: crate::journal::Candidate =
             crate::journal::load_object_at(held, member, "candidate", &record.candidate_hash)
@@ -786,7 +790,7 @@ fn terminal_manifest_beyond_verified_publication_prefix_cannot_release_quota_or_
         );
         let barrier_error = crate::publication_evidence::verified_publication_seal_at(
             &engine.disk_resources,
-            &f.config.disks,
+            &members,
             &candidate,
             &publication,
         )
@@ -816,14 +820,24 @@ fn terminal_manifest_beyond_verified_publication_prefix_cannot_release_quota_or_
         }
         assert_eq!(engine.workspace_capacity("admin").principal.records.used, 2);
         assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 0);
+        // For both interruption points, the final publisher member has no
+        // PUBLICATION for this candidate. Retain that journal without erasing
+        // either of the one/two actual publication receipts being tested.
+        assert!(
+            scans[2]
+                .records
+                .iter()
+                .all(|(frame, _)| frame.record_type != RecordType::Publication
+                    || frame.candidate_hash != record.candidate_hash)
+        );
         drop(engine);
-        let missing_journal = crate::journal::log_path(&f.config.disks[2]);
+        let missing_journal = crate::journal::log_path(&members[2]);
         let retained_journal = missing_journal.with_extension("retained");
         fs::rename(&missing_journal, &retained_journal).unwrap();
         let retained_bytes = fs::read(&retained_journal).unwrap();
         // Writer conversion would recreate the missing journal; replay would
         // truncate these tails or fill the missing publication replicas.
-        for disk in &f.config.disks[..2] {
+        for disk in &members[..2] {
             fs::OpenOptions::new()
                 .append(true)
                 .open(crate::journal::log_path(disk))
