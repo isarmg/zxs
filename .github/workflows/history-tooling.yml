@@ -1,0 +1,83 @@
+name: History tool adoption checks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  tooling:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact validation carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Record source and environment
+        run: |
+          mkdir -p target/history-scale-adoption
+          git rev-parse HEAD HEAD^{tree} > target/history-scale-adoption/source.txt
+          git diff --stat c8ce99de07f2d0e673dcc71f9278f6ac570b3633 HEAD > target/history-scale-adoption/scope.txt
+          git diff --check c8ce99de07f2d0e673dcc71f9278f6ac570b3633 HEAD
+          git diff --exit-code c8ce99de07f2d0e673dcc71f9278f6ac570b3633 HEAD -- src Cargo.toml Cargo.lock rust-toolchain.toml .cargo
+          uname -a > target/history-scale-adoption/kernel.txt
+          lscpu --json > target/history-scale-adoption/cpu.json
+          python3 --version > target/history-scale-adoption/python.txt
+          cp tools/history-scale-bench/acceptance-plan.json target/history-scale-adoption/
+      - name: Deterministic tooling tests without storage workloads
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s test/history-scale-bench -p 'test_*.py' -v 2>&1 | tee target/history-scale-adoption/python-tests.log
+      - name: Affected static checks and CI wiring
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            bash -n .github/scripts/check.sh
+            python3 .github/scripts/check-workflows.py
+            python3 .github/scripts/check-workflows.py tools/history-scale-bench/workflow.yml
+            python3 .github/scripts/check-architecture.py
+            python3 tools/rust-sources/manage.py verify
+            python3 tools/rust-sources/architecture.py verify
+            python3 tools/rust-sources/documentation.py verify
+            python3 -m unittest discover -s test/ci -p test_check_suites.py -v
+            python3 -m unittest discover -s test/ci -p test_workflows.py -v
+          } 2>&1 | tee target/history-scale-adoption/static.log
+      - name: Initialize isolated offline Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Fixed Rust and driver format
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup component add rustfmt --toolchain 1.99.0
+          rustc +1.99.0 --version --verbose > target/history-scale-adoption/rustc.txt
+          cargo +1.99.0 --version > target/history-scale-adoption/cargo.txt
+          cp tools/history-scale-bench/driver.rs target/history-scale-adoption/driver.formatted.rs
+          rustfmt +1.99.0 --edition 2024 target/history-scale-adoption/driver.formatted.rs
+          rustfmt +1.99.0 --edition 2024 --check tools/history-scale-bench/driver.rs 2>&1 | tee target/history-scale-adoption/rustfmt.log
+      - name: Actual docs source export integration and repository scan
+        run: |
+          set -euo pipefail
+          cargo +1.99.0 test --locked --offline -p contract-check --test source_export -- --nocapture 2>&1 | tee target/history-scale-adoption/source-export.log
+          cargo +1.99.0 run --locked --offline -p contract-check -- --root . 2>&1 | tee target/history-scale-adoption/docs.log
+      - name: Check ordinary driver API and actual compiler features without execution
+        run: |
+          set -euo pipefail
+          python3 tools/history-scale-bench/prepare.py --source . --candidate-sha "$GITHUB_SHA" > target/history-scale-adoption/registration.json
+          cargo +1.99.0 check --locked --offline --release -p perf-check --bin history-scale-driver --features history-scale-current --message-format=json > target/history-scale-adoption/compiler.jsonl 2> target/history-scale-adoption/compiler.stderr.log
+          python3 tools/history-scale-bench/verify_build.py --input target/history-scale-adoption/compiler.jsonl > target/history-scale-adoption/compiler-features.json
+          git diff -- tools/perf-check/Cargo.toml > target/history-scale-adoption/registration.patch
+      - name: Retain logs including failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: history-scale-adoption-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/history-scale-adoption/
+          if-no-files-found: error
+          retention-days: 30
