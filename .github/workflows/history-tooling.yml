@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap]
 
 permissions:
   contents: read
@@ -108,6 +108,10 @@ jobs:
               'd2c93af9a63985f43e58dce600aa5aaa6cf4d154', '8b1348e9341d40394bb570a1508c6d2463ca7c37',
           ):
               raise SystemExit('Detached history diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'detached-history-overlap' and (source, tree) != (
+              '286ff86e73f52657fbf6f96b1fcc846fee1a4173', 'a9b23370998eab91c8f090a7f1a843c2a27249fb',
+          ):
+              raise SystemExit('Detached history overlap requires the exact reviewed merged source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -496,6 +500,15 @@ jobs:
                   test_groups=json.dumps(history_extra), command='Two exact engine index, branch/wire and two exact backend authority witnesses'),
               dict(id='detached-history-http', cache='server', package='storage-server',
                   test_groups=json.dumps(http_history), command='Five exact real HTTP history and metadata projection witnesses'),
+          ]
+          history_overlap = ['engine_backend::graph::tests::' + name for name in [
+              'writers_progress_while_both_history_projections_keep_one_generation',
+              'both_history_reads_recheck_revocation_after_capture',
+          ]]
+          groups['detached-history-overlap'] = [
+              dict(id='detached-history-overlap', cache='server', package='storage-server',
+                  test_groups=json.dumps([dict(selector=name, count=1, exact=True, required=[name])
+                      for name in history_overlap]), command='Two exact merged history writer-progress and revocation witnesses'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
