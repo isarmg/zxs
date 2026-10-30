@@ -136,7 +136,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             <button class="zxs-button" disabled=move ||state.with(|s|!actions::write_allowed(s)||s.files.checked_nodes.is_empty()||!s.files.file_history.ready()) on:click=move |_|start(state)>{t("编辑所选节点标签","Edit selected node tags")}</button>
             <span class="zxs-row">{move ||state.with(|s|format!("{} {}",s.files.checked_nodes.len(),t("个节点已选择","nodes selected")))}</span>
         </div>
-        <For each=move ||instances.get().into_iter().collect::<Vec<_>>() key=|instance|*instance children=move |instance|view!{
+        <For
+            each={move || instances.get().into_iter().collect::<Vec<_>>()}
+            key={|instance| *instance}
+            children={move |instance| view! {
             <section class="zxs-frame zxs-stack zxs-tag-review" aria-label=t("节点标签编辑","Node tag editor")>
                 <div class="zxs-file-toolbar zxs-flow">
                     <h3 class="zxs-row">{t("节点标签","Node tags")}</h3>
@@ -217,7 +220,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 <p class="zxs-row zxs-inline-error" role="status">{move ||state.with(|s|review::error_text(s,review::Kind::Tags))}</p>
                 <button class="zxs-button" disabled=disabled on:click=move |_|submit(state,instance)>{t("保存标签子节点","Save tag child nodes")}</button>
             </section>
-        }/>
+        }}/>
     }
 }
 

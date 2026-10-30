@@ -156,7 +156,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         })
     });
     view! {
-        <For each=move ||instances.get().into_iter().collect::<Vec<_>>() key=|instance|*instance children=move |instance|view!{
+        <For
+            each={move || instances.get().into_iter().collect::<Vec<_>>()}
+            key={|instance| *instance}
+            children={move |instance| view! {
             <section class="zxs-frame zxs-stack zxs-merge-review" aria-label=t("合并文件分支","Merge file branches")>
                 <div class="zxs-file-toolbar zxs-flow">
                     <h3 class="zxs-row">{t("合并文件分支","Merge file branches")}</h3>
@@ -215,7 +218,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 <p class="zxs-row zxs-inline-error" role="status">{move ||state.with(|s|review::error_text(s,review::Kind::Merge))}</p>
                 <button class="zxs-button" disabled=move ||disabled.get()||review_needed.get() on:click=move |_|submit(state,instance)>{t("确认合并所选分支","Confirm merge of selected branches")}</button>
             </section>
-        }/>
+        }}/>
     }
 }
 
