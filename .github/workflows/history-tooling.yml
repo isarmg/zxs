@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning]
 
 permissions:
   contents: read
@@ -128,6 +128,10 @@ jobs:
               '5ee74edd577c4ea1ba1568e667ae1bcc19549134', '9d79967107c42cf4c16df73aa93aa79f87bb878f',
           ):
               raise SystemExit('Detached listing diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'scrub-planning' and (source, tree) != (
+              '4d36b6adf74be177b013a0211bef09151a466331', '61f21430dd0ce86681d565ee36fd2bacf2a9c594',
+          ):
+              raise SystemExit('Scrub planning diagnostics require the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -581,6 +585,25 @@ jobs:
                       dict(selector='backup_namespace::', test_target='http_engine', count=4, required_suffixes=[
                           'backup_path_collisions_are_rejected_for_every_session_without_overwriting_bodies']),
                   ]), command='Real HTTP paginated listing and backup namespace/collision groups'),
+          ]
+          groups['scrub-planning'] = [
+              dict(id='scrub-planning-format', format_base='286ff86e73f52657fbf6f96b1fcc846fee1a4173',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='scrub-planning-engine', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([dict(selector='engine::integrity_scrub::', features=['fault-injection'],
+                      count=69, required_suffixes=[
+                          'pre_cancelled_payload_planning_does_not_request_an_item',
+                          'payload_planning_cancellation_between_items_precedes_more_arithmetic',
+                          'payload_planning_cancellation_at_end_does_not_return_a_completed_estimate',
+                          'payload_planning_counts_available_routes_and_skips_retired_content',
+                          'payload_planning_retains_checked_multiplication_and_addition',
+                      ])]), command='Complete engine scrub metadata, scheduling and scan groups including five new planning witnesses'),
+              dict(id='scrub-planning-server', cache='server', package='storage-server',
+                  test_groups=json.dumps([
+                      dict(selector='integrity_scrub::', count=22, required_suffixes=[
+                          'cancelled_payload_planning_returns_a_report_without_estimate_or_storage_reads',
+                          'actual_http_controls_expose_baseline_progress_and_keep_check_unchanged']),
+                  ]), command='Complete server scrub lifecycle and public scrub policy groups'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
