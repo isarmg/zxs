@@ -4,18 +4,18 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
-mkdir -p "$fixture/.github/scripts" "$fixture/target/native/release" \
+mkdir -p "$fixture/.github/scripts" "$fixture/target/native/x86_64-unknown-linux-gnu/release" \
   "$fixture/build/web/pkg" "$fixture/compliance/licenses/upstream/sample" \
   "$fixture/compliance/provenance" "$fixture/docs/components" "$fixture/docs/templates"
 cp .github/scripts/release-package.sh .github/scripts/release-assemble.sh "$fixture/.github/scripts/"
 cp rust-toolchain.toml "$fixture/"
 for name in zxs zxs-rescue; do
-  printf '#!/bin/sh\nexit 0\n' > "$fixture/target/native/release/$name"
-  chmod +x "$fixture/target/native/release/$name"
+  printf '#!/bin/sh\nexit 0\n' > "$fixture/target/native/x86_64-unknown-linux-gnu/release/$name"
+  chmod +x "$fixture/target/native/x86_64-unknown-linux-gnu/release/$name"
 done
 # Validation tools must never leak into either product archive.
-printf 'test-only engine fixture\n' > "$fixture/target/native/release/browser-smoke"
-printf 'unshipped tool\n' > "$fixture/target/native/release/zxs-unpublished-tool"
+printf 'test-only engine fixture\n' > "$fixture/target/native/x86_64-unknown-linux-gnu/release/browser-smoke"
+printf 'unshipped tool\n' > "$fixture/target/native/x86_64-unknown-linux-gnu/release/zxs-unpublished-tool"
 printf '<html>fixture</html>\n' > "$fixture/build/web/index.html"
 printf '{"runtime":"web-interface"}\n' > "$fixture/build/web/build-manifest.json"
 printf 'wasm fixture\n' > "$fixture/build/web/pkg/zxs_bg.wasm"
@@ -83,7 +83,7 @@ for document in (root / "docs/release.md", root / "docs/components/smb.md"):
 PY
   if [[ "$archive" == *-unknown-linux-gnu.tar.gz ]]; then
     for name in zxs zxs-rescue; do
-      cmp "$fixture/target/native/release/$name" "$output/$name"
+      cmp "$fixture/target/native/x86_64-unknown-linux-gnu/release/$name" "$output/$name"
     done
   else
     cmp "$fixture/build/web/pkg/zxs_bg.wasm" "$output/public/pkg/zxs_bg.wasm"

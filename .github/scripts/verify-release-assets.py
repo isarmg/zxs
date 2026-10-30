@@ -32,6 +32,27 @@ def read_metadata(directory_fd, name):
     return data
 
 
+def build_identity(build, version, commit=None):
+    fields = {}
+    for line in build.decode("utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or not key or key in fields:
+            raise ValueError("invalid or duplicate release build identity field")
+        fields[key] = value
+    if fields.get("version") != version or (commit is not None and fields.get("commit") != commit):
+        raise ValueError("release build identity differs from the requested version/source")
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", fields.get("commit", "")):
+        raise ValueError("invalid native build source identity")
+    if fields.get("native-target") != "x86_64-unknown-linux-gnu" or fields.get("native-profile") != "release":
+        raise ValueError("native build target/profile identity mismatch")
+    if not fields.get("native-rustc"):
+        raise ValueError("missing native compiler identity")
+    for key in ("native-environment-sha256", "native-inputs-sha256", "native-zxs-sha256", "native-zxs-rescue-sha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", fields.get(key, "")):
+            raise ValueError(f"missing or invalid native build identity: {key}")
+    return fields
+
+
 def verify(directory, version, commit, stage=None):
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]+)?", version):
         raise ValueError("invalid release version")
@@ -59,14 +80,9 @@ def verify_opened(directory_fd, version, commit, stage):
     if set(hashes) != names:
         raise ValueError("release checksum inventory differs from the expected asset set")
     build = read_metadata(directory_fd, "BUILD.txt")
-    fields = {}
-    for line in build.decode("utf-8").splitlines():
-        key, separator, value = line.partition("=")
-        if not separator or not key or key in fields:
-            raise ValueError("invalid or duplicate release build identity field")
-        fields[key] = value
-    if fields.get("version") != version or fields.get("commit") != commit:
-        raise ValueError("release build identity differs from the requested version/source")
+    fields = build_identity(build, version, commit)
+    if fields.get("native-archive-sha256") != hashes[f"zxs-{version}-x86_64-unknown-linux-gnu.tar.gz"]:
+        raise ValueError("native archive differs from build identity")
     if stage is not None:
         stage = Path(stage)
         for path in (stage, *stage.absolute().parents):

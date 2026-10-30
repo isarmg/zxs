@@ -622,6 +622,29 @@ fn commit_fixture() -> (tempfile::TempDir, Engine, FileVersion) {
     (temp, engine, version)
 }
 
+#[test]
+fn checksum_admission_rejects_unsupported_and_over_budget_descriptors_before_io() {
+    let (_temp, _engine, mut version) = commit_fixture();
+    for width in [0, 1, u32::MAX] {
+        version.checksum_chunk_bytes = width;
+        assert_eq!(
+            checksum_manifest_length(&version).unwrap_err().code(),
+            ErrorCode::ChecksumFormatInvalid
+        );
+    }
+    version.checksum_chunk_bytes = 65536;
+    version.logical_size = 1 << 40;
+    assert_eq!(
+        checksum_manifest_length(&version).unwrap(),
+        MAX_CHECKSUM_MANIFEST
+    );
+    version.logical_size += 1;
+    assert_eq!(
+        checksum_manifest_length(&version).unwrap_err().code(),
+        ErrorCode::ResourceLimit
+    );
+}
+
 fn replace_replica(engine: &Engine, version: &FileVersion, slot: &str, bytes: &[u8]) {
     let directory = version_dir(
         engine.disk(slot).unwrap(),

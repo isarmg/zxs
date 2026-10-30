@@ -1,5 +1,141 @@
 use super::descriptors::close_opened;
 use super::*;
+mod seek_tests;
+
+#[test]
+fn sync_and_async_immutable_reads_use_verified_rpc_bytes_with_a_directory_placeholder() {
+    use smb_protocol::protocol::{FrameStream, PROTOCOL, REQUIRED_CAPABILITIES, Response};
+    use std::{
+        os::unix::net::UnixListener,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    for asynchronous_read in [false, true] {
+        let socket = std::env::temp_dir().join(format!(
+            "zxs-vfs-read-{}-{}.sock",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let listener = UnixListener::bind(&socket).unwrap();
+        let worker = std::thread::spawn(move || {
+            let mut stream = FrameStream::new(listener.accept().unwrap().0).unwrap();
+            assert!(matches!(
+                stream.receive::<Request>().unwrap().0,
+                Request::Hello { .. }
+            ));
+            stream.send(&Response::Ok { result: json_codec::json!({"protocol":PROTOCOL,"capabilities":REQUIRED_CAPABILITIES}) }, None).unwrap();
+            assert!(matches!(
+                stream.receive::<Request>().unwrap().0,
+                Request::Read {
+                    handle: 7,
+                    offset: 1,
+                    length: 3
+                }
+            ));
+            stream
+                .send(
+                    &Response::Ok {
+                        result: json_codec::json!({"bytes":[9,8,7]}),
+                    },
+                    None,
+                )
+                .unwrap();
+            assert!(matches!(
+                stream.receive::<Request>().unwrap().0,
+                Request::AuthorizeRead { handle: 7 }
+            ));
+            stream
+                .send(
+                    &Response::Ok {
+                        result: json_codec::json!({"authorized":true}),
+                    },
+                    None,
+                )
+                .unwrap();
+        });
+        let client = Client::connect(&socket, "alice", "repository").unwrap();
+        let mut fsp: sdk::files_struct = Default::default();
+        let opened = Open {
+            info: Arc::new(OpenResult {
+                entry_id: "file".into(),
+                kind: NamespaceEntryKind::File,
+                path: "file".into(),
+                handle: 7,
+                size: 4,
+                max_file_bytes: 4,
+                version_id: Some("version".into()),
+                workspace_id: None,
+            }),
+            fd: std::fs::File::open(std::env::temp_dir()).unwrap().into(),
+            writable: false,
+            io: Arc::new(Mutex::new(WriteSequence::new(false))),
+        };
+        let context = Box::new(Context {
+            samba_username: "alice".into(),
+            client,
+            files: [(&mut fsp as *mut _ as usize, opened)]
+                .into_iter()
+                .collect(),
+        });
+        let mut authenticated = authentication::tests::AuthenticatedSession::new();
+        let mut host = authenticated.handle();
+        host.data = Box::into_raw(context).cast();
+        let mut output = [0u8; 3];
+        // SAFETY: real SDK/session structures and output remain live on this
+        // event loop until synchronous return or actual tevent completion.
+        // Context ownership is reclaimed once after every request finishes.
+        unsafe {
+            let mut stat: sdk::SMB_STRUCT_STAT = Default::default();
+            if asynchronous_read {
+                let event = asynchronous::tests::event_context();
+                assert!(!event.is_null());
+                let request = pread_send(
+                    &mut host,
+                    std::ptr::null_mut(),
+                    event,
+                    &mut fsp,
+                    output.as_mut_ptr().cast(),
+                    output.len(),
+                    1,
+                );
+                assert!(!request.is_null());
+                while sdk::tevent_req_is_in_progress(request) {
+                    assert_eq!(
+                        sdk::_tevent_loop_once(event, c"zxs verified read test".as_ptr()),
+                        0
+                    );
+                }
+                let mut aio: sdk::vfs_aio_state = Default::default();
+                assert_eq!(io_recv(request, &mut aio), 3);
+                assert_eq!(aio.error, 0);
+                sdk::_talloc_free(request.cast(), c"zxs verified read test".as_ptr());
+                sdk::_talloc_free(event.cast(), c"zxs verified read test".as_ptr());
+            } else {
+                assert_eq!(
+                    pread(
+                        &mut host,
+                        &mut fsp,
+                        output.as_mut_ptr().cast(),
+                        output.len(),
+                        1
+                    ),
+                    3
+                );
+            }
+            assert_eq!(output, [9, 8, 7]);
+            // Logical metadata remains a regular file despite the non-content FD.
+            assert_eq!(fstat(&mut host, &mut fsp, &mut stat), 0);
+            assert_eq!(stat.st_ex_mode & libc::S_IFMT, libc::S_IFREG);
+            assert_eq!(stat.st_ex_size, 4);
+            drop(Box::from_raw(host.data.cast::<Context>()));
+            host.data = std::ptr::null_mut();
+        }
+        worker.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+}
 
 #[test]
 fn typed_handle_stat_matches_path_stat_without_json_reencoding() {

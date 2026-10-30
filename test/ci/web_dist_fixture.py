@@ -32,7 +32,7 @@ def prepare(root):
         (root / directory).mkdir(parents=True, exist_ok=True)
     for relative in [*spec["files"], "README.md", "compliance/NOTICE.md", "docs/README.md", "deploy/systemd/zxs.service",
                      "deploy/samba/smb.conf.example",
-                     "target/native/release/zxs", "target/native/release/zxs-rescue", "build/web/index.html", "build/web/boot.js",
+                     "target/native/x86_64-unknown-linux-gnu/release/zxs", "target/native/x86_64-unknown-linux-gnu/release/zxs-rescue", "build/web/index.html", "build/web/boot.js",
                      "build/web/zxs.css", "build/web/styles/startup.css", "build/web/pkg/zxs.js",
                      "build/web/pkg/zxs_bg.wasm", "build/web/pkg/zxs_bg.wasm.gz"]:
         path = root / relative
@@ -40,8 +40,17 @@ def prepare(root):
         if not path.exists():
             path.write_text(f"fixture {relative}\n")
     for name in ("zxs", "zxs-rescue"):
-        (root / "target/native/release" / name).chmod(0o755)
-    for relative in (SPEC, ".github/scripts/release-package.sh", ".github/scripts/verify-web-dist.py"):
+        (root / "target/native/x86_64-unknown-linux-gnu/release" / name).chmod(0o755)
+    native = root / "target/native/x86_64-unknown-linux-gnu/release"
+    fields = {"version": "0.1.0", "commit": "0123456789012345678901234567890123456789",
+              "native-target": "x86_64-unknown-linux-gnu", "native-profile": "release",
+              "native-rustc": "fixture compiler", "native-environment-sha256": "a" * 64,
+              "native-inputs-sha256": "b" * 64}
+    for name in ("zxs", "zxs-rescue"):
+        fields[f"native-{name}-sha256"] = hashlib.sha256((native / name).read_bytes()).hexdigest()
+    (native / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
+    for relative in (SPEC, ".github/scripts/release-package.sh", ".github/scripts/verify-web-dist.py",
+                     ".github/scripts/verify-release-assets.py"):
         shutil.copy2(ROOT / relative, root / relative)
     return record(root)
 

@@ -60,6 +60,8 @@ impl EngineBackend {
         };
         let repo = repo_for_history(&engine, &record.history_tree_id)?;
         let plan = engine.prepare_content(version).map_err(error)?;
+        let proof_memory =
+            crate::content_proof_budget::reserve(plan.checksum_manifest_bytes().map_err(error)?)?;
         let download_name = match logical_name {
             Some(name) => name,
             None => default_download_name(&engine, repo, record)?,
@@ -72,7 +74,7 @@ impl EngineBackend {
             file: content.file,
             size: content.size,
             hash: content.content_hash.to_string(),
-            lease: Box::new(content.lease),
+            lease: Box::new((content.lease, proof_memory)),
             download_name: Some(download_name),
         })
     }

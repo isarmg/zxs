@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import stat
 import sys
+import runpy
+import subprocess
 
 version = sys.argv[1]
 if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]+)?", version):
@@ -17,24 +19,22 @@ if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]+)?", version):
 assets = Path("release-assets")
 if not stat.S_ISDIR(assets.lstat().st_mode):
     raise SystemExit("release-assets must be a real directory")
-expected = {f"zxs-{version}-x86_64-unknown-linux-gnu.tar.gz", f"web-interface-{version}.tar.gz"}
+expected = {f"zxs-{version}-x86_64-unknown-linux-gnu.tar.gz", f"web-interface-{version}.tar.gz", "BUILD.txt"}
 if {path.name for path in assets.iterdir()} != expected:
-    raise SystemExit("Release directory must contain exactly the two expected archives")
+    raise SystemExit("Release directory must contain exactly the two archives and native build receipt")
 for name in expected:
     info = (assets / name).lstat()
     if not stat.S_ISREG(info.st_mode) or not info.st_size:
         raise SystemExit(f"Release archive must be a nonempty regular file: {name}")
+validator = runpy.run_path('.github/scripts/verify-release-assets.py')
+commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+validator['build_identity']((assets / 'BUILD.txt').read_bytes(), version, commit)
 PYVALIDATE
 {
   printf '# ZXS %s 安装\n\n' "$v"
   cat docs/templates/release-install.md
 } > release-assets/INSTALL.md
-{
-  echo "version=$v"
-  echo "commit=$(git rev-parse HEAD)"
-  echo "rust=$(sed -n 's/channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
-  echo 'web-bindings=0.2.129; derived Web-only wasm-bindgen command'
-  echo "workflow=${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-local}/actions/runs/${GITHUB_RUN_ID:-local}"
-  echo 'access=Web and SMB; Samba VFS is built separately against its pinned native SDK'
-} > release-assets/BUILD.txt
+# Preserve the receipt from the build runner; never relabel it with this job's
+# checkout/toolchain. The native archive digest is checked against that receipt.
 (cd release-assets && sha256sum -- * > SHA256SUMS && sha256sum --check SHA256SUMS)
+python3 .github/scripts/verify-release-assets.py --version "$v" --commit "$(git rev-parse HEAD)"

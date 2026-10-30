@@ -659,8 +659,8 @@ pub(crate) fn open_payload_at(
     directory: &Path,
     version: &FileVersion,
 ) -> Result<(File, Vec<u8>, ChecksumManifest)> {
-    let checks = root.read_bytes(&directory.join("checksums.bin"), MAX_CHECKSUM_MANIFEST)?;
-    let manifest = decode_checksum_manifest(&checks, version)?;
+    let checks = read_authenticated_checksums_at(root, directory, version)?;
+    let manifest = decode_authenticated_checksums(&checks, version)?;
     let path =
         crate::container_storage::content_path_at(root, directory, version, &mut |_| Ok(()))?;
     let file = root.open_regular(&path)?;
@@ -671,6 +671,52 @@ pub(crate) fn open_payload_at(
         ));
     }
     Ok((file, checks, manifest))
+}
+
+pub(crate) fn checksum_manifest_length(version: &FileVersion) -> Result<usize> {
+    if !SUPPORTED_CHECKSUM_CHUNK_BYTES.contains(&version.checksum_chunk_bytes) {
+        return Err(Error::new(
+            ErrorCode::ChecksumFormatInvalid,
+            "unsupported version checksum chunk size",
+        ));
+    }
+    let length = version
+        .logical_size
+        .div_ceil(u64::from(version.checksum_chunk_bytes))
+        .checked_mul(32)
+        .and_then(|bytes| bytes.checked_add(CHECKSUM_HEADER_BYTES as u64))
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .filter(|bytes| *bytes <= MAX_CHECKSUM_MANIFEST)
+        .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "checksum manifest exceeds limit"))?;
+    Ok(length)
+}
+
+/// Allocate exactly the descriptor-bound length, including for corrupt/growing
+/// input. A matching digest permits reuse of an already decoded identical proof.
+pub(crate) fn read_authenticated_checksums_at(
+    root: &DiskRoot,
+    directory: &Path,
+    version: &FileVersion,
+) -> Result<Vec<u8>> {
+    let length = checksum_manifest_length(version)?;
+    let mut file = root.open_regular(&directory.join("checksums.bin"))?;
+    if file.metadata()?.len() != length as u64 {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "checksum manifest length differs",
+        ));
+    }
+    let mut checks = vec![0; length];
+    file.read_exact(&mut checks)?;
+    if file.read(&mut [0; 1])? != 0
+        || blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash
+    {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "checksum manifest digest differs",
+        ));
+    }
+    Ok(checks)
 }
 
 pub(crate) fn read_checksum_manifest_at(
@@ -694,6 +740,13 @@ fn decode_checksum_manifest(checks: &[u8], version: &FileVersion) -> Result<Chec
             "checksum manifest digest differs",
         ));
     }
+    decode_authenticated_checksums(checks, version)
+}
+
+fn decode_authenticated_checksums(
+    checks: &[u8],
+    version: &FileVersion,
+) -> Result<ChecksumManifest> {
     let manifest = ChecksumManifest::decode(checks)?;
     if manifest.logical_size != version.logical_size
         || manifest.chunk_bytes != version.checksum_chunk_bytes

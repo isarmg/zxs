@@ -20,10 +20,13 @@ pub const AUTHENTICATED_ACCOUNT_CAPABILITY: &str = "authenticated-single-account
 /// when a mutation opens a save generation (first change after open or Flush)
 /// and for every write-through change. See `client::WriteSequence`.
 pub const GENERATION_DIRTY_CAPABILITY: &str = "generation-dirty-writes";
-pub const REQUIRED_CAPABILITIES: [&str; 3] = [
+/// Immutable reads use range RPCs; Open hands out a non-content placeholder FD.
+pub const VERIFIED_READ_CAPABILITY: &str = "verified-range-reads";
+pub const REQUIRED_CAPABILITIES: [&str; 4] = [
     WRITE_RESERVATION_CAPABILITY,
     AUTHENTICATED_ACCOUNT_CAPABILITY,
     GENERATION_DIRTY_CAPABILITY,
+    VERIFIED_READ_CAPABILITY,
 ];
 
 /// A single exact Samba account name, never an alias-to-principal mapping.
@@ -43,6 +46,8 @@ pub fn validate_username(username: &str) -> io::Result<()> {
 }
 
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+/// JSON byte arrays use at most four encoded bytes per byte plus small metadata.
+pub const MAX_READ_BYTES: usize = 64 * 1024;
 /// Directory replies stay well below the frame ceiling, even with long names.
 pub const MAX_DIRECTORY_PAGE_BYTES: usize = 256 * 1024;
 pub const MAX_DIRECTORY_PAGE_ENTRIES: usize = 256;
@@ -86,6 +91,15 @@ pub enum Request<O = String> {
     AuthorizeRead {
         #[serialization(with = "storage_contract::u64_string")]
         handle: u64,
+    },
+    /// Return only verified immutable bytes; admit current identity and binding
+    /// at actual execution, including cache hits and empty/EOF reads.
+    Read {
+        #[serialization(with = "storage_contract::u64_string")]
+        handle: u64,
+        #[serialization(with = "storage_contract::u64_string")]
+        offset: u64,
+        length: u32,
     },
     Flush {
         #[serialization(with = "storage_contract::u64_string")]
@@ -157,6 +171,15 @@ impl Request<String> {
             }
             Self::Dirty { handle } => Request::Dirty { handle },
             Self::AuthorizeRead { handle } => Request::AuthorizeRead { handle },
+            Self::Read {
+                handle,
+                offset,
+                length,
+            } => Request::Read {
+                handle,
+                offset,
+                length,
+            },
             Self::Flush { handle } => Request::Flush { handle },
             Self::Close { handle } => Request::Close { handle },
             Self::Detach { handle } => Request::Detach { handle },
@@ -274,6 +297,12 @@ pub struct OpenResult {
     pub max_file_bytes: u64,
     pub version_id: Option<String>,
     pub workspace_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct ReadResult {
+    pub bytes: Vec<u8>,
 }
 
 impl OpenResult {

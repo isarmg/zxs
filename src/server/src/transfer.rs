@@ -926,12 +926,8 @@ struct VerifiedRange<R> {
     position: u64,
     end: u64,
 }
-#[derive(Debug, error_definition::Error)]
-#[error("CHECKSUM_MISMATCH: no replica has a verified payload chunk")]
-struct VerifiedChunkUnavailable {
-    #[source]
-    io: Option<std::io::Error>,
-}
+#[cfg(test)]
+use crate::verified_chunk::VerifiedChunkUnavailable;
 
 impl<R: std::io::Read + Seek> VerifiedRange<R> {
     fn new(
@@ -945,12 +941,7 @@ impl<R: std::io::Read + Seek> VerifiedRange<R> {
             .checked_add(length)
             .filter(|end| *end <= manifest.logical_size)
             .ok_or_else(|| ApiError::invalid("range exceeds authenticated size"))?;
-        if !storage_contract::SUPPORTED_CHECKSUM_CHUNK_BYTES.contains(&manifest.chunk_bytes)
-            || manifest.chunks.len() as u64
-                != manifest.logical_size.div_ceil(manifest.chunk_bytes as u64)
-        {
-            return Err(ApiError::invalid("invalid checksum manifest"));
-        }
+        crate::verified_chunk::validate_manifest(&manifest, manifest.logical_size)?;
         Ok(Self {
             file,
             fallbacks,
@@ -963,51 +954,19 @@ impl<R: std::io::Read + Seek> VerifiedRange<R> {
         if self.position == self.end {
             return Ok(None);
         }
-        let chunk_bytes = self.manifest.chunk_bytes as u64;
-        let index = self.position / chunk_bytes;
-        let base = index * chunk_bytes;
-        let count = chunk_bytes.min(self.manifest.logical_size - base) as usize;
-        let mut buffer = vec![0; count];
-        let expected = &self.manifest.chunks[index as usize];
-        let mut verified_source = None;
-        let mut first_io_error = None;
-        for (source, file) in std::iter::once(&mut self.file)
-            .chain(self.fallbacks.iter_mut())
-            .enumerate()
-        {
-            match file
-                .seek(SeekFrom::Start(base))
-                .and_then(|_| file.read_exact(&mut buffer))
-            {
-                Ok(()) => {
-                    if blake3::hash(&buffer).as_bytes() == expected {
-                        verified_source = Some(source);
-                        break;
-                    }
-                }
-                Err(error) => {
-                    first_io_error.get_or_insert(error);
-                }
-            }
-        }
-        let Some(source) = verified_source else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                VerifiedChunkUnavailable { io: first_io_error },
-            ));
-        };
-        if source != 0 {
-            // Prefer the last successful source, but retain every other replica:
-            // corruption can affect different chunks on different members.
-            // This is only read ordering, never evidence for the next chunk.
-            std::mem::swap(&mut self.file, &mut self.fallbacks[source - 1]);
-        }
-        let from = (self.position - base) as usize;
-        let to = (self.end - base).min(count as u64) as usize;
-        self.position = base + to as u64;
-        buffer.truncate(to);
-        let mut chunk = bytes::Bytes::from(buffer);
-        bytes::Buf::advance(&mut chunk, from);
+        let verified = crate::verified_chunk::read(
+            &mut self.file,
+            &mut self.fallbacks,
+            &self.manifest,
+            self.position,
+        )?;
+        let chunk = verified
+            .range(
+                self.position,
+                (self.end - self.position).min(usize::MAX as u64) as usize,
+            )
+            .expect("invariant: the verified chunk covers the requested position");
+        self.position += chunk.len() as u64;
         Ok(Some(chunk))
     }
 }

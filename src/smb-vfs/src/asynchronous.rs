@@ -360,4 +360,4 @@ pub(super) unsafe fn recv(request: *mut sdk::tevent_req, aio: *mut sdk::vfs_aio_
 
 #[cfg(test)]
 #[path = "../../../test/smb-vfs/unit/asynchronous/tests.rs"]
-mod tests;
+pub(super) mod tests;

@@ -263,18 +263,33 @@ impl Session {
             if create || truncate {
                 return Err(ApiError::invalid("read handle cannot create or truncate"));
             }
-            let content = self.shared.backend.content(
+            let version_id = version.as_deref().ok_or_else(|| {
+                ApiError::new(
+                    ::http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::NotFound,
+                    "version missing",
+                )
+            })?;
+            let content = self.shared.backend.range_content(
                 &self.identity,
-                version.as_deref().ok_or_else(|| {
-                    ApiError::new(
-                        ::http::StatusCode::NOT_FOUND,
-                        storage_contract::ErrorCode::NotFound,
-                        "version missing",
-                    )
-                })?,
+                crate::ReadContent {
+                    version: version_id,
+                    context: None,
+                },
             )?;
+            let manifest = content.checksum_manifest.as_ref().ok_or_else(|| {
+                ApiError::invalid(
+                    "SMB immutable content requires an authenticated checksum manifest",
+                )
+            })?;
+            crate::verified_chunk::validate_manifest(manifest, content.size)?;
             let size = content.size;
-            let fd = OwnedFd::from(content.file.try_clone().map_err(ApiError::io)?);
+            // The negotiated VFS obtains bytes only through verified Read RPCs.
+            // A raw read on this existing placeholder fails with EISDIR rather
+            // than exposing the daemon's still-unverified payload descriptor.
+            let fd = OwnedFd::from(
+                File::open(self.shared.spool.join("empty-directory")).map_err(ApiError::io)?,
+            );
             (
                 Handle::Read(
                     content,
@@ -324,5 +339,68 @@ impl Session {
             }
         }
         Ok(json!({"authorized":true}))
+    }
+
+    pub(super) fn read(
+        &mut self,
+        handle: u64,
+        offset: u64,
+        length: u32,
+    ) -> Result<Value, ApiError> {
+        if length as usize > smb_protocol::protocol::MAX_READ_BYTES {
+            return Err(ApiError::limit("SMB read exceeds bounded reply size"));
+        }
+        self.authorize_read(handle)?;
+        let content = match self.handles.get_mut(&handle) {
+            Some(Handle::Read(content, _)) => content,
+            Some(Handle::Directory(_)) => {
+                return Err(ApiError::new(
+                    ::http::StatusCode::CONFLICT,
+                    storage_contract::ErrorCode::IsDirectory,
+                    "directory data is not readable",
+                ));
+            }
+            Some(Handle::Write(_)) => return Err(ApiError::unsupported()),
+            None => unreachable!("invariant: read authorization admitted this handle"),
+        };
+        if length == 0 || offset >= content.size {
+            return Ok(json!({"bytes":[]}));
+        }
+        let cached = self
+            .read_cache
+            .as_ref()
+            .filter(|(owner, _)| *owner == handle)
+            .and_then(|(_, chunk)| chunk.range(offset, length as usize));
+        let bytes = match cached {
+            Some(bytes) => bytes,
+            None => {
+                // Evict first: at most one complete checksum chunk per session.
+                self.read_cache = None;
+                let manifest = content
+                    .checksum_manifest
+                    .as_ref()
+                    .expect("invariant: immutable Open retained its authenticated manifest");
+                let chunk = crate::verified_chunk::read(
+                    &mut content.file,
+                    &mut content.fallback_files,
+                    manifest,
+                    offset,
+                )
+                .map_err(|source| {
+                    ApiError::new(
+                        ::http::StatusCode::SERVICE_UNAVAILABLE,
+                        storage_contract::ErrorCode::ContentUnavailable,
+                        "no replica has verified bytes for the requested range",
+                    )
+                    .with_source(source)
+                })?;
+                let bytes = chunk
+                    .range(offset, length as usize)
+                    .expect("invariant: verified chunk covers the requested offset");
+                self.read_cache = Some((handle, chunk));
+                bytes
+            }
+        };
+        Ok(json!({"bytes":bytes.as_ref()}))
     }
 }

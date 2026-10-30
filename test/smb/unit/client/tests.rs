@@ -2,6 +2,7 @@ use super::*;
 use storage_contract::ErrorCode;
 
 mod admission;
+mod read;
 mod write_sequence;
 
 #[test]
@@ -14,6 +15,11 @@ fn module_client_requires_authenticated_account_and_durable_reservations() {
         json_codec::json!({"protocol":PROTOCOL,"capabilities":[
             crate::protocol::WRITE_RESERVATION_CAPABILITY,
             crate::protocol::AUTHENTICATED_ACCOUNT_CAPABILITY,
+        ]}),
+        json_codec::json!({"protocol":PROTOCOL,"capabilities":[
+            crate::protocol::WRITE_RESERVATION_CAPABILITY,
+            crate::protocol::AUTHENTICATED_ACCOUNT_CAPABILITY,
+            crate::protocol::GENERATION_DIRTY_CAPABILITY,
         ]}),
         json_codec::json!({"protocol":PROTOCOL}),
         json_codec::json!({"protocol":PROTOCOL,"capabilities":[]}),
