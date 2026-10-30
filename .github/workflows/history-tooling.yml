@@ -69,6 +69,8 @@ jobs:
           ]:
               groups[name] = [dict(id=name, cache='server', exact_test=test,
                   command=f'cargo test --locked --offline -p storage-server --lib {test} -- --exact --nocapture')]
+          groups['smb-close'].append(dict(id='smb-format',
+              command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check test/server/unit/smb_rpc/tests.rs'))
           groups['server'] = [
               dict(id='server-unit', cache='server', command='cargo test --locked --offline -p storage-server --lib --bins -- --nocapture'),
               dict(id='server-doc', cache='server', command='cargo test --locked --offline -p storage-server --doc'),
@@ -85,10 +87,14 @@ jobs:
               'src/engine/src/namespace.rs',
               'src/engine/src/business/namespace/query.rs',
               'src/engine/src/business/file_requests.rs',
+              'src/engine/src/segment_store.rs',
+              'src/engine/src/history_package.rs',
               'src/server/src/engine_backend/file_manager/listing.rs',
               'src/server/src/engine_backend/read_projection.rs',
               'test/engine/unit/namespace/borrowed_lookup_tests.rs',
               'test/engine/unit/business/namespace/query_tests.rs',
+              'test/engine/unit/namespace/tests.rs',
+              'test/engine/unit/namespace/owned_decode_tests.rs',
           ]
           groups['namespace-borrow'] = [
               dict(id='namespace-format', command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check ' + ' '.join(files)),
@@ -99,6 +105,8 @@ jobs:
               'identity_predicates_match_owned_lookup_for_unicode_missing_and_wrong_kinds',
               'projection_borrows_leaf_ids_until_callback_returns',
               'lookup_preserves_reference_failure_before_a_delayed_composed_path_error',
+              'owned_decode_moves_page_and_index_strings_from_authenticated_values',
+              'owned_decode_keeps_reference_and_shape_error_precedence',
           ]
           for name, package, prefix in [
               ('engine-namespace', 'storage-engine', 'namespace::'),
