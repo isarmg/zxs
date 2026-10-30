@@ -1,4 +1,5 @@
 use super::*;
+use http_routing::http::Method;
 
 #[tokio::test]
 async fn entity_tag_precedes_modified_since_for_static_get_and_head() {
