@@ -369,7 +369,7 @@ impl Engine {
                 // Checkpoint coverage never substitutes for candidate-bound graph
                 // verification. At the boundary, retain the original State proof
                 // for history-set and projected-manifest comparisons as well.
-                crate::history_package::bound_history_objects_at(
+                let (_, roots) = crate::history_package::bound_history_objects_with_roots_at(
                     &self.disk_resources,
                     &online,
                     &candidate,
@@ -382,6 +382,7 @@ impl Engine {
                             .insert(candidate.operation_id, publication.result.clone());
                     }
                     self.state = std::sync::Arc::new(next);
+                    self.bind_recovered_history_roots(roots);
                 }
                 self.snapshot = Some(candidate.snapshot_hash);
                 continue;
@@ -392,12 +393,13 @@ impl Engine {
                     verified_snapshot_at(&self.disk_resources, &online, &candidate.snapshot_hash)?
                 }
             };
-            let history_objects = crate::history_package::bound_history_objects_at(
-                &self.disk_resources,
-                &online,
-                &candidate,
-                Some(&admitted),
-            )?;
+            let (history_objects, roots) =
+                crate::history_package::bound_history_objects_with_roots_at(
+                    &self.disk_resources,
+                    &online,
+                    &candidate,
+                    Some(&admitted),
+                )?;
             let mut next = admitted.into_state();
             if publication.is_none() && mode == RecoveryMode::PreservePending {
                 self.blocked = true;
@@ -508,6 +510,7 @@ impl Engine {
                     next.operations.insert(candidate.operation_id, result);
                 }
                 self.state = std::sync::Arc::new(next);
+                self.bind_recovered_history_roots(roots);
                 self.snapshot = Some(candidate.snapshot_hash);
             } else if let Some(p) = publication {
                 if p.candidate_hash != hash || p.result.operation_id != candidate.operation_id {
@@ -542,6 +545,7 @@ impl Engine {
                         .insert(candidate.operation_id, p.result.clone());
                 }
                 self.state = std::sync::Arc::new(next);
+                self.bind_recovered_history_roots(roots);
                 self.snapshot = Some(candidate.snapshot_hash);
                 self.blocked = true;
             } else {
