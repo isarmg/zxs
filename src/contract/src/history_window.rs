@@ -16,6 +16,22 @@ fn invalid(message: &str) -> Error {
     Error::new(ErrorCode::InvalidRequest, message)
 }
 
+macro_rules! string_enum {
+    ($name:ident { $($variant:ident => $token:literal),+ $(,)? }) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+        #[serialization(rename_all = "snake_case")]
+        pub enum $name { $($variant),+ }
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+                match String::deserialize(d)?.as_str() {
+                    $($token => Ok(Self::$variant),)+
+                    value => Err(data_serialization::de::Error::unknown_variant(value, &[$($token),+])),
+                }
+            }
+        }
+    };
+}
+
 macro_rules! identifier {
     ($name:ident, $($prefix:literal),+) => {
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -79,7 +95,7 @@ macro_rules! digest {
         }
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                self.0.fmt(f)
+                fmt::Display::fmt(&self.0, f)
             }
         }
     };
@@ -102,13 +118,7 @@ impl HistoryLocation {
 }
 
 /// Unbounded persisted scalar fields are read separately without new write limits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serialization(rename_all = "snake_case")]
-pub enum HistoryField {
-    Message,
-    Author,
-    CreatedAt,
-}
+string_enum!(HistoryField { Message => "message", Author => "author", CreatedAt => "created_at" });
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -181,20 +191,13 @@ impl<'de> Deserialize<'de> for HistoryPageLimit {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serialization(rename_all = "snake_case")]
-pub enum HistoryCursorFormat {
-    HistoryWindowV1,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serialization(rename_all = "snake_case")]
-pub enum HistoryDirection {
-    Forward,
-    Backward,
-}
+string_enum!(HistoryCursorFormat { HistoryWindowV1 => "history_window_v1" });
+string_enum!(HistoryDirection { Forward => "forward", Backward => "backward" });
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoryPosition {
+    /// Inclusive beginning for a parent's first page when preview allocated no edges.
+    Start,
     Node {
         #[serialization(with = "crate::u64_string")]
         sequence: u64,
@@ -242,27 +245,34 @@ pub struct HistoryCursorPayload {
 impl HistoryCursorPayload {
     pub fn validate(&self) -> Result<()> {
         HistoryPageLimit::for_collection(self.limit.get(), &self.collection)?;
-        let compatible = matches!(
+        let compatible = (matches!(
             (&self.collection, &self.position),
-            (HistoryCollection::Nodes, HistoryPosition::Node { .. })
-                | (HistoryCollection::Versions, HistoryPosition::Version { .. })
-                | (HistoryCollection::Branches, HistoryPosition::Branch { .. })
-                | (HistoryCollection::Merges, HistoryPosition::Merge { .. })
-                | (
-                    HistoryCollection::NodeParents { .. },
-                    HistoryPosition::Parent { .. }
-                )
-                | (
-                    HistoryCollection::VersionSources { .. }
-                        | HistoryCollection::MergeInputs { .. }
-                        | HistoryCollection::MergeParents { .. },
-                    HistoryPosition::Member { .. }
-                )
-                | (
-                    HistoryCollection::NodeField { .. },
-                    HistoryPosition::Field { .. }
-                )
-        );
+            (
+                HistoryCollection::NodeParents { .. },
+                HistoryPosition::Start
+            )
+        ) && self.direction == HistoryDirection::Forward)
+            || matches!(
+                (&self.collection, &self.position),
+                (HistoryCollection::Nodes, HistoryPosition::Node { .. })
+                    | (HistoryCollection::Versions, HistoryPosition::Version { .. })
+                    | (HistoryCollection::Branches, HistoryPosition::Branch { .. })
+                    | (HistoryCollection::Merges, HistoryPosition::Merge { .. })
+                    | (
+                        HistoryCollection::NodeParents { .. },
+                        HistoryPosition::Parent { .. }
+                    )
+                    | (
+                        HistoryCollection::VersionSources { .. }
+                            | HistoryCollection::MergeInputs { .. }
+                            | HistoryCollection::MergeParents { .. },
+                        HistoryPosition::Member { .. }
+                    )
+                    | (
+                        HistoryCollection::NodeField { .. },
+                        HistoryPosition::Field { .. }
+                    )
+            );
         if !compatible
             || (self.anchor_node_id.is_some() && self.collection != HistoryCollection::Nodes)
         {
@@ -277,7 +287,7 @@ impl HistoryCursorPayload {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryCursor {
     encoded: String,
-    payload: HistoryCursorPayload,
+    payload: Box<HistoryCursorPayload>,
 }
 impl HistoryCursor {
     pub fn parse(encoded: &str) -> Result<Self> {
@@ -305,7 +315,7 @@ impl HistoryCursor {
         payload.validate()?;
         Ok(Self {
             encoded: encoded.into(),
-            payload,
+            payload: Box::new(payload),
         })
     }
     pub fn from_payload(payload: HistoryCursorPayload) -> Result<Self> {
@@ -319,7 +329,10 @@ impl HistoryCursor {
             use std::fmt::Write;
             write!(&mut encoded, "{byte:02x}").expect("invariant: writing to String succeeds");
         }
-        Ok(Self { encoded, payload })
+        Ok(Self {
+            encoded,
+            payload: Box::new(payload),
+        })
     }
     pub fn as_str(&self) -> &str {
         &self.encoded
@@ -421,26 +434,14 @@ pub struct HistoryContextSummary {
     pub note: String,
     pub content: Option<HistoryContentDisposition>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serialization(rename_all = "snake_case")]
-pub enum HistoryNodeKind {
-    Content,
-    Rename,
-    Tags,
-    Merge,
-}
+string_enum!(HistoryNodeKind { Content => "content", Rename => "rename", Tags => "tags", Merge => "merge" });
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoryParentSet {
     Complete,
     More { cursor: HistoryCursor },
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serialization(rename_all = "snake_case")]
-pub enum HistoryEndpoint {
-    InWindow,
-    OutsideWindow,
-}
+string_enum!(HistoryEndpoint { InWindow => "in_window", OutsideWindow => "outside_window" });
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct HistoryGraphEdge {
