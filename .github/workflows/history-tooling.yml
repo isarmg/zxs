@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format]
 
 permissions:
   contents: read
@@ -132,6 +132,10 @@ jobs:
               '4d36b6adf74be177b013a0211bef09151a466331', '61f21430dd0ce86681d565ee36fd2bacf2a9c594',
           ):
               raise SystemExit('Scrub planning diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'scrub-format' and (source, tree) != (
+              '69718524644e23d6e4e77bda64436acc8f62e508', '86088fcc6c6fa02c6f7465aa2ad71f4516a4f0ae',
+          ):
+              raise SystemExit('Scrub formatting requires the exact formatting successor and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -605,6 +609,7 @@ jobs:
                           'actual_http_controls_expose_baseline_progress_and_keep_check_unchanged']),
                   ]), command='Complete server scrub lifecycle and public scrub policy groups'),
           ]
+          groups['scrub-format'] = [groups['scrub-planning'][0]]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
