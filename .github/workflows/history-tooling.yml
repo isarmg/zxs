@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history]
 
 permissions:
   contents: read
@@ -104,6 +104,10 @@ jobs:
               '15b4b04b2e33cfd91abc398c391ad4442c28452f', '3ae7fc6e0a8a23fc9af5a232d235af4a64cf675c',
           ):
               raise SystemExit('Combined overlap requires the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'detached-history' and (source, tree) != (
+              'd2c93af9a63985f43e58dce600aa5aaa6cf4d154', '8b1348e9341d40394bb570a1508c6d2463ca7c37',
+          ):
+              raise SystemExit('Detached history diagnostics require the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -436,6 +440,33 @@ jobs:
                   command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
               dict(id='native-smb-overlap', cache='server', package='storage-server',
                   test_groups=json.dumps(overlap), command='Complete stream-read module and four exact combined outcome/retirement witnesses'),
+          ]
+          history_witnesses = [
+              'writers_progress_while_both_history_projections_keep_one_generation',
+              'retained_file_history_preserves_aliases_merges_pending_sources_paths_and_tags',
+              'both_history_reads_recheck_revocation_after_capture',
+              'scoped_file_history_rechecks_deleted_path_but_historical_file_remains_readable',
+              'both_history_reads_recheck_actual_split_scope',
+              'both_reads_reject_a_target_removed_by_engine_replacement',
+              'canceled_waiters_retain_history_views_auth_and_the_existing_backend_slot',
+          ]
+          groups['detached-history'] = [
+              dict(id='detached-history-format', format_base='eb6ee0ef3450c836a8ecafb67bec66aa536ef398',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='detached-history-engine', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([dict(selector='business::file_nodes::projection_tests::', count=5,
+                      required_suffixes=['metadata_view_shares_one_generation_and_releases_it_without_a_cache'])]),
+                  command='Complete engine file-node projection tests'),
+              dict(id='detached-history-server', cache='server', package='storage-server',
+                  test_groups=json.dumps([
+                      dict(selector='engine_backend::graph::tests::', count=7, required_suffixes=history_witnesses),
+                      dict(selector='engine_backend::file_manager::history_nodes::tests::', count=5),
+                      dict(selector='engine_backend::file_manager::time_tests::', count=2, required_suffixes=[
+                          'file_history_and_activity_emit_one_utc_form_without_changing_stored_facts']),
+                      dict(selector='engine_backend::file_manager::history_query_tests::', count=1),
+                      dict(selector='engine_backend::read_projection::tests::graph_tests::', count=2),
+                      dict(selector='engine_backend::read_projection::tests::history_tests::', count=1),
+                  ]), command='Complete bounded graph/history/query/time projection test groups'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
