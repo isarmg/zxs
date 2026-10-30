@@ -111,7 +111,7 @@ impl Engine {
         &self,
         online: &[DiskConfig],
         records: &super::super::recovery_checkpoint::Records,
-    ) -> Result<(Option<(u64, PreparedCandidate)>, Option<(u64, Error)>)> {
+    ) -> Result<PreparedReceipts> {
         let mut prepared = None;
         let mut barrier_failure = None;
         let mut previous = None;
@@ -213,7 +213,10 @@ impl Engine {
                 ))
             })
             .transpose()?;
-        Ok((prepared, barrier_failure))
+        Ok(PreparedReceipts {
+            candidates: prepared,
+            barrier_failure,
+        })
     }
 }
 

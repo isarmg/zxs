@@ -871,10 +871,11 @@ impl<'a> FileHistoryScope<'a> {
                     .flat_map(|rows| rows.merges.keys())
                 {
                     self.checkpoint()?;
-                    if let Some(merge) = self.merge(id) {
-                        if !merge.reused_node && merge.result_node_id == current {
-                            chosen = Some(merge.chosen_node_id.as_str());
-                        }
+                    if let Some(merge) = self.merge(id)
+                        && !merge.reused_node
+                        && merge.result_node_id == current
+                    {
+                        chosen = Some(merge.chosen_node_id.as_str());
                     }
                 }
                 chosen

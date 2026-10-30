@@ -16,6 +16,11 @@ pub(super) enum RecoveryMode {
 mod workspace_receipts;
 use workspace_receipts::PreparedCandidate;
 
+struct PreparedReceipts {
+    candidates: Option<(u64, PreparedCandidate)>,
+    barrier_failure: Option<(u64, Error)>,
+}
+
 /// A read-only journal admission. The same open descriptions become writers
 /// only after the caller has admitted retained workspace evidence.
 pub(super) struct PreparedRecovery {
@@ -241,7 +246,10 @@ impl Engine {
             checkpoint_snapshot_hash = checkpoint.as_ref().map(|value| value.snapshot_hash.as_str()),
             "recovery checkpoint selection"
         );
-        let (candidates, barrier_failure) = self.prepare_published_receipts(&online, &records)?;
+        let PreparedReceipts {
+            candidates,
+            barrier_failure,
+        } = self.prepare_published_receipts(&online, &records)?;
         Ok(PreparedRecovery {
             members,
             online,
