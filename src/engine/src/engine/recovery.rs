@@ -46,8 +46,12 @@ impl RecoveryNamespaceSeed {
         if !engine.blocked
             && engine.snapshot.as_deref() == Some(self.snapshot.as_str())
             && self.state.ptr_eq(&std::sync::Arc::downgrade(&engine.state))
-            && self.resources.ptr_eq(&std::sync::Arc::downgrade(&engine.disk_resources))
-            && self.caches.ptr_eq(&std::sync::Arc::downgrade(&engine.segment_caches))
+            && self
+                .resources
+                .ptr_eq(&std::sync::Arc::downgrade(&engine.disk_resources))
+            && self
+                .caches
+                .ptr_eq(&std::sync::Arc::downgrade(&engine.segment_caches))
         {
             engine.segment_caches.replace_namespace(self.nodes);
         }
@@ -475,8 +479,11 @@ impl Engine {
                             "checkpoint boundary differs from journal",
                         ));
                     }
-                    let resolved = snapshot
-                        .resolve(&self.disk_resources, &online, &candidate.snapshot_hash)?;
+                    let resolved = snapshot.resolve(
+                        &self.disk_resources,
+                        &online,
+                        &candidate.snapshot_hash,
+                    )?;
                     let cache = retain_namespace.then_some(resolved.namespace_cache);
                     let mut next = resolved.admitted.into_state();
                     if publication.recovery.is_some() {
@@ -725,7 +732,9 @@ impl RecoverySnapshot {
                     resources, members, kind, hash,
                 )
             }),
-            Self::Stored => crate::publication_evidence::verified_snapshot_with_namespace_cache_at(resources, members, hash),
+            Self::Stored => crate::publication_evidence::verified_snapshot_with_namespace_cache_at(
+                resources, members, hash,
+            ),
         }
     }
 }

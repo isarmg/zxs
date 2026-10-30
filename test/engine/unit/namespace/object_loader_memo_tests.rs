@@ -79,7 +79,11 @@ fn admission_node_memo_keeps_domains_separate_and_rejects_invalid_references() {
         .as_ref()
         .unwrap()
         .borrow_mut()
-        .insert(crate::segment_store::NamespaceCacheKey::Page([b'g'; 64]), cached, 1);
+        .insert(
+            crate::segment_store::NamespaceCacheKey::Page([b'g'; 64]),
+            cached,
+            1,
+        );
     assert!(source.node(&invalid).is_err());
     assert_eq!(reads.get(), 2);
     source.node(&root.root).unwrap();

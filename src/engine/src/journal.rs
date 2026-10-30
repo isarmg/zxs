@@ -1105,9 +1105,13 @@ impl SchemaValidatedSnapshot {
         // object loader that produced the snapshot's own pages.
         let source = crate::namespace::ObjectLoaderSource::memoized(&mut load);
         let admitted = crate::history_package::AdmittedState::admit(raw, &source)?;
-        let namespace_cache = source.into_namespace_cache()
+        let namespace_cache = source
+            .into_namespace_cache()
             .expect("invariant: snapshot admission uses a memoized namespace source");
-        Ok(ResolvedSnapshot { admitted, namespace_cache })
+        Ok(ResolvedSnapshot {
+            admitted,
+            namespace_cache,
+        })
     }
 }
 fn resolve_raw_snapshot(

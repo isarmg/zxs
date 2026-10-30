@@ -76,7 +76,10 @@ pub(crate) enum NamespaceCacheKey {
 impl NamespaceCacheKey {
     pub(crate) fn parse(reference: &storage_contract::NamespaceReference) -> Result<Self> {
         reference.validate()?;
-        let hash = reference.hash.as_bytes().try_into()
+        let hash = reference
+            .hash
+            .as_bytes()
+            .try_into()
             .expect("invariant: a validated namespace hash has 64 bytes");
         Ok(match reference.kind {
             storage_contract::NamespaceRefKind::Page => Self::Page(hash),

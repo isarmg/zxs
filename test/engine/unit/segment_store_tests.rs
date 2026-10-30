@@ -345,9 +345,20 @@ fn admission_namespace_cache_moves_nodes_budget_and_fifo_without_loading() {
     let temp = tempfile::tempdir().unwrap();
     let config = Config::development([temp.path().join("member")]);
     private_dir(&config.disks[0].root).unwrap();
-    let page = NamespacePage { format: Default::default(), entries: Vec::new() };
-    let hash = store_object(&config.disks[0], storage_contract::NAMESPACE_PAGE_KIND, &page).unwrap();
-    let reference = NamespaceReference { kind: NamespaceRefKind::Page, hash };
+    let page = NamespacePage {
+        format: Default::default(),
+        entries: Vec::new(),
+    };
+    let hash = store_object(
+        &config.disks[0],
+        storage_contract::NAMESPACE_PAGE_KIND,
+        &page,
+    )
+    .unwrap();
+    let reference = NamespaceReference {
+        kind: NamespaceRefKind::Page,
+        hash,
+    };
     let calls = std::cell::Cell::new(0);
     let source = ObjectLoaderSource::memoized(|kind, hash: &str| {
         calls.set(calls.get() + 1);
@@ -370,16 +381,29 @@ fn admission_namespace_cache_moves_nodes_budget_and_fifo_without_loading() {
         let moved = SegmentCaches::lock(&caches.namespace);
         assert_eq!(moved.bytes, charge);
         assert!(moved.order == order);
-        let NamespaceNode::Page(retained) = moved.get(&NamespaceCacheKey::parse(&reference).unwrap()).unwrap() else {
+        let NamespaceNode::Page(retained) = moved
+            .get(&NamespaceCacheKey::parse(&reference).unwrap())
+            .unwrap()
+        else {
             panic!("expected retained page");
         };
         assert!(Arc::ptr_eq(&node, &retained));
     }
     assert_eq!(calls.get(), 1);
-    std::fs::remove_file(object_path(&config.disks[0], storage_contract::NAMESPACE_PAGE_KIND, &reference.hash)).unwrap();
+    std::fs::remove_file(object_path(
+        &config.disks[0],
+        storage_contract::NAMESPACE_PAGE_KIND,
+        &reference.hash,
+    ))
+    .unwrap();
     let admitted = ValidatedConfig::try_from(config.clone()).unwrap();
     let resources = DiskResources::open(&admitted, false).unwrap();
-    let reader = SegmentReader { resources: &resources, members: &config.disks, caches: &caches, observe: None };
+    let reader = SegmentReader {
+        resources: &resources,
+        members: &config.disks,
+        caches: &caches,
+        observe: None,
+    };
     let NamespaceNode::Page(hit) = reader.namespace_node(&reference).unwrap() else {
         panic!("expected cached proof");
     };
@@ -388,6 +412,12 @@ fn admission_namespace_cache_moves_nodes_budget_and_fifo_without_loading() {
     drop(node);
     drop(hit);
     caches.replace_namespace(NamespaceCache::new(usize::MAX, MAX_CACHED_NAMESPACE_BYTES));
-    assert!(weak.upgrade().is_none(), "replacement must release the previous cache");
-    assert!(reader.namespace_node(&reference).is_err(), "cold miss must still read and verify storage");
+    assert!(
+        weak.upgrade().is_none(),
+        "replacement must release the previous cache"
+    );
+    assert!(
+        reader.namespace_node(&reference).is_err(),
+        "cold miss must still read and verify storage"
+    );
 }
