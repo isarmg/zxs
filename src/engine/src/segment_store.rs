@@ -333,15 +333,16 @@ impl SegmentReader<'_> {
             },
             &reference.hash,
         )?;
+        let canonical_len = object.canonical_len();
         let node = crate::namespace::NamespaceNode::decode(
             reference,
-            object.value(),
-            object.canonical_len(),
+            object.into_value(),
+            canonical_len,
         )?;
         SegmentCaches::lock(&self.caches.namespace).insert(
             address,
             node.clone(),
-            object.canonical_len(),
+            canonical_len,
         );
         Ok(node)
     }
@@ -436,3 +437,4 @@ impl<'state> ReceiptLookup<'_, 'state> {
 #[cfg(test)]
 #[path = "../../../test/engine/unit/segment_store_tests.rs"]
 mod tests;
+

@@ -42,18 +42,18 @@ pub(crate) enum NamespaceNode {
 impl NamespaceNode {
     pub(crate) fn decode(
         reference: &NamespaceReference,
-        value: &json_codec::Value,
+        value: json_codec::Value,
         canonical_bytes: usize,
     ) -> Result<Self> {
         reference.validate()?;
         Ok(match reference.kind {
             NamespaceRefKind::Page => {
-                let page: NamespacePage = json_codec::from_value(value.clone())?;
+                let page: NamespacePage = json_codec::from_value(value)?;
                 validate_page_shape(&page, canonical_bytes)?;
                 Self::Page(Arc::new(page))
             }
             NamespaceRefKind::Index => {
-                let index: NamespaceIndex = json_codec::from_value(value.clone())?;
+                let index: NamespaceIndex = json_codec::from_value(value)?;
                 validate_index_shape(&index)?;
                 Self::Index(Arc::new(index))
             }
@@ -181,7 +181,8 @@ impl NamespaceObjects {
         object: crate::journal::AuthenticatedMetadataObject,
     ) -> Result<()> {
         reference.validate()?;
-        let node = NamespaceNode::decode(reference, object.value(), object.canonical_len())?;
+        let node =
+            NamespaceNode::decode(reference, object.value().clone(), object.canonical_len())?;
         let kind = reference.kind.as_str();
         if object.kind() != kind || object.hash() != reference.hash {
             return Err(corrupt(
@@ -267,11 +268,12 @@ where
             return Ok(node);
         }
         let object = (self.load.borrow_mut())(reference.kind.as_str(), &reference.hash)?;
-        let node = NamespaceNode::decode(reference, object.value(), object.canonical_len())?;
+        let canonical_len = object.canonical_len();
+        let node = NamespaceNode::decode(reference, object.into_value(), canonical_len)?;
         if let Some((nodes, address)) = self.nodes.as_ref().zip(address) {
             nodes
                 .borrow_mut()
-                .insert(address, node.clone(), object.canonical_len());
+                .insert(address, node.clone(), canonical_len);
         }
         Ok(node)
     }
@@ -316,7 +318,7 @@ impl<'a, S: NamespaceSource + ?Sized> PreparedSource<'a, S> {
                 object.hash.as_str(),
                 NamespaceNode::decode(
                     &reference,
-                    &json_codec::from_slice(&object.bytes)?,
+                    json_codec::from_slice(&object.bytes)?,
                     object.bytes.len(),
                 )?,
             );
@@ -2317,7 +2319,8 @@ pub(crate) fn visit_namespace_objects(
     }
     root.validate()?;
     let object = load(root.kind.as_str(), &root.hash)?;
-    match NamespaceNode::decode(root, object.value(), object.canonical_len())? {
+    let canonical_len = object.canonical_len();
+    match NamespaceNode::decode(root, object.into_value(), canonical_len)? {
         NamespaceNode::Page(page) => {
             for entry in &page.entries {
                 if let NamespacePageEntry::Directory { subtree, .. } = entry {
@@ -2417,4 +2420,5 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/namespace/mutation_order_tests.rs"]
 mod mutation_order_tests;
+
 

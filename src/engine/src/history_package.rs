@@ -658,8 +658,11 @@ fn load_package_namespace(
             "packaged namespace object differs from its address",
         )
     })?;
-    let node =
-        crate::namespace::NamespaceNode::decode(root, object.value(), object.canonical_len())?;
+    let node = crate::namespace::NamespaceNode::decode(
+        root,
+        object.value().clone(),
+        object.canonical_len(),
+    )?;
     out.install(root, object)?;
     match node {
         crate::namespace::NamespaceNode::Page(page) => {
@@ -1194,3 +1197,4 @@ mod history_changes_oracle_tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/history_package/prepared_dedup_tests.rs"]
 mod prepared_dedup_tests;
+

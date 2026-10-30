@@ -15,6 +15,8 @@ mod depth_bound_tests;
 mod object_loader_memo_tests;
 #[path = "ordered_walk_tests.rs"]
 mod ordered_walk_tests;
+#[path = "owned_decode_tests.rs"]
+mod owned_decode_tests;
 #[path = "page_local_tests.rs"]
 mod page_local_tests;
 
@@ -736,7 +738,7 @@ fn page_decode_enforces_canonical_bytes_with_the_single_entry_exception() {
     let object = &objects.objects()[0];
     assert!(object.bytes.len() > NAMESPACE_PAGE_TARGET_BYTES);
     let value = json_codec::from_slice(&object.bytes).unwrap();
-    let error = match NamespaceNode::decode(&reference, &value, object.bytes.len()) {
+    let error = match NamespaceNode::decode(&reference, value, object.bytes.len()) {
         Ok(_) => panic!("oversized multi-entry page admitted"),
         Err(error) => error,
     };
@@ -761,7 +763,7 @@ fn page_decode_enforces_canonical_bytes_with_the_single_entry_exception() {
     assert!(
         NamespaceNode::decode(
             &reference,
-            &json_codec::from_slice(&object.bytes).unwrap(),
+            json_codec::from_slice(&object.bytes).unwrap(),
             object.bytes.len(),
         )
         .is_ok()
@@ -812,7 +814,7 @@ fn packing_counts_the_page_envelope_in_the_byte_bound() {
         assert!(
             NamespaceNode::decode(
                 &reference,
-                &json_codec::from_slice(&object.bytes).unwrap(),
+                json_codec::from_slice(&object.bytes).unwrap(),
                 object.bytes.len(),
             )
             .is_ok()
@@ -1046,3 +1048,4 @@ fn point_path_budget_failure_is_reported_only_for_a_resolved_path() {
             .is_none()
     );
 }
+
