@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web]
 
 permissions:
   contents: read
@@ -160,6 +160,10 @@ jobs:
               '7a38df46cbec602bc097bd1cac793001a307f27c', '70c3fef9d995afd8017608bd95a966f3ae9e137d',
           ):
               raise SystemExit('History window repair requires the exact strict-parser and consumer successor')
+          if os.environ['SCOPE'] == 'history-window-web' and (source, tree) != (
+              '09c8c9eb9c1728201fecbf5f7c9b5c635519fef9', 'ef8e1e2d616970f5d0d04b88e0478fa4cc12aa7f',
+          ):
+              raise SystemExit('History window Web checkpoint requires the exact cross-layer source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -725,6 +729,21 @@ jobs:
               dict(groups['history-window'][3], id='history-window-repair-server'),
               dict(id='history-window-repair-smb', cache='smb-protocol', package='smb-protocol', exact_test=history_errno,
                   command=f'cargo test --locked --offline -p smb-protocol --lib {history_errno} -- --exact --nocapture'),
+          ]
+          groups['history-window-web'] = [
+              dict(groups['payload-quality'][0], id='history-window-web-quality'),
+              dict(id='history-window-web-native', cache='web-app', package='web-app',
+                  test_groups=json.dumps([
+                      dict(selector='files::', required_suffixes=[
+                          'stale_auxiliary_failure_cannot_invalidate_or_release_a_newer_read',
+                          'current_session_401_is_checked_before_any_obsolete_resource_fence',
+                          'page_identity_cannot_change_file_root_collection_limit_query_or_action_capability',
+                          'utf8_fragments_are_replaced_with_exact_ranges_and_explicit_right_boundary']),
+                      dict(selector='ui::tests::', required_suffixes=[
+                          'a_session_transition_releases_every_history_read_generation']),
+                  ]), command='Actual file-history consumer and UI session test inventories and native execution'),
+              dict(id='history-window-web-production', web_production=True,
+                  command='bash .github/scripts/check.sh web-production'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
