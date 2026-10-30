@@ -689,18 +689,17 @@ fn validate_scope(
             "file is outside this history",
         ));
     }
-    if let Some(location) = &request.location {
-        if location.repository_id != context.repository_id
+    if let Some(location) = &request.location
+        && (location.repository_id != context.repository_id
             || context
                 .path
                 .as_ref()
-                .is_none_or(|path| path.key() != location.path.key())
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::FileNotFound,
-                "file is outside the requested logical path",
-            ));
-        }
+                .is_none_or(|path| path.key() != location.path.key()))
+    {
+        return Err(Error::new(
+            storage_contract::ErrorCode::FileNotFound,
+            "file is outside the requested logical path",
+        ));
     }
     Ok(())
 }
