@@ -763,9 +763,11 @@ impl IntegrityScrubPlan {
         observe: &mut impl FnMut(usize) -> Result<()>,
     ) -> Result<&DiskHandle> {
         let handle = self.disk_resources.get(disk)?;
-        let stored: DiskSeal = handle
-            .root
-            .read_json_observed(&disk.root.join("disk.json"), observe)?;
+        let stored = decode_seal(&handle.root.read_bytes_observed(
+            &disk.root.join("disk.json"),
+            MAX_METADATA,
+            observe,
+        )?)?;
         validate_stored_seal(&stored, &handle.seal)?;
         Ok(handle)
     }

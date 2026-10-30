@@ -451,7 +451,7 @@ impl Engine {
         let mut configs = BTreeMap::<String, (ValidatedConfig, usize)>::new();
         let mut seals = BTreeMap::new();
         for path in disks {
-            let seal: DiskSeal = read_json(&path.join("disk.json"))?;
+            let seal = decode_seal(&read_bytes(&path.join("disk.json"), MAX_METADATA)?)?;
             let config = ValidatedConfig::try_from(read_json::<Config>(
                 &path.join("metadata/pool-membership/config.json"),
             )?)?;
