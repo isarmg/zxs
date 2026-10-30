@@ -225,12 +225,22 @@ fn assert_error(error: &Error, target: Target, damage: Damage) {
             assert_eq!(cause.message(), reason);
         }
         Damage::Truncated => {
-            assert_eq!(cause.code(), ErrorCode::InvalidJson);
+            let Error::Context {
+                code: ErrorCode::ObjectCorrupt,
+                message,
+                retryable: false,
+                source,
+            } = cause
+            else {
+                panic!("stored JSON rejection lost its object context: {cause:?}");
+            };
+            assert_eq!(message, "immutable object JSON is invalid");
+            assert_eq!(source.code(), ErrorCode::InvalidJson);
             assert!(matches!(
-                cause,
+                source.as_ref(),
                 Error::Contract(storage_contract::Error::Json { .. })
             ));
-            assert!(std::error::Error::source(cause).is_some());
+            assert!(std::error::Error::source(source.as_ref()).is_some());
         }
     }
 }

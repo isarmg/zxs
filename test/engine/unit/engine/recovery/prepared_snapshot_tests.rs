@@ -378,7 +378,7 @@ fn namespace_seed_rejects_changed_state_resources_cache_and_snapshot_owners() {
 #[test]
 fn completing_a_pending_candidate_does_not_retain_the_preceding_admission_cache() {
     use crate::namespace::NamespaceNode;
-    use crate::segment_store::{NamespaceCache, NamespaceCacheKey, MAX_CACHED_NAMESPACE_BYTES};
+    use crate::segment_store::{MAX_CACHED_NAMESPACE_BYTES, NamespaceCache, NamespaceCacheKey};
     use std::sync::Arc;
     use storage_contract::{NamespacePage, NamespaceRefKind, NamespaceReference};
 
@@ -419,7 +419,9 @@ fn completing_a_pending_candidate_does_not_retain_the_preceding_admission_cache(
             1,
         );
         engine.segment_caches.replace_namespace(cache);
-        engine.recover_for_open(RecoveryMode::CompletePending).unwrap();
+        engine
+            .recover_for_open(RecoveryMode::CompletePending)
+            .unwrap();
         assert!(!engine.blocked);
         assert_eq!(engine.state.repositories.len(), 2);
         // Pending completion legitimately fills the ordinary cache while
