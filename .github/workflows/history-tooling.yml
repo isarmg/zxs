@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair]
 
 permissions:
   contents: read
@@ -62,6 +62,8 @@ jobs:
           if tree and not re.fullmatch(r'[0-9a-f]{40}', tree):
               raise SystemExit('source_tree must be an exact 40-character lowercase tree SHA')
           retirement_pin = (
+              ('b8e6bf9e0d60bd76466d5683ab46d70878ac27b0', 'db8a3f6aedc81c108d46ce49cd1d92e7ee4a6c3a')
+              if os.environ['SCOPE'] == 'retirement-repair' else
               ('778612309d3b661c044a06318761e49b75d0b47b', 'c70635a9c16f22184b7b8952dd5804c77e858afd')
               if os.environ['SCOPE'] == 'retirement-negative' else
               ('7107bedfa14cd0cde9a713571a83b889828920d6', '2d7dddf25f914f440de27163a6c25972a68019e0')
@@ -257,6 +259,25 @@ jobs:
               dict(id='retirement-negative', cache='storage-engine', package='storage-engine',
                   exact_tests=json.dumps(negative_names), command='Two exact reviewed retirement negative witnesses'),
           ]
+          groups['retirement-repair'] = [
+              dict(id='retirement-repair-format', format_base='8f28d74ae1e3ead1f31e7a96a8abfd9e3ffa6d3f',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='retirement-repair-lifecycle', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([
+                      dict(selector=retirement, count=10, required=negative_names),
+                      dict(selector='engine::recovery::tests::', count=24),
+                      dict(selector='engine::recovery::diagnostics_tests::', count=3),
+                  ]), command='Three reviewed lifecycle and recovery module commands'),
+              dict(id='retirement-repair-checkpoint', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([
+                      dict(selector='engine::recovery_checkpoint::tests::', count=27),
+                      dict(selector='degraded_recovery::tests::', count=17),
+                  ]), command='Two reviewed checkpoint and degraded recovery module commands'),
+              dict(id='retirement-repair-replay', cache='storage-engine', package='storage-engine',
+                  test_target='workspace_commit_replay', expected_count=28, expected_ignored=2,
+                  required_names='[]',
+                  command='cargo test --locked --offline -p storage-engine --test workspace_commit_replay -- --nocapture'),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -282,6 +303,7 @@ jobs:
       TEST_COMMAND: ${{ matrix.command }}
       EXACT_TEST: ${{ matrix.exact_test }}
       EXACT_TESTS: ${{ matrix.exact_tests }}
+      TEST_GROUPS: ${{ matrix.test_groups }}
       TEST_PACKAGE: ${{ matrix.package }}
       TEST_FILTER: ${{ matrix.test_filter }}
       TEST_TARGET: ${{ matrix.test_target }}
@@ -422,8 +444,8 @@ jobs:
               raise SystemExit('Server unit selector matched zero tests')
           print(f'Inventoried {len(tests)} server unit test bodies')
           PY
-      - name: Execute both exact negative witnesses in one engine job
-        if: matrix.exact_tests != ''
+      - name: Execute grouped reviewed selectors in one engine job
+        if: matrix.exact_tests != '' || matrix.test_groups != ''
         run: |
           python3 - <<'PY'
           import json
@@ -432,10 +454,18 @@ jobs:
           import subprocess
           from pathlib import Path
           overall = 0
-          for index, name in enumerate(json.loads(os.environ['EXACT_TESTS']), 1):
-              base = ['cargo', 'test', '--locked', '--offline', '-p', os.environ['TEST_PACKAGE'], '--lib', name, '--', '--exact']
+          groups = json.loads(os.environ['TEST_GROUPS']) if os.environ['TEST_GROUPS'] else [
+              dict(selector=name, count=1, required=[name], exact=True)
+              for name in json.loads(os.environ['EXACT_TESTS'])
+          ]
+          for index, group in enumerate(groups, 1):
+              name = group['selector']
+              base = ['cargo', 'test', '--locked', '--offline', '-p', os.environ['TEST_PACKAGE'], '--lib', name, '--']
+              if group.get('exact'):
+                  base.append('--exact')
               def run(label, flags):
                   command = base + flags
+                  Path(f'.diagnostics/exact-{index}-{label}-command.json').write_text(json.dumps(command, indent=2))
                   result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                   Path(f'.diagnostics/exact-{index}-{label}.log').write_text(result.stdout)
                   print(json.dumps(command), flush=True)
@@ -444,19 +474,23 @@ jobs:
               listed = run('list', ['--list'])
               ignored = run('ignored', ['--ignored', '--list'])
               if listed.returncode or ignored.returncode:
-                  raise SystemExit('Exact inventory command failed')
-              if [line for line in listed.stdout.splitlines() if line.endswith(': test')] != [name + ': test']:
-                  raise SystemExit(f'Exact inventory mismatch: {name}')
+                  raise SystemExit('Reviewed inventory command failed')
+              names = [line[:-6] for line in listed.stdout.splitlines() if line.endswith(': test')]
+              if len(names) != group['count'] or any(names.count(required) != 1 for required in group.get('required', [])):
+                  raise SystemExit(f'Reviewed inventory mismatch: {name}: {names!r}')
               if any(line.endswith(': test') for line in ignored.stdout.splitlines()):
-                  raise SystemExit(f'Required exact witness is ignored: {name}')
+                  raise SystemExit(f'Required reviewed group has ignored tests: {name}')
               result = run('test', ['--nocapture'])
               summaries = re.findall(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', result.stdout)
-              if result.returncode or summaries != [('1', '0', '0')]:
+              if result.returncode or summaries != [(str(group['count']), '0', '0')]:
                   overall = 1
+              for required in group.get('required', []):
+                  if not re.search(r'^test ' + re.escape(required) + r' \.\.\. ok$', result.stdout, re.MULTILINE):
+                      overall = 1
           raise SystemExit(overall)
           PY
       - name: Execute selected locked offline tests and retain failures
-        if: matrix.repetitions != 10 && matrix.format_base == '' && matrix.exact_tests == ''
+        if: matrix.repetitions != 10 && matrix.format_base == '' && matrix.exact_tests == '' && matrix.test_groups == ''
         run: |
           printf 'Source: %s\nCommand: %s\n' "$SOURCE_SHA" "$TEST_COMMAND" | tee .diagnostics/command.txt
           set +e
