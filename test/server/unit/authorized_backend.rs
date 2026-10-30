@@ -13,6 +13,8 @@ struct Recorded {
 
 struct RecordingBackend {
     calls: Mutex<Vec<Recorded>>,
+    history_cancellation:
+        Mutex<Option<storage_contract::history_window::HistoryWindowCancellation>>,
     fail: AtomicBool,
     file: std::fs::File,
 }
@@ -69,6 +71,179 @@ impl RecordingBackend {
 fn upload_arguments(workspace: &str, item: &str, path: &str, source: &UploadSource) -> Value {
     json!({"workspace": workspace, "item": item, "path": path,
         "fd": source.file.as_raw_fd(), "size": source.size, "hash": source.hash})
+}
+
+fn recorded_history_request() -> storage_contract::history_window::HistoryWindowRequest {
+    use storage_contract::history_window::*;
+    HistoryWindowRequest {
+        file_id: HistoryFileId::parse("file_00000000000000000000000000000000").unwrap(),
+        collection: HistoryCollection::Nodes,
+        location: Some(HistoryLocation::new(
+            HistoryRepositoryId::parse("repo_00000000000000000000000000000000").unwrap(),
+            name_policy::LookupPath::parse("Café/report.txt").unwrap(),
+        )),
+        history_root: Some(HistoryRoot::parse(&"1".repeat(64)).unwrap()),
+        cursor: None,
+        anchor_node_id: Some(
+            HistoryNodeId::parse("fmeta_00000000000000000000000000000000").unwrap(),
+        ),
+        limit: HistoryPageLimit::for_collection(7, &HistoryCollection::Nodes).unwrap(),
+    }
+}
+
+fn recorded_history_page(
+    request: &storage_contract::history_window::HistoryWindowRequest,
+) -> storage_contract::history_window::HistoryWindowPage {
+    use storage_contract::history_window::*;
+    let identity = HistoryPageIdentity {
+        history_root: request.history_root.unwrap(),
+        file_id: request.file_id.clone(),
+        collection: request.collection.clone(),
+        context: HistoryResolvedContext {
+            repository_id: HistoryRepositoryId::parse("repo_00000000000000000000000000000000")
+                .unwrap(),
+            history_tree_id: HistoryTreeId::parse("history_00000000000000000000000000000000")
+                .unwrap(),
+            path: Some(name_policy::PortablePath::parse("Café/report.txt").unwrap()),
+            current_node_id: None,
+            selected_branch_id: None,
+        },
+        query_hash: HistoryQueryHash::parse(&"2".repeat(64)).unwrap(),
+        limit: request.limit,
+        action_max_entries: 17,
+    };
+    let page = HistoryPageCursors {
+        previous_cursor: None,
+        next_cursor: None,
+    };
+    match &request.collection {
+        HistoryCollection::Nodes => HistoryWindowPage::Nodes {
+            identity,
+            context: HistoryContextSummary {
+                note: "history-window fixture".into(),
+                content: None,
+            },
+            nodes: vec![],
+            edges: vec![],
+            page,
+        },
+        HistoryCollection::Versions => HistoryWindowPage::Versions {
+            identity,
+            versions: vec![],
+            page,
+        },
+        HistoryCollection::Branches => HistoryWindowPage::Branches {
+            identity,
+            branches: vec![],
+            page,
+        },
+        HistoryCollection::Merges => HistoryWindowPage::Merges {
+            identity,
+            merges: vec![],
+            page,
+        },
+        HistoryCollection::NodeParents { .. } => HistoryWindowPage::NodeParents {
+            identity,
+            parents: vec![],
+            page,
+        },
+        HistoryCollection::VersionSources { .. } => HistoryWindowPage::VersionSources {
+            identity,
+            sources: vec![],
+            page,
+        },
+        HistoryCollection::MergeInputs { .. } => HistoryWindowPage::MergeInputs {
+            identity,
+            inputs: vec![],
+            page,
+        },
+        HistoryCollection::MergeParents { .. } => HistoryWindowPage::MergeParents {
+            identity,
+            parents: vec![],
+            page,
+        },
+        HistoryCollection::NodeField { field, .. } => HistoryWindowPage::NodeField {
+            identity,
+            field: *field,
+            total_bytes: 5,
+            byte_offset: 0,
+            text: "probe".into(),
+            end_of_field: true,
+            next_cursor: None,
+        },
+    }
+}
+
+fn history_window_cases() -> Vec<(
+    storage_contract::history_window::HistoryCollection,
+    storage_contract::history_window::HistoryPosition,
+)> {
+    use storage_contract::history_window::*;
+    let node = HistoryNodeId::parse("fmeta_00000000000000000000000000000000").unwrap();
+    let version = HistoryVersionId::parse("ver_00000000000000000000000000000000").unwrap();
+    let merge = HistoryMergeId::parse("fmerge_00000000000000000000000000000000").unwrap();
+    vec![
+        (
+            HistoryCollection::Nodes,
+            HistoryPosition::Node {
+                sequence: u64::MAX,
+                node_id: node.clone(),
+            },
+        ),
+        (
+            HistoryCollection::Versions,
+            HistoryPosition::Version {
+                sequence: u64::MAX,
+                version_id: version.clone(),
+            },
+        ),
+        (
+            HistoryCollection::Branches,
+            HistoryPosition::Branch {
+                branch_id: HistoryBranchId::parse("br_00000000000000000000000000000000").unwrap(),
+            },
+        ),
+        (
+            HistoryCollection::Merges,
+            HistoryPosition::Merge {
+                sequence: u64::MAX,
+                merge_id: merge.clone(),
+            },
+        ),
+        (
+            HistoryCollection::NodeParents {
+                node_id: node.clone(),
+            },
+            HistoryPosition::Parent {
+                parent_node_id: node.clone(),
+            },
+        ),
+        (
+            HistoryCollection::VersionSources {
+                version_id: version,
+            },
+            HistoryPosition::Member { ordinal: u64::MAX },
+        ),
+        (
+            HistoryCollection::MergeInputs {
+                merge_id: merge.clone(),
+            },
+            HistoryPosition::Member { ordinal: u64::MAX },
+        ),
+        (
+            HistoryCollection::MergeParents { merge_id: merge },
+            HistoryPosition::Member { ordinal: u64::MAX },
+        ),
+        (
+            HistoryCollection::NodeField {
+                node_id: node,
+                field: HistoryField::Message,
+            },
+            HistoryPosition::Field {
+                byte_offset: u64::MAX,
+            },
+        ),
+    ]
 }
 
 fn recorded_plan(id: &str) -> storage_contract::Plan {
@@ -920,6 +1095,31 @@ impl Backend for RecordingBackend {
             directory_branches: vec![],
         })
     }
+    fn history_window(
+        &self,
+        identity: &crate::auth::Identity,
+        request: storage_contract::history_window::HistoryWindowRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, crate::ApiError> {
+        *self.history_cancellation.lock().unwrap() = Some(cancellation);
+        self.record(
+            "history_window",
+            Some(identity),
+            json!({
+                "file_id":request.file_id,
+                "collection":request.collection,
+                "location":request.location.as_ref().map(|location| json!({
+                    "repository_id":location.repository_id,
+                    "path":location.path.as_str(),"key":location.path.key()
+                })),
+                "history_root":request.history_root,
+                "cursor":request.cursor.as_ref().map(|cursor| cursor.as_str()),
+                "anchor_node_id":request.anchor_node_id,
+                "limit":request.limit.get()
+            }),
+        )?;
+        Ok(recorded_history_page(&request))
+    }
     fn file_history_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -1289,6 +1489,7 @@ impl Fixture {
         let source = UploadSource::from_file(std::fs::File::open(path).unwrap(), 1024).unwrap();
         let probe = Arc::new(RecordingBackend {
             calls: Mutex::new(vec![]),
+            history_cancellation: Mutex::new(None),
             fail: AtomicBool::new(false),
             file: source.file.try_clone().unwrap(),
         });
@@ -1736,6 +1937,13 @@ impl Fixture {
                 }),
             ),
             (
+                "history_window",
+                backend.history_window(identity, recorded_history_request(), storage_contract::history_window::HistoryWindowCancellation::new()).map(|page| {
+                    assert_eq!(page, recorded_history_page(&recorded_history_request()));
+                    json!({"returned_by":"history_window"})
+                }),
+            ),
+            (
                 "topology_snapshot",
                 backend.topology_snapshot(identity).map(|snapshot| {
                     assert_eq!(snapshot.generation, 17);
@@ -2139,6 +2347,11 @@ fn protected_overrides_preserve_identity_arguments_results_and_errors() {
         json!({"repository_id":"repository"}),
         json!({"file_id":"file","location":{"repository_id":"repository","path":"Café/report.txt","key":"café/report.txt"}}),
         json!({"file_id":"file"}),
+        json!({"file_id":"file_00000000000000000000000000000000",
+            "collection":{"kind":"nodes"},
+            "location":{"repository_id":"repo_00000000000000000000000000000000","path":"Café/report.txt","key":"café/report.txt"},
+            "history_root":"1".repeat(64),"cursor":null,
+            "anchor_node_id":"fmeta_00000000000000000000000000000000","limit":7}),
         Value::Null,
         json!({"version_id":"version"}),
         json!({}),
@@ -2197,6 +2410,101 @@ fn revoked_sessions_never_reach_protected_backend_methods() {
         );
     }
     assert!(fixture.probe.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn history_window_collections_forward_cursor_scope_results_errors_and_revocation() {
+    use storage_contract::history_window::*;
+    let fixture = Fixture::new();
+    let requests = history_window_cases()
+        .into_iter()
+        .map(|(collection, position)| {
+            let mut request = recorded_history_request();
+            request.collection = collection;
+            request.anchor_node_id = None;
+            request.cursor = Some(
+                HistoryCursor::from_payload(HistoryCursorPayload {
+                    format: HistoryCursorFormat::HistoryWindowV1,
+                    history_root: request.history_root.unwrap(),
+                    history_tree_id: HistoryTreeId::parse(
+                        "history_00000000000000000000000000000000",
+                    )
+                    .unwrap(),
+                    file_id: request.file_id.clone(),
+                    collection: request.collection.clone(),
+                    query_hash: HistoryQueryHash::parse(&"2".repeat(64)).unwrap(),
+                    limit: request.limit,
+                    direction: HistoryDirection::Backward,
+                    position,
+                    anchor_node_id: None,
+                })
+                .unwrap(),
+            );
+            request
+        })
+        .collect::<Vec<_>>();
+    for request in &requests {
+        let cancellation = HistoryWindowCancellation::new();
+        let actual = fixture
+            .backend
+            .history_window(&fixture.identity, request.clone(), cancellation.clone())
+            .unwrap();
+        assert_eq!(actual, recorded_history_page(request));
+        let forwarded = fixture
+            .probe
+            .history_cancellation
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap();
+        assert!(!forwarded.is_cancelled());
+        cancellation.cancel();
+        assert!(
+            forwarded.is_cancelled(),
+            "authorization must preserve the same cancellation flag"
+        );
+        let call = fixture.probe.calls.lock().unwrap().pop().unwrap();
+        assert_eq!(call.method, "history_window");
+        assert_identity(call.identity.as_ref(), &fixture.identity);
+        assert_eq!(call.arguments["file_id"], request.file_id.as_str());
+        assert_eq!(
+            call.arguments["collection"],
+            json_codec::to_value(&request.collection).unwrap()
+        );
+        assert_eq!(
+            call.arguments["cursor"],
+            request.cursor.as_ref().unwrap().as_str()
+        );
+        assert_eq!(call.arguments["history_root"], "1".repeat(64));
+        assert_eq!(call.arguments["limit"], 7);
+        assert_eq!(call.arguments["location"]["key"], "café/report.txt");
+    }
+    fixture.probe.fail.store(true, Ordering::SeqCst);
+    for request in &requests {
+        assert_error(
+            fixture
+                .backend
+                .history_window(
+                    &fixture.identity,
+                    request.clone(),
+                    HistoryWindowCancellation::new(),
+                )
+                .unwrap_err(),
+            "history_window",
+        );
+    }
+    fixture.probe.calls.lock().unwrap().clear();
+    *fixture.probe.history_cancellation.lock().unwrap() = None;
+    fixture.auth.lock().unwrap().logout(&fixture.token).unwrap();
+    for request in requests {
+        let error = fixture
+            .backend
+            .history_window(&fixture.identity, request, HistoryWindowCancellation::new())
+            .unwrap_err();
+        assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
+    }
+    assert!(fixture.probe.calls.lock().unwrap().is_empty());
+    assert!(fixture.probe.history_cancellation.lock().unwrap().is_none());
 }
 
 #[test]

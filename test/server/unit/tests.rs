@@ -37,6 +37,10 @@ pub(crate) fn private_tempdir() -> tempfile::TempDir {
 struct TestBackend {
     path: PathBuf,
 }
+
+pub(crate) fn history_window_test_backend(path: PathBuf) -> Arc<dyn Backend> {
+    Arc::new(TestBackend { path })
+}
 impl Backend for TestBackend {
     fn operation_outcome(
         &self,
@@ -491,6 +495,14 @@ impl Backend for TestBackend {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
+    fn history_window(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::history_window::HistoryWindowRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, crate::ApiError> {
+        Err(crate::ApiError::unsupported())
+    }
     fn file_history_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -681,7 +693,7 @@ impl Backend for TestBackend {
         })
     }
 }
-fn application(root: &Path) -> Router {
+pub(crate) fn application(root: &Path) -> Router {
     application_config(root, ServerConfig::loopback(root))
 }
 fn application_config(root: &Path, config: ServerConfig) -> Router {
@@ -1676,6 +1688,15 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
             self.delegate
                 .default_directory_branch(identity, repository_id)
+        }
+        fn history_window(
+            &self,
+            identity: &crate::auth::Identity,
+            request: storage_contract::history_window::HistoryWindowRequest,
+            cancellation: storage_contract::history_window::HistoryWindowCancellation,
+        ) -> Result<storage_contract::history_window::HistoryWindowPage, crate::ApiError> {
+            self.delegate
+                .history_window(identity, request, cancellation)
         }
         fn file_history_snapshot(
             &self,

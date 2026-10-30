@@ -1933,175 +1933,6 @@
       "additionalProperties": false,
       "description": "重命名形成的不可变文件路径节点。version_id复用真实正文，parent_node_ids连接内容或路径节点；创建路径节点不增加FileVersion或复制正文。"
     },
-    "FileHistoryNode": {
-      "type": "object",
-      "properties": {
-        "node_id": {
-          "$ref": "#/$defs/FileNodeId"
-        },
-        "version_id": {
-          "$ref": "#/$defs/VersionId"
-        },
-        "file_id": {
-          "$ref": "#/$defs/FileId"
-        },
-        "kind": {
-          "enum": [
-            "content",
-            "rename",
-            "tags",
-            "merge"
-          ]
-        },
-        "parent_node_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "$ref": "#/$defs/FileNodeId"
-          }
-        },
-        "path": {
-          "type": "string"
-        },
-        "previous_path": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "note": {
-          "type": "string"
-        },
-        "created_at": {
-          "$ref": "#/$defs/UtcTimestamp"
-        },
-        "sequence": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "current": {
-          "type": "boolean"
-        },
-        "size": {
-          "$ref": "#/$defs/UInt64"
-        },
-        "content_hash": {
-          "$ref": "#/$defs/Hash"
-        },
-        "download_name": {
-          "type": "string"
-        },
-        "storage_name": {
-          "type": "string"
-        },
-        "branch_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BranchId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "source_version_ids": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "$ref": "#/$defs/VersionId"
-          }
-        },
-        "tags": {
-          "$ref": "#/$defs/FileNodeTags"
-        }
-      },
-      "required": [
-        "node_id",
-        "version_id",
-        "file_id",
-        "kind",
-        "parent_node_ids",
-        "path",
-        "previous_path",
-        "note",
-        "created_at",
-        "sequence",
-        "current"
-      ],
-      "additionalProperties": true,
-      "description": "统一不可变文件节点图：content实际正文，rename路径节点，tags/merge元数据节点。后三者复用version_id正文；parent_node_ids含安全的混合图边。tags为每个节点有效继承标签，旧source_version_ids仅表示正文谱系。",
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "content"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "node_id": {
-                "$ref": "#/$defs/VersionId"
-              },
-              "previous_path": {
-                "type": "null"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "rename"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "node_id": {
-                "$ref": "#/$defs/FilePathNodeId"
-              },
-              "previous_path": {
-                "type": "string",
-                "minLength": 1
-              },
-              "parent_node_ids": {
-                "minItems": 1
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "tags",
-                  "merge"
-                ]
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "node_id": {
-                "$ref": "#/$defs/FileMetadataNodeId"
-              },
-              "previous_path": {
-                "type": "null"
-              },
-              "parent_node_ids": {
-                "minItems": 1
-              }
-            },
-            "required": [
-              "tags"
-            ]
-          }
-        }
-      ]
-    },
     "FileMetadataNodeId": {
       "type": "string",
       "pattern": "^fmeta_[0-9a-f]{32}(?![\\s\\S])"
@@ -3683,6 +3514,2006 @@
           "$ref": "#/$defs/GenericOperationObservation"
         }
       ]
+    },
+    "HistoryRoot": {
+      "$ref": "#/$defs/Hash",
+      "description": "目标 history 的准确当前 history-manifest hash；不是授权、健康、全池序号或旧根保留凭据。"
+    },
+    "HistoryQueryHash": {
+      "$ref": "#/$defs/Hash",
+      "description": "绑定规范化请求上下文、实际解析上下文、集合、anchor、页大小和预算策略的摘要。"
+    },
+    "HistoryCursor": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^(?:[0-9a-f]{2})+(?![\\s\\S])",
+      "description": "严格history_window_v1游标的ASCII小写十六进制编码；解码后的有界payload须通过HistoryCursorPayload及当前授权/根/边界位置检查，无签名或旧格式兼容。"
+    },
+    "HistoryField": {
+      "type": "string",
+      "enum": [
+        "message",
+        "author",
+        "created_at"
+      ]
+    },
+    "HistoryCollection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "nodes"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "versions"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "branches"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "merges"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "node_parents"
+            },
+            "node_id": {
+              "$ref": "#/$defs/FileNodeId"
+            }
+          },
+          "required": [
+            "kind",
+            "node_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "version_sources"
+            },
+            "version_id": {
+              "$ref": "#/$defs/VersionId"
+            }
+          },
+          "required": [
+            "kind",
+            "version_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "merge_inputs"
+            },
+            "merge_id": {
+              "$ref": "#/$defs/FileMergeId"
+            }
+          },
+          "required": [
+            "kind",
+            "merge_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "merge_parents"
+            },
+            "merge_id": {
+              "$ref": "#/$defs/FileMergeId"
+            }
+          },
+          "required": [
+            "kind",
+            "merge_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "node_field"
+            },
+            "node_id": {
+              "$ref": "#/$defs/FileNodeId"
+            },
+            "field": {
+              "$ref": "#/$defs/HistoryField"
+            }
+          },
+          "required": [
+            "kind",
+            "node_id",
+            "field"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HistoryPageLimit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65536
+    },
+    "HistoryResolvedContext": {
+      "type": "object",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768,
+              "x-maxUtf16Units": 200,
+              "x-maxDepth": 32,
+              "x-namePolicy": "PortablePath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "current_node_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileNodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selected_branch_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "repository_id",
+        "history_tree_id",
+        "path",
+        "current_node_id",
+        "selected_branch_id"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryPageIdentity": {
+      "type": "object",
+      "properties": {
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "collection": {
+          "$ref": "#/$defs/HistoryCollection"
+        },
+        "context": {
+          "$ref": "#/$defs/HistoryResolvedContext"
+        },
+        "query_hash": {
+          "$ref": "#/$defs/HistoryQueryHash"
+        },
+        "limit": {
+          "$ref": "#/$defs/HistoryPageLimit"
+        },
+        "action_max_entries": {
+          "$ref": "#/$defs/UInt64"
+        }
+      },
+      "required": [
+        "history_root",
+        "file_id",
+        "collection",
+        "context",
+        "query_hash",
+        "limit",
+        "action_max_entries"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryPageCursors": {
+      "type": "object",
+      "properties": {
+        "previous_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "previous_cursor",
+        "next_cursor"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryContentSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "owned"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "inherited"
+            },
+            "source_version_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VersionId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "source_version_id"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HistoryContentDisposition": {
+      "type": "object",
+      "properties": {
+        "version_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VersionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/HistoryContentSource"
+        },
+        "stored_state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "AVAILABLE",
+                "PURGED",
+                "MIGRATED"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "version_id",
+        "source",
+        "stored_state"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryContextSummary": {
+      "type": "object",
+      "properties": {
+        "note": {
+          "type": "string",
+          "maxLength": 128,
+          "x-maxUtf8Bytes": 128,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryContentDisposition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "note",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryParentSet": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "complete"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "more"
+            },
+            "cursor": {
+              "$ref": "#/$defs/HistoryCursor"
+            }
+          },
+          "required": [
+            "state",
+            "cursor"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "more即使尚未预览任何边也携带该节点的父关系续读游标；complete且零已枚举边才表示真正没有父关系。"
+    },
+    "HistoryGraphEdge": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "parent_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "endpoint": {
+          "type": "string",
+          "enum": [
+            "in_window",
+            "outside_window"
+          ]
+        }
+      },
+      "required": [
+        "node_id",
+        "parent_node_id",
+        "endpoint"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryFieldInfo": {
+      "type": "object",
+      "properties": {
+        "byte_length": {
+          "$ref": "#/$defs/UInt64"
+        }
+      },
+      "required": [
+        "byte_length"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryNodeFields": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/HistoryFieldInfo"
+        },
+        "author": {
+          "$ref": "#/$defs/HistoryFieldInfo"
+        },
+        "created_at": {
+          "$ref": "#/$defs/HistoryFieldInfo"
+        }
+      },
+      "required": [
+        "message",
+        "author",
+        "created_at"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryNodeSummary": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "version_id": {
+          "$ref": "#/$defs/VersionId"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "content",
+            "rename",
+            "tags",
+            "merge"
+          ]
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "current": {
+          "type": "boolean"
+        },
+        "branch_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 768,
+          "x-maxUtf8Bytes": 768,
+          "x-maxUtf16Units": 200,
+          "x-maxDepth": 32,
+          "x-namePolicy": "PortablePath"
+        },
+        "previous_path": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 768,
+              "x-maxUtf8Bytes": 768,
+              "x-maxUtf16Units": 200,
+              "x-maxDepth": 32,
+              "x-namePolicy": "PortablePath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 128,
+          "x-maxUtf8Bytes": 128,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+        },
+        "tags": {
+          "$ref": "#/$defs/FileNodeTags"
+        },
+        "size": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "content_state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "AVAILABLE",
+                "PURGED",
+                "MIGRATED"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "download_name": {
+          "type": "string",
+          "maxLength": 768,
+          "x-maxUtf8Bytes": 768,
+          "x-maxUtf16Units": 200,
+          "x-namePolicy": "PortableName"
+        },
+        "storage_name": {
+          "type": "string",
+          "maxLength": 768,
+          "x-maxUtf8Bytes": 768,
+          "x-maxUtf16Units": 200,
+          "x-namePolicy": "PortableName"
+        },
+        "parents": {
+          "$ref": "#/$defs/HistoryParentSet"
+        },
+        "fields": {
+          "$ref": "#/$defs/HistoryNodeFields"
+        }
+      },
+      "required": [
+        "node_id",
+        "version_id",
+        "kind",
+        "sequence",
+        "current",
+        "branch_id",
+        "path",
+        "previous_path",
+        "note",
+        "tags",
+        "size",
+        "content_hash",
+        "content_state",
+        "download_name",
+        "storage_name",
+        "parents",
+        "fields"
+      ],
+      "additionalProperties": false,
+      "x-maxEncodedBytes": 65536,
+      "description": "有界节点摘要，不含完整父数组、正文source数组、message、author或created_at文本。大字段由fields字节长度描述并可分片完整读取。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "content"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "node_id": {
+                "$ref": "#/$defs/VersionId"
+              },
+              "previous_path": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "rename"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "node_id": {
+                "$ref": "#/$defs/FilePathNodeId"
+              },
+              "previous_path": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "tags",
+                  "merge"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "node_id": {
+                "$ref": "#/$defs/FileMetadataNodeId"
+              },
+              "previous_path": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "HistoryVersionSummary": {
+      "type": "object",
+      "properties": {
+        "version_id": {
+          "$ref": "#/$defs/VersionId"
+        },
+        "version_sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "size": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "content_state": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "AVAILABLE",
+                "PURGED",
+                "MIGRATED"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 128,
+          "x-maxUtf8Bytes": 128,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+        },
+        "download_name": {
+          "type": "string",
+          "maxLength": 768,
+          "x-maxUtf8Bytes": 768,
+          "x-maxUtf16Units": 200,
+          "x-namePolicy": "PortableName"
+        },
+        "storage_name": {
+          "type": "string",
+          "maxLength": 768,
+          "x-maxUtf8Bytes": 768,
+          "x-maxUtf16Units": 200,
+          "x-namePolicy": "PortableName"
+        },
+        "source_count": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "fields": {
+          "$ref": "#/$defs/HistoryNodeFields"
+        }
+      },
+      "required": [
+        "version_id",
+        "version_sequence",
+        "size",
+        "content_hash",
+        "content_state",
+        "note",
+        "download_name",
+        "storage_name",
+        "source_count",
+        "fields"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryBranchSummary": {
+      "type": "object",
+      "properties": {
+        "branch_id": {
+          "$ref": "#/$defs/BranchId"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 768,
+          "x-maxUtf8Bytes": 768,
+          "x-maxUtf16Units": 200,
+          "x-namePolicy": "PortableName"
+        },
+        "head_commit_id": {
+          "$ref": "#/$defs/CommitId"
+        },
+        "fork_commit_id": {
+          "$ref": "#/$defs/CommitId"
+        },
+        "node_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileNodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived",
+            "merged",
+            "migrated"
+          ]
+        },
+        "branch_kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "full"
+          ]
+        },
+        "generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "current": {
+          "type": "boolean"
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "alias_of": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BranchId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content": {
+          "$ref": "#/$defs/HistoryContentDisposition"
+        }
+      },
+      "required": [
+        "branch_id",
+        "name",
+        "head_commit_id",
+        "fork_commit_id",
+        "node_id",
+        "state",
+        "branch_kind",
+        "generation",
+        "current",
+        "read_only",
+        "alias_of",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryMergeSummary": {
+      "type": "object",
+      "properties": {
+        "merge_id": {
+          "$ref": "#/$defs/FileMergeId"
+        },
+        "sequence": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "chosen_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "result_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        },
+        "surviving_branch_id": {
+          "$ref": "#/$defs/BranchId"
+        },
+        "reused_node": {
+          "type": "boolean"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "input_count": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "parent_count": {
+          "$ref": "#/$defs/UInt64"
+        }
+      },
+      "required": [
+        "merge_id",
+        "sequence",
+        "chosen_node_id",
+        "result_node_id",
+        "surviving_branch_id",
+        "reused_node",
+        "operation_id",
+        "input_count",
+        "parent_count"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryParentMember": {
+      "type": "object",
+      "properties": {
+        "parent_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        }
+      },
+      "required": [
+        "parent_node_id"
+      ],
+      "additionalProperties": false
+    },
+    "HistorySourceMember": {
+      "type": "object",
+      "properties": {
+        "ordinal": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "version_id": {
+          "$ref": "#/$defs/VersionId"
+        }
+      },
+      "required": [
+        "ordinal",
+        "version_id"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryMergeInputMember": {
+      "type": "object",
+      "properties": {
+        "ordinal": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "branch_id": {
+          "$ref": "#/$defs/BranchId"
+        },
+        "node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        }
+      },
+      "required": [
+        "ordinal",
+        "branch_id",
+        "node_id"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryMergeParentMember": {
+      "type": "object",
+      "properties": {
+        "ordinal": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "parent_node_id": {
+          "$ref": "#/$defs/FileNodeId"
+        }
+      },
+      "required": [
+        "ordinal",
+        "parent_node_id"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryPosition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "start"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "node"
+            },
+            "sequence": {
+              "$ref": "#/$defs/UInt64"
+            },
+            "node_id": {
+              "$ref": "#/$defs/FileNodeId"
+            }
+          },
+          "required": [
+            "kind",
+            "sequence",
+            "node_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "version"
+            },
+            "sequence": {
+              "$ref": "#/$defs/UInt64"
+            },
+            "version_id": {
+              "$ref": "#/$defs/VersionId"
+            }
+          },
+          "required": [
+            "kind",
+            "sequence",
+            "version_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "branch"
+            },
+            "branch_id": {
+              "$ref": "#/$defs/BranchId"
+            }
+          },
+          "required": [
+            "kind",
+            "branch_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "merge"
+            },
+            "sequence": {
+              "$ref": "#/$defs/UInt64"
+            },
+            "merge_id": {
+              "$ref": "#/$defs/FileMergeId"
+            }
+          },
+          "required": [
+            "kind",
+            "sequence",
+            "merge_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "parent"
+            },
+            "parent_node_id": {
+              "$ref": "#/$defs/FileNodeId"
+            }
+          },
+          "required": [
+            "kind",
+            "parent_node_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "member"
+            },
+            "ordinal": {
+              "$ref": "#/$defs/UInt64"
+            }
+          },
+          "required": [
+            "kind",
+            "ordinal"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "field"
+            },
+            "byte_offset": {
+              "$ref": "#/$defs/UInt64"
+            }
+          },
+          "required": [
+            "kind",
+            "byte_offset"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HistoryCursorPayload": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "const": "history_window_v1"
+        },
+        "history_root": {
+          "$ref": "#/$defs/HistoryRoot"
+        },
+        "history_tree_id": {
+          "$ref": "#/$defs/HistoryId"
+        },
+        "file_id": {
+          "$ref": "#/$defs/FileId"
+        },
+        "collection": {
+          "$ref": "#/$defs/HistoryCollection"
+        },
+        "query_hash": {
+          "$ref": "#/$defs/HistoryQueryHash"
+        },
+        "limit": {
+          "$ref": "#/$defs/HistoryPageLimit"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "forward",
+            "backward"
+          ]
+        },
+        "position": {
+          "$ref": "#/$defs/HistoryPosition"
+        },
+        "anchor_node_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileNodeId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "format",
+        "history_root",
+        "history_tree_id",
+        "file_id",
+        "collection",
+        "query_hash",
+        "limit",
+        "direction",
+        "position",
+        "anchor_node_id"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "collection": {
+                "properties": {
+                  "kind": {
+                    "const": "nodes"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "maximum": 64
+              },
+              "position": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "node"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "collection": {
+                "properties": {
+                  "kind": {
+                    "const": "versions"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "maximum": 128
+              },
+              "position": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "version"
+                    ]
+                  }
+                }
+              },
+              "anchor_node_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "collection": {
+                "properties": {
+                  "kind": {
+                    "const": "branches"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "maximum": 128
+              },
+              "position": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "branch"
+                    ]
+                  }
+                }
+              },
+              "anchor_node_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "collection": {
+                "properties": {
+                  "kind": {
+                    "const": "merges"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "maximum": 128
+              },
+              "position": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "merge"
+                    ]
+                  }
+                }
+              },
+              "anchor_node_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "collection": {
+                "properties": {
+                  "kind": {
+                    "const": "node_parents"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "maximum": 512
+              },
+              "position": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "start",
+                      "parent"
+                    ]
+                  }
+                }
+              },
+              "anchor_node_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "collection": {
+                "properties": {
+                  "kind": {
+                    "const": "version_sources"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "maximum": 512
+              },
+              "position": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "member"
+                    ]
+                  }
+                }
+              },
+              "anchor_node_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "collection": {
+                "properties": {
+                  "kind": {
+                    "const": "merge_inputs"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "maximum": 512
+              },
+              "position": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "member"
+                    ]
+                  }
+                }
+              },
+              "anchor_node_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "collection": {
+                "properties": {
+                  "kind": {
+                    "const": "merge_parents"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "maximum": 512
+              },
+              "position": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "member"
+                    ]
+                  }
+                }
+              },
+              "anchor_node_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "collection": {
+                "properties": {
+                  "kind": {
+                    "const": "node_field"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "limit": {
+                "maximum": 65536
+              },
+              "position": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "field"
+                    ]
+                  }
+                }
+              },
+              "anchor_node_id": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "position": {
+                "properties": {
+                  "kind": {
+                    "const": "start"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "direction": {
+                "const": "forward"
+              },
+              "collection": {
+                "properties": {
+                  "kind": {
+                    "const": "node_parents"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "description": "无frontier/visited/旧页库存；位置种类、参数预算和anchor约束在严格解码后复核，实际边界必须属于当前获授权根内的集合。"
+    },
+    "HistoryNodesPage": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "nodes"
+        },
+        "identity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/HistoryPageIdentity"
+            },
+            {
+              "properties": {
+                "collection": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "nodes"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                "limit": {
+                  "maximum": 64
+                }
+              }
+            }
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/HistoryContextSummary"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryNodeSummary"
+          },
+          "maxItems": 64
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryGraphEdge"
+          },
+          "maxItems": 256
+        },
+        "page": {
+          "$ref": "#/$defs/HistoryPageCursors"
+        }
+      },
+      "required": [
+        "kind",
+        "identity",
+        "context",
+        "nodes",
+        "edges",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryVersionsPage": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "versions"
+        },
+        "identity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/HistoryPageIdentity"
+            },
+            {
+              "properties": {
+                "collection": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "versions"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                "limit": {
+                  "maximum": 128
+                }
+              }
+            }
+          ]
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryVersionSummary"
+          },
+          "maxItems": 128
+        },
+        "page": {
+          "$ref": "#/$defs/HistoryPageCursors"
+        }
+      },
+      "required": [
+        "kind",
+        "identity",
+        "versions",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryBranchesPage": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "branches"
+        },
+        "identity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/HistoryPageIdentity"
+            },
+            {
+              "properties": {
+                "collection": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "branches"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                "limit": {
+                  "maximum": 128
+                }
+              }
+            }
+          ]
+        },
+        "branches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryBranchSummary"
+          },
+          "maxItems": 128
+        },
+        "page": {
+          "$ref": "#/$defs/HistoryPageCursors"
+        }
+      },
+      "required": [
+        "kind",
+        "identity",
+        "branches",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryMergesPage": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "merges"
+        },
+        "identity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/HistoryPageIdentity"
+            },
+            {
+              "properties": {
+                "collection": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "merges"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "additionalProperties": false
+                },
+                "limit": {
+                  "maximum": 128
+                }
+              }
+            }
+          ]
+        },
+        "merges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryMergeSummary"
+          },
+          "maxItems": 128
+        },
+        "page": {
+          "$ref": "#/$defs/HistoryPageCursors"
+        }
+      },
+      "required": [
+        "kind",
+        "identity",
+        "merges",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryNodeParentsPage": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "node_parents"
+        },
+        "identity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/HistoryPageIdentity"
+            },
+            {
+              "properties": {
+                "collection": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "node_parents"
+                    },
+                    "node_id": {
+                      "$ref": "#/$defs/FileNodeId"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "node_id"
+                  ],
+                  "additionalProperties": false
+                },
+                "limit": {
+                  "maximum": 512
+                }
+              }
+            }
+          ]
+        },
+        "parents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryParentMember"
+          },
+          "maxItems": 512
+        },
+        "page": {
+          "$ref": "#/$defs/HistoryPageCursors"
+        }
+      },
+      "required": [
+        "kind",
+        "identity",
+        "parents",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryVersionSourcesPage": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "version_sources"
+        },
+        "identity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/HistoryPageIdentity"
+            },
+            {
+              "properties": {
+                "collection": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "version_sources"
+                    },
+                    "version_id": {
+                      "$ref": "#/$defs/VersionId"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "version_id"
+                  ],
+                  "additionalProperties": false
+                },
+                "limit": {
+                  "maximum": 512
+                }
+              }
+            }
+          ]
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistorySourceMember"
+          },
+          "maxItems": 512
+        },
+        "page": {
+          "$ref": "#/$defs/HistoryPageCursors"
+        }
+      },
+      "required": [
+        "kind",
+        "identity",
+        "sources",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryMergeInputsPage": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "merge_inputs"
+        },
+        "identity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/HistoryPageIdentity"
+            },
+            {
+              "properties": {
+                "collection": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "merge_inputs"
+                    },
+                    "merge_id": {
+                      "$ref": "#/$defs/FileMergeId"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "merge_id"
+                  ],
+                  "additionalProperties": false
+                },
+                "limit": {
+                  "maximum": 512
+                }
+              }
+            }
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryMergeInputMember"
+          },
+          "maxItems": 512
+        },
+        "page": {
+          "$ref": "#/$defs/HistoryPageCursors"
+        }
+      },
+      "required": [
+        "kind",
+        "identity",
+        "inputs",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryMergeParentsPage": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "merge_parents"
+        },
+        "identity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/HistoryPageIdentity"
+            },
+            {
+              "properties": {
+                "collection": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "merge_parents"
+                    },
+                    "merge_id": {
+                      "$ref": "#/$defs/FileMergeId"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "merge_id"
+                  ],
+                  "additionalProperties": false
+                },
+                "limit": {
+                  "maximum": 512
+                }
+              }
+            }
+          ]
+        },
+        "parents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryMergeParentMember"
+          },
+          "maxItems": 512
+        },
+        "page": {
+          "$ref": "#/$defs/HistoryPageCursors"
+        }
+      },
+      "required": [
+        "kind",
+        "identity",
+        "parents",
+        "page"
+      ],
+      "additionalProperties": false
+    },
+    "HistoryNodeFieldPage": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "node_field"
+        },
+        "identity": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/HistoryPageIdentity"
+            },
+            {
+              "properties": {
+                "collection": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "node_field"
+                    },
+                    "node_id": {
+                      "$ref": "#/$defs/FileNodeId"
+                    },
+                    "field": {
+                      "$ref": "#/$defs/HistoryField"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "node_id",
+                    "field"
+                  ],
+                  "additionalProperties": false
+                },
+                "limit": {
+                  "maximum": 65536
+                }
+              }
+            }
+          ]
+        },
+        "field": {
+          "$ref": "#/$defs/HistoryField"
+        },
+        "total_bytes": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "byte_offset": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 65536,
+          "x-maxUtf8Bytes": 65536
+        },
+        "end_of_field": {
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HistoryCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "identity",
+        "field",
+        "total_bytes",
+        "byte_offset",
+        "text",
+        "end_of_field",
+        "next_cursor"
+      ],
+      "additionalProperties": false,
+      "description": "完整UTF-8片段；end_of_field只标记该片的右边界，不表示客户端持有前序片段或完整字段。空字段offset=total=0、text为空、end_of_field=true且无后续。不得截断或增加网络限额。"
+    },
+    "HistoryWindowPage": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/HistoryNodesPage"
+        },
+        {
+          "$ref": "#/$defs/HistoryVersionsPage"
+        },
+        {
+          "$ref": "#/$defs/HistoryBranchesPage"
+        },
+        {
+          "$ref": "#/$defs/HistoryMergesPage"
+        },
+        {
+          "$ref": "#/$defs/HistoryNodeParentsPage"
+        },
+        {
+          "$ref": "#/$defs/HistoryVersionSourcesPage"
+        },
+        {
+          "$ref": "#/$defs/HistoryMergeInputsPage"
+        },
+        {
+          "$ref": "#/$defs/HistoryMergeParentsPage"
+        },
+        {
+          "$ref": "#/$defs/HistoryNodeFieldPage"
+        }
+      ],
+      "x-maxEncodedBytes": 8388608,
+      "description": "单个当前根上的可替换窗口；包括外壳、转义、游标与边预览的完整JSON编码不超过既有8MiB。不是无限加载更多或整包兼容出口。"
     }
   }
 }

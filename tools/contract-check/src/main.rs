@@ -1,6 +1,7 @@
 //! Fully offline documentation and published-contract checks.
 mod document_links;
 mod document_scan;
+mod history_window;
 use data_serialization::Serialize;
 use json_codec::{Value, json};
 use std::{
@@ -150,6 +151,18 @@ fn validate_content_view(value: &Value) -> Result {
 
 fn semantics(name: &str, value: &Value) -> Result {
     match name {
+        "HistoryWindowPage"
+        | "HistoryNodesPage"
+        | "HistoryVersionsPage"
+        | "HistoryBranchesPage"
+        | "HistoryMergesPage"
+        | "HistoryNodeParentsPage"
+        | "HistoryVersionSourcesPage"
+        | "HistoryMergeInputsPage"
+        | "HistoryMergeParentsPage"
+        | "HistoryNodeFieldPage"
+        | "HistoryCursor"
+        | "HistoryCursorPayload" => history_window::validate(name, value)?,
         "config" => {
             let metadata = &value["metadata"];
             let members = small(&metadata["replica_members"])?;
@@ -786,3 +799,7 @@ fn main() {
 #[cfg(test)]
 #[path = "../../../test/tools/contract-check/unit/main_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../test/tools/contract-check/unit/history_window_tests.rs"]
+mod history_window_tests;

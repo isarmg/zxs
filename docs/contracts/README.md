@@ -36,7 +36,7 @@ PUBLICATION 中回执使用合成身份与摘要；通过字段或覆盖集合�
 
 持久状态、写请求和固定向量的 JSON 解析先拒绝重复字段、BOM、孤立代理项和浮点数，再做 schema 和 JCS；解析后只检查普通字典无法找回重复字段信息。`/api/system/status` 与 `/api/system/history` 的临时监测响应允许有限小数，不放宽持久状态或写请求规则。固定向量中的 JCS 属性排序包含非 BMP 键样例，用于检测错误地按 Unicode 标量顺序排序；该向量不表示 PortableName 允许 emoji 文件名。
 
-备注写接口通过 `x-maxUtf8Bytes: 128` 标明 UTF-8 字节上限，配合控制字符模式和服务端字节计数校验；JSON Schema 的 `maxLength` 本身只计算 Unicode 字符数。文件、版本和节点备注在写入及历史包读取时均遵守当前128 UTF-8字节、无控制字符规则；不合格式的历史包被拒绝，不截断或迁移备注。读响应原样输出已验证备注；响应 schema 的较宽字符串形状（包括 `FileHistoryNode.note`）不替代引擎语义校验，也不承诺旧格式可读。
+备注写接口通过 `x-maxUtf8Bytes: 128` 标明 UTF-8 字节上限，配合控制字符模式和服务端字节计数校验；JSON Schema 的 `maxLength` 本身只计算 Unicode 字符数。文件、版本和节点备注在写入及历史包读取时均遵守当前128 UTF-8字节、无控制字符规则；不合格式的历史包被拒绝，不截断或迁移备注。读响应原样输出已验证备注；`HistoryNodeSummary.note` 等响应 schema 不替代引擎语义校验，也不承诺旧格式可读。
 
 ## 运行校验
 
@@ -64,7 +64,7 @@ Rust 依赖源码已包含在仓库中，首次构建也使用唯一根锁文件
 
 目录分支以 `DirectoryBranch`、`DirectoryTree` 和 `DirectoryReference` 区分命名身份、不可变组成及子目录精确引用；`DirectoryNamespaceBatch` 每项要求源分支、依据子树与稳定条目 ID，非删除操作还要求明确目标分支及依据子树。登记目录分支不提前创建文件分支或占位文件。路径、跨分支冲突与实际归属由核心统一校验，schema 合法不等于业务可发布。
 
-`FilePathNode` 描述重命名的路径节点并引用现有正文，`FileHistoryNode` 把内容与路径节点放在同一历史图；`FileNodeId` 允许 `ver_`、`fnode_` 与 `fmeta_`，正文读取仍只接受真实 `VersionId`。`FileContext.node_id` 和 `Branch.file_node_id` 冻结具体图节点，创建分支可以传 `source_node_id` 保留此来源。节点备注独立于正文版本备注保存，使用同一128 UTF-8字节、无控制字符规则。
+`FilePathNode` 描述重命名的路径节点并引用现有正文，`HistoryNodeSummary` 把内容、路径与元数据节点投影到有界 `HistoryWindowPage`，父边预览与完整关系页分开。`FileNodeId` 允许 `ver_`、`fnode_` 与 `fmeta_`，正文读取仍只接受真实 `VersionId`。`FileContext.node_id` 和 `Branch.file_node_id` 冻结具体图节点，创建分支可以传 `source_node_id` 保留此来源。节点备注独立于正文版本备注保存，使用同一128 UTF-8字节、无控制字符规则。两个历史 GET 均默认首页；准确根、cursor、外置字段片段及各辅助集合不保留旧整包兼容出口。
 
 `FileMetadataNode` 保存不可变标签/合并子节点，`FileBranchMerge` 独立保存全部合并来源和安全图边。文件合并请求要求明确确认、结果归属及每个参与head，标签批量请求固定源节点与branch head，scope备份配置同时固定稳定身份和自身代数。标签的16项/128字节限制、无控制字符和全部预检由共享Rust验证及业务事务执行；schema检查不代替真实发布。目录分支合并待用户确认，暂不实现，能力为false。
 

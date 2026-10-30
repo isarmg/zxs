@@ -1048,6 +1048,16 @@ impl Backend for ManagementBackend {
             .backend()?
             .default_directory_branch(identity, repository_id)
     }
+    fn history_window(
+        &self,
+        identity: &crate::auth::Identity,
+        request: storage_contract::history_window::HistoryWindowRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, crate::ApiError> {
+        self.inner
+            .backend()?
+            .history_window(identity, request, cancellation)
+    }
     fn file_history_snapshot(
         &self,
         identity: &crate::auth::Identity,

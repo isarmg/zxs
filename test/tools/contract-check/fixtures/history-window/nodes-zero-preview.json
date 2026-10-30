@@ -1,0 +1,72 @@
+{
+  "kind": "nodes",
+  "identity": {
+    "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
+    "collection": {
+      "kind": "nodes"
+    },
+    "context": {
+      "repository_id": "repo_4f185d7fabb3444ebeaf32bcd61440fa",
+      "history_tree_id": "history_47238cab7fbb497aa8f81160f3643427",
+      "path": "renamed.txt",
+      "current_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "selected_branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4"
+    },
+    "query_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "limit": 32,
+    "action_max_entries": "100000"
+  },
+  "context": {
+    "note": "",
+    "content": {
+      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "source": {
+        "kind": "owned"
+      },
+      "stored_state": "AVAILABLE"
+    }
+  },
+  "nodes": [
+    {
+      "node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "kind": "merge",
+      "sequence": "15",
+      "current": true,
+      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
+      "path": "report.txt",
+      "previous_path": null,
+      "note": "",
+      "tags": [
+        "work",
+        "已审核"
+      ],
+      "size": "9",
+      "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
+      "content_state": "AVAILABLE",
+      "download_name": "renamed.txt",
+      "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+      "parents": {
+        "state": "more",
+        "cursor": "7b22666f726d6174223a22686973746f72795f77696e646f775f7631222c22686973746f72795f726f6f74223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161222c22686973746f72795f747265655f6964223a22686973746f72795f3437323338636162376662623439376161386638313136306633363433343237222c2266696c655f6964223a2266696c655f6430373336316233353839303437663139336233636435666463613062366439222c22636f6c6c656374696f6e223a7b226b696e64223a226e6f64655f706172656e7473222c226e6f64655f6964223a22666d6574615f6464643864623635633362333430623839306561333463616136393761333638227d2c2271756572795f68617368223a2262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262222c226c696d6974223a3235362c22646972656374696f6e223a22666f7277617264222c22706f736974696f6e223a7b226b696e64223a227374617274227d2c22616e63686f725f6e6f64655f6964223a6e756c6c7d"
+      },
+      "fields": {
+        "message": {
+          "byte_length": "0"
+        },
+        "author": {
+          "byte_length": "5"
+        },
+        "created_at": {
+          "byte_length": "20"
+        }
+      }
+    }
+  ],
+  "edges": [],
+  "page": {
+    "previous_cursor": null,
+    "next_cursor": null
+  }
+}

@@ -1,361 +1,310 @@
 {
-  "branches": [
-    {
-      "alias_of": null,
-      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
-      "branch_kind": "file",
-      "content_state": "AVAILABLE",
-      "current": true,
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "file_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
-      "fork_commit_id": "commit_0ad62b2d294c4ab4a2eed96fd4534f19",
-      "generation": "5",
-      "head_commit_id": "commit_244859da15164d7bb719e3a62b90381b",
-      "history_tree_id": "history_47238cab7fbb497aa8f81160f3643427",
-      "inherited": false,
-      "materialized": true,
-      "name": "left",
-      "node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
-      "own_version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
-      "pending_file_versions": {},
-      "read_only": false,
-      "source_version_id": null,
-      "state": "active",
-      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
-      "visible_content_state": "AVAILABLE"
+  "kind": "nodes",
+  "identity": {
+    "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
+    "collection": {
+      "kind": "nodes"
     },
-    {
-      "alias_of": null,
-      "branch_id": "br_beb2fa7127f84eeea9110644558cb526",
-      "branch_kind": "file",
-      "content_state": "AVAILABLE",
-      "current": false,
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "fork_commit_id": "commit_0ad62b2d294c4ab4a2eed96fd4534f19",
-      "generation": "1",
-      "head_commit_id": "commit_50c138b2954040f380b504c49feef222",
+    "context": {
+      "repository_id": "repo_4f185d7fabb3444ebeaf32bcd61440fa",
       "history_tree_id": "history_47238cab7fbb497aa8f81160f3643427",
-      "inherited": false,
-      "materialized": true,
-      "name": "main",
-      "node_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
-      "own_version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
-      "pending_file_versions": {},
-      "read_only": false,
-      "source_version_id": null,
-      "state": "active",
-      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
-      "visible_content_state": "AVAILABLE"
+      "path": "renamed.txt",
+      "current_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "selected_branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4"
     },
-    {
-      "alias_of": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
-      "branch_id": "br_c74d8572ee234bc8aca8299a0b17fb22",
-      "branch_kind": "file",
-      "content_state": "AVAILABLE",
-      "current": false,
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "fork_commit_id": "commit_0ad62b2d294c4ab4a2eed96fd4534f19",
-      "generation": "3",
-      "head_commit_id": "commit_e3bd9209dd144ecbbaf9cedc02606640",
-      "history_tree_id": "history_47238cab7fbb497aa8f81160f3643427",
-      "inherited": false,
-      "materialized": true,
-      "name": "right",
-      "node_id": "ver_87aacbfd592e4b539fc94e3f1653367d",
-      "own_version_id": "ver_87aacbfd592e4b539fc94e3f1653367d",
-      "pending_file_versions": {},
-      "read_only": true,
-      "source_version_id": null,
-      "state": "merged",
-      "version_id": "ver_87aacbfd592e4b539fc94e3f1653367d",
-      "visible_content_state": "AVAILABLE"
+    "query_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "limit": 32,
+    "action_max_entries": "100000"
+  },
+  "context": {
+    "note": "",
+    "content": {
+      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "source": {
+        "kind": "owned"
+      },
+      "stored_state": "AVAILABLE"
     }
-  ],
-  "content_state": "AVAILABLE",
-  "current_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
-  "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-  "inherited": false,
-  "materialized": true,
-  "merges": [
-    {
-      "chosen_node_id": "fmeta_e6235fa19d6445f196f4d68386fefbe8",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "history_tree_id": "history_47238cab7fbb497aa8f81160f3643427",
-      "input_branch_ids": [
-        "br_31992afdd8274ce5b3b2b81ab3abb2b4",
-        "br_c74d8572ee234bc8aca8299a0b17fb22"
-      ],
-      "input_node_ids": [
-        "ver_8344ed7d8dce409e8241cbd7a7045371",
-        "ver_87aacbfd592e4b539fc94e3f1653367d"
-      ],
-      "merge_id": "fmerge_dc77fb31b3ae4efe8bcf7e3e57cfa51b",
-      "operation_id": "op_35c9bc927ea140bba28336a7ea6e690b",
-      "parent_node_ids": [
-        "fmeta_e6235fa19d6445f196f4d68386fefbe8",
-        "ver_8344ed7d8dce409e8241cbd7a7045371",
-        "ver_87aacbfd592e4b539fc94e3f1653367d"
-      ],
-      "result_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
-      "reused_node": false,
-      "sequence": "15",
-      "surviving_branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4"
-    }
-  ],
-  "node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+  },
   "nodes": [
     {
-      "author": "admin",
-      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
-      "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
-      "content_state": "AVAILABLE",
-      "created_at": "2026-10-24T05:27:23Z",
-      "current": true,
-      "download_name": "renamed.txt",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "kind": "merge",
-      "message": "",
       "node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
-      "note": "",
-      "operation_id": "op_35c9bc927ea140bba28336a7ea6e690b",
-      "parent_node_ids": [
-        "fmeta_e6235fa19d6445f196f4d68386fefbe8",
-        "ver_8344ed7d8dce409e8241cbd7a7045371",
-        "ver_87aacbfd592e4b539fc94e3f1653367d"
-      ],
+      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "kind": "merge",
+      "sequence": "15",
+      "current": true,
+      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
       "path": "report.txt",
       "previous_path": null,
-      "sequence": "15",
-      "size": "9",
-      "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+      "note": "",
       "tags": [
         "work",
         "已审核"
       ],
-      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68"
-    },
-    {
-      "branch_id": "br_c74d8572ee234bc8aca8299a0b17fb22",
-      "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
-      "content_state": "AVAILABLE",
-      "created_at": "2026-10-24T05:27:22Z",
-      "current": false,
-      "download_name": "renamed.txt",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "kind": "content",
-      "message": "Upload renamed.txt",
-      "node_id": "ver_87aacbfd592e4b539fc94e3f1653367d",
-      "note": "",
-      "parent_node_ids": [
-        "ver_7a52dbf0d7d048fa9187aa30301d4d68"
-      ],
-      "path": "renamed.txt",
-      "previous_path": null,
-      "sequence": "14",
-      "size": "10",
-      "source_version_ids": [
-        "ver_7a52dbf0d7d048fa9187aa30301d4d68"
-      ],
-      "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
-      "tags": [],
-      "version_id": "ver_87aacbfd592e4b539fc94e3f1653367d"
-    },
-    {
-      "author": "admin",
-      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
+      "size": "9",
       "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
       "content_state": "AVAILABLE",
-      "created_at": "2026-10-24T05:27:22Z",
-      "current": false,
       "download_name": "renamed.txt",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "kind": "tags",
-      "message": "",
-      "node_id": "fmeta_c5fab1c7b33d4fcbaa1f73e81de023e8",
+      "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+      "parents": {
+        "state": "complete"
+      },
+      "fields": {
+        "message": {
+          "byte_length": "0"
+        },
+        "author": {
+          "byte_length": "5"
+        },
+        "created_at": {
+          "byte_length": "20"
+        }
+      }
+    },
+    {
+      "node_id": "ver_87aacbfd592e4b539fc94e3f1653367d",
+      "version_id": "ver_87aacbfd592e4b539fc94e3f1653367d",
+      "kind": "content",
+      "sequence": "14",
+      "current": false,
+      "branch_id": "br_c74d8572ee234bc8aca8299a0b17fb22",
+      "path": "renamed.txt",
+      "previous_path": null,
       "note": "",
-      "operation_id": "op_4329ceaab87e40448efdefa077e40e6d",
-      "parent_node_ids": [
-        "fmeta_e6235fa19d6445f196f4d68386fefbe8"
-      ],
+      "tags": [],
+      "size": "10",
+      "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
+      "content_state": "AVAILABLE",
+      "download_name": "renamed.txt",
+      "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
+      "parents": {
+        "state": "complete"
+      },
+      "fields": {
+        "message": {
+          "byte_length": "18"
+        },
+        "author": {
+          "byte_length": "0"
+        },
+        "created_at": {
+          "byte_length": "20"
+        }
+      }
+    },
+    {
+      "node_id": "fmeta_c5fab1c7b33d4fcbaa1f73e81de023e8",
+      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "kind": "tags",
+      "sequence": "12",
+      "current": false,
+      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
       "path": "report.txt",
       "previous_path": null,
-      "sequence": "12",
-      "size": "9",
-      "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+      "note": "",
       "tags": [
         "已审核",
         "归档"
       ],
-      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68"
+      "size": "9",
+      "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
+      "content_state": "AVAILABLE",
+      "download_name": "renamed.txt",
+      "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+      "parents": {
+        "state": "complete"
+      },
+      "fields": {
+        "message": {
+          "byte_length": "0"
+        },
+        "author": {
+          "byte_length": "5"
+        },
+        "created_at": {
+          "byte_length": "20"
+        }
+      }
     },
     {
-      "branch_id": null,
-      "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
-      "content_state": "AVAILABLE",
-      "created_at": "2026-10-24T05:27:22Z",
-      "current": false,
-      "download_name": "renamed.txt",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "kind": "content",
-      "message": "Upload renamed.txt",
       "node_id": "ver_8344ed7d8dce409e8241cbd7a7045371",
-      "note": "",
-      "parent_node_ids": [
-        "fnode_2aa521840a464065bd307370e62e77ac"
-      ],
+      "version_id": "ver_8344ed7d8dce409e8241cbd7a7045371",
+      "kind": "content",
+      "sequence": "11",
+      "current": false,
+      "branch_id": null,
       "path": "renamed.txt",
       "previous_path": null,
-      "sequence": "11",
-      "size": "9",
-      "source_version_ids": [
-        "ver_7a52dbf0d7d048fa9187aa30301d4d68"
-      ],
-      "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+      "note": "",
       "tags": [
         "work",
         "已审核"
       ],
-      "version_id": "ver_8344ed7d8dce409e8241cbd7a7045371"
+      "size": "9",
+      "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
+      "content_state": "AVAILABLE",
+      "download_name": "renamed.txt",
+      "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
+      "parents": {
+        "state": "complete"
+      },
+      "fields": {
+        "message": {
+          "byte_length": "18"
+        },
+        "author": {
+          "byte_length": "0"
+        },
+        "created_at": {
+          "byte_length": "20"
+        }
+      }
     },
     {
-      "author": "admin",
-      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
-      "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
-      "content_state": "AVAILABLE",
-      "created_at": "2026-10-24T05:27:22Z",
-      "current": false,
-      "download_name": "renamed.txt",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "kind": "rename",
-      "message": "",
       "node_id": "fnode_2aa521840a464065bd307370e62e77ac",
-      "note": "",
-      "operation_id": "op_1da64f0ad2c74d1c89cc37ff7e0fc6f9",
-      "parent_node_ids": [
-        "fmeta_e6235fa19d6445f196f4d68386fefbe8"
-      ],
+      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "kind": "rename",
+      "sequence": "10",
+      "current": false,
+      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
       "path": "renamed.txt",
       "previous_path": "report.txt",
-      "sequence": "10",
-      "size": "9",
-      "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+      "note": "",
       "tags": [
         "work",
         "已审核"
       ],
-      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68"
-    },
-    {
-      "author": "admin",
-      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
+      "size": "9",
       "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
       "content_state": "AVAILABLE",
-      "created_at": "2026-10-24T05:27:22Z",
-      "current": false,
       "download_name": "renamed.txt",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "kind": "tags",
-      "message": "",
+      "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+      "parents": {
+        "state": "complete"
+      },
+      "fields": {
+        "message": {
+          "byte_length": "0"
+        },
+        "author": {
+          "byte_length": "5"
+        },
+        "created_at": {
+          "byte_length": "20"
+        }
+      }
+    },
+    {
       "node_id": "fmeta_e6235fa19d6445f196f4d68386fefbe8",
-      "note": "独立标签备注",
-      "operation_id": "op_c0703064b0d340a0a2a5746386e858d2",
-      "parent_node_ids": [
-        "ver_7a52dbf0d7d048fa9187aa30301d4d68"
-      ],
+      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "kind": "tags",
+      "sequence": "8",
+      "current": false,
+      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
       "path": "report.txt",
       "previous_path": null,
-      "sequence": "8",
-      "size": "9",
-      "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+      "note": "独立标签备注",
       "tags": [
         "work",
         "已审核"
       ],
-      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68"
-    },
-    {
-      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
+      "size": "9",
       "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
       "content_state": "AVAILABLE",
-      "created_at": "2026-10-24T05:27:21Z",
-      "current": false,
       "download_name": "renamed.txt",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "kind": "content",
-      "message": "Upload report.txt",
+      "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+      "parents": {
+        "state": "complete"
+      },
+      "fields": {
+        "message": {
+          "byte_length": "0"
+        },
+        "author": {
+          "byte_length": "5"
+        },
+        "created_at": {
+          "byte_length": "20"
+        }
+      }
+    },
+    {
       "node_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
-      "note": "",
-      "parent_node_ids": [],
+      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "kind": "content",
+      "sequence": "4",
+      "current": false,
+      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
       "path": "report.txt",
       "previous_path": null,
-      "sequence": "4",
-      "size": "9",
-      "source_version_ids": [],
-      "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
+      "note": "",
       "tags": [],
-      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68"
-    }
-  ],
-  "note": "",
-  "own_version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
-  "path": "renamed.txt",
-  "repository_id": "repo_4f185d7fabb3444ebeaf32bcd61440fa",
-  "selected_branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
-  "source_version_id": null,
-  "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
-  "versions": [
-    {
-      "branch_id": "br_c74d8572ee234bc8aca8299a0b17fb22",
-      "content_hash": "77c5d273841ca0ba7d8fc8dabe5f5c58264a0845db8869f75c0e3547d46fb954",
-      "content_state": "AVAILABLE",
-      "created_at": "2026-10-24T05:27:22Z",
-      "current": false,
-      "download_name": "renamed.txt",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "message": "Upload renamed.txt",
-      "note": "",
-      "sequence": "14",
-      "size": "10",
-      "source_version_ids": [
-        "ver_7a52dbf0d7d048fa9187aa30301d4d68"
-      ],
-      "storage_name": "v000003_20261024T052722Z_77c5d273.txt",
-      "version_id": "ver_87aacbfd592e4b539fc94e3f1653367d"
-    },
-    {
-      "branch_id": null,
-      "content_hash": "49fb11d543076a1cb4f678679362b73d48a683d94d78144d9b397adbd6453940",
-      "content_state": "AVAILABLE",
-      "created_at": "2026-10-24T05:27:22Z",
-      "current": false,
-      "download_name": "renamed.txt",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "message": "Upload renamed.txt",
-      "note": "",
-      "sequence": "11",
       "size": "9",
-      "source_version_ids": [
-        "ver_7a52dbf0d7d048fa9187aa30301d4d68"
-      ],
-      "storage_name": "v000002_20261024T052722Z_49fb11d5.txt",
-      "version_id": "ver_8344ed7d8dce409e8241cbd7a7045371"
-    },
-    {
-      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
       "content_hash": "2f6b57bb5845222f19903673b902c2ccd9217e4d3bc7b6bd47ac7c411fce24e7",
       "content_state": "AVAILABLE",
-      "created_at": "2026-10-24T05:27:21Z",
-      "current": true,
       "download_name": "renamed.txt",
-      "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
-      "message": "Upload report.txt",
-      "note": "",
-      "sequence": "4",
-      "size": "9",
-      "source_version_ids": [],
       "storage_name": "v000001_20261024T052721Z_2f6b57bb.txt",
-      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68"
+      "parents": {
+        "state": "complete"
+      },
+      "fields": {
+        "message": {
+          "byte_length": "17"
+        },
+        "author": {
+          "byte_length": "0"
+        },
+        "created_at": {
+          "byte_length": "20"
+        }
+      }
     }
   ],
-  "visible_content_state": "AVAILABLE"
+  "edges": [
+    {
+      "node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "parent_node_id": "fmeta_e6235fa19d6445f196f4d68386fefbe8",
+      "endpoint": "in_window"
+    },
+    {
+      "node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "parent_node_id": "ver_8344ed7d8dce409e8241cbd7a7045371",
+      "endpoint": "in_window"
+    },
+    {
+      "node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "parent_node_id": "ver_87aacbfd592e4b539fc94e3f1653367d",
+      "endpoint": "in_window"
+    },
+    {
+      "node_id": "ver_87aacbfd592e4b539fc94e3f1653367d",
+      "parent_node_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "endpoint": "in_window"
+    },
+    {
+      "node_id": "fmeta_c5fab1c7b33d4fcbaa1f73e81de023e8",
+      "parent_node_id": "fmeta_e6235fa19d6445f196f4d68386fefbe8",
+      "endpoint": "in_window"
+    },
+    {
+      "node_id": "ver_8344ed7d8dce409e8241cbd7a7045371",
+      "parent_node_id": "fnode_2aa521840a464065bd307370e62e77ac",
+      "endpoint": "in_window"
+    },
+    {
+      "node_id": "fnode_2aa521840a464065bd307370e62e77ac",
+      "parent_node_id": "fmeta_e6235fa19d6445f196f4d68386fefbe8",
+      "endpoint": "in_window"
+    },
+    {
+      "node_id": "fmeta_e6235fa19d6445f196f4d68386fefbe8",
+      "parent_node_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "endpoint": "in_window"
+    }
+  ],
+  "page": {
+    "previous_cursor": null,
+    "next_cursor": null
+  }
 }
