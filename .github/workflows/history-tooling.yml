@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-browser, detached-backup-listing, mature-static, history-window]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, history-window]
 
 permissions:
   contents: read
@@ -136,10 +136,14 @@ jobs:
               '69718524644e23d6e4e77bda64436acc8f62e508', '86088fcc6c6fa02c6f7465aa2ad71f4516a4f0ae',
           ):
               raise SystemExit('Scrub formatting requires the exact formatting successor and tree')
-          if os.environ['SCOPE'] in ('web-history-native', 'web-history-browser') and (source, tree) != (
+          if os.environ['SCOPE'] == 'web-history-native' and (source, tree) != (
               '9848c4a7b3569e1bbd4dd509e266a2f24429ad6c', '306254217301e1ebcb6dafe7edd71791074aaedd',
           ):
               raise SystemExit('Web history diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] in ('web-history-format', 'web-history-browser') and (source, tree) != (
+              'b7617e3f83df7f94526f54bec3b2d2527ce18928', '3f2bc6dfd731472c8c283e48ded8193ee082ce5e',
+          ):
+              raise SystemExit('Web history formatting and Chrome require the exact formatting successor and tree')
           if os.environ['SCOPE'] == 'mature-static' and (source, tree) != (
               '85fecf6149b0913f8ac53f579245102012f38ad9', 'bd99da2680440a0e8ca0a838da0d6985a4701644',
           ):
@@ -663,6 +667,7 @@ jobs:
           ]
           groups['web-history-browser'] = [dict(id='web-history-browser', web_production=True, browser_smoke=True,
               command='bash .github/scripts/check.sh web-production\nZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh browser-smoke')]
+          groups['web-history-format'] = [groups['web-history-native'][0]]
           groups['history-window'] = [
               dict(id='history-window-format', format_base='096f9a7f60025ca14781b179d9e7415f10c5b846',
                   command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
