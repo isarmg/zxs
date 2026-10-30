@@ -138,7 +138,7 @@
         },
         {
           "path": "test/naming/unit/lib/tests.rs",
-          "sha256": "6a8cc62572fd612619f24dd3771c1efc068fdce5a071c84f9552bd290662e8a1",
+          "sha256": "310e9a2a030a9b433d54c2513e50d8b4982ecbc73ae7839e1081bb0f9d21a0fd",
           "source": "src/naming/src/lib.rs",
           "source_sha256_before": "619a98004dc108746a51157455bbf031c0f2c7112946e04b535b7391f87d20ad"
         },
