@@ -12,6 +12,34 @@ pub const MAX_HISTORY_FIELD_BYTES: usize = 65_536;
 pub const MAX_HISTORY_NODE_ENCODED_BYTES: usize = 65_536;
 pub const MAX_HISTORY_ENVELOPE_BYTES: usize = 65_536;
 
+/// One read's cancellation signal, created before enqueue and shared with its
+/// worker. It has no wire representation or authority and retains no metadata.
+#[derive(Clone, Debug)]
+pub struct HistoryWindowCancellation(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl HistoryWindowCancellation {
+    pub fn new() -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        )))
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        // This flag publishes no other data; only the signal itself is shared.
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl Default for HistoryWindowCancellation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn invalid(message: &str) -> Error {
     Error::new(ErrorCode::InvalidRequest, message)
 }
@@ -117,7 +145,7 @@ impl HistoryLocation {
     }
 }
 
-/// Unbounded persisted scalar fields are read separately without new write limits.
+// Unbounded persisted scalar fields are read separately without new write limits.
 string_enum!(HistoryField { Message => "message", Author => "author", CreatedAt => "created_at" });
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
