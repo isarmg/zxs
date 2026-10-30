@@ -29,7 +29,8 @@ fn typed_open_transfers_metadata_and_descriptor_ownership_to_the_caller() {
                         "entry_id": "entry", "kind": "file", "path": "file",
                         "handle": "18446744073709551615", "size": "9007199254740992",
                         "max_file_bytes": "18446744073709551615",
-                        "version_id": "version", "workspace_id": null
+                        "version_id": "version", "workspace_id": null,
+                        "mtime":{"state":"saved","unix_seconds":"1600000000"}
                     }),
                 },
                 Some(descriptor.as_fd()),
@@ -111,6 +112,8 @@ fn malformed_open_frames_reject_duplicate_fields_and_release_received_descriptor
     for payload in [
         br#"{"status":"ok","result":{"handle":"1","handle":"2"}}"#.as_slice(),
         br#"{"status":"ok","result":{"handle":"1","\u0068andle":"2"}}"#,
+        br#"{"status":"ok","result":{"mtime":{"state":"saved","unix_seconds":"1","unix_seconds":"2"}}}"#,
+        br#"{"status":"ok","result":{"mtime":{"state":"saved","unix_seconds":"1","\u0075nix_seconds":"2"}}}"#,
         br#"{"status":"ok","status":"error","result":{}}"#,
         br#"{"status":"ok","result":{"path":"\uD800"}}"#,
         br#"{"status":"ok","result":{}} trailing"#,

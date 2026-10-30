@@ -55,7 +55,7 @@ fn with_seek_host(
                     operation_id: None,
                 },
                 None => Response::Ok {
-                    result: json_codec::json!({"authorized":true}),
+                    result: json_codec::json!({"mtime":{"state":"unpublished"}}),
                 },
             };
             stream.send(&response, None).unwrap();
@@ -96,6 +96,7 @@ fn with_seek_host(
             max_file_bytes: 1 << 35,
             version_id: Some("version".into()),
             workspace_id: writable.then(|| "workspace".into()),
+            mtime: smb_protocol::protocol::FileMtime::Unpublished {},
         }),
         fd: file.try_clone().unwrap().into(),
         writable,

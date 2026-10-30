@@ -21,8 +21,43 @@ pub enum DirectorySelection<'a> {
 #[derive(Debug, Serialize)]
 pub struct DirectorySnapshot {
     pub commit_id: String,
-    pub entries: Vec<storage_contract::Entry>,
+    pub entries: Vec<smb_protocol::protocol::DirectoryEntry>,
     pub more: bool,
+}
+
+/// Parse the stored version timestamp at the SMB metadata projection boundary.
+pub(crate) fn version_mtime(
+    version: &storage_contract::FileVersion,
+) -> Result<smb_protocol::protocol::FileMtime, crate::ApiError> {
+    use date_time::{OffsetDateTime, format_description::well_known::Rfc3339};
+    use smb_protocol::protocol::{FileMtime, SavedMtime};
+    let invalid = || {
+        crate::ApiError::new(
+            ::http::StatusCode::INTERNAL_SERVER_ERROR,
+            storage_contract::ErrorCode::MetadataUnavailable,
+            format!("invalid saved time for version {}", version.version_id),
+        )
+    };
+    let time = OffsetDateTime::parse(&version.created_at, &Rfc3339)
+        .map_err(|source| invalid().with_source(source))?;
+    // Version builders store exact UTC seconds. Reject offsets, fractions,
+    // alternate spellings and pre-epoch values instead of normalizing them.
+    if version.created_at.len() != 20
+        || !version.created_at.ends_with('Z')
+        || time.nanosecond() != 0
+        || time
+            .format(&Rfc3339)
+            .map_err(|source| invalid().with_source(source))?
+            != version.created_at
+    {
+        return Err(invalid());
+    }
+    let seconds =
+        u64::try_from(time.unix_timestamp()).map_err(|source| invalid().with_source(source))?;
+    Ok(FileMtime::Saved {
+        unix_seconds: SavedMtime::from_unix_seconds(seconds)
+            .map_err(|source| invalid().with_source(source))?,
+    })
 }
 
 /// Immutable metadata and its stored disposition from one authorized state.

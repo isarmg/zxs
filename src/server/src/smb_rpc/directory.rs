@@ -47,7 +47,7 @@ impl Session {
         let after = page
             .entries
             .last()
-            .map(|entry| entry.lookup_key().to_owned())
+            .map(|node| node.entry.lookup_key().to_owned())
             .or_else(|| cursor.and_then(|cursor| cursor.after));
         if let Some(Handle::Directory(directory)) = self.handles.get_mut(&handle) {
             directory.cursor = Some(DirectoryCursor { commit_id, after });

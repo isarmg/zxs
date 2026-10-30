@@ -161,20 +161,26 @@ impl DirectorySnapshot {
                 entries: Vec::new(),
                 more: false,
             }),
-            crate::DirectorySelection::Page { after, .. } => {
-                Self::page(&snapshot.commit_id, tree.entries(), key, after)
-            }
+            crate::DirectorySelection::Page { after, .. } => Self::page(
+                engine.state(),
+                &snapshot.commit_id,
+                tree.entries(),
+                key,
+                after,
+            ),
         }
     }
 
     fn page(
+        state: &storage_contract::State,
         commit_id: &str,
         entries: &[storage_contract::Entry],
         key: &str,
         after: Option<&str>,
     ) -> Result<Self, ApiError> {
         use smb_protocol::protocol::{
-            MAX_DIRECTORY_PAGE_BYTES, MAX_DIRECTORY_PAGE_ENTRIES, Response,
+            DirectoryEntry, FileMtime, MAX_DIRECTORY_PAGE_BYTES, MAX_DIRECTORY_PAGE_ENTRIES,
+            Response,
         };
         let prefix = if key.is_empty() {
             String::new()
@@ -205,7 +211,24 @@ impl DirectorySnapshot {
             if rest.is_empty() || rest.contains('/') {
                 continue;
             }
-            let extra = json_codec::to_vec(entry)
+            let mtime = match entry.kind {
+                storage_contract::NamespaceEntryKind::Directory => FileMtime::NotFile {},
+                storage_contract::NamespaceEntryKind::File => {
+                    let version = state.versions.get(&entry.version_id).ok_or_else(|| {
+                        ApiError::new(
+                            ::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            storage_contract::ErrorCode::MetadataUnavailable,
+                            format!("selected directory version {} missing", entry.version_id),
+                        )
+                    })?;
+                    crate::backend_read::version_mtime(version)?
+                }
+            };
+            let entry = DirectoryEntry {
+                entry: entry.clone(),
+                mtime,
+            };
+            let extra = json_codec::to_vec(&entry)
                 .expect("invariant: internal JSON serialization succeeds")
                 .len()
                 + usize::from(!page.entries.is_empty());
@@ -219,7 +242,7 @@ impl DirectorySnapshot {
                 break;
             }
             bytes += extra;
-            page.entries.push(entry.clone());
+            page.entries.push(entry);
         }
         Ok(page)
     }

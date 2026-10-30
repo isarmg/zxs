@@ -390,6 +390,7 @@ fn immutable_reads_hide_appended_bytes_while_workspace_reads_follow_live_length(
         max_file_bytes: 1024,
         version_id: Some("version".into()),
         workspace_id: None,
+        mtime: FileMtime::Unpublished {},
     };
     // Model alteration of the same inode after the server verified/opened it.
     file.write_all_at(b"SECRET", 4).unwrap();
@@ -490,3 +491,6 @@ fn raw_and_domain_namespace_requests_preserve_identical_wire_bytes() {
         assert!(raw.parse_operation_id().is_err());
     }
 }
+
+#[path = "mtime_tests.rs"]
+mod mtime_tests;

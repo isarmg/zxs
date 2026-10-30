@@ -29,7 +29,7 @@ sysinfo = { version = "=0.39.6", default-features = false, features = ["system"]
 tokio.workspace = true
 tower-http = { version = "0.6", features = ["fs"], path = "../foundation/networking/tower-http"}
 tracing = {version = "0.1", default-features = false, features = ["collector-default", "env-filter"], path = "../foundation/diagnostics/tracing"}
-date-time = { version = "0.3.55", features = ["formatting"], path = "../foundation/core-types/date-time"}
+date-time = { version = "0.3.55", features = ["formatting", "parsing"], path = "../foundation/core-types/date-time"}
 url-encoding = { path = "../foundation/networking/url-encoding", default-features = false, features = ["std", "parser"] }
 storage-engine = { path = "../engine", optional = true }
 platform-io.workspace = true

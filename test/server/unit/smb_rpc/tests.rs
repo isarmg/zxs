@@ -30,6 +30,8 @@ mod binding_tests;
 mod close_tests;
 #[path = "directory_tests.rs"]
 mod directory_tests;
+#[path = "mtime_tests.rs"]
+mod mtime_tests;
 #[path = "namespace_tests.rs"]
 mod namespace_tests;
 #[path = "../published_reconciliation_failure.rs"]
@@ -1760,7 +1762,7 @@ fn listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories() 
             .unwrap();
         let entries = listed["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["name"], expected_name);
+        assert_eq!(entries[0]["entry"]["name"], expected_name);
         assert_eq!(listed["more"], false);
         session.close(opened.handle, false).unwrap();
     }

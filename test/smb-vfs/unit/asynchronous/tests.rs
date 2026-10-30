@@ -194,7 +194,9 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
                 Request::Hello { .. } => {
                     json_codec::json!({"protocol": PROTOCOL, "capabilities": REQUIRED_CAPABILITIES})
                 }
-                Request::AuthorizeRead { handle: 7 } => json_codec::json!({"authorized":true}),
+                Request::AuthorizeRead { handle: 7 } => {
+                    json_codec::json!({"mtime":{"state":"unpublished"}})
+                }
                 Request::Read {
                     handle: 7,
                     offset,
@@ -227,6 +229,7 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
             max_file_bytes: 1024,
             version_id: Some("version".into()),
             workspace_id: None,
+            mtime: smb_protocol::protocol::FileMtime::Unpublished {},
         }),
         fd: file.try_clone().unwrap().into(),
         writable: false,

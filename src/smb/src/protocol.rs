@@ -22,11 +22,14 @@ pub const AUTHENTICATED_ACCOUNT_CAPABILITY: &str = "authenticated-single-account
 pub const GENERATION_DIRTY_CAPABILITY: &str = "generation-dirty-writes";
 /// Immutable reads use range RPCs; Open hands out a non-content placeholder FD.
 pub const VERIFIED_READ_CAPABILITY: &str = "verified-range-reads";
-pub const REQUIRED_CAPABILITIES: [&str; 4] = [
+/// Metadata carries the selected published version's save time, never inode time.
+pub const VERSION_MTIME_CAPABILITY: &str = "published-version-mtime";
+pub const REQUIRED_CAPABILITIES: [&str; 5] = [
     WRITE_RESERVATION_CAPABILITY,
     AUTHENTICATED_ACCOUNT_CAPABILITY,
     GENERATION_DIRTY_CAPABILITY,
     VERIFIED_READ_CAPABILITY,
+    VERSION_MTIME_CAPABILITY,
 ];
 
 /// A single exact Samba account name, never an alias-to-principal mapping.
@@ -297,6 +300,79 @@ pub struct OpenResult {
     pub max_file_bytes: u64,
     pub version_id: Option<String>,
     pub workspace_id: Option<String>,
+    pub mtime: FileMtime,
+}
+
+/// UTC Unix seconds in the supported saved-version range (1970 through 9999).
+/// The wire uses one canonical decimal string, with no old numeric encoding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serialization(transparent)]
+pub struct SavedMtime(#[serialization(with = "storage_contract::u64_string")] u64);
+
+impl SavedMtime {
+    pub const MAX_UNIX_SECONDS: u64 = 253_402_300_799;
+
+    /// # Errors
+    /// Returns InvalidData when the UTC seconds exceed the end of year 9999.
+    pub fn from_unix_seconds(seconds: u64) -> io::Result<Self> {
+        if seconds > Self::MAX_UNIX_SECONDS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "saved version time is outside the supported UTC range",
+            ));
+        }
+        Ok(Self(seconds))
+    }
+
+    /// Return the exact nonnegative UTC Unix seconds, with no rounding.
+    pub fn unix_seconds(self) -> u64 {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for SavedMtime {
+    fn deserialize<D: data_serialization::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Self, D::Error> {
+        let seconds = storage_contract::u64_string::deserialize(deserializer)?;
+        Self::from_unix_seconds(seconds).map_err(data_serialization::de::Error::custom)
+    }
+}
+
+/// Unpublished work has no save time. Directories are outside this projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FileMtime {
+    NotFile {},
+    Unpublished {},
+    Saved { unix_seconds: SavedMtime },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct AuthorizedMetadata {
+    pub mtime: FileMtime,
+}
+
+/// Logical path metadata, including the synthetic share root.
+#[derive(Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct StatResult {
+    pub entry_id: String,
+    pub kind: storage_contract::NamespaceEntryKind,
+    pub path: String,
+    pub name: String,
+    #[serialization(with = "storage_contract::u64_string")]
+    pub size: u64,
+    pub mtime: FileMtime,
+}
+
+/// A page entry and the time of that exact entry's selected version.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct DirectoryEntry {
+    pub entry: storage_contract::Entry,
+    pub mtime: FileMtime,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -321,7 +397,7 @@ impl OpenResult {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DirectoryPage {
-    pub entries: Vec<storage_contract::Entry>,
+    pub entries: Vec<DirectoryEntry>,
     pub more: bool,
 }
 

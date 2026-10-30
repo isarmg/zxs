@@ -1,5 +1,6 @@
 use super::descriptors::close_opened;
 use super::*;
+mod mtime_tests;
 mod seek_tests;
 
 #[test]
@@ -49,7 +50,7 @@ fn sync_and_async_immutable_reads_use_verified_rpc_bytes_with_a_directory_placeh
             stream
                 .send(
                     &Response::Ok {
-                        result: json_codec::json!({"authorized":true}),
+                        result: json_codec::json!({"mtime":{"state":"unpublished"}}),
                     },
                     None,
                 )
@@ -67,6 +68,7 @@ fn sync_and_async_immutable_reads_use_verified_rpc_bytes_with_a_directory_placeh
                 max_file_bytes: 4,
                 version_id: Some("version".into()),
                 workspace_id: None,
+                mtime: smb_protocol::protocol::FileMtime::Unpublished {},
             }),
             fd: std::fs::File::open(std::env::temp_dir()).unwrap().into(),
             writable: false,
@@ -147,10 +149,18 @@ fn typed_handle_stat_matches_path_stat_without_json_reencoding() {
     ] {
         let mut direct = sdk::SMB_STRUCT_STAT::default();
         let mut decoded = sdk::SMB_STRUCT_STAT::default();
-        let node = json_codec::json!({"kind": kind, "entry_id": "entry", "size": size.to_string()});
+        let mtime = if kind == NamespaceEntryKind::Directory {
+            FileMtime::NotFile {}
+        } else {
+            FileMtime::Saved {
+                unix_seconds: smb_protocol::protocol::SavedMtime::from_unix_seconds(1_600_000_000)
+                    .unwrap(),
+            }
+        };
+        let node = json_codec::json!({"kind": kind, "entry_id": "entry", "size": size.to_string(), "path":"entry", "name":"entry", "mtime":mtime});
         // SAFETY: Both outputs are live, exclusive local SDK stat structures.
         unsafe {
-            fill_stat_fields(kind, "entry", size, &mut direct).unwrap();
+            fill_stat_fields(kind, "entry", size, mtime, &mut direct).unwrap();
             fill_stat(&node, &mut decoded).unwrap();
         }
         assert_eq!(direct.st_ex_dev, decoded.st_ex_dev);
@@ -177,12 +187,27 @@ fn typed_handle_stat_matches_path_stat_without_json_reencoding() {
     let mut output = sdk::SMB_STRUCT_STAT::default();
     // SAFETY: The local output is writable; null is rejected before dereference.
     unsafe {
-        assert!(fill_stat_fields(NamespaceEntryKind::File, "entry", -1, &mut output).is_err());
         assert!(
-            fill_stat_fields(NamespaceEntryKind::File, "entry", 0, std::ptr::null_mut()).is_err()
+            fill_stat_fields(
+                NamespaceEntryKind::File,
+                "entry",
+                -1,
+                FileMtime::Unpublished {},
+                &mut output
+            )
+            .is_err()
         );
-        let too_large =
-            json_codec::json!({"kind": "file", "entry_id": "entry", "size": u64::MAX.to_string()});
+        assert!(
+            fill_stat_fields(
+                NamespaceEntryKind::File,
+                "entry",
+                0,
+                FileMtime::Unpublished {},
+                std::ptr::null_mut()
+            )
+            .is_err()
+        );
+        let too_large = json_codec::json!({"kind": "file", "entry_id": "entry", "size": u64::MAX.to_string(), "path":"entry", "name":"entry", "mtime":{"state":"unpublished"}});
         assert!(fill_stat(&too_large, &mut output).is_err());
         let unknown = json_codec::json!({"kind":"future_kind", "entry_id":"entry", "size":"0"});
         assert!(fill_stat(&unknown, &mut output).is_err());
@@ -229,6 +254,7 @@ fn removed_open_descriptor_is_closed_on_poisoned_lock_and_remote_save_failure() 
                 max_file_bytes: 1,
                 version_id: None,
                 workspace_id: None,
+                mtime: smb_protocol::protocol::FileMtime::Unpublished {},
             }),
             fd: descriptor.into(),
             writable: true,
@@ -343,8 +369,9 @@ fn readdir_keeps_one_page_and_rewind_requests_a_fresh_snapshot() {
                 .iter()
                 .map(|name| {
                     json_codec::json!({
-                        "entry_id": name, "name": name, "lookup_key": name, "path": name,
-                        "kind": "file", "file_id": "file", "version_id": "version", "size": "0",
+                        "entry": {"entry_id": name, "name": name, "lookup_key": name, "path": name,
+                        "kind": "file", "file_id": "file", "version_id": "version", "size": "0"},
+                        "mtime":{"state":"saved", "unix_seconds":"1600000000"},
                     })
                 })
                 .collect();
@@ -384,6 +411,7 @@ fn readdir_keeps_one_page_and_rewind_requests_a_fresh_snapshot() {
             max_file_bytes: 1,
             version_id: None,
             workspace_id: None,
+            mtime: smb_protocol::protocol::FileMtime::Unpublished {},
         }),
         fd: descriptor,
         writable: false,
@@ -548,6 +576,7 @@ fn directory_cleanup_preserves_admission_failure_and_is_terminal_after_errors() 
                 max_file_bytes: 1,
                 version_id: None,
                 workspace_id: None,
+                mtime: smb_protocol::protocol::FileMtime::Unpublished {},
             }),
             // SAFETY: Successful pipe2 returned this unique write endpoint.
             fd: unsafe { OwnedFd::from_raw_fd(descriptors[1]) },
@@ -664,6 +693,7 @@ fn revoked_close_detaches_without_publishing_and_releases_descriptor() {
             max_file_bytes: 1,
             version_id: None,
             workspace_id: None,
+            mtime: smb_protocol::protocol::FileMtime::Unpublished {},
         }),
         fd: descriptor.into(),
         writable: true,
@@ -708,6 +738,7 @@ fn removed_open_owns_descriptor_through_success_and_unwind() {
                 max_file_bytes: 1,
                 version_id: None,
                 workspace_id: None,
+                mtime: smb_protocol::protocol::FileMtime::Unpublished {},
             }),
             fd: descriptor.into(),
             writable: true,
@@ -785,6 +816,7 @@ fn context_cleanup_closes_owned_records_without_publishing_and_snapshot_outlives
                     max_file_bytes: 1,
                     version_id: None,
                     workspace_id: None,
+                    mtime: smb_protocol::protocol::FileMtime::Unpublished {},
                 }),
                 fd: descriptor.into(),
                 writable: true,

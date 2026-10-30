@@ -492,7 +492,8 @@ fn successful_open_descriptor_keeps_the_shared_connection_reusable() {
                     result: json_codec::json!({
                         "entry_id": "entry", "kind": "file", "path": "file",
                         "handle": "1", "size": "0", "max_file_bytes": "1024",
-                        "version_id": null, "workspace_id": null
+                        "version_id": null, "workspace_id": null,
+                        "mtime":{"state":"unpublished"}
                     }),
                 },
                 Some(file.as_fd()),
@@ -589,12 +590,14 @@ fn malformed_open_result_closes_descriptor_and_disconnects_every_clone() {
         json_codec::json!({
             "entry_id": "entry", "kind": "file", "path": "file",
             "handle": 1, "size": "0", "max_file_bytes": "1024",
-            "version_id": null, "workspace_id": null
+            "version_id": null, "workspace_id": null,
+            "mtime":{"state":"unpublished"}
         }),
         json_codec::json!({
             "entry_id": "entry", "kind": "file", "path": "file",
             "handle": "1", "size": "0", "max_file_bytes": "1024",
-            "version_id": null, "workspace_id": null, "unknown": true
+            "version_id": null, "workspace_id": null, "unknown": true,
+            "mtime":{"state":"unpublished"}
         }),
     ] {
         let (one, two) = UnixStream::pair().unwrap();

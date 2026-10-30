@@ -111,6 +111,7 @@ impl Session {
                 max_file_bytes: self.max_file_bytes,
                 version_id: None,
                 workspace_id: None,
+                mtime: smb_protocol::protocol::FileMtime::NotFile {},
             };
             return Ok((
                 json_codec::to_value(result)
@@ -119,6 +120,10 @@ impl Session {
             ));
         }
         let path = path.expect("invariant: a file handle has an admitted entry path");
+        let mtime = match version.as_deref() {
+            Some(version) => self.version_mtime(version)?,
+            None => smb_protocol::protocol::FileMtime::Unpublished {},
+        };
         let (handle, fd, size, workspace_id) = if writable {
             self.reserve_paths(&[path.as_str()])?;
             let mut pending_workspace = None;
@@ -312,6 +317,7 @@ impl Session {
             max_file_bytes: self.max_file_bytes,
             version_id: version,
             workspace_id,
+            mtime,
         };
         Ok((
             json_codec::to_value(result).expect("invariant: internal JSON serialization succeeds"),

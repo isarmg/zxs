@@ -28,6 +28,7 @@ const MAX_HANDLES: usize = 1024;
 mod budget;
 mod directory;
 mod handles;
+mod metadata;
 mod namespace;
 mod publication;
 mod recovery_record;

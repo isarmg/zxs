@@ -611,6 +611,47 @@ fn directory_entry(index: usize, path: String) -> storage_contract::Entry {
         size: 0,
     }
 }
+
+fn directory_page_state(entries: &[storage_contract::Entry]) -> storage_contract::State {
+    let (_root, mut engine, repo, _) = fixture();
+    save_projection_file(
+        &mut engine,
+        &repo.main_branch_id,
+        "template.txt",
+        b"template",
+    );
+    let mut state = engine.state().clone();
+    let template = state.versions.values().next().unwrap().clone();
+    for entry in entries {
+        let mut version = template.clone();
+        version.version_id = entry.version_id.clone();
+        version.file_id = entry.file_id.clone();
+        state.versions.insert(version.version_id.clone(), version);
+    }
+    state
+}
+
+#[test]
+fn directory_mtime_uses_the_page_version_even_when_another_version_has_the_same_path() {
+    use smb_protocol::protocol::{FileMtime, SavedMtime};
+    let old = directory_entry(0, "same.txt".into());
+    let new = directory_entry(1, "same.txt".into());
+    let mut state = directory_page_state(&[old.clone(), new.clone()]);
+    state.versions.get_mut(&old.version_id).unwrap().created_at = "2000-01-01T00:00:00Z".into();
+    state.versions.get_mut(&new.version_id).unwrap().created_at = "2001-01-01T00:00:00Z".into();
+    for (entry, seconds) in [(old, 946_684_800), (new, 978_307_200)] {
+        let version = entry.version_id.clone();
+        let page = DirectorySnapshot::page(&state, "frozen", &[entry], "", None).unwrap();
+        assert_eq!(page.entries[0].entry.version_id, version);
+        assert_eq!(
+            page.entries[0].mtime,
+            FileMtime::Saved {
+                unix_seconds: SavedMtime::from_unix_seconds(seconds).unwrap()
+            }
+        );
+    }
+}
+
 #[test]
 fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copies() {
     use smb_protocol::protocol::{
@@ -623,6 +664,7 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
         name_policy::validate_path(&entry.path).unwrap();
     }
     entries.sort_by(|left, right| left.lookup_key().cmp(right.lookup_key()));
+    let state = directory_page_state(&entries);
     assert!(
         json_codec::to_vec(&json!({"entries":entries}))
             .unwrap()
@@ -633,6 +675,7 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
     let mut seen = Vec::new();
     loop {
         let page = DirectorySnapshot::page(
+            &state,
             "commit_00000000000000000000000000000000",
             &entries,
             "",
@@ -652,8 +695,8 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
         after = page
             .entries
             .last()
-            .map(|entry| entry.lookup_key().to_owned());
-        seen.extend(page.entries.iter().map(|entry| entry.entry_id.clone()));
+            .map(|node| node.entry.lookup_key().to_owned());
+        seen.extend(page.entries.iter().map(|node| node.entry.entry_id.clone()));
         if !page.more {
             break;
         }
@@ -679,6 +722,7 @@ fn directory_byte_bound_applies_to_utf8_and_long_paths_before_the_count_limit() 
         name_policy::validate_path(&entry.path).unwrap();
     }
     let page = DirectorySnapshot::page(
+        &directory_page_state(&entries),
         "commit_00000000000000000000000000000000",
         &entries,
         &parent,
@@ -941,7 +985,7 @@ fn typed_directory_reads_pin_snapshots_and_refresh_on_restart() {
         pinned
             .entries
             .iter()
-            .map(|entry| entry.path.as_str())
+            .map(|node| node.entry.path.as_str())
             .collect::<Vec<_>>(),
         vec!["before.txt"]
     );
@@ -955,7 +999,7 @@ fn typed_directory_reads_pin_snapshots_and_refresh_on_restart() {
         restarted
             .entries
             .iter()
-            .map(|entry| entry.path.as_str())
+            .map(|node| node.entry.path.as_str())
             .collect::<Vec<_>>(),
         vec!["after.txt", "before.txt"]
     );
@@ -988,7 +1032,7 @@ fn typed_directory_reads_pin_snapshots_and_refresh_on_restart() {
                 &identity,
                 crate::ReadDirectory {
                     branch: &repo.main_branch_id,
-                    entry_id: &pinned.entries[0].entry_id,
+                    entry_id: &pinned.entries[0].entry.entry_id,
                     path: Some(&path),
                     selection: crate::DirectorySelection::Capture,
                 }

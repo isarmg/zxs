@@ -37,7 +37,7 @@ fn directory_cursor_freezes_its_commit_and_restart_captures_a_new_snapshot() {
     let handle = root(&mut client);
     let first = page(&mut client, handle, false);
     assert_eq!(first.entries.len(), 1);
-    assert_eq!(first.entries[0].path, "report.txt");
+    assert_eq!(first.entries[0].entry.path, "report.txt");
     let mut writer = session(shared.clone(), &branch);
     writer
         .namespace(
@@ -54,7 +54,7 @@ fn directory_cursor_freezes_its_commit_and_restart_captures_a_new_snapshot() {
         restarted
             .entries
             .iter()
-            .map(|entry| entry.path.as_str())
+            .map(|node| node.entry.path.as_str())
             .collect::<Vec<_>>(),
         vec!["new-directory", "report.txt"]
     );

@@ -29,6 +29,7 @@ FD 合约和打开元数据非法仍先关闭共享连接，不把半准入结�
 - 只允许受信任的本机 Samba 进程 UID 连接，使用 Linux `SO_PEERCRED` 校验；JSON 中没有远程客户端可以自行声明的 ACL、管理员权限或任意核心命令。
 - VFS 从真实 Samba 会话安全令牌读取认证身份，拒绝匿名、guest、缺少 Authenticated Users、缺失身份及 force-user 会话，不信任回调中自报的用户名。服务端只接受显式配置的单一 Samba account_name，并绑定当前唯一 ZXS 管理员；Samba 凭据与 ZXS 凭据独立。
 - 分享范围固定到一个仓库的主分支。只读打开固定具体版本，正文 FD 和核心读租约留在服务端；VFS 取得既有空目录的非正文占位 FD，文件属性仍由逻辑打开元数据提供。后续提交不会改变旧句柄读到的版本。每次 VFS 操作（含缓存 readdir）在本地复核真实 Samba token 与同一 account_name，guest、anonymous 或 force-user 立即拒绝。ZXS 唯一身份与共享绑定在每次实际 RPC 目录页请求、读取授权和写入发布中复核；同一已返回目录页的逐项缓存访问不增加逐条 RPC，也不声称能撤回已经返回的数据。既有 FD 不允许绕过后续受支持 I/O 的身份与绑定检查。
+- 普通文件的 `mtime` 来自已发布 `FileVersion.created_at`，按该版本的 UTC 秒投影到 SDK `st_ex_mtime`；视频、照片和文档使用相同规则。路径 Stat 取本次可见版本，只读句柄保留打开版本，继承文件取实际可见父版本。它不表示拍摄时间、导入前时间或安装／修复副本的 inode 时间；同一秒保存的不同版本可以有相同 mtime。
 - 写打开使用服务端私有目录中的完整独立工作文件，FD 通过 SCM_RIGHTS 转交；RPC 不返回磁盘内部路径。
 - `Stat`、已有文件或目录的 `Open`、`rename` 源及 `unlink` / `rmdir` 源允许 NFC 名称的规范等价输入，例如以 NFD 查询已保存的 NFC 条目；查找仍受原始输入的字符、保留名、结构及长度预算限制。命中的打开句柄保留条目现有显示路径，可写句柄后续上传也使用此路径，不隐式改名。带创建意图的打开未命中时，先严格校验 NFC 新名称，再分配工作区或工作文件；独占创建遇到已有等价名称仍冲突。`mkdir` 和 `rename` 目标始终严格校验新名称。此入口区分不改变 Unicode 折叠、允许字符或持久化命名策略。
 - 选中的未写入分支继承父版本的内容和大小。只读打开取得父版本的只读描述符，写打开从父内容建立私有工作副本；仅打开后关闭不创建版本，实际写入或显式截断并成功发布后才形成自己的分支版本，父版本不变。目录分支中各个文件分别保留继承或自己的版本。
@@ -47,6 +48,37 @@ FD 合约和打开元数据非法仍先关闭共享连接，不把半准入结�
 ## 只读正文与完整性预算
 
 守护进程和 VFS 必须同时协商 `verified-range-reads` capability；缺失时握手失败，不回退到裸正文 FD。只读 Open 验证本盘发布证据、同版本校验清单及实际文件长度，不预先扫描正文，也不宣称整个副本当前健康。可写 Open 的完整校验和独立工作副本保持原语义。
+
+## 文件版本保存时间
+
+Open、Stat、AuthorizeRead 的属性结果和目录页条目都必填 `mtime`：
+`{"state":"saved","unix_seconds":"1600000000"}` 表示已保存版本；
+`{"state":"unpublished"}` 表示尚无已保存版本的新文件；
+`{"state":"not_file"}` 表示不在本投影范围内的目录。目录页条目为
+`{entry, mtime}`，在同一次授权快照内取该页具体 `entry.version_id` 的时间，
+翻页不会向当前同名路径重绑；时间元数据也计入原有页字节预算。
+
+源时间只接受现有 `YYYY-MM-DDTHH:mm:ssZ` UTC 秒格式，范围为 Unix epoch
+至 9999 年末；本机协议使用同范围的规范十进制秒字符串。缺字段、未知状态／字段、
+重复字段、非法日期、偏移、额外精度和越界明确失败，不替换为 0 或当前时刻。
+此边界只读版本元数据，不为时间打开或扫描正文。
+
+可写句柄显示最后确认发布提交 `last_head` 中该文件的保存时间：修改或 truncate
+仍保留此前保存时间，新建且未发布时没有保存时间。Flush 沿既有核心发布确认推进
+`last_head` 后，后续 fstat 才投影该发布版本；结果未知时仍需按原操作核对。
+write-through Dirty 同步走相同发布确认路径。失败不会推断性地清零或改成当前时刻：
+若发布确认尚未推进 `last_head`，时间仍为此前保存版本（新建文件仍无保存时间）；
+若 native completion 已确认发布、随后元数据核对失败，`last_head` 已指向的新版时间
+可以返回，但失败仍须按原操作核对，不能把后续 FD 字节宣称为已保存。
+后继脏代不把工作 FD 的复制／写入时间解释为新保存时间。未发布文件在 SDK 中使用
+`SAMBA_UTIME_OMIT`，使 Samba 返回缺失时间，而不是有效的 1970 年保存日期；合法的
+Unix epoch 版本仍是秒与纳秒均为零的真实时间。目录时间不在本投影范围内，
+客户端设置时间仍被拒绝。
+
+冻结保证属于 RPC 目录页的元数据。固定 Samba 4.23 在返回枚举属性时还会按名称
+打开 pathref 并查询属性，该新句柄仍遵守当次 Open 的可见版本规则；当前实现不把
+目录页的历史时间套到另一个当前版本句柄。将完整 Samba 枚举属性也冻结到页版本
+需要另行决定目录作用域的属性／打开协议与授权语义。
 
 同步 `pread` 和异步 `pread_send` 的只读分支均调用 `Read {handle, offset, length}`。每个 RPC 最多请求 64 KiB，响应为严格 `ReadResult {bytes}`，使用既有 JSON 帧。客户端连续读取直到填满宿主请求或明确 EOF；段边界的短响应不冒充 EOF。每个 Read（含缓存、零长度与 EOF）在实际执行处重新授权。写句柄继续授权后读取私有工作 FD。sendfile/recvfile 拒绝，其他直接读取占位 FD 的路径不能取得正文。
 
@@ -81,7 +113,7 @@ socket 已存在时服务端拒绝覆盖，启动时不会删除未知对象。�
 
 帧格式为 `u32` 大端 JSON 长度、严格 UTF-8 JSON；最大 8 MiB，分配 payload 前检查长度。可选单个 FD 通过四字节帧头的 SCM_RIGHTS 附带；接收端立即设置 CLOEXEC，拒绝额外或截断的 FD。客户端请求禁止附带 FD。64 位字段使用规范十进制字符串。
 
-握手双方必须显式声明 `capabilities: ["durable-write-reservations", "authenticated-single-account", "generation-dirty-writes", "verified-range-reads"]`。缺少任一能力的旧模块或服务端在创建会话、复制文件和转交 FD 前即被拒绝，不提供匿名、跳过 `PrepareWrite`、裸正文 FD 或逐写 `Dirty` 与分代 `Dirty` 混用的兼容路径。能力是实现语义声明，不是认证凭证；代理 UID、受保护 socket 与真实 Samba 安全令牌仍是信任边界。
+握手双方必须显式声明 `capabilities: ["durable-write-reservations", "authenticated-single-account", "generation-dirty-writes", "verified-range-reads", "published-version-mtime"]`。缺少任一能力的旧模块或服务端在创建会话、复制文件和转交 FD 前即被拒绝，不提供匿名、跳过 `PrepareWrite`、裸正文 FD、缺失保存时间字段或逐写 `Dirty` 与分代 `Dirty` 混用的兼容路径。能力是实现语义声明，不是认证凭证；代理 UID、受保护 socket 与真实 Samba 安全令牌仍是信任边界。
 
 仓库在拆分、恢复后默认禁止 SMB，新连接明确返回 `SMB_REBIND_REQUIRED`；管理员须通过受权绑定接口核对历史代际后启用，原共享不自动跳到新历史。影响范围内仍有活动写工作区时，绑定变更先返回 `WORKSPACE_BUSY`，不隐式取消工作区。每次成功绑定变更推进独立的 `smb_binding_generation`，握手捕获该代际、仓库和分支。后续读取授权、新打开、目录分页、命名空间操作与写入发布在核心锁内复核，禁用或重新绑定后旧会话不会因再次启用而恢复。普通文件提交和默认目录组成选择不推进绑定代际，已打开读句柄仍固定原版本。代际失效不强行回收宿主 FD，但后续受支持 I/O 返回 `SMB_REBIND_REQUIRED`；`close` / `detach` 仍可释放句柄，失败写入保留恢复证据。
 

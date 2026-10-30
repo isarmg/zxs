@@ -64,6 +64,8 @@ pub(crate) enum ApiErrorSource {
     #[error("{0}")]
     DateFormat(#[from] date_time::error::Format),
     #[error("{0}")]
+    DateParse(#[from] date_time::error::Parse),
+    #[error("{0}")]
     Clock(#[from] std::time::SystemTimeError),
     #[cfg(feature = "core")]
     #[error("{0}")]

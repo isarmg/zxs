@@ -462,7 +462,7 @@ impl Client {
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "SMB bridge did not negotiate authenticated sessions, durable generation writes and verified range reads",
+                "SMB bridge did not negotiate authenticated sessions, durable generation writes, verified range reads and saved version times",
             ));
         }
         Ok(client)

@@ -15,7 +15,10 @@ use data_serialization::Deserialize;
 use json_codec::Value;
 use smb_protocol::{
     client::{Client, Mutation, WriteSequence, error_errno},
-    protocol::{DirectoryPage, NamespaceOperation, OpenResult, Request as RawRequest},
+    protocol::{
+        AuthorizedMetadata, DirectoryPage, FileMtime, NamespaceOperation, OpenResult,
+        Request as RawRequest, StatResult,
+    },
 };
 
 type Request = RawRequest<storage_contract::OperationId>;
@@ -712,21 +715,12 @@ unsafe extern "C" fn fsync_recv(
 /// # Safety
 /// A non-null stat points to live, aligned, exclusively writable SDK stat storage.
 unsafe fn fill_stat(node: &Value, stat: *mut sdk::SMB_STRUCT_STAT) -> std::io::Result<()> {
-    let kind = NamespaceEntryKind::deserialize(node.get("kind").ok_or_else(bad)?)
-        .map_err(std::io::Error::other)?;
-    let id = node
-        .get("entry_id")
-        .and_then(Value::as_str)
-        .ok_or_else(bad)?;
-    let size = node
-        .get("size")
-        .and_then(Value::as_str)
-        .ok_or_else(bad)?
-        .parse::<i64>()
+    let node = StatResult::deserialize(node).map_err(std::io::Error::other)?;
+    let size = i64::try_from(node.size)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     // SAFETY: The caller provides the same exclusive SDK output required by
     // fill_stat_fields, which rejects null before writing.
-    unsafe { fill_stat_fields(kind, id, size, stat) }
+    unsafe { fill_stat_fields(node.kind, &node.entry_id, size, node.mtime, stat) }
 }
 
 /// # Safety
@@ -735,6 +729,7 @@ unsafe fn fill_stat_fields(
     kind: NamespaceEntryKind,
     id: &str,
     size: i64,
+    mtime: FileMtime,
     stat: *mut sdk::SMB_STRUCT_STAT,
 ) -> std::io::Result<()> {
     if stat.is_null() || size < 0 {
@@ -743,6 +738,18 @@ unsafe fn fill_stat_fields(
     let mode = match kind {
         NamespaceEntryKind::Directory => libc::S_IFDIR | 0o700,
         NamespaceEntryKind::File => libc::S_IFREG | 0o600,
+    };
+    let saved_time = match (kind, mtime) {
+        (NamespaceEntryKind::File, FileMtime::Saved { unix_seconds }) => {
+            let seconds = libc::time_t::try_from(unix_seconds.unix_seconds())
+                .map_err(|source| std::io::Error::new(std::io::ErrorKind::InvalidData, source))?;
+            Some((seconds, 0))
+        }
+        (NamespaceEntryKind::File, FileMtime::Unpublished {}) => {
+            Some((0, i64::from(sdk::SAMBA_UTIME_OMIT)))
+        }
+        (NamespaceEntryKind::Directory, FileMtime::NotFile {}) => None,
+        _ => return Err(bad()),
     };
     // SAFETY: The caller supplies exclusive writable SDK stat storage; null was rejected. Its POD
     // fields admit zero and are filled before return.
@@ -757,6 +764,10 @@ unsafe fn fill_stat_fields(
         (*stat).st_ex_size = size as _;
         (*stat).st_ex_blksize = 4096;
         (*stat).st_ex_blocks = (size as u64).div_ceil(512) as _;
+        if let Some((seconds, nanos)) = saved_time {
+            (*stat).st_ex_mtime.tv_sec = seconds;
+            (*stat).st_ex_mtime.tv_nsec = nanos;
+        }
     }
     Ok(())
 }
@@ -793,28 +804,36 @@ unsafe extern "C" fn fstat(
         // event-loop thread and does not escape the callback.
         let context = unsafe { context(handle) }?;
         let opened = context.files.get(&(fsp as usize)).ok_or_else(bad)?;
-        context.client.call(Request::AuthorizeRead {
+        let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+        let metadata = context.client.call(Request::AuthorizeRead {
             handle: opened.info.handle,
         })?;
+        let metadata: AuthorizedMetadata =
+            json_codec::from_value(metadata).map_err(std::io::Error::other)?;
         // SAFETY: libc::stat is a C POD output structure whose integer and pointer fields admit
         // zero initialization.
-        let mut metadata: libc::stat = unsafe { std::mem::zeroed() };
+        let mut physical: libc::stat = unsafe { std::mem::zeroed() };
         // SAFETY: The descriptor is owned and the output points to a live, exclusively borrowed
         // stat structure.
-        if unsafe { libc::fstat(opened.fd.as_raw_fd(), &mut metadata) } < 0 {
+        if unsafe { libc::fstat(opened.fd.as_raw_fd(), &mut physical) } < 0 {
             return Err(std::io::Error::last_os_error());
         }
         let size = if opened.info.kind == NamespaceEntryKind::Directory {
             0
         } else if opened.writable {
-            metadata.st_size
+            physical.st_size
         } else {
             i64::try_from(opened.info.size)
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?
         };
+        let mtime = if opened.writable {
+            metadata.mtime
+        } else {
+            opened.info.mtime
+        };
         // SAFETY: The host provides exclusive writable stat output for this callback, as required
         // by fill_stat_fields.
-        unsafe { fill_stat_fields(opened.info.kind, &opened.info.entry_id, size, stat) }?;
+        unsafe { fill_stat_fields(opened.info.kind, &opened.info.entry_id, size, mtime, stat) }?;
         Ok(0)
     })
 }
@@ -882,8 +901,8 @@ unsafe extern "C" fn real_filename(
         let entry = unsafe { context(handle) }?
             .client
             .call(Request::Stat { path })?;
-        let name = entry.get("name").and_then(Value::as_str).ok_or_else(bad)?;
-        let name = std::ffi::CString::new(name)
+        let entry: StatResult = json_codec::from_value(entry).map_err(std::io::Error::other)?;
+        let name = std::ffi::CString::new(entry.name)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
         // SAFETY: mem_ctx is a live host talloc context or null; name is a live CString copied by
         // talloc_strdup.
@@ -1040,6 +1059,7 @@ impl Directory {
         }
         let mut entries = Vec::new();
         for node in page.entries {
+            let node = node.entry;
             let mut entry: sdk::dirent = Default::default();
             let name = node.name();
             debug_assert!(

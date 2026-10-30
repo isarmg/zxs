@@ -123,7 +123,18 @@ fn check_read_authorization(
         );
         assert!(descriptor.is_none());
         match (reply, error) {
-            (Response::Ok { result }, None) => assert_eq!(result, json!({"authorized":true})),
+            (Response::Ok { result }, None) => {
+                let metadata: smb_protocol::protocol::AuthorizedMetadata =
+                    json_codec::from_value(result).unwrap();
+                if opened.workspace_id.is_some() {
+                    assert!(matches!(
+                        metadata.mtime,
+                        smb_protocol::protocol::FileMtime::Saved { .. }
+                    ));
+                } else {
+                    assert_eq!(metadata.mtime, opened.mtime);
+                }
+            }
             (Response::Error { code, .. }, Some(expected)) => assert_eq!(code.as_str(), expected),
             (reply, expected) => {
                 panic!("unexpected authorization reply: {reply:?}, error={expected:?}")

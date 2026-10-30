@@ -51,8 +51,8 @@ fn build_sdk() {
         .layout_tests(false)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .allowlist_type("vfs_.*|files_struct|smb_filename|stat_ex|SMB_STRUCT_STAT|NTSTATUS|TALLOC_CTX|mode_t|off_t|tevent_.*|file_id|auth_session_info|auth_user_info|security_token|dom_sid")
-        .allowlist_function("smb_register_vfs|lp_parm_const_string|talloc_strdup|fsp_get_.*fd|__tevent_req_create|_tevent_req_data|_tevent_req_done|tevent_req_post|tevent_req_received|_tevent_add_fd|tevent_fd_set_auto_close|_talloc_set_destructor|_talloc_free|tevent_context_init|_tevent_loop_once|tevent_req_is_in_progress|security_token_is_anonymous|security_token_has_builtin_guests|security_token_has_nt_authenticated_users")
-        .allowlist_var("SMB_VFS_INTERFACE_VERSION|VFS_OPEN_HOW_.*|VFS_RENAME_HOW_.*|TEVENT_FD_READ|global_sid_Anonymous|global_sid_Authenticated_Users|global_sid_Builtin_Guests")
+        .allowlist_function("smb_register_vfs|lp_parm_const_string|talloc_strdup|fsp_get_.*fd|__tevent_req_create|_tevent_req_data|_tevent_req_done|tevent_req_post|tevent_req_received|_tevent_add_fd|tevent_fd_set_auto_close|_talloc_set_destructor|_talloc_free|tevent_context_init|_tevent_loop_once|tevent_req_is_in_progress|security_token_is_anonymous|security_token_has_builtin_guests|security_token_has_nt_authenticated_users|full_timespec_to_nt_time")
+        .allowlist_var("SMB_VFS_INTERFACE_VERSION|VFS_OPEN_HOW_.*|VFS_RENAME_HOW_.*|TEVENT_FD_READ|global_sid_Anonymous|global_sid_Authenticated_Users|global_sid_Builtin_Guests|SAMBA_UTIME_OMIT|NTTIME_OMIT")
         .clang_arg("-D_GNU_SOURCE=1")
         .clang_arg("-D_XOPEN_SOURCE_EXTENDED=1")
         .clang_arg("-D__STDC_WANT_LIB_EXT1__=1")
@@ -75,7 +75,13 @@ fn build_sdk() {
     ] {
         generator = generator.clang_arg(format!("-I{}", directory.display()));
     }
-    for library in ["lib/tevent", "lib/talloc", "libcli/security", "source3"] {
+    for library in [
+        "lib/tevent",
+        "lib/talloc",
+        "lib/util",
+        "libcli/security",
+        "source3",
+    ] {
         println!(
             "cargo:rustc-link-search=native={}",
             build.join(library).display()

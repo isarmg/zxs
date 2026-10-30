@@ -172,7 +172,10 @@ impl Session {
                 exclusive,
                 write_through,
             } => return self.open(path, writable, create, truncate, exclusive, write_through),
-            Request::AuthorizeRead { handle } => self.authorize_read(handle)?,
+            Request::AuthorizeRead { handle } => {
+                self.authorize_read(handle)?;
+                self.handle_metadata(handle)?
+            }
             Request::Read {
                 handle,
                 offset,
@@ -186,23 +189,7 @@ impl Session {
             Request::Close { handle } => self.close(handle, false)?,
             Request::Detach { handle } => self.detach(handle)?,
             Request::Abort { handle } => self.close(handle, true)?,
-            Request::Stat { path } => {
-                if path.is_empty() || path == "." {
-                    self.authorize_binding()?;
-                    json!({"path":"","kind":"directory","size":"0","entry_id":self.branch})
-                } else {
-                    let path = name_policy::LookupPath::parse(&path)
-                        .map_err(|source| contract(source.into()))?;
-                    json_codec::to_value(self.find(&path)?.ok_or_else(|| {
-                        ApiError::new(
-                            ::http::StatusCode::NOT_FOUND,
-                            storage_contract::ErrorCode::NotFound,
-                            "entry missing",
-                        )
-                    })?)
-                    .expect("invariant: internal JSON serialization succeeds")
-                }
-            }
+            Request::Stat { path } => self.stat(&path)?,
             Request::ReadDirectory { handle, restart } => self.read_directory(handle, restart)?,
             Request::Namespace {
                 kind,
