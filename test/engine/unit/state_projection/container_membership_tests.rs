@@ -230,7 +230,18 @@ fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwner
     assert_memberships(before, transition.previous().owners);
     assert_memberships(after, transition.next().owners);
     assert_memberships(before, index);
+    assert_cold_transition(before, after);
     transition.next().owners.clone()
+}
+
+fn assert_cold_transition(before: &State, after: &State) {
+    let previous = DerivedOwners::from_state(before);
+    let mut cold = ProjectionTransition::new(before, after, None).unwrap();
+    assert_eq!(cold.previous().owners, &previous);
+    assert_eq!(cold.next().owners, &DerivedOwners::from_state(after));
+    assert!(cold.take_history_edits().is_none());
+    // Requesting edits must not mutate the previous derivation either.
+    assert_eq!(cold.previous().owners, &previous);
 }
 
 #[test]
@@ -502,4 +513,151 @@ fn control_and_unowned_rows_do_not_rebuild_unchanged_relations() {
             .shares_storage_with(&next.directory_trees.0)
     );
     assert_memberships(&after, next);
+}
+
+#[test]
+fn cold_exact_transitions_share_the_fresh_previous_instead_of_rebuilding_after() {
+    let before = sharing_fixture();
+    for edit_label in [false, true] {
+        let mut after = candidate(&before);
+        if edit_label {
+            after.branches.get_mut("b-a").unwrap().name = "new label".into();
+        }
+        let mut transition = ProjectionTransition::new(&before, &after, None).unwrap();
+        let previous = transition.previous().owners;
+        let next = transition.next().owners;
+        let full = DerivedOwners::from_state(&after);
+        assert_eq!(previous, &DerivedOwners::from_state(&before));
+        assert_eq!(next, &full);
+        // All witnessed roots are nonempty. A second full derivation creates
+        // new backing; the exact update retains these freshly built roots.
+        assert!(!previous.files.0.is_empty());
+        assert!(!previous.directories.0.is_empty());
+        assert!(!previous.history_rows.is_empty());
+        assert!(!previous.repository_rows.is_empty());
+        assert!(previous.files.0.shares_storage_with(&next.files.0));
+        assert!(
+            previous
+                .directories
+                .0
+                .shares_storage_with(&next.directories.0)
+        );
+        assert!(
+            previous
+                .history_rows
+                .shares_storage_with(&next.history_rows)
+        );
+        assert!(
+            previous
+                .repository_rows
+                .shares_storage_with(&next.repository_rows)
+        );
+        assert!(!previous.files.0.shares_storage_with(&full.files.0));
+        assert!(
+            !previous
+                .directories
+                .0
+                .shares_storage_with(&full.directories.0)
+        );
+        assert!(transition.take_history_edits().is_none());
+    }
+}
+
+#[test]
+fn cold_unknown_write_sets_keep_the_full_after_rebuild() {
+    let before = sharing_fixture();
+    let mut key_limit = candidate(&before);
+    for number in 0..16_384 {
+        key_limit
+            .file_notes
+            .insert(format!("unowned-{number}"), "note".into());
+    }
+    assert!(Writes::between(&before, &key_limit).is_some());
+    assert_cold_transition(&before, &key_limit);
+    let mut byte_limit = candidate(&before);
+    byte_limit
+        .file_notes
+        .insert("k".repeat(1024 * 1024), "note".into());
+    assert!(Writes::between(&before, &byte_limit).is_some());
+    assert_cold_transition(&before, &byte_limit);
+    let mut byte_overflow = byte_limit.clone();
+    byte_overflow
+        .file_notes
+        .insert("extra".into(), "note".into());
+    let mut foreign = candidate(&before);
+    foreign.versions = before
+        .versions
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let mut all = candidate(&before);
+    all.branches.values_mut().next().unwrap().name = "unknown writer".into();
+    let mut overflow = key_limit;
+    overflow.file_notes.insert("extra".into(), "note".into());
+    for after in [&foreign, &all, &overflow, &byte_overflow] {
+        assert!(Writes::between(&before, after).is_none());
+        let mut transition = ProjectionTransition::new(&before, after, None).unwrap();
+        let previous = transition.previous().owners;
+        let next = transition.next().owners;
+        assert_eq!(next, &DerivedOwners::from_state(after));
+        assert_eq!(previous, &DerivedOwners::from_state(&before));
+        assert!(
+            !previous
+                .directories
+                .0
+                .shares_storage_with(&next.directories.0)
+        );
+        assert!(transition.take_history_edits().is_none());
+    }
+}
+
+fn directory_commit(id: &str, history: &str, directories: &[&str]) -> storage_contract::Commit {
+    record(json!({
+        "commit_id":id, "history_tree_id":history, "kind":"save", "parent_commit_ids":[],
+        "tree_id":"tree", "sequence":"1", "operation_id":storage_contract::OperationId::generate(),
+        "author":"alice", "message":"fixture", "entries":directories.iter().map(|entry| json!({
+            "entry_id":entry, "path":entry, "name":entry, "lookup_key":entry,
+            "kind":"directory", "file_id":"", "version_id":"", "size":"0"
+        })).collect::<Vec<_>>(), "provenance":null
+    }))
+}
+
+#[test]
+fn cold_shared_directory_owners_follow_commit_insert_rewrite_and_last_removal() {
+    let mut before = sharing_fixture();
+    for (id, history) in [("c1", "h1"), ("c2", "h1"), ("c3", "h2")] {
+        before
+            .commits
+            .insert(id.into(), directory_commit(id, history, &["shared"]));
+    }
+    before
+        .directory_selection_generations
+        .insert("shared".into(), 1);
+    let mut after = candidate(&before);
+    after.commits.insert(
+        "c4".into(),
+        directory_commit("c4", "h3", &["shared", "other"]),
+    );
+    assert_cold_transition(&before, &after);
+    before = after;
+    after = candidate(&before);
+    after
+        .commits
+        .insert("c1".into(), directory_commit("c1", "h3", &["other"]));
+    after.versions.get_mut("v-a1").unwrap().history_tree_id = "h3".into();
+    after.histories.get_mut("h1").unwrap().repository_id = "r2".into();
+    assert_cold_transition(&before, &after);
+    before = after;
+    for id in ["c2", "c3", "c4", "c1"] {
+        after = candidate(&before);
+        after.commits.remove_discard(id);
+        assert_cold_transition(&before, &after);
+        before = after;
+    }
+    assert!(
+        !DerivedOwners::from_state(&before)
+            .directories
+            .0
+            .contains_key("shared")
+    );
 }

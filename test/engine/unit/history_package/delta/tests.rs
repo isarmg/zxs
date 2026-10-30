@@ -44,6 +44,10 @@ fn logical(state: &State, id: &str) -> Value {
 // Independent full projection/encoding is intentionally only test code. The
 // fixture includes multiple owners disallowed by today's external admission.
 fn compare(before: &State, after: &State, index: &DerivedOwners) -> DerivedOwners {
+    let mut cold = crate::state_projection::ProjectionTransition::new(before, after, None).unwrap();
+    assert_eq!(cold.previous().owners(), &DerivedOwners::from_state(before));
+    assert_eq!(cold.next().owners(), &DerivedOwners::from_state(after));
+    assert!(cold.take_history_edits().is_none());
     let mut delta = ProjectionDelta::between(before, after, index)
         .unwrap()
         .unwrap();

@@ -22,6 +22,12 @@
 
 未知公开 mutable escape、foreign replacement 和写集上限导致的 `MapChanges::All` 才走明确 full；不把普通增删、owner 移动或 metadata 单写归入 All。没有逻辑变化的 history 不重建 manifest，不扫描其 State versions/files，也不重复全 manifest.validate。
 
+冷态 `ProjectionTransition` 先从本次不可变 `before` 完整构建 `previous`，再用同一次事务的可信写集派生 `next owners`。纯成员关系更新与 history JSON edits 分开：冷态不调用行值编码，`history_edits` 始终为 `None`，因此完整 history manifest 逻辑准入、snapshot 依赖安装和全部发布屏障仍执行。foreign、All 或写集超限仍完整构建 `after`。本次新建的索引只证明成员关系，不授予旧图、授权、epoch 或磁盘免读许可，也不增加跨事务 RAM cache。
+
+本 main 实现的目录引用来自已准入内存 `Commit.entries`，owner 派生不执行磁盘 I/O，也没有首发布者索引；两者的错误观察顺序不因这次优化而改变。坏对象、I/O 及领域闭包错误仍在原完整准入／发布阶段返回并保留来源。减少的是精确写集冷态的第二次完整 owner 推导；首次完整推导、实际改动条目和受影响关系仍有成本，`SharedRecords` 首次共享写的复制成本仍保留。
+
+根 `test/engine/unit/state_projection/container_membership_tests.rs` 将冷态前后完整 owner 值与独立全量推导对照，并对未触及的非空索引根断言存储身份共享。完整重建 `after` 会创建不同根；该见证确定性地区分一次完整构建加增量更新与两次完整构建，不依赖计时或生产计数器。cold 的 history edits 缺席、previous 不变及 foreign/All/overflow 完整回退分别断言；发布边界的坏条目首错、损坏页、PREPARE I/O 来源和恢复重试见对应 `history_baseline_tests.rs`。
+
 ## Graph 与信任边界
 
 通用 `edit_map_values` 连接新增／删除／替换到同一个 radix planner。`Resolver::retain_map` 复用同一图形状／路由校验和 address 去重，只保留完整已认证对象，不另造全逻辑 manifest。新 history 经索引选出的所有真实投影行编码；新增大 Commit.entries 本身仍是实际 S 字节成本，没有拆分大 entity。

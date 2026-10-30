@@ -455,13 +455,18 @@ impl<'a> ProjectionTransition<'a> {
             Some(index) => std::borrow::Cow::Borrowed(index),
             None => std::borrow::Cow::Owned(DerivedOwners::from_state(before)),
         };
-        let delta = match baseline {
-            Some(index) => ProjectionDelta::between(before, after, index)?,
-            None => None,
-        };
-        let (next, history_edits) = match delta {
-            Some(delta) => (delta.owners, Some(delta.histories)),
-            None => (DerivedOwners::from_state(after), None),
+        let (next, history_edits) = match baseline {
+            Some(index) => match ProjectionDelta::between(before, after, index)? {
+                Some(delta) => (delta.owners, Some(delta.histories)),
+                None => (DerivedOwners::from_state(after), None),
+            },
+            None => {
+                // The freshly derived previous index proves pure membership,
+                // not a published history graph. Keep full history admission.
+                let next = DerivedOwners::transition(before, after, &previous, None)?
+                    .unwrap_or_else(|| DerivedOwners::from_state(after));
+                (next, None)
+            }
         };
         Ok(Self {
             before,
@@ -633,6 +638,23 @@ impl ProjectionDelta {
         after: &State,
         index: &DerivedOwners,
     ) -> Result<Option<Self>> {
+        let mut histories = BTreeMap::new();
+        Ok(
+            DerivedOwners::transition(before, after, index, Some(&mut histories))?
+                .map(|owners| Self { owners, histories }),
+        )
+    }
+}
+
+impl DerivedOwners {
+    /// Membership updates are pure State derivations. Only a caller with a
+    /// published history basis requests the fallible JSON projection as well.
+    fn transition(
+        before: &State,
+        after: &State,
+        index: &Self,
+        mut histories: Option<&mut BTreeMap<String, HistoryEdits>>,
+    ) -> Result<Option<Self>> {
         let Some(writes) = Writes::between(before, after) else {
             return Ok(None);
         };
@@ -640,9 +662,10 @@ impl ProjectionDelta {
         let mut owners = index.clone();
         owners.update_dependencies(before, after, &writes, &mut affected);
         owners.update_file_rows(before, after, index, &writes);
-        let mut histories = BTreeMap::<String, HistoryEdits>::new();
         for key in &writes.histories {
-            if before.histories.get(key) != after.histories.get(key) {
+            if before.histories.get(key) != after.histories.get(key)
+                && let Some(histories) = histories.as_deref_mut()
+            {
                 let edits = histories.entry(key.clone()).or_default();
                 edits.history = true;
                 edits.repository = true;
@@ -663,7 +686,9 @@ impl ProjectionDelta {
             }
         }
         for key in &writes.repositories {
-            if before.repositories.get(key) != after.repositories.get(key) {
+            if before.repositories.get(key) != after.repositories.get(key)
+                && let Some(histories) = histories.as_deref_mut()
+            {
                 for source in [index, &owners] {
                     source.repositories.each(key, |history| {
                         histories.entry(history.to_owned()).or_default().repository = true;
@@ -714,6 +739,9 @@ impl ProjectionDelta {
                 for history in next.difference(&previous) {
                     owners.member(history, field, &key, true);
                 }
+                let Some(histories) = histories.as_deref_mut() else {
+                    continue;
+                };
                 let equal = field.equal(before, after, &key);
                 if equal && previous == next {
                     continue;
@@ -742,7 +770,7 @@ impl ProjectionDelta {
                 }
             }
         }
-        Ok(Some(Self { owners, histories }))
+        Ok(Some(owners))
     }
 }
 

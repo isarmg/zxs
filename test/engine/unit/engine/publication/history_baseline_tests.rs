@@ -143,6 +143,154 @@ fn cold_planning_captures_admitted_missing_fields_before_the_business_closure() 
 }
 
 #[test]
+fn cold_owner_update_keeps_full_history_rejection_before_io_and_allows_retry() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(temp.path());
+    save_capture_file(&mut engine);
+    let root = engine.root.clone();
+    drop(engine);
+    let mut engine = Engine::open(&root).unwrap();
+    assert!(engine.published_state_base.is_none());
+    let operation = OperationId::generate();
+    let plan = engine
+        .planning_context()
+        .plan_new_mutation(
+            "auth.cold-test",
+            "alice",
+            operation,
+            "cold-test".into(),
+            |_, next, _| {
+                next.control_auth = Some(json!({"cold":"valid"}));
+                Ok(json!({}))
+            },
+        )
+        .unwrap();
+    let crate::engine::MutationPlan::Prepared {
+        next,
+        prepared,
+        result,
+    } = plan
+    else {
+        panic!("new operation must produce a candidate");
+    };
+    let mut damaged = next.as_ref().clone();
+    // Two defects exercise the existing full-admission first-error order.
+    let repository = damaged.repositories.values().next().unwrap();
+    let head = damaged.branches[&repository.main_branch_id]
+        .head_commit_id
+        .clone();
+    let entries = &mut damaged.commits.get_mut(&head).unwrap().entries;
+    entries[0].entry_id = "invalid-entry".into();
+    entries[1].file_id = "invalid-file".into();
+    let mut projection =
+        crate::state_projection::ProjectionTransition::new(&engine.state, &damaged, None).unwrap();
+    assert!(projection.take_history_edits().is_none());
+    let expected = match crate::history_package::prepare_history_manifests(&damaged, MAX_METADATA) {
+        Ok(_) => panic!("full history admission must reject the damaged entries"),
+        Err(error) => error,
+    };
+    let members = engine.members();
+    let logs = members
+        .iter()
+        .map(|disk| std::fs::read(log_path(disk)).unwrap())
+        .collect::<Vec<_>>();
+    let error = match engine.prepare_publication(damaged, Vec::new(), result.clone(), MAX_METADATA)
+    {
+        Ok(_) => panic!("cold owner reuse must not authorize damaged history"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), expected.code());
+    assert_eq!(error.message(), expected.message());
+    assert_eq!(format!("{error:?}"), format!("{expected:?}"));
+    for (disk, bytes) in members.iter().zip(logs) {
+        assert_eq!(std::fs::read(log_path(disk)).unwrap(), bytes);
+    }
+    assert!(engine.published_state_base.is_none());
+    let publication = engine
+        .prepare_publication(*next, prepared, result, MAX_METADATA)
+        .unwrap();
+    engine.decide_publication(publication).unwrap();
+    assert_eq!(engine.state.control_auth, Some(json!({"cold":"valid"})));
+    assert!(engine.state.operations.contains_key(&operation));
+}
+
+#[test]
+fn cold_owner_update_preserves_corrupt_page_failure_and_exact_retry() {
+    let temp = tempfile::tempdir().unwrap();
+    let engine = engine(temp.path());
+    let root = engine.root.clone();
+    drop(engine);
+    let mut engine = Engine::open(&root).unwrap();
+    assert!(engine.published_state_base.is_none());
+    let member = engine.members()[0].clone();
+    let snapshot: Snapshot =
+        load_object(&member, "snapshot", engine.snapshot.as_deref().unwrap()).unwrap();
+    let (kind, hash) = map_addresses(&member, &snapshot.maps["repositories"])[0].clone();
+    let path = object_path(&member, kind, &hash);
+    let original = std::fs::read(&path).unwrap();
+    std::fs::write(&path, b"{").unwrap();
+    let operation = OperationId::generate();
+    let body = json!({"auth":"cold page retry"});
+    let sequence = engine.state.sequence;
+    let error = engine
+        .persist_auth_state(body.clone(), "alice", operation)
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ObjectCollision);
+    assert_eq!(engine.state.sequence, sequence);
+    assert!(engine.published_state_base.is_none());
+    assert_eq!(std::fs::read(&path).unwrap(), b"{");
+    std::fs::write(&path, original).unwrap();
+    engine
+        .persist_auth_state(body.clone(), "alice", operation)
+        .unwrap();
+    assert_eq!(engine.state.control_auth, Some(body));
+    assert!(engine.state.operations.contains_key(&operation));
+}
+
+#[test]
+fn cold_owner_update_retains_first_prepare_io_cause_and_recovers_for_retry() {
+    let temp = tempfile::tempdir().unwrap();
+    let engine = engine(temp.path());
+    let root = engine.root.clone();
+    drop(engine);
+    let mut engine = Engine::open(&root).unwrap();
+    assert!(engine.published_state_base.is_none());
+    let first = engine.members()[0].disk_id.clone();
+    engine.journals.get_mut(&first).unwrap().fault = Some(crate::journal::JournalFault::Sync);
+    let operation = OperationId::generate();
+    let body = json!({"auth":"cold io retry"});
+    let sequence = engine.state.sequence;
+    let error = engine
+        .persist_auth_state(body.clone(), "alice", operation)
+        .unwrap_err();
+    let mut cause: &dyn std::error::Error = &error;
+    loop {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            assert_eq!(io.raw_os_error(), Some(5));
+            break;
+        }
+        cause = cause
+            .source()
+            .expect("the first PREPARE EIO must retain its cause");
+    }
+    assert_eq!(engine.state.sequence, sequence);
+    assert!(!engine.state.operations.contains_key(&operation));
+    assert!(engine.published_state_base.is_none());
+    for member in engine.members() {
+        assert!(!scan(&member).unwrap().records.iter().any(|(record, _)| {
+            record.sequence > sequence && record.record_type == RecordType::Accept
+        }));
+    }
+    drop(engine);
+    let mut engine = Engine::open(&root).unwrap();
+    engine
+        .persist_auth_state(body.clone(), "alice", operation)
+        .unwrap();
+    assert_eq!(engine.state.control_auth, Some(body));
+    assert!(engine.state.operations.contains_key(&operation));
+}
+
+#[test]
 fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_configuration() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = engine(temp.path());
