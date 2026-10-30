@@ -121,7 +121,7 @@ jobs:
           ):
               raise SystemExit('Payload proof formatting requires the exact formatting successor and tree')
           if os.environ['SCOPE'] == 'payload-quality' and (source, tree) != (
-              '16ccd64551ddd232164e439c2ae73b8e57b4697a', 'b35525b26f3f9dd4775fb47b47bc15094b49ac22',
+              '096f9a7f60025ca14781b179d9e7415f10c5b846', '22844376a82d99dc3c8f6422566eed21d02c932d',
           ):
               raise SystemExit('Quality reproduction requires the exact frozen source and tree')
           groups = {}
