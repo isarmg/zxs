@@ -1075,7 +1075,7 @@ impl RemainingRequest {
 }
 
 #[test]
-fn remaining_cold_captures_freeze_all_five_pages_and_release_pool_lease_when_consumed() {
+fn remaining_cold_captures_freeze_all_five_pages_and_release_captured_owner_when_consumed() {
     let mut g = graph();
     let request = RemainingRequest::new(&g);
     let control = crate::tests::history_read_control();
@@ -1094,6 +1094,12 @@ fn remaining_cold_captures_freeze_all_five_pages_and_release_pool_lease_when_con
     let system = g._root.path().join("system");
     drop(g.engine);
     g.engine = Engine::open(&system).unwrap();
+    // Observe an actual record owned by the captured State, not the writer
+    // locks: Engine::_locks is separate from detached read resources. The
+    // marker itself is weak and cannot keep any capture alive.
+    let head = &g.engine.state().branches[&g.repo.main_branch_id].head_commit_id;
+    let captured_record =
+        std::sync::Arc::downgrade(&g.engine.state().commits.get_shared(head).unwrap());
     let pending = (0..5)
         .map(|_| capture(&g.engine, &g.file, None).unwrap())
         .collect::<Vec<_>>();
@@ -1106,19 +1112,23 @@ fn remaining_cold_captures_freeze_all_five_pages_and_release_pool_lease_when_con
     );
     drop(g.engine);
     assert!(
-        Engine::open(&system).is_err(),
-        "captures retain the resource lease"
+        captured_record.upgrade().is_some(),
+        "captures retain the old State record"
     );
     for (kind, captured) in pending.into_iter().enumerate() {
         assert_eq!(
             request.read(kind, captured, false, &control).unwrap(),
             expected[kind]
         );
-        if kind < 4 {
-            assert!(Engine::open(&system).is_err());
-        }
+        assert_eq!(
+            captured_record.upgrade().is_some(),
+            kind < 4,
+            "only unconsumed captures may retain the old State record"
+        );
     }
-    drop(Engine::open(&system).unwrap());
+    // All five encoded results matched while the last read owner was dropped;
+    // owned response bytes and the weak marker do not retain old State records.
+    assert!(captured_record.upgrade().is_none());
 }
 
 #[test]
