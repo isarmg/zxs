@@ -1,5 +1,5 @@
 # Verification-only carrier; publish as ci.yml on its separate verification branch.
-name: Stage A namespace 500-file smoke only
+name: Owned-decode namespace 500-file smoke only
 on:
   push:
     branches: [verify/adoption-performance-stage-a-20261030]
@@ -163,7 +163,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
   paired:
-    name: Stage A smoke pair (${{ matrix.files }} files, repetition ${{ matrix.pair }})
+    name: Owned-decode smoke pair (${{ matrix.files }} files, repetition ${{ matrix.pair }})
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -226,7 +226,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   aggregate:
-    name: Audit four Stage A smoke pairs; full suite not run
+    name: Audit four Owned-decode smoke pairs; full suite not run
     if: always()
     needs: [build, paired]
     runs-on: ubuntu-24.04
@@ -253,7 +253,7 @@ jobs:
         run: |
           python3 harness/tools/namespace-adoption-bench/summarize.py \
             --input "$RUNNER_TEMP/namespace-pairs" --output "$RUNNER_TEMP/namespace-summary"
-      - name: Report only the four requested Stage A smoke pairs
+      - name: Report only the four requested Owned-decode smoke pairs
         if: always()
         shell: bash
         run: |
@@ -264,20 +264,20 @@ jobs:
           requested = [row for row in full['pairs'] if row['files'] == 500 and row['pair'] in (0, 1, 2, 3)]
           good = (full['build_result'] == 'success' and full['status'] == 'incomplete' and len(requested) == 4
                   and all(row['status'] == 'completed_measurements' and not row.get('errors') for row in requested))
-          report = dict(schema='namespace-stage-a-smoke-v1',
-                        scope='Stage A only; 500 files plus 97 directories; pairs 0/1/2 untraced AB/BA/AB and pair 3 BPF BA',
+          report = dict(schema='namespace-owned-decode-smoke-v1',
+                        scope='Owned decode plus real predicate projection; 500 files plus 97 directories; pairs 0/1/2 untraced AB/BA/AB and pair 3 BPF BA',
                         status='completed_requested_smoke' if good else 'incomplete_or_failed_smoke',
                         full_suite='NOT RUN; unchanged full-suite report remains incomplete',
-                        adoption_verdict='NOT EVALUATED', candidate_scope='Stage A on R136 plus test/governance-only470ea successor; excludes R137/R138', current_main='frozen e2f33d9',
+                        adoption_verdict='NOT EVALUATED', candidate_scope='529ef formatting successor of45ecc owned decode and875298 real predicates on6d19 Stage A; R136 plus test/governance470ea, excludes R137/R138', current_main='frozen e2f33d9',
                         baseline_sha='e2f33d9882cf7263412d9370b6a703e0b216357d',
-                        candidate_sha='6d19d5065c473da5c7f5e68a6a428789b5bf1b6b',
+                        candidate_sha='529efdd0e772e30668c3dfa3f6e15025592baa10',
                         run_id=full['github_run_id'], run_attempt=full['github_run_attempt'],
                         carrier_sha=full['carrier_sha'], manifest_sha256=full['artifact_manifest_sha256'],
                         requested_pairs=requested, size500=full['sizes']['500'])
           print('PAIRED_RESULTS', json.dumps(report))
           (out / 'stage-a-smoke.json').write_text(json.dumps(report, indent=2) + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('\nStage A bounded smoke: ' + report['status'] + '. Full suite NOT RUN; no adoption verdict.\n')
+              summary.write('\nOwned-decode bounded smoke: ' + report['status'] + '. Full suite NOT RUN; no adoption verdict.\n')
           raise SystemExit(0 if good else 1)
           PY
       - name: Retain aggregate evidence index
