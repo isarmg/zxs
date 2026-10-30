@@ -10,6 +10,8 @@
 
 下文 Actions、测试数量和搜索结果均为原固定提交的历史证据。本次没有执行测试或搜索，也未启动完整 CI；当前候选的精确受影响工具／`static` 回归由统一 validator 执行，历史通过不计为当前候选通过。旧 8 档根搜索及 6 档局部搜索的 `Inconclusive` 保留，搜索规模与常规门禁预算不变。
 
+原始 Actions 日志使用固定采用提交的永久链接；按仓库忽略规则制作的源码导出不携带 `.log`，版本库中的原始归档保持不变。模型工具、源码、固定契约和证据索引的本地链接仍须有效。
+
 ## 范围与规范映射
 
 实现入口为 [model.py](../../tools/publication-model/model.py)、[独立性质](../../tools/publication-model/properties.py)及[搜索与重放](../../tools/publication-model/search.py)。本专题集中维护规范映射、模型假设、运行方法、独立审阅、反例映射和未覆盖边界。
@@ -275,6 +277,6 @@ python3 test/publication-model/run_deep_validation.py --output /tmp/publication-
 | `PublicationModelSelftestRunner` | `test_assertion_and_import_errors_fail` |
 | `PublicationModelSelftestRunner` | `test_discovery_exception_is_not_swallowed` |
 
-独立审阅核对了实际源码和日志，无剩余集成交付阻塞。完整日志、测试名字、精确提交、运行／artifact 元数据见 [集成记录](../../test/publication-model/evidence/integration-40854973138/result.json) 和 [原始 job 日志](../../test/publication-model/evidence/integration-40854973138/job.log)。[被测提交路径清单](../../test/publication-model/evidence/integration-40854973138/tested-paths.txt) 对应接线提交相对产品基线的 248 个路径；[完整交付路径清单](../../test/publication-model/evidence/integration-40854973138/delivery-paths.txt) 另含本轮归档。
+独立审阅核对了实际源码和日志，无剩余集成交付阻塞。完整日志、测试名字、精确提交、运行／artifact 元数据见 [集成记录](../../test/publication-model/evidence/integration-40854973138/result.json) 和 [原始 job 日志](https://github.com/isarmg/zxs/blob/55e9f3a6ee3b3ed3d2e77fe5b324579d32140e78/test/publication-model/evidence/integration-40854973138/job.log)。[被测提交路径清单](../../test/publication-model/evidence/integration-40854973138/tested-paths.txt) 对应接线提交相对产品基线的 248 个路径；[完整交付路径清单](../../test/publication-model/evidence/integration-40854973138/delivery-paths.txt) 另含本轮归档。
 
 旧 8 档根搜索、6 档选定前缀后缀搜索仍为 `Inconclusive`；这些限制及历史 `results`／显式 `duplicate=True` 的抽象边界不因集成或快速自测而消除，不能据此宣称当前产品恢复实现安全已获证明。
