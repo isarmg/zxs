@@ -523,18 +523,23 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::CompareCommits<'_>,
-    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, crate::ApiError> {
         self.record(
             "compare_commits",
             Some(identity),
             json!({"left_commit_id":request.left,"right_commit_id":request.right}),
         )?;
-        Ok(storage_contract::CommitComparison::between(
-            recorded_commit(request.left),
-            vec![],
-            recorded_commit(request.right),
-            vec![],
-        ))
+        self.wait_for_history_scan(control)?;
+        crate::ComparisonSnapshot::encode(
+            &storage_contract::CommitComparison::between(
+                recorded_commit(request.left),
+                vec![],
+                recorded_commit(request.right),
+                vec![],
+            ),
+            control,
+        )
     }
     fn disk_status(
         &self,
@@ -979,22 +984,25 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         repository_id: &str,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record(
             "default_directory_branch",
             Some(identity),
             json!({"repository_id":repository_id}),
         )?;
-        Ok(crate::DefaultDirectoryBranchSnapshot {
-            repository_id: repository_id.into(),
-            namespace_branch_id: "namespace".into(),
-            selected: Some(crate::SelectedDirectoryBranch {
-                directory_branch_id: "directory".into(),
-                name: "selected".into(),
+        crate::DefaultDirectoryBranchSnapshot::encode(
+            repository_id,
+            "namespace",
+            Some(crate::SelectedDirectoryBranch {
+                directory_branch_id: "directory",
+                name: "selected",
             }),
-            directory_branches: vec![],
-        })
+            &[],
+        )
     }
+
     fn file_history_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -1779,10 +1787,11 @@ impl Fixture {
                             left: "left",
                             right: "right",
                         },
+                        &crate::tests::history_read_control(),
                     )
                     .map(|comparison| {
-                        assert_eq!(comparison.left_id(), "left");
-                        assert_eq!(comparison.right_id(), "right");
+                        let value: Value = json_codec::from_slice(comparison.body()).unwrap();
+                        assert_eq!(value, json!({"left":"left","right":"right","changes":[]}));
                         json!({"returned_by":"compare_commits"})
                     }),
             ),
@@ -1954,12 +1963,12 @@ impl Fixture {
             (
                 "default_directory_branch",
                 backend
-                    .default_directory_branch(identity, "repository")
+                    .default_directory_branch(identity, "repository", &crate::tests::history_read_control())
                     .map(|snapshot| {
-                        assert_eq!(snapshot.repository_id, "repository");
-                        assert_eq!(snapshot.namespace_branch_id, "namespace");
-                        assert_eq!(snapshot.selected.unwrap().name, "selected");
-                        assert!(snapshot.directory_branches.is_empty());
+                        assert_eq!(crate::tests::default_directory_value(&snapshot), json!({
+                            "repository_id":"repository", "namespace_branch_id":"namespace",
+                            "directory_branch_id":"directory", "name":"selected", "directory_branches":[]
+                        }));
                         json!({"returned_by":"default_directory_branch"})
                     }),
             ),
@@ -2864,6 +2873,11 @@ fn history_route_fixture(
         web_assets_available: false,
     };
     let app = Router::new()
+        .route("/api/compare", post(crate::http_comparison::compare))
+        .route(
+            "/api/repositories/{repo}/default-branch",
+            get(crate::default_branch),
+        )
         .route(
             "/api/history-trees/{history}/graph",
             get(crate::http_graph::graph),
@@ -2876,6 +2890,22 @@ fn history_route_fixture(
         .layer(http_routing::Extension(fixture.identity.clone()))
         .with_state(state);
     (app, history_read_slots, backend_slots)
+}
+
+#[tokio::test]
+async fn comparison_route_cancellation_retains_shared_capacity_until_worker_checkpoint() {
+    cancelled_history_route_keeps_capacity(comparison_request()).await;
+}
+
+fn comparison_request() -> http_routing::http::Request<http_routing::body::Body> {
+    http_routing::http::Request::builder()
+        .method("POST")
+        .uri("/api/compare")
+        .header("content-type", "application/json")
+        .body(http_routing::body::Body::from(
+            r#"{"left_commit_id":"left","right_commit_id":"right"}"#,
+        ))
+        .unwrap()
 }
 
 #[tokio::test]
@@ -3065,6 +3095,8 @@ async fn cancelled_history_route_keeps_capacity(
     assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
     let overloaded = app.clone().oneshot(listing_request()).await.unwrap();
     assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
+    let overloaded = app.clone().oneshot(comparison_request()).await.unwrap();
+    assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
     let overloaded = app.clone().oneshot(selection_request()).await.unwrap();
     assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
     for suffix in [
@@ -3201,6 +3233,45 @@ fn file_history_request(suffix: &str) -> http_routing::http::Request<http_routin
             "/api/file-manager/files/file/history{suffix}?history_root={}",
             recorded_root(),
         ))
+        .body(http_routing::body::Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn default_directory_cancellation_retains_shared_capacity_until_worker_checkpoint() {
+    cancelled_history_route_keeps_capacity(default_directory_request()).await;
+}
+
+#[tokio::test]
+async fn default_directory_response_retains_backend_permit_until_collected_bytes_drop() {
+    use service_stack::ServiceExt;
+    let fixture = Fixture::new();
+    let (app, scans, backends) = history_route_fixture(&fixture);
+    let response = app.oneshot(default_directory_request()).await.unwrap();
+    assert_eq!(response.status(), ::http::StatusCode::OK);
+    assert_eq!(scans.available_permits(), 2);
+    assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS - 1);
+    let bytes = http_routing::body::to_bytes(
+        response.into_body(),
+        storage_contract::client_protocol::MAX_RESPONSE_BYTES,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        json_codec::from_slice::<Value>(&bytes).unwrap(),
+        json!({
+            "repository_id":"repository", "namespace_branch_id":"namespace",
+            "directory_branch_id":"directory", "name":"selected", "directory_branches":[]
+        })
+    );
+    assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS - 1);
+    drop(bytes);
+    assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS);
+}
+
+fn default_directory_request() -> http_routing::http::Request<http_routing::body::Body> {
+    http_routing::http::Request::builder()
+        .uri("/api/repositories/repository/default-branch?repository_id=ignored&unused=yes")
         .body(http_routing::body::Body::empty())
         .unwrap()
 }

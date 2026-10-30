@@ -152,6 +152,68 @@ impl Engine {
 }
 
 impl PublishedReadView {
+    /// Compare two complete namespaces using only this publication's resources.
+    /// Both identities resolve before I/O; left namespace errors precede right.
+    /// The response budget does not bound these O(left + right) entry owners.
+    pub fn compare_commits(
+        &self,
+        left: &str,
+        right: &str,
+        observe: Option<&dyn Fn() -> storage_contract::Result<()>>,
+    ) -> Result<storage_contract::CommitComparison> {
+        let left = self.state.commits.get_shared(left).ok_or_else(|| {
+            crate::Error::new(
+                storage_contract::ErrorCode::CommitNotFound,
+                "left commit missing",
+            )
+        })?;
+        let right = self.state.commits.get_shared(right).ok_or_else(|| {
+            crate::Error::new(
+                storage_contract::ErrorCode::CommitNotFound,
+                "right commit missing",
+            )
+        })?;
+        let checkpoint = || -> Result<()> {
+            if let Some(observe) = observe {
+                observe()?;
+            }
+            Ok(())
+        };
+        let reader = SegmentReader {
+            resources: &self.resources,
+            members: &self.members,
+            caches: &self.caches,
+            observe: observe.map(|_| &checkpoint as &dyn Fn() -> Result<()>),
+        };
+        let source =
+            crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {
+                reader.namespace_node(reference)
+            });
+        let entries = |namespace: &storage_contract::CommitNamespace| {
+            let mut entries = Vec::new();
+            checkpoint()?;
+            crate::namespace::NamespaceView::new(namespace, &source).walk(|location, entry| {
+                checkpoint()?;
+                entries.push(crate::namespace::materialized_entry(
+                    location.clone(),
+                    entry,
+                ));
+                Ok(true)
+            })?;
+            Ok::<_, crate::Error>(entries)
+        };
+        let left_entries = entries(&left.namespace)?;
+        let right_entries = entries(&right.namespace)?;
+        storage_contract::CommitComparison::between_observed(
+            left,
+            left_entries,
+            right,
+            right_entries,
+            observe,
+        )
+        .map_err(Into::into)
+    }
+
     pub fn state(&self) -> &State {
         &self.state
     }

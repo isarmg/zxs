@@ -155,3 +155,63 @@ fn comparison_modified_semantics_do_not_expand_to_other_entry_metadata() {
         0
     );
 }
+
+#[test]
+fn observed_comparison_matches_existing_oracle_and_cancels_every_loop() {
+    use std::cell::Cell;
+    let before = vec![
+        entry("File.txt", "v1"),
+        entry("file.txt", "v2"),
+        entry("gone", "v1"),
+    ];
+    let after = vec![entry("FILE.txt", "v3"), entry("new", "v4")];
+    let expected = old_changes(&before, &after);
+    // Start, both index loops, both classification loops, finish.
+    let checkpoints = 2 + 2 * (before.len() + after.len());
+    for cancel_at in 1..=checkpoints + 1 {
+        let calls = Cell::new(0);
+        let observe = || {
+            calls.set(calls.get() + 1);
+            if calls.get() == cancel_at {
+                Err(crate::Error::new(
+                    crate::ErrorCode::RequestTimeout,
+                    "cancel comparison",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        let result = CommitComparison::between_observed(
+            commit("left", before.len() as u64),
+            before.clone(),
+            commit("right", after.len() as u64),
+            after.clone(),
+            Some(&observe),
+        );
+        if cancel_at <= checkpoints {
+            assert_eq!(result.unwrap_err().code(), crate::ErrorCode::RequestTimeout);
+            assert_eq!(calls.get(), cancel_at);
+        } else {
+            assert_eq!(changes(&result.unwrap()), expected);
+            assert_eq!(calls.get(), checkpoints);
+        }
+    }
+    let cancel = || {
+        Err(crate::Error::new(
+            crate::ErrorCode::RequestTimeout,
+            "empty cancellation",
+        ))
+    };
+    assert_eq!(
+        CommitComparison::between_observed(
+            commit("a", 0),
+            vec![],
+            commit("b", 0),
+            vec![],
+            Some(&cancel)
+        )
+        .unwrap_err()
+        .code(),
+        crate::ErrorCode::RequestTimeout
+    );
+}

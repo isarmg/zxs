@@ -200,7 +200,8 @@ impl Backend for WriterProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::CompareCommits<'_>,
-    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        _control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn disk_status(
@@ -425,6 +426,7 @@ impl Backend for WriterProbe {
         &self,
         _identity: &crate::auth::Identity,
         _repository_id: &str,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

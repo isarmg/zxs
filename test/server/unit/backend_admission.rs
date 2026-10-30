@@ -278,7 +278,8 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::CompareCommits<'_>,
-    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        _control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
@@ -535,6 +536,7 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _repository_id: &str,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -1280,7 +1282,8 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
             "/api/repositories/repo/backup-configuration" if method == "GET" => 2,
             "/api/branches/branch/tree?commit_id=commit"
             | "/api/history-trees/history/graph?collection=commits"
-            | "/api/file-manager/history?ignored=true" => 2,
+            | "/api/file-manager/history?ignored=true"
+            | "/api/repositories/repository/default-branch" => 2,
             _ => HTTP_BACKEND_SLOTS,
         };
         let root = crate::tests::private_tempdir();

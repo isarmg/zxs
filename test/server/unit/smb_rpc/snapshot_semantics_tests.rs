@@ -300,8 +300,9 @@ impl Backend for NamespaceAfterWorkspace {
         &self,
         identity: &crate::auth::Identity,
         request: crate::CompareCommits<'_>,
-    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
-        self.inner.compare_commits(identity, request)
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, crate::ApiError> {
+        self.inner.compare_commits(identity, request, control)
     }
     fn disk_status(
         &self,
@@ -526,8 +527,10 @@ impl Backend for NamespaceAfterWorkspace {
         &self,
         identity: &crate::auth::Identity,
         repository_id: &str,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
-        self.inner.default_directory_branch(identity, repository_id)
+        self.inner
+            .default_directory_branch(identity, repository_id, control)
     }
     fn file_history_snapshot(
         &self,

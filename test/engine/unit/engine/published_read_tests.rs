@@ -809,3 +809,136 @@ fn activity_receipt_cursor_segment_checkpoint_cancellation_advances_past_segment
     }
     assert!(receipts.next_record().is_none());
 }
+
+#[test]
+fn detached_comparison_owns_exact_entries_and_survives_writer_and_resource_drop() {
+    let (_temporary, mut engine, repo) = pool();
+    save_content(&mut engine, &repo.main_branch_id, "File.txt", b"old");
+    let left = engine.state.branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    save_content(&mut engine, &repo.main_branch_id, "File.txt", b"new");
+    let right = engine.state.branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    let expected_before = engine.list_tree_at(&repo.main_branch_id, &left).unwrap();
+    let expected_after = engine.list_tree_at(&repo.main_branch_id, &right).unwrap();
+    let left_record = engine.state.commits.get_shared(&left).unwrap();
+    let weak = Arc::downgrade(&left_record);
+    let view = engine.published_read_view();
+    save(&mut engine, &repo.main_branch_id, "later.txt");
+    drop(engine);
+    let before_count = Arc::strong_count(&left_record);
+    let comparison = view.compare_commits(&left, &right, None).unwrap();
+    assert_eq!(Arc::strong_count(&left_record), before_count + 1);
+    drop(view);
+    drop(left_record);
+    assert!(weak.upgrade().is_some());
+    let storage_contract::CommitChange::Modified { before, after } =
+        comparison.changes().next().unwrap()
+    else {
+        panic!("expected modification")
+    };
+    assert_eq!(before, &expected_before[0]);
+    assert_eq!(after, &expected_after[0]);
+    assert_eq!(comparison.changes().len(), 1);
+    drop(comparison);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn comparison_resolves_both_ids_before_io_then_reads_left_before_right_even_when_equal() {
+    let (_temporary, mut engine, repo) = pool();
+    save(&mut engine, &repo.main_branch_id, "left.txt");
+    let left = engine.state.branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    save(&mut engine, &repo.main_branch_id, "right.txt");
+    let right = engine.state.branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    let mut view = engine.published_read_view();
+    view.caches = Arc::new(SegmentCaches::new());
+    let root = &view.state.commits[&left].namespace.root;
+    let kind = match root.kind {
+        storage_contract::NamespaceRefKind::Page => storage_contract::NAMESPACE_PAGE_KIND,
+        storage_contract::NamespaceRefKind::Index => storage_contract::NAMESPACE_INDEX_KIND,
+    };
+    let originals = view
+        .members
+        .iter()
+        .map(|member| {
+            let path = crate::journal::object_path(member, kind, &root.hash);
+            let bytes = std::fs::read(&path).unwrap();
+            std::fs::write(&path, b"truncated").unwrap();
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+    // Right has an independently invalid reference, but cannot mask left I/O.
+    Arc::make_mut(&mut view.state)
+        .commits
+        .get_mut(&right)
+        .unwrap()
+        .namespace
+        .root
+        .hash = "invalid-right".into();
+    let calls = Cell::new(0);
+    let observe = || {
+        calls.set(calls.get() + 1);
+        Ok(())
+    };
+    let missing = view
+        .compare_commits(&left, "missing", Some(&observe))
+        .unwrap_err();
+    assert_eq!(missing.code(), ErrorCode::CommitNotFound);
+    assert_eq!(missing.message(), "right commit missing");
+    assert_eq!(calls.get(), 0);
+    assert_eq!(
+        view.compare_commits("missing", "missing", None)
+            .unwrap_err()
+            .message(),
+        "left commit missing"
+    );
+    let left_failure = view.compare_commits(&left, &left, None).unwrap_err();
+    let ordered_failure = view.compare_commits(&left, &right, None).unwrap_err();
+    assert_eq!(ordered_failure.code(), left_failure.code());
+    assert_eq!(ordered_failure.message(), left_failure.message());
+    assert!(std::error::Error::source(&ordered_failure).is_some());
+    for (path, bytes) in originals {
+        std::fs::write(path, bytes).unwrap();
+    }
+    let right_failure = view.compare_commits(&left, &right, None).unwrap_err();
+    assert_ne!(right_failure.message(), left_failure.message());
+    // Same IDs traverse both namespaces: cancel upon entering the second side.
+    let baseline_calls = Cell::new(0);
+    let baseline = || {
+        baseline_calls.set(baseline_calls.get() + 1);
+        Ok(())
+    };
+    let equal = engine.published_read_view();
+    equal
+        .compare_commits(&left, &left, Some(&baseline))
+        .unwrap();
+    // For one entry: each side has start + page read + entry, then six algorithm checks.
+    assert_eq!(baseline_calls.get(), 12);
+    let count = Cell::new(0);
+    let cancel = || {
+        count.set(count.get() + 1);
+        if count.get() == 4 {
+            Err(storage_contract::Error::new(
+                ErrorCode::RequestTimeout,
+                "second namespace",
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    assert_eq!(
+        equal
+            .compare_commits(&left, &left, Some(&cancel))
+            .unwrap_err()
+            .code(),
+        ErrorCode::RequestTimeout
+    );
+    assert_eq!(count.get(), 4);
+}

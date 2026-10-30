@@ -6,6 +6,18 @@ use crate::{ApiError, DirectorySnapshot, TreeSnapshot};
 use std::collections::BTreeMap;
 use storage_engine::{Engine, PublishedReadView};
 
+pub(super) fn capture_comparison(
+    view: PublishedReadView,
+    request: crate::CompareCommits<'_>,
+    control: &crate::HistoryReadControl,
+) -> Result<crate::ComparisonSnapshot, ApiError> {
+    let observe = || control.checkpoint();
+    let comparison = view
+        .compare_commits(request.left, request.right, Some(&observe))
+        .map_err(super::file_manager::activity::read_error)?;
+    crate::ComparisonSnapshot::encode(&comparison, control)
+}
+
 pub(super) fn capture_tree(
     view: PublishedReadView,
     request: crate::ReadTree<'_>,

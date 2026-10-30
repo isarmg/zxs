@@ -1,7 +1,7 @@
 //! Comparison identity parsing belongs to HTTP, before the typed backend call.
-use crate::{ApiError, AppState, auth::Identity, backend_comparison::ComparisonResponse};
+use crate::{ApiError, AppState, auth::Identity};
 use http_routing::{
-    Extension, Json,
+    Extension,
     extract::{Request, State},
 };
 struct CompareBody {
@@ -32,28 +32,29 @@ pub(crate) async fn compare(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
     request: Request,
-) -> Result<Json<ComparisonResponse>, ApiError> {
+) -> Result<http_routing::response::Response, ApiError> {
+    let connection = request
+        .extensions()
+        .get::<crate::http_shutdown::ResponseConnection>()
+        .cloned();
     let value = crate::json_body(request).await?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
+    crate::history_read::run(
+        state,
+        connection,
+        move |backend, control| {
             let body = CompareBody::parse(value)?;
-            backend
-                .compare_commits(
-                    &identity,
-                    crate::CompareCommits {
-                        left: &body.left,
-                        right: &body.right,
-                    },
-                )
-                .map(ComparisonResponse::from)
-        })
-        .await
-        .map(Json)
+            backend.compare_commits(
+                &identity,
+                crate::CompareCommits {
+                    left: &body.left,
+                    right: &body.right,
+                },
+                control,
+            )
+        },
+        |snapshot| Ok(snapshot.into_encoded()),
+    )
+    .await
 }
 #[cfg(test)]
 #[path = "../../../test/server/unit/http_comparison.rs"]

@@ -1,5 +1,7 @@
 use super::*;
-use crate::backend_default_directory::DefaultDirectoryBranchResponse;
+fn default_value(snapshot: &crate::DefaultDirectoryBranchSnapshot) -> Value {
+    json_codec::from_slice(snapshot.body()).unwrap()
+}
 
 fn legacy_wire(engine: &Engine, repo: &storage_contract::Repository) -> Value {
     let state = engine.state();
@@ -30,14 +32,11 @@ fn default_directory_metadata_is_frozen_and_retains_admission_and_wire() {
     let empty = legacy_wire(&engine, &repo);
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
     let initial = backend
-        .default_directory_branch(&identity, &repo.repository_id)
+        .default_directory_branch(&identity, &repo.repository_id, &tree_control())
         .unwrap();
-    assert!(initial.selected.is_none());
-    assert!(initial.directory_branches.is_empty());
-    assert_eq!(
-        json_codec::to_value(DefaultDirectoryBranchResponse::from(initial)).unwrap(),
-        empty
-    );
+    assert!(default_value(&initial)["directory_branch_id"].is_null());
+    assert_eq!(default_value(&initial)["directory_branches"], json!([]));
+    assert_eq!(default_value(&initial), empty);
     let expected = {
         let mut engine = backend.engine.lock().unwrap();
         save_projection_file(
@@ -66,11 +65,16 @@ fn default_directory_metadata_is_frozen_and_retains_admission_and_wire() {
         legacy_wire(&engine, &repo)
     };
     let snapshot = backend
-        .default_directory_branch(&identity, &repo.repository_id)
+        .default_directory_branch(&identity, &repo.repository_id, &tree_control())
         .unwrap();
-    assert!(snapshot.selected.is_some());
-    assert_eq!(snapshot.directory_branches.len(), 2);
-    let response = DefaultDirectoryBranchResponse::from(snapshot);
+    assert!(default_value(&snapshot)["directory_branch_id"].is_string());
+    assert_eq!(
+        default_value(&snapshot)["directory_branches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     backend
         .engine
         .lock()
@@ -84,7 +88,7 @@ fn default_directory_metadata_is_frozen_and_retains_admission_and_wire() {
         )
         .unwrap();
     let missing = backend
-        .default_directory_branch(&identity, "missing-repository")
+        .default_directory_branch(&identity, "missing-repository", &tree_control())
         .err()
         .unwrap();
     assert_eq!(missing.code, storage_contract::ErrorCode::NotFound);
@@ -92,40 +96,17 @@ fn default_directory_metadata_is_frozen_and_retains_admission_and_wire() {
     auth.logout(&token).unwrap();
     assert_eq!(
         backend
-            .default_directory_branch(&identity, "missing-repository")
+            .default_directory_branch(&identity, "missing-repository", &tree_control())
             .err()
             .unwrap()
             .code,
         storage_contract::ErrorCode::Unauthorized
     );
-    struct Probe<'a>(&'a EngineBackend, &'a DefaultDirectoryBranchResponse);
-    impl Serialize for Probe<'_> {
-        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            let available = std::thread::scope(|scope| {
-                scope
-                    .spawn(|| self.0.engine.try_lock().is_ok())
-                    .join()
-                    .unwrap()
-            });
-            if !available {
-                return Err(S::Error::custom(
-                    "default-directory serialization retained engine mutex",
-                ));
-            }
-            self.1.serialize(serializer)
-        }
-    }
-    assert_eq!(
-        json_codec::to_value(Probe(&backend, &response)).unwrap(),
-        expected
-    );
-    assert_eq!(
-        storage_contract::canonical_json(&response).unwrap(),
-        storage_contract::canonical_json(&expected).unwrap()
-    );
+    assert!(backend.engine.try_lock().is_ok());
+    assert_eq!(default_value(&snapshot), expected);
     drop(auth);
     drop(backend);
-    assert_eq!(json_codec::to_value(response).unwrap(), expected);
+    assert_eq!(default_value(&snapshot), expected);
 }
 
 #[test]
@@ -421,5 +402,293 @@ fn typed_scope_initialization_preserves_lookup_spelling_receipts_and_live_admiss
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
+    );
+}
+
+#[test]
+fn detached_default_preserves_selection_and_releases_publication_and_writer() {
+    let (_root, mut engine, repo, identity) = fixture();
+    engine
+        .initialize_directory_scope(
+            &repo.repository_id,
+            None,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let selected = engine.state().directory_selections[&repo.repository_id].clone();
+    let expected = legacy_wire(&engine, &repo);
+    let head = &engine.state().branches[&repo.main_branch_id].head_commit_id;
+    let commit = engine.state().commits.get_shared(head).unwrap();
+    let weak = Arc::downgrade(&commit);
+    drop(commit);
+    let backend = EngineBackend::new(engine);
+    let view = backend.engine.lock().unwrap().published_read_view();
+    {
+        let original = &view.state().directory_branches[&selected];
+        let row = crate::DefaultDirectoryBranchRow {
+            branch: original,
+            current: true,
+        };
+        assert!(std::ptr::eq(
+            row.branch,
+            &view.state().directory_branches[&selected]
+        ));
+        assert_eq!(row.branch.name.as_ptr(), original.name.as_ptr());
+        assert_eq!(row.branch.entries.as_ptr(), original.entries.as_ptr());
+        let encoded = crate::DefaultDirectoryBranchSnapshot::encode(
+            &repo.repository_id,
+            &repo.main_branch_id,
+            Some(crate::SelectedDirectoryBranch {
+                directory_branch_id: &selected,
+                name: &original.name,
+            }),
+            &[row],
+        )
+        .unwrap();
+        assert_eq!(default_value(&encoded), expected);
+    }
+    let mut writer = backend.engine.lock().unwrap();
+    writer
+        .rename_directory_branch(
+            &repo.repository_id,
+            &selected,
+            &storage_contract::BranchName::parse("renamed").unwrap(),
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    // A later selection/name must not replace the captured selection.
+    writer
+        .create_directory_branches(
+            &repo.repository_id,
+            None,
+            &storage_contract::BranchName::parse("later").unwrap(),
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let other = writer
+        .state()
+        .directory_branches
+        .values()
+        .find(|branch| branch.directory_branch_id != selected)
+        .unwrap()
+        .directory_branch_id
+        .clone();
+    writer
+        .select_default_directory_branch(
+            &repo.repository_id,
+            &other,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let repository_id = repo.repository_id.clone();
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        send.send(crate::engine_backend::default_directory::read(
+            view,
+            &repository_id,
+            &tree_control(),
+        ))
+        .unwrap();
+    });
+    let result = receive.recv_timeout(std::time::Duration::from_secs(30));
+    drop(writer);
+    worker.join().unwrap();
+    let snapshot = backend
+        .finish_default_directory(
+            &identity,
+            result.expect("default reader waited for writer mutex"),
+            &tree_control(),
+        )
+        .unwrap();
+    assert_eq!(default_value(&snapshot), expected);
+    drop(backend);
+    assert!(
+        weak.upgrade().is_none(),
+        "encoded result retained old publication"
+    );
+    let allocation = snapshot.body().as_ptr();
+    assert_eq!(snapshot.into_encoded().body().as_ptr(), allocation);
+}
+
+#[test]
+fn default_scope_preserves_root_filter_ties_path_and_map_count() {
+    let (_root, mut engine, repo, _) = fixture();
+    engine
+        .initialize_directory_scope(
+            &repo.repository_id,
+            None,
+            "owner",
+            storage_contract::OperationId::generate(),
+        )
+        .unwrap();
+    let mut state = engine.state().clone();
+    let original = state.directory_branches.values().next().unwrap().clone();
+    state.directory_branches.clear();
+    for (id, sequence, repository, directory) in [
+        (
+            "z",
+            u64::MAX - 1,
+            repo.repository_id.as_str(),
+            repo.repository_id.as_str(),
+        ),
+        (
+            "b",
+            u64::MAX,
+            repo.repository_id.as_str(),
+            repo.repository_id.as_str(),
+        ),
+        (
+            "a",
+            u64::MAX,
+            repo.repository_id.as_str(),
+            repo.repository_id.as_str(),
+        ),
+        ("nested", 9, repo.repository_id.as_str(), "nested"),
+        ("foreign", 9, "foreign", repo.repository_id.as_str()),
+    ] {
+        let mut row = original.clone();
+        row.directory_branch_id = id.into();
+        row.sequence = sequence;
+        row.repository_id = repository.into();
+        row.directory_id = directory.into();
+        row.path = "not-the-public-root-path".into();
+        row.entries.clear();
+        row.file_branches = [("file".into(), "branch".into())].into();
+        state.directory_branches.insert(id.into(), row);
+    }
+    state
+        .directory_selections
+        .insert(repo.repository_id.clone(), "b".into());
+    storage_engine::test_support::replace_state(&mut engine, state);
+    let expected = legacy_wire(&engine, &repo);
+    let actual = crate::engine_backend::default_directory::read(
+        engine.published_read_view(),
+        &repo.repository_id,
+        &tree_control(),
+    )
+    .unwrap();
+    let actual = default_value(&actual);
+    assert_eq!(actual, expected);
+    assert_eq!(
+        actual["directory_branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["directory_branch_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["a", "b", "z"]
+    );
+    for row in actual["directory_branches"].as_array().unwrap() {
+        assert_eq!(row["path"], "");
+        assert_eq!(row["file_count"], "1");
+    }
+}
+
+#[test]
+fn default_completion_reauthorizes_success_errors_and_cancellation() {
+    for managed in [false, true] {
+        let (root, engine, repo, _) = fixture();
+        let backend = Arc::new(EngineBackend::new(engine));
+        let auth =
+            AuthStore::initialize(root.path(), "owner", "integration-test-password").unwrap();
+        let mut auth = if managed {
+            backend.set_management_auth(auth.reader()).unwrap();
+            auth
+        } else {
+            backend.protect_auth(auth).unwrap()
+        };
+        let token = auth
+            .login("owner", "integration-test-password")
+            .unwrap()
+            .token;
+        let identity = auth.authenticate(&token).unwrap();
+        let control = crate::tests::history_read_control();
+        let snapshot = crate::engine_backend::default_directory::read(
+            backend.engine.lock().unwrap().published_read_view(),
+            &repo.repository_id,
+            &control,
+        );
+        let failure = || {
+            ApiError::new(
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
+                storage_contract::ErrorCode::ObjectCorrupt,
+                "captured default metadata failed",
+            )
+        };
+        assert_eq!(
+            backend
+                .finish_default_directory(&identity, Err(failure()), &control)
+                .err()
+                .unwrap()
+                .code,
+            storage_contract::ErrorCode::ObjectCorrupt
+        );
+        let cancelled = crate::tests::history_read_control();
+        drop(cancelled.wait_owner());
+        assert_eq!(
+            backend
+                .finish_default_directory(&identity, Err(failure()), &cancelled)
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::RequestTimeout
+        );
+        assert_eq!(
+            backend
+                .default_directory_branch(&identity, &repo.repository_id, &cancelled)
+                .err()
+                .unwrap()
+                .code,
+            storage_contract::ErrorCode::RequestTimeout
+        );
+        assert_eq!(
+            crate::engine_backend::default_directory::read(
+                backend.engine.lock().unwrap().published_read_view(),
+                &repo.repository_id,
+                &cancelled
+            )
+            .err()
+            .unwrap()
+            .code,
+            storage_contract::ErrorCode::RequestTimeout
+        );
+        auth.logout(&token).unwrap();
+        for result in [snapshot, Err(failure())] {
+            assert_eq!(
+                backend
+                    .finish_default_directory(&identity, result, &control)
+                    .err()
+                    .unwrap()
+                    .code,
+                storage_contract::ErrorCode::Unauthorized
+            );
+        }
+        assert_eq!(
+            backend
+                .finish_default_directory(&identity, Err(failure()), &cancelled)
+                .err()
+                .unwrap()
+                .code,
+            storage_contract::ErrorCode::Unauthorized
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "invariant: admitted directory selection references its branch")]
+fn default_dangling_admitted_selection_is_not_silently_main() {
+    let (_root, mut engine, repo, _) = fixture();
+    let mut state = engine.state().clone();
+    state
+        .directory_selections
+        .insert(repo.repository_id.clone(), "missing".into());
+    storage_engine::test_support::replace_state(&mut engine, state);
+    let _ = crate::engine_backend::default_directory::read(
+        engine.published_read_view(),
+        &repo.repository_id,
+        &tree_control(),
     );
 }

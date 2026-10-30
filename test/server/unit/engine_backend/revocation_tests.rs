@@ -234,9 +234,10 @@ impl Backend for PausedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::CompareCommits<'_>,
-    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, crate::ApiError> {
         self.enter();
-        self.inner.compare_commits(identity, request)
+        self.inner.compare_commits(identity, request, control)
     }
     fn disk_status(
         &self,
@@ -492,9 +493,11 @@ impl Backend for PausedBackend {
         &self,
         identity: &crate::auth::Identity,
         repository_id: &str,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         self.enter();
-        self.inner.default_directory_branch(identity, repository_id)
+        self.inner
+            .default_directory_branch(identity, repository_id, control)
     }
     fn file_history_snapshot(
         &self,
@@ -1450,12 +1453,17 @@ impl Request {
                         left: &fixture.workspace.base_head,
                         right: "missing",
                     },
+                    &crate::tests::history_read_control(),
                 )
                 .map(|_| ()),
             Self::DiskStatus => backend.disk_status(identity).map(|_| ()),
             Self::IntegrityCheck => backend.integrity_check(identity).map(|_| ()),
             Self::DefaultDirectoryBranch => backend
-                .default_directory_branch(identity, "missing-repository")
+                .default_directory_branch(
+                    identity,
+                    "missing-repository",
+                    &crate::tests::history_read_control(),
+                )
                 .map(|_| ()),
             Self::SelectDefaultDirectoryBranch => {
                 let request = crate::SelectDefaultDirectoryBranch {

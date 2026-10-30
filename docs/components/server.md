@@ -333,6 +333,18 @@ Web 窗口夹具 `test/fixtures/file-history-window.json`）、`engine_backend/f
 
 树读取与活动/历史图共用两个旧根扫描槽及最长 30 秒协作工作期限；逐条目录项、目录树及上下文扫描检查取消，底层读取保留已有对象身份/完整性检查。协作期限不保证中断阻塞的系统调用。普通 backend 许可继续覆盖编码结果、Body 及实际传输块，沿用既有空闲/总发送期限与准确连接租约。测试覆盖边界编码、当前/历史来源、别名覆盖顺序、冻结快照、撤权及共享槽取消；源码接线不代表本地或 CI 测试已经执行。
 
+### 完整提交比较读取边界
+
+`POST /api/compare` 保留请求体对象、未知字段、左 ID、右 ID 的解析顺序。EngineBackend 先复核当前身份，再检查左提交/历史/仓库、右提交/历史/仓库，允许跨仓库比较；随后捕获现有 `PublishedReadView` 并释放 Engine 锁。具体视图使用同一发布的 State、磁盘资源、缓存与成员读取，不构建索引或伪造 Engine。Engine 的直接比较入口复用同一实现：两个提交先解析成功，完整左命名空间先于完整右命名空间读取；相同 ID 不跳过读取和完整性校验。
+
+`CommitComparison` 保留两个完整 `Vec<Entry>`、两个临时 `BTreeMap<&str, usize>` 和变更索引的唯一比较算法；重复键保留最后索引。移除/修改按左侧规范顺序输出，然后按右侧顺序输出新增。匹配键仍是缓存的 lookup key，修改条件仍仅为 version_id 或展示路径变化；wire 的 left/right/changes 及 before/after/path 字段不变。
+
+锁外逐条检查取消并完成一次编码。比较对象及发布视图释放后，仅 `ComparisonSnapshot` 的编码字节进入完成阶段：重新取得 Engine 锁后先复核当前身份，再检查取消，再传播成功或读取/编码错误；不追加最终根、仓库存在性或 generation 冲突，普通发布不会改写已捕获结果。
+
+完整正文以现有 `MAX_RESPONSE_BYTES`（8 MiB）覆盖信封、转义、分隔符及所有变更字段；超限失败，不截断、不返回部分成功。这明确收紧了此前 compare 的服务端无界正文行为。**8 MiB 不是总堆内存上限**：即使差异为空，两个完整命名空间、字符串、临时映射和变更索引仍随 L+R 增长，另有旧 State、解码、遍历和缓存工作集；保留既有比较复杂度，不声称吞吐收益。
+
+HTTP 复用历史读取的两个扫描槽、最长 30 秒协作工作期限、普通 backend 许可和 `ResponseConnection`；普通许可覆盖编码结果、Body 和最后一个实际传输块，关闭/取消/发送期限沿用既有实现。命名空间条目、索引插入、分类循环、编码记录与完成边界检查取消；不能强制中断单次文件系统调用、容器操作、单条 JSON 编码或容器释放。测试位于根 test/ 的 contract comparison、engine published_read、server comparison/authorized_backend；源码和格式检查不表示运行通过，运行验证另由绑定提交的 GitHub 结果给出。
+
 ### 目录作用域完整读取边界
 
 `GET /api/repositories/{repo}/directory-branches` 的 All、根目录与路径过滤在当前身份、仓库准入后捕获 `PublishedReadView`。锁外依据该发布根解析主分支命名空间，复用 `ScopeMatch` 的稳定目录 ID／缺失路径回退规则，逐分支筛选、逐条目计数并排序。完成时仅复核当前身份，再检查取消和传播读取结果；普通发布不使冻结响应失效，不增加完成时仓库存在性或 generation 检查。POST 有界选择及主目录 listing 的匹配语义不变。
@@ -342,6 +354,14 @@ Web 窗口夹具 `test/fixtures/file-history-window.json`）、`engine_backend/f
 HTTP 与历史读取共用扫描槽、最长 30 秒协作工作期限、既有完整响应 8 MiB 编码器及 Body／实际传输块租约。超限失败，不分页、不截断。这收紧了此前 GET 完整响应无字节上限的行为；8 MiB 不是总堆内存上限：编码期间的旧发布根及全部匹配借用行仍随历史／匹配分支数增长；Summary 单行临时元数据及排序工作区也不属于正文上限。逐分支、逐条目及命名空间读取检查取消；标准排序前后检查取消，排序本身及编码是不可逐比较／逐字段中断的协作段。分支扫描 O(B)，匹配条目计数 O(E)，排序 O(M log M)，借用行占 O(M)；Full 无逐行 map 再查询，正文按实际输出编码；未提供吞吐提升测量。
 
 原 R130 关于目录分支共享 Arc 身份的测试主张不成立；修复后的根 test 用实际发布记录的借用指针、真实共享 commit 的 Weak 生命周期及编码字节分配身份检查借用、旧根释放和 HTTP 单次编码移交，并保留冻结发布、路径别名、排序、Full 字节与空字段、Summary 数量、撤权优先级、取消、字节超限和传输块租约。格式与静态检查不代替编译或实际执行；运行结果由对应验证提交记录。
+
+### 默认根目录分支完整读取边界
+
+`GET /api/repositories/{repo}/default-branch` 在当前身份与仓库准入后捕获既有 `PublishedReadView`；锁外扫描 `Tracked<BTreeMap<String, DirectoryBranch>>`，只借用 repository_id 与 directory_id 都等于该仓库的根作用域记录，不修改容器，不读取命名空间。选择 ID、名称和 current 都来自同一发布；无选择时仍输出 null ID 与 `main`，已准入的悬空选择仍属于内部不变量失败，不降级为 main。namespace_branch_id 仍为主命名空间分支。
+
+响应保持默认目录专有字段：path 始终为空，file_count 是 file_branches.len() 的十进制字符串，不是 entries 中 File 的数量，也不复用字段不同的目录作用域 Summary。按 sequence 降序、directory_branch_id 升序排列借用行，复用默认目录的借用字段投影完成一次编码，不复制 entries 或上下文 map。返回仅拥有编码字节，发布视图在完成时重新取得 Engine 锁前释放。最终先核验当前身份，再检查取消与传播结果；撤权优先于成功或读取错误，普通选择、名称或发布变化不使冻结响应失效，不增加仓库存在性或 generation 冲突。
+
+HTTP 复用历史读取扫描槽、最长 30 秒协作工作期限及既有 Body／实际传输块租约，移交既有编码分配而不再次序列化。完整响应沿用 8 MiB 字节上限，超限返回 RESOURCE_LIMIT_EXCEEDED，不分页、不截断；这明确收紧此前该 GET 无服务端响应字节上限的行为。逐分支与排序、编码前后检查取消；标准排序和编码本身是非逐比较／逐字段中断的协作段。扫描 O(B)、排序 O(M log M)、借用行 O(M)；旧 State、借用行及排序空间不受正文 8 MiB 上限约束。此边界不涵盖通用分支 GET 或创建分支，不宣称吞吐提升；新增测试须在绑定源码的独立执行中验证，静态检查不是运行通过。
 
 ### 活动历史投影边界
 

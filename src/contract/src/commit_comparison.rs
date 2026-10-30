@@ -35,18 +35,38 @@ impl CommitComparison {
         right: Arc<Commit>,
         right_entries: Vec<Entry>,
     ) -> Self {
+        Self::between_observed(left, left_entries, right, right_entries, None)
+            .expect("invariant: comparison without an observer cannot fail")
+    }
+
+    /// The same comparison, with cancellation at each input/index/change step.
+    /// No partial comparison escapes when the observer fails.
+    pub fn between_observed(
+        left: Arc<Commit>,
+        left_entries: Vec<Entry>,
+        right: Arc<Commit>,
+        right_entries: Vec<Entry>,
+        observe: Option<&dyn Fn() -> crate::Result<()>>,
+    ) -> crate::Result<Self> {
+        let checkpoint = || match observe {
+            Some(observe) => observe(),
+            None => Ok(()),
+        };
+        checkpoint()?;
         let changes = {
-            fn index(entries: &[Entry]) -> BTreeMap<&str, usize> {
-                entries
-                    .iter()
-                    .enumerate()
-                    .map(|(index, entry)| (entry.lookup_key(), index))
-                    .collect()
+            let mut left_index = BTreeMap::new();
+            for (index, entry) in left_entries.iter().enumerate() {
+                checkpoint()?;
+                left_index.insert(entry.lookup_key(), index);
             }
-            let left_index = index(&left_entries);
-            let right_index = index(&right_entries);
+            let mut right_index = BTreeMap::new();
+            for (index, entry) in right_entries.iter().enumerate() {
+                checkpoint()?;
+                right_index.insert(entry.lookup_key(), index);
+            }
             let mut changes = Vec::new();
             for (before, entry) in left_entries.iter().enumerate() {
+                checkpoint()?;
                 match right_index.get(entry.lookup_key()) {
                     None => changes.push(ChangeIndex::Removed(before)),
                     Some(&after)
@@ -59,19 +79,21 @@ impl CommitComparison {
                 }
             }
             for (after, entry) in right_entries.iter().enumerate() {
+                checkpoint()?;
                 if !left_index.contains_key(entry.lookup_key()) {
                     changes.push(ChangeIndex::Added(after));
                 }
             }
             changes
         };
-        Self {
+        checkpoint()?;
+        Ok(Self {
             left,
             right,
             left_entries,
             right_entries,
             changes,
-        }
+        })
     }
     pub fn left_id(&self) -> &str {
         &self.left.commit_id

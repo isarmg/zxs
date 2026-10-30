@@ -224,7 +224,8 @@ impl Backend for TestBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::CompareCommits<'_>,
-    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        _control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn disk_status(
@@ -489,6 +490,7 @@ impl Backend for TestBackend {
         &self,
         _identity: &crate::auth::Identity,
         _repository_id: &str,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -1536,8 +1538,9 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             &self,
             identity: &crate::auth::Identity,
             request: crate::CompareCommits<'_>,
-        ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
-            self.delegate.compare_commits(identity, request)
+            control: &crate::HistoryReadControl,
+        ) -> Result<crate::ComparisonSnapshot, crate::ApiError> {
+            self.delegate.compare_commits(identity, request, control)
         }
         fn disk_status(
             &self,
@@ -1764,9 +1767,10 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             &self,
             identity: &crate::auth::Identity,
             repository_id: &str,
+            control: &crate::HistoryReadControl,
         ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
             self.delegate
-                .default_directory_branch(identity, repository_id)
+                .default_directory_branch(identity, repository_id, control)
         }
         fn file_history_snapshot(
             &self,
@@ -2431,5 +2435,9 @@ async fn listing_http_boundary_preserves_root_shape_and_rejects_invalid_queries(
 }
 
 pub(crate) fn directory_scopes_value(snapshot: &crate::DirectoryScopesSnapshot) -> Value {
+    json_codec::from_slice(snapshot.body()).unwrap()
+}
+
+pub(crate) fn default_directory_value(snapshot: &crate::DefaultDirectoryBranchSnapshot) -> Value {
     json_codec::from_slice(snapshot.body()).unwrap()
 }

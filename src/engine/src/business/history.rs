@@ -489,28 +489,8 @@ impl Engine {
     }
 
     pub fn compare_commits(&self, left: &str, right: &str) -> Result<CommitComparison> {
-        let left = self.state.commits.get_shared(left).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::CommitNotFound,
-                "left commit missing",
-            )
-        })?;
-        let right = self.state.commits.get_shared(right).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::CommitNotFound,
-                "right commit missing",
-            )
-        })?;
-        // Comparison is whole-namespace by definition; both sides materialize
-        // once and the comparison owns the compared records.
-        let left_entries = self.namespace_entries(&left.namespace)?;
-        let right_entries = self.namespace_entries(&right.namespace)?;
-        Ok(CommitComparison::between(
-            left,
-            left_entries,
-            right,
-            right_entries,
-        ))
+        self.published_read_view()
+            .compare_commits(left, right, None)
     }
 }
 

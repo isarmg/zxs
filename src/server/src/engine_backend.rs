@@ -12,6 +12,7 @@ pub mod application;
 use application::Application;
 mod branch;
 mod content;
+mod default_directory;
 mod directory_scopes;
 mod directory_selection;
 mod disk_monitor;
@@ -81,6 +82,21 @@ impl EngineBackend {
         result
     }
 
+    fn finish_default_directory(
+        &self,
+        identity: &Identity,
+        result: Result<crate::DefaultDirectoryBranchSnapshot, ApiError>,
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::DefaultDirectoryBranchSnapshot, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::activity::checkpoint(control)?;
+        result
+    }
+
     fn finish_directory_scopes(
         &self,
         identity: &Identity,
@@ -127,6 +143,21 @@ impl EngineBackend {
         file_manager::activity::checkpoint(control)?;
         // Business mutations do not invalidate an already captured response.
         // Its original token still rejects subsequent stale cursor requests.
+        result
+    }
+
+    fn finish_comparison(
+        &self,
+        identity: &Identity,
+        result: Result<crate::ComparisonSnapshot, ApiError>,
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::activity::checkpoint(control)?;
         result
     }
 
@@ -974,7 +1005,8 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::CompareCommits<'_>,
-    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         {
@@ -992,10 +1024,11 @@ impl Backend for EngineBackend {
             validate(request.left)?;
             validate(request.right)?;
         }
-        // Whole-commit comparison materializes both sides once in the engine.
-        engine
-            .compare_commits(request.left, request.right)
-            .map_err(error)
+        let view = engine.published_read_view();
+        drop(engine);
+        let result = read_projection::capture_comparison(view, request, control);
+        // Only bounded bytes remain before current authorization is refreshed.
+        self.finish_comparison(identity, result, control)
     }
     fn disk_status(
         &self,
@@ -1532,37 +1565,19 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
         repository_id: &str,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         let engine = self
             .engine
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        let repo = repository(&engine, repository_id)?;
-        let state = engine.state();
-        let selected = state.directory_selections.get(repository_id).map(|id| {
-            let branch = state
-                .directory_branches
-                .get(id)
-                .expect("invariant: admitted directory selection references its branch");
-            crate::SelectedDirectoryBranch {
-                directory_branch_id: id.clone(),
-                name: branch.name.clone(),
-            }
-        });
-        Ok(crate::DefaultDirectoryBranchSnapshot {
-            repository_id: repo.repository_id.clone(),
-            namespace_branch_id: repo.main_branch_id.clone(),
-            selected,
-            directory_branches: storage_contract::directory_branch_summaries(
-                state,
-                storage_contract::DirectoryBranchScope {
-                    repository_id,
-                    directory_id: repository_id,
-                    path: "",
-                },
-            ),
-        })
+        repository(&engine, repository_id)?;
+        file_manager::activity::checkpoint(control)?;
+        let view = engine.published_read_view();
+        drop(engine);
+        let result = default_directory::read(view, repository_id, control);
+        self.finish_default_directory(identity, result, control)
     }
     fn file_history_snapshot(
         &self,

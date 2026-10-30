@@ -394,8 +394,9 @@ impl Backend for LostCommitReply {
         &self,
         identity: &crate::auth::Identity,
         request: crate::CompareCommits<'_>,
-    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
-        self.inner.compare_commits(identity, request)
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, crate::ApiError> {
+        self.inner.compare_commits(identity, request, control)
     }
     fn disk_status(
         &self,
@@ -620,8 +621,10 @@ impl Backend for LostCommitReply {
         &self,
         identity: &crate::auth::Identity,
         repository_id: &str,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
-        self.inner.default_directory_branch(identity, repository_id)
+        self.inner
+            .default_directory_branch(identity, repository_id, control)
     }
     fn file_history_snapshot(
         &self,
@@ -1115,11 +1118,14 @@ fn directory_fixture(shared: &Shared) -> (String, String, String) {
         .unwrap();
     let initial = shared
         .backend
-        .default_directory_branch(identity, &repository)
+        .default_directory_branch(identity, &repository, &crate::tests::history_read_control())
         .unwrap();
     (
         repository,
-        initial.selected.unwrap().directory_branch_id,
+        crate::tests::default_directory_value(&initial)["directory_branch_id"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
         created["result"]["directory_branch_id"]
             .as_str()
             .unwrap()

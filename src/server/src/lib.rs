@@ -115,7 +115,7 @@ pub use backend_smb_binding::{SmbBindingStatus, UpdateSmbBinding};
 mod http_smb_binding;
 use http_smb_binding::{smb_binding, update_smb_binding};
 mod backend_comparison;
-pub use backend_comparison::CompareCommits;
+pub use backend_comparison::{CompareCommits, ComparisonSnapshot};
 mod http_comparison;
 use http_comparison::compare;
 mod backend_protection;
@@ -154,8 +154,8 @@ mod backend_diagnostics;
 mod http_default_directory;
 mod http_directory_scopes;
 pub use backend_default_directory::{
-    DefaultDirectoryBranchSnapshot, RenameDirectoryBranch, SelectDefaultDirectoryBranch,
-    SelectedDirectoryBranch,
+    DefaultDirectoryBranchRow, DefaultDirectoryBranchSnapshot, RenameDirectoryBranch,
+    SelectDefaultDirectoryBranch, SelectedDirectoryBranch,
 };
 mod backend_monitoring;
 pub use backend_monitoring::{DiskSample, PowerUnavailable};
@@ -697,7 +697,8 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         request: CompareCommits<'_>,
-    ) -> Result<storage_contract::CommitComparison, ApiError>;
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, ApiError>;
     fn disk_status(
         &self,
         identity: &Identity,
@@ -859,6 +860,7 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         repository_id: &str,
+        control: &crate::HistoryReadControl,
     ) -> Result<DefaultDirectoryBranchSnapshot, ApiError>;
     /// One bounded node page of a file's history bound to the exact current root.
     fn file_history_snapshot(
@@ -1310,9 +1312,10 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::CompareCommits<'_>,
-    ) -> Result<storage_contract::CommitComparison, crate::ApiError> {
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ComparisonSnapshot, crate::ApiError> {
         self.backend
-            .compare_commits(&self.current(identity)?, request)
+            .compare_commits(&self.current(identity)?, request, control)
     }
     fn disk_status(
         &self,
@@ -1556,9 +1559,10 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         repository_id: &str,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         self.backend
-            .default_directory_branch(&self.current(identity)?, repository_id)
+            .default_directory_branch(&self.current(identity)?, repository_id, control)
     }
     fn file_history_snapshot(
         &self,
@@ -2648,20 +2652,15 @@ async fn default_branch(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<backend_default_directory::DefaultDirectoryBranchResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
-            backend
-                .default_directory_branch(&identity, &id)
-                .map(backend_default_directory::DefaultDirectoryBranchResponse::from)
-        })
-        .await
-        .map(Json)
+    connection: Option<http_routing::Extension<crate::http_shutdown::ResponseConnection>>,
+) -> Result<Response, ApiError> {
+    crate::history_read::run(
+        state,
+        connection.map(|http_routing::Extension(connection)| connection),
+        move |backend, control| backend.default_directory_branch(&identity, &id, control),
+        |snapshot| Ok(snapshot.into_encoded()),
+    )
+    .await
 }
 
 async fn branch_info(

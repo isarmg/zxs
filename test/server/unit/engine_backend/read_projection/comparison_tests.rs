@@ -1,105 +1,223 @@
 use super::*;
 
+fn comparison_value(snapshot: &crate::ComparisonSnapshot) -> Value {
+    json_codec::from_slice(snapshot.body()).unwrap()
+}
+
 #[test]
-fn typed_comparison_shares_captured_entries_and_serializes_after_unlock_and_revocation() {
-    let (root, mut engine, repo, _) = fixture();
+fn comparison_reads_and_encodes_detached_then_releases_publication_before_finish() {
+    let (_root, mut engine, repo, identity) = fixture();
     save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"first");
-    let left_id = engine.state().branches[&repo.main_branch_id]
+    let left = engine.state().branches[&repo.main_branch_id]
         .head_commit_id
         .clone();
-    let left = engine.state().commits.get_shared(&left_id).unwrap();
     save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"second");
-    let right_id = engine.state().branches[&repo.main_branch_id]
+    let right = engine.state().branches[&repo.main_branch_id]
         .head_commit_id
         .clone();
-    let right = engine.state().commits.get_shared(&right_id).unwrap();
-    let left_entries = engine.list_tree_at(&repo.main_branch_id, &left_id).unwrap();
-    let right_entries = engine
-        .list_tree_at(&repo.main_branch_id, &right_id)
+    let before = engine.list_tree_at(&repo.main_branch_id, &left).unwrap();
+    let after = engine.list_tree_at(&repo.main_branch_id, &right).unwrap();
+    let expected = json!({"left":left,"right":right,"changes":[{"path":"file.txt","change":"modified","before":before[0],"after":after[0]}]});
+    let weak = Arc::downgrade(&engine.state().commits.get_shared(&left).unwrap());
+    let backend = EngineBackend::new(engine);
+    let view = backend.engine.lock().unwrap().published_read_view();
+    let mut writer = backend.engine.lock().unwrap();
+    save_projection_file(&mut writer, &repo.main_branch_id, "later.txt", b"later");
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        send.send(capture_comparison(
+            view,
+            crate::CompareCommits {
+                left: &left,
+                right: &right,
+            },
+            &tree_control(),
+        ))
         .unwrap();
-    let expected = json!({"left":left_id,"right":right_id,"changes":[{"path":"file.txt","change":"modified","before":left_entries[0],"after":right_entries[0]}]});
-    let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
-    let before_left = Arc::strong_count(&left);
-    let before_right = Arc::strong_count(&right);
+    });
+    let result = receive.recv_timeout(std::time::Duration::from_secs(30));
+    drop(writer);
+    worker.join().unwrap();
     let snapshot = backend
-        .compare_commits(
+        .finish_comparison(
             &identity,
-            crate::CompareCommits {
-                left: &left_id,
-                right: &right_id,
-            },
+            result.expect("comparison waited for writer mutex"),
+            &tree_control(),
         )
         .unwrap();
-    assert_eq!(Arc::strong_count(&left), before_left + 1);
-    assert_eq!(Arc::strong_count(&right), before_right + 1);
-    let storage_contract::CommitChange::Modified { before, after } =
-        snapshot.changes().next().unwrap()
-    else {
-        panic!("expected modified")
-    };
-    // The comparison owns its materialized namespaces; the compared records
-    // must still be the exact published entries of each side.
-    assert_eq!(before, &left_entries[0]);
-    assert_eq!(after, &right_entries[0]);
-    save_projection_file(
-        &mut backend.engine.lock().unwrap(),
-        &repo.main_branch_id,
-        "file.txt",
-        b"later",
+    assert_eq!(comparison_value(&snapshot), expected);
+    drop(backend);
+    assert!(
+        weak.upgrade().is_none(),
+        "encoded comparison must not retain commits or its publication"
     );
-    let missing = backend
-        .compare_commits(
-            &identity,
-            crate::CompareCommits {
-                left: &left_id,
-                right: "missing",
-            },
+    let allocation = snapshot.body().as_ptr();
+    let encoded = snapshot.into_encoded();
+    assert_eq!(encoded.body().as_ptr(), allocation);
+    assert_eq!(
+        json_codec::from_slice::<Value>(encoded.body()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn comparison_admission_preserves_left_history_repository_order_and_cross_repository_reads() {
+    let (_root, mut engine, repo, identity) = fixture();
+    let other = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Other").unwrap(),
+            "P01",
+            3,
+            "owner",
+            storage_contract::OperationId::generate(),
         )
-        .unwrap_err();
-    assert_eq!(missing.code, storage_contract::ErrorCode::NotFound);
-    assert_eq!(missing.message, "comparison commit not found");
-    auth.logout(&token).unwrap();
+        .unwrap();
+    let left = engine.state().branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
+    let right = engine.state().branches[&other.main_branch_id]
+        .head_commit_id
+        .clone();
+    let backend = EngineBackend::new(engine);
+    let request = || crate::CompareCommits {
+        left: &left,
+        right: &right,
+    };
+    assert_eq!(
+        comparison_value(
+            &backend
+                .compare_commits(&identity, request(), &tree_control())
+                .unwrap()
+        )["changes"],
+        json!([])
+    );
+    for (missing, expected) in [
+        ("history", "history not found"),
+        ("repository", "repository not found"),
+    ] {
+        let mut engine = backend.engine.lock().unwrap();
+        let original = engine.state().clone();
+        let mut broken = original.clone();
+        if missing == "history" {
+            broken.histories.remove(&repo.history_tree_id);
+        } else {
+            broken.repositories.remove(&repo.repository_id);
+        }
+        storage_engine::test_support::replace_state(&mut engine, broken);
+        drop(engine);
+        let failure = backend
+            .compare_commits(
+                &identity,
+                crate::CompareCommits {
+                    left: &left,
+                    right: "missing",
+                },
+                &tree_control(),
+            )
+            .unwrap_err();
+        assert_eq!(failure.message, expected);
+        storage_engine::test_support::replace_state(&mut backend.engine.lock().unwrap(), original);
+    }
     assert_eq!(
         backend
             .compare_commits(
                 &identity,
                 crate::CompareCommits {
                     left: "missing",
-                    right: "missing"
-                }
+                    right: &right
+                },
+                &tree_control()
             )
             .unwrap_err()
-            .code,
-        storage_contract::ErrorCode::Unauthorized
+            .message,
+        "comparison commit not found"
     );
-    struct Probe<'a>(
-        &'a EngineBackend,
-        &'a crate::backend_comparison::ComparisonResponse,
-    );
-    impl Serialize for Probe<'_> {
-        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            let unlocked = std::thread::scope(|scope| {
-                scope
-                    .spawn(|| self.0.engine.try_lock().is_ok())
-                    .join()
-                    .unwrap()
-            });
-            if !unlocked {
-                return Err(S::Error::custom(
-                    "comparison serialization retained engine mutex",
-                ));
-            }
-            self.1.serialize(serializer)
+}
+
+#[test]
+fn comparison_completion_reauthorizes_success_errors_budget_and_cancellation() {
+    for managed in [false, true] {
+        let (root, engine, repo, _) = fixture();
+        let backend = Arc::new(EngineBackend::new(engine));
+        let auth =
+            AuthStore::initialize(root.path(), "owner", "integration-test-password").unwrap();
+        let mut auth = if managed {
+            backend.set_management_auth(auth.reader()).unwrap();
+            auth
+        } else {
+            backend.protect_auth(auth).unwrap()
+        };
+        let token = auth
+            .login("owner", "integration-test-password")
+            .unwrap()
+            .token;
+        let identity = auth.authenticate(&token).unwrap();
+        let view = backend.engine.lock().unwrap().published_read_view();
+        let commit = view.state().branches[&repo.main_branch_id]
+            .head_commit_id
+            .clone();
+        let request = || crate::CompareCommits {
+            left: &commit,
+            right: &commit,
+        };
+        let snapshot = capture_comparison(view, request(), &tree_control());
+        let failure = || {
+            ApiError::new(
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
+                storage_contract::ErrorCode::ObjectCorrupt,
+                "comparison namespace is corrupt",
+            )
+        };
+        assert_eq!(
+            backend
+                .finish_comparison(&identity, Err(failure()), &tree_control())
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::ObjectCorrupt
+        );
+        let cancelled = tree_control();
+        drop(cancelled.wait_owner());
+        assert_eq!(
+            backend
+                .compare_commits(&identity, request(), &cancelled)
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::RequestTimeout
+        );
+        auth.logout(&token).unwrap();
+        for result in [
+            snapshot,
+            Err(failure()),
+            Err(ApiError::limit("comparison byte budget exhausted")),
+        ] {
+            assert_eq!(
+                backend
+                    .finish_comparison(&identity, result, &tree_control())
+                    .unwrap_err()
+                    .code,
+                storage_contract::ErrorCode::Unauthorized
+            );
         }
+        assert_eq!(
+            backend
+                .finish_comparison(&identity, Err(failure()), &cancelled)
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::Unauthorized
+        );
+        assert_eq!(
+            backend
+                .compare_commits(
+                    &identity,
+                    crate::CompareCommits {
+                        left: "missing",
+                        right: "missing"
+                    },
+                    &tree_control()
+                )
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::Unauthorized
+        );
     }
-    let response = crate::backend_comparison::ComparisonResponse::from(snapshot);
-    assert_eq!(
-        json_codec::to_value(Probe(&backend, &response)).unwrap(),
-        expected
-    );
-    drop(left);
-    drop(right);
-    drop(auth);
-    drop(backend);
-    assert_eq!(json_codec::to_value(response).unwrap(), expected);
 }
