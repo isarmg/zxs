@@ -28,6 +28,7 @@ mod file_rows;
 mod fixture;
 use fixture::seed_files;
 mod fonts;
+mod history_cancellation;
 mod integrity_scrub;
 mod lifecycle;
 mod management;
@@ -287,6 +288,7 @@ fn exercise(
     println!("PASS engine-seeded file browsing in the real server namespace");
     file_rows::run(browser)?;
     file_pagination::run(browser)?;
+    history_cancellation::run(browser)?;
     error_feedback::run(browser)?;
     if let Some(path) = screenshot {
         // Save the real regression view without adding presentation-only data.

@@ -64,6 +64,7 @@ fn navigation_resets_only_location_owned_state() {
             ),
             history_loading: true,
             history_generation: 11,
+            history_cancellation: None,
             checked_entries: [entry_key(&selected)].into_iter().collect(),
             batch: None,
             merge: None,
@@ -151,6 +152,31 @@ fn refreshed_selection_invalidates_old_history_only_when_context_changes() {
     assert!(model.checked_nodes.is_empty());
     assert_eq!(model.history_generation, 1);
 }
+
+#[test]
+fn history_read_is_invalidated_when_only_the_logical_context_changes() {
+    let original = entry(json!({"file_id":"file","path":"a.txt"}));
+    for patch in [
+        json!({"repository_id":"other-repository"}),
+        json!({"repository_path":"other/a.txt"}),
+        json!({"backup":true}),
+    ] {
+        let mut replacement = original.clone();
+        update(&mut replacement, patch);
+        let mut model = Model {
+            selected: Some(original.clone()),
+            history_loading: true,
+            history_generation: 4,
+            ..Default::default()
+        };
+        model.reconcile_selection(Some(replacement.clone()));
+        assert_eq!(model.selected.as_ref(), Some(&replacement));
+        assert_eq!(model.history_generation, 5);
+        assert!(!model.history_loading);
+        assert!(model.history_cancellation.is_none());
+    }
+}
+
 #[test]
 fn backup_context_never_guesses_a_primary_alias_from_its_prefix() {
     let mut backup = entry(

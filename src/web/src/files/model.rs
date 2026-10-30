@@ -85,6 +85,7 @@ pub(crate) struct Model {
     pub file_history: crate::snapshot::Snapshot<FileHistory>,
     pub history_loading: bool,
     pub history_generation: u64,
+    pub history_cancellation: Option<crate::api::ReadCancellation>,
     pub checked_entries: BTreeSet<String>,
     pub batch: Option<super::batch::Draft>,
     pub merge: Option<super::merge::Draft>,
@@ -161,12 +162,19 @@ impl Model {
     }
 
     pub(crate) fn clear_selection(&mut self) {
+        self.cancel_history();
         self.merge = None;
         self.backup = None;
         self.tag_edit = None;
         self.checked_nodes.clear();
         self.selected = None;
         self.file_history = Default::default();
+    }
+
+    pub(crate) fn cancel_history(&mut self) {
+        if let Some(cancellation) = self.history_cancellation.take() {
+            cancellation.abort();
+        }
         self.history_loading = false;
         self.history_generation += 1;
     }
@@ -186,15 +194,17 @@ impl Model {
                 || selected.version_id() != entry.version_id()
                 || selected.node_id() != entry.node_id()
                 || selected.selected_branch_id() != entry.selected_branch_id();
-            let changed = content_changed || selected.path() != entry.path();
+            let changed = content_changed
+                || selected.path() != entry.path()
+                || selected.context() != entry.context()
+                || selected.backup() != entry.backup();
             if changed {
                 // A refreshed branch or renamed logical path invalidates both
                 // visible metadata and in-flight reads of the previous context.
                 if content_changed {
                     self.file_history = Default::default();
                 }
-                self.history_loading = false;
-                self.history_generation += 1;
+                self.cancel_history();
                 self.checked_nodes.clear();
             }
             self.selected = Some(entry);

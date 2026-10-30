@@ -360,11 +360,21 @@ pub(crate) fn load_file_history(state: RwSignal<State>) {
     if id.is_empty() {
         return;
     }
-    let generation = state.with_untracked(|s| s.files.history_generation + 1);
-    state.update(|s| {
+    let cancellation = match api::ReadCancellation::new() {
+        Ok(value) => value,
+        Err(error) => {
+            fail(state, error);
+            return;
+        }
+    };
+    let Some(generation) = state.try_update(|s| {
+        s.files.cancel_history();
         s.files.history_loading = true;
-        s.files.history_generation = generation;
-    });
+        s.files.history_cancellation = Some(cancellation.clone());
+        s.files.history_generation
+    }) else {
+        return;
+    };
     spawn_local(async move {
         let endpoint = format!(
             "/api/file-manager/files/{}/history{}",
@@ -378,37 +388,56 @@ pub(crate) fn load_file_history(state: RwSignal<State>) {
                 ))
                 .unwrap_or_default()
         );
-        let result = api::request("GET", &endpoint, None)
+        let result = api::cancellable_get(&endpoint, cancellation)
             .await
             .and_then(|value| FileHistory::parse(value, &id));
-        if !accept_read_response(state, epoch, &result)
-            || !state.with_untracked(|s| {
-                s.files.history_generation == generation
-                    && s.files
-                        .selected
-                        .as_ref()
-                        .is_some_and(|entry| entry.file_id() == id)
-            })
-        {
+        if !accept_read_response(state, epoch, &result) {
             return;
         }
-        match result {
-            Ok(history) => state.update(|s| {
-                let entry = s
-                    .files
-                    .selected
-                    .as_ref()
-                    .expect("invariant: accepted history still has its selected entry");
-                s.files.file_history = history.for_entry(entry).into();
-            }),
-            Err(error) => {
-                // A failed refresh must not re-enable controls for stale heads.
-                state.update(|s| s.files.file_history = Default::default());
-                fail_in(state, epoch, ErrorContext::Read(endpoint), error);
-            }
+        if let Some(Err(error)) =
+            state.try_update(|s| complete_history_load(s, epoch, generation, &id, result))
+        {
+            fail_in(state, epoch, ErrorContext::Read(endpoint), error);
         }
-        state.update(|s| s.files.history_loading = false);
     });
+}
+
+fn complete_history_load(
+    state: &mut State,
+    epoch: u64,
+    generation: u64,
+    file: &str,
+    result: Result<FileHistory, api::Error>,
+) -> Result<(), api::Error> {
+    if !state.session_active()
+        || state.session_epoch != epoch
+        || state.files.history_generation != generation
+        || !state
+            .files
+            .selected
+            .as_ref()
+            .is_some_and(|entry| entry.file_id() == file)
+    {
+        return Ok(());
+    }
+    state.files.history_loading = false;
+    state.files.history_cancellation = None;
+    match result {
+        Ok(history) => {
+            let entry = state
+                .files
+                .selected
+                .as_ref()
+                .expect("invariant: accepted history still has its selected entry");
+            state.files.file_history = history.for_entry(entry).into();
+            Ok(())
+        }
+        Err(error) => {
+            // A failed refresh must not re-enable controls for stale heads.
+            state.files.file_history = Default::default();
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]
