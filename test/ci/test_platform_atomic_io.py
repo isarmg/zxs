@@ -79,7 +79,17 @@ class AtomicArtifactTests(unittest.TestCase):
                     )
                     self.assertEqual(execution.returncode, 0 if succeeds else 1, execution.stderr)
                     if succeeds:
-                        self.assertEqual(execution.stdout.count("Atomic I/O mode="), 19)
+                        expected = [
+                            f"Atomic I/O mode={mode} stage={stage}"
+                            for mode in ("create", "replace", "replace-held", "public", "recovery-intent")
+                            for stage in ("success", "write", "file-sync", "publish", "directory-sync")
+                            if (mode, stage) != ("public", "write")
+                        ]
+                        self.assertEqual(
+                            [line for line in execution.stdout.splitlines()
+                             if line.startswith("Atomic I/O mode=")],
+                            expected,
+                        )
                     else:
                         self.assertIn("Missing exact ignored atomic I/O test" if not listed else
                                       "Missing atomic I/O completion or single-test pass", execution.stderr)
