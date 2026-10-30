@@ -40,19 +40,21 @@ impl Backend for Probe {
         let Some(activation) = &self.1 else {
             return Ok(crate::HttpSpoolQualification::Retain);
         };
-        activation.attempted.add_permits(1);
-        if activation.corrupt.load(Ordering::SeqCst) {
-            return Err(ApiError::new(
+        let result = if activation.corrupt.load(Ordering::SeqCst) {
+            Err(ApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 storage_contract::ErrorCode::RecoveryRequired,
                 "corrupt retirement proof",
-            ));
-        }
-        if activation.ready.load(Ordering::SeqCst) {
+            ))
+        } else if activation.ready.load(Ordering::SeqCst) {
             Ok(crate::HttpSpoolQualification::Retain)
         } else {
             Ok(crate::HttpSpoolQualification::Unavailable)
-        }
+        };
+        // The waiter may activate immediately after this notification. Freeze
+        // this qualification first so it cannot observe that later activation.
+        activation.attempted.add_permits(1);
+        result
     }
     fn http_spool_activation(
         &self,
