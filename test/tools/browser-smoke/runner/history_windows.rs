@@ -234,7 +234,7 @@ fn merge_review(browser: &Browser) -> Result<()> {
     check(
         browser,
         "genuine branch basis is available",
-        "const panel=document.querySelector('.zxs-merge-review'),input=panel?.querySelector('fieldset input[type=checkbox]');if(!input||input.disabled)return false;if(!input.checked)input.click();window.__zxsHistoryWindows.branchName=input.closest('label').querySelector('span').textContent.trim();return true",
+        "const panel=document.querySelector('.zxs-merge-review'),inputs=Array.from(panel?.querySelectorAll('fieldset input[type=checkbox]')||[]),input=inputs.find(input=>input.checked&&!input.disabled)||inputs.find(input=>!input.disabled);if(!input)return false;if(!input.checked){input.click();return false;}if(inputs.filter(input=>input.checked).length!==1)return false;window.__zxsHistoryWindows.branchName=input.closest('label').querySelector('span').textContent.trim();return true",
     )?;
     let older = browser
         .script("return window.__zxsHistoryWindows.older")?

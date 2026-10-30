@@ -5,6 +5,7 @@ use storage_engine::{CommitRequest, Engine};
 
 const PRINCIPAL: &str = "smoke-admin";
 const FILE: &str = "browser-smoke.txt";
+const FILE_BRANCH: &str = "browser-smoke-alternate";
 const PAYLOADS: [&str; 2] = ["first real version\n", "second real version: 测试\n"];
 
 /// Use the same explicit authority publication as production setup. A pool
@@ -100,6 +101,20 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
             request_digest: None,
         })?;
     }
+    let entries = engine.list_tree(&repository.main_branch_id)?;
+    let [entry] = entries.as_slice() else {
+        return Err("fixture must contain exactly one file before branching".into());
+    };
+    // A directory commit alone does not create independent file branches. Bind
+    // this pending branch to a real node without adding a version or graph node.
+    engine.create_file_branch_from_node(
+        &entry.file_id,
+        &entry.version_id,
+        &entry.version_id,
+        &storage_engine::BranchName::parse(FILE_BRANCH)?,
+        PRINCIPAL,
+        storage_engine::OperationId::generate(),
+    )?;
     // Reopen from disk before serving: an in-memory-only fixture is insufficient.
     drop(engine);
     let engine = Engine::open(&pool)?;

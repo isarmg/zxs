@@ -1,5 +1,11 @@
 use super::*;
-use storage_engine::Config;
+use storage_engine::{
+    BranchKind, BranchState, Config,
+    history_window::{
+        HistoryCollection, HistoryFileId, HistoryPageLimit, HistoryWindowCancellation,
+        HistoryWindowPage, HistoryWindowRequest,
+    },
+};
 
 fn pool() -> tempfile::TempDir {
     let temporary = tempfile::tempdir().unwrap();
@@ -25,6 +31,54 @@ fn test_only_fixture_persists_two_versions_and_refuses_reuse() {
         let mut bytes = Vec::new();
         content.file.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, expected.as_bytes());
+    }
+    let request = HistoryWindowRequest {
+        file_id: HistoryFileId::parse(&entries[0].file_id).unwrap(),
+        collection: HistoryCollection::Nodes,
+        location: None,
+        history_root: None,
+        cursor: None,
+        anchor_node_id: None,
+        limit: HistoryPageLimit::new(32).unwrap(),
+    };
+    let HistoryWindowPage::Nodes {
+        identity, nodes, ..
+    } = engine
+        .capture_history_window(request.clone(), HistoryWindowCancellation::new())
+        .unwrap()
+        .page()
+        .unwrap()
+    else {
+        panic!("node request must produce a node page");
+    };
+    assert_eq!(nodes.len(), 2);
+    let HistoryWindowPage::Branches { branches, page, .. } = engine
+        .capture_history_window(
+            HistoryWindowRequest {
+                collection: HistoryCollection::Branches,
+                history_root: Some(identity.history_root),
+                ..request
+            },
+            HistoryWindowCancellation::new(),
+        )
+        .unwrap()
+        .page()
+        .unwrap()
+    else {
+        panic!("branch request must produce a branch page");
+    };
+    assert_eq!(branches.len(), 2);
+    assert!(page.previous_cursor.is_none());
+    assert!(page.next_cursor.is_none());
+    for name in ["main", FILE_BRANCH] {
+        let branch = branches.iter().find(|branch| branch.name == name).unwrap();
+        assert_eq!(branch.state, BranchState::Active);
+        assert_eq!(branch.branch_kind, BranchKind::File);
+        assert!(!branch.read_only);
+        assert!(branch.alias_of.is_none());
+        let head = branch.node_id.as_ref().unwrap();
+        assert!(nodes.iter().any(|node| node.node_id == *head));
+        assert_eq!(head.as_str(), entries[0].version_id);
     }
     drop(engine);
     let error = seed_files(&temporary).unwrap_err();
