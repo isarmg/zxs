@@ -67,7 +67,11 @@ async fn entity_tag_precedes_modified_since_for_static_get_and_head() {
             )
             .await
             .unwrap();
-        assert_eq!(updated.status(), StatusCode::OK, "{method}: stale entity tag");
+        assert_eq!(
+            updated.status(),
+            StatusCode::OK,
+            "{method}: stale entity tag"
+        );
         assert_eq!(updated.headers()[header::ETAG], etag);
         assert_eq!(updated.headers()[header::LAST_MODIFIED], modified);
         assert_eq!(
