@@ -2298,6 +2298,83 @@ fn capture_wire(name: &str, wire: &Value) {
     }
 }
 
+fn assert_capture_contract(actual: &Value, fixture: &str) {
+    use storage_contract::client_protocol::{operation_observation_status, operation_status};
+
+    // Compare real routes with the historical captures. Generated identities
+    // receive stable labels while repeated references keep their aliasing.
+    fn normalize(
+        value: &Value,
+        field: &str,
+        identities: &mut std::collections::BTreeMap<String, usize>,
+    ) -> Value {
+        match value {
+            Value::Object(object) => Value::Object(
+                object
+                    .iter()
+                    .map(|(key, value)| (key.clone(), normalize(value, key, identities)))
+                    .collect(),
+            ),
+            Value::Array(array) => {
+                let mut entries: Vec<_> = array.iter().collect();
+                if field == "versions" {
+                    // The two-version recovery fixture is ordered by random
+                    // version IDs; retain the full protection facts per version.
+                    entries.sort_by_key(|version| {
+                        version["slots"][0]["state"].as_str().unwrap().to_owned()
+                    });
+                }
+                Value::Array(
+                    entries
+                        .into_iter()
+                        .map(|entry| normalize(entry, field, identities))
+                        .collect(),
+                )
+            }
+            Value::String(text) => {
+                if matches!(field, "request_digest" | "checked_at" | "timestamp") {
+                    return format!("<{field}>").into();
+                }
+                if let Some((prefix, _)) = text.split_once('_')
+                    && matches!(
+                        prefix,
+                        "op" | "br"
+                            | "commit"
+                            | "history"
+                            | "ver"
+                            | "disk"
+                            | "dbr"
+                            | "dtree"
+                            | "fnode"
+                            | "file"
+                            | "entry"
+                    )
+                {
+                    storage_contract::validate_id(text, prefix).unwrap();
+                    let next = identities.len();
+                    let label = identities.entry(text.clone()).or_insert(next);
+                    return format!("{prefix}_{label}").into();
+                }
+                value.clone()
+            }
+            _ => value.clone(),
+        }
+    }
+
+    let expected: Value = json_codec::from_str(fixture).unwrap();
+    let status = if expected.get("current_health").is_some() {
+        operation_observation_status
+    } else {
+        operation_status
+    };
+    assert!(status(&expected).is_some());
+    assert_eq!(status(actual), status(&expected));
+    assert_eq!(
+        normalize(actual, "", &mut std::collections::BTreeMap::new()),
+        normalize(&expected, "", &mut std::collections::BTreeMap::new())
+    );
+}
+
 fn seed_engine_authority(engine: &mut Engine, system: &Path) {
     let auth = AuthStore::initialize(system, "admin", "integration-test-password").unwrap();
     engine
@@ -2441,6 +2518,14 @@ async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavail
         "degraded-save-operation-outcome.json",
     )
     .await;
+    assert_capture_contract(
+        &projection_failure::receipt_outcome(&wire),
+        include_str!("../../web/unit/files/fixtures/github-degraded-save-outcome.json"),
+    );
+    assert_capture_contract(
+        &wire,
+        include_str!("../../web/unit/files/fixtures/github-degraded-save-observation.json"),
+    );
     assert_eq!(wire["state"], "completed");
     assert_eq!(wire["commit_state"], "PUBLISHED_DEGRADED");
     assert_eq!(wire["result"]["outcome"], "COMMITTED_DEGRADED");
@@ -2540,6 +2625,16 @@ async fn damage_after_normal_publication_keeps_original_target_met_in_save_wire(
         "damaged-published-save-operation-outcome.json",
     )
     .await;
+    assert_capture_contract(
+        &projection_failure::receipt_outcome(&wire),
+        include_str!("../../web/unit/files/fixtures/github-damaged-published-save-outcome.json"),
+    );
+    assert_capture_contract(
+        &wire,
+        include_str!(
+            "../../web/unit/files/fixtures/github-damaged-published-save-observation.json"
+        ),
+    );
     assert_eq!(wire["commit_state"], "PUBLISHED");
     assert_eq!(wire["result"]["outcome"], "COMMITTED_AND_PROTECTED");
     assert_eq!(wire["result"]["protection_at_publish"], "TARGET_MET");

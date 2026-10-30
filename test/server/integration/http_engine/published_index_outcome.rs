@@ -64,6 +64,14 @@ async fn metadata_projection_failure_returns_published_http_receipt_and_same_id_
     assert!(outcome.get("current_health").is_none());
     assert_eq!(outcome, saved);
     capture_wire("namespace-batch-outcome.json", &outcome);
+    assert_capture_contract(
+        &outcome,
+        include_str!("../../../web/unit/files/fixtures/github-namespace-batch-outcome.json"),
+    );
+    assert_capture_contract(
+        &queried,
+        include_str!("../../../web/unit/files/fixtures/github-namespace-batch-observation.json"),
+    );
     assert_eq!(receipt_outcome(&queried), receipt_outcome(&saved));
     let replay = success(&app, &token, "POST", route, Some(request.clone())).await;
     assert!(replay.get("current_health").is_none());
