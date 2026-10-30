@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b]
 
 permissions:
   contents: read
@@ -76,6 +76,10 @@ jobs:
               '7b38c66f9825bcf80bc69f3b5de8ac1b3602f6dc', '6b337f9366340abe6d47f14b3276f70787b5f4ee',
           ):
               raise SystemExit('Release fixtures require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'namespace-stage-b' and (source, tree) != (
+              '4545759d1c7992d7ea905c7776bcf1c9a41e6b3c', '8c688716c04f2168e2f51672322a11e2f7066d9d',
+          ):
+              raise SystemExit('Stage B diagnostics require the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -310,6 +314,25 @@ jobs:
                   command + ' || status=$?' for command in fixture_commands) + '\nexit "$status"')]
           groups['native-release-acceptance'] = [dict(id='native-release-web-production',
               web_production=True, command='bash .github/scripts/check.sh web-production')]
+          groups['namespace-stage-b'] = [
+              dict(id='namespace-stage-b-format', format_base='529efdd0e772e30668c3dfa3f6e15025592baa10',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='namespace-stage-b-namespace', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([
+                      dict(selector='namespace', allow_ignored=True, ignored_suffixes=['parsed_path_namespace_cost']),
+                      dict(selector='segment_store::tests', allow_ignored=True,
+                          required_suffixes=['admission_namespace_cache_moves_nodes_budget_and_fifo_without_loading']),
+                  ]), command='Reviewed namespace and segment store module commands'),
+              dict(id='namespace-stage-b-recovery', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([
+                      dict(selector='engine::recovery', allow_ignored=True, required_suffixes=[
+                          'fresh_normal_open_retains_admitted_namespace_but_offline_and_in_place_do_not',
+                          'namespace_seed_rejects_changed_state_resources_cache_and_snapshot_owners',
+                          'completing_a_pending_candidate_does_not_retain_the_preceding_admission_cache',
+                      ]),
+                      dict(selector='engine::integrity_scrub', allow_ignored=True),
+                  ]), command='Reviewed recovery and integrity scrub module commands'),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -521,15 +544,26 @@ jobs:
               if listed.returncode or ignored.returncode:
                   raise SystemExit('Reviewed inventory command failed')
               names = [line[:-6] for line in listed.stdout.splitlines() if line.endswith(': test')]
-              if len(names) != group['count'] or any(names.count(required) != 1 for required in group.get('required', [])):
+              ignored_names = [line[:-6] for line in ignored.stdout.splitlines() if line.endswith(': test')]
+              required_names = list(group.get('required', []))
+              for suffix in group.get('required_suffixes', []):
+                  matches = [test for test in names if test.endswith('::' + suffix)]
+                  if len(matches) != 1:
+                      raise SystemExit(f'Required suffix inventory mismatch: {suffix}: {matches!r}')
+                  required_names.extend(matches)
+              if not names or len(names) != group.get('count', len(names)) or any(names.count(required) != 1 or required in ignored_names for required in required_names):
                   raise SystemExit(f'Reviewed inventory mismatch: {name}: {names!r}')
-              if any(line.endswith(': test') for line in ignored.stdout.splitlines()):
+              if ignored_names and not group.get('allow_ignored'):
                   raise SystemExit(f'Required reviewed group has ignored tests: {name}')
+              if 'ignored_suffixes' in group and sorted(test.rsplit('::', 1)[-1] for test in ignored_names) != sorted(group['ignored_suffixes']):
+                  raise SystemExit(f'Existing ignored inventory changed: {ignored_names!r}')
+              Path(f'.diagnostics/exact-{index}-inventory.json').write_text(json.dumps(dict(
+                  selector=name, tests=names, ignored=ignored_names, required=required_names), indent=2))
               result = run('test', ['--nocapture'])
               summaries = re.findall(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', result.stdout)
-              if result.returncode or summaries != [(str(group['count']), '0', '0')]:
+              if result.returncode or len(names) <= len(ignored_names) or summaries != [(str(len(names) - len(ignored_names)), '0', str(len(ignored_names)))]:
                   overall = 1
-              for required in group.get('required', []):
+              for required in required_names:
                   if not re.search(r'^test ' + re.escape(required) + r' \.\.\. ok$', result.stdout, re.MULTILINE):
                       overall = 1
           raise SystemExit(overall)
