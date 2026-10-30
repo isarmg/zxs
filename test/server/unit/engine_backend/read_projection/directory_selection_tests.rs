@@ -107,7 +107,7 @@ fn selected_facts_run_with_writer_held_and_keep_the_captured_branch() {
 fn selection_completion_reauthorizes_success_errors_and_expiry() {
     for managed in [false, true] {
         let (root, engine, _repo, _identity, branch) = selection_fixture();
-        let backend = EngineBackend::new(engine);
+        let backend = Arc::new(EngineBackend::new(engine));
         let auth =
             AuthStore::initialize(root.path(), "owner", "integration-test-password").unwrap();
         let mut auth = if managed {

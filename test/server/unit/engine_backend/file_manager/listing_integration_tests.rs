@@ -245,7 +245,12 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
     };
     let before = (engine.state().sequence, engine.state().operations.len());
     let request = selection(branch["head_tree_id"].as_str().unwrap().into(), "zeta.txt").unwrap();
-    let facts = crate::engine_backend::directory_selection::read(&engine, &request).unwrap();
+    let facts = crate::engine_backend::directory_selection::read(
+        engine.published_read_view(),
+        &request,
+        &crate::tests::history_read_control(),
+    )
+    .unwrap();
     let facts = &facts.branches[0].entries;
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].entry_id, chosen["entry_id"]);
@@ -257,10 +262,14 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
     );
     let stale = selection(new_id("tree"), "zeta.txt").unwrap();
     assert_eq!(
-        crate::engine_backend::directory_selection::read(&engine, &stale)
-            .err()
-            .unwrap()
-            .code,
+        crate::engine_backend::directory_selection::read(
+            engine.published_read_view(),
+            &stale,
+            &crate::tests::history_read_control(),
+        )
+        .err()
+        .unwrap()
+        .code,
         storage_contract::ErrorCode::ListingChanged
     );
     for path in ["../zeta.txt", "folder/child.txt"] {
