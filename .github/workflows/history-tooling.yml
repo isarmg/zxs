@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts]
 
 permissions:
   contents: read
@@ -172,6 +172,10 @@ jobs:
               '574b3b63fa100df126fd81f7c395241035dd00b8', '26e226df71c60d777749abd2496efe59ecf64d36',
           ):
               raise SystemExit('Cold/Web/scrub composition requires the exact frozen source and tree')
+          if os.environ['SCOPE'] == 'mature-doc-contracts' and (source, tree) != (
+              '26f406dc4336d434cb68f2885ff18a39cec99105', '5f7e8f37631a41d35fea2f6f37a5ab577d85b939',
+          ):
+              raise SystemExit('Mature documentation closure requires the exact anchor-only successor and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -779,6 +783,15 @@ jobs:
               dict(groups['scrub-terminal-diagnostics'][3], id='cold-web-scrub-server',
                   test_groups=json.dumps(combined_scrub)),
           ]
+          groups['mature-doc-contracts'] = [dict(id='mature-doc-contracts', cache='contract-check',
+              command='python3 test/tools/contract-check/check_document_scan.py\n'
+                  'cargo test --locked --offline -p contract-check -- --list 2>&1 | tee .diagnostics/contract-check-list.log\n'
+                  'test "$(grep -c ": test$" .diagnostics/contract-check-list.log)" -gt 0\n'
+                  'cargo test --locked --offline -p contract-check -- --ignored --list 2>&1 | tee .diagnostics/contract-check-ignored.log\n'
+                  'if grep -q ": test$" .diagnostics/contract-check-ignored.log; then exit 1; fi\n'
+                  'cargo test --locked --offline -p contract-check -- --nocapture 2>&1 | tee .diagnostics/contract-check-tests.log\n'
+                  'grep -Eq "test result: ok\\. [1-9][0-9]* passed; 0 failed;" .diagnostics/contract-check-tests.log\n'
+                  'cargo run --locked --offline -p contract-check -- --root .')]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
