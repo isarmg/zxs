@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, smb-stream]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream]
 
 permissions:
   contents: read
@@ -84,6 +84,10 @@ jobs:
               '954aeb962fcd5015ebab69cdb3d9966cbbc0ceab', 'eda5795a134d6d8c55b84475fe9593e370ac7400',
           ):
               raise SystemExit('Stage B diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'namespace-stage-b-repair' and (source, tree) != (
+              '2af128b5d1eaee2bbb7b5223f8574eeb1207f7c3', 'bbedf3f2dc7af196a276bf6fd968f79fa821db4b',
+          ):
+              raise SystemExit('Stage B repair diagnostics require the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'smb-stream' and (source, tree) != (
               '486bb70f01f5d47d5b56193dce2381d0e44d2e8f', '4b9877902b78313d9098d86a812809054acf3ed9',
           ):
@@ -341,6 +345,13 @@ jobs:
                       ]),
                       dict(selector='engine::integrity_scrub', allow_ignored=True),
                   ]), command='Reviewed recovery and integrity scrub module commands'),
+          ]
+          adversarial = 'metadata_adversarial_recovery::missing_or_corrupt_namespace_replicas_never_reset_a_published_pool'
+          groups['namespace-stage-b-repair'] = [
+              dict(groups['namespace-stage-b'][0], id='namespace-stage-b-repair-format'),
+              dict(id='namespace-stage-b-adversarial', cache='storage-engine', package='storage-engine',
+                  exact_test=adversarial,
+                  command=f'cargo test --locked --offline -p storage-engine --lib {adversarial} -- --exact --nocapture'),
           ]
           sdk_witnesses = [
               'module::tests::sync_and_async_immutable_reads_use_verified_rpc_bytes_with_a_directory_placeholder',
