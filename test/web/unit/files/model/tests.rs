@@ -205,9 +205,10 @@ const DAMAGE: &str = include_str!("../fixtures/damaged-published-save-operation.
 fn captured_http_outcomes_and_diagnostics_keep_separate_consumer_contracts() {
     use storage_contract::client_protocol::{OperationStatus, operation_observation_status};
 
-    // Real HTTP captures: https://github.com/isarmg/zxs/actions/runs/40834921728
-    // The run records source 93f1f962 and its rustfmt patch. Existing captures
-    // remain unchanged; these pairs were obtained from the two actual routes.
+    // Main-native HTTP captures: https://github.com/isarmg/zxs/actions/runs/41027119807
+    // Input: 1897756d, tree 48fcc5c7. Its retained rustfmt patch changes only
+    // unrelated Foundation whitespace, so these remain diagnostic captures.
+    // The HTTP integration scenarios also compare all six fixtures with real routes.
     for (outcome, observation, status, save_status) in [
         (
             include_str!("../fixtures/github-degraded-save-outcome.json"),

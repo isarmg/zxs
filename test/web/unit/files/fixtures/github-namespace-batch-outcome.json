@@ -1,51 +1,51 @@
 {
   "commit_state": "PUBLISHED",
   "error": null,
-  "operation_id": "op_657da914af924574b37c929248043b63",
+  "operation_id": "op_af4bdbfecaf94a689fb6dcb9e7f6adfb",
   "operation_kind": "directory.namespace.batch",
   "protection_at_publish": "NOT_APPLICABLE",
   "publication_sequence": "5",
-  "request_digest": "b51432540da207362b5c69a17767854f9a809b477ee81d0280cb1c6417f566f2",
+  "request_digest": "c4cf407633b8a1ac040af24d8ae540f7707c7cb08dbae113051f872eaf5a0a84",
   "result": {
     "action": "rename",
     "branch_generation": "3",
-    "branch_id": "br_45cbd6aa04db4dc1b8073940a3302d98",
+    "branch_id": "br_58795b20bb504b62a67a7028a4aa1105",
     "changes": [
       {
-        "directory_branch_id": "dbr_94183cef7de34cc891085b12a2b6462b",
-        "head_tree_id": "dtree_e4dda1263b964066a815b265024a0a75",
+        "directory_branch_id": "dbr_b5c12f177f0c48f0a3b9ced6f332a89b",
+        "head_tree_id": "dtree_b331696a0361402dbdc90daf27cbbfff",
         "path": "",
-        "previous_tree_id": "dtree_6efa12d9e16149cea9d9b3aab62188cc"
+        "previous_tree_id": "dtree_abd566d1c3ae40d3b2649eb0742082f5"
       }
     ],
-    "commit_id": "commit_67c938761dcd4d1aa18c384d7f3b6b7c",
+    "commit_id": "commit_747f44c62e3d426aa8aeb88361cffb6e",
     "copies": [],
     "count": "1",
     "directory_branch_ids": [
-      "dbr_94183cef7de34cc891085b12a2b6462b"
+      "dbr_b5c12f177f0c48f0a3b9ced6f332a89b"
     ],
     "file_node_ids": [
-      "fnode_050baa663c8646fbabe88e805d8efbe3"
+      "fnode_91c59783915c47de8037d257ffa430cc"
     ],
-    "history_tree_id": "history_7d66ccd1b913429a9d6af9e89f7cdbbf",
+    "history_tree_id": "history_35cff090156847db8a29f4aba943db0e",
     "membership_epoch": "1",
-    "timestamp": "1793258813",
+    "timestamp": "1793349473",
     "transfers": [
       {
-        "file_id": "file_716f8364a1e24093b441442cecd588ec",
+        "file_id": "file_81ce949238ba4370b74f617b7d7fe8cf",
         "physical_path": "renamed.txt",
         "source": {
-          "directory_branch_id": "dbr_94183cef7de34cc891085b12a2b6462b",
-          "entry_id": "entry_05daaa2e578a46a39ea8acb6f7b00a39",
-          "expected_tree_id": "dtree_6efa12d9e16149cea9d9b3aab62188cc",
+          "directory_branch_id": "dbr_b5c12f177f0c48f0a3b9ced6f332a89b",
+          "entry_id": "entry_b7a23526d6434f1daeacc363e3b8a1fd",
+          "expected_tree_id": "dtree_abd566d1c3ae40d3b2649eb0742082f5",
           "path": "original.txt"
         },
         "target": {
-          "directory_branch_id": "dbr_94183cef7de34cc891085b12a2b6462b",
-          "expected_tree_id": "dtree_6efa12d9e16149cea9d9b3aab62188cc",
+          "directory_branch_id": "dbr_b5c12f177f0c48f0a3b9ced6f332a89b",
+          "expected_tree_id": "dtree_abd566d1c3ae40d3b2649eb0742082f5",
           "path": "renamed.txt"
         },
-        "version_id": "ver_1508fca6b3b24603a2775a9e1e340918"
+        "version_id": "ver_1991d7030f574b2f97a6dba3c1f77027"
       }
     ],
     "version_protection": []

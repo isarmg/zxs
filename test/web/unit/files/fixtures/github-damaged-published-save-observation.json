@@ -1,17 +1,17 @@
 {
   "commit_state": "PUBLISHED",
   "current_health": {
-    "checked_at": "2026-10-29T07:25:45.154260888Z",
+    "checked_at": "2026-10-30T08:36:42.644232761Z",
     "state": "DEGRADED"
   },
   "error": null,
-  "operation_id": "op_b582851a2bd9474bbe5d135629b2e1d6",
+  "operation_id": "op_41ecab9396d5434884b73edffa914771",
   "operation_kind": "content_save",
-  "request_digest": "06ed9cb4a5fe65bff33e2c02731731c6dbc722d4af5d1eaf0f10a4fb9806e28f",
+  "request_digest": "d0b664b8dccd8cf61703e80c354ddd6bc1a83abc58bc80f4b17c8e8d23e19c80",
   "result": {
     "branch_generation": "2",
-    "branch_id": "br_5a0a54602b7f4e8b8eef6cb38517cba0",
-    "commit_id": "commit_7d50493f6bd842958507534713bd940b",
+    "branch_id": "br_4a10cc8d4e1847a88af8ed042eaf4f1a",
+    "commit_id": "commit_e53ea6d9987e4cec86e99081b8874e64",
     "membership_epoch": "1",
     "outcome": "COMMITTED_AND_PROTECTED",
     "protection_at_publish": "TARGET_MET",
@@ -28,28 +28,28 @@
           {
             "binding_generation": "1",
             "copy_level": 1,
-            "disk_id": "disk_a7fe0591d63d4ca2bfdb692c17442d41",
+            "disk_id": "disk_e53ac5e670964cc69aa219e9d505485b",
             "slot_id": "P01",
             "state": "COMPLETE_VERIFIED"
           },
           {
             "binding_generation": "1",
             "copy_level": 2,
-            "disk_id": "disk_589d36f4394d4083aec140690a59c63a",
+            "disk_id": "disk_23d3329d174f43d29ffb5228f511dfdc",
             "slot_id": "B01",
             "state": "COMPLETE_VERIFIED"
           },
           {
             "binding_generation": "1",
             "copy_level": 3,
-            "disk_id": "disk_c4ddf86366454e4aaa15b00ee586b677",
+            "disk_id": "disk_f065217d71b842f09877ebe433c1dac8",
             "slot_id": "C01",
             "state": "COMPLETE_VERIFIED"
           }
         ],
         "target_copies": 3,
         "topology_generation": "1",
-        "version_id": "ver_1233a8ecb33b4727b6d0177f2b08f03c"
+        "version_id": "ver_6260194c7feb48bba3e4dfb5d8963780"
       }
     ]
   },
