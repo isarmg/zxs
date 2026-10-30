@@ -112,6 +112,54 @@ struct Run<'a> {
     job_id: u64,
     trigger: &'static str,
     outcome: Outcome<'a>,
+    diagnostics: Diagnostics,
+}
+
+#[derive(Serialize)]
+struct Diagnostics {
+    bytes_read: String,
+    scan_elapsed_millis: Option<String>,
+    expected_payload_bytes: Option<String>,
+    policy: Policy,
+    metadata_coverage_at_finish: Option<bool>,
+    feasibility: &'static str,
+}
+
+#[derive(Serialize)]
+struct Policy {
+    interval_seconds: Option<String>,
+    max_age_seconds: String,
+    bytes_per_second: String,
+}
+
+impl From<&IntegrityScrubDiagnostics> for Diagnostics {
+    fn from(diagnostics: &IntegrityScrubDiagnostics) -> Self {
+        let IntegrityScrubDiagnostics {
+            bytes_read,
+            scan_elapsed,
+            expected_payload_bytes,
+            policy,
+            metadata_coverage_at_finish,
+        } = diagnostics;
+        Self {
+            bytes_read: bytes_read.to_string(),
+            scan_elapsed_millis: scan_elapsed.map(|elapsed| elapsed.as_millis().to_string()),
+            expected_payload_bytes: expected_payload_bytes.map(|bytes| bytes.to_string()),
+            policy: Policy {
+                interval_seconds: policy
+                    .interval
+                    .map(|interval| interval.as_secs().to_string()),
+                max_age_seconds: policy.max_age.as_secs().to_string(),
+                bytes_per_second: policy.bytes_per_second.to_string(),
+            },
+            metadata_coverage_at_finish: *metadata_coverage_at_finish,
+            feasibility: match diagnostics.feasibility() {
+                IntegrityScrubFeasibility::UnknownScale => "unknown_scale",
+                IntegrityScrubFeasibility::UnknownTotal => "unknown_total",
+                IntegrityScrubFeasibility::PayloadCannotFitMaxAge => "payload_cannot_fit_max_age",
+            },
+        }
+    }
 }
 #[derive(Serialize)]
 #[serialization(tag = "kind", rename_all = "snake_case")]
@@ -130,6 +178,7 @@ impl<'a> From<&'a IntegrityScrubRun> for Run<'a> {
             job_id,
             trigger,
             outcome,
+            diagnostics,
         } = run;
         Self {
             job_id: job_id.0,
@@ -141,6 +190,7 @@ impl<'a> From<&'a IntegrityScrubRun> for Run<'a> {
                 IntegrityScrubOutcome::Report(report) => Outcome::Report { report },
                 IntegrityScrubOutcome::Rejected(error) => Outcome::Rejected { error },
             },
+            diagnostics: Diagnostics::from(diagnostics),
         }
     }
 }

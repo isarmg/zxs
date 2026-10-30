@@ -142,6 +142,23 @@ HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止
 
 接口都要求当前管理员认证；排队启动还会在实际 Engine 准入处再次核验撤权。status/cancel 不等扫描的 Engine 锁。状态与写成功和 `/readyz` 分离：只有完整无故障扫描更新成功时间；取消、过期、部分故障、重开和 worker 失败不产生绿色结论。HTTP 时间使用 UTC `YYYY-MM-DDTHH:mm:ssZ`；无成功记录为 null，freshness 为 `not_checked/fresh/expired/unavailable`。
 
+`latest.diagnostics` 保留该次尝试收尾时的诊断，完整、部分失败、取消、准入拒绝和
+worker panic 都沿原 `outcome` 表达，不用诊断替换结果：
+
+| 字段 | 范围与含义 |
+| --- | --- |
+| `bytes_read` | 实际已计费读取的总字节，包括正文和元数据；使用同一活动任务计数器，终态取值后不随下一轮改变 |
+| `scan_elapsed_millis` | 复用首次 Running 回调的单调时钟，到收尾采样的耗时，向下取整到毫秒；不按 UTC 时间相减，未进入 Running 为 null，不含此前排队与准备 |
+| `expected_payload_bytes` | 已完成的 required 正文估计下界；尚未取得完整估计为 null，不能补成零 |
+| `policy` | 当轮 `interval_seconds`、`max_age_seconds`、`bytes_per_second`；纯手动策略的 interval 为 null |
+| `metadata_coverage_at_finish` | 原 live Engine finish 返回后，再经其现行资格检查取得的观察；未取得该观察时为 null。它不表示该轮新签发资格，也不保证查询时资格仍有效 |
+| `feasibility` | `unknown_scale` 表示缺完整正文估计；`payload_cannot_fit_max_age` 表示正文下界已达到或超过 `速率 × 最大年龄`，完整健康扫描无法在严格期限内完成；其余为 `unknown_total`，仍有元数据和执行成本未知 |
+
+所有字节、毫秒、策略秒数和速率均使用十进制字符串。可行性诊断只评估完整健康
+扫描所需的正文下界；即使某轮因缺失或取消很快结束，也保留它的实际结果及部分
+统计。`unknown_total` 不承诺下一轮可完成。这些值随现有 latest 报告留在内存，
+不是持久化收据、恢复依据或覆盖准入凭证。
+
 `/api/admin/check` 保留原目录诊断语义，没有暗换成全池读验。嵌入 `ManagementOptions::default()` 仅手动启用；无托管 owner 的 `EngineBackend` 返回 Unsupported，无 core 构建不提供新路由。所有实际后台 I/O、lease 和 Engine owner 结束后服务关闭才返回；详细资源、基线及验证边界见[巡检生命周期](../design/integrity-scrub-lifecycle.md)。
 
 ### 周期 owner 与内部复用资格
