@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals]
 
 permissions:
   contents: read
@@ -204,6 +204,10 @@ jobs:
               'a0b3ff448cf0872f1deb70c52de1dc35eb28cb8e', '6028ac768865d873c62c1ddb7b6d0be672f95dad',
           ):
               raise SystemExit('Recovery record transfer requires the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'static-asset-conditionals' and (source, tree) != (
+              'd5451b7e5fd4fd70c184c502d9967f91b53ab835', '72d49c77d0ee1d3da4ff8e61a845a0d30ab3cd98',
+          ):
+              raise SystemExit('Static asset regression requires the exact source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -874,6 +878,12 @@ jobs:
                       dict(selector='engine::recovery_checkpoint::tests::', count=27),
                   ]), command='Writer lifecycle9, exact replay receipt1, complete recovery checkpoint27; locked offline'),
               dict(groups['payload-quality'][0], id='recovery-record-transfer-quality'),
+          ]
+          static_conditional_test = 'tests::static_asset_tests::entity_tag_precedes_modified_since_for_static_get_and_head'
+          groups['static-asset-conditionals'] = [
+              dict(id='static-asset-conditional-regression', cache='server', package='storage-server',
+                  exact_test=static_conditional_test,
+                  command=f'cargo test --locked --offline -p storage-server --lib {static_conditional_test} -- --exact --nocapture'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
