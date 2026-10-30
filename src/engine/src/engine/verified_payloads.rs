@@ -7,8 +7,73 @@ use std::{
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
+
+/// Optional retained payload evidence only, shared by every pool/preparation in
+/// this process. This is not a count of free FDs or a total-process FD limit.
+pub(super) struct PayloadProofBudget {
+    capacity: usize,
+    held: AtomicUsize,
+}
+impl PayloadProofBudget {
+    fn from_soft_limit(soft_limit: Option<u64>) -> Self {
+        Self {
+            // Leave most of NOFILE for mandatory seals, roots, transient opens,
+            // SQLite, sockets and SMB. Unlimited still has a finite ceiling.
+            capacity: soft_limit.map_or(8192, |limit| (limit / 4).min(8192) as usize),
+            held: AtomicUsize::new(0),
+        }
+    }
+
+    pub(super) fn reserve(self: &Arc<Self>, descriptors: usize) -> Option<PayloadProofReservation> {
+        // Only the counter is shared; acquiring a lease publishes no other data.
+        if self
+            .held
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+                (descriptors <= self.capacity - held).then(|| held + descriptors)
+            })
+            .is_err()
+        {
+            return None;
+        }
+        Some(PayloadProofReservation {
+            budget: Arc::clone(self),
+            descriptors,
+        })
+    }
+}
+
+/// Declare after the files it covers, or keep outside the scope consuming them:
+/// descriptors must close before the reservation is returned. Never clone it.
+pub(super) struct PayloadProofReservation {
+    budget: Arc<PayloadProofBudget>,
+    descriptors: usize,
+}
+impl Drop for PayloadProofReservation {
+    fn drop(&mut self) {
+        self.budget
+            .held
+            .fetch_sub(self.descriptors, Ordering::Relaxed);
+    }
+}
+
+pub(super) fn payload_proof_budget() -> Arc<PayloadProofBudget> {
+    #[cfg(test)]
+    if let Some(budget) = TEST_PROOF_BUDGET.with(|budget| budget.borrow().as_ref().map(Arc::clone))
+    {
+        return budget;
+    }
+    static BUDGET: OnceLock<Arc<PayloadProofBudget>> = OnceLock::new();
+    Arc::clone(BUDGET.get_or_init(|| {
+        Arc::new(PayloadProofBudget::from_soft_limit(
+            rustix::process::getrlimit(rustix::process::Resource::Nofile).current,
+        ))
+    }))
+}
 
 struct HeldFile {
     file: File,
@@ -49,15 +114,19 @@ struct HeldSeal {
 pub(super) struct VerifiedPayloadSet {
     metadata_integrity: Arc<MetadataIntegrity>,
     entries: Vec<VerifiedPayload>,
+    // Struct fields drop in declaration order: all per-replica FDs close first.
+    _reservation: Option<PayloadProofReservation>,
     disks: Vec<HeldSeal>,
     resources: Arc<DiskResources>,
     full_revalidation: bool,
+    replicas: usize,
 }
-pub(super) const MAX_HELD_PAYLOAD_FILES: usize = 128;
-// Thread-local counters isolate concurrently running tests. No release cost.
+// Thread-local instrumentation is absent from production builds.
 #[cfg(test)]
 std::thread_local! {
     static VERIFICATION_COST: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+    static PROOF_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_PROOF_BUDGET: std::cell::RefCell<Option<Arc<PayloadProofBudget>>> = const { std::cell::RefCell::new(None) };
     static AFTER_REPLICA_VALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 /// Disk identities are pinned before copying begins. Only complete verification
@@ -127,7 +196,16 @@ impl PayloadPreparation {
                         )
                     })
             })?;
-        let full_revalidation = replicas > MAX_HELD_PAYLOAD_FILES / 4;
+        let descriptors = replicas.checked_mul(4).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::ResourceLimit,
+                "payload proof descriptor count overflow",
+            )
+        })?;
+        // Reserve before opening evidence. A miss uses the existing whole-body
+        // path immediately; actual open/IO errors remain errors, never retries.
+        let reservation = payload_proof_budget().reserve(descriptors);
+        let full_revalidation = reservation.is_none();
         let mut entries = Vec::new();
         if !full_revalidation {
             for evidence in &candidate.versions {
@@ -147,9 +225,11 @@ impl PayloadPreparation {
         let proof = VerifiedPayloadSet {
             metadata_integrity: self.metadata_integrity,
             entries,
+            _reservation: reservation,
             disks: self.disks,
             resources: self.resources,
             full_revalidation,
+            replicas,
         };
         proof.validate(config, candidate)?;
         Ok(proof)
@@ -287,24 +367,13 @@ impl VerifiedPayloadSet {
     }
     pub(super) fn validate(&self, config: &ValidatedConfig, candidate: &Candidate) -> Result<()> {
         self.validate_disks()?;
-        let expected: usize = candidate
-            .versions
-            .iter()
-            .map(|e| e.placement.route_slot_ids.len())
-            .sum();
-        if (!self.full_revalidation && expected != self.entries.len())
-            || (self.full_revalidation && !self.entries.is_empty())
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::PreparationStale,
-                "payload proof count differs",
-            ));
-        }
+        let mut cursor = self.cursor();
         for evidence in &candidate.versions {
             for slot in &evidence.placement.route_slot_ids {
-                self.validate_payload(config, &evidence.version, slot)?;
+                cursor.validate_payload(config, &evidence.version, slot)?;
             }
         }
+        cursor.finish()?;
         #[cfg(test)]
         AFTER_REPLICA_VALIDATION.with(|hook| {
             if let Some(run) = hook.borrow_mut().take() {
@@ -315,29 +384,75 @@ impl VerifiedPayloadSet {
         // complete verification interval, including the final replica read.
         self.validate_disks()
     }
+    pub(super) fn cursor(&self) -> PayloadProofCursor<'_> {
+        assert_eq!(
+            self.entries.len(),
+            if self.full_revalidation {
+                0
+            } else {
+                self.replicas
+            },
+            "invariant: retained proof count matches its verification mode"
+        );
+        PayloadProofCursor {
+            proof: self,
+            entries: self.entries.iter(),
+            remaining: self.replicas,
+        }
+    }
+}
+
+/// Both validation and commit-proof installation consume the original ordered
+/// version/route traversal. Caller mismatches are stale evidence; no zip or
+/// search can silently omit an entry or bind another replica's identity.
+pub(super) struct PayloadProofCursor<'a> {
+    proof: &'a VerifiedPayloadSet,
+    entries: std::slice::Iter<'a, VerifiedPayload>,
+    remaining: usize,
+}
+impl PayloadProofCursor<'_> {
+    pub(super) fn finish(self) -> Result<()> {
+        if self.remaining != 0 {
+            return Err(Error::new(
+                storage_contract::ErrorCode::PreparationStale,
+                "payload proof count differs",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_payload(
-        &self,
+        &mut self,
         config: &ValidatedConfig,
         version: &FileVersion,
         slot: &str,
     ) -> Result<()> {
-        if self.full_revalidation {
+        if self.remaining == 0 {
+            return Err(Error::new(
+                storage_contract::ErrorCode::PreparationStale,
+                "payload proof count differs",
+            ));
+        }
+        self.remaining -= 1;
+        if self.proof.full_revalidation {
             // Large candidates keep only disk identities pinned. Re-read every
             // byte with the same metadata and held-inode checks, one replica at
             // a time, rather than exhausting process-wide file descriptors.
-            verify_replica(config, &self.resources, version, slot)?;
+            verify_replica(config, &self.proof.resources, version, slot)?;
             return Ok(());
         }
+        #[cfg(test)]
+        PROOF_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
         let entry = self
             .entries
-            .iter()
-            .find(|entry| entry.version_id == version.version_id && entry.slot_id == slot)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::PreparationStale,
-                    "payload proof missing",
-                )
-            })?;
+            .next()
+            .expect("invariant: cursor consumes the retained proof count");
+        if entry.version_id != version.version_id || entry.slot_id != slot {
+            return Err(Error::new(
+                storage_contract::ErrorCode::PreparationStale,
+                "payload proof identity differs",
+            ));
+        }
         let disk = config
             .disks
             .iter()
