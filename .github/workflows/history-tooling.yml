@@ -161,7 +161,7 @@ jobs:
           ):
               raise SystemExit('History window repair requires the exact strict-parser and consumer successor')
           if os.environ['SCOPE'] == 'history-window-web' and (source, tree) != (
-              '09c8c9eb9c1728201fecbf5f7c9b5c635519fef9', 'ef8e1e2d616970f5d0d04b88e0478fa4cc12aa7f',
+              '3525a500126bf1d1111583d76b8d02b9bd7437c4', '74acc2e5252a4e1e345336c2edfba3f1610577c2',
           ):
               raise SystemExit('History window Web checkpoint requires the exact cross-layer source and tree')
           if os.environ['SCOPE'] == 'scrub-terminal-diagnostics' and (source, tree) != (
@@ -746,8 +746,7 @@ jobs:
                           'stale_auxiliary_failure_cannot_invalidate_or_release_a_newer_read',
                           'current_session_401_is_checked_before_any_obsolete_resource_fence',
                           'page_identity_cannot_change_file_root_collection_limit_query_or_action_capability',
-                          'utf8_fragments_are_replaced_with_exact_ranges_and_explicit_right_boundary']),
-                      dict(selector='ui::tests::', required_suffixes=[
+                          'utf8_fragments_are_replaced_with_exact_ranges_and_explicit_right_boundary',
                           'a_session_transition_releases_every_history_read_generation']),
                   ]), command='Actual file-history consumer and UI session test inventories and native execution'),
               dict(id='history-window-web-production', web_production=True,
@@ -1226,8 +1225,8 @@ jobs:
           retention-days: 7
 
   native-release-browser:
-    name: Extracted native release and browser acceptance
-    if: inputs.scope == 'native-release-acceptance'
+    name: ${{ inputs.scope == 'history-window-web' && 'Real Chrome history windows and observer lifetime' || 'Extracted native release and browser acceptance' }}
+    if: inputs.scope == 'native-release-acceptance' || inputs.scope == 'history-window-web'
     needs: diagnostic
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1284,6 +1283,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y fonts-noto-cjk
       - name: Build and exercise the exact native release and browser packages
+        if: inputs.scope == 'native-release-acceptance'
         env:
           ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
           ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
@@ -1306,7 +1306,25 @@ jobs:
           bash .github/scripts/release-acceptance.sh 2>&1 | tee .native-diagnostics/release-acceptance.log
           python3 .github/scripts/check-csr-browser.py 2>&1 | tee .native-diagnostics/csr-browser.log
           bash .github/scripts/release-assemble.sh 2>&1 | tee .native-diagnostics/assembly.log
+      - name: Exercise real Chrome history windows and owner disposal
+        if: inputs.scope == 'history-window-web'
+        env:
+          ZXS_REQUIRE_BROWSER: '1'
+          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
+        run: |
+          bash .github/scripts/check.sh browser-smoke 2>&1 | tee .native-diagnostics/history-window-browser.log
+          grep -Fx 'PASS synthetic history AbortSignal replacement, late completion ownership, real-file selection and navigation cleanup' .native-diagnostics/history-window-browser.log
+          grep -Fx 'PASS synthetic 32-node window replacement/observer disposal, real-ID tag and merge basis review, replace-only UTF-8 fields and stale auxiliary delivery (no writes submitted)' .native-diagnostics/history-window-browser.log
+      - name: Retain history window browser failure diagnostics
+        if: always() && inputs.scope == 'history-window-web'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: history-window-browser-failure-${{ inputs.source_sha }}
+          path: artifacts/browser-smoke/diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Retain verified installation candidate only
+        if: inputs.scope == 'native-release-acceptance'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installation-candidate-linux-web
@@ -1328,7 +1346,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Retain responsive Web viewport previews
-        if: always()
+        if: always() && inputs.scope == 'native-release-acceptance'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: viewport-previews
@@ -1341,6 +1359,11 @@ jobs:
           git diff --exit-code HEAD
           git ls-files -z | xargs -0 sha256sum --zero > .native-diagnostics/source-after.sha256z
           cmp .native-diagnostics/source-before.sha256z .native-diagnostics/source-after.sha256z
+      - name: Record exact browser diagnostic SHA256 manifest
+        if: always()
+        run: |
+          cd .native-diagnostics
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
       - name: Retain native build receipt and exact acceptance logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
