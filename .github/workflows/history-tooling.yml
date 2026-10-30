@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-browser, detached-backup-listing, mature-static]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-browser, detached-backup-listing, mature-static, history-window]
 
 permissions:
   contents: read
@@ -144,6 +144,10 @@ jobs:
               '85fecf6149b0913f8ac53f579245102012f38ad9', 'bd99da2680440a0e8ca0a838da0d6985a4701644',
           ):
               raise SystemExit('Mature static closure requires the exact frozen source and tree')
+          if os.environ['SCOPE'] == 'history-window' and (source, tree) != (
+              'e9b201d83b52ad982a5b6d0d7b9a82f2f7a674a2', 'f627b66705153302f8c276ed5347f3bd5fbdf1aa',
+          ):
+              raise SystemExit('History window diagnostics require the exact composed core/server source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -659,6 +663,36 @@ jobs:
           ]
           groups['web-history-browser'] = [dict(id='web-history-browser', web_production=True, browser_smoke=True,
               command='bash .github/scripts/check.sh web-production\nZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh browser-smoke')]
+          groups['history-window'] = [
+              dict(id='history-window-format', format_base='096f9a7f60025ca14781b179d9e7415f10c5b846',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='history-window-engine', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([dict(selector='engine::history_window', features=['fault-injection'],
+                      count=36, required_suffixes=[
+                          'published_history_root_is_exact_across_full_and_checkpoint_cold_recovery',
+                          'history_root_binding_requires_the_same_immutable_state_allocation',
+                          'indeterminate_publication_keeps_the_old_root_until_verified_cold_recovery',
+                          'every_public_record_collection_matches_its_independent_complete_oracle',
+                          'every_public_collection_checks_cancellation_including_legitimately_empty_results',
+                      ])]), command='Complete history root and bounded window oracle engine groups'),
+              dict(id='history-window-contracts', cache='storage-contract', package='storage-contract',
+                  test_groups=json.dumps([
+                      dict(selector='history_window::tests::', count=13),
+                      dict(selector='history_window_tests::', package='contract-check', bin='contract-check', count=6),
+                  ]), command='Shared history window contract and actual fixed-vector schema tool tests'),
+              dict(id='history-window-server', cache='server', package='storage-server',
+                  test_groups=json.dumps([
+                      dict(selector='history_window_encode::tests::', count=12),
+                      dict(selector='history_window_query::tests::', count=8),
+                      dict(selector='history_window_http::tests::', count=9),
+                      dict(selector='authorized_backend_tests::history_window_collections_forward_cursor_scope_results_errors_and_revocation',
+                          count=1, exact=True, required_suffixes=[
+                              'history_window_collections_forward_cursor_scope_results_errors_and_revocation']),
+                      dict(selector='history_query::', test_target='http_engine', count=2, required_suffixes=[
+                          'history_query_rejects_unknown_fields_and_preserves_paired_context',
+                          'history_window_roots_change_with_metadata_but_not_authentication']),
+                  ]), command='History window response ownership, query/HTTP/auth unit groups and two real HTTP boundaries'),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -889,6 +923,8 @@ jobs:
                   base.extend(['--features', ','.join(group['features'])])
               if group.get('test_target'):
                   base.extend(['--test', group['test_target']])
+              elif group.get('bin'):
+                  base.extend(['--bin', group['bin']])
               else:
                   base.append('--lib')
               if name:
