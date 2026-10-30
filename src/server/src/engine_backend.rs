@@ -1163,12 +1163,27 @@ impl Backend for EngineBackend {
         identity: &Identity,
         request: crate::ReadListing,
     ) -> Result<crate::ListingSnapshot, ApiError> {
+        let read = {
+            let engine = self
+                .engine
+                .lock()
+                .expect("invariant: service state lock poisoned");
+            current_protected_identity(&engine, identity)?;
+            match file_manager::listing::capture(&engine, request)? {
+                file_manager::listing::ListingRead::Backup(snapshot) => return Ok(snapshot),
+                file_manager::listing::ListingRead::Primary(read) => read,
+            }
+        };
+        let selected = read.select();
         let engine = self
             .engine
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::listing::entries(&engine, request)
+        let selected = selected?;
+        let page = selected.project(&engine);
+        drop(engine);
+        Ok(selected.finish(page?))
     }
     fn mutate_disk_directory(
         &self,
