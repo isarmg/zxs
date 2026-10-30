@@ -49,7 +49,11 @@ fn identity_predicates_match_owned_lookup_for_unicode_missing_and_wrong_kinds() 
                 }),
             );
         }
-        for entry_id in [None, Some(entries[0].entry_id.as_str()), Some("wrong-entry")] {
+        for entry_id in [
+            None,
+            Some(entries[0].entry_id.as_str()),
+            Some("wrong-entry"),
+        ] {
             assert_eq!(
                 tree.contains_directory_key(&key, entry_id).unwrap(),
                 owned.as_ref().is_some_and(|entry| {
@@ -564,4 +568,3 @@ fn entry_wire_rejects_mismatched_keys_names_and_non_nfc_display_at_read_boundary
         original
     );
 }
-

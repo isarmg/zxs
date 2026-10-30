@@ -1048,4 +1048,3 @@ fn point_path_budget_failure_is_reported_only_for_a_resolved_path() {
             .is_none()
     );
 }
-

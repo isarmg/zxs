@@ -182,4 +182,3 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/business/namespace/query_tests.rs"]
 mod tests;
-

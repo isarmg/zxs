@@ -73,13 +73,9 @@ fn owned_decode_keeps_reference_and_shape_error_precedence() {
         hash: "a".repeat(64),
     };
     let expected = validate_index_shape(&index).unwrap_err();
-    let actual = NamespaceNode::decode(
-        &reference,
-        json_codec::to_value(index).unwrap(),
-        0,
-    )
-    .err()
-    .unwrap();
+    let actual = NamespaceNode::decode(&reference, json_codec::to_value(index).unwrap(), 0)
+        .err()
+        .unwrap();
     assert_eq!(actual.code(), expected.code());
     assert_eq!(actual.to_string(), expected.to_string());
 }

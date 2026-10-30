@@ -201,7 +201,9 @@ fn lookup_preserves_reference_failure_before_a_delayed_composed_path_error() {
     for key in [&prefix, &format!("{prefix}/leaf")] {
         let owned = view.resolve_key(key).unwrap_err();
         let projected = view
-            .inspect_key(key, |_| panic!("invalid path must not reach the projection"))
+            .inspect_key(key, |_| {
+                panic!("invalid path must not reach the projection")
+            })
             .unwrap_err();
         assert_eq!(projected.code(), owned.code());
         assert_eq!(projected.to_string(), owned.to_string());
@@ -233,11 +235,14 @@ fn projection_borrows_leaf_ids_until_callback_returns() {
                 panic!("resolved entry must belong to a leaf page");
             };
             let page = page.upgrade().expect("leaf lives through projection");
-            assert!(page.entries.iter().any(|stored| std::ptr::eq(stored, entry)));
+            assert!(
+                page.entries
+                    .iter()
+                    .any(|stored| std::ptr::eq(stored, entry))
+            );
             matches!(entry, NamespacePageEntry::File { .. })
         })
         .unwrap();
     assert_eq!(matched, Some(true));
     assert!(!source.previous.borrow().as_ref().unwrap().alive());
 }
-
