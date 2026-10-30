@@ -63,6 +63,16 @@ pub(crate) struct DiskSeal {
     pub filesystem_uuid: String,
     pub simulation: bool,
 }
+
+/// Add identity context only after bounded file I/O has succeeded.
+pub(crate) fn decode_seal(bytes: &[u8]) -> Result<DiskSeal> {
+    decode_strict(bytes).map_err(|source| {
+        Error::from(source).context(
+            ErrorCode::DiskIdentityMismatch,
+            "persisted disk identity cannot be decoded",
+        )
+    })
+}
 pub(crate) fn private_dir(path: &Path) -> Result<()> {
     let path = absolute_path(path)?;
     match PrivateDirectory::create(&path) {
@@ -264,12 +274,6 @@ pub(crate) fn read_json<T: data_serialization::de::DeserializeOwned>(path: &Path
     decode_strict(&read_bytes(path, MAX_METADATA)?).map_err(Into::into)
 }
 
-pub(crate) fn read_json_observed<T: data_serialization::de::DeserializeOwned>(
-    path: &Path,
-    observe: &mut impl FnMut(usize) -> Result<()>,
-) -> Result<T> {
-    decode_strict(&read_bytes_observed(path, MAX_METADATA, observe)?).map_err(Into::into)
-}
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
     let path = absolute_path(path)?;
     let parent = path
@@ -1068,7 +1072,11 @@ pub(crate) fn validate_seal_observed(
     disk: &DiskConfig,
     observe: &mut impl FnMut(usize) -> Result<()>,
 ) -> Result<DiskSeal> {
-    let stored: DiskSeal = read_json_observed(&disk.root.join("disk.json"), observe)?;
+    let stored = decode_seal(&read_bytes_observed(
+        &disk.root.join("disk.json"),
+        MAX_METADATA,
+        observe,
+    )?)?;
     let live = identity(config, disk)?;
     validate_stored_seal(&stored, &live)?;
     Ok(live)
@@ -1100,7 +1108,8 @@ pub(crate) fn offline_check_in_context(
     root: &Path,
     metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<CheckReport> {
-    let loaded = read_json(&root.join("disk.json"));
+    let loaded = read_bytes(&root.join("disk.json"), MAX_METADATA)
+        .and_then(|bytes| decode_seal(&bytes));
     let _seal: DiskSeal = match metadata {
         Some(metadata) => metadata.seal(loaded)?,
         None => loaded?,
@@ -1165,7 +1174,7 @@ pub(crate) fn offline_check_in_context(
 }
 pub fn offline_export(root: &Path, version_id: &str, destination: &Path) -> Result<()> {
     validate_id(version_id, "ver")?;
-    let _seal: DiskSeal = read_json(&root.join("disk.json"))?;
+    let _seal = decode_seal(&read_bytes(&root.join("disk.json"), MAX_METADATA)?)?;
     for h in fs::read_dir(root.join("histories"))? {
         let h = h?;
         if !h.file_type()?.is_dir() {
@@ -1213,3 +1222,7 @@ mod export_tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/disk/admission_tests.rs"]
 mod admission_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/disk/identity_tests.rs"]
+mod identity_tests;

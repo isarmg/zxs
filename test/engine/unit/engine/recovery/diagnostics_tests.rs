@@ -48,8 +48,12 @@ fn member_seal_failures_keep_each_identity_and_reset_on_the_next_recovery() {
                 .unwrap();
             assert!(failure.source().unwrap().is::<Error>());
             if index == 0 {
+                assert_eq!(failure.cause().code(), ErrorCode::DiskIdentityMismatch);
+                let Error::Context { source, .. } = failure.cause() else {
+                    panic!("disk identity context was lost");
+                };
                 assert!(matches!(
-                    failure.cause(),
+                    source.as_ref(),
                     Error::Contract(storage_contract::Error::Json { .. })
                 ));
             } else {

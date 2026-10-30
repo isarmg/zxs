@@ -1307,7 +1307,7 @@ fn verify_tombstone_content_with(
             "invalid version location",
         )
     })?;
-    let loaded = read_local_json(&root.join("disk.json"), read);
+    let loaded = read(&root.join("disk.json")).and_then(|bytes| decode_seal(&bytes));
     let seal: DiskSeal = match metadata {
         Some(metadata) => metadata.seal(loaded)?,
         None => loaded?,
@@ -1469,7 +1469,7 @@ fn verify_local_version_publication(
             "version is outside disk layout",
         )
     })?;
-    let loaded = read_local_json(&root.join("disk.json"), read);
+    let loaded = read(&root.join("disk.json")).and_then(|bytes| decode_seal(&bytes));
     let seal: DiskSeal = match metadata {
         Some(metadata) => metadata.seal(loaded)?,
         None => loaded?,

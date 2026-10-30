@@ -151,9 +151,11 @@ pub(crate) fn validate_owned_seal(
 ) -> Result<()> {
     let result = (|| {
         let handle = resources.get(disk)?;
-        let stored = handle
-            .root
-            .read_json_observed(&disk.root.join("disk.json"), &mut |_| Ok(()))?;
+        let stored = crate::disk::decode_seal(&handle.root.read_bytes_observed(
+            &disk.root.join("disk.json"),
+            crate::disk::MAX_METADATA,
+            &mut |_| Ok(()),
+        )?)?;
         crate::disk::validate_stored_seal(&stored, &handle.seal)
     })();
     if disk.metadata_member {

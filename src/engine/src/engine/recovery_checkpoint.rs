@@ -38,9 +38,11 @@ fn path(d: &DiskConfig) -> std::path::PathBuf {
 
 fn checkpoint_disk<'a>(engine: &'a Engine, disk: &DiskConfig) -> Result<&'a DiskHandle> {
     let held = engine.disk_resources.get(disk)?;
-    let stored = held
-        .root
-        .read_json_observed(&disk.root.join("disk.json"), &mut |_| Ok(()))?;
+    let stored = decode_seal(&held.root.read_bytes_observed(
+        &disk.root.join("disk.json"),
+        MAX_METADATA,
+        &mut |_| Ok(()),
+    )?)?;
     validate_stored_seal(&stored, &held.seal)?;
     Ok(held)
 }

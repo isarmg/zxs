@@ -37,6 +37,8 @@
 
 初始化、重开和停服重配验证实际设备、seal 与物理独立性；普通操作不轮询 mountinfo/sysfs。真实文件读取、seal/成员证明、正文哈希和文件/目录同步不由身份代替。显式 `check`、成员 probe、操作/版本 health、磁盘状态及容量 observation 仍描述当前命名路径，不作写入准入。公开输入路径不根据前缀猜作盘内来源；内部复制显式携带来源 owner。资源与候选代际、冷准入 `STATX_MNT_ID` 要求、seal 时点、同步预算及外部路径边界见 [ADR 0007](../adr/0007-owned-disk-resources.md)。
 
+持久化 `disk.json` 的 JSON 语法或 identity schema 解码失败携带 `DISK_IDENTITY_MISMATCH` 上下文，保留具体 JSON source。打开、读取和元数据字节上限失败继续保留原错误；此解码上下文不替代已有的实际身份比较或发布阶段错误。
+
 业务操作先在 State 克隆上组合修改；分支创建只登记冻结引用，不新建空文件。实际内容写入才准备 FULL 和固定路由副本。DirectoryBranch 保持稳定 ID/名称，DirectoryTree 保存不可变组合；文件修改或子项选择只增加子树并推进 head。PREPARE 不表示可见，ACCEPT → FINALIZE → PUBLICATION 及同步收据共同决定公开状态，恢复沿原候选继续。
 
 命名空间删除在实际执行处收集有序路径和条目种类，随不可变 Commit 保存删除时间；空效果不创建事实，移动、改名和视图选择不冒充删除。工作区与目录批量操作复用同一规则，失败不发布部分事实。删除事实不保存正文身份，不扩大历史保留根；历史包与拆分保留事实本身，活动投影不回查操作回执或父快照推测删除。
