@@ -75,9 +75,12 @@ fn parse(line: &str) -> Result<Mount> {
         return Err(invalid("mountinfo mount point must be absolute"));
     }
     Ok(Mount {
-        id: fields[0]
-            .parse()
-            .map_err(|_| invalid("invalid mountinfo mount identity"))?,
+        id: fields[0].parse().map_err(|source| {
+            Error::from(source).context(
+                storage_contract::ErrorCode::DiskIdentityMismatch,
+                "invalid mountinfo mount identity",
+            )
+        })?,
         point,
         kind: filesystem[0].to_owned(),
         source: decode_field(filesystem[1], Escapes::Source)?.into(),
