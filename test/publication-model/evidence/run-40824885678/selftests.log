@@ -1,0 +1,44 @@
+test_file_sync_error_can_leave_persistent_bytes (test_model.ProtocolWindows.test_file_sync_error_can_leave_persistent_bytes) ... ok
+test_later_content_and_index_failure_preserve_historical_result (test_model.ProtocolWindows.test_later_content_and_index_failure_preserve_historical_result) ... ok
+test_lost_reply_retry_and_digest_mismatch_preserve_business_effect (test_model.ProtocolWindows.test_lost_reply_retry_and_digest_mismatch_preserve_business_effect) ... ok
+test_nonprefix_accept_completion_decides_without_publication (test_model.ProtocolWindows.test_nonprefix_accept_completion_decides_without_publication) ... ok
+test_nonprefix_failures_are_independent_and_keep_fixed_barrier (test_model.ProtocolWindows.test_nonprefix_failures_are_independent_and_keep_fixed_barrier) ... ok
+test_process_exit_and_power_loss_have_different_byte_outcomes (test_model.ProtocolWindows.test_process_exit_and_power_loss_have_different_byte_outcomes) ... ok
+test_second_crash_can_interrupt_recovery (test_model.ProtocolWindows.test_second_crash_can_interrupt_recovery) ... ok
+test_single_publication_record_is_not_all_member_completion (test_model.ProtocolWindows.test_single_publication_record_is_not_all_member_completion) ... ok
+test_two_sequential_full_publications_for_each_member_count (test_model.ProtocolWindows.test_two_sequential_full_publications_for_each_member_count) ... ok
+test_unreadable_log_cannot_supply_absence_evidence (test_model.ProtocolWindows.test_unreadable_log_cannot_supply_absence_evidence) ... ok
+test_unsynced_directory_name_can_survive_or_disappear (test_model.ProtocolWindows.test_unsynced_directory_name_can_survive_or_disappear) ... ok
+test_early_ack (test_mutations.MutationSensitivityTests.test_early_ack) ... ok
+test_lost_idempotency_binding (test_mutations.MutationSensitivityTests.test_lost_idempotency_binding) ... ok
+test_omit_sync (test_mutations.MutationSensitivityTests.test_omit_sync) ... ok
+test_saved_mutation_trace_rejects_action_tampering (test_mutations.MutationSensitivityTests.test_saved_mutation_trace_rejects_action_tampering) ... ok
+test_saved_mutation_trace_rejects_state_digest_tampering (test_mutations.MutationSensitivityTests.test_saved_mutation_trace_rejects_state_digest_tampering) ... ok
+test_shrunken_quorum (test_mutations.MutationSensitivityTests.test_shrunken_quorum) ... ok
+test_timeout_rollback (test_mutations.MutationSensitivityTests.test_timeout_rollback) ... ok
+test_abort_needs_durable_fixed_quorum_resolution (test_mutations.OracleSensitivityTests.test_abort_needs_durable_fixed_quorum_resolution) ... ok
+test_corrupt_installed_record_is_not_complete_absence (test_mutations.OracleSensitivityTests.test_corrupt_installed_record_is_not_complete_absence) ... ok
+test_fabricated_publication_origin_is_rejected (test_mutations.OracleSensitivityTests.test_fabricated_publication_origin_is_rejected) ... ok
+test_abort_q_without_missing_member_and_no_resurrection (test_recovery.RecoveryWindows.test_abort_q_without_missing_member_and_no_resurrection) ... ok
+test_one_healthy_copy_repairs_second_required_copy_before_normal_publication (test_recovery.RecoveryWindows.test_one_healthy_copy_repairs_second_required_copy_before_normal_publication) ... ok
+test_planned_normal_recovery_does_not_hide_new_content_damage (test_recovery.RecoveryWindows.test_planned_normal_recovery_does_not_hide_new_content_damage) ... ok
+test_second_power_failure_during_abort_resolution (test_recovery.RecoveryWindows.test_second_power_failure_during_abort_resolution) ... ok
+test_single_publication_then_damage_keeps_original_normal_result (test_recovery.RecoveryWindows.test_single_publication_then_damage_keeps_original_normal_result) ... ok
+test_unpublished_decision_damage_publishes_explicit_degraded_result (test_recovery.RecoveryWindows.test_unpublished_decision_damage_publishes_explicit_degraded_result) ... ok
+test_depth_boundary_backedges_are_not_silently_unchecked (test_search.SearchTests.test_depth_boundary_backedges_are_not_silently_unchecked) ... ok
+test_depth_cutoff_is_not_a_pass_or_out_of_bounds_violation (test_search.SearchTests.test_depth_cutoff_is_not_a_pass_or_out_of_bounds_violation) ... ok
+test_duplicate_labels_are_model_errors (test_search.SearchTests.test_duplicate_labels_are_model_errors) ... ok
+test_edges_to_seen_states_are_checked (test_search.SearchTests.test_edges_to_seen_states_are_checked) ... ok
+test_exact_dedup_finishes_cycles (test_search.SearchTests.test_exact_dedup_finishes_cycles) ... ok
+test_initial_violation_trace_preserves_expected_property (test_search.SearchTests.test_initial_violation_trace_preserves_expected_property) ... ok
+test_invalid_resource_limits_are_rejected (test_search.SearchTests.test_invalid_resource_limits_are_rejected) ... ok
+test_replay_rejects_changed_digest_and_disabled_action (test_search.SearchTests.test_replay_rejects_changed_digest_and_disabled_action) ... ok
+test_replay_wide_successors_fail_with_explicit_budget (test_search.SearchTests.test_replay_wide_successors_fail_with_explicit_budget) ... ok
+test_shortest_deterministic_witness_and_replay (test_search.SearchTests.test_shortest_deterministic_witness_and_replay) ... ok
+test_state_and_transition_cutoffs_are_inconclusive (test_search.SearchTests.test_state_and_transition_cutoffs_are_inconclusive) ... ok
+test_wide_successors_respect_budget_before_materialization (test_search.SearchTests.test_wide_successors_respect_budget_before_materialization) ... ok
+
+----------------------------------------------------------------------
+Ran 39 tests in 0.356s
+
+OK

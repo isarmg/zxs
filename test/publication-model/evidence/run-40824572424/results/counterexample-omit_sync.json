@@ -1,0 +1,42 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "omit_sync"
+  },
+  "initial_digest": "2dc1c0dcebde45172023d8e84cae918f687728eecb9e40a634f3265bb892a2b0",
+  "schema": "zxs-publication-model-trace-v1",
+  "steps": [
+    {
+      "action": "CONTENT:0:write",
+      "state_digest": "4039d5fec4351bd2076b0e91ba84e4c7cf39f36a169d2ff2cad6bbcc1f66d374"
+    },
+    {
+      "action": "CONTENT:0:file_sync",
+      "state_digest": "0d9af90e13cb183ea8acac523f556143a60758979a246102f7814faf036964b6"
+    },
+    {
+      "action": "CONTENT:0:install",
+      "state_digest": "64a941324cda64bc52deaa7bdb06459ff6e81b811eb16d4aaff0f512f337eb45"
+    },
+    {
+      "action": "CONTENT:0:skip_directory_sync",
+      "state_digest": "401e3616dbbda64512fafcc5eead8157ec90e19d2e669aad84c0dc022e61d7be"
+    },
+    {
+      "action": "barrier:CONTENT",
+      "state_digest": "ed43b5e3a0a3a5a9d0dd2e3c7d811a10222125a73161ce4680aae9830cf2febf"
+    }
+  ],
+  "violations": [
+    {
+      "message": "CONTENT: member 0 advanced without durable complete bytes and directory entry",
+      "name": "durability_barrier",
+      "spec": "10.3; 10.5; 10.10"
+    }
+  ]
+}

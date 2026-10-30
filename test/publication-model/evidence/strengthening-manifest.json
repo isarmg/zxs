@@ -1,0 +1,1404 @@
+{
+  "artifact_id": 12877605576,
+  "artifact_zip_sha256": "53ac9b90e6b246da528339a81894bc28e9dbf3d9419c33697cdd965c1c86ad99",
+  "conclusion": "success",
+  "core_fix_commit": "c9e51f77d56a18baf17b9dc97925db3c1a928240",
+  "deep_search": {
+    "maximum_depth_is_not_a_completed_layer": true,
+    "mutation": {
+      "replayed": true,
+      "scope": "selected-prefix-suffix",
+      "status": "Counterexample"
+    },
+    "mutation_full_trace_steps": 28,
+    "normal": [
+      {
+        "config": {
+          "crashes": 0,
+          "fault_budget": 0,
+          "n": 2,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 13,
+          "max_depth": 3,
+          "queued": 0,
+          "states": 13,
+          "transitions": 16
+        },
+        "coverage": {
+          "max_full_trace_depth": 56,
+          "suffix_phases_checked": [
+            "ACK",
+            "DONE",
+            "RESOLVED"
+          ]
+        },
+        "name": "n2-published-client-suffix",
+        "prefix_complete": true,
+        "prefix_crashes_consumed": 0,
+        "prefix_faults_consumed": 0,
+        "prefix_length": 53,
+        "prefix_replayed": true,
+        "prefix_requested_length": 53,
+        "scope": "selected-prefix-suffix",
+        "status": "LocalExhaustive",
+        "truncation": null
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 1,
+          "n": 2,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 10828,
+          "max_depth": 9,
+          "queued": 9172,
+          "states": 20000,
+          "transitions": 70113
+        },
+        "coverage": {
+          "max_full_trace_depth": 24,
+          "suffix_phases_checked": [
+            "ACCEPT",
+            "CONTENT",
+            "FINALIZE",
+            "PREPARE",
+            "RECOVER_ABORT",
+            "RECOVER_OBSERVE",
+            "RECOVER_RESOLVE"
+          ]
+        },
+        "name": "n2-ready-accept",
+        "prefix_complete": true,
+        "prefix_crashes_consumed": 0,
+        "prefix_faults_consumed": 0,
+        "prefix_length": 15,
+        "prefix_replayed": true,
+        "prefix_requested_length": 15,
+        "scope": "selected-prefix-suffix",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 1,
+          "n": 3,
+          "operations": 1,
+          "replicas": 2,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 11263,
+          "max_depth": 11,
+          "queued": 8737,
+          "states": 20000,
+          "transitions": 70135
+        },
+        "coverage": {
+          "max_full_trace_depth": 42,
+          "suffix_phases_checked": [
+            "ACCEPT",
+            "CONTENT",
+            "FINALIZE",
+            "PREPARE",
+            "RECOVER_OBSERVE",
+            "RECOVER_RESOLVE"
+          ]
+        },
+        "name": "n3-nonprefix-accept",
+        "prefix_complete": true,
+        "prefix_crashes_consumed": 0,
+        "prefix_faults_consumed": 0,
+        "prefix_length": 31,
+        "prefix_replayed": true,
+        "prefix_requested_length": 31,
+        "scope": "selected-prefix-suffix",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 1,
+          "n": 4,
+          "operations": 1,
+          "replicas": 2,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 10382,
+          "max_depth": 7,
+          "queued": 9618,
+          "states": 20000,
+          "transitions": 73027
+        },
+        "coverage": {
+          "max_full_trace_depth": 42,
+          "suffix_phases_checked": [
+            "ACCEPT",
+            "RECOVER_OBSERVE",
+            "RECOVER_RESOLVE"
+          ]
+        },
+        "name": "n4-nonprefix-accept",
+        "prefix_complete": true,
+        "prefix_crashes_consumed": 0,
+        "prefix_faults_consumed": 0,
+        "prefix_length": 35,
+        "prefix_replayed": true,
+        "prefix_requested_length": 35,
+        "scope": "selected-prefix-suffix",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 1,
+          "n": 3,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 12148,
+          "max_depth": 12,
+          "queued": 7852,
+          "states": 20000,
+          "transitions": 55001
+        },
+        "coverage": {
+          "max_full_trace_depth": 39,
+          "suffix_phases_checked": [
+            "ACCEPT",
+            "CONTENT",
+            "PREPARE",
+            "RECOVER_ABORT",
+            "RECOVER_OBSERVE",
+            "RECOVER_RESOLVE"
+          ]
+        },
+        "name": "n3-recovery-preserve",
+        "prefix_complete": true,
+        "prefix_crashes_consumed": 1,
+        "prefix_faults_consumed": 0,
+        "prefix_length": 27,
+        "prefix_replayed": true,
+        "prefix_requested_length": 27,
+        "scope": "selected-prefix-suffix",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 1,
+          "n": 3,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 13878,
+          "max_depth": 10,
+          "queued": 6122,
+          "states": 20000,
+          "transitions": 48790
+        },
+        "coverage": {
+          "max_full_trace_depth": 34,
+          "suffix_phases_checked": [
+            "DONE",
+            "RECOVER_ABORT",
+            "RECOVER_OBSERVE",
+            "RESOLVED"
+          ]
+        },
+        "name": "n3-abort-resolution-write",
+        "prefix_complete": true,
+        "prefix_crashes_consumed": 1,
+        "prefix_faults_consumed": 0,
+        "prefix_length": 24,
+        "prefix_replayed": true,
+        "prefix_requested_length": 24,
+        "scope": "selected-prefix-suffix",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 1,
+          "n": 3,
+          "operations": 1,
+          "replicas": 2,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 12655,
+          "max_depth": 8,
+          "queued": 7345,
+          "states": 20000,
+          "transitions": 74073
+        },
+        "coverage": {
+          "max_full_trace_depth": 70,
+          "suffix_phases_checked": [
+            "ACCEPT",
+            "PREPARE",
+            "PUBLICATION",
+            "RECOVER_OBSERVE",
+            "RECOVER_RESOLVE"
+          ]
+        },
+        "name": "n3-single-publication",
+        "prefix_complete": true,
+        "prefix_crashes_consumed": 0,
+        "prefix_faults_consumed": 0,
+        "prefix_length": 62,
+        "prefix_replayed": true,
+        "prefix_requested_length": 62,
+        "scope": "selected-prefix-suffix",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      }
+    ],
+    "scope": "selected legal prefix plus all enabled suffix successors; no pruning or counter reset",
+    "status_counts": {
+      "Inconclusive": 6,
+      "LocalExhaustive": 1
+    }
+  },
+  "limits": "Root Inconclusive remains unproved; LocalExhaustive is conditional only on the selected prefix. No production defect or physical power-loss proof.",
+  "prior_evidence": {
+    "files_verified_unchanged": 160,
+    "manifest": "test/publication-model/evidence/manifest.json",
+    "manifest_sha256": "d13e1415db9c0c60edaf892072d38ec5d583763bcc84c179a12c37d2ad0d92e9"
+  },
+  "raw_files": [
+    {
+      "path": "test/publication-model/evidence/run-40827378985/actions.log",
+      "sha256": "a2ddc86d638b48b141da0e1c413bd2a9e1cbd7b8b4431a8ca7d545f963ac08bc"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/artifact-metadata.json",
+      "sha256": "52b91f6ecb4262e89828012df053d4029b01ee31197e5ef8c2d0574f6bba6c1f"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/counterexample-early_ack.json",
+      "sha256": "5edc285a5874b54d4a0298e8e4782c0bd5064c8ecd776a36a74c7abd1f437106"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/mutation-early_ack.json",
+      "sha256": "a292f50d1c4d9604e459305fa3348cb0af4d5b4e9cd4f7f196183742013122dd"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/n2-published-client-suffix.json",
+      "sha256": "3d172fcd39cbc69e4b0ae241ac325c5a9067bd604acf5174615d9caabb22be76"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/n2-ready-accept.json",
+      "sha256": "47c14542748408588be89f9674f4f35b9d95860a04296b2e9552b07403b35d4d"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/n3-abort-resolution-write.json",
+      "sha256": "9f448bc1fa44bf6eabf2a25fec9bf0a48f577977764b512d75fbd2afb535db38"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/n3-nonprefix-accept.json",
+      "sha256": "b8295b4544f9bee8f4bbcc14a1897762dee5dea60dbb3b1ec4f7d4f4e7aa3677"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/n3-recovery-preserve.json",
+      "sha256": "9d198280b2b8071079f96e84be3f12d5367df659dfac4a77cabe5a600db7f115"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/n3-single-publication.json",
+      "sha256": "b3e554eff792893ee655f5c8aa5374cbd49e96155de35f1231319d1d16e37255"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/n4-nonprefix-accept.json",
+      "sha256": "bfb7ebc83faf9295d470d5710327df20a5bb59d601c5affb9f37dd665dbf9df9"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-n2-published-client-suffix.json",
+      "sha256": "c533b469f7559eae31f7006f2730712bc20852a01b366027f18db4c22749fbed"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-n2-ready-accept.json",
+      "sha256": "625d8cf0196182be662bcbfdfac9e86ab867e3594077eb3ff59a98357d88d064"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-n3-abort-resolution-write.json",
+      "sha256": "2e9602fcc61bd77adc948441502c3006fa4c4daa1c00083498d67dfe0e012cb3"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-n3-nonprefix-accept.json",
+      "sha256": "c79ccfc961bd16197f4a0444a172aab822fe64579e96c687199cf98e40311c11"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-n3-recovery-preserve.json",
+      "sha256": "3f5662fa69b0524adc3625218840d9b5a5071228801bed9fbc01979aebb3f912"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-n3-single-publication.json",
+      "sha256": "28f5e6c5b7e2842ea40f347cc8fea046fda90269bd1e021f21562b55b6e36be1"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-n4-nonprefix-accept.json",
+      "sha256": "f90403b34dc8472b584ca7d98af8c6b759c47a181b3e5a16c19d87fd8f2386e8"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-replay-n2-published-client-suffix.json",
+      "sha256": "855c9f1a8818a41db8c6f2c1fcaeb9930c277bf7bcc790a0838d95cbe7992c4e"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-replay-n2-ready-accept.json",
+      "sha256": "66337ef0ac7d9ac651f9ba6c9be4778b81574e1da6dc7637575d054febee78d1"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-replay-n3-abort-resolution-write.json",
+      "sha256": "8232bd5f86181c0e6c1b891fa413d9e9ace747368717a0f18048a6846d326f3e"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-replay-n3-nonprefix-accept.json",
+      "sha256": "195f4d654008becf5761f2f23e09f9767437c930f4be691ce97280de3bb42f9e"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-replay-n3-recovery-preserve.json",
+      "sha256": "d7d6104e84b71fab2252df2efc7b1c0586375e4785902adc776f70ca9d8c896e"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-replay-n3-single-publication.json",
+      "sha256": "75b6b1f93f0b80ad2710e65389cbd046a1620ecc6631ab215b1c1615cce3bf95"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/prefix-replay-n4-nonprefix-accept.json",
+      "sha256": "c0db1a1ad10634d6c260f3185de6ebd966836d5096f31322bb09821da4037d99"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/replay-early_ack.json",
+      "sha256": "58511a4652da41a792bdb0d9aa28c7491bba0f9cad272265c2a648908ae5c696"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-results/summary.json",
+      "sha256": "248646392cd68961a56195505eb17e5bad8c422ead08a18c61bd373a14d8441d"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/deep-search.log",
+      "sha256": "dd43b555e7ef5c5c0c1ce63b0bf230048ac04c9043f455e04a5dd3eafdb1f2cd"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/python.txt",
+      "sha256": "5b3e43dc38ca01e3f5a7854ba50d4330864b0c1e0f646650b2c78cf072acc366"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/counterexample-early_ack.json",
+      "sha256": "77e8486c9881d981f49b314e8a8645d07861b3a79d83cdafcfe8337c1f7fdd7a"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/counterexample-lost_binding.json",
+      "sha256": "9d01fb4bc9fcc63c50b96c0631f684b3822e73b4b4ebf657e762ae1d3bce40e1"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/counterexample-omit_sync.json",
+      "sha256": "efe049ad4809b9c8171a719a1362e414e30c5f574496cfc79849596c73bebdc1"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/counterexample-shrunken_quorum.json",
+      "sha256": "32039af316420c8c7dde1ed4d3ede09814809db24ff3f8219a27bf64a1460957"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/counterexample-timeout_rollback.json",
+      "sha256": "881639cfaee233f4447e16bffd987ec5fada1182263de99b1d76d686dc5326a8"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/environment.json",
+      "sha256": "3ce3559768b19b4d2de65207783672ef5b119e6aa69f5f213b333836575f32df"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/mutation-early_ack.json",
+      "sha256": "8c3ba5026e9a815d9889c857c435121bbe2a6e6c094f6b186956d2c4e0af977b"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/mutation-lost_binding.json",
+      "sha256": "5627a2fc300e63a035a607243760a77c2123e27ee6d8841cbc6acaa73268190d"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/mutation-omit_sync.json",
+      "sha256": "70d53a06e3307aaf7bc604db09e869ff238ee93f56e3c67cfd3aa3186bd68287"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/mutation-shrunken_quorum.json",
+      "sha256": "87d424448e1f5e19f04f556173a03664ecb81d0bd52777d2e8055afbacc34794"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/mutation-timeout_rollback.json",
+      "sha256": "2b75549b8d5c164ec5e00d96df6fc334079ff201076b508dcb92fc490692e12d"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n1-failure-recovery.json",
+      "sha256": "b359947db8256a263dc24ab24b1cd7087f833e24e62eddd075662c2795deac36"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n1-one-crash.json",
+      "sha256": "cf00a6ce6c6579013256aa0c0af8302e8c5f110a4b458e8e739d350123e500e5"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n1-one-slot.json",
+      "sha256": "bf4fb6136cd12c41acb8cb70ff068ee2917ffb04cca0bb16973b6dd815479400"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n1-recovery-crash.json",
+      "sha256": "fd5aad394391e440fa9448e20e5d4d423e3cc9ec4e7a9a6dd15f7a3cd9ec6a6e"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n1-two-slots.json",
+      "sha256": "d570c8793050dad91599115921befc2565ccfc0205ed9b98c7899bcc967d62dd"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n2-failure-recovery.json",
+      "sha256": "26781405de663a9c0f13ea60d1782ca18eb1eb7fb26d55b0b90eaaf50e8bb8a3"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n2-one-copy.json",
+      "sha256": "63ef5dce3a74882521a1a17e3861d8470d0a8c8b943c38ad1825c769f11e9780"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n2-two-copies.json",
+      "sha256": "6854d18395848b5b3aaf88c2e02a73d5bf2e29b214f6a49b675f8550cf4e4761"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n3-full-publication.json",
+      "sha256": "5320562ca39dafcb78718e8497b0d37037ad73b82bc413382a4181ea7b0ce9bb"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n3-nonprefix-failures.json",
+      "sha256": "7de6835bd681b32b94f030f184078ca8ac487c155ead31c44d96e562f45aaadd"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n3-recovery.json",
+      "sha256": "a82e2093ce569072cbe500146f8a8383278a890d87b4df9a08d08ffc04fb1ed4"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n3-two-slots.json",
+      "sha256": "f0ae28523a39cee884662a92d7ccf7d68afe19231b5f3e8427d6e7a05dd113c8"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n4-full-publication.json",
+      "sha256": "951df1790afc8f07390bc2fd02185992f07749ee36b4da08530f89565e21e50c"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n4-nonprefix-failures.json",
+      "sha256": "5b342ea4d977b4dc6f909cc3e192ca113096be5f497a66eba43393a46a77c9ed"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n4-recovery.json",
+      "sha256": "dc294230f3b5ba7cc30dd0871191ede1f4fe2e48c98fa2c8f29b8b6d4afe2cd0"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/n4-two-slots.json",
+      "sha256": "8c987eda717e9a1aabbb55804d5e4746dca38fd9a36d11fbd02021c3f86ba81f"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/replay-early_ack.json",
+      "sha256": "055f8446a0df8861591e8d0e8b7f56f8a30772a7250af1635fd620efa16d5d71"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/replay-lost_binding.json",
+      "sha256": "7cc16e0b2cbf9366979dbb70db854f572d20be50aed4791e4c92e0ace7b61838"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/replay-omit_sync.json",
+      "sha256": "ac7f520e984130ef68b45f43a294f6251b6a5f19f8fa240c80654ae71c34a385"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/replay-shrunken_quorum.json",
+      "sha256": "679c5e57a6b01e2ec91c49f4ad797684b7e6d51f22a551d4e2d5a5f854443e91"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/replay-timeout_rollback.json",
+      "sha256": "5372f314a52e2fee102b63f2ade747a31212ba9b6af8318c754159295fb946b9"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/results/summary.json",
+      "sha256": "4059ebd2772a2add68811bc8ccdb286ff870dbbe78101002193adbacfab1027b"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/run-status.json",
+      "sha256": "49fc18393416e218374de8dcf4206cc6b517ec885af9fee8999789736c66cc66"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/search.log",
+      "sha256": "c97479e35c45569b432ce7eea63cce52f557bbd4220c6e928476ab8026ae3512"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/selftests.log",
+      "sha256": "30726b939810b6cd62034b95a387f641a9172ebdf61c9273a59eebda6cbfd737"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/tool-commit.txt",
+      "sha256": "6e6ccae00214857a7d29cb72ef8fa58acb1d8dbb5d381b4328327c03c994c83b"
+    },
+    {
+      "path": "test/publication-model/evidence/run-40827378985/validation-commit.txt",
+      "sha256": "213a5c9051eec54288bef640b06c38d503383546bdf01a7579dd638d4ebb435b"
+    }
+  ],
+  "root_search": {
+    "mutations": [
+      {
+        "counts": {
+          "expanded": 2835,
+          "max_depth": 21,
+          "queued": 419,
+          "states": 3254,
+          "transitions": 5502
+        },
+        "replayed": true,
+        "status": "Counterexample",
+        "variant": "shrunken_quorum",
+        "violations": [
+          {
+            "message": "slot 0: decision witness has fewer than fixed Q distinct members",
+            "name": "fixed_quorum",
+            "spec": "10.2; 10.6; 10.7"
+          },
+          {
+            "message": "slot 0: first decision witness is not a fixed-Q member set",
+            "name": "decision_evidence",
+            "spec": "10.2; 10.6; 10.7"
+          }
+        ]
+      },
+      {
+        "counts": {
+          "expanded": 22,
+          "max_depth": 16,
+          "queued": 4,
+          "states": 26,
+          "transitions": 29
+        },
+        "replayed": true,
+        "status": "Counterexample",
+        "variant": "early_ack",
+        "violations": [
+          {
+            "message": "slot 0: member 0 lacks durable metadata/publication evidence",
+            "name": "publication_barrier",
+            "spec": "10.3(2-3); 10.10(1,3)"
+          },
+          {
+            "message": "slot 0: required member 0 lacks durable content/proof evidence",
+            "name": "publication_barrier",
+            "spec": "10.3(1,2,4); 10.10(2,4)"
+          },
+          {
+            "message": "slot 0: permanent result differs from the historical publication kind",
+            "name": "fixed_result",
+            "spec": "10.10"
+          }
+        ]
+      },
+      {
+        "counts": {
+          "expanded": 5,
+          "max_depth": 5,
+          "queued": 0,
+          "states": 5,
+          "transitions": 6
+        },
+        "replayed": true,
+        "status": "Counterexample",
+        "variant": "omit_sync",
+        "violations": [
+          {
+            "message": "CONTENT: member 0 advanced without durable complete bytes and directory entry",
+            "name": "durability_barrier",
+            "spec": "10.3; 10.5; 10.10"
+          }
+        ]
+      },
+      {
+        "counts": {
+          "expanded": 12,
+          "max_depth": 12,
+          "queued": 1,
+          "states": 13,
+          "transitions": 13
+        },
+        "replayed": true,
+        "status": "Counterexample",
+        "variant": "timeout_rollback",
+        "violations": [
+          {
+            "message": "slot 0: ACCEPT was issued but abort has no complete fixed-Q absence evidence",
+            "name": "no_timeout_abort",
+            "spec": "10.4; 10.7; 10.11"
+          },
+          {
+            "message": "slot 0: aborted result has no complete fixed-Q absence evidence",
+            "name": "abort_resolution",
+            "spec": "10.7"
+          },
+          {
+            "message": "slot 0: aborted result has no fixed-Q durable resolution",
+            "name": "abort_resolution",
+            "spec": "10.7; 10.8"
+          }
+        ]
+      },
+      {
+        "counts": {
+          "expanded": 373,
+          "max_depth": 39,
+          "queued": 23,
+          "states": 396,
+          "transitions": 575
+        },
+        "replayed": true,
+        "status": "Counterexample",
+        "variant": "lost_binding",
+        "violations": [
+          {
+            "message": "events repeat or violate decision-slot order",
+            "name": "unique_publication",
+            "spec": "10.2; 10.3(5); 10.10"
+          },
+          {
+            "message": "slot 0: operation has multiple business effects",
+            "name": "unique_publication",
+            "spec": "10.3(5); 18"
+          }
+        ]
+      }
+    ],
+    "normal": [
+      {
+        "config": {
+          "crashes": 0,
+          "fault_budget": 0,
+          "n": 1,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 658,
+          "max_depth": 57,
+          "queued": 0,
+          "states": 658,
+          "transitions": 1029
+        },
+        "name": "n1-one-slot",
+        "status": "BoundedExhaustive",
+        "truncation": null
+      },
+      {
+        "config": {
+          "crashes": 0,
+          "fault_budget": 0,
+          "n": 1,
+          "operations": 2,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 3002,
+          "max_depth": 96,
+          "queued": 0,
+          "states": 3002,
+          "transitions": 4724
+        },
+        "name": "n1-two-slots",
+        "status": "BoundedExhaustive",
+        "truncation": null
+      },
+      {
+        "config": {
+          "crashes": 0,
+          "fault_budget": 0,
+          "n": 2,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 3324,
+          "max_depth": 76,
+          "queued": 0,
+          "states": 3324,
+          "transitions": 5844
+        },
+        "name": "n2-one-copy",
+        "status": "BoundedExhaustive",
+        "truncation": null
+      },
+      {
+        "config": {
+          "crashes": 0,
+          "fault_budget": 0,
+          "n": 2,
+          "operations": 1,
+          "replicas": 2,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 5104,
+          "max_depth": 88,
+          "queued": 0,
+          "states": 5104,
+          "transitions": 9416
+        },
+        "name": "n2-two-copies",
+        "status": "BoundedExhaustive",
+        "truncation": null
+      },
+      {
+        "config": {
+          "crashes": 0,
+          "fault_budget": 0,
+          "n": 3,
+          "operations": 1,
+          "replicas": 2,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 84915,
+          "max_depth": 107,
+          "queued": 0,
+          "states": 84915,
+          "transitions": 184653
+        },
+        "name": "n3-full-publication",
+        "status": "BoundedExhaustive",
+        "truncation": null
+      },
+      {
+        "config": {
+          "crashes": 0,
+          "fault_budget": 0,
+          "n": 4,
+          "operations": 1,
+          "replicas": 2,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 234682,
+          "max_depth": 58,
+          "queued": 15318,
+          "states": 250000,
+          "transitions": 607570
+        },
+        "name": "n4-full-publication",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 1,
+          "fault_budget": 0,
+          "n": 1,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 2589,
+          "max_depth": 60,
+          "queued": 0,
+          "states": 2589,
+          "transitions": 5492
+        },
+        "name": "n1-one-crash",
+        "status": "BoundedExhaustive",
+        "truncation": null
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 0,
+          "n": 1,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 5244,
+          "max_depth": 61,
+          "queued": 0,
+          "states": 5244,
+          "transitions": 13988
+        },
+        "name": "n1-recovery-crash",
+        "status": "BoundedExhaustive",
+        "truncation": null
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 1,
+          "n": 1,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 44347,
+          "max_depth": 63,
+          "queued": 0,
+          "states": 44347,
+          "transitions": 151386
+        },
+        "name": "n1-failure-recovery",
+        "status": "BoundedExhaustive",
+        "truncation": null
+      },
+      {
+        "config": {
+          "crashes": 1,
+          "fault_budget": 1,
+          "n": 2,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 19496,
+          "max_depth": 17,
+          "queued": 5504,
+          "states": 25000,
+          "transitions": 64142
+        },
+        "name": "n2-failure-recovery",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 0,
+          "fault_budget": 3,
+          "n": 3,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 11948,
+          "max_depth": 10,
+          "queued": 13052,
+          "states": 25000,
+          "transitions": 69668
+        },
+        "name": "n3-nonprefix-failures",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 2,
+          "n": 3,
+          "operations": 1,
+          "replicas": 2,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 10134,
+          "max_depth": 7,
+          "queued": 14866,
+          "states": 25000,
+          "transitions": 89157
+        },
+        "name": "n3-recovery",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 1,
+          "n": 3,
+          "operations": 2,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 10007,
+          "max_depth": 9,
+          "queued": 14993,
+          "states": 25000,
+          "transitions": 69895
+        },
+        "name": "n3-two-slots",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 0,
+          "fault_budget": 4,
+          "n": 4,
+          "operations": 1,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 9978,
+          "max_depth": 8,
+          "queued": 15022,
+          "states": 25000,
+          "transitions": 87716
+        },
+        "name": "n4-nonprefix-failures",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 2,
+          "n": 4,
+          "operations": 1,
+          "replicas": 2,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 7800,
+          "max_depth": 6,
+          "queued": 17200,
+          "states": 25000,
+          "transitions": 85292
+        },
+        "name": "n4-recovery",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      },
+      {
+        "config": {
+          "crashes": 2,
+          "fault_budget": 1,
+          "n": 4,
+          "operations": 2,
+          "replicas": 1,
+          "retries": true,
+          "variant": "correct"
+        },
+        "counts": {
+          "expanded": 8993,
+          "max_depth": 9,
+          "queued": 16007,
+          "states": 25000,
+          "transitions": 74726
+        },
+        "name": "n4-two-slots",
+        "status": "Inconclusive",
+        "truncation": "max_states"
+      }
+    ],
+    "scope": "from initial state",
+    "status_counts": {
+      "BoundedExhaustive": 8,
+      "Inconclusive": 8
+    }
+  },
+  "run_id": 40827378985,
+  "run_url": "https://github.com/isarmg/zxs/actions/runs/40827378985",
+  "schema": "zxs-publication-model-strengthening-evidence-v1",
+  "selftests": {
+    "individual_tests": [
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_counterexample_trace_contains_prefix_and_suffix"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_disabled_prefix_is_rejected"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_duplicate_prefix_actions_are_model_errors"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_every_prefix_edge_is_checked"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_invalid_prefix_budgets_are_rejected"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_local_exhaustion_is_not_root_exhaustion"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_prefix_step_budget_is_inconclusive"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_prefix_successor_budget_is_inconclusive"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_real_prefix_preserves_consumed_fault_and_crash_counts"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_suffix_checks_edges_to_already_seen_states"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_suffix_depth_boundary_does_not_report_out_of_bounds_violation"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_suffix_resource_cutoffs_are_not_local_passes"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_deep_search.DeepSearchTests.test_time_budget_applies_to_prefix_and_suffix"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_file_sync_error_can_leave_persistent_bytes"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_later_content_and_index_failure_preserve_historical_result"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_lost_reply_retry_and_digest_mismatch_preserve_business_effect"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_nonprefix_accept_completion_decides_without_publication"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_nonprefix_failures_are_independent_and_keep_fixed_barrier"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_process_exit_and_power_loss_have_different_byte_outcomes"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_second_crash_can_interrupt_recovery"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_single_publication_record_is_not_all_member_completion"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_two_sequential_full_publications_for_each_member_count"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_unreadable_log_cannot_supply_absence_evidence"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_model.ProtocolWindows.test_unsynced_directory_name_can_survive_or_disappear"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_mutations.MutationSensitivityTests.test_early_ack"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_mutations.MutationSensitivityTests.test_lost_idempotency_binding"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_mutations.MutationSensitivityTests.test_omit_sync"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_mutations.MutationSensitivityTests.test_saved_mutation_trace_rejects_action_tampering"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_mutations.MutationSensitivityTests.test_saved_mutation_trace_rejects_state_digest_tampering"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_mutations.MutationSensitivityTests.test_shrunken_quorum"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_mutations.MutationSensitivityTests.test_timeout_rollback"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_mutations.OracleSensitivityTests.test_abort_needs_durable_fixed_quorum_resolution"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_mutations.OracleSensitivityTests.test_corrupt_installed_record_is_not_complete_absence"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_mutations.OracleSensitivityTests.test_fabricated_publication_origin_is_rejected"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_recovery.DirectedHelperOracleSensitivity.test_advance_rejects_invalid_successor_with_action_and_property_name"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_recovery.DirectedHelperOracleSensitivity.test_take_rejects_invalid_successor_with_action_and_property_name"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_recovery.RecoveryWindows.test_abort_q_without_missing_member_and_no_resurrection"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_recovery.RecoveryWindows.test_one_healthy_copy_repairs_second_required_copy_before_normal_publication"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_recovery.RecoveryWindows.test_planned_normal_recovery_does_not_hide_new_content_damage"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_recovery.RecoveryWindows.test_second_power_failure_during_abort_resolution"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_recovery.RecoveryWindows.test_single_publication_then_damage_keeps_original_normal_result"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_recovery.RecoveryWindows.test_unpublished_decision_damage_publishes_explicit_degraded_result"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_depth_boundary_backedges_are_not_silently_unchecked"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_depth_cutoff_is_not_a_pass_or_out_of_bounds_violation"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_duplicate_labels_are_model_errors"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_edges_to_seen_states_are_checked"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_exact_dedup_finishes_cycles"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_initial_violation_trace_preserves_expected_property"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_invalid_resource_limits_are_rejected"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_replay_rejects_changed_digest_and_disabled_action"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_replay_wide_successors_fail_with_explicit_budget"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_shortest_deterministic_witness_and_replay"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_state_and_transition_cutoffs_are_inconclusive"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_search.SearchTests.test_wide_successors_respect_budget_before_materialization"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_abort_cannot_ignore_an_already_observed_candidate"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_complete_absence_snapshot_establishes_abort_witness"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_decision_mask_must_match_complete_physical_set"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_each_accept_durability_fact_is_required"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_error_return_can_still_have_real_durable_accept"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_full_quorum_abort_mask_cannot_forge_an_unobserved_member"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_full_quorum_mask_cannot_forge_missing_accept"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_full_quorum_resolution_mask_cannot_forge_durable_records"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_historical_resolution_mask_cannot_change"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_later_damage_does_not_revoke_a_historical_resolution"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_nonprefix_member_sets_are_valid_witnesses"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_offline_after_complete_observation_does_not_erase_snapshot"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_out_of_configuration_members_cannot_complete_a_quorum"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_real_majority_accepts_establish_decision"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_real_resolution_records_and_prior_absence_establish_abort"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_resolution_after_second_crash_keeps_original_absence_proof"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_resolution_requires_previously_established_absence"
+      },
+      {
+        "status": "ok",
+        "test_id": "test_witnesses.WitnessEvidenceTests.test_stale_absence_labels_cannot_hide_present_or_broken_logs"
+      }
+    ],
+    "module_counts": {
+      "test_deep_search": 13,
+      "test_model": 11,
+      "test_mutations": 10,
+      "test_recovery": 8,
+      "test_search": 12,
+      "test_witnesses": 18
+    },
+    "status_counts": {
+      "ok": 72
+    },
+    "total": 72
+  },
+  "source_files": [
+    {
+      "path": "test/publication-model/run_deep_validation.py",
+      "sha256": "a554f81149d01e2e10a06371675bdf21880f17044a5954d45c58764a56bc2c8a"
+    },
+    {
+      "path": "test/publication-model/run_validation.py",
+      "sha256": "1f8b2d48b371e4a739ab1ec90de5fea5dde98920f60560784e51234687a0ccac"
+    },
+    {
+      "path": "test/publication-model/test_deep_search.py",
+      "sha256": "675de22cdabbebc39a631f0a7acb758c0d0bb3ebcbbb9a3abbbbe21a61665230"
+    },
+    {
+      "path": "test/publication-model/test_model.py",
+      "sha256": "c36e21cdd86509418f718011111b57c06f67fa3a5ece8398c8468296d3a8dc4e"
+    },
+    {
+      "path": "test/publication-model/test_mutations.py",
+      "sha256": "45a620d02d6a178dcb74b8043d234abde012cb833f601a64134d4ef6d19f99be"
+    },
+    {
+      "path": "test/publication-model/test_recovery.py",
+      "sha256": "a33eed6c8ab2f05724721269732da99a3ac42cdda5a13721949c5f9d6450890b"
+    },
+    {
+      "path": "test/publication-model/test_search.py",
+      "sha256": "5224b1c2a9164b69fbb29913a18ddedec4b16b6325873819841c8234265ba6f8"
+    },
+    {
+      "path": "test/publication-model/test_witnesses.py",
+      "sha256": "69634497db3e6a1aa50e2cb7ce015af7eba2cb9804cd7c3ff19ee6c584c49a80"
+    },
+    {
+      "path": "test/publication-model/validation.yml.template",
+      "sha256": "558d0eddb94ce958732ce224ad5dd7832a98c42c50a24cf6832e60ecc8dc230e"
+    },
+    {
+      "path": "tools/publication-model/cli.py",
+      "sha256": "5e7faf79abcff00dfb633568fc0ef77185e0e4feac3e28e6baa753afb527bc1a"
+    },
+    {
+      "path": "tools/publication-model/deep_search.py",
+      "sha256": "246e277ee6b07e8eb7ee9151f0aa59d6b45f93ce26d1330fad05f3f18f700519"
+    },
+    {
+      "path": "tools/publication-model/model.py",
+      "sha256": "abf7cff355dadbcd376b4d93aeba57644f0edb9ad7a8c6e177d3bc2b5d41fd0f"
+    },
+    {
+      "path": "tools/publication-model/properties.py",
+      "sha256": "e54059f4c437b197dc816e127d80f107af88daa48ef5055ef0eca2b416646a68"
+    },
+    {
+      "path": "tools/publication-model/search.py",
+      "sha256": "80cecb6cb8d90c69026c2277833a1734416df6c1c14e30032653c4c2ec089bbb"
+    }
+  ],
+  "source_validation": "All Python sources/tests and workflow template byte-identical to validated tool commit; no model/tests run locally.",
+  "spec_commit": "e2f33d9882cf7263412d9370b6a703e0b216357d",
+  "validated_tool_commit": "0c4b4d37a5b751ff51824df82e021fd8a2ef26b0",
+  "validation_commit": "9e2d61d4b7b9882c675ce7e27631125fd8dfa21b"
+}

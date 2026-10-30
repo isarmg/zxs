@@ -1,0 +1,34 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "timeout_rollback"
+  },
+  "counterexample": true,
+  "final_digest": "ab907ddc2e561ad51829b6049979118d02344ca88a21039d2349e52b68d3cc97",
+  "first_violation_step": 12,
+  "schema": "zxs-publication-model-replay-v1",
+  "steps": 12,
+  "valid": true,
+  "violations": [
+    {
+      "message": "slot 0: ACCEPT was issued but abort has no complete fixed-Q absence evidence",
+      "name": "no_timeout_abort",
+      "spec": "10.4; 10.7; 10.11"
+    },
+    {
+      "message": "slot 0: aborted result has no complete fixed-Q absence evidence",
+      "name": "abort_resolution",
+      "spec": "10.7"
+    },
+    {
+      "message": "slot 0: aborted result has no fixed-Q durable resolution",
+      "name": "abort_resolution",
+      "spec": "10.7; 10.8"
+    }
+  ]
+}

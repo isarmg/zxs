@@ -1,0 +1,258 @@
+{
+  "claim": "Only a validated selected prefix and its explicitly bounded suffix; no successor pruning or fault/crash budget reset. Inconclusive is not a pass.",
+  "mutation": {
+    "replayed": true,
+    "scope": "selected-prefix-suffix",
+    "status": "Counterexample"
+  },
+  "normal": [
+    {
+      "config": {
+        "crashes": 0,
+        "fault_budget": 0,
+        "n": 2,
+        "operations": 1,
+        "replicas": 1,
+        "retries": true,
+        "variant": "correct"
+      },
+      "counts": {
+        "expanded": 13,
+        "max_depth": 3,
+        "queued": 0,
+        "states": 13,
+        "transitions": 16
+      },
+      "coverage": {
+        "max_full_trace_depth": 56,
+        "suffix_phases_checked": [
+          "ACK",
+          "DONE",
+          "RESOLVED"
+        ]
+      },
+      "name": "n2-published-client-suffix",
+      "prefix_complete": true,
+      "prefix_length": 53,
+      "prefix_requested_length": 53,
+      "scope": "selected-prefix-suffix",
+      "status": "LocalExhaustive",
+      "truncation": null
+    },
+    {
+      "config": {
+        "crashes": 2,
+        "fault_budget": 1,
+        "n": 2,
+        "operations": 1,
+        "replicas": 1,
+        "retries": true,
+        "variant": "correct"
+      },
+      "counts": {
+        "expanded": 10828,
+        "max_depth": 9,
+        "queued": 9172,
+        "states": 20000,
+        "transitions": 70113
+      },
+      "coverage": {
+        "max_full_trace_depth": 24,
+        "suffix_phases_checked": [
+          "ACCEPT",
+          "CONTENT",
+          "FINALIZE",
+          "PREPARE",
+          "RECOVER_ABORT",
+          "RECOVER_OBSERVE",
+          "RECOVER_RESOLVE"
+        ]
+      },
+      "name": "n2-ready-accept",
+      "prefix_complete": true,
+      "prefix_length": 15,
+      "prefix_requested_length": 15,
+      "scope": "selected-prefix-suffix",
+      "status": "Inconclusive",
+      "truncation": "max_states"
+    },
+    {
+      "config": {
+        "crashes": 2,
+        "fault_budget": 1,
+        "n": 3,
+        "operations": 1,
+        "replicas": 2,
+        "retries": true,
+        "variant": "correct"
+      },
+      "counts": {
+        "expanded": 11263,
+        "max_depth": 11,
+        "queued": 8737,
+        "states": 20000,
+        "transitions": 70135
+      },
+      "coverage": {
+        "max_full_trace_depth": 42,
+        "suffix_phases_checked": [
+          "ACCEPT",
+          "CONTENT",
+          "FINALIZE",
+          "PREPARE",
+          "RECOVER_OBSERVE",
+          "RECOVER_RESOLVE"
+        ]
+      },
+      "name": "n3-nonprefix-accept",
+      "prefix_complete": true,
+      "prefix_length": 31,
+      "prefix_requested_length": 31,
+      "scope": "selected-prefix-suffix",
+      "status": "Inconclusive",
+      "truncation": "max_states"
+    },
+    {
+      "config": {
+        "crashes": 2,
+        "fault_budget": 1,
+        "n": 4,
+        "operations": 1,
+        "replicas": 2,
+        "retries": true,
+        "variant": "correct"
+      },
+      "counts": {
+        "expanded": 10382,
+        "max_depth": 7,
+        "queued": 9618,
+        "states": 20000,
+        "transitions": 73027
+      },
+      "coverage": {
+        "max_full_trace_depth": 42,
+        "suffix_phases_checked": [
+          "ACCEPT",
+          "RECOVER_OBSERVE",
+          "RECOVER_RESOLVE"
+        ]
+      },
+      "name": "n4-nonprefix-accept",
+      "prefix_complete": true,
+      "prefix_length": 35,
+      "prefix_requested_length": 35,
+      "scope": "selected-prefix-suffix",
+      "status": "Inconclusive",
+      "truncation": "max_states"
+    },
+    {
+      "config": {
+        "crashes": 2,
+        "fault_budget": 1,
+        "n": 3,
+        "operations": 1,
+        "replicas": 1,
+        "retries": true,
+        "variant": "correct"
+      },
+      "counts": {
+        "expanded": 12148,
+        "max_depth": 12,
+        "queued": 7852,
+        "states": 20000,
+        "transitions": 55001
+      },
+      "coverage": {
+        "max_full_trace_depth": 39,
+        "suffix_phases_checked": [
+          "ACCEPT",
+          "CONTENT",
+          "PREPARE",
+          "RECOVER_ABORT",
+          "RECOVER_OBSERVE",
+          "RECOVER_RESOLVE"
+        ]
+      },
+      "name": "n3-recovery-preserve",
+      "prefix_complete": true,
+      "prefix_length": 27,
+      "prefix_requested_length": 27,
+      "scope": "selected-prefix-suffix",
+      "status": "Inconclusive",
+      "truncation": "max_states"
+    },
+    {
+      "config": {
+        "crashes": 2,
+        "fault_budget": 1,
+        "n": 3,
+        "operations": 1,
+        "replicas": 1,
+        "retries": true,
+        "variant": "correct"
+      },
+      "counts": {
+        "expanded": 13878,
+        "max_depth": 10,
+        "queued": 6122,
+        "states": 20000,
+        "transitions": 48790
+      },
+      "coverage": {
+        "max_full_trace_depth": 34,
+        "suffix_phases_checked": [
+          "DONE",
+          "RECOVER_ABORT",
+          "RECOVER_OBSERVE",
+          "RESOLVED"
+        ]
+      },
+      "name": "n3-abort-resolution-write",
+      "prefix_complete": true,
+      "prefix_length": 24,
+      "prefix_requested_length": 24,
+      "scope": "selected-prefix-suffix",
+      "status": "Inconclusive",
+      "truncation": "max_states"
+    },
+    {
+      "config": {
+        "crashes": 2,
+        "fault_budget": 1,
+        "n": 3,
+        "operations": 1,
+        "replicas": 2,
+        "retries": true,
+        "variant": "correct"
+      },
+      "counts": {
+        "expanded": 12655,
+        "max_depth": 8,
+        "queued": 7345,
+        "states": 20000,
+        "transitions": 74073
+      },
+      "coverage": {
+        "max_full_trace_depth": 70,
+        "suffix_phases_checked": [
+          "ACCEPT",
+          "PREPARE",
+          "PUBLICATION",
+          "RECOVER_OBSERVE",
+          "RECOVER_RESOLVE"
+        ]
+      },
+      "name": "n3-single-publication",
+      "prefix_complete": true,
+      "prefix_length": 62,
+      "prefix_requested_length": 62,
+      "scope": "selected-prefix-suffix",
+      "status": "Inconclusive",
+      "truncation": "max_states"
+    }
+  ],
+  "schema": "zxs-publication-model-deep-validation-v1",
+  "scope": "selected-prefix-suffix, never root exhaustiveness",
+  "tool_commit": "0c4b4d37a5b751ff51824df82e021fd8a2ef26b0",
+  "validation_failed": false
+}

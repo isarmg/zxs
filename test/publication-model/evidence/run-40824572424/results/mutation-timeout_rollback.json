@@ -1,0 +1,126 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "timeout_rollback"
+  },
+  "counts": {
+    "expanded": 12,
+    "max_depth": 12,
+    "queued": 1,
+    "states": 13,
+    "transitions": 13
+  },
+  "elapsed_seconds": 0.001218690000001743,
+  "limits": {
+    "max_depth": 220,
+    "max_seconds": 45,
+    "max_states": 80000,
+    "max_transitions": 900000
+  },
+  "schema": "zxs-publication-model-search-v1",
+  "scope": "declared finite abstraction only",
+  "status": "Counterexample",
+  "trace": {
+    "config": {
+      "crashes": 0,
+      "fault_budget": 0,
+      "n": 1,
+      "operations": 1,
+      "replicas": 1,
+      "retries": true,
+      "variant": "timeout_rollback"
+    },
+    "initial_digest": "2dc1c0dcebde45172023d8e84cae918f687728eecb9e40a634f3265bb892a2b0",
+    "schema": "zxs-publication-model-trace-v1",
+    "steps": [
+      {
+        "action": "CONTENT:0:write",
+        "state_digest": "4039d5fec4351bd2076b0e91ba84e4c7cf39f36a169d2ff2cad6bbcc1f66d374"
+      },
+      {
+        "action": "CONTENT:0:file_sync",
+        "state_digest": "0d9af90e13cb183ea8acac523f556143a60758979a246102f7814faf036964b6"
+      },
+      {
+        "action": "CONTENT:0:install",
+        "state_digest": "64a941324cda64bc52deaa7bdb06459ff6e81b811eb16d4aaff0f512f337eb45"
+      },
+      {
+        "action": "CONTENT:0:directory_sync",
+        "state_digest": "9f4b2cb5c650208d8c339d4547d3a1542e5c3b004a4fb76ce79f8b29173cbc0c"
+      },
+      {
+        "action": "barrier:CONTENT",
+        "state_digest": "a943fcadbb6d7f3c42e435996d8fc380590c312b9fc8d3e88459d6eb46ff081a"
+      },
+      {
+        "action": "PREPARE:0:write",
+        "state_digest": "2a45e2ded2e4663e32b0382100684ac1d15403d61848a9fcdfd9427520c89210"
+      },
+      {
+        "action": "PREPARE:0:file_sync",
+        "state_digest": "85ba4b6f9c714c9e6e058380617cf5ceef8bc50be37519b41be506e098981e32"
+      },
+      {
+        "action": "PREPARE:0:install",
+        "state_digest": "e31973a5f0365e59ed3d49af072f3959300fb02c2d4f93c2183562eaf7be76bd"
+      },
+      {
+        "action": "PREPARE:0:directory_sync",
+        "state_digest": "c07ee5ceab2a830cd6d1c07f899eb223dfdcca20861c19e7fd3c11e0c529e017"
+      },
+      {
+        "action": "barrier:PREPARE",
+        "state_digest": "75251eef3694d90c74a294c5986c574b62842c76faac966437b654ec9427a7ec"
+      },
+      {
+        "action": "issue_accept",
+        "state_digest": "abe871ae8bddde33ddc3e3b2478b806acf9e3bc124058fec01e7e95ba8958164"
+      },
+      {
+        "action": "mutant:timeout_rollback",
+        "state_digest": "e9e7fc567435346809613abcf1bf7553c1694119574c22970b1bdc6c62f3f1aa"
+      }
+    ],
+    "violations": [
+      {
+        "message": "slot 0: ACCEPT was issued but abort has no complete fixed-Q absence evidence",
+        "name": "no_timeout_abort",
+        "spec": "10.4; 10.7; 10.11"
+      },
+      {
+        "message": "slot 0: aborted result has no complete fixed-Q absence evidence",
+        "name": "abort_resolution",
+        "spec": "10.7"
+      },
+      {
+        "message": "slot 0: aborted result has no fixed-Q durable resolution",
+        "name": "abort_resolution",
+        "spec": "10.7; 10.8"
+      }
+    ]
+  },
+  "truncation": null,
+  "violations": [
+    {
+      "message": "slot 0: ACCEPT was issued but abort has no complete fixed-Q absence evidence",
+      "name": "no_timeout_abort",
+      "spec": "10.4; 10.7; 10.11"
+    },
+    {
+      "message": "slot 0: aborted result has no complete fixed-Q absence evidence",
+      "name": "abort_resolution",
+      "spec": "10.7"
+    },
+    {
+      "message": "slot 0: aborted result has no fixed-Q durable resolution",
+      "name": "abort_resolution",
+      "spec": "10.7; 10.8"
+    }
+  ]
+}

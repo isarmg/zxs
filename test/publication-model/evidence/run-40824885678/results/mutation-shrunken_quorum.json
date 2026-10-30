@@ -1,0 +1,142 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 1,
+    "n": 2,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "shrunken_quorum"
+  },
+  "counts": {
+    "expanded": 2835,
+    "max_depth": 21,
+    "queued": 419,
+    "states": 3254,
+    "transitions": 5502
+  },
+  "elapsed_seconds": 0.1849182159999998,
+  "limits": {
+    "max_depth": 220,
+    "max_seconds": 45,
+    "max_states": 80000,
+    "max_transitions": 900000
+  },
+  "schema": "zxs-publication-model-search-v1",
+  "scope": "declared finite abstraction only",
+  "status": "Counterexample",
+  "trace": {
+    "config": {
+      "crashes": 0,
+      "fault_budget": 1,
+      "n": 2,
+      "operations": 1,
+      "replicas": 1,
+      "retries": true,
+      "variant": "shrunken_quorum"
+    },
+    "initial_digest": "ecbe9cb5e76b714164cbfed6c9cfdf392c5dff7015aaf255688fe1d9d4c9dac2",
+    "schema": "zxs-publication-model-trace-v1",
+    "steps": [
+      {
+        "action": "CONTENT:0:write",
+        "state_digest": "81481abe028f14e146ee63cfd6a8508c21d77ef7b78529efdbb4aa788a64618d"
+      },
+      {
+        "action": "CONTENT:0:file_sync",
+        "state_digest": "acd82bfdf1a29c011bca580c64894bcc8931378419fc8a37c362e2083b516a7b"
+      },
+      {
+        "action": "CONTENT:0:install",
+        "state_digest": "8141fa5edf000405694f95f2aa0205c00a535de108c7d1d3b76ab271367e154f"
+      },
+      {
+        "action": "CONTENT:0:directory_sync",
+        "state_digest": "d861cd06ad0525589bbeb35c2345979ee73bc1304cc900295f9981a86b7f3a5a"
+      },
+      {
+        "action": "barrier:CONTENT",
+        "state_digest": "a9215f63e3e30e26092fd7dd389e01d0208cef045a4bfdad3b9c173723bb90c5"
+      },
+      {
+        "action": "PREPARE:0:write",
+        "state_digest": "c34b3d589cd9a2b3eb0d6320c0e8d68693bbf065cc49fd5b0f680f008dcd7ab0"
+      },
+      {
+        "action": "PREPARE:0:file_sync",
+        "state_digest": "26e7d86f6dbfcc85b2eebccbf34ff93ff30097b1636224519b05521b1f7d77eb"
+      },
+      {
+        "action": "PREPARE:0:install",
+        "state_digest": "a49952b4f4276a2370fcb1d6489bb376d9029ea7dcd9ee93b87c26a50f744b12"
+      },
+      {
+        "action": "PREPARE:0:directory_sync",
+        "state_digest": "8dd65b706472f5364327472874e20365958ea58b2ebc77d4fd47543542713ecc"
+      },
+      {
+        "action": "PREPARE:1:write",
+        "state_digest": "ad87adf4df5379af48619a131c1581712b714f50d3db754a89b833322577abb1"
+      },
+      {
+        "action": "PREPARE:1:file_sync",
+        "state_digest": "1eb33c186d6c58e762482190b21e4055ead62ace29ca4da90da93abc59b3db51"
+      },
+      {
+        "action": "PREPARE:1:install",
+        "state_digest": "49c1c1211cdf81cd2e082479651663fb602f096f184a9742cc98a5d2a0d32ffb"
+      },
+      {
+        "action": "PREPARE:1:directory_sync",
+        "state_digest": "a8f0c1d5c31c48eea69b6b8861dd9293d4d0fd690c6d9bde98d73e1acfe6edeb"
+      },
+      {
+        "action": "barrier:PREPARE",
+        "state_digest": "272a924f915c9fa2c466dff160c29c3d97dec639893ac8a5be001d1ec98ce279"
+      },
+      {
+        "action": "issue_accept",
+        "state_digest": "fd2a538d4c693bebf4156a8c0cf2d24f80a0d393dcf64c902ecf8a4aa78543f2"
+      },
+      {
+        "action": "ACCEPT:0:write",
+        "state_digest": "9143a0944157aa35f8be779fe9ff429a516327718588cab2574097b4856980f1"
+      },
+      {
+        "action": "ACCEPT:0:file_sync",
+        "state_digest": "b612949a9f8dd1a75a91ffaedfc1befb20a3a55289cc0eebbcecdf00e0898157"
+      },
+      {
+        "action": "ACCEPT:0:install",
+        "state_digest": "b242c762283905948840f8606497d1b6dc86fc50310a45966b6cbb237edadc07"
+      },
+      {
+        "action": "ACCEPT:0:directory_sync",
+        "state_digest": "c2d45d9263b500a2351d4b7a6cc2ec47f8f1bb4798a614284953ad1ba1a4bdaf"
+      },
+      {
+        "action": "disk:offline:0",
+        "state_digest": "69dadd27992ee8cf7ee640db80135e0615be67b43352940f2f332c8b10187749"
+      },
+      {
+        "action": "mutant:decide_using_online_quorum",
+        "state_digest": "9da74a2320353b08ea81f178fac775519bef21853c8c30052a456a0a23af7e18"
+      }
+    ],
+    "violations": [
+      {
+        "message": "slot 0: decision witness has fewer than fixed Q distinct members",
+        "name": "fixed_quorum",
+        "spec": "10.2; 10.6; 10.7"
+      }
+    ]
+  },
+  "truncation": null,
+  "violations": [
+    {
+      "message": "slot 0: decision witness has fewer than fixed Q distinct members",
+      "name": "fixed_quorum",
+      "spec": "10.2; 10.6; 10.7"
+    }
+  ]
+}

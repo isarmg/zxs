@@ -1,0 +1,78 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "omit_sync"
+  },
+  "counts": {
+    "expanded": 5,
+    "max_depth": 4,
+    "queued": 0,
+    "states": 5,
+    "transitions": 6
+  },
+  "elapsed_seconds": 0.0007138440000034052,
+  "limits": {
+    "max_depth": 220,
+    "max_seconds": 45,
+    "max_states": 80000,
+    "max_transitions": 900000
+  },
+  "schema": "zxs-publication-model-search-v1",
+  "scope": "declared finite abstraction only",
+  "status": "Counterexample",
+  "trace": {
+    "config": {
+      "crashes": 0,
+      "fault_budget": 0,
+      "n": 1,
+      "operations": 1,
+      "replicas": 1,
+      "retries": true,
+      "variant": "omit_sync"
+    },
+    "initial_digest": "bec25f153b2387b68e72adba40b1e18389e756705ea7198ae2fc32db373a66f7",
+    "schema": "zxs-publication-model-trace-v1",
+    "steps": [
+      {
+        "action": "CONTENT:0:write",
+        "state_digest": "f17628032a12426eafe82d085cc548832c75095fa9a597e441292c92b451a6fd"
+      },
+      {
+        "action": "CONTENT:0:file_sync",
+        "state_digest": "66dd4c7cbec1a0999e87e535441c185655729d092362b697fcaca83f43467c40"
+      },
+      {
+        "action": "CONTENT:0:install",
+        "state_digest": "1ab74446f03534792e1fa201bd0f568dfdd0f1b393d63b13612bcf35447bf1b7"
+      },
+      {
+        "action": "CONTENT:0:skip_directory_sync",
+        "state_digest": "dbae069267920d1004cd343f3970cefd9f5d3fbe14fe2cd17089c10c87442fed"
+      },
+      {
+        "action": "barrier:CONTENT",
+        "state_digest": "08e45de9369ac171818a03fcc6890acc923e7bb8d77c3b4d29e2a230bbbb7439"
+      }
+    ],
+    "violations": [
+      {
+        "message": "CONTENT: member 0 advanced without durable complete bytes and directory entry",
+        "name": "durability_barrier",
+        "spec": "10.3; 10.5; 10.10"
+      }
+    ]
+  },
+  "truncation": null,
+  "violations": [
+    {
+      "message": "CONTENT: member 0 advanced without durable complete bytes and directory entry",
+      "name": "durability_barrier",
+      "spec": "10.3; 10.5; 10.10"
+    }
+  ]
+}

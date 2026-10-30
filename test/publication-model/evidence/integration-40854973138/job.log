@@ -1,0 +1,515 @@
+﻿2026-10-29T10:07:08.7954693Z Current runner version: '2.338.0'
+2026-10-29T10:07:08.7975553Z ##[group]Runner Image Provisioner
+2026-10-29T10:07:08.7976239Z Hosted Compute Agent
+2026-10-29T10:07:08.7976667Z Version: 20261021.618
+2026-10-29T10:07:08.7977106Z Commit: 21505ad2541d5be6135ed84fc33697146cf75b8e
+2026-10-29T10:07:08.7977939Z Build Date: 2026-10-21T00:45:21Z
+2026-10-29T10:07:08.7978417Z Worker ID: {1865d212-b2c4-48e3-8b77-0dd547042987}
+2026-10-29T10:07:08.7978965Z Region: southcentralus
+2026-10-29T10:07:08.7979388Z Cloud: Azure
+2026-10-29T10:07:08.7979775Z ##[endgroup]
+2026-10-29T10:07:08.7980796Z ##[group]Operating System
+2026-10-29T10:07:08.7981219Z Ubuntu
+2026-10-29T10:07:08.7981576Z 24.04.5
+2026-10-29T10:07:08.7981998Z LTS
+2026-10-29T10:07:08.7982361Z ##[endgroup]
+2026-10-29T10:07:08.7982803Z ##[group]Runner Image
+2026-10-29T10:07:08.7983237Z Image: ubuntu-24.04
+2026-10-29T10:07:08.7983643Z Version: 20261025.353.1
+2026-10-29T10:07:08.7984585Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261025.353/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-29T10:07:08.7985962Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261025.353
+2026-10-29T10:07:08.7986624Z ##[endgroup]
+2026-10-29T10:07:08.7987580Z ##[group]GITHUB_TOKEN Permissions
+2026-10-29T10:07:08.7989198Z Contents: read
+2026-10-29T10:07:08.7989624Z Metadata: read
+2026-10-29T10:07:08.7990078Z ##[endgroup]
+2026-10-29T10:07:08.7991857Z Secret source: Actions
+2026-10-29T10:07:08.7992525Z Cache mode: write
+2026-10-29T10:07:08.7993077Z Prepare workflow directory
+2026-10-29T10:07:08.8265521Z Prepare all required actions
+2026-10-29T10:07:08.8314782Z Getting action download info
+2026-10-29T10:07:09.1024832Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-10-29T10:07:09.1967595Z Download action repository 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' (SHA:cf430e030ddbb5b0abf93d22962f4752f3646cd9)
+2026-10-29T10:07:09.3665402Z Complete job name: static-integration
+2026-10-29T10:07:09.4262852Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-10-29T10:07:09.4263435Z with:
+2026-10-29T10:07:09.4263706Z   repository: isarmg/zxs
+2026-10-29T10:07:09.4264037Z   ref: 6a778a6374aeed236d15782e6d3bdd13907ae83c
+2026-10-29T10:07:09.4264400Z   fetch-depth: 3
+2026-10-29T10:07:09.4264684Z   persist-credentials: false
+2026-10-29T10:07:09.4267134Z   token: ***
+2026-10-29T10:07:09.4267613Z   ssh-strict: true
+2026-10-29T10:07:09.4267884Z   ssh-user: git
+2026-10-29T10:07:09.4268149Z   clean: true
+2026-10-29T10:07:09.4268428Z   sparse-checkout-cone-mode: true
+2026-10-29T10:07:09.4268747Z   fetch-tags: false
+2026-10-29T10:07:09.4269020Z   show-progress: true
+2026-10-29T10:07:09.4269298Z   lfs: false
+2026-10-29T10:07:09.4269552Z   submodules: false
+2026-10-29T10:07:09.4269831Z   set-safe-directory: true
+2026-10-29T10:07:09.4270147Z   allow-unsafe-pr-checkout: false
+2026-10-29T10:07:09.4270554Z ##[endgroup]
+2026-10-29T10:07:09.6783306Z Syncing repository: isarmg/zxs
+2026-10-29T10:07:09.6784682Z ##[group]Getting Git version info
+2026-10-29T10:07:09.6785105Z Working directory is '/home/runner/work/zxs/zxs'
+2026-10-29T10:07:09.6785778Z [command]/usr/bin/git version
+2026-10-29T10:07:09.6835411Z git version 2.56.0
+2026-10-29T10:07:09.6861581Z ##[endgroup]
+2026-10-29T10:07:09.6875762Z Temporarily overriding HOME='/home/runner/work/_temp/e47d2a25-8c6e-4482-924b-80ce07e5e897' before making global git config changes
+2026-10-29T10:07:09.6877537Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-29T10:07:09.6881323Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/zxs/zxs
+2026-10-29T10:07:09.6933973Z Deleting the contents of '/home/runner/work/zxs/zxs'
+2026-10-29T10:07:09.6937146Z ##[group]Determining repository object format
+2026-10-29T10:07:09.6938681Z ##[endgroup]
+2026-10-29T10:07:09.6939587Z ##[group]Initializing the repository
+2026-10-29T10:07:09.6952479Z [command]/usr/bin/git init /home/runner/work/zxs/zxs
+2026-10-29T10:07:09.7204467Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-29T10:07:09.7205354Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-29T10:07:09.7205971Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-29T10:07:09.7206469Z hint: call:
+2026-10-29T10:07:09.7206777Z hint:
+2026-10-29T10:07:09.7207294Z hint: 	git config --global init.defaultBranch <name>
+2026-10-29T10:07:09.7207887Z hint:
+2026-10-29T10:07:09.7208267Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-29T10:07:09.7208873Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-29T10:07:09.7209412Z hint:
+2026-10-29T10:07:09.7209845Z hint: 	git branch -m <name>
+2026-10-29T10:07:09.7210338Z hint:
+2026-10-29T10:07:09.7210992Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-29T10:07:09.7213194Z Initialized empty Git repository in /home/runner/work/zxs/zxs/.git/
+2026-10-29T10:07:09.7225193Z [command]/usr/bin/git remote add origin https://github.com/isarmg/zxs
+2026-10-29T10:07:09.7287845Z ##[endgroup]
+2026-10-29T10:07:09.7288500Z ##[group]Disabling automatic garbage collection
+2026-10-29T10:07:09.7291673Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-29T10:07:09.7335891Z ##[endgroup]
+2026-10-29T10:07:09.7337606Z ##[group]Setting up auth
+2026-10-29T10:07:09.7338364Z Removing SSH command configuration
+2026-10-29T10:07:09.7340311Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-29T10:07:09.7393245Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-29T10:07:09.7723854Z Removing HTTP extra header
+2026-10-29T10:07:09.7729505Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-29T10:07:09.7774907Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-29T10:07:09.7995481Z Removing includeIf entries pointing to credentials config files
+2026-10-29T10:07:09.8000055Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-29T10:07:09.8050953Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-29T10:07:09.8276171Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-28b224bb-31f7-4d1a-93cd-a21e6d392fb1.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-29T10:07:09.8338250Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/zxs/zxs/.git.path /home/runner/work/_temp/git-credentials-28b224bb-31f7-4d1a-93cd-a21e6d392fb1.config
+2026-10-29T10:07:09.8407145Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/zxs/zxs/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-28b224bb-31f7-4d1a-93cd-a21e6d392fb1.config
+2026-10-29T10:07:09.8472000Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-28b224bb-31f7-4d1a-93cd-a21e6d392fb1.config
+2026-10-29T10:07:09.8520915Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-28b224bb-31f7-4d1a-93cd-a21e6d392fb1.config
+2026-10-29T10:07:09.8568095Z ##[endgroup]
+2026-10-29T10:07:09.8568934Z ##[group]Fetching the repository
+2026-10-29T10:07:09.8574387Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=3 origin 6a778a6374aeed236d15782e6d3bdd13907ae83c
+2026-10-29T10:07:14.4705488Z From https://github.com/isarmg/zxs
+2026-10-29T10:07:14.4707081Z  * branch              6a778a6374aeed236d15782e6d3bdd13907ae83c -> FETCH_HEAD
+2026-10-29T10:07:14.4713374Z [command]/usr/bin/git rev-parse --verify --quiet 6a778a6374aeed236d15782e6d3bdd13907ae83c^{object}
+2026-10-29T10:07:14.4755154Z 6a778a6374aeed236d15782e6d3bdd13907ae83c
+2026-10-29T10:07:14.4760253Z ##[endgroup]
+2026-10-29T10:07:14.4760771Z ##[group]Determining the checkout info
+2026-10-29T10:07:14.4761305Z ##[endgroup]
+2026-10-29T10:07:14.4764580Z [command]/usr/bin/git sparse-checkout disable
+2026-10-29T10:07:14.4823109Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-29T10:07:14.4866466Z ##[group]Checking out the ref
+2026-10-29T10:07:14.4870201Z [command]/usr/bin/git checkout --progress --force 6a778a6374aeed236d15782e6d3bdd13907ae83c
+2026-10-29T10:07:15.5076021Z Updating files:  66% (10979/16426)
+2026-10-29T10:07:15.5264508Z Updating files:  67% (11006/16426)
+2026-10-29T10:07:15.5450256Z Updating files:  68% (11170/16426)
+2026-10-29T10:07:15.5536824Z Updating files:  69% (11334/16426)
+2026-10-29T10:07:15.5660632Z Updating files:  70% (11499/16426)
+2026-10-29T10:07:15.5747535Z Updating files:  71% (11663/16426)
+2026-10-29T10:07:15.5802909Z Updating files:  72% (11827/16426)
+2026-10-29T10:07:15.5914545Z Updating files:  73% (11991/16426)
+2026-10-29T10:07:15.6011233Z Updating files:  74% (12156/16426)
+2026-10-29T10:07:15.6074612Z Updating files:  75% (12320/16426)
+2026-10-29T10:07:15.6168676Z Updating files:  76% (12484/16426)
+2026-10-29T10:07:15.6266308Z Updating files:  77% (12649/16426)
+2026-10-29T10:07:15.6391255Z Updating files:  78% (12813/16426)
+2026-10-29T10:07:15.6485125Z Updating files:  79% (12977/16426)
+2026-10-29T10:07:15.6599683Z Updating files:  80% (13141/16426)
+2026-10-29T10:07:15.6695467Z Updating files:  81% (13306/16426)
+2026-10-29T10:07:15.6775174Z Updating files:  82% (13470/16426)
+2026-10-29T10:07:15.7061123Z Updating files:  83% (13634/16426)
+2026-10-29T10:07:15.7220002Z Updating files:  84% (13798/16426)
+2026-10-29T10:07:15.7311267Z Updating files:  85% (13963/16426)
+2026-10-29T10:07:15.7437716Z Updating files:  86% (14127/16426)
+2026-10-29T10:07:15.7553195Z Updating files:  87% (14291/16426)
+2026-10-29T10:07:15.7662518Z Updating files:  88% (14455/16426)
+2026-10-29T10:07:15.7737092Z Updating files:  89% (14620/16426)
+2026-10-29T10:07:15.7837752Z Updating files:  90% (14784/16426)
+2026-10-29T10:07:15.8050993Z Updating files:  91% (14948/16426)
+2026-10-29T10:07:15.8288421Z Updating files:  92% (15112/16426)
+2026-10-29T10:07:15.8357312Z Updating files:  93% (15277/16426)
+2026-10-29T10:07:15.8453203Z Updating files:  94% (15441/16426)
+2026-10-29T10:07:15.8580692Z Updating files:  95% (15605/16426)
+2026-10-29T10:07:15.8652917Z Updating files:  96% (15769/16426)
+2026-10-29T10:07:15.8760247Z Updating files:  97% (15934/16426)
+2026-10-29T10:07:15.8856283Z Updating files:  98% (16098/16426)
+2026-10-29T10:07:15.8943546Z Updating files:  99% (16262/16426)
+2026-10-29T10:07:15.8943796Z Updating files: 100% (16426/16426)
+2026-10-29T10:07:15.8946937Z Updating files: 100% (16426/16426), done.
+2026-10-29T10:07:15.9440356Z Note: switching to '6a778a6374aeed236d15782e6d3bdd13907ae83c'.
+2026-10-29T10:07:15.9440682Z 
+2026-10-29T10:07:15.9440879Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-29T10:07:15.9441350Z changes and commit them, and you can discard any commits you make in this
+2026-10-29T10:07:15.9441849Z state without impacting any branches by switching back to a branch.
+2026-10-29T10:07:15.9447625Z 
+2026-10-29T10:07:15.9448291Z If you want to create a new branch to retain commits you create, you may
+2026-10-29T10:07:15.9448762Z do so (now or later) by using -c with the switch command. Example:
+2026-10-29T10:07:15.9449039Z 
+2026-10-29T10:07:15.9449152Z   git switch -c <new-branch-name>
+2026-10-29T10:07:15.9449325Z 
+2026-10-29T10:07:15.9449430Z Or undo this operation with:
+2026-10-29T10:07:15.9449591Z 
+2026-10-29T10:07:15.9449676Z   git switch -
+2026-10-29T10:07:15.9449793Z 
+2026-10-29T10:07:15.9450001Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-29T10:07:15.9450978Z 
+2026-10-29T10:07:15.9451244Z HEAD is now at 6a778a63 ci(model): run nonempty fast selftests in existing static gate [skip ci]
+2026-10-29T10:07:15.9523763Z ##[endgroup]
+2026-10-29T10:07:15.9591748Z [command]/usr/bin/git log -1 --format=%H
+2026-10-29T10:07:15.9624889Z 6a778a6374aeed236d15782e6d3bdd13907ae83c
+2026-10-29T10:07:15.9636479Z ##[group]Removing auth
+2026-10-29T10:07:15.9636758Z Removing SSH command configuration
+2026-10-29T10:07:15.9638326Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-29T10:07:15.9683398Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-29T10:07:15.9937105Z Removing HTTP extra header
+2026-10-29T10:07:15.9944221Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-29T10:07:15.9993797Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-29T10:07:16.0250555Z Removing includeIf entries pointing to credentials config files
+2026-10-29T10:07:16.0253353Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-29T10:07:16.0296742Z includeif.gitdir:/home/runner/work/zxs/zxs/.git.path
+2026-10-29T10:07:16.0297185Z includeif.gitdir:/home/runner/work/zxs/zxs/.git/worktrees/*.path
+2026-10-29T10:07:16.0297702Z includeif.gitdir:/github/workspace/.git.path
+2026-10-29T10:07:16.0298033Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-29T10:07:16.0306662Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/zxs/zxs/.git.path
+2026-10-29T10:07:16.0347050Z /home/runner/work/_temp/git-credentials-28b224bb-31f7-4d1a-93cd-a21e6d392fb1.config
+2026-10-29T10:07:16.0357209Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/zxs/zxs/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-28b224bb\-31f7\-4d1a\-93cd\-a21e6d392fb1\.config
+2026-10-29T10:07:16.0409380Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/zxs/zxs/.git/worktrees/*.path
+2026-10-29T10:07:16.0446973Z /home/runner/work/_temp/git-credentials-28b224bb-31f7-4d1a-93cd-a21e6d392fb1.config
+2026-10-29T10:07:16.0455872Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/zxs/zxs/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-28b224bb\-31f7\-4d1a\-93cd\-a21e6d392fb1\.config
+2026-10-29T10:07:16.0505655Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-29T10:07:16.0545513Z /github/runner_temp/git-credentials-28b224bb-31f7-4d1a-93cd-a21e6d392fb1.config
+2026-10-29T10:07:16.0551224Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-28b224bb\-31f7\-4d1a\-93cd\-a21e6d392fb1\.config
+2026-10-29T10:07:16.0597712Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-29T10:07:16.0632953Z /github/runner_temp/git-credentials-28b224bb-31f7-4d1a-93cd-a21e6d392fb1.config
+2026-10-29T10:07:16.0639238Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-28b224bb\-31f7\-4d1a\-93cd\-a21e6d392fb1\.config
+2026-10-29T10:07:16.0687630Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-29T10:07:16.0931192Z Removing credentials config '/home/runner/work/_temp/git-credentials-28b224bb-31f7-4d1a-93cd-a21e6d392fb1.config'
+2026-10-29T10:07:16.0940619Z ##[endgroup]
+2026-10-29T10:07:16.1123248Z ##[group]Run set -euo pipefail
+2026-10-29T10:07:16.1123520Z [36;1mset -euo pipefail[0m
+2026-10-29T10:07:16.1123932Z [36;1mmkdir -p /tmp/publication-integration-evidence[0m
+2026-10-29T10:07:16.1124243Z [36;1mpython3 --version | tee /tmp/publication-integration-evidence/python.txt[0m
+2026-10-29T10:07:16.1124598Z [36;1mgit rev-parse HEAD | tee /tmp/publication-integration-evidence/tested-commit.txt[0m
+2026-10-29T10:07:16.1124984Z [36;1mprintf '%s\n' "$GITHUB_SHA" > /tmp/publication-integration-evidence/validation-commit.txt[0m
+2026-10-29T10:07:16.1125359Z [36;1mgit log -3 --format='%H %P %s' | tee /tmp/publication-integration-evidence/ancestry.txt[0m
+2026-10-29T10:07:16.1125697Z [36;1mtest "$(git rev-parse HEAD~2)" = 209f31a4122174129bcf40b56c0598ac61e66352[0m
+2026-10-29T10:07:16.1126020Z [36;1mgit fetch --no-tags --depth=1 origin 47655937bbd1a3c8d6638e0260a793b63450bc29[0m
+2026-10-29T10:07:16.1126622Z [36;1mgit diff --exit-code 47655937bbd1a3c8d6638e0260a793b63450bc29 4e726896938590c831108ee31dbfd10705a55cf6 -- tools/publication-model test/publication-model docs/validation/publication-model.md[0m
+2026-10-29T10:07:16.1127737Z [36;1mgit diff --exit-code 47655937bbd1a3c8d6638e0260a793b63450bc29 HEAD -- tools/publication-model test/publication-model ':(exclude)tools/publication-model/selftest.py' ':(exclude)test/publication-model/validation.yml.template'[0m
+2026-10-29T10:07:16.1128562Z [36;1mgit diff --exit-code 209f31a4122174129bcf40b56c0598ac61e66352 HEAD -- src Cargo.toml Cargo.lock rust-toolchain.toml .cargo .github/workflows .github/architecture-policy.json[0m
+2026-10-29T10:07:16.1129190Z [36;1mgit diff --name-status 209f31a4122174129bcf40b56c0598ac61e66352 HEAD > /tmp/publication-integration-evidence/changed-paths.txt[0m
+2026-10-29T10:07:16.1129698Z [36;1mgit diff --stat 209f31a4122174129bcf40b56c0598ac61e66352 HEAD > /tmp/publication-integration-evidence/diff-stat.txt[0m
+2026-10-29T10:07:16.1130259Z [36;1mprintf '%s\n' 'Exact reviewed import, original evidence and unchanged model/test sources verified.' > /tmp/publication-integration-evidence/provenance.txt[0m
+2026-10-29T10:07:16.1152151Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-29T10:07:16.1152375Z ##[endgroup]
+2026-10-29T10:07:16.1230551Z Python 3.12.3
+2026-10-29T10:07:16.1246412Z 6a778a6374aeed236d15782e6d3bdd13907ae83c
+2026-10-29T10:07:16.1265821Z 6a778a6374aeed236d15782e6d3bdd13907ae83c 4e726896938590c831108ee31dbfd10705a55cf6 ci(model): run nonempty fast selftests in existing static gate [skip ci]
+2026-10-29T10:07:16.1266638Z 4e726896938590c831108ee31dbfd10705a55cf6 209f31a4122174129bcf40b56c0598ac61e66352 test(model): import reviewed publication tooling with original evidence [skip ci]
+2026-10-29T10:07:16.1267195Z 209f31a4122174129bcf40b56c0598ac61e66352  fix(engine): retain object path re-export only for unit-test consumers
+2026-10-29T10:07:20.6272820Z From https://github.com/isarmg/zxs
+2026-10-29T10:07:20.6273348Z  * branch              47655937bbd1a3c8d6638e0260a793b63450bc29 -> FETCH_HEAD
+2026-10-29T10:07:20.6468861Z ##[group]Run set -euo pipefail
+2026-10-29T10:07:20.6469090Z [36;1mset -euo pipefail[0m
+2026-10-29T10:07:20.6469473Z [36;1mpython3 -m unittest discover -s test/ci -p test_check_suites.py -v 2>&1 | tee /tmp/publication-integration-evidence/gate-regressions.log[0m
+2026-10-29T10:07:20.6489157Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-29T10:07:20.6489381Z ##[endgroup]
+2026-10-29T10:07:20.9663217Z test_quality_checks_first_party_clippy_and_host_and_wasm_dependency_warnings (test_check_suites.DiagnosticGateCommands.test_quality_checks_first_party_clippy_and_host_and_wasm_dependency_warnings) ... ok
+2026-10-29T10:07:21.4131046Z test_quality_rejects_foundation_warnings_in_each_compile_stage (test_check_suites.DiagnosticGateCommands.test_quality_rejects_foundation_warnings_in_each_compile_stage) ... ok
+2026-10-29T10:07:21.6020312Z test_sdk_abort_gate_rejects_unexpected_success (test_check_suites.DiagnosticGateCommands.test_sdk_abort_gate_rejects_unexpected_success) ... ok
+2026-10-29T10:07:21.7943303Z test_sdk_abort_gate_rejects_unrelated_compile_failure (test_check_suites.DiagnosticGateCommands.test_sdk_abort_gate_rejects_unrelated_compile_failure) ... ok
+2026-10-29T10:07:22.0393559Z test_sdk_gates_compile_streams_and_then_runs_normal_tests (test_check_suites.DiagnosticGateCommands.test_sdk_gates_compile_streams_and_then_runs_normal_tests) ... ok
+2026-10-29T10:07:22.1861763Z test_sdk_rejects_warnings_before_running_test_bodies (test_check_suites.DiagnosticGateCommands.test_sdk_rejects_warnings_before_running_test_bodies) ... ok
+2026-10-29T10:07:22.1880748Z test_assertion_and_import_errors_fail (test_check_suites.PublicationModelSelftestRunner.test_assertion_and_import_errors_fail) ... ok
+2026-10-29T10:07:22.1886512Z test_discovery_exception_is_not_swallowed (test_check_suites.PublicationModelSelftestRunner.test_discovery_exception_is_not_swallowed) ... ok
+2026-10-29T10:07:22.1891041Z test_nonempty_success_is_successful (test_check_suites.PublicationModelSelftestRunner.test_nonempty_success_is_successful) ... ok
+2026-10-29T10:07:22.1894537Z test_zero_discovery_fails (test_check_suites.PublicationModelSelftestRunner.test_zero_discovery_fails) ... ok
+2026-10-29T10:07:26.9426081Z test_binding_parser_gates_run_in_language_and_sdk_data_shards (test_check_suites.SuiteCoverageTests.test_binding_parser_gates_run_in_language_and_sdk_data_shards) ... ok
+2026-10-29T10:07:27.0768798Z test_build_tools_cover_report_parsing_without_running_a_workload (test_check_suites.SuiteCoverageTests.test_build_tools_cover_report_parsing_without_running_a_workload) ... ok
+2026-10-29T10:07:27.2135354Z test_build_tools_keep_log_filter_and_formatter_regressions (test_check_suites.SuiteCoverageTests.test_build_tools_keep_log_filter_and_formatter_regressions) ... ok
+2026-10-29T10:07:29.5984058Z test_compression_family_gate_runs_once_in_shard_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_compression_family_gate_runs_once_in_shard_and_aggregate_only) ... ok
+2026-10-29T10:07:31.9698521Z test_concurrent_collections_gate_runs_once_in_async_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_concurrent_collections_gate_runs_once_in_async_and_aggregate_only) ... ok
+2026-10-29T10:07:32.1204573Z test_contracts_exercise_both_json_map_backends_and_feature_unions (test_check_suites.SuiteCoverageTests.test_contracts_exercise_both_json_map_backends_and_feature_unions) ... ok
+2026-10-29T10:07:32.2691769Z test_crypto_budget_retains_full_ring_matrix (test_check_suites.SuiteCoverageTests.test_crypto_budget_retains_full_ring_matrix) ... ok
+2026-10-29T10:07:34.6054394Z test_date_time_family_gate_runs_once_in_shard_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_date_time_family_gate_runs_once_in_shard_and_aggregate_only) ... ok
+2026-10-29T10:07:34.9665327Z test_dependency_documentation_is_verified_in_static_and_source_suites (test_check_suites.SuiteCoverageTests.test_dependency_documentation_is_verified_in_static_and_source_suites) ... ok
+2026-10-29T10:07:37.2717758Z test_form_float_gate_runs_once_in_language_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_form_float_gate_runs_once_in_language_and_aggregate_only) ... ok
+2026-10-29T10:07:38.4731488Z test_foundation_aggregate_is_exactly_once_union_of_shards (test_check_suites.SuiteCoverageTests.test_foundation_aggregate_is_exactly_once_union_of_shards) ... ok
+2026-10-29T10:07:39.6760294Z test_foundation_shards_match_explicit_command_inventory (test_check_suites.SuiteCoverageTests.test_foundation_shards_match_explicit_command_inventory) ... ok
+2026-10-29T10:07:40.4198693Z test_full_source_tool_regressions_run_only_in_source_shard (test_check_suites.SuiteCoverageTests.test_full_source_tool_regressions_run_only_in_source_shard) ... ok
+2026-10-29T10:07:41.6804048Z test_history_io_rejects_successful_children_without_completion (test_check_suites.SuiteCoverageTests.test_history_io_rejects_successful_children_without_completion) ... ok
+2026-10-29T10:07:44.0273480Z test_http_routing_gate_runs_once_in_async_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_http_routing_gate_runs_once_in_async_and_aggregate_only) ... ok
+2026-10-29T10:07:46.3486965Z test_http_transport_gate_runs_once_in_async_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_http_transport_gate_runs_once_in_async_and_aggregate_only) ... ok
+2026-10-29T10:07:48.7436710Z test_pattern_gate_runs_once_in_language_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_pattern_gate_runs_once_in_language_and_aggregate_only) ... ok
+2026-10-29T10:07:49.0757901Z test_publication_model_selftests_run_once_in_static_only (test_check_suites.SuiteCoverageTests.test_publication_model_selftests_run_once_in_static_only) ... ok
+2026-10-29T10:07:49.0798511Z test_removed_demo_suite_fails_before_running_tools (test_check_suites.SuiteCoverageTests.test_removed_demo_suite_fails_before_running_tools) ... ok
+2026-10-29T10:07:49.3280074Z test_security_suite_revalidates_cached_scanner_and_runs_all_scans (test_check_suites.SuiteCoverageTests.test_security_suite_revalidates_cached_scanner_and_runs_all_scans) ... ok
+2026-10-29T10:07:49.3299862Z test_server_engine_integration_targets_declare_core_admission (test_check_suites.SuiteCoverageTests.test_server_engine_integration_targets_declare_core_admission) ... ok
+2026-10-29T10:07:51.6755198Z test_service_stack_gate_runs_once_in_async_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_service_stack_gate_runs_once_in_async_and_aggregate_only) ... ok
+2026-10-29T10:07:51.8433379Z test_source_gate_reparses_registered_target_closures (test_check_suites.SuiteCoverageTests.test_source_gate_reparses_registered_target_closures) ... ok
+2026-10-29T10:07:52.0373949Z test_static_gate_requires_no_rust_or_metadata_resolution (test_check_suites.SuiteCoverageTests.test_static_gate_requires_no_rust_or_metadata_resolution) ... ok
+2026-10-29T10:07:52.1853488Z test_static_stops_when_publication_model_selftests_fail (test_check_suites.SuiteCoverageTests.test_static_stops_when_publication_model_selftests_fail) ... ok
+2026-10-29T10:07:54.4923463Z test_toml_gate_runs_once_in_language_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_toml_gate_runs_once_in_language_and_aggregate_only) ... ok
+2026-10-29T10:07:56.8711568Z test_unicode_data_family_gate_runs_once_in_shard_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_unicode_data_family_gate_runs_once_in_shard_and_aggregate_only) ... ok
+2026-10-29T10:07:56.8751629Z test_unknown_foundation_shard_fails_before_running_tools (test_check_suites.SuiteCoverageTests.test_unknown_foundation_shard_fails_before_running_tools) ... ok
+2026-10-29T10:07:59.2015589Z test_url_encoding_gate_runs_once_in_shard_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_url_encoding_gate_runs_once_in_shard_and_aggregate_only) ... ok
+2026-10-29T10:08:01.5473492Z test_uuid_format_gate_runs_once_in_language_and_aggregate_only (test_check_suites.SuiteCoverageTests.test_uuid_format_gate_runs_once_in_language_and_aggregate_only) ... ok
+2026-10-29T10:08:01.5754326Z test_web_runs_unit_and_integration_tests (test_check_suites.SuiteCoverageTests.test_web_runs_unit_and_integration_tests) ... ok
+2026-10-29T10:08:01.5774089Z test_workflows_schedule_source_shard_once_after_preflight (test_check_suites.SuiteCoverageTests.test_workflows_schedule_source_shard_once_after_preflight) ... ok
+2026-10-29T10:08:01.7810876Z test_workspace_checks_native_capabilities_before_product_tests (test_check_suites.SuiteCoverageTests.test_workspace_checks_native_capabilities_before_product_tests) ... ok
+2026-10-29T10:08:01.9803238Z test_workspace_runs_both_isolated_mount_admission_regressions (test_check_suites.SuiteCoverageTests.test_workspace_runs_both_isolated_mount_admission_regressions) ... ok
+2026-10-29T10:08:01.9803957Z 
+2026-10-29T10:08:01.9804122Z ----------------------------------------------------------------------
+2026-10-29T10:08:01.9804497Z Ran 44 tests in 41.208s
+2026-10-29T10:08:01.9804638Z 
+2026-10-29T10:08:01.9804722Z OK
+2026-10-29T10:08:01.9988455Z ##[group]Run set -euo pipefail
+2026-10-29T10:08:01.9988708Z [36;1mset -euo pipefail[0m
+2026-10-29T10:08:01.9989013Z [36;1mbash .github/scripts/check.sh static 2>&1 | tee /tmp/publication-integration-evidence/static.log[0m
+2026-10-29T10:08:02.0007919Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-29T10:08:02.0008136Z ##[endgroup]
+2026-10-29T10:08:02.0301419Z Verified early env context availability in 3 workflow(s).
+2026-10-29T10:08:02.1499292Z architecture: 20 first-party owners, 31 declared edges checked
+2026-10-29T10:08:34.0095806Z Verified 224 active source trees, 107 retired and 3 superseded sources, immutable upstream provenance and one root workspace/lock.
+2026-10-29T10:08:34.3420331Z Foundation consumer index verify: 224 active sources.
+2026-10-29T10:08:34.7717592Z Dependency documentation verify: 13 pages; 224 active + 77 merged identities.
+2026-10-29T10:09:19.5007998Z .......................................................................................................................................................actual daemon/rescue/web-build CLI outputs and exit statuses match fixed baseline
+2026-10-29T10:09:19.5009095Z ctutils default/all-feature native unit tests and wasm32 compilation passed; no timing-proof claim.
+2026-10-29T10:09:19.5009651Z system-entropy: default
+2026-10-29T10:09:19.5009908Z system-entropy: fallback
+2026-10-29T10:09:19.5010164Z system-entropy: syscall
+2026-10-29T10:09:19.5010416Z system-entropy: linux_getrandom
+2026-10-29T10:09:19.5010807Z system-entropy: linux_raw
+2026-10-29T10:09:19.5011904Z system-entropy: custom
+2026-10-29T10:09:19.5012799Z system-entropy: unsupported
+2026-10-29T10:09:19.5013675Z system-entropy: browser wasm compile
+2026-10-29T10:09:19.5014484Z system-entropy: reject rndr
+2026-10-29T10:09:19.5015289Z system-entropy: reject efi_rng
+2026-10-29T10:09:19.5016099Z system-entropy: reject windows_legacy
+2026-10-29T10:09:31.7942892Z .................................................................PASS: 7 native component modes, 1 wasm compile check, 3 retired-backend rejections
+2026-10-29T10:09:31.7943596Z This matrix is not a production closure check or a browser runtime smoke test.
+2026-10-29T10:09:31.7944198Z PASS: two native fail-closed API/seeding tests; WASM rejects missing wasm_js and compiles with it
+2026-10-29T10:09:31.7944754Z WASM checks are compile gates, not a browser runtime entropy assertion.
+2026-10-29T10:09:31.7945258Z Entropy matrix passed: core/no_std/std, docs, forced failures, browser WASM compile.
+2026-10-29T10:09:31.7945777Z Checking every rustix API and Linux amd64 linux-raw syscall/ABI behavior
+2026-10-29T10:09:31.7946110Z Checking every rustix API and Linux amd64 libc syscall/ABI behavior
+2026-10-29T10:09:31.7956524Z ...Checking every rustix API and Linux amd64 linux-raw syscall/ABI behavior
+2026-10-29T10:09:31.7957181Z Checking every rustix API and Linux amd64 libc syscall/ABI behavior
+2026-10-29T10:09:31.7967239Z Checking every rustix API and Linux amd64 linux-raw syscall/ABI behavior
+2026-10-29T10:09:31.7967990Z Checking every rustix API and Linux amd64 libc syscall/ABI behavior
+2026-10-29T10:09:31.7980774Z ..Checking every retained Linux amd64 UAPI with std
+2026-10-29T10:09:31.7989965Z .Checking every retained Linux amd64 UAPI with std
+2026-10-29T10:09:31.7991033Z Checking every retained Linux amd64 UAPI with no_std
+2026-10-29T10:09:31.8002650Z .Checking every retained Linux amd64 UAPI with std
+2026-10-29T10:09:31.8004134Z Checking every retained Linux amd64 UAPI with no_std
+2026-10-29T10:09:31.8012962Z Checking every retained Linux amd64 UAPI with std
+2026-10-29T10:09:31.8013909Z Checking every retained Linux amd64 UAPI with no_std
+2026-10-29T10:09:32.5511396Z ........................................native consumer capabilities: 14 separate production/dev graphs checked
+2026-10-29T10:09:55.9184011Z .disk failure.{"reason":"compiler-message","target":{"name":"regex"},"message":{"level":"warning","message":"unused"}}.........test result: ok. 14 passed; 0 failed
+2026-10-29T10:09:55.9190561Z test result: ok. 14 passed; 0 failed
+2026-10-29T10:09:57.0561541Z .............................................................................................Confirmed rejection: cannot find attribute `serde`
+2026-10-29T10:09:57.0564548Z Confirmed rejection: serialization_core
+2026-10-29T10:09:57.8693992Z ...test result: ok. 6 passed; 0 failed;
+2026-10-29T10:09:57.8695970Z test result: ok. 2 passed; 0 failed;
+2026-10-29T10:09:57.9285415Z .............Direct SQLite production closure: 2 packages (excluding probe); no pool/runtime or URL/IDNA capabilities.
+2026-10-29T10:09:57.9286084Z Direct SQLite production closure: 2 packages (excluding probe); no pool/runtime or URL/IDNA capabilities.
+2026-10-29T10:09:58.3435408Z test unit::required ... ignoredtest unit::required ... FAILEDtest unit::required ... ok..test result: ok. 0 passed; 0 failed;test result: ok. 7 passed; 0 failed;....................................PASS tree frame geometry/query isolation, native-record capture, resize registration, burst, flush, cancellation and restoration (mock host only)
+2026-10-29T10:09:58.4187543Z ........................................
+2026-10-29T10:09:58.4187918Z ----------------------------------------------------------------------
+2026-10-29T10:09:58.4188281Z Ran 461 tests in 83.315s
+2026-10-29T10:09:58.4188433Z 
+2026-10-29T10:09:58.4188516Z OK
+2026-10-29T10:09:58.4198177Z Synchronization feature graphs, capability negatives and guard-send contract passed
+2026-10-29T10:09:58.4198727Z Six lock behaviors, real native/no-std consumers and crypto namespace guard passed
+2026-10-29T10:09:58.5320303Z test_counterexample_trace_contains_prefix_and_suffix (test_deep_search.DeepSearchTests.test_counterexample_trace_contains_prefix_and_suffix) ... ok
+2026-10-29T10:09:58.5321334Z test_disabled_prefix_is_rejected (test_deep_search.DeepSearchTests.test_disabled_prefix_is_rejected) ... ok
+2026-10-29T10:09:58.5322267Z test_duplicate_prefix_actions_are_model_errors (test_deep_search.DeepSearchTests.test_duplicate_prefix_actions_are_model_errors) ... ok
+2026-10-29T10:09:58.5323256Z test_every_prefix_edge_is_checked (test_deep_search.DeepSearchTests.test_every_prefix_edge_is_checked) ... ok
+2026-10-29T10:09:58.5324216Z test_invalid_prefix_budgets_are_rejected (test_deep_search.DeepSearchTests.test_invalid_prefix_budgets_are_rejected) ... ok
+2026-10-29T10:09:58.5328316Z test_local_exhaustion_is_not_root_exhaustion (test_deep_search.DeepSearchTests.test_local_exhaustion_is_not_root_exhaustion) ... ok
+2026-10-29T10:09:58.5328922Z test_prefix_step_budget_is_inconclusive (test_deep_search.DeepSearchTests.test_prefix_step_budget_is_inconclusive) ... ok
+2026-10-29T10:09:58.5329735Z test_prefix_successor_budget_is_inconclusive (test_deep_search.DeepSearchTests.test_prefix_successor_budget_is_inconclusive) ... ok
+2026-10-29T10:09:58.5342047Z test_real_prefix_preserves_consumed_fault_and_crash_counts (test_deep_search.DeepSearchTests.test_real_prefix_preserves_consumed_fault_and_crash_counts) ... ok
+2026-10-29T10:09:58.5343204Z test_suffix_checks_edges_to_already_seen_states (test_deep_search.DeepSearchTests.test_suffix_checks_edges_to_already_seen_states) ... ok
+2026-10-29T10:09:58.5344208Z test_suffix_depth_boundary_does_not_report_out_of_bounds_violation (test_deep_search.DeepSearchTests.test_suffix_depth_boundary_does_not_report_out_of_bounds_violation) ... ok
+2026-10-29T10:09:58.5345256Z test_suffix_resource_cutoffs_are_not_local_passes (test_deep_search.DeepSearchTests.test_suffix_resource_cutoffs_are_not_local_passes) ... ok
+2026-10-29T10:09:58.5349086Z test_time_budget_applies_to_prefix_and_suffix (test_deep_search.DeepSearchTests.test_time_budget_applies_to_prefix_and_suffix) ... ok
+2026-10-29T10:09:58.5351590Z test_file_sync_error_can_leave_persistent_bytes (test_model.ProtocolWindows.test_file_sync_error_can_leave_persistent_bytes) ... ok
+2026-10-29T10:09:58.5404188Z test_later_content_and_index_failure_preserve_historical_result (test_model.ProtocolWindows.test_later_content_and_index_failure_preserve_historical_result) ... ok
+2026-10-29T10:09:58.5419931Z test_lost_reply_retry_and_digest_mismatch_preserve_business_effect (test_model.ProtocolWindows.test_lost_reply_retry_and_digest_mismatch_preserve_business_effect) ... ok
+2026-10-29T10:09:58.5430747Z test_nonprefix_accept_completion_decides_without_publication (test_model.ProtocolWindows.test_nonprefix_accept_completion_decides_without_publication) ... ok
+2026-10-29T10:09:58.5531721Z test_nonprefix_failures_are_independent_and_keep_fixed_barrier (test_model.ProtocolWindows.test_nonprefix_failures_are_independent_and_keep_fixed_barrier) ... ok
+2026-10-29T10:09:58.5534631Z test_process_exit_and_power_loss_have_different_byte_outcomes (test_model.ProtocolWindows.test_process_exit_and_power_loss_have_different_byte_outcomes) ... ok
+2026-10-29T10:09:58.5560539Z test_second_crash_can_interrupt_recovery (test_model.ProtocolWindows.test_second_crash_can_interrupt_recovery) ... ok
+2026-10-29T10:09:58.5578924Z test_single_publication_record_is_not_all_member_completion (test_model.ProtocolWindows.test_single_publication_record_is_not_all_member_completion) ... ok
+2026-10-29T10:09:58.5891648Z test_two_sequential_full_publications_for_each_member_count (test_model.ProtocolWindows.test_two_sequential_full_publications_for_each_member_count) ... ok
+2026-10-29T10:09:58.5895855Z test_unreadable_log_cannot_supply_absence_evidence (test_model.ProtocolWindows.test_unreadable_log_cannot_supply_absence_evidence) ... ok
+2026-10-29T10:09:58.5900605Z test_unsynced_directory_name_can_survive_or_disappear (test_model.ProtocolWindows.test_unsynced_directory_name_can_survive_or_disappear) ... ok
+2026-10-29T10:09:58.5935222Z test_early_ack (test_mutations.MutationSensitivityTests.test_early_ack) ... ok
+2026-10-29T10:09:58.6104815Z test_lost_idempotency_binding (test_mutations.MutationSensitivityTests.test_lost_idempotency_binding) ... ok
+2026-10-29T10:09:58.6115831Z test_omit_sync (test_mutations.MutationSensitivityTests.test_omit_sync) ... ok
+2026-10-29T10:09:58.6145599Z test_saved_mutation_trace_rejects_action_tampering (test_mutations.MutationSensitivityTests.test_saved_mutation_trace_rejects_action_tampering) ... ok
+2026-10-29T10:09:58.6187876Z test_saved_mutation_trace_rejects_state_digest_tampering (test_mutations.MutationSensitivityTests.test_saved_mutation_trace_rejects_state_digest_tampering) ... ok
+2026-10-29T10:09:58.7289645Z test_shrunken_quorum (test_mutations.MutationSensitivityTests.test_shrunken_quorum) ... ok
+2026-10-29T10:09:58.7311845Z test_timeout_rollback (test_mutations.MutationSensitivityTests.test_timeout_rollback) ... ok
+2026-10-29T10:09:58.7312986Z test_abort_needs_durable_fixed_quorum_resolution (test_mutations.OracleSensitivityTests.test_abort_needs_durable_fixed_quorum_resolution) ... ok
+2026-10-29T10:09:58.7314116Z test_corrupt_installed_record_is_not_complete_absence (test_mutations.OracleSensitivityTests.test_corrupt_installed_record_is_not_complete_absence) ... ok
+2026-10-29T10:09:58.7315200Z test_fabricated_publication_origin_is_rejected (test_mutations.OracleSensitivityTests.test_fabricated_publication_origin_is_rejected) ... ok
+2026-10-29T10:09:58.7317656Z test_advance_rejects_invalid_successor_with_action_and_property_name (test_recovery.DirectedHelperOracleSensitivity.test_advance_rejects_invalid_successor_with_action_and_property_name) ... ok
+2026-10-29T10:09:58.7320449Z test_take_rejects_invalid_successor_with_action_and_property_name (test_recovery.DirectedHelperOracleSensitivity.test_take_rejects_invalid_successor_with_action_and_property_name) ... ok
+2026-10-29T10:09:58.7338596Z test_abort_q_without_missing_member_and_no_resurrection (test_recovery.RecoveryWindows.test_abort_q_without_missing_member_and_no_resurrection) ... ok
+2026-10-29T10:09:58.7352505Z test_one_healthy_copy_repairs_second_required_copy_before_normal_publication (test_recovery.RecoveryWindows.test_one_healthy_copy_repairs_second_required_copy_before_normal_publication) ... ok
+2026-10-29T10:09:58.7358930Z test_planned_normal_recovery_does_not_hide_new_content_damage (test_recovery.RecoveryWindows.test_planned_normal_recovery_does_not_hide_new_content_damage) ... ok
+2026-10-29T10:09:58.7362441Z test_second_power_failure_during_abort_resolution (test_recovery.RecoveryWindows.test_second_power_failure_during_abort_resolution) ... ok
+2026-10-29T10:09:58.7371923Z test_single_publication_then_damage_keeps_original_normal_result (test_recovery.RecoveryWindows.test_single_publication_then_damage_keeps_original_normal_result) ... ok
+2026-10-29T10:09:58.7378822Z test_unpublished_decision_damage_publishes_explicit_degraded_result (test_recovery.RecoveryWindows.test_unpublished_decision_damage_publishes_explicit_degraded_result) ... ok
+2026-10-29T10:09:58.7380020Z test_depth_boundary_backedges_are_not_silently_unchecked (test_search.SearchTests.test_depth_boundary_backedges_are_not_silently_unchecked) ... ok
+2026-10-29T10:09:58.7381069Z test_depth_cutoff_is_not_a_pass_or_out_of_bounds_violation (test_search.SearchTests.test_depth_cutoff_is_not_a_pass_or_out_of_bounds_violation) ... ok
+2026-10-29T10:09:58.7381980Z test_duplicate_labels_are_model_errors (test_search.SearchTests.test_duplicate_labels_are_model_errors) ... ok
+2026-10-29T10:09:58.7382772Z test_edges_to_seen_states_are_checked (test_search.SearchTests.test_edges_to_seen_states_are_checked) ... ok
+2026-10-29T10:09:58.7383504Z test_exact_dedup_finishes_cycles (test_search.SearchTests.test_exact_dedup_finishes_cycles) ... ok
+2026-10-29T10:09:58.7384391Z test_initial_violation_trace_preserves_expected_property (test_search.SearchTests.test_initial_violation_trace_preserves_expected_property) ... ok
+2026-10-29T10:09:58.7385355Z test_invalid_resource_limits_are_rejected (test_search.SearchTests.test_invalid_resource_limits_are_rejected) ... ok
+2026-10-29T10:09:58.7386384Z test_replay_rejects_changed_digest_and_disabled_action (test_search.SearchTests.test_replay_rejects_changed_digest_and_disabled_action) ... ok
+2026-10-29T10:09:58.7387772Z test_replay_wide_successors_fail_with_explicit_budget (test_search.SearchTests.test_replay_wide_successors_fail_with_explicit_budget) ... ok
+2026-10-29T10:09:58.7388933Z test_shortest_deterministic_witness_and_replay (test_search.SearchTests.test_shortest_deterministic_witness_and_replay) ... ok
+2026-10-29T10:09:58.7389893Z test_state_and_transition_cutoffs_are_inconclusive (test_search.SearchTests.test_state_and_transition_cutoffs_are_inconclusive) ... ok
+2026-10-29T10:09:58.7390905Z test_wide_successors_respect_budget_before_materialization (test_search.SearchTests.test_wide_successors_respect_budget_before_materialization) ... ok
+2026-10-29T10:09:58.7392263Z test_abort_cannot_ignore_an_already_observed_candidate (test_witnesses.WitnessEvidenceTests.test_abort_cannot_ignore_an_already_observed_candidate) ... ok
+2026-10-29T10:09:58.7393585Z test_complete_absence_snapshot_establishes_abort_witness (test_witnesses.WitnessEvidenceTests.test_complete_absence_snapshot_establishes_abort_witness) ... ok
+2026-10-29T10:09:58.7395156Z test_decision_mask_must_match_complete_physical_set (test_witnesses.WitnessEvidenceTests.test_decision_mask_must_match_complete_physical_set) ... ok
+2026-10-29T10:09:58.7397860Z test_each_accept_durability_fact_is_required (test_witnesses.WitnessEvidenceTests.test_each_accept_durability_fact_is_required) ... ok
+2026-10-29T10:09:58.7398921Z test_error_return_can_still_have_real_durable_accept (test_witnesses.WitnessEvidenceTests.test_error_return_can_still_have_real_durable_accept) ... ok
+2026-10-29T10:09:58.7400136Z test_full_quorum_abort_mask_cannot_forge_an_unobserved_member (test_witnesses.WitnessEvidenceTests.test_full_quorum_abort_mask_cannot_forge_an_unobserved_member) ... ok
+2026-10-29T10:09:58.7401388Z test_full_quorum_mask_cannot_forge_missing_accept (test_witnesses.WitnessEvidenceTests.test_full_quorum_mask_cannot_forge_missing_accept) ... ok
+2026-10-29T10:09:58.7403534Z test_full_quorum_resolution_mask_cannot_forge_durable_records (test_witnesses.WitnessEvidenceTests.test_full_quorum_resolution_mask_cannot_forge_durable_records) ... ok
+2026-10-29T10:09:58.7404597Z test_historical_resolution_mask_cannot_change (test_witnesses.WitnessEvidenceTests.test_historical_resolution_mask_cannot_change) ... ok
+2026-10-29T10:09:58.7405555Z test_later_damage_does_not_revoke_a_historical_resolution (test_witnesses.WitnessEvidenceTests.test_later_damage_does_not_revoke_a_historical_resolution) ... ok
+2026-10-29T10:09:58.7406674Z test_nonprefix_member_sets_are_valid_witnesses (test_witnesses.WitnessEvidenceTests.test_nonprefix_member_sets_are_valid_witnesses) ... ok
+2026-10-29T10:09:58.7407625Z test_offline_after_complete_observation_does_not_erase_snapshot (test_witnesses.WitnessEvidenceTests.test_offline_after_complete_observation_does_not_erase_snapshot) ... ok
+2026-10-29T10:09:58.7409580Z test_out_of_configuration_members_cannot_complete_a_quorum (test_witnesses.WitnessEvidenceTests.test_out_of_configuration_members_cannot_complete_a_quorum) ... ok
+2026-10-29T10:09:58.7410498Z test_real_majority_accepts_establish_decision (test_witnesses.WitnessEvidenceTests.test_real_majority_accepts_establish_decision) ... ok
+2026-10-29T10:09:58.7411568Z test_real_resolution_records_and_prior_absence_establish_abort (test_witnesses.WitnessEvidenceTests.test_real_resolution_records_and_prior_absence_establish_abort) ... ok
+2026-10-29T10:09:58.7412712Z test_resolution_after_second_crash_keeps_original_absence_proof (test_witnesses.WitnessEvidenceTests.test_resolution_after_second_crash_keeps_original_absence_proof) ... ok
+2026-10-29T10:09:58.7413811Z test_resolution_requires_previously_established_absence (test_witnesses.WitnessEvidenceTests.test_resolution_requires_previously_established_absence) ... ok
+2026-10-29T10:09:58.7416811Z test_stale_absence_labels_cannot_hide_present_or_broken_logs (test_witnesses.WitnessEvidenceTests.test_stale_absence_labels_cannot_hide_present_or_broken_logs) ... ok
+2026-10-29T10:09:58.7417239Z 
+2026-10-29T10:09:58.7417562Z ----------------------------------------------------------------------
+2026-10-29T10:09:58.7417810Z Ran 72 tests in 0.210s
+2026-10-29T10:09:58.7418031Z 
+2026-10-29T10:09:58.7418108Z OK
+2026-10-29T10:10:01.5563456Z .......................
+2026-10-29T10:10:01.5563869Z ----------------------------------------------------------------------
+2026-10-29T10:10:01.5564230Z Ran 23 tests in 2.743s
+2026-10-29T10:10:01.5564373Z 
+2026-10-29T10:10:01.5564467Z OK
+2026-10-29T10:10:03.3177059Z Verified 8 Web output hashes and 4129 current source input hashes.
+2026-10-29T10:10:04.0231855Z BUILD.txt: OK
+2026-10-29T10:10:04.0232147Z INSTALL.md: OK
+2026-10-29T10:10:04.0234215Z web-interface-0.1.0.tar.gz: OK
+2026-10-29T10:10:04.0234512Z zxs-0.1.0-x86_64-unknown-linux-gnu.tar.gz: OK
+2026-10-29T10:10:05.8211720Z PASS release archives retain complete documentation and assembly emits standalone installation instructions
+2026-10-29T10:10:06.3760554Z PASS mock release publication: new
+2026-10-29T10:10:06.4825318Z PASS mock release publication: resume
+2026-10-29T10:10:06.5264004Z PASS mock release publication: network
+2026-10-29T10:10:06.5702040Z PASS mock release publication: forbidden
+2026-10-29T10:10:06.6319029Z PASS mock release publication: public
+2026-10-29T10:10:06.6932318Z PASS mock release publication: foreign
+2026-10-29T10:10:06.7550473Z PASS mock release publication: malformed
+2026-10-29T10:10:06.8417835Z PASS mock release publication: corrupt
+2026-10-29T10:10:06.9292972Z PASS mock release publication: remote-extra
+2026-10-29T10:10:07.0264722Z PASS mock release publication: local-change
+2026-10-29T10:10:07.7729859Z TAP version 13
+2026-10-29T10:10:07.8030173Z # Subtest: fixture URL and disposable acknowledgement are both mandatory
+2026-10-29T10:10:07.8033596Z ok 1 - fixture URL and disposable acknowledgement are both mandatory
+2026-10-29T10:10:07.8034916Z   ---
+2026-10-29T10:10:07.8035133Z   duration_ms: 1.139177
+2026-10-29T10:10:07.8035373Z   type: 'test'
+2026-10-29T10:10:07.8035572Z   ...
+2026-10-29T10:10:07.8040141Z # Subtest: historical inputs and browser package never silently use private defaults
+2026-10-29T10:10:07.8040722Z ok 2 - historical inputs and browser package never silently use private defaults
+2026-10-29T10:10:07.8041076Z   ---
+2026-10-29T10:10:07.8041528Z   duration_ms: 0.272182
+2026-10-29T10:10:07.8041744Z   type: 'test'
+2026-10-29T10:10:07.8041926Z   ...
+2026-10-29T10:10:07.8045943Z # Historical probe output (not current acceptance): /tmp/zxs-probe-config-aPtisc/regression-tree-probe-ikHnO7
+2026-10-29T10:10:07.8047289Z # Historical probe output (not current acceptance): /tmp/zxs-probe-config-aPtisc/regression-tree-probe-eAV2PZ
+2026-10-29T10:10:07.8058307Z # Historical probe output (not current acceptance): /tmp/zxs-probe-config-aPtisc/regression-tree-probe-JHDsPp
+2026-10-29T10:10:07.8073303Z # Subtest: root is independent of nested probe depth and outputs are unique
+2026-10-29T10:10:07.8076113Z ok 3 - root is independent of nested probe depth and outputs are unique
+2026-10-29T10:10:07.8076473Z   ---
+2026-10-29T10:10:07.8076670Z   duration_ms: 7.055627
+2026-10-29T10:10:07.8076890Z   type: 'test'
+2026-10-29T10:10:07.8077078Z   ...
+2026-10-29T10:10:07.8097907Z # Subtest: missing output, archive output, and symlink aliases are rejected
+2026-10-29T10:10:07.8098796Z ok 4 - missing output, archive output, and symlink aliases are rejected
+2026-10-29T10:10:07.8099030Z   ---
+2026-10-29T10:10:07.8099158Z   duration_ms: 2.4313
+2026-10-29T10:10:07.8099333Z   type: 'test'
+2026-10-29T10:10:07.8099455Z   ...
+2026-10-29T10:10:07.8157526Z # Subtest: all executable historical entries use guarded initialization
+2026-10-29T10:10:07.8158197Z ok 5 - all executable historical entries use guarded initialization
+2026-10-29T10:10:07.8158437Z   ---
+2026-10-29T10:10:07.8158565Z   duration_ms: 6.154616
+2026-10-29T10:10:07.8158707Z   type: 'test'
+2026-10-29T10:10:07.8158828Z   ...
+2026-10-29T10:10:07.8228114Z 1..5
+2026-10-29T10:10:07.8248138Z # tests 5
+2026-10-29T10:10:07.8248405Z # suites 0
+2026-10-29T10:10:07.8248619Z # pass 5
+2026-10-29T10:10:07.8248798Z # fail 0
+2026-10-29T10:10:07.8248959Z # cancelled 0
+2026-10-29T10:10:07.8249132Z # skipped 0
+2026-10-29T10:10:07.8249251Z # todo 0
+2026-10-29T10:10:07.8249374Z # duration_ms 66.762252
+2026-10-29T10:10:07.8277234Z PASS static syntax, portable configuration and inventory for 26 historical modules; no browser acceptance executed
+2026-10-29T10:10:07.8376104Z ##[group]Run actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+2026-10-29T10:10:07.8376368Z with:
+2026-10-29T10:10:07.8376526Z   name: publication-model-integration-evidence
+2026-10-29T10:10:07.8376747Z   path: /tmp/publication-integration-evidence
+2026-10-29T10:10:07.8376939Z   if-no-files-found: error
+2026-10-29T10:10:07.8377090Z   retention-days: 30
+2026-10-29T10:10:07.8377228Z   compression-level: 6
+2026-10-29T10:10:07.8377537Z   overwrite: false
+2026-10-29T10:10:07.8377761Z   include-hidden-files: false
+2026-10-29T10:10:07.8377913Z   archive: true
+2026-10-29T10:10:07.8378041Z ##[endgroup]
+2026-10-29T10:10:07.9541090Z With the provided path, there will be 9 files uploaded
+2026-10-29T10:10:07.9545773Z Artifact name is valid!
+2026-10-29T10:10:07.9546196Z Root directory input is valid!
+2026-10-29T10:10:08.2939944Z Uploading artifact: publication-model-integration-evidence.zip
+2026-10-29T10:10:08.2972333Z Beginning upload of artifact content to blob storage
+2026-10-29T10:10:08.5678775Z Uploaded bytes 9609
+2026-10-29T10:10:08.6119970Z Finished uploading artifact content to blob storage!
+2026-10-29T10:10:08.6138242Z SHA256 digest of uploaded artifact is 461c12fb31b93c0fbe2a4cf8638a0282251418037dadd97c191d805bce8ebbc7
+2026-10-29T10:10:08.6138816Z Finalizing artifact upload
+2026-10-29T10:10:09.1531350Z Artifact publication-model-integration-evidence successfully finalized. Artifact ID 12888263620
+2026-10-29T10:10:09.1532175Z Artifact publication-model-integration-evidence has been successfully uploaded! Final size is 9609 bytes. Artifact ID is 12888263620
+2026-10-29T10:10:09.1534910Z Artifact download URL: https://github.com/isarmg/zxs/actions/runs/40854973138/artifacts/12888263620
+2026-10-29T10:10:09.1728049Z Post job cleanup.
+2026-10-29T10:10:09.2371953Z [command]/usr/bin/git version
+2026-10-29T10:10:09.2412630Z git version 2.56.0
+2026-10-29T10:10:09.2439058Z Temporarily overriding HOME='/home/runner/work/_temp/d836929e-f5b9-4583-8ca8-b0ad2eb4c19d' before making global git config changes
+2026-10-29T10:10:09.2440206Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-29T10:10:09.2442596Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/zxs/zxs
+2026-10-29T10:10:09.2474651Z Removing SSH command configuration
+2026-10-29T10:10:09.2479591Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-29T10:10:09.2511972Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-29T10:10:09.2763156Z Removing HTTP extra header
+2026-10-29T10:10:09.2768408Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-29T10:10:09.2806810Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-29T10:10:09.3068290Z Removing includeIf entries pointing to credentials config files
+2026-10-29T10:10:09.3076387Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-29T10:10:09.3120879Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-29T10:10:09.3498919Z Cleaning up orphan processes

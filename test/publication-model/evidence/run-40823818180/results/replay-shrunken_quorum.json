@@ -1,0 +1,24 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 1,
+    "n": 2,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "shrunken_quorum"
+  },
+  "counterexample": true,
+  "final_digest": "085e70c538e0351ef32fe98ebdc639440c70354ebe7fa6499e29b52756c327f2",
+  "first_violation_step": 21,
+  "schema": "zxs-publication-model-replay-v1",
+  "steps": 21,
+  "valid": true,
+  "violations": [
+    {
+      "message": "slot 0: decision witness has fewer than fixed Q distinct members",
+      "name": "fixed_quorum",
+      "spec": "10.2; 10.6; 10.7"
+    }
+  ]
+}

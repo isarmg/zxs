@@ -1,0 +1,527 @@
+{
+  "schema": "zxs-publication-model-integration-v1",
+  "product_base": "209f31a4122174129bcf40b56c0598ac61e66352",
+  "reviewed_source": "47655937bbd1a3c8d6638e0260a793b63450bc29",
+  "import_commit": "4e726896938590c831108ee31dbfd10705a55cf6",
+  "import_parent": "209f31a4122174129bcf40b56c0598ac61e66352",
+  "tested_commit": "6a778a6374aeed236d15782e6d3bdd13907ae83c",
+  "tested_parent": "4e726896938590c831108ee31dbfd10705a55cf6",
+  "validation_commit": "e51ff147859745cd85c13f3b6586e2ad40261c8e",
+  "run_id": 40854973138,
+  "run_url": "https://github.com/isarmg/zxs/actions/runs/40854973138",
+  "job_id": 123383551913,
+  "conclusion": "success",
+  "tested_path_count": 248,
+  "test_summaries": [
+    {
+      "count": 44,
+      "seconds": 41.208
+    },
+    {
+      "count": 461,
+      "seconds": 83.315
+    },
+    {
+      "count": 72,
+      "seconds": 0.21
+    },
+    {
+      "count": 23,
+      "seconds": 2.743
+    }
+  ],
+  "named_gate_tests": [
+    {
+      "name": "test_check_suites.DiagnosticGateCommands.test_quality_checks_first_party_clippy_and_host_and_wasm_dependency_warnings",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.DiagnosticGateCommands.test_quality_rejects_foundation_warnings_in_each_compile_stage",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.DiagnosticGateCommands.test_sdk_abort_gate_rejects_unexpected_success",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.DiagnosticGateCommands.test_sdk_abort_gate_rejects_unrelated_compile_failure",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.DiagnosticGateCommands.test_sdk_gates_compile_streams_and_then_runs_normal_tests",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.DiagnosticGateCommands.test_sdk_rejects_warnings_before_running_test_bodies",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.PublicationModelSelftestRunner.test_assertion_and_import_errors_fail",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.PublicationModelSelftestRunner.test_discovery_exception_is_not_swallowed",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.PublicationModelSelftestRunner.test_nonempty_success_is_successful",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.PublicationModelSelftestRunner.test_zero_discovery_fails",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_binding_parser_gates_run_in_language_and_sdk_data_shards",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_build_tools_cover_report_parsing_without_running_a_workload",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_build_tools_keep_log_filter_and_formatter_regressions",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_compression_family_gate_runs_once_in_shard_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_concurrent_collections_gate_runs_once_in_async_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_contracts_exercise_both_json_map_backends_and_feature_unions",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_crypto_budget_retains_full_ring_matrix",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_date_time_family_gate_runs_once_in_shard_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_dependency_documentation_is_verified_in_static_and_source_suites",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_form_float_gate_runs_once_in_language_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_foundation_aggregate_is_exactly_once_union_of_shards",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_foundation_shards_match_explicit_command_inventory",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_full_source_tool_regressions_run_only_in_source_shard",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_history_io_rejects_successful_children_without_completion",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_http_routing_gate_runs_once_in_async_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_http_transport_gate_runs_once_in_async_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_pattern_gate_runs_once_in_language_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_publication_model_selftests_run_once_in_static_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_removed_demo_suite_fails_before_running_tools",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_security_suite_revalidates_cached_scanner_and_runs_all_scans",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_server_engine_integration_targets_declare_core_admission",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_service_stack_gate_runs_once_in_async_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_source_gate_reparses_registered_target_closures",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_static_gate_requires_no_rust_or_metadata_resolution",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_static_stops_when_publication_model_selftests_fail",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_toml_gate_runs_once_in_language_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_unicode_data_family_gate_runs_once_in_shard_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_unknown_foundation_shard_fails_before_running_tools",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_url_encoding_gate_runs_once_in_shard_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_uuid_format_gate_runs_once_in_language_and_aggregate_only",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_web_runs_unit_and_integration_tests",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_workflows_schedule_source_shard_once_after_preflight",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_workspace_checks_native_capabilities_before_product_tests",
+      "status": "ok"
+    },
+    {
+      "name": "test_check_suites.SuiteCoverageTests.test_workspace_runs_both_isolated_mount_admission_regressions",
+      "status": "ok"
+    }
+  ],
+  "model_selftests": [
+    {
+      "name": "test_deep_search.DeepSearchTests.test_counterexample_trace_contains_prefix_and_suffix",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_disabled_prefix_is_rejected",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_duplicate_prefix_actions_are_model_errors",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_every_prefix_edge_is_checked",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_invalid_prefix_budgets_are_rejected",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_local_exhaustion_is_not_root_exhaustion",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_prefix_step_budget_is_inconclusive",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_prefix_successor_budget_is_inconclusive",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_real_prefix_preserves_consumed_fault_and_crash_counts",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_suffix_checks_edges_to_already_seen_states",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_suffix_depth_boundary_does_not_report_out_of_bounds_violation",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_suffix_resource_cutoffs_are_not_local_passes",
+      "status": "ok"
+    },
+    {
+      "name": "test_deep_search.DeepSearchTests.test_time_budget_applies_to_prefix_and_suffix",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_file_sync_error_can_leave_persistent_bytes",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_later_content_and_index_failure_preserve_historical_result",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_lost_reply_retry_and_digest_mismatch_preserve_business_effect",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_nonprefix_accept_completion_decides_without_publication",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_nonprefix_failures_are_independent_and_keep_fixed_barrier",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_process_exit_and_power_loss_have_different_byte_outcomes",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_second_crash_can_interrupt_recovery",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_single_publication_record_is_not_all_member_completion",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_two_sequential_full_publications_for_each_member_count",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_unreadable_log_cannot_supply_absence_evidence",
+      "status": "ok"
+    },
+    {
+      "name": "test_model.ProtocolWindows.test_unsynced_directory_name_can_survive_or_disappear",
+      "status": "ok"
+    },
+    {
+      "name": "test_mutations.MutationSensitivityTests.test_early_ack",
+      "status": "ok"
+    },
+    {
+      "name": "test_mutations.MutationSensitivityTests.test_lost_idempotency_binding",
+      "status": "ok"
+    },
+    {
+      "name": "test_mutations.MutationSensitivityTests.test_omit_sync",
+      "status": "ok"
+    },
+    {
+      "name": "test_mutations.MutationSensitivityTests.test_saved_mutation_trace_rejects_action_tampering",
+      "status": "ok"
+    },
+    {
+      "name": "test_mutations.MutationSensitivityTests.test_saved_mutation_trace_rejects_state_digest_tampering",
+      "status": "ok"
+    },
+    {
+      "name": "test_mutations.MutationSensitivityTests.test_shrunken_quorum",
+      "status": "ok"
+    },
+    {
+      "name": "test_mutations.MutationSensitivityTests.test_timeout_rollback",
+      "status": "ok"
+    },
+    {
+      "name": "test_mutations.OracleSensitivityTests.test_abort_needs_durable_fixed_quorum_resolution",
+      "status": "ok"
+    },
+    {
+      "name": "test_mutations.OracleSensitivityTests.test_corrupt_installed_record_is_not_complete_absence",
+      "status": "ok"
+    },
+    {
+      "name": "test_mutations.OracleSensitivityTests.test_fabricated_publication_origin_is_rejected",
+      "status": "ok"
+    },
+    {
+      "name": "test_recovery.DirectedHelperOracleSensitivity.test_advance_rejects_invalid_successor_with_action_and_property_name",
+      "status": "ok"
+    },
+    {
+      "name": "test_recovery.DirectedHelperOracleSensitivity.test_take_rejects_invalid_successor_with_action_and_property_name",
+      "status": "ok"
+    },
+    {
+      "name": "test_recovery.RecoveryWindows.test_abort_q_without_missing_member_and_no_resurrection",
+      "status": "ok"
+    },
+    {
+      "name": "test_recovery.RecoveryWindows.test_one_healthy_copy_repairs_second_required_copy_before_normal_publication",
+      "status": "ok"
+    },
+    {
+      "name": "test_recovery.RecoveryWindows.test_planned_normal_recovery_does_not_hide_new_content_damage",
+      "status": "ok"
+    },
+    {
+      "name": "test_recovery.RecoveryWindows.test_second_power_failure_during_abort_resolution",
+      "status": "ok"
+    },
+    {
+      "name": "test_recovery.RecoveryWindows.test_single_publication_then_damage_keeps_original_normal_result",
+      "status": "ok"
+    },
+    {
+      "name": "test_recovery.RecoveryWindows.test_unpublished_decision_damage_publishes_explicit_degraded_result",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_depth_boundary_backedges_are_not_silently_unchecked",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_depth_cutoff_is_not_a_pass_or_out_of_bounds_violation",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_duplicate_labels_are_model_errors",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_edges_to_seen_states_are_checked",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_exact_dedup_finishes_cycles",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_initial_violation_trace_preserves_expected_property",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_invalid_resource_limits_are_rejected",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_replay_rejects_changed_digest_and_disabled_action",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_replay_wide_successors_fail_with_explicit_budget",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_shortest_deterministic_witness_and_replay",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_state_and_transition_cutoffs_are_inconclusive",
+      "status": "ok"
+    },
+    {
+      "name": "test_search.SearchTests.test_wide_successors_respect_budget_before_materialization",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_abort_cannot_ignore_an_already_observed_candidate",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_complete_absence_snapshot_establishes_abort_witness",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_decision_mask_must_match_complete_physical_set",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_each_accept_durability_fact_is_required",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_error_return_can_still_have_real_durable_accept",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_full_quorum_abort_mask_cannot_forge_an_unobserved_member",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_full_quorum_mask_cannot_forge_missing_accept",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_full_quorum_resolution_mask_cannot_forge_durable_records",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_historical_resolution_mask_cannot_change",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_later_damage_does_not_revoke_a_historical_resolution",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_nonprefix_member_sets_are_valid_witnesses",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_offline_after_complete_observation_does_not_erase_snapshot",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_out_of_configuration_members_cannot_complete_a_quorum",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_real_majority_accepts_establish_decision",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_real_resolution_records_and_prior_absence_establish_abort",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_resolution_after_second_crash_keeps_original_absence_proof",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_resolution_requires_previously_established_absence",
+      "status": "ok"
+    },
+    {
+      "name": "test_witnesses.WitnessEvidenceTests.test_stale_absence_labels_cannot_hide_present_or_broken_logs",
+      "status": "ok"
+    }
+  ],
+  "scope": "Existing static gate only; no root/deep matrix, Rust compilation or product recovery correctness claim.",
+  "provenance": "GitHub verified exact import of approved tool/docs/evidence and unchanged original model/test sources; only selftest runner and current workflow example differ in tool/test directories.",
+  "retained_inconclusive": {
+    "root": 8,
+    "selected_prefix_suffix": 6,
+    "origin": "Historical model evidence; not rerun or discharged by integration."
+  },
+  "artifact": {
+    "id": 12888263620,
+    "name": "publication-model-integration-evidence",
+    "size_in_bytes": 9609,
+    "url": "https://api.github.com/repos/isarmg/zxs/actions/artifacts/12888263620",
+    "archive_download_url": "https://api.github.com/repos/isarmg/zxs/actions/artifacts/12888263620/zip",
+    "expired": false,
+    "created_at": "2026-10-29T10:10:08Z",
+    "expires_at": "2026-11-28T10:10:07Z",
+    "updated_at": "2026-10-29T10:10:08Z",
+    "digest": "sha256:461c12fb31b93c0fbe2a4cf8638a0282251418037dadd97c191d805bce8ebbc7",
+    "workflow_run": {
+      "id": 40854973138,
+      "repository_id": 1424437655,
+      "head_repository_id": 1424437655,
+      "head_branch": "validation/codex-publication-model-integration-20261029",
+      "head_sha": "e51ff147859745cd85c13f3b6586e2ad40261c8e"
+    }
+  }
+}

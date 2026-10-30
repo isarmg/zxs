@@ -1,0 +1,31 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 2,
+    "replicas": 1,
+    "retries": true,
+    "variant": "correct"
+  },
+  "counts": {
+    "expanded": 3002,
+    "max_depth": 96,
+    "queued": 0,
+    "states": 3002,
+    "transitions": 4724
+  },
+  "elapsed_seconds": 0.08869242200000116,
+  "limits": {
+    "max_depth": 220,
+    "max_seconds": 30,
+    "max_states": 50000,
+    "max_transitions": 600000
+  },
+  "schema": "zxs-publication-model-search-v1",
+  "scope": "declared finite abstraction only",
+  "status": "BoundedExhaustive",
+  "trace": null,
+  "truncation": null,
+  "violations": []
+}
