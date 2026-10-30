@@ -413,13 +413,12 @@ fn oracle_path<'a>(state: &'a State, node: &'a str) -> &'a str {
             state
                 .file_branch_merges
                 .values()
-                .filter(|merge| {
+                .rfind(|merge| {
                     merge.file_id == FILE
                         && merge.history_tree_id == HISTORY
                         && !merge.reused_node
                         && merge.result_node_id == current
                 })
-                .next_back()
                 .map(|merge| &merge.chosen_node_id)
         } else {
             metadata.parent_node_ids.first()
