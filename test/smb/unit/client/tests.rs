@@ -206,6 +206,13 @@ fn remote_error_retains_operation_and_filesystem_errno() {
             None,
         ),
         (
+            ErrorCode::HistoryChanged,
+            "history root changed; refresh the history window",
+            libc::EAGAIN,
+            false,
+            None,
+        ),
+        (
             ErrorCode::CommitPreparationBusy,
             "another workspace commit is being prepared",
             libc::EBUSY,
