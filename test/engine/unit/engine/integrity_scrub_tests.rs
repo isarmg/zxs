@@ -397,15 +397,21 @@ fn payload_planning_counts_available_routes_and_skips_retired_content() {
     let migrated = save(&mut engine, &repository, &[4; 13]);
     let state = std::sync::Arc::make_mut(&mut engine.state);
     state.content_states.remove(&sparse);
-    state.content_states.insert(available, ContentState::Available);
+    state
+        .content_states
+        .insert(available, ContentState::Available);
     state.content_states.insert(purged, ContentState::Purged);
-    state.content_states.insert(migrated, ContentState::Migrated);
+    state
+        .content_states
+        .insert(migrated, ContentState::Migrated);
     let plan = engine.prepare_integrity_scrub().unwrap();
     let cancellation = IntegrityScrubCancellation::new();
     assert_eq!(plan.estimated_payload_bytes(&cancellation).unwrap(), 36);
     cancellation.cancel();
     assert_eq!(
-        plan.estimated_payload_bytes(&cancellation).unwrap_err().code(),
+        plan.estimated_payload_bytes(&cancellation)
+            .unwrap_err()
+            .code(),
         ErrorCode::OperationAborted
     );
 }
@@ -413,7 +419,10 @@ fn payload_planning_counts_available_routes_and_skips_retired_content() {
 #[test]
 fn payload_planning_retains_checked_multiplication_and_addition() {
     let cancellation = IntegrityScrubCancellation::new();
-    assert_eq!(estimate_required_payload_bytes(&cancellation, []).unwrap(), 0);
+    assert_eq!(
+        estimate_required_payload_bytes(&cancellation, []).unwrap(),
+        0
+    );
     assert_eq!(
         estimate_required_payload_bytes(&cancellation, [(u64::MAX, 1), (u64::MAX, 0)]).unwrap(),
         u64::MAX
