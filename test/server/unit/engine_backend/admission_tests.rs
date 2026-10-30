@@ -360,6 +360,7 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
             .file_version_page(
                 &caller(),
                 crate::ReadVersionPage::parse(entry.file_id.clone(), BTreeMap::new()).unwrap(),
+                &crate::tests::history_read_control(),
             )
             .unwrap();
         backend
@@ -427,7 +428,8 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
         backend
             .file_version_page(
                 &caller(),
-                crate::ReadVersionPage::parse(entry.file_id.clone(), BTreeMap::new()).unwrap()
+                crate::ReadVersionPage::parse(entry.file_id.clone(), BTreeMap::new()).unwrap(),
+                &crate::tests::history_read_control(),
             )
             .unwrap_err()
             .status,
@@ -589,7 +591,8 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
             backend
                 .file_version_page(
                     &caller(),
-                    crate::ReadVersionPage::parse(entry.file_id.clone(), BTreeMap::new()).unwrap()
+                    crate::ReadVersionPage::parse(entry.file_id.clone(), BTreeMap::new()).unwrap(),
+                    &crate::tests::history_read_control(),
                 )
                 .unwrap_err()
                 .code,

@@ -1,8 +1,8 @@
 //! Bounded file-history pages over the engine's page projection.
 //!
 //! File/root admission is locked; detached resource owners perform node,
-//! branch, parent and field projection outside the writer lock. Version and
-//! merge selection retain their existing plans. JSON encoding is unlocked.
+//! branch, parent, field, merge and version projection outside the writer lock.
+//! Version and merge selection reuse their existing plans. JSON encoding is unlocked.
 use super::*;
 use crate::backend_activity::utc_timestamp;
 use crate::backend_file_history::{
@@ -46,18 +46,6 @@ fn admit_root<'a>(
         ));
     }
     Ok((repo, root))
-}
-
-fn admit<'a>(
-    engine: &'a Engine,
-    file: &'a str,
-    observed: Option<&HistoryRootText>,
-) -> Result<Admitted<'a>, ApiError> {
-    let (repo, root) = admit_root(engine, file, observed)?;
-    let scope = engine
-        .file_history_scope(file, &repo.history_tree_id)
-        .map_err(super::activity::read_error)?;
-    Ok(Admitted { repo, root, scope })
 }
 
 /// Captured authorization context is only a projection source, never authority.
@@ -137,6 +125,50 @@ impl FileHistoryCapture {
     ) -> Result<NodeFieldSlice, ApiError> {
         let observe = || control.checkpoint().map_err(storage_engine::Error::from);
         node_field(self.admitted(&observe)?, request)
+    }
+    pub(in crate::engine_backend) fn merges(
+        self,
+        request: ReadHistoryMerges,
+        control: &crate::HistoryReadControl,
+    ) -> Result<HistoryMergesPage, ApiError> {
+        let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+        prepare_merge_page(self.admitted(&observe)?, request)?.read(&observe)
+    }
+
+    pub(in crate::engine_backend) fn version_page(
+        self,
+        request: ReadVersionPage,
+        control: &crate::HistoryReadControl,
+    ) -> Result<VersionPage, ApiError> {
+        let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+        prepare_version_page(self.admitted(&observe)?, request)?.read(&observe)
+    }
+
+    pub(in crate::engine_backend) fn merge_inputs(
+        self,
+        request: ReadIndexedSlice,
+        control: &crate::HistoryReadControl,
+    ) -> Result<IndexedSlice<(String, String)>, ApiError> {
+        let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+        merge_inputs(self.admitted(&observe)?, &request)
+    }
+
+    pub(in crate::engine_backend) fn merge_parents(
+        self,
+        request: ReadIndexedSlice,
+        control: &crate::HistoryReadControl,
+    ) -> Result<IndexedSlice<String>, ApiError> {
+        let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+        merge_parents(self.admitted(&observe)?, &request)
+    }
+
+    pub(in crate::engine_backend) fn version_sources(
+        self,
+        request: ReadIndexedSlice,
+        control: &crate::HistoryReadControl,
+    ) -> Result<IndexedSlice<String>, ApiError> {
+        let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+        version_sources(self.admitted(&observe)?, &request)
     }
 }
 
@@ -587,7 +619,7 @@ fn branches(
     })
 }
 
-pub(in crate::engine_backend) struct MergePagePlan {
+struct MergePagePlan {
     file_id: String,
     history_tree_id: String,
     history_root: String,
@@ -596,12 +628,11 @@ pub(in crate::engine_backend) struct MergePagePlan {
     merges: storage_engine::file_history_pages::FileMergeReadPlan,
 }
 
-pub(in crate::engine_backend) fn prepare_merge_page(
-    engine: &Engine,
+fn prepare_merge_page(
+    admitted: Admitted<'_>,
     request: ReadHistoryMerges,
 ) -> Result<MergePagePlan, ApiError> {
     let collection = request.0;
-    let admitted = admit(engine, collection.file_id.as_str(), Some(&collection.root))?;
     let seed = seed(
         &admitted,
         CursorKind::Merges,
@@ -641,8 +672,14 @@ pub(in crate::engine_backend) fn prepare_merge_page(
 }
 
 impl MergePagePlan {
-    pub(in crate::engine_backend) fn read(self) -> HistoryMergesPage {
-        let (selection, records) = self.merges.read();
+    fn read(
+        self,
+        observe: &dyn Fn() -> storage_engine::Result<()>,
+    ) -> Result<HistoryMergesPage, ApiError> {
+        let (selection, records) = self
+            .merges
+            .read_observed(observe)
+            .map_err(super::activity::read_error)?;
         let merges = records
             .into_iter()
             .map(|record| FileMergeSummary {
@@ -657,18 +694,18 @@ impl MergePagePlan {
                 parent_count: record.parent_count,
             })
             .collect();
-        HistoryMergesPage {
+        Ok(HistoryMergesPage {
             file_id: self.file_id,
             history_tree_id: self.history_tree_id,
             history_root: self.history_root,
             merges,
             continuation: continuation(self.seed, &selection, self.backward),
-        }
+        })
     }
 }
 
 fn indexed<T>(
-    engine: &Engine,
+    admitted: Admitted<'_>,
     request: &ReadIndexedSlice,
     read: impl FnOnce(
         &FileHistoryScope<'_>,
@@ -677,7 +714,6 @@ fn indexed<T>(
         usize,
     ) -> storage_engine::Result<storage_engine::file_history_pages::Slice<T>>,
 ) -> Result<IndexedSlice<T>, ApiError> {
-    let admitted = admit(engine, request.file_id.as_str(), Some(&request.root))?;
     let slice = read(
         &admitted.scope,
         request.subject_id.as_str(),
@@ -696,29 +732,29 @@ fn indexed<T>(
     })
 }
 
-pub(in crate::engine_backend) fn merge_inputs(
-    engine: &Engine,
+fn merge_inputs(
+    admitted: Admitted<'_>,
     request: &ReadIndexedSlice,
 ) -> Result<IndexedSlice<(String, String)>, ApiError> {
-    indexed(engine, request, |scope, merge, offset, limit| {
+    indexed(admitted, request, |scope, merge, offset, limit| {
         scope.merge_inputs(merge, offset, limit)
     })
 }
 
-pub(in crate::engine_backend) fn merge_parents(
-    engine: &Engine,
+fn merge_parents(
+    admitted: Admitted<'_>,
     request: &ReadIndexedSlice,
 ) -> Result<IndexedSlice<String>, ApiError> {
-    indexed(engine, request, |scope, merge, offset, limit| {
+    indexed(admitted, request, |scope, merge, offset, limit| {
         scope.merge_parents(merge, offset, limit)
     })
 }
 
-pub(in crate::engine_backend) fn version_sources(
-    engine: &Engine,
+fn version_sources(
+    admitted: Admitted<'_>,
     request: &ReadIndexedSlice,
 ) -> Result<IndexedSlice<String>, ApiError> {
-    indexed(engine, request, |scope, version, offset, limit| {
+    indexed(admitted, request, |scope, version, offset, limit| {
         scope.version_sources(version, offset, limit)
     })
 }
@@ -755,7 +791,7 @@ fn node_field(admitted: Admitted<'_>, request: ReadNodeField) -> Result<NodeFiel
     })
 }
 
-pub(in crate::engine_backend) struct VersionPagePlan {
+struct VersionPagePlan {
     file_id: String,
     history_tree_id: String,
     history_root: String,
@@ -764,16 +800,11 @@ pub(in crate::engine_backend) struct VersionPagePlan {
     versions: storage_engine::file_history_pages::FileVersionReadPlan,
 }
 
-pub(in crate::engine_backend) fn prepare_version_page(
-    engine: &Engine,
+fn prepare_version_page(
+    admitted: Admitted<'_>,
     request: ReadVersionPage,
 ) -> Result<VersionPagePlan, ApiError> {
     let collection = request;
-    let admitted = admit(
-        engine,
-        collection.file_id.as_str(),
-        collection.root.as_ref(),
-    )?;
     let seed = seed(
         &admitted,
         CursorKind::Versions,
@@ -813,8 +844,14 @@ pub(in crate::engine_backend) fn prepare_version_page(
 }
 
 impl VersionPagePlan {
-    pub(in crate::engine_backend) fn read(self) -> Result<VersionPage, ApiError> {
-        let (selection, records) = self.versions.read();
+    fn read(
+        self,
+        observe: &dyn Fn() -> storage_engine::Result<()>,
+    ) -> Result<VersionPage, ApiError> {
+        let (selection, records) = self
+            .versions
+            .read_observed(observe)
+            .map_err(super::activity::read_error)?;
         if selection.keys.is_empty() && !selection.more_before && !selection.more_after {
             return Err(ApiError::new(
                 ::http::StatusCode::NOT_FOUND,

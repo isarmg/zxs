@@ -2,7 +2,7 @@
 //! backend read and bounded encoding on one blocking slot. The engine lock is
 //! released by the read; the response and transport-owned chunks retain the
 //! slot through actual socket drain, cancellation or the existing deadline.
-use crate::backend_file_history::{EncodedPage, PageBudget};
+use crate::backend_file_history::PageBudget;
 use crate::*;
 use http_routing::response::Response;
 
@@ -32,37 +32,6 @@ impl<S: Send + Sync> http_routing::extract::FromRequestParts<S> for HistoryQuery
                 .cloned(),
         })
     }
-}
-
-fn permit(state: &AppState) -> Result<tokio::sync::OwnedSemaphorePermit, ApiError> {
-    state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))
-}
-
-async fn page<T: Send + 'static>(
-    state: AppState,
-    connection: Option<crate::http_shutdown::ResponseConnection>,
-    read: impl FnOnce(&dyn Backend) -> Result<T, ApiError> + Send + 'static,
-    encode: impl FnOnce(&T) -> Result<EncodedPage, ApiError> + Send + 'static,
-) -> Result<Response, ApiError> {
-    let permit = permit(&state)?;
-    let limits = state.config.http_transfer_limits.clone();
-    let deadline = tokio::time::Instant::now() + limits.total_timeout;
-    let (encoded, permit) = tokio::time::timeout_at(
-        deadline,
-        crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit).run_with_permit(
-            move |backend, permit| {
-                let captured = read(backend)?;
-                Ok((encode(&captured)?, permit))
-            },
-        ),
-    )
-    .await
-    .map_err(|source| crate::transfer_limits::timeout_error().with_source(source))??;
-    Ok(encoded.into_leased_response(permit, &limits, deadline, connection))
 }
 
 pub(crate) async fn nodes(
@@ -151,11 +120,11 @@ pub(crate) async fn merges(
     ApiPath(file): ApiPath<String>,
     HistoryQuery { query, connection }: HistoryQuery,
 ) -> Result<Response, ApiError> {
-    page(
+    crate::history_read::run(
         state,
         connection,
-        move |backend| {
-            backend.file_history_merges(&identity, ReadHistoryMerges::parse(file, query)?)
+        move |backend, control| {
+            backend.file_history_merges(&identity, ReadHistoryMerges::parse(file, query)?, control)
         },
         |captured| captured.encode(PageBudget::PROTOCOL),
     )
@@ -168,15 +137,16 @@ pub(crate) async fn merge_inputs(
     ApiPath((file, merge)): ApiPath<(String, String)>,
     HistoryQuery { query, connection }: HistoryQuery,
 ) -> Result<Response, ApiError> {
-    page(
+    crate::history_read::run(
         state,
         connection,
-        move |backend| {
+        move |backend, control| {
             backend.file_history_merge_inputs(
                 &identity,
                 ReadMergeInputs(crate::backend_file_history::ReadIndexedSlice::parse(
                     file, "merge_id", merge, query,
                 )?),
+                control,
             )
         },
         |captured| captured.encode_inputs(PageBudget::PROTOCOL),
@@ -190,15 +160,16 @@ pub(crate) async fn merge_parents(
     ApiPath((file, merge)): ApiPath<(String, String)>,
     HistoryQuery { query, connection }: HistoryQuery,
 ) -> Result<Response, ApiError> {
-    page(
+    crate::history_read::run(
         state,
         connection,
-        move |backend| {
+        move |backend, control| {
             backend.file_history_merge_parents(
                 &identity,
                 ReadMergeParents(crate::backend_file_history::ReadIndexedSlice::parse(
                     file, "merge_id", merge, query,
                 )?),
+                control,
             )
         },
         |captured| captured.encode_merge_parents(PageBudget::PROTOCOL),
@@ -212,10 +183,12 @@ pub(crate) async fn versions(
     ApiPath(file): ApiPath<String>,
     HistoryQuery { query, connection }: HistoryQuery,
 ) -> Result<Response, ApiError> {
-    page(
+    crate::history_read::run(
         state,
         connection,
-        move |backend| backend.file_version_page(&identity, ReadVersionPage::parse(file, query)?),
+        move |backend, control| {
+            backend.file_version_page(&identity, ReadVersionPage::parse(file, query)?, control)
+        },
         |captured| captured.encode(PageBudget::PROTOCOL),
     )
     .await
@@ -227,10 +200,10 @@ pub(crate) async fn version_sources(
     ApiPath((file, version)): ApiPath<(String, String)>,
     HistoryQuery { query, connection }: HistoryQuery,
 ) -> Result<Response, ApiError> {
-    page(
+    crate::history_read::run(
         state,
         connection,
-        move |backend| {
+        move |backend, control| {
             backend.file_version_sources(
                 &identity,
                 ReadVersionSources(crate::backend_file_history::ReadIndexedSlice::parse(
@@ -239,6 +212,7 @@ pub(crate) async fn version_sources(
                     version,
                     query,
                 )?),
+                control,
             )
         },
         |captured| captured.encode_sources(PageBudget::PROTOCOL),

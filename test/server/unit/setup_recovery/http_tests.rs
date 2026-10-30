@@ -463,6 +463,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadHistoryMerges,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -470,6 +471,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadMergeInputs,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeInputsPage, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -477,6 +479,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadMergeParents,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeParentsPage, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -492,6 +495,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadVersionPage,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionPage, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -499,6 +503,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadVersionSources,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

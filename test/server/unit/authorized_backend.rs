@@ -1079,7 +1079,9 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryMerges,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record(
             "file_history_merges",
             Some(identity),
@@ -1097,7 +1099,9 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadMergeInputs,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeInputsPage, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record(
             "file_history_merge_inputs",
             Some(identity),
@@ -1112,7 +1116,9 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadMergeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeParentsPage, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record(
             "file_history_merge_parents",
             Some(identity),
@@ -1148,7 +1154,9 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadVersionPage,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionPage, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record(
             "file_version_page",
             Some(identity),
@@ -1168,7 +1176,9 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadVersionSources,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record(
             "file_version_sources",
             Some(identity),
@@ -1996,19 +2006,19 @@ impl Fixture {
             ),
             ("file_history_node_parents", backend.file_history_node_parents(identity, crate::ReadNodeParents::parse("file".into(), "node".into(), rooted_query()).unwrap(), &crate::tests::history_read_control()).map(|page| { assert_eq!(page.parents, ["parent"]); json!({"returned_by":"file_history_node_parents"}) })),
             ("file_history_branches", backend.file_history_branches(identity, crate::ReadHistoryBranches::parse("file".into(), rooted_query()).unwrap(), &crate::tests::history_read_control()).map(|page| { assert!(page.branches.is_empty()); json!({"returned_by":"file_history_branches"}) })),
-            ("file_history_merges", backend.file_history_merges(identity, crate::ReadHistoryMerges::parse("file".into(), rooted_query()).unwrap()).map(|page| { assert!(page.merges.is_empty()); json!({"returned_by":"file_history_merges"}) })),
-            ("file_history_merge_inputs", backend.file_history_merge_inputs(identity, crate::ReadMergeInputs(crate::backend_file_history::ReadIndexedSlice::parse("file".into(), "merge_id", "merge".into(), rooted_query()).unwrap())).map(|page| { assert_eq!(page.total, 1); json!({"returned_by":"file_history_merge_inputs"}) })),
-            ("file_history_merge_parents", backend.file_history_merge_parents(identity, crate::ReadMergeParents(crate::backend_file_history::ReadIndexedSlice::parse("file".into(), "merge_id", "merge".into(), rooted_query()).unwrap())).map(|page| { assert_eq!(page.items, ["parent"]); json!({"returned_by":"file_history_merge_parents"}) })),
+            ("file_history_merges", backend.file_history_merges(identity, crate::ReadHistoryMerges::parse("file".into(), rooted_query()).unwrap(), &crate::tests::history_read_control()).map(|page| { assert!(page.merges.is_empty()); json!({"returned_by":"file_history_merges"}) })),
+            ("file_history_merge_inputs", backend.file_history_merge_inputs(identity, crate::ReadMergeInputs(crate::backend_file_history::ReadIndexedSlice::parse("file".into(), "merge_id", "merge".into(), rooted_query()).unwrap()), &crate::tests::history_read_control()).map(|page| { assert_eq!(page.total, 1); json!({"returned_by":"file_history_merge_inputs"}) })),
+            ("file_history_merge_parents", backend.file_history_merge_parents(identity, crate::ReadMergeParents(crate::backend_file_history::ReadIndexedSlice::parse("file".into(), "merge_id", "merge".into(), rooted_query()).unwrap()), &crate::tests::history_read_control()).map(|page| { assert_eq!(page.items, ["parent"]); json!({"returned_by":"file_history_merge_parents"}) })),
             ("file_history_node_field", backend.file_history_node_field(identity, crate::ReadNodeField::parse("file".into(), "node".into(), "message".into(), rooted_query()).unwrap(), &crate::tests::history_read_control()).map(|slice| { assert_eq!(slice.text, "text"); json!({"returned_by":"file_history_node_field"}) })),
             (
                 "file_version_page",
-                backend.file_version_page(identity, crate::ReadVersionPage::parse("file".into(), BTreeMap::new()).unwrap()).map(|page| {
+                backend.file_version_page(identity, crate::ReadVersionPage::parse("file".into(), BTreeMap::new()).unwrap(), &crate::tests::history_read_control()).map(|page| {
                     assert_eq!(page.versions[0].logical_size, u64::MAX);
                     assert_eq!(page.versions[0].file_id, "file");
                     json!({"returned_by":"file_version_page"})
                 }),
             ),
-            ("file_version_sources", backend.file_version_sources(identity, crate::ReadVersionSources(crate::backend_file_history::ReadIndexedSlice::parse("file".into(), "version_id", "version".into(), rooted_query()).unwrap())).map(|page| { assert_eq!(page.items, ["source"]); json!({"returned_by":"file_version_sources"}) })),
+            ("file_version_sources", backend.file_version_sources(identity, crate::ReadVersionSources(crate::backend_file_history::ReadIndexedSlice::parse("file".into(), "version_id", "version".into(), rooted_query()).unwrap()), &crate::tests::history_read_control()).map(|page| { assert_eq!(page.items, ["source"]); json!({"returned_by":"file_version_sources"}) })),
             (
                 "topology_snapshot",
                 backend.topology_snapshot(identity).map(|snapshot| {
@@ -2892,6 +2902,14 @@ fn history_route_fixture(
             "/api/repositories/{repo}/directory-branches",
             post(crate::http_directory_selection::read),
         )
+        .route(
+            "/api/files/{file}/history",
+            get(crate::http_file_history::versions),
+        )
+        .route(
+            "/api/files/{file}/history/versions/{version}/sources",
+            get(crate::http_file_history::version_sources),
+        )
         .merge(crate::file_manager::routes())
         .layer(http_routing::Extension(fixture.identity.clone()))
         .with_state(state);
@@ -2931,29 +2949,19 @@ async fn listing_route_cancellation_retains_shared_capacity_until_worker_checkpo
 
 #[tokio::test]
 async fn file_history_routes_retain_shared_capacity_until_cancelled_worker_checkpoint() {
-    for suffix in [
-        "",
-        "/branches",
-        "/nodes/node/parents",
-        "/nodes/node/fields/message",
-    ] {
-        cancelled_history_route_keeps_capacity(file_history_request(suffix)).await;
+    for route in FILE_HISTORY_ROUTES {
+        cancelled_history_route_keeps_capacity(file_history_request(route)).await;
     }
 }
 
 #[tokio::test]
 async fn file_history_responses_retain_backend_permit_until_collected_bytes_drop() {
     use service_stack::ServiceExt;
-    for suffix in [
-        "",
-        "/branches",
-        "/nodes/node/parents",
-        "/nodes/node/fields/message",
-    ] {
+    for route in FILE_HISTORY_ROUTES {
         let fixture = Fixture::new();
         let (app, scans, backends) = history_route_fixture(&fixture);
-        let response = app.oneshot(file_history_request(suffix)).await.unwrap();
-        assert_eq!(response.status(), ::http::StatusCode::OK, "{suffix}");
+        let response = app.oneshot(file_history_request(route)).await.unwrap();
+        assert_eq!(response.status(), ::http::StatusCode::OK, "{route}");
         assert_eq!(scans.available_permits(), 2);
         assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS - 1);
         let bytes = http_routing::body::to_bytes(
@@ -3105,21 +3113,16 @@ async fn cancelled_history_route_keeps_capacity(
     assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
     let overloaded = app.clone().oneshot(selection_request()).await.unwrap();
     assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
-    for suffix in [
-        "",
-        "/branches",
-        "/nodes/node/parents",
-        "/nodes/node/fields/message",
-    ] {
+    for route in FILE_HISTORY_ROUTES {
         let overloaded = app
             .clone()
-            .oneshot(file_history_request(suffix))
+            .oneshot(file_history_request(route))
             .await
             .unwrap();
         assert_eq!(
             overloaded.status(),
             ::http::StatusCode::TOO_MANY_REQUESTS,
-            "{suffix}"
+            "{route}"
         );
     }
     assert_eq!(history_read_slots.available_permits(), 0);
@@ -3233,12 +3236,21 @@ fn selection_request() -> http_routing::http::Request<http_routing::body::Body> 
         .unwrap()
 }
 
-fn file_history_request(suffix: &str) -> http_routing::http::Request<http_routing::body::Body> {
+const FILE_HISTORY_ROUTES: [&str; 9] = [
+    "/api/file-manager/files/file/history",
+    "/api/file-manager/files/file/history/branches",
+    "/api/file-manager/files/file/history/nodes/node/parents",
+    "/api/file-manager/files/file/history/nodes/node/fields/message",
+    "/api/file-manager/files/file/history/merges",
+    "/api/file-manager/files/file/history/merges/merge/inputs",
+    "/api/file-manager/files/file/history/merges/merge/parents",
+    "/api/files/file/history",
+    "/api/files/file/history/versions/version/sources",
+];
+
+fn file_history_request(route: &str) -> http_routing::http::Request<http_routing::body::Body> {
     http_routing::http::Request::builder()
-        .uri(format!(
-            "/api/file-manager/files/file/history{suffix}?history_root={}",
-            recorded_root(),
-        ))
+        .uri(format!("{route}?history_root={}", recorded_root(),))
         .body(http_routing::body::Body::empty())
         .unwrap()
 }

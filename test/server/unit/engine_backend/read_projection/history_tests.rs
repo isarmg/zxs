@@ -15,6 +15,7 @@ fn typed_file_history_preserves_core_query_wire_and_admitted_snapshot_lifetime()
         backend.file_version_page(
             &identity,
             crate::ReadVersionPage::parse(file.clone(), query).unwrap(),
+            &tree_control(),
         )
     };
     let page = read(BTreeMap::new()).unwrap();
@@ -54,6 +55,7 @@ fn typed_file_history_preserves_core_query_wire_and_admitted_snapshot_lifetime()
         .file_version_page(
             &identity,
             crate::ReadVersionPage::parse("missing".into(), BTreeMap::new()).unwrap(),
+            &tree_control(),
         )
         .unwrap_err();
     assert_eq!(missing.code, storage_contract::ErrorCode::FileNotFound);
@@ -122,7 +124,7 @@ fn version_page_finishes_captured_snapshot_but_rechecks_current_authorization() 
     let capture = || {
         let engine = backend.engine.lock().unwrap();
         crate::engine_backend::current_protected_identity(&engine, &identity).unwrap();
-        crate::engine_backend::file_manager::history_pages::prepare_version_page(
+        capture_version(
             &engine,
             crate::ReadVersionPage::parse(file.clone(), BTreeMap::new()).unwrap(),
         )
@@ -136,12 +138,13 @@ fn version_page_finishes_captured_snapshot_but_rechecks_current_authorization() 
         b"second",
     );
     let old_page = backend
-        .finish_file_history_page(&identity, &file, old.read(), None)
+        .finish_file_history_page(&identity, &file, old.read(), &tree_control())
         .unwrap();
     let fresh = backend
         .file_version_page(
             &identity,
             crate::ReadVersionPage::parse(file.clone(), BTreeMap::new()).unwrap(),
+            &tree_control(),
         )
         .unwrap();
     assert_eq!(old_page.versions.len(), 1);
@@ -151,7 +154,7 @@ fn version_page_finishes_captured_snapshot_but_rechecks_current_authorization() 
     auth.logout(&token).unwrap();
     assert_eq!(
         backend
-            .finish_file_history_page(&identity, &file, pending.read(), None)
+            .finish_file_history_page(&identity, &file, pending.read(), &tree_control())
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
@@ -163,7 +166,7 @@ fn version_page_finishes_captured_snapshot_but_rechecks_current_authorization() 
                 &identity,
                 &file,
                 Err::<crate::VersionPage, _>(ApiError::invalid("detached failure")),
-                None
+                &tree_control()
             )
             .unwrap_err()
             .code,
@@ -173,7 +176,8 @@ fn version_page_finishes_captured_snapshot_but_rechecks_current_authorization() 
         backend
             .file_version_page(
                 &identity,
-                crate::ReadVersionPage::parse("missing".into(), BTreeMap::new()).unwrap()
+                crate::ReadVersionPage::parse("missing".into(), BTreeMap::new()).unwrap(),
+                &tree_control()
             )
             .unwrap_err()
             .code,
@@ -193,7 +197,7 @@ fn empty_merge_page_finishes_captured_snapshot_and_rechecks_current_authorizatio
         let engine = backend.engine.lock().unwrap();
         crate::engine_backend::current_protected_identity(&engine, &identity).unwrap();
         let root = engine.history_root(&repo.history_tree_id).unwrap();
-        crate::engine_backend::file_manager::history_pages::prepare_merge_page(
+        capture_merges(
             &engine,
             crate::ReadHistoryMerges::parse(
                 file.clone(),
@@ -212,15 +216,15 @@ fn empty_merge_page_finishes_captured_snapshot_and_rechecks_current_authorizatio
     );
     assert!(backend.engine.try_lock().is_ok());
     let old_page = backend
-        .finish_file_history_page(&identity, &file, Ok(old.read()), None)
+        .finish_file_history_page(&identity, &file, old.read(), &tree_control())
         .unwrap();
     assert!(old_page.merges.is_empty());
-    let fresh = capture().read();
+    let fresh = capture().read().unwrap();
     assert_ne!(old_page.history_root, fresh.history_root);
     // The common completion boundary also rejects a no-longer-resolvable file.
     assert_eq!(
         backend
-            .finish_file_history_page(&identity, "missing", Ok(fresh), None)
+            .finish_file_history_page(&identity, "missing", Ok(fresh), &tree_control())
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::FileNotFound
@@ -229,7 +233,7 @@ fn empty_merge_page_finishes_captured_snapshot_and_rechecks_current_authorizatio
     auth.logout(&token).unwrap();
     assert_eq!(
         backend
-            .finish_file_history_page(&identity, &file, Ok(pending.read()), None)
+            .finish_file_history_page(&identity, &file, pending.read(), &tree_control())
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
@@ -240,7 +244,7 @@ fn empty_merge_page_finishes_captured_snapshot_and_rechecks_current_authorizatio
                 &identity,
                 &file,
                 Err::<crate::HistoryMergesPage, _>(ApiError::invalid("detached failure")),
-                None
+                &tree_control()
             )
             .unwrap_err()
             .code,
@@ -266,7 +270,7 @@ fn detached_file_history_completion_rechecks_authorization_before_success_and_re
         crate::engine_backend::file_manager::history_pages::capture(&engine, &entry.file_id, None)
             .unwrap()
     };
-    let pending = (0..4).map(|_| capture()).collect::<Vec<_>>();
+    let pending = (0..9).map(|_| capture()).collect::<Vec<_>>();
     let failing = capture();
     auth.logout(&token).unwrap();
     let query = || BTreeMap::from([("history_root".to_owned(), root_hash.as_str().to_owned())]);
@@ -308,12 +312,56 @@ fn detached_file_history_completion_rechecks_authorization_before_success_and_re
                     &control,
                 )
                 .map(|page| page.history_root),
+            4 => captured
+                .merges(
+                    crate::ReadHistoryMerges::parse(entry.file_id.clone(), query()).unwrap(),
+                    &control,
+                )
+                .map(|page| page.history_root),
+            5 => captured
+                .version_page(
+                    crate::ReadVersionPage::parse(entry.file_id.clone(), query()).unwrap(),
+                    &control,
+                )
+                .map(|page| page.history_root),
+            6..=8 => {
+                let request = crate::backend_file_history::ReadIndexedSlice::parse(
+                    entry.file_id.clone(),
+                    if kind == 8 { "version_id" } else { "merge_id" },
+                    if kind == 8 {
+                        entry.version_id.clone()
+                    } else {
+                        "missing-merge".into()
+                    },
+                    query(),
+                )
+                .unwrap();
+                match kind {
+                    6 => captured
+                        .merge_inputs(request, &control)
+                        .map(|page| page.history_root),
+                    7 => captured
+                        .merge_parents(request, &control)
+                        .map(|page| page.history_root),
+                    8 => captured
+                        .version_sources(request, &control)
+                        .map(|page| page.history_root),
+                    _ => unreachable!(),
+                }
+            }
             _ => unreachable!(),
         };
-        assert_eq!(read.as_ref().unwrap(), root_hash.as_str());
+        if matches!(kind, 6 | 7) {
+            assert_eq!(
+                read.as_ref().unwrap_err().status,
+                http::StatusCode::NOT_FOUND
+            );
+        } else {
+            assert_eq!(read.as_ref().unwrap(), root_hash.as_str());
+        }
         assert_eq!(
             backend
-                .finish_file_history_page(&identity, &entry.file_id, read, Some(&control))
+                .finish_file_history_page(&identity, &entry.file_id, read, &control)
                 .unwrap_err()
                 .code,
             storage_contract::ErrorCode::Unauthorized
@@ -336,7 +384,136 @@ fn detached_file_history_completion_rechecks_authorization_before_success_and_re
     );
     assert_eq!(
         backend
-            .finish_file_history_page(&identity, &entry.file_id, error, Some(&control))
+            .finish_file_history_page(&identity, &entry.file_id, error, &control)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized
+    );
+}
+
+struct PendingVersion(
+    crate::engine_backend::file_manager::history_pages::FileHistoryCapture,
+    crate::ReadVersionPage,
+);
+impl PendingVersion {
+    fn read(self) -> Result<crate::VersionPage, ApiError> {
+        self.0.version_page(self.1, &tree_control())
+    }
+}
+fn capture_version(
+    engine: &Engine,
+    request: crate::ReadVersionPage,
+) -> Result<PendingVersion, ApiError> {
+    Ok(PendingVersion(
+        crate::engine_backend::file_manager::history_pages::capture(
+            engine,
+            request.file_id.as_str(),
+            request.root.as_ref(),
+        )?,
+        request,
+    ))
+}
+struct PendingMerges(
+    crate::engine_backend::file_manager::history_pages::FileHistoryCapture,
+    crate::ReadHistoryMerges,
+);
+impl PendingMerges {
+    fn read(self) -> Result<crate::HistoryMergesPage, ApiError> {
+        self.0.merges(self.1, &tree_control())
+    }
+}
+fn capture_merges(
+    engine: &Engine,
+    request: crate::ReadHistoryMerges,
+) -> Result<PendingMerges, ApiError> {
+    Ok(PendingMerges(
+        crate::engine_backend::file_manager::history_pages::capture(
+            engine,
+            request.0.file_id.as_str(),
+            Some(&request.0.root),
+        )?,
+        request,
+    ))
+}
+
+#[test]
+fn remaining_history_completion_checks_current_file_before_control_and_result() {
+    let (root, mut engine, repo, _) = fixture();
+    save_projection_file(&mut engine, &repo.main_branch_id, "file.txt", b"first");
+    let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    let hash = engine.history_root(&repo.history_tree_id).unwrap();
+    let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
+    let expired = crate::HistoryReadControl::until(std::time::Instant::now());
+    let query = || BTreeMap::from([("history_root".into(), hash.as_str().to_owned())]);
+    for kind in 0..5 {
+        let captured = {
+            let engine = backend.engine.lock().unwrap();
+            crate::engine_backend::file_manager::history_pages::capture(
+                &engine,
+                &entry.file_id,
+                None,
+            )
+            .unwrap()
+        };
+        let read = match kind {
+            0 => captured
+                .merges(
+                    crate::ReadHistoryMerges::parse(entry.file_id.clone(), query()).unwrap(),
+                    &tree_control(),
+                )
+                .map(|page| page.history_root),
+            1 => captured
+                .version_page(
+                    crate::ReadVersionPage::parse(entry.file_id.clone(), query()).unwrap(),
+                    &tree_control(),
+                )
+                .map(|page| page.history_root),
+            2..=4 => {
+                let request = crate::backend_file_history::ReadIndexedSlice::parse(
+                    entry.file_id.clone(),
+                    if kind == 4 { "version_id" } else { "merge_id" },
+                    if kind == 4 {
+                        entry.version_id.clone()
+                    } else {
+                        "missing".into()
+                    },
+                    query(),
+                )
+                .unwrap();
+                match kind {
+                    2 => captured
+                        .merge_inputs(request, &tree_control())
+                        .map(|page| page.history_root),
+                    3 => captured
+                        .merge_parents(request, &tree_control())
+                        .map(|page| page.history_root),
+                    4 => captured
+                        .version_sources(request, &tree_control())
+                        .map(|page| page.history_root),
+                    _ => unreachable!(),
+                }
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            backend
+                .finish_file_history_page(&identity, &entry.file_id, read, &expired)
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::RequestTimeout
+        );
+    }
+    assert_eq!(
+        backend
+            .finish_file_history_page(&identity, "missing", Ok(()), &expired)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::FileNotFound
+    );
+    auth.logout(&token).unwrap();
+    assert_eq!(
+        backend
+            .finish_file_history_page(&identity, "missing", Ok(()), &expired)
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized

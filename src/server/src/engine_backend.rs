@@ -217,14 +217,12 @@ impl EngineBackend {
         identity: &Identity,
         file_id: &str,
         page: Result<T, ApiError>,
-        control: Option<&crate::HistoryReadControl>,
+        control: &crate::HistoryReadControl,
     ) -> Result<T, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         file_manager::file_repo(&engine, file_id)?;
-        if let Some(control) = control {
-            file_manager::activity::checkpoint(control)?;
-        }
+        file_manager::activity::checkpoint(control)?;
         page
     }
 
@@ -1611,7 +1609,7 @@ impl Backend for EngineBackend {
             file_manager::history_pages::capture(&engine, &file_id, request.root.as_ref())?;
         drop(engine);
         let page = capture.file_history(request, control);
-        self.finish_file_history_page(identity, &file_id, page, Some(control))
+        self.finish_file_history_page(identity, &file_id, page, control)
     }
     fn file_history_node_parents(
         &self,
@@ -1629,7 +1627,7 @@ impl Backend for EngineBackend {
         )?;
         drop(engine);
         let page = capture.node_parents(request, control);
-        self.finish_file_history_page(identity, &file_id, page, Some(control))
+        self.finish_file_history_page(identity, &file_id, page, control)
     }
     fn file_history_branches(
         &self,
@@ -1644,37 +1642,52 @@ impl Backend for EngineBackend {
             file_manager::history_pages::capture(&engine, &file_id, Some(&request.0.root))?;
         drop(engine);
         let page = capture.branches(request, control);
-        self.finish_file_history_page(identity, &file_id, page, Some(control))
+        self.finish_file_history_page(identity, &file_id, page, control)
     }
     fn file_history_merges(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryMerges,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         let file_id = request.0.file_id.as_str().to_owned();
-        let plan = file_manager::history_pages::prepare_merge_page(&engine, request)?;
+        let capture =
+            file_manager::history_pages::capture(&engine, &file_id, Some(&request.0.root))?;
         drop(engine);
-        self.finish_file_history_page(identity, &file_id, Ok(plan.read()), None)
+        let page = capture.merges(request, control);
+        self.finish_file_history_page(identity, &file_id, page, control)
     }
     fn file_history_merge_inputs(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadMergeInputs,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeInputsPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::history_pages::merge_inputs(&engine, &request.0)
+        let file_id = request.0.file_id.as_str().to_owned();
+        let capture =
+            file_manager::history_pages::capture(&engine, &file_id, Some(&request.0.root))?;
+        drop(engine);
+        let page = capture.merge_inputs(request.0, control);
+        self.finish_file_history_page(identity, &file_id, page, control)
     }
     fn file_history_merge_parents(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadMergeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeParentsPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::history_pages::merge_parents(&engine, &request.0)
+        let file_id = request.0.file_id.as_str().to_owned();
+        let capture =
+            file_manager::history_pages::capture(&engine, &file_id, Some(&request.0.root))?;
+        drop(engine);
+        let page = capture.merge_parents(request.0, control);
+        self.finish_file_history_page(identity, &file_id, page, control)
     }
     fn file_history_node_field(
         &self,
@@ -1688,28 +1701,37 @@ impl Backend for EngineBackend {
         let capture = file_manager::history_pages::capture(&engine, &file_id, Some(&request.root))?;
         drop(engine);
         let page = capture.node_field(request, control);
-        self.finish_file_history_page(identity, &file_id, page, Some(control))
+        self.finish_file_history_page(identity, &file_id, page, control)
     }
     fn file_version_page(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadVersionPage,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         let file_id = request.file_id.as_str().to_owned();
-        let plan = file_manager::history_pages::prepare_version_page(&engine, request)?;
+        let capture =
+            file_manager::history_pages::capture(&engine, &file_id, request.root.as_ref())?;
         drop(engine);
-        self.finish_file_history_page(identity, &file_id, plan.read(), None)
+        let page = capture.version_page(request, control);
+        self.finish_file_history_page(identity, &file_id, page, control)
     }
     fn file_version_sources(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadVersionSources,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::history_pages::version_sources(&engine, &request.0)
+        let file_id = request.0.file_id.as_str().to_owned();
+        let capture =
+            file_manager::history_pages::capture(&engine, &file_id, Some(&request.0.root))?;
+        drop(engine);
+        let page = capture.version_sources(request.0, control);
+        self.finish_file_history_page(identity, &file_id, page, control)
     }
     fn topology_snapshot(
         &self,

@@ -572,6 +572,7 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadHistoryMerges,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -580,6 +581,7 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadMergeInputs,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeInputsPage, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -588,6 +590,7 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadMergeParents,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeParentsPage, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -605,6 +608,7 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadVersionPage,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionPage, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -613,6 +617,7 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadVersionSources,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())

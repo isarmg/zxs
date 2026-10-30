@@ -259,10 +259,28 @@ impl FileVersionReadPlan {
     /// Select outside the Engine lock. Only selected record handles outlive
     /// this call; both shared map roots are dropped before the caller re-admits.
     pub fn read(self) -> (Selection<VersionKey>, Vec<std::sync::Arc<FileVersion>>) {
+        self.read_with_observer(None)
+            .expect("invariant: observerless plan selection is infallible")
+    }
+
+    /// Select with cancellation/deadline observation during membership scans.
+    /// # Errors
+    /// Returns the observer's error without publishing a partial page.
+    pub fn read_observed(
+        self,
+        observe: &dyn Fn() -> Result<()>,
+    ) -> Result<(Selection<VersionKey>, Vec<std::sync::Arc<FileVersion>>)> {
+        self.read_with_observer(Some(observe))
+    }
+
+    fn read_with_observer(
+        self,
+        observe: Option<&dyn Fn() -> Result<()>>,
+    ) -> Result<(Selection<VersionKey>, Vec<std::sync::Arc<FileVersion>>)> {
         let versions = self
             .membership
             .iter()
-            .flat_map(|histories| histories.values())
+            .filter_map(|histories| histories.get(&self.history_id))
             .flat_map(|versions| versions.keys())
             .map(|id| {
                 self.versions
@@ -278,7 +296,8 @@ impl FileVersionReadPlan {
                 .as_ref()
                 .map(|(key, direction)| (key, *direction)),
             self.limit,
-        );
+            observe,
+        )?;
         let records = selection
             .keys
             .iter()
@@ -288,7 +307,7 @@ impl FileVersionReadPlan {
                     .expect("invariant: selected version exists in captured map")
             })
             .collect();
-        (selection, records)
+        Ok((selection, records))
     }
 }
 
@@ -306,6 +325,24 @@ impl FileMergeReadPlan {
     /// Select and summarize outside the Engine lock. No source arrays or
     /// shared record handles survive this consuming read.
     pub fn read(self) -> (Selection<MergeKey>, Vec<MergeRecord>) {
+        self.read_with_observer(None)
+            .expect("invariant: observerless plan selection is infallible")
+    }
+
+    /// Select with cancellation/deadline observation during membership scans.
+    /// # Errors
+    /// Returns the observer's error without publishing a partial page.
+    pub fn read_observed(
+        self,
+        observe: &dyn Fn() -> Result<()>,
+    ) -> Result<(Selection<MergeKey>, Vec<MergeRecord>)> {
+        self.read_with_observer(Some(observe))
+    }
+
+    fn read_with_observer(
+        self,
+        observe: Option<&dyn Fn() -> Result<()>>,
+    ) -> Result<(Selection<MergeKey>, Vec<MergeRecord>)> {
         let mut selector = Selector::new(
             self.boundary
                 .as_ref()
@@ -313,6 +350,9 @@ impl FileMergeReadPlan {
             self.limit,
         );
         for id in self.membership.iter().flat_map(|members| members.keys()) {
+            if let Some(observe) = observe {
+                observe()?;
+            }
             let merge = self
                 .merges
                 .get(id)
@@ -338,7 +378,7 @@ impl FileMergeReadPlan {
                 )
             })
             .collect();
-        (selection, records)
+        Ok((selection, records))
     }
 }
 
@@ -360,15 +400,19 @@ fn version_selection<'a>(
     versions: impl Iterator<Item = &'a FileVersion>,
     boundary: Option<(&VersionKey, Direction)>,
     limit: usize,
-) -> Selection<VersionKey> {
+    observe: Option<&dyn Fn() -> Result<()>>,
+) -> Result<Selection<VersionKey>> {
     let mut selector = Selector::new(boundary, limit);
     for version in versions {
+        if let Some(observe) = observe {
+            observe()?;
+        }
         selector.consider(VersionKey {
             version_sequence: version.version_sequence,
             version_id: version.version_id.clone(),
         });
     }
-    selector.finish()
+    Ok(selector.finish())
 }
 
 impl Engine {
@@ -1012,6 +1056,7 @@ impl<'a> FileHistoryScope<'a> {
         boundary: Option<(MergeKey, Direction)>,
         limit: usize,
     ) -> Result<FileMergeReadPlan> {
+        self.checkpoint()?;
         if let Some((key, _)) = &boundary {
             self.merge_record(key)?;
         }
@@ -1025,6 +1070,8 @@ impl<'a> FileHistoryScope<'a> {
     }
 
     /// `(branch, node)` input pairs by original index; pairs are never split.
+    /// Indexed slices copy only the requested bounded page as one cooperative
+    /// segment after the scope checkpoint; no full source array is cloned.
     ///
     /// # Errors
     /// `NotFound` when the merge is not in this file history.
@@ -1034,6 +1081,7 @@ impl<'a> FileHistoryScope<'a> {
         offset: usize,
         limit: usize,
     ) -> Result<Slice<(String, String)>> {
+        self.checkpoint()?;
         let merge = self.merge(merge_id).ok_or_else(merge_not_found)?;
         assert_eq!(
             merge.input_branch_ids.len(),
@@ -1063,6 +1111,7 @@ impl<'a> FileHistoryScope<'a> {
         offset: usize,
         limit: usize,
     ) -> Result<Slice<String>> {
+        self.checkpoint()?;
         let merge = self.merge(merge_id).ok_or_else(merge_not_found)?;
         Ok(slice(merge.parent_node_ids.len(), offset, limit, |index| {
             merge.parent_node_ids[index].clone()
@@ -1081,7 +1130,9 @@ impl<'a> FileHistoryScope<'a> {
             }),
             boundary,
             limit,
+            None,
         )
+        .expect("invariant: observerless version selection is infallible")
     }
 
     /// Capture shared version roots after cursor admission, without cloning
@@ -1094,6 +1145,7 @@ impl<'a> FileHistoryScope<'a> {
         boundary: Option<(VersionKey, Direction)>,
         limit: usize,
     ) -> Result<FileVersionReadPlan> {
+        self.checkpoint()?;
         if let Some((key, _)) = &boundary {
             self.version_record(key)?;
         }
@@ -1132,6 +1184,7 @@ impl<'a> FileHistoryScope<'a> {
         offset: usize,
         limit: usize,
     ) -> Result<Slice<String>> {
+        self.checkpoint()?;
         let version = self.version(version_id).ok_or_else(version_not_found)?;
         Ok(slice(
             version.source_version_ids.len(),

@@ -887,16 +887,19 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         request: crate::ReadHistoryMerges,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryMergesPage, ApiError>;
     fn file_history_merge_inputs(
         &self,
         identity: &Identity,
         request: crate::ReadMergeInputs,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeInputsPage, ApiError>;
     fn file_history_merge_parents(
         &self,
         identity: &Identity,
         request: crate::ReadMergeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeParentsPage, ApiError>;
     fn file_history_node_field(
         &self,
@@ -909,11 +912,13 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         request: crate::ReadVersionPage,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionPage, ApiError>;
     fn file_version_sources(
         &self,
         identity: &Identity,
         request: crate::ReadVersionSources,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionSourcesPage, ApiError>;
     fn topology_snapshot(&self, identity: &Identity) -> Result<TopologySnapshot, ApiError>;
     fn placement_snapshot(
@@ -1599,25 +1604,28 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryMerges,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
         self.backend
-            .file_history_merges(&self.current(identity)?, request)
+            .file_history_merges(&self.current(identity)?, request, control)
     }
     fn file_history_merge_inputs(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadMergeInputs,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeInputsPage, crate::ApiError> {
         self.backend
-            .file_history_merge_inputs(&self.current(identity)?, request)
+            .file_history_merge_inputs(&self.current(identity)?, request, control)
     }
     fn file_history_merge_parents(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadMergeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeParentsPage, crate::ApiError> {
         self.backend
-            .file_history_merge_parents(&self.current(identity)?, request)
+            .file_history_merge_parents(&self.current(identity)?, request, control)
     }
     fn file_history_node_field(
         &self,
@@ -1632,17 +1640,19 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadVersionPage,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionPage, crate::ApiError> {
         self.backend
-            .file_version_page(&self.current(identity)?, request)
+            .file_version_page(&self.current(identity)?, request, control)
     }
     fn file_version_sources(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadVersionSources,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
         self.backend
-            .file_version_sources(&self.current(identity)?, request)
+            .file_version_sources(&self.current(identity)?, request, control)
     }
     fn topology_snapshot(
         &self,

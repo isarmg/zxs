@@ -861,6 +861,7 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadHistoryMerges,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
         panic!("private file history panic detail")
     }
@@ -868,6 +869,7 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadMergeInputs,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeInputsPage, crate::ApiError> {
         panic!("private file history panic detail")
     }
@@ -875,6 +877,7 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadMergeParents,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeParentsPage, crate::ApiError> {
         panic!("private file history panic detail")
     }
@@ -890,6 +893,7 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadVersionPage,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionPage, crate::ApiError> {
         panic!("private file history panic detail")
     }
@@ -897,6 +901,7 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadVersionSources,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
         panic!("private file history panic detail")
     }

@@ -690,7 +690,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
     let merge = &merges.merges[0];
     assert_eq!((merge.input_count, merge.parent_count), (40, 41));
     assert_eq!(merge.result_node_id, g.merge_node);
-    let inputs = history_pages::merge_inputs(
+    let inputs = self::merge_inputs(
         &g.engine,
         &ReadIndexedSlice::parse(
             g.file.clone(),
@@ -704,7 +704,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
     assert_eq!(inputs.total, 40);
     assert_eq!(inputs.items.len(), 2);
     assert_eq!(inputs.items[0].0, g.forks[38]);
-    let parents = history_pages::merge_parents(
+    let parents = self::merge_parents(
         &g.engine,
         &ReadIndexedSlice::parse(
             g.file.clone(),
@@ -729,7 +729,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
     )
     .unwrap_err();
     assert_eq!(stale.code, storage_contract::ErrorCode::HistoryChanged);
-    let unknown_merge = history_pages::merge_inputs(
+    let unknown_merge = self::merge_inputs(
         &g.engine,
         &ReadIndexedSlice::parse(
             g.file.clone(),
@@ -755,7 +755,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
         pair[1].version_sequence,
         &pair[1].version_id
     )));
-    let sources = history_pages::version_sources(
+    let sources = self::version_sources(
         &g.engine,
         &ReadIndexedSlice::parse(
             g.file.clone(),
@@ -871,14 +871,16 @@ fn retried_requests_under_the_same_root_return_byte_identical_pages() {
 
 // Synchronous convenience for the existing transport projection fixtures.
 fn version_page(engine: &Engine, request: crate::ReadVersionPage) -> Result<VersionPage, ApiError> {
-    history_pages::prepare_version_page(engine, request)?.read()
+    capture(engine, request.file_id.as_str(), request.root.as_ref())?
+        .version_page(request, &crate::tests::history_read_control())
 }
 
 fn merge_page(
     engine: &Engine,
     request: crate::ReadHistoryMerges,
 ) -> Result<HistoryMergesPage, ApiError> {
-    Ok(history_pages::prepare_merge_page(engine, request)?.read())
+    capture(engine, request.0.file_id.as_str(), Some(&request.0.root))?
+        .merges(request, &crate::tests::history_read_control())
 }
 
 #[test]
@@ -898,7 +900,8 @@ fn detached_merge_page_keeps_captured_wire_after_publication() {
         .unwrap()
         .body()
         .to_vec();
-    let plan = history_pages::prepare_merge_page(&g.engine, request()).unwrap();
+    let captured = capture(&g.engine, &g.file, Some(&request().0.root)).unwrap();
+    let pending = request();
     save(
         &mut g.engine,
         &g.repo.main_branch_id,
@@ -910,7 +913,9 @@ fn detached_merge_page_keeps_captured_wire_after_publication() {
         g.engine.history_root(&g.repo.history_tree_id).unwrap(),
         root
     );
-    let captured = plan.read();
+    let captured = captured
+        .merges(pending, &crate::tests::history_read_control())
+        .unwrap();
     assert_eq!(captured.merges[0].input_count, 40);
     assert_eq!(captured.merges[0].parent_count, 41);
     assert_eq!(
@@ -918,10 +923,280 @@ fn detached_merge_page_keeps_captured_wire_after_publication() {
         expected.as_slice()
     );
     assert_eq!(
-        history_pages::prepare_merge_page(&g.engine, request())
-            .err()
-            .unwrap()
-            .code,
+        merge_page(&g.engine, request()).err().unwrap().code,
         storage_contract::ErrorCode::HistoryChanged
     );
+}
+
+fn merge_inputs(
+    engine: &Engine,
+    request: &ReadIndexedSlice,
+) -> Result<IndexedSlice<(String, String)>, ApiError> {
+    let captured = capture(engine, request.file_id.as_str(), Some(&request.root))?;
+    let control = crate::tests::history_read_control();
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+    super::merge_inputs(captured.admitted(&observe)?, request)
+}
+
+fn merge_parents(
+    engine: &Engine,
+    request: &ReadIndexedSlice,
+) -> Result<IndexedSlice<String>, ApiError> {
+    let captured = capture(engine, request.file_id.as_str(), Some(&request.root))?;
+    let control = crate::tests::history_read_control();
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+    super::merge_parents(captured.admitted(&observe)?, request)
+}
+
+fn version_sources(
+    engine: &Engine,
+    request: &ReadIndexedSlice,
+) -> Result<IndexedSlice<String>, ApiError> {
+    let captured = capture(engine, request.file_id.as_str(), Some(&request.root))?;
+    let control = crate::tests::history_read_control();
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+    super::version_sources(captured.admitted(&observe)?, request)
+}
+
+struct RemainingRequest {
+    file: String,
+    history: String,
+    root: String,
+    merge: String,
+    version: String,
+}
+impl RemainingRequest {
+    fn new(g: &Graph) -> Self {
+        Self {
+            file: g.file.clone(),
+            history: g.repo.history_tree_id.clone(),
+            root: g
+                .engine
+                .history_root(&g.repo.history_tree_id)
+                .unwrap()
+                .as_str()
+                .to_owned(),
+            merge: g
+                .engine
+                .state()
+                .file_branch_merges
+                .values()
+                .next()
+                .unwrap()
+                .merge_id
+                .clone(),
+            version: g.base.clone(),
+        }
+    }
+    fn read(
+        &self,
+        kind: usize,
+        captured: FileHistoryCapture,
+        invalid: bool,
+        control: &crate::HistoryReadControl,
+    ) -> Result<Vec<u8>, ApiError> {
+        use crate::backend_file_history::{
+            MergeCursor, MergeCursorKey, VersionCursor, VersionCursorKey,
+        };
+        let mut query = query(&[("history_root", &self.root), ("limit", "2")]);
+        // Valid transport syntax, wrong query fingerprint: this fails only
+        // after detached admission, unlike a malformed HTTP cursor.
+        if invalid && kind < 2 {
+            let seed = HistoryCursorSeed::new(
+                if kind == 0 {
+                    CursorKind::Merges
+                } else {
+                    CursorKind::Versions
+                },
+                &self.root,
+                &self.history,
+                &self.file,
+                &json!({"wrong":"query"}),
+            );
+            let cursor = if kind == 0 {
+                MergeCursor::encode(
+                    &seed,
+                    false,
+                    MergeCursorKey {
+                        sequence: 0,
+                        merge_id: self.merge.clone(),
+                    },
+                )?
+            } else {
+                VersionCursor::encode(
+                    &seed,
+                    false,
+                    VersionCursorKey {
+                        version_sequence: 0,
+                        version_id: self.version.clone(),
+                    },
+                )?
+            };
+            query.insert("cursor".into(), cursor);
+        }
+        let encoded = match kind {
+            0 => captured
+                .merges(ReadHistoryMerges::parse(self.file.clone(), query)?, control)?
+                .encode(PageBudget::PROTOCOL)?,
+            1 => captured
+                .version_page(ReadVersionPage::parse(self.file.clone(), query)?, control)?
+                .encode(PageBudget::PROTOCOL)?,
+            2..=4 => {
+                let subject = if invalid {
+                    "missing"
+                } else if kind == 4 {
+                    &self.version
+                } else {
+                    &self.merge
+                };
+                let request = ReadIndexedSlice::parse(
+                    self.file.clone(),
+                    if kind == 4 { "version_id" } else { "merge_id" },
+                    subject.to_owned(),
+                    query,
+                )?;
+                match kind {
+                    2 => captured
+                        .merge_inputs(request, control)?
+                        .encode_inputs(PageBudget::PROTOCOL)?,
+                    3 => captured
+                        .merge_parents(request, control)?
+                        .encode_merge_parents(PageBudget::PROTOCOL)?,
+                    4 => captured
+                        .version_sources(request, control)?
+                        .encode_sources(PageBudget::PROTOCOL)?,
+                    _ => unreachable!(),
+                }
+            }
+            _ => unreachable!(),
+        };
+        Ok(encoded.body().to_vec())
+    }
+}
+
+#[test]
+fn remaining_cold_captures_freeze_all_five_pages_and_release_pool_lease_when_consumed() {
+    let mut g = graph();
+    let request = RemainingRequest::new(&g);
+    let control = crate::tests::history_read_control();
+    let expected = (0..5)
+        .map(|kind| {
+            request
+                .read(
+                    kind,
+                    capture(&g.engine, &g.file, None).unwrap(),
+                    false,
+                    &control,
+                )
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let system = g._root.path().join("system");
+    drop(g.engine);
+    g.engine = Engine::open(&system).unwrap();
+    let pending = (0..5)
+        .map(|_| capture(&g.engine, &g.file, None).unwrap())
+        .collect::<Vec<_>>();
+    save(
+        &mut g.engine,
+        &g.repo.main_branch_id,
+        "doc.txt",
+        b"later",
+        "later",
+    );
+    drop(g.engine);
+    assert!(
+        Engine::open(&system).is_err(),
+        "captures retain the resource lease"
+    );
+    for (kind, captured) in pending.into_iter().enumerate() {
+        assert_eq!(
+            request.read(kind, captured, false, &control).unwrap(),
+            expected[kind]
+        );
+        if kind < 4 {
+            assert!(Engine::open(&system).is_err());
+        }
+    }
+    drop(Engine::open(&system).unwrap());
+}
+
+#[test]
+fn remaining_cold_io_failure_precedes_cursor_or_subject_errors_and_can_retry() {
+    let mut g = graph();
+    let request = RemainingRequest::new(&g);
+    let system = g._root.path().join("system");
+    drop(g.engine);
+    g.engine = Engine::open(&system).unwrap();
+    // Recovery installs fresh segment caches. Remove every commit root from
+    // this single-member fixture after admission, before any scope is built.
+    let mut originals = BTreeMap::new();
+    for commit in g.engine.state().commits.values() {
+        let root = &commit.namespace.root;
+        let kind = match root.kind {
+            storage_contract::NamespaceRefKind::Page => storage_contract::NAMESPACE_PAGE_KIND,
+            storage_contract::NamespaceRefKind::Index => storage_contract::NAMESPACE_INDEX_KIND,
+        };
+        let path = g
+            ._root
+            .path()
+            .join("disk/metadata/objects")
+            .join(kind)
+            .join(&root.hash[..2])
+            .join(format!("{}.json", root.hash));
+        if !originals.contains_key(&path) {
+            originals.insert(path.clone(), std::fs::read(&path).unwrap());
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+    let control = crate::tests::history_read_control();
+    for kind in 0..5 {
+        let captured = capture(&g.engine, &g.file, None).unwrap();
+        let error = request.read(kind, captured, true, &control).unwrap_err();
+        assert_ne!(error.status, http::StatusCode::BAD_REQUEST);
+        assert_ne!(error.status, http::StatusCode::NOT_FOUND);
+        assert!(
+            error.source.is_some(),
+            "cold I/O failure preserves its source"
+        );
+    }
+    for (path, bytes) in originals {
+        std::fs::write(path, bytes).unwrap();
+    }
+    for kind in 0..5 {
+        let captured = capture(&g.engine, &g.file, None).unwrap();
+        let error = request.read(kind, captured, true, &control).unwrap_err();
+        assert_eq!(
+            error.status,
+            if kind < 2 {
+                http::StatusCode::BAD_REQUEST
+            } else {
+                http::StatusCode::NOT_FOUND
+            }
+        );
+        let captured = capture(&g.engine, &g.file, None).unwrap();
+        request.read(kind, captured, false, &control).unwrap();
+    }
+}
+
+#[test]
+fn remaining_captures_observe_expired_control_without_retaining_resource_owners() {
+    let g = graph();
+    let request = RemainingRequest::new(&g);
+    let system = g._root.path().join("system");
+    let pending = (0..5)
+        .map(|_| capture(&g.engine, &g.file, None).unwrap())
+        .collect::<Vec<_>>();
+    drop(g.engine);
+    let expired = crate::HistoryReadControl::until(std::time::Instant::now());
+    for (kind, captured) in pending.into_iter().enumerate() {
+        assert_eq!(
+            request
+                .read(kind, captured, true, &expired)
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::RequestTimeout
+        );
+    }
+    drop(Engine::open(&system).unwrap());
 }

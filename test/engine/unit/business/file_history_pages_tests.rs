@@ -1776,3 +1776,62 @@ fn history_commit_records_reject_stale_owner_binding_after_decoded_state_replace
     assert!(pool.engine.available_history_owners().is_some());
     assert_history_commit_records(&pool.engine, &history);
 }
+
+#[test]
+fn observed_version_and_merge_plans_stop_membership_scans_and_preserve_errors() {
+    use std::cell::Cell;
+    let g = graph();
+    let scope = g.pool.scope(&g.file);
+    let calls = Cell::new(0);
+    let observe = || {
+        calls.set(calls.get() + 1);
+        Err(
+            Error::new(storage_contract::ErrorCode::StateInvalid, "observer source").context(
+                storage_contract::ErrorCode::RequestTimeout,
+                "plan scan cancelled",
+            ),
+        )
+    };
+    let error = scope
+        .prepare_version_page(None, 2)
+        .unwrap()
+        .read_observed(&observe)
+        .unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::RequestTimeout);
+    assert_eq!(error.message(), "plan scan cancelled");
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(calls.get(), 1);
+    calls.set(0);
+    let error = scope
+        .prepare_merge_page(None, 2)
+        .unwrap()
+        .read_observed(&observe)
+        .unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::RequestTimeout);
+    assert_eq!(error.message(), "plan scan cancelled");
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(calls.get(), 1);
+    let proceed = || {
+        calls.set(calls.get() + 1);
+        Ok(())
+    };
+    calls.set(0);
+    let observed = scope
+        .prepare_version_page(None, 2)
+        .unwrap()
+        .read_observed(&proceed)
+        .unwrap();
+    assert_eq!(
+        observed,
+        scope.prepare_version_page(None, 2).unwrap().read()
+    );
+    assert_eq!(calls.get(), scope.select_versions(None, 1000).keys.len());
+    calls.set(0);
+    let observed = scope
+        .prepare_merge_page(None, 2)
+        .unwrap()
+        .read_observed(&proceed)
+        .unwrap();
+    assert_eq!(observed, scope.prepare_merge_page(None, 2).unwrap().read());
+    assert_eq!(calls.get(), scope.file_rows().unwrap().merges.len());
+}

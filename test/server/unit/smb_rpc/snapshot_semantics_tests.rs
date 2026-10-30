@@ -561,22 +561,27 @@ impl Backend for NamespaceAfterWorkspace {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryMerges,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryMergesPage, crate::ApiError> {
-        self.inner.file_history_merges(identity, request)
+        self.inner.file_history_merges(identity, request, control)
     }
     fn file_history_merge_inputs(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadMergeInputs,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeInputsPage, crate::ApiError> {
-        self.inner.file_history_merge_inputs(identity, request)
+        self.inner
+            .file_history_merge_inputs(identity, request, control)
     }
     fn file_history_merge_parents(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadMergeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::MergeParentsPage, crate::ApiError> {
-        self.inner.file_history_merge_parents(identity, request)
+        self.inner
+            .file_history_merge_parents(identity, request, control)
     }
     fn file_history_node_field(
         &self,
@@ -591,15 +596,17 @@ impl Backend for NamespaceAfterWorkspace {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadVersionPage,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionPage, crate::ApiError> {
-        self.inner.file_version_page(identity, request)
+        self.inner.file_version_page(identity, request, control)
     }
     fn file_version_sources(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadVersionSources,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::VersionSourcesPage, crate::ApiError> {
-        self.inner.file_version_sources(identity, request)
+        self.inner.file_version_sources(identity, request, control)
     }
     fn topology_snapshot(
         &self,
