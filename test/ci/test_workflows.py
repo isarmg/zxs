@@ -71,7 +71,9 @@ class WorkflowContexts(unittest.TestCase):
                 cache = [step for step in steps if "security-audit-" in step]
                 self.assertEqual(cache, [expected])  # Exact inputs/paths; no restore-keys or cache-hit bypass.
                 following = steps[steps.index(cache[0]) + 1]
+                condition = "        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'\n" if filename == "ci.yml" else ""
                 self.assertEqual(following, f"name: {suite_name}\n"
+                                 + condition +
                                  '        run: bash .github/scripts/check.sh "${{ matrix.suite }}"')
 
     def test_workflow_env_rejects_runner_and_other_job_only_contexts(self):

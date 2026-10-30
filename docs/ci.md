@@ -32,6 +32,14 @@ bash .github/scripts/check.sh static
 
 CI 与 Release 都先运行独立的 `static` job；它通过后才安装或使用 Rust。
 
+仅当 `main` 收到非强制的普通 push，且完整 head SHA 已在本仓库同一官方 CI 工作流的候选分支 push 中完成验证时，CI 的静态门禁才可采用那次源码验证证据。[精确 SHA 判定器](../.github/scripts/check-main-adoption.py) 使用公开只读 API，不增加 token 权限：核对工作流 ID／路径、仓库及 head 仓库、完整 SHA、成功运行尝试、全部 17 个作业及相关执行步骤，并核对七份未过期产物的来源和本次尝试的成功上传时间。PR merge SHA、不同提交／工作流、缺失或跳过的执行、仅采用旧证据的运行都不能成为来源；复用结果不再接力复用。
+
+查询只读取最近至多三个同 SHA 的成功 push 候选，不翻页、不重试；每次响应最多 1 MiB，单次网络等待超时 10 秒。缺失、不完整、API 错误、尝试变化或任何不能确认的输入都选择原有完整路径。普通候选分支、PR、标签及手动 CI 始终走完整路径，未经候选验证的直接 main push 也完整执行。候选需先完成再将 main 快进到**相同提交**；合并、rebase 或新增提交得到的新 SHA 必须重新验证。
+
+采用证据时保留既有作业名称和矩阵，只跳过重复的源码构建、测试、SDK 及浏览器执行步骤；各作业记录原始运行尝试链接。`static` 仍全部执行，`Tests (security)` 仍实时读取 RustSec 和 registry/yank 状态。原始源码证据不替代本次安全结果，也不能只凭轻量作业成功判断候选完整性。Release／标签发布工作流保持全部原有验证，共用 SDK 工作流的默认空输入仍执行真实 SDK 检查。
+
+采用的产物留在原候选运行，保留 `BUILD.txt` 等材料中的原始 CI URL；main 只记录链接，不下载、重新上传、重命名或混装产物。需要材料时到原运行下载并核验摘要；过期或缺失材料会使判定回到完整验证。此机制仅采用精确 SHA 的完整执行证据，不按文件、目录、tree 或近似提交缓存测试成功。定向回归通过现有 `static` 的 `test/ci` 发现入口执行：`python3 -m unittest discover -s test/ci -p 'test_main_adoption.py'`；其中包含真实运行 `41031345216` 第一次尝试的 API 字段夹具，夹具只证明当时证据，不能绕过实时查询。
+
 完整来源工具回归只在后续矩阵的 `rust-sources` 分片运行一次，不再阻塞静态预检；它与其余 Rust 测试、生产构建并行，Release 仍须等待所有验证分片通过后才组装和发布。`static` 通过不代表完整来源工具回归通过。需要单独在本地运行全部来源工具测试（无需 Rust）时，执行 `python3 -m unittest discover -s test/tools/rust-sources -p 'test_*.py'`；完整来源门禁仍使用下列 `check.sh rust-sources` 命令。
 
 工作流上下文检查是针对本仓库 block-mapping 写法的定向回归，不是完整 YAML / GitHub Actions 语义验证器。它检查顶层及 job 的 `env`，拒绝尚未可用的 `runner`、`steps` 等上下文及 `hashFiles`；合法的 step env 和 action 输入仍可使用 runner 上下文。

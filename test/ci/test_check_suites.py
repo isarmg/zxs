@@ -261,7 +261,8 @@ class SuiteCoverageTests(unittest.TestCase):
                 self.assertNotRegex(body, r"(?m)^    (?:if|continue-on-error):")
                 invocation = '        run: bash .github/scripts/check.sh "${{ matrix.suite }}"'
                 self.assertEqual(body.count(invocation), 1)
-                self.assertRegex(body, r"- name: [^\n]+\n" + re.escape(invocation))
+                guard = "        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'\n" if filename == "ci.yml" else ""
+                self.assertRegex(body, r"- name: [^\n]+\n" + re.escape(guard + invocation))
                 self.assertEqual(workflow.count("suite: ["), 1)
                 self.assertNotIn("check.sh rust-sources", workflow)
                 self.assertNotIn("test/tools/rust-sources", workflow)

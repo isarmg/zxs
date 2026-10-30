@@ -22,7 +22,7 @@ class WorkflowTargetSetupTests(unittest.TestCase):
         self.assertIsNotNone(setup, "matrix jobs need explicit WASM target setup")
         self.assertEqual(
             setup[1].strip(),
-            "matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')",
+            "env.ZXS_RUN_SOURCE_VALIDATION == 'true' && (matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-'))",
         )
         self.assertLess(setup.end(), matrix_job.index("Run locked test suite"))
 

@@ -44,7 +44,8 @@ class FoundationWorkloads(unittest.TestCase):
                 probe = re.search(r'- name: Verify isolated system SQLite consumer\n\s+if: ([^\n]+)\n\s+run: ([^\n]+)', body)
                 self.assertIsNotNone(setup)
                 self.assertIsNotNone(probe)
-                self.assertEqual(setup[1], "matrix.suite == 'foundation-data'")
+                guard = "env.ZXS_RUN_SOURCE_VALIDATION == 'true' && " if workflow == 'ci.yml' else ''
+                self.assertEqual(setup[1], guard + "matrix.suite == 'foundation-data'")
                 self.assertEqual(probe[1], setup[1])
                 self.assertIn('libsqlite3-dev clang libclang-dev pkg-config', setup[3])
                 self.assertEqual(probe[2], 'python3 .github/scripts/check-sqlite-system.py')

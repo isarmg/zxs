@@ -22,12 +22,20 @@ jobs:
     name: Static workflow and tooling regressions (no Rust)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      reuse-source: ${{ steps.adoption.outcome == 'success' && steps.adoption.outputs.reuse-source || 'false' }}
+      source-run-url: ${{ steps.adoption.outputs.source-run-url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Check workflows, source governance and script regressions
         run: bash .github/scripts/check.sh static
+      - name: Check exact-SHA main adoption
+        id: adoption
+        # This optional lookup cannot prevent the full path on API/script failure.
+        continue-on-error: true
+        run: python3 .github/scripts/check-main-adoption.py
 
   tests:
     name: Tests (${{ matrix.suite }})
@@ -43,27 +51,35 @@ jobs:
         suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
     env:
       ZXS_REQUIRE_BROWSER: '1'
+      ZXS_RUN_SOURCE_VALIDATION: ${{ needs.static.outputs.reuse-source != 'true' || matrix.suite == 'security' }}
+      ZXS_SOURCE_RUN_URL: ${{ needs.static.outputs.source-run-url }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Report adopted source validation
+        if: env.ZXS_RUN_SOURCE_VALIDATION != 'true'
+        run: printf 'Source validation completed in %s\n' "$ZXS_SOURCE_RUN_URL"
+      - if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Initialize isolated Cargo home
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         run: bash .github/scripts/initialize-cargo-home.sh
       - name: Install repository Rust toolchain
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         run: |
           rustup show active-toolchain
           rustc --version
           cargo --version
       - name: Install WASM standard library for cross-target checks
-        if: matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-')
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true' && (matrix.suite == 'quality' || matrix.suite == 'build-tools' || startsWith(matrix.suite, 'foundation-'))
         run: rustup target add wasm32-unknown-unknown
       - name: Install system SQLite SDK for unbundled validation
-        if: matrix.suite == 'foundation-data'
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true' && matrix.suite == 'foundation-data'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libsqlite3-dev clang libclang-dev pkg-config
       - name: Enable sandboxed Chrome for browser future runtime checks
-        if: matrix.suite == 'foundation-language'
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true' && matrix.suite == 'foundation-language'
         run: bash .github/scripts/prepare-browser-contract.sh
       - name: Cache verified security scanner
         if: matrix.suite == 'security'
@@ -74,12 +90,13 @@ jobs:
             target/security-tools/verified-build.json
           key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
       - name: Run locked test suite
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         run: bash .github/scripts/check.sh "${{ matrix.suite }}"
       - name: Verify isolated system SQLite consumer
-        if: matrix.suite == 'foundation-data'
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true' && matrix.suite == 'foundation-data'
         run: python3 .github/scripts/check-sqlite-system.py
       - name: Retain exact foundation behaviour test evidence
-        if: always() && matrix.suite == 'foundation-async'
+        if: always() && env.ZXS_RUN_SOURCE_VALIDATION == 'true' && matrix.suite == 'foundation-async'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: foundation-behaviour-evidence
@@ -94,18 +111,28 @@ jobs:
     needs: static
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      ZXS_RUN_SOURCE_VALIDATION: ${{ needs.static.outputs.reuse-source != 'true' }}
+      ZXS_SOURCE_RUN_URL: ${{ needs.static.outputs.source-run-url }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Report adopted source validation
+        if: env.ZXS_RUN_SOURCE_VALIDATION != 'true'
+        run: printf 'Source validation completed in %s\n' "$ZXS_SOURCE_RUN_URL"
+      - if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Initialize isolated Cargo home
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         run: bash .github/scripts/initialize-cargo-home.sh
       - name: Install repository Rust toolchain and WASM target
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         run: |
           rustup show active-toolchain
           rustup target add wasm32-unknown-unknown
           rustc --version
       - name: Cache locally compiled Rust build helpers
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/rust-build-tools
@@ -113,8 +140,10 @@ jobs:
           restore-keys: |
             rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
       - name: Build production Web distribution
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         run: bash .github/scripts/check.sh web-production
       - name: Retain production assets for checks in this run
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-dist
@@ -123,6 +152,7 @@ jobs:
           retention-days: 7
 
       - name: Retain browser template contract fixture
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: csr-template-fixture
@@ -132,29 +162,41 @@ jobs:
 
   browser-smoke:
     name: Extracted release browser smoke (Chrome)
-    needs: web-production
+    needs: [static, web-production]
     runs-on: ubuntu-24.04
     # Compile one release-profile graph for both product and browser harness.
     timeout-minutes: 60
+    env:
+      ZXS_RUN_SOURCE_VALIDATION: ${{ needs.static.outputs.reuse-source != 'true' }}
+      ZXS_SOURCE_RUN_URL: ${{ needs.static.outputs.source-run-url }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Report adopted source validation
+        if: env.ZXS_RUN_SOURCE_VALIDATION != 'true'
+        run: printf 'Source validation completed in %s\n' "$ZXS_SOURCE_RUN_URL"
+      - if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Initialize isolated Cargo home
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         run: bash .github/scripts/initialize-cargo-home.sh
       - name: Install repository Rust toolchain
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         run: rustup show active-toolchain
       - name: Fetch production Web assets from this workflow run
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: web-dist
           path: build/web
       - name: Fetch browser template contract fixture from this run
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: csr-template-fixture
           path: target/csr-template-check/output
       - name: Verify runner Chrome and ChromeDriver
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         run: |
           chrome="$(command -v google-chrome)"
           driver="$(command -v chromedriver)"
@@ -166,10 +208,12 @@ jobs:
           echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
           echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
       - name: Install CJK fonts for the Chinese screenshot
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y fonts-noto-cjk
       - name: Build and exercise extracted release packages
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         env:
           ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
           ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
@@ -183,6 +227,7 @@ jobs:
           python3 .github/scripts/check-csr-browser.py
           bash .github/scripts/release-assemble.sh
       - name: Retain verified installation candidate (not a published release)
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installation-candidate-linux-web
@@ -190,6 +235,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Retain template browser result and exact input identity
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: csr-template-browser
@@ -197,6 +243,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Retain real Web file manager screenshot
+        if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-screenshot
@@ -206,7 +253,7 @@ jobs:
 
       - name: Retain responsive Web viewport previews
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+        if: always() && env.ZXS_RUN_SOURCE_VALIDATION == 'true'
         with:
           name: viewport-previews
           path: artifacts/viewport-previews/
@@ -216,3 +263,5 @@ jobs:
   smb-sdk:
     needs: static
     uses: ./.github/workflows/smb-sdk.yml
+    with:
+      source-validation-run-url: ${{ needs.static.outputs.reuse-source == 'true' && needs.static.outputs.source-run-url || '' }}

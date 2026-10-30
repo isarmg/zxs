@@ -2,6 +2,12 @@ name: Pinned Samba SDK validation
 
 on:
   workflow_call:
+    inputs:
+      source-validation-run-url:
+        description: Exact-SHA full CI attempt verified by the caller's static gate
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -17,23 +23,34 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Report adopted source validation
+        if: inputs.source-validation-run-url != ''
+        env:
+          ZXS_SOURCE_RUN_URL: ${{ inputs.source-validation-run-url }}
+        run: printf 'Source validation completed in %s\n' "$ZXS_SOURCE_RUN_URL"
+      - if: inputs.source-validation-run-url == ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Initialize isolated Cargo home
+        if: inputs.source-validation-run-url == ''
         run: bash .github/scripts/initialize-cargo-home.sh
       - name: Install repository Rust toolchain
+        if: inputs.source-validation-run-url == ''
         run: rustup show active-toolchain
       - name: Install official Ubuntu SDK build prerequisites
+        if: inputs.source-validation-run-url == ''
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             build-essential pkg-config python3 perl libparse-yapp-perl flex bison m4 \
             clang libclang-dev libgnutls28-dev libkrb5-dev zlib1g-dev libpopt-dev
       - name: Cache pinned configured Samba source and real libraries
+        if: inputs.source-validation-run-url == ''
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/smb-sdk
           key: samba-4.23.0-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.github/scripts/smb-sdk.sh') }}
       - name: Build official SDK and validate the Rust VFS
+        if: inputs.source-validation-run-url == ''
         run: bash .github/scripts/smb-sdk.sh

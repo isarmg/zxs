@@ -39,7 +39,8 @@ class ReleaseAcceptance(unittest.TestCase):
         self.assertIn('path: release-assets/*', candidate)
         self.assertIn('if-no-files-found: error', candidate)
         self.assertIn('retention-days: 7', candidate)
-        self.assertNotIn('if:', candidate)
+        self.assertIn("if: env.ZXS_RUN_SOURCE_VALIDATION == 'true'", candidate)
+        self.assertNotIn('always()', candidate)
         self.assertNotIn('release-publish.sh', workflow)
         self.assertNotIn('contents: write', workflow)
         for path in ('docs/ci.md', 'docs/release.md'):

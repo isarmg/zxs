@@ -66,7 +66,8 @@ class BrowserFuturesRetirement(unittest.TestCase):
                 workflow = (ROOT / '.github/workflows' / filename).read_text()
                 job_source = workflow.split(f'  {job}:\n', 1)[1].split(f'  {next_job}:\n', 1)[0]
                 self.assertIn("    env:\n      ZXS_REQUIRE_BROWSER: '1'", job_source)
-                self.assertIn("if: matrix.suite == 'foundation-language'\n"
+                guard = "env.ZXS_RUN_SOURCE_VALIDATION == 'true' && " if filename == 'ci.yml' else ''
+                self.assertIn(f"if: {guard}matrix.suite == 'foundation-language'\n"
                               "        run: bash .github/scripts/prepare-browser-contract.sh", job_source)
                 self.assertIn('foundation-language', job_source.split('    steps:', 1)[0])
                 self.assertLess(job_source.index('prepare-browser-contract.sh'),
