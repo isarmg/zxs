@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer]
 
 permissions:
   contents: read
@@ -200,6 +200,10 @@ jobs:
               '0964101860e4d5fa530f0a91ae2763a07fcaf9ce', 'c2587d7db37e9e022012f77b2df45d58a2687474',
           ):
               raise SystemExit('Periodic scrub scheduling requires the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'recovery-record-transfer' and (source, tree) != (
+              'a0b3ff448cf0872f1deb70c52de1dc35eb28cb8e', '6028ac768865d873c62c1ddb7b6d0be672f95dad',
+          ):
+              raise SystemExit('Recovery record transfer requires the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -859,6 +863,17 @@ jobs:
                       'revoked_manual_admission_waits_a_full_interval_after_rejection']),
                   command='cargo test --locked --offline -p storage-server --lib management::integrity_scrub::tests -- --test-threads=2'),
               dict(groups['payload-quality'][0], id='scrub-periodic-quality'),
+          ]
+          replay_receipts = 'engine::recovery::tests::replay_receipts_survive_multiple_tail_slot_advances_for_checkpoint'
+          groups['recovery-record-transfer'] = [
+              dict(id='recovery-record-transfer-engine', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([
+                      dict(selector='journal::writer_lifecycle_tests::', count=9,
+                          required=['journal::writer_lifecycle_tests::full_recovery_keeps_historical_receipts_and_wire_bytes']),
+                      dict(selector=replay_receipts, exact=True, count=1, required=[replay_receipts]),
+                      dict(selector='engine::recovery_checkpoint::tests::', count=27),
+                  ]), command='Writer lifecycle9, exact replay receipt1, complete recovery checkpoint27; locked offline'),
+              dict(groups['payload-quality'][0], id='recovery-record-transfer-quality'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
