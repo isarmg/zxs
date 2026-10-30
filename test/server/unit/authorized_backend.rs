@@ -2924,6 +2924,10 @@ async fn cancelled_history_route_keeps_capacity(
         json_codec::from_slice::<Value>(&activity).unwrap(),
         json!({"events": [], "limit": 200}),
     );
+    // A single collected chunk still owns its transport permit through Bytes.
+    assert_eq!(backend_slots.available_permits(), HTTP_BACKEND_SLOTS - 2);
+    drop(activity);
+    assert_eq!(backend_slots.available_permits(), HTTP_BACKEND_SLOTS - 1);
     let resumed = app.clone().oneshot(graph_request()).await.unwrap();
     assert_eq!(resumed.status(), ::http::StatusCode::OK);
     let bytes = http_routing::body::to_bytes(resumed.into_body(), 4 * 1024 * 1024)

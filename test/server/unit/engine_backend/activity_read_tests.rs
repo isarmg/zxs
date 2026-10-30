@@ -203,9 +203,25 @@ fn activity_current_tree_failure_precedes_an_earlier_parent_lookup_failure() {
         .unwrap()
         .entries()
         .unwrap_err();
-    assert_ne!(parent_error.code(), current_error.code());
+    assert_eq!(parent_error.message(), "immutable object is missing");
+    assert_eq!(current_error.message(), "immutable object JSON is invalid");
+    fn causes(mut source: &dyn std::error::Error) -> Vec<String> {
+        let mut causes = vec![source.to_string()];
+        while let Some(next) = source.source() {
+            causes.push(next.to_string());
+            source = next;
+        }
+        causes
+    }
+    let current_causes = causes(&current_error);
+    assert_ne!(causes(&parent_error), current_causes);
     let expected = error(current_error);
     let result = file_manager::activity::read(plan, &control()).unwrap_err();
     assert_eq!(result.code, expected.code);
     assert_eq!(result.message, expected.message);
+    let Some(crate::http_boundary::ApiErrorSource::Engine(source)) = result.source.as_deref()
+    else {
+        panic!("activity must retain its engine read failure");
+    };
+    assert_eq!(causes(source), current_causes);
 }
