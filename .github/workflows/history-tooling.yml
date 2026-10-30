@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, history-window]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window]
 
 permissions:
   contents: read
@@ -148,6 +148,10 @@ jobs:
               '85fecf6149b0913f8ac53f579245102012f38ad9', 'bd99da2680440a0e8ca0a838da0d6985a4701644',
           ):
               raise SystemExit('Mature static closure requires the exact frozen source and tree')
+          if os.environ['SCOPE'] == 'mature-listing-repair' and (source, tree) != (
+              'f8e9167a509af8134945c8fa3f7bd10b2a21a865', '11338bdb876200d1f09a7beac4aab83e5cc7fa5e',
+          ):
+              raise SystemExit('Mature listing repair requires the exact reviewed layout fix and tree')
           if os.environ['SCOPE'] == 'history-window' and (source, tree) != (
               'e9b201d83b52ad982a5b6d0d7b9a82f2f7a674a2', 'f627b66705153302f8c276ed5347f3bd5fbdf1aa',
           ):
@@ -631,6 +635,12 @@ jobs:
                   test_groups=json.dumps(backup_groups + json.loads(groups['detached-listing'][1]['test_groups'])),
                   command='Sixteen new backup listing bodies plus twenty-one primary listing preservation bodies'),
               dict(groups['detached-listing'][2], id='detached-backup-listing-http'),
+          ]
+          groups['mature-listing-repair'] = [
+              dict(groups['payload-quality'][0], id='mature-listing-quality'),
+              dict(groups['mature-static'][0], id='mature-listing-static'),
+              dict(groups['detached-backup-listing'][1], id='mature-listing-server'),
+              dict(groups['detached-backup-listing'][2], id='mature-listing-http'),
           ]
           groups['scrub-planning'] = [
               dict(id='scrub-planning-format', format_base='286ff86e73f52657fbf6f96b1fcc846fee1a4173',
