@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance]
 
 permissions:
   contents: read
@@ -72,7 +72,7 @@ jobs:
           )
           if os.environ['SCOPE'].startswith('retirement-') and (source, tree) != retirement_pin:
               raise SystemExit('Retirement diagnostics require the exact reviewed source and tree')
-          if os.environ['SCOPE'] == 'native-release-fixtures' and (source, tree) != (
+          if os.environ['SCOPE'] in ('native-release-fixtures', 'native-release-acceptance') and (source, tree) != (
               '7b38c66f9825bcf80bc69f3b5de8ac1b3602f6dc', '6b337f9366340abe6d47f14b3276f70787b5f4ee',
           ):
               raise SystemExit('Release fixtures require the exact reviewed source and tree')
@@ -308,6 +308,8 @@ jobs:
           groups['native-release-fixtures'] = [dict(id='native-release-fixtures', tooling_only=True,
               release_fixtures=True, command='status=0\n' + '\n'.join(
                   command + ' || status=$?' for command in fixture_commands) + '\nexit "$status"')]
+          groups['native-release-acceptance'] = [dict(id='native-release-web-production',
+              web_production=True, command='bash .github/scripts/check.sh web-production')]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -320,7 +322,7 @@ jobs:
     name: Diagnostic (${{ matrix.id }})
     needs: select
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.web_production == true && 45 || 30 }}
     strategy:
       fail-fast: false
       max-parallel: 6
@@ -384,6 +386,17 @@ jobs:
           rustup show active-toolchain
           rustc --version
           cargo --version
+      - name: Install the official production Web WASM target
+        if: matrix.web_production == true
+        run: rustup target add wasm32-unknown-unknown
+      - name: Cache locally compiled Rust build helpers
+        if: matrix.web_production == true
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/rust-build-tools
+          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
+          restore-keys: |
+            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
       - name: Check feature-changed Rust files without modifying source
         if: matrix.format_base != ''
         run: |
@@ -563,6 +576,23 @@ jobs:
           PY
           fi
           exit "$status"
+      - name: Retain production assets for native acceptance in this run
+        if: matrix.web_production == true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-dist
+          path: build/web/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Retain browser template contract fixture
+        if: matrix.web_production == true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: csr-template-fixture
+          path: target/csr-template-check/output/
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify nonzero release tooling fixture summaries
         if: always() && matrix.release_fixtures == true
         run: |
@@ -632,6 +662,132 @@ jobs:
         with:
           name: workspace-${{ inputs.source_sha }}-${{ matrix.id }}-${{ github.run_attempt }}
           path: .diagnostics/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  native-release-browser:
+    name: Extracted native release and browser acceptance
+    if: inputs.scope == 'native-release-acceptance'
+    needs: diagnostic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      SOURCE_TREE: ${{ inputs.source_tree }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Verify native checkout identity and preserve tracked source hashes
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          mkdir -p .native-diagnostics
+          printf 'source_sha=%s\nsource_tree=%s\nworkflow_sha=%s\nrun_id=%s\n' \
+            "$SOURCE_SHA" "$SOURCE_TREE" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" | tee .native-diagnostics/identity.txt
+          git ls-files -z | xargs -0 sha256sum --zero > .native-diagnostics/source-before.sha256z
+      - name: Initialize official isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust 1.99 toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version | tee .native-diagnostics/rustc.txt
+          grep -E '^rustc 1\.99\.0 ' .native-diagnostics/rustc.txt
+      - name: Fetch production Web assets from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-dist
+          path: build/web
+      - name: Fetch browser template contract fixture from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: csr-template-fixture
+          path: target/csr-template-check/output
+      - name: Verify runner Chrome and ChromeDriver
+        run: |
+          chrome="$(command -v google-chrome)"
+          driver="$(command -v chromedriver)"
+          "$chrome" --version
+          "$driver" --version
+          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
+          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
+          test "$chrome_major" = "$driver_major"
+          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
+          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
+      - name: Install CJK fonts for the Chinese screenshot
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
+      - name: Build and exercise the exact native release and browser packages
+        env:
+          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
+          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
+        run: |
+          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          python3 .github/scripts/release-native.py 2>&1 | tee .native-diagnostics/native-build.log
+          cp target/native/x86_64-unknown-linux-gnu/release/BUILD.txt .native-diagnostics/native-build-BUILD.txt
+          cargo test --locked --offline --release -p browser-smoke -- --list 2>&1 | tee .native-diagnostics/browser-list.log
+          cargo test --locked --offline --release -p browser-smoke 2>&1 | tee .native-diagnostics/browser-unit.log
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          listed = sum(line.endswith(': test') for line in Path('.native-diagnostics/browser-list.log').read_text().splitlines())
+          counts = re.findall(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', Path('.native-diagnostics/browser-unit.log').read_text())
+          if not listed or sum(sum(map(int, row)) for row in counts) != listed or any(int(row[1]) or int(row[2]) for row in counts):
+              raise SystemExit(f'Browser unit execution differs from {listed} nonignored listed tests: {counts!r}')
+          print(f'Verified {listed} executed browser harness unit tests')
+          PY
+          bash .github/scripts/release-package.sh 2>&1 | tee .native-diagnostics/package.log
+          bash .github/scripts/release-acceptance.sh 2>&1 | tee .native-diagnostics/release-acceptance.log
+          python3 .github/scripts/check-csr-browser.py 2>&1 | tee .native-diagnostics/csr-browser.log
+          bash .github/scripts/release-assemble.sh 2>&1 | tee .native-diagnostics/assembly.log
+      - name: Retain verified installation candidate only
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installation-candidate-linux-web
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain template browser result and exact input identity
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: csr-template-browser
+          path: target/csr-template-check/output/*json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain real Web file manager screenshot
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-screenshot
+          path: artifacts/web-file-manager.png
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain responsive Web viewport previews
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: viewport-previews
+          path: artifacts/viewport-previews/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Verify native acceptance tracked source is unchanged
+        if: always()
+        run: |
+          git diff --exit-code HEAD
+          git ls-files -z | xargs -0 sha256sum --zero > .native-diagnostics/source-after.sha256z
+          cmp .native-diagnostics/source-before.sha256z .native-diagnostics/source-after.sha256z
+      - name: Retain native build receipt and exact acceptance logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-acceptance-${{ inputs.source_sha }}-${{ github.run_attempt }}
+          path: .native-diagnostics/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
