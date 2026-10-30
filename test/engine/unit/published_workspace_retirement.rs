@@ -469,3 +469,79 @@ fn published_cold_point_reads_and_recovery_hints_keep_exact_mirror_proof() {
         assert_eq!(engine.workspace_capacity("admin"), capacity);
     }
 }
+
+#[test]
+fn damaged_request_mirror_replays_admitted_cold_but_restart_keeps_record_resident() {
+    let mut f = Fixture::new();
+    f.config.max_retained_workspaces = 1;
+    f.config.max_retained_workspaces_per_principal = 1;
+    let mut engine = f.initialize();
+    let repo = repository(&mut engine, 1);
+    let (request, published) = publish(&mut engine, &repo.main_branch_id, b"retained publication");
+    engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    let admitted = engine.workspace_capacity("admin");
+    assert_eq!(admitted.principal.records.used, 1);
+    assert_eq!(admitted.principal.cold_records, 1);
+    let sequence = engine.state().sequence;
+    let paths = manifests(&f, &request.workspace_id);
+    let manifests_before = paths.each_ref().map(|path| fs::read(path).unwrap());
+    let damaged = paths[0].with_file_name("commit-request.json");
+    let original_request_bytes = fs::read(&damaged).unwrap();
+    fs::write(&damaged, b"{").unwrap();
+    // Existing admission proves the exact manifest and mirror set. The healthy
+    // original request copy still authorizes replay without new admission.
+    assert_eq!(engine.commit_workspace(request.clone()).unwrap(), published);
+    assert_eq!(engine.workspace_capacity("admin"), admitted);
+    assert_eq!(engine.state().sequence, sequence);
+    drop(engine);
+    let logs: Vec<_> = f
+        .config
+        .disks
+        .iter()
+        .map(|disk| fs::read(crate::journal::log_path(disk)).unwrap())
+        .collect();
+    assert_eq!(
+        Engine::open(&f.root).err().unwrap().code(),
+        ErrorCode::ResourceLimit
+    );
+    assert_eq!(fs::read(&damaged).unwrap(), b"{");
+    assert_eq!(
+        paths.each_ref().map(|path| fs::read(path).unwrap()),
+        manifests_before
+    );
+    for (disk, expected) in f.config.disks.iter().zip(logs) {
+        assert_eq!(fs::read(crate::journal::log_path(disk)).unwrap(), expected);
+    }
+    let raised = crate::RetainedWorkspaceLimits {
+        max_retained_workspaces: 2,
+        max_retained_workspaces_per_principal: 2,
+        max_retained_workspace_metadata_bytes: f.config.max_retained_workspace_metadata_bytes,
+        max_retained_workspace_metadata_bytes_per_principal: f
+            .config
+            .max_retained_workspace_metadata_bytes_per_principal,
+    };
+    let mut engine = Engine::open_with_workspace_limits(&f.root, Some(raised)).unwrap();
+    let resident = engine.workspace_capacity("admin");
+    assert_eq!(resident.principal.records.used, 2);
+    assert_eq!(resident.principal.cold_records, 0);
+    assert_eq!(
+        resident.principal.metadata_bytes,
+        admitted.principal.metadata_bytes
+    );
+    assert_eq!(engine.commit_workspace(request.clone()).unwrap(), published);
+    assert_eq!(engine.workspace_capacity("admin"), resident);
+    assert_eq!(engine.state().sequence, sequence);
+    assert_eq!(fs::read(&damaged).unwrap(), b"{");
+    engine.assert_workspace_budget_consistent();
+    drop(engine);
+    // Restoring the exact saved evidence permits fresh cold admission again;
+    // the runtime limit override has not changed the pool baseline.
+    fs::write(&damaged, original_request_bytes).unwrap();
+    let mut engine = Engine::open(&f.root).unwrap();
+    assert_eq!(engine.workspace_capacity("admin"), admitted);
+    assert_eq!(engine.commit_workspace(request).unwrap(), published);
+    assert_eq!(engine.state().sequence, sequence);
+    engine.assert_workspace_budget_consistent();
+}
