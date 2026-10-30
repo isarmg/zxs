@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-browser]
 
 permissions:
   contents: read
@@ -136,6 +136,10 @@ jobs:
               '69718524644e23d6e4e77bda64436acc8f62e508', '86088fcc6c6fa02c6f7465aa2ad71f4516a4f0ae',
           ):
               raise SystemExit('Scrub formatting requires the exact formatting successor and tree')
+          if os.environ['SCOPE'] in ('web-history-native', 'web-history-browser') and (source, tree) != (
+              'ee0a9b08ff4b16ce2019b4b36e4153671ede91ae', '3b5d347cc36756dd5ee173818e77f6a0ae124e84',
+          ):
+              raise SystemExit('Web history diagnostics require the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -610,6 +614,21 @@ jobs:
                   ]), command='Complete server scrub lifecycle and public scrub policy groups'),
           ]
           groups['scrub-format'] = [groups['scrub-planning'][0]]
+          groups['web-history-native'] = [
+              dict(id='web-history-format', format_base='286ff86e73f52657fbf6f96b1fcc846fee1a4173',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='web-history-native', cache='web-app', package='web-app', test_groups=json.dumps([
+                  dict(selector='files::actions::browse::tests::', count=20, required_suffixes=[
+                      'stale_history_success_and_failure_cannot_settle_the_current_read',
+                      'history_completion_requires_its_session_and_selected_file',
+                      'current_history_completion_settles_loading_and_failure_discards_stale_heads',
+                      'history_response_session_authority_precedes_the_request_generation_fence']),
+                  dict(selector='files::model::tests::', count=25, required_suffixes=[
+                      'history_read_is_invalidated_when_only_the_logical_context_changes']),
+              ]), command='Complete native Web browse and model groups including five new history ownership witnesses'),
+          ]
+          groups['web-history-browser'] = [dict(id='web-history-browser', web_production=True, browser_smoke=True,
+              command='bash .github/scripts/check.sh web-production\nZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh browser-smoke')]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -622,7 +641,7 @@ jobs:
     name: Diagnostic (${{ matrix.id }})
     needs: select
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ (matrix.web_production == true || matrix.smb_sdk == true) && 45 || 30 }}
+    timeout-minutes: ${{ matrix.browser_smoke == true && 60 || (matrix.web_production == true || matrix.smb_sdk == true) && 45 || 30 }}
     strategy:
       fail-fast: false
       max-parallel: 6
@@ -689,6 +708,23 @@ jobs:
       - name: Install the official production Web WASM target
         if: matrix.web_production == true || matrix.quality == true
         run: rustup target add wasm32-unknown-unknown
+      - name: Verify matching real Chrome and ChromeDriver
+        if: matrix.browser_smoke == true
+        run: |
+          chrome="$(command -v google-chrome)"
+          driver="$(command -v chromedriver)"
+          "$chrome" --version
+          "$driver" --version
+          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
+          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
+          test "$chrome_major" = "$driver_major"
+          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
+          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
+      - name: Install official browser CJK fonts
+        if: matrix.browser_smoke == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
       - name: Cache locally compiled Rust build helpers
         if: matrix.web_production == true
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -911,6 +947,18 @@ jobs:
           PY
           fi
           exit "$status"
+      - name: Require real Chrome history cancellation witness
+        if: matrix.browser_smoke == true
+        run: |
+          test "$(grep -cF 'PASS synthetic history AbortSignal replacement, late completion ownership, same-file alias context and navigation cleanup' .diagnostics/test.log)" = 1
+      - name: Retain real browser failure diagnostics
+        if: always() && matrix.browser_smoke == true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-history-browser-diagnostics-${{ inputs.source_sha }}
+          path: artifacts/browser-smoke/diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Verify actual real SDK inventory and callback witnesses
         if: matrix.smb_sdk == true
         run: |
