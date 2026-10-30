@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation]
 
 permissions:
   contents: read
@@ -192,6 +192,59 @@ jobs:
                   exact_test=smb_quota,
                   command=f'cargo test --locked --offline -p storage-server --lib {smb_quota} -- --exact --nocapture'),
           ]
+          groups['retirement-preservation'] = []
+          for name, prefix, expected in [
+              ('cold-workspace-records', 'tests::cold_workspace_records::', 13),
+              ('retained-workspace-budget', 'tests::retained_workspace_budget::', 13),
+              ('runtime-workspace-limits', 'tests::runtime_workspace_limits::', 4),
+              ('workspace-storage', 'engine::workspace_storage::tests::', 8),
+              ('workspace-commit', 'engine::workspace_commit::tests::', 7),
+              ('workspace-budget-boundary', 'engine::workspace_budget::tests::', 1),
+              ('workspace-recovery', 'engine::recovery::tests::', 24),
+              ('workspace-recovery-diagnostics', 'engine::recovery::diagnostics_tests::', 3),
+              ('workspace-recovery-checkpoint', 'engine::recovery_checkpoint::tests::', 27),
+              ('workspace-degraded-recovery', 'degraded_recovery::tests::', 17),
+              ('workspace-historical-preservation', 'historical_save::tests::', 3),
+              ('workspace-upload-preparation', 'upload_preparation', 7),
+          ]:
+              groups['retirement-preservation'].append(dict(id=name, cache='storage-engine',
+                  package='storage-engine', test_filter=prefix, release=False,
+                  expected_count=expected, required_names='[]',
+                  command=f'cargo test --locked --offline -p storage-engine --lib {prefix} -- --nocapture'))
+          for name in [
+              'detached_workspace_preparation_writes_no_decision_and_replays_original_operation',
+              'detached_workspace_commit_stale_base_is_definite_retryable_conflict',
+              'detached_workspace_commit_rechecks_fence_and_releases_cancelled_admission',
+              'detached_workspace_commit_consumes_real_fault_only_at_decision_boundary',
+              'detached_workspace_commit_checks_actual_source_owner_and_topology',
+              'detached_preparation_fences_physical_namespace_writes_but_not_reads',
+              'retained_generations_and_sealed_workspaces_keep_their_resource_and_file_ownership',
+          ]:
+              test = 'tests::' + name
+              groups['retirement-preservation'].append(dict(id='preserve-' + name, cache='storage-engine',
+                  package='storage-engine', exact_test=test,
+                  command=f'cargo test --locked --offline -p storage-engine --lib {test} -- --exact --nocapture'))
+          groups['retirement-preservation'].append(dict(id='retirement-workspace-replay',
+              cache='storage-engine', package='storage-engine', test_target='workspace_commit_replay',
+              expected_count=28, expected_ignored=2, required_names='[]',
+              command='cargo test --locked --offline -p storage-engine --test workspace_commit_replay -- --nocapture'))
+          smb_prefix = 'smb_rpc::tests::reconciliation_tests::'
+          groups['retirement-preservation'].append(dict(id='retirement-smb-reconciliation',
+              cache='server', package='storage-server', test_filter=smb_prefix,
+              expected_count=4, required_names='[]',
+              command=f'cargo test --locked --offline -p storage-server --lib {smb_prefix} -- --nocapture'))
+          for name in [
+              'lost_commit_reply_reconciles_same_operation_without_restaging_or_second_version',
+              'changed_bytes_after_lost_publication_reply_are_retained_for_a_second_save',
+              'close_tests::lost_close_reply_retains_original_published_operation_without_resubmitting',
+              'recovery_record_tests::lost_publication_reply_keeps_original_operation_and_later_bytes',
+              'disconnect_before_dirty_delivery_retains_unacknowledged_fd_bytes',
+              'unchanged_writable_close_cleans_up_but_disconnect_remains_uncertain',
+          ]:
+              test = 'smb_rpc::tests::' + name
+              groups['retirement-preservation'].append(dict(id='preserve-smb-' + name.replace('::', '-'),
+                  cache='server', package='storage-server', exact_test=test,
+                  command=f'cargo test --locked --offline -p storage-server --lib {test} -- --exact --nocapture'))
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -221,6 +274,7 @@ jobs:
       TEST_TARGET: ${{ matrix.test_target }}
       TEST_RELEASE: ${{ matrix.release }}
       EXPECTED_COUNT: ${{ matrix.expected_count }}
+      EXPECTED_IGNORED: ${{ matrix.expected_ignored || 0 }}
       REQUIRED_NAMES: ${{ matrix.required_names }}
       VERIFY_UNIT_INVENTORY: ${{ matrix.unit_inventory }}
       FORMAT_BASE: ${{ matrix.format_base }}
@@ -336,10 +390,11 @@ jobs:
           cargo test --locked --offline "${profile[@]}" -p "$TEST_PACKAGE" "${target[@]}" -- --ignored --list 2>&1 | tee .diagnostics/ignored-list.log
           if [[ -n "$EXPECTED_COUNT" ]]; then
             python3 - <<'PY'
+          import os
           from pathlib import Path
           ignored = [line for line in Path('.diagnostics/ignored-list.log').read_text().splitlines() if line.endswith(': test')]
-          if ignored:
-              raise SystemExit(f'Required record-sharing bodies must all execute; found ignored bodies {ignored!r}')
+          if len(ignored) != int(os.environ['EXPECTED_IGNORED']):
+              raise SystemExit(f'Ignored inventory differs from the reviewed source: {ignored!r}')
           PY
           fi
       - name: Inventory complete server unit bodies and existing ignored tests
