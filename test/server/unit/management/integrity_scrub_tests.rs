@@ -120,6 +120,98 @@ fn hold_engine(engine: Arc<EngineBackend>) -> (mpsc::Sender<()>, thread::JoinHan
 }
 
 #[test]
+fn terminal_diagnostics_keep_real_read_totals_and_the_running_clock() {
+    let policy = IntegrityScrubPolicy::manual(positive(60), positive(u64::MAX));
+    let fixture = Fixture::dormant(policy);
+    let engine = fixture.engine();
+    let payload = b"terminal scrub statistics";
+    let expected_reads = engine.test_with_engine_locked(|engine| {
+        let branch = engine
+            .state()
+            .repositories
+            .values()
+            .next()
+            .unwrap()
+            .main_branch_id
+            .clone();
+        let workspace = engine.create_workspace(&branch, "admin").unwrap();
+        engine
+            .stage_bytes(&workspace.workspace_id, "file.txt", payload)
+            .unwrap();
+        engine
+            .commit_workspace(storage_engine::CommitRequest {
+                workspace_id: workspace.workspace_id,
+                operation_id: OperationId::generate(),
+                principal: "admin".into(),
+                expected_head: workspace.base_head,
+                fencing_token: workspace.fencing_token,
+                message: "statistics fixture".into(),
+                request_digest: None,
+            })
+            .unwrap();
+        let mut bytes = 0u128;
+        let outcome = engine.prepare_integrity_scrub().unwrap().run(
+            &IntegrityScrubCancellation::new(),
+            |plan, id| engine.admit_integrity_scrub_batch(plan, id),
+            |count| bytes += count as u128,
+            |_| {},
+        );
+        assert!(engine.finish_integrity_scrub(outcome).is_healthy());
+        bytes
+    });
+    let control = &fixture.backend.scrub.control;
+    assert!(control.auth.set(crate::lock(&fixture.auth).reader()).is_ok());
+    {
+        let mut state = crate::lock(&control.state);
+        state.lifecycle = Lifecycle::Ready;
+        enqueue(
+            &mut state,
+            engine,
+            ScrubAdmission::Manual(fixture.identity.clone()),
+        )
+        .unwrap();
+    }
+    let job = next_job(control, &Arc::downgrade(&fixture.backend.inner)).unwrap();
+    let mut schedule = None;
+    let mut completed = run_job(control, &job, &mut schedule).unwrap();
+    completed.report.finished_at = completed.report.started_at;
+    {
+        let mut state = crate::lock(&control.state);
+        let Activity::Executing(active) = &mut state.activity else {
+            panic!("active fixture")
+        };
+        assert_eq!(active.bytes_read, expected_reads);
+        let Progress::Running { started, .. } = &mut active.progress else {
+            panic!("real scan entered Running")
+        };
+        *started = Instant::now() - Duration::from_secs(5);
+    }
+    finish_job(control, job, Ok(completed));
+    let status = fixture.status();
+    let run = status.latest.as_ref().unwrap();
+    let IntegrityScrubOutcome::Report(report) = &run.outcome else {
+        panic!("real report")
+    };
+    assert!(report.is_healthy());
+    assert_eq!(run.diagnostics.bytes_read, expected_reads);
+    assert!(expected_reads > payload.len() as u128);
+    assert!(run.diagnostics.scan_elapsed.unwrap() >= Duration::from_secs(5));
+    assert_eq!(
+        run.diagnostics.expected_payload_bytes,
+        Some(payload.len() as u64)
+    );
+    assert_eq!(run.diagnostics.metadata_coverage_at_finish, Some(false));
+    assert_eq!(run.diagnostics.policy.interval(), None);
+    assert_eq!(run.diagnostics.policy.max_age(), policy.max_age());
+    let wire = json_codec::to_value(crate::integrity_scrub::StatusResponse::from(status)).unwrap();
+    assert_eq!(
+        wire["latest"]["diagnostics"]["bytes_read"],
+        expected_reads.to_string()
+    );
+    assert_eq!(wire["latest"]["diagnostics"]["feasibility"], "unknown_total");
+}
+
+#[test]
 fn single_job_controls_do_not_wait_for_engine_and_cancel_does_not_detach() {
     let fixture = Fixture::new(slow_policy());
     let engine = fixture.engine();
@@ -177,6 +269,8 @@ fn single_job_controls_do_not_wait_for_engine_and_cancel_does_not_detach() {
         IntegrityScrubCompletion::Cancelled
     ));
     assert!(!report.is_healthy());
+    assert_eq!(run.diagnostics.bytes_read, 0);
+    assert_eq!(run.diagnostics.metadata_coverage_at_finish, Some(false));
     eventually(|| (Arc::strong_count(&engine) == 2).then_some(()));
 }
 
@@ -201,6 +295,10 @@ fn queued_manual_identity_is_revalidated_before_any_scan() {
         panic!("revoked queue admission cannot produce a scan report");
     };
     assert_eq!(error.code, storage_contract::ErrorCode::Unauthorized);
+    assert_eq!(run.diagnostics.bytes_read, 0);
+    assert!(run.diagnostics.scan_elapsed.is_none());
+    assert!(run.diagnostics.expected_payload_bytes.is_none());
+    assert!(run.diagnostics.metadata_coverage_at_finish.is_none());
     assert!(fixture.status().last_complete_success_at.is_none());
 }
 
@@ -239,6 +337,9 @@ fn paced_real_reads_leave_engine_available_and_cancel_wakes_the_budget_wait() {
         report.completion,
         IntegrityScrubCompletion::Cancelled
     ));
+    assert!(run.diagnostics.bytes_read > 0);
+    assert!(run.diagnostics.scan_elapsed.is_some());
+    assert_eq!(run.diagnostics.metadata_coverage_at_finish, Some(false));
 }
 
 #[test]
@@ -353,6 +454,11 @@ fn queued_worker_panic_is_visible_and_drain_returns_the_native_failure() {
     let error = fixture.backend.drain_management().unwrap_err();
     assert_eq!(error.code, storage_contract::ErrorCode::InternalError);
     assert!(format!("{error:?}").contains("integrity scrub worker panicked"));
+    let run = fixture.status().latest.unwrap();
+    assert_eq!(run.diagnostics.bytes_read, 0);
+    assert!(run.diagnostics.scan_elapsed.is_none());
+    assert!(run.diagnostics.expected_payload_bytes.is_none());
+    assert!(run.diagnostics.metadata_coverage_at_finish.is_none());
 }
 
 #[test]
@@ -869,6 +975,9 @@ fn local_proof_failure_keeps_shared_graph_coverage_distinct_from_full_health() {
     };
     assert!(!report.is_healthy());
     assert!(report.metadata_failures > 0);
+    assert!(run.diagnostics.bytes_read > 0);
+    assert!(run.diagnostics.scan_elapsed.is_some());
+    assert_eq!(run.diagnostics.metadata_coverage_at_finish, Some(true));
     assert!(
         coverage(&engine),
         "version-local proof loss is not a shared graph fault"

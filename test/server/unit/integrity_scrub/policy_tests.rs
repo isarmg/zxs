@@ -27,6 +27,75 @@ fn read_budget_uses_actual_bytes_with_fractional_rounding_and_no_lifetime_overfl
 }
 
 #[test]
+fn terminal_feasibility_only_disproves_a_payload_lower_bound() {
+    let mut diagnostics = IntegrityScrubDiagnostics {
+        bytes_read: 0,
+        scan_elapsed: None,
+        expected_payload_bytes: None,
+        policy: IntegrityScrubPolicy::periodic(positive(1), positive(2), positive(3)).unwrap(),
+        metadata_coverage_at_finish: None,
+    };
+    assert_eq!(
+        diagnostics.feasibility(),
+        IntegrityScrubFeasibility::UnknownScale
+    );
+    diagnostics.expected_payload_bytes = Some(5);
+    assert_eq!(
+        diagnostics.feasibility(),
+        IntegrityScrubFeasibility::UnknownTotal
+    );
+    diagnostics.expected_payload_bytes = Some(6);
+    assert_eq!(
+        diagnostics.feasibility(),
+        IntegrityScrubFeasibility::PayloadCannotFitMaxAge
+    );
+    diagnostics.expected_payload_bytes = Some(7);
+    assert_eq!(
+        diagnostics.feasibility(),
+        IntegrityScrubFeasibility::PayloadCannotFitMaxAge
+    );
+    diagnostics.policy = IntegrityScrubPolicy::manual(positive(u64::MAX), positive(u64::MAX));
+    diagnostics.expected_payload_bytes = Some(u64::MAX);
+    assert_eq!(
+        diagnostics.feasibility(),
+        IntegrityScrubFeasibility::UnknownTotal
+    );
+}
+
+#[test]
+fn terminal_diagnostics_wire_preserves_wide_counts_and_unknown_observations() {
+    let diagnostics = IntegrityScrubDiagnostics {
+        bytes_read: u128::from(u64::MAX) + 1,
+        scan_elapsed: Some(Duration::from_millis(1234)),
+        expected_payload_bytes: None,
+        policy: IntegrityScrubPolicy::manual(positive(60), positive(3)),
+        metadata_coverage_at_finish: None,
+    };
+    let status = IntegrityScrubStatus {
+        phase: IntegrityScrubPhase::Idle,
+        latest: Some(Arc::new(IntegrityScrubRun {
+            job_id: IntegrityScrubJobId(1),
+            trigger: IntegrityScrubTrigger::Manual,
+            outcome: IntegrityScrubOutcome::Rejected(crate::ApiError::limit("fixture")),
+            diagnostics,
+        })),
+        last_complete_success_at: None,
+        freshness: IntegrityScrubFreshness::Unavailable,
+    };
+    let value = json_codec::to_value(StatusResponse::from(status)).unwrap();
+    let diagnostics = &value["latest"]["diagnostics"];
+    assert_eq!(diagnostics["bytes_read"], "18446744073709551616");
+    assert_eq!(diagnostics["scan_elapsed_millis"], "1234");
+    assert!(diagnostics["expected_payload_bytes"].is_null());
+    assert!(diagnostics["metadata_coverage_at_finish"].is_null());
+    assert!(diagnostics["policy"]["interval_seconds"].is_null());
+    assert_eq!(diagnostics["policy"]["max_age_seconds"], "60");
+    assert_eq!(diagnostics["policy"]["bytes_per_second"], "3");
+    assert_eq!(diagnostics["feasibility"], "unknown_scale");
+    assert_eq!(value["latest"]["outcome"]["kind"], "rejected");
+}
+
+#[test]
 fn retained_report_error_projection_preserves_http_redaction() {
     let source = storage_engine::Error::new(
         storage_engine::ErrorCode::IoError,

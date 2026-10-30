@@ -5,9 +5,9 @@ use crate::{
     auth::{AuthReader, Identity},
     engine_backend::EngineBackend,
     integrity_scrub::{
-        IntegrityScrubBaseline, IntegrityScrubFreshness, IntegrityScrubJobId,
-        IntegrityScrubOutcome, IntegrityScrubPhase, IntegrityScrubPolicy, IntegrityScrubRun,
-        IntegrityScrubStatus, ScrubAdmission, ScrubExecution,
+        IntegrityScrubBaseline, IntegrityScrubDiagnostics, IntegrityScrubFreshness,
+        IntegrityScrubJobId, IntegrityScrubOutcome, IntegrityScrubPhase, IntegrityScrubPolicy,
+        IntegrityScrubRun, IntegrityScrubStatus, ScrubAdmission, ScrubExecution,
     },
 };
 use std::{
@@ -62,6 +62,7 @@ struct Active {
     trigger: crate::integrity_scrub::IntegrityScrubTrigger,
     cancellation: Arc<IntegrityScrubCancellation>,
     progress: Progress,
+    bytes_read: u128,
 }
 enum Progress {
     Queued,
@@ -69,9 +70,36 @@ enum Progress {
         baseline: IntegrityScrubBaseline,
         started_at: SystemTime,
         started: Instant,
-        bytes_read: u128,
         expected_payload_bytes: u64,
     },
+}
+impl Active {
+    fn diagnostics(
+        &self,
+        policy: IntegrityScrubPolicy,
+        metadata_coverage_at_finish: Option<bool>,
+    ) -> IntegrityScrubDiagnostics {
+        let (scan_elapsed, expected_payload_bytes) = match &self.progress {
+            Progress::Queued => (None, None),
+            Progress::Running {
+                started,
+                expected_payload_bytes,
+                ..
+            } => (Some(started.elapsed()), Some(*expected_payload_bytes)),
+        };
+        IntegrityScrubDiagnostics {
+            bytes_read: self.bytes_read,
+            scan_elapsed,
+            expected_payload_bytes,
+            policy,
+            metadata_coverage_at_finish,
+        }
+    }
+}
+
+struct CompletedScrub {
+    report: IntegrityScrubReport,
+    metadata_coverage_at_finish: bool,
 }
 // Only the native worker owns this lease. The control plane can revoke through
 // a Weak, and idle scheduling never retains the Engine or its writer locks.
@@ -216,14 +244,13 @@ impl IntegrityScrubService {
                     Progress::Running {
                         ref baseline,
                         started_at,
-                        bytes_read,
                         expected_payload_bytes,
                         ..
                     } => IntegrityScrubPhase::Running {
                         job_id: job.id,
                         baseline: baseline.clone(),
                         started_at,
-                        bytes_read,
+                        bytes_read: job.bytes_read,
                         expected_payload_bytes,
                         cancellation_requested: job.cancellation.is_cancelled(),
                     },
@@ -358,6 +385,7 @@ fn worker_entry(control: Arc<Control>, inner: Weak<Inner>) -> Result<(), Arc<Api
                     job_id: active.id,
                     trigger: active.trigger,
                     outcome: IntegrityScrubOutcome::Rejected(shared_error(Arc::clone(&error))),
+                    diagnostics: active.diagnostics(control.policy, None),
                 }));
             }
             state.activity = Activity::Idle;
@@ -424,10 +452,10 @@ fn run_job(
     control: &Control,
     job: &Job,
     schedule: &mut Option<OwnedSchedule>,
-) -> Result<IntegrityScrubReport, ApiError> {
+) -> Result<CompletedScrub, ApiError> {
     let admission = execution(control, job, schedule)?;
     let mut last_read = Instant::now();
-    job.backend.run_integrity_scrub(
+    let report = job.backend.run_integrity_scrub(
         admission,
         &job.cancellation,
         |report: &IntegrityScrubReport, expected_payload_bytes| {
@@ -443,7 +471,6 @@ fn run_job(
                     },
                     started_at: report.started_at,
                     started: Instant::now(),
-                    bytes_read: 0,
                     expected_payload_bytes,
                 };
             }
@@ -462,7 +489,11 @@ fn run_job(
             }
         },
         |bytes| pace(control, &job.cancellation, &mut last_read, bytes),
-    )
+    )?;
+    Ok(CompletedScrub {
+        report,
+        metadata_coverage_at_finish: job.backend.current_integrity_scrub_coverage(),
+    })
 }
 
 fn next_job(control: &Control, inner: &Weak<Inner>) -> Option<Job> {
@@ -482,6 +513,7 @@ fn next_job(control: &Control, inner: &Weak<Inner>) -> Option<Job> {
                 trigger: job.admission.trigger(),
                 cancellation: Arc::clone(&job.cancellation),
                 progress: Progress::Queued,
+                bytes_read: 0,
             });
             return Some(job);
         }
@@ -557,12 +589,13 @@ fn pace(
     let Activity::Executing(active) = &mut state.activity else {
         unreachable!("invariant: I/O belongs to the active scrub");
     };
-    let Progress::Running { bytes_read, .. } = &mut active.progress else {
-        unreachable!("invariant: byte accounting follows baseline admission");
-    };
+    assert!(
+        matches!(active.progress, Progress::Running { .. }),
+        "invariant: byte accounting follows baseline admission"
+    );
     // Payload estimates are bounded to u64; metadata per-member frame/object
     // budgets times an addressable member list fit this wider progress counter.
-    *bytes_read += bytes as u128;
+    active.bytes_read += bytes as u128;
     loop {
         if cancellation.is_cancelled() {
             return;
@@ -579,10 +612,18 @@ fn pace(
             .0;
     }
 }
-fn finish_job(control: &Control, job: Job, outcome: Result<IntegrityScrubReport, ApiError>) {
+fn finish_job(control: &Control, job: Job, outcome: Result<CompletedScrub, ApiError>) {
     let mut state = crate::lock(&control.state);
+    let Activity::Executing(active) = &state.activity else {
+        unreachable!("invariant: one worker finishes its active scrub");
+    };
+    let coverage = match &outcome {
+        Ok(run) => Some(run.metadata_coverage_at_finish),
+        Err(_) => None,
+    };
+    let diagnostics = active.diagnostics(control.policy, coverage);
     let outcome = match outcome {
-        Ok(report) => {
+        Ok(CompletedScrub { report, .. }) => {
             if !report.is_healthy()
                 && !matches!(
                     report.completion,
@@ -621,6 +662,7 @@ fn finish_job(control: &Control, job: Job, outcome: Result<IntegrityScrubReport,
         job_id: job.id,
         trigger: job.admission.trigger(),
         outcome,
+        diagnostics,
     }));
     state.activity = Activity::Idle;
     state.last_attempt = Some(Instant::now());

@@ -131,6 +131,48 @@ pub struct IntegrityScrubRun {
     pub job_id: IntegrityScrubJobId,
     pub trigger: IntegrityScrubTrigger,
     pub outcome: IntegrityScrubOutcome,
+    pub diagnostics: IntegrityScrubDiagnostics,
+}
+
+/// Terminal observations of one attempt. These cannot grant metadata coverage.
+#[derive(Debug)]
+pub struct IntegrityScrubDiagnostics {
+    pub bytes_read: u128,
+    /// From the first Running callback through result collection, using its
+    /// existing monotonic clock. None means scanning never entered Running.
+    pub scan_elapsed: Option<Duration>,
+    /// None when preparation did not produce a complete payload estimate.
+    pub expected_payload_bytes: Option<u64>,
+    pub policy: IntegrityScrubPolicy,
+    /// Sampled from the live Engine after finish, never inferred from health.
+    /// None when no live-finish observation was collected.
+    pub metadata_coverage_at_finish: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntegrityScrubFeasibility {
+    UnknownScale,
+    UnknownTotal,
+    PayloadCannotFitMaxAge,
+}
+
+impl IntegrityScrubDiagnostics {
+    /// A payload lower bound can disprove feasibility. Other metered reads and
+    /// execution costs remain unknown even when that lower bound fits.
+    pub fn feasibility(&self) -> IntegrityScrubFeasibility {
+        // Both policy factors are u64; their product fits the wider comparison.
+        match self.expected_payload_bytes {
+            None => IntegrityScrubFeasibility::UnknownScale,
+            Some(bytes)
+                if u128::from(bytes)
+                    >= u128::from(self.policy.bytes_per_second.get())
+                        * u128::from(self.policy.max_age.as_secs()) =>
+            {
+                IntegrityScrubFeasibility::PayloadCannotFitMaxAge
+            }
+            Some(_) => IntegrityScrubFeasibility::UnknownTotal,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntegrityScrubFreshness {

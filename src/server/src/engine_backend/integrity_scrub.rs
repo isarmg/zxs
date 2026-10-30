@@ -7,6 +7,11 @@ use crate::{
 use storage_engine::{IntegrityScrubCancellation, IntegrityScrubReport, IntegrityScrubSchedule};
 
 impl EngineBackend {
+    /// Diagnostic observation only; core admission remains the authority.
+    pub(crate) fn current_integrity_scrub_coverage(&self) -> bool {
+        crate::lock(&self.engine).has_current_integrity_scrub_coverage()
+    }
+
     pub(crate) fn begin_integrity_scrub_schedule(
         &self,
         policy: IntegrityScrubPolicy,

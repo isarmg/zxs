@@ -64,6 +64,23 @@ fn registration_and_a_real_manual_scan_never_claim_a_periodic_owner_completed_co
 }
 
 #[test]
+fn healthy_scan_completed_after_max_age_has_no_usable_coverage() {
+    let (_temp, mut engine) = fixture();
+    let owner = schedule(&mut engine);
+    let mut outcome = run(&engine, &owner, &IntegrityScrubCancellation::new());
+    outcome.started = Instant::now() - owner.state.max_age - Duration::from_secs(1);
+    let report = engine.finish_integrity_scrub(outcome);
+    assert!(report.is_healthy(), "{report:?}");
+    assert!(!engine.has_current_integrity_scrub_coverage());
+    assert!(
+        engine
+            .planning_context()
+            .capture_scrub_coverage()
+            .is_none()
+    );
+}
+
+#[test]
 fn publication_does_not_refresh_the_scan_start_or_the_next_schedule_deadline() {
     let (_temp, mut engine) = fixture();
     let owner = schedule(&mut engine);
