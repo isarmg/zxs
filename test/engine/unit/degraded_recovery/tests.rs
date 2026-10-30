@@ -811,13 +811,21 @@ fn incomplete_log_cannot_prove_absence_and_unknown_record_types_are_rejected() {
         .collect::<Vec<_>>();
     drop(engine);
     let index_before = fs::read(temp.path().join("state/index.sqlite")).unwrap();
-    assert_eq!(
-        Engine::open_for_recovery(&temp.path().join("state"))
-            .err()
-            .unwrap()
-            .code(),
-        storage_contract::ErrorCode::InvalidJson
-    );
+    let error = Engine::open_for_recovery(&temp.path().join("state"))
+        .err()
+        .unwrap();
+    assert_eq!(error.code(), storage_contract::ErrorCode::LogCorrupt);
+    assert_eq!(error.message(), "log record JSON is invalid");
+    assert!(!error.is_retryable());
+    assert!(error.published_result().is_none());
+    let Error::Context { source, .. } = &error else {
+        panic!("stored journal record failure lost its context");
+    };
+    let Error::Contract(storage_contract::Error::Json { source, .. }) = source.as_ref()
+    else {
+        panic!("stored journal record failure lost its JSON source");
+    };
+    assert!(!source.to_string().is_empty());
     assert_eq!(
         fs::read(temp.path().join("state/index.sqlite")).unwrap(),
         index_before
