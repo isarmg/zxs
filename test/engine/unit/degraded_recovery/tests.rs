@@ -821,8 +821,7 @@ fn incomplete_log_cannot_prove_absence_and_unknown_record_types_are_rejected() {
     let Error::Context { source, .. } = &error else {
         panic!("stored journal record failure lost its context");
     };
-    let Error::Contract(storage_contract::Error::Json { source, .. }) = source.as_ref()
-    else {
+    let Error::Contract(storage_contract::Error::Json { source, .. }) = source.as_ref() else {
         panic!("stored journal record failure lost its JSON source");
     };
     assert!(!source.to_string().is_empty());
