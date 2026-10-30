@@ -7,8 +7,8 @@
     "adapter_sha256": "3da2d4a68deba85d64a88a4e07e681ec371283f9874f920a810d0abd45e3dc9f"
   },
   "final_candidate": {
-    "sha": "9ef9faf59075b33b46d22724a93dd9e0fc85a2ba",
-    "tree": "5da65e77fa2e39c64cb9138ddde7ff2f21356726",
+    "sha": "7d15bba51cbc64ab86461f0345458050d289c180",
+    "tree": "06e6abcc3d270edd98f011f626cbf5cccd0a45cb",
     "adapter_path": "test/engine/bench/namespace_adoption/candidate.rs",
     "adapter_sha256": "c2e05b8bc6e889e11c168197026cba334409007263186084f74fc8eec677a8c3"
   },
