@@ -17,7 +17,7 @@ pub(crate) use graph::{EncodedHistory, decode_history_root};
 mod manifest;
 mod state_read;
 pub use manifest::HistoryManifest;
-pub(crate) use state_read::{AdmittedState, RawState};
+pub(crate) use state_read::{AdmittedState, RawState, SharedAdmittedState};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,

@@ -312,6 +312,7 @@ impl Engine {
             let candidate = prepared.candidate;
             let publication = prepared.publication;
             let mut barrier_failure = prepared.barrier_failure;
+            let admitted = prepared.snapshot.map(|snapshot| snapshot.into_admitted());
             if online.len() == members.len()
                 && let Some(source) = barrier_failure.take()
             {
@@ -345,14 +346,7 @@ impl Engine {
                         .read_json_observed(&publication_seal_path(d, &hash), &mut |_| Ok(()))?;
                     verify_publication_seal(&candidate, publication, &seal)?;
                 }
-                // Checkpoint coverage never substitutes for candidate-bound graph verification.
-                crate::history_package::bound_history_objects_at(
-                    &self.disk_resources,
-                    &online,
-                    &candidate,
-                    None,
-                )?;
-                if candidate.sequence == checkpoint.sequence {
+                let admitted = if candidate.sequence == checkpoint.sequence {
                     if hash != checkpoint.candidate_hash
                         || candidate.snapshot_hash != checkpoint.snapshot_hash
                     {
@@ -361,12 +355,28 @@ impl Engine {
                             "checkpoint boundary differs from journal",
                         ));
                     }
-                    let mut next = verified_snapshot_at(
-                        &self.disk_resources,
-                        &online,
-                        &candidate.snapshot_hash,
-                    )?
-                    .into_state();
+                    Some(match admitted {
+                        Some(admitted) => admitted,
+                        None => verified_snapshot_at(
+                            &self.disk_resources,
+                            &online,
+                            &candidate.snapshot_hash,
+                        )?,
+                    })
+                } else {
+                    None
+                };
+                // Checkpoint coverage never substitutes for candidate-bound graph
+                // verification. At the boundary, retain the original State proof
+                // for history-set and projected-manifest comparisons as well.
+                crate::history_package::bound_history_objects_at(
+                    &self.disk_resources,
+                    &online,
+                    &candidate,
+                    admitted.as_ref(),
+                )?;
+                if let Some(admitted) = admitted {
+                    let mut next = admitted.into_state();
                     if publication.recovery.is_some() {
                         next.operations
                             .insert(candidate.operation_id, publication.result.clone());
@@ -376,8 +386,12 @@ impl Engine {
                 self.snapshot = Some(candidate.snapshot_hash);
                 continue;
             }
-            let admitted =
-                verified_snapshot_at(&self.disk_resources, &online, &candidate.snapshot_hash)?;
+            let admitted = match admitted {
+                Some(admitted) => admitted,
+                None => {
+                    verified_snapshot_at(&self.disk_resources, &online, &candidate.snapshot_hash)?
+                }
+            };
             let history_objects = crate::history_package::bound_history_objects_at(
                 &self.disk_resources,
                 &online,

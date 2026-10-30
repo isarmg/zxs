@@ -6,6 +6,9 @@ pub(super) struct PreparedCandidate {
     pub candidate: Candidate,
     pub publication: Option<Publication>,
     pub barrier_failure: Option<Error>,
+    // Only this exact candidate.snapshot_hash, consumed once under the same
+    // admitted roots/locks. Never an all-history State cache.
+    pub snapshot: Option<crate::history_package::SharedAdmittedState>,
 }
 
 impl Engine {
@@ -71,17 +74,16 @@ impl Engine {
         // Only the latest fully published State is needed for cold admission;
         // no alternate receipt index or persistent representation is introduced.
         let state = if let Some(sequence) = published {
-            let bound = &prepared.candidates[&sequence];
-            let mut state = verified_snapshot_at(
+            let bound = prepared
+                .candidates
+                .get_mut(&sequence)
+                .expect("invariant: preflight retains its latest published candidate");
+            let admitted = verified_snapshot_at(
                 &self.disk_resources,
                 &prepared.online,
                 &bound.candidate.snapshot_hash,
-            )?
-            .into_state();
-            let publication = bound
-                .publication
-                .as_ref()
-                .expect("invariant: verified publication");
+            )?;
+            let state = admitted.state();
             let result = state
                 .operations
                 .get(&bound.candidate.operation_id)
@@ -101,12 +103,13 @@ impl Engine {
                     "published snapshot receipt differs",
                 ));
             }
-            if publication.recovery.is_some() {
-                state
-                    .operations
-                    .insert(bound.candidate.operation_id, publication.result.clone());
-            }
-            Arc::new(state)
+            // Cold admission needs the original actor/request/result bindings.
+            // Apply retains the original admitted proof and overlays any degraded
+            // result only after checking the candidate-bound history projection.
+            let shared = admitted.into_shared();
+            let state = shared.share_state();
+            bound.snapshot = Some(shared);
+            state
         } else {
             Arc::new(State {
                 topology_generation: 1,
@@ -157,6 +160,7 @@ impl Engine {
             candidate,
             publication,
             barrier_failure: None,
+            snapshot: None,
         })
     }
 }
