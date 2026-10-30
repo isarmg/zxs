@@ -59,7 +59,7 @@ impl Draft {
         self.resolved = None;
     }
 
-    pub(crate) fn resolve_review(
+    pub(in crate::files) fn resolve_review(
         &mut self,
         root: String,
         nodes: &[SelectedNode],

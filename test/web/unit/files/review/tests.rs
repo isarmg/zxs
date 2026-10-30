@@ -2,8 +2,10 @@ use super::*;
 
 #[test]
 fn receipts_settle_only_the_matching_publication_and_preserve_unknown_outcomes() {
-    let mut model = Model::default();
-    model.checked_nodes = crate::files::tags::tests::selection(&["selected-node"]);
+    let mut model = Model {
+        checked_nodes: crate::files::tags::tests::selection(&["selected-node"]),
+        ..Default::default()
+    };
     model.publications.insert(
         Kind::Tags,
         Publication {

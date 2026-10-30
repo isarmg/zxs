@@ -1053,10 +1053,10 @@ async fn collect_review_branches(
             .install_auxiliary(page)
             .map_err(api::Error::from)?;
         for branch in projected.branches() {
-            if remaining.remove(branch.id()) {
-                if let Some(branch) = SelectedBranch::capture(branch) {
-                    facts.branches.push(branch);
-                }
+            if remaining.remove(branch.id())
+                && let Some(branch) = SelectedBranch::capture(branch)
+            {
+                facts.branches.push(branch);
             }
         }
         cursor = next;
@@ -1071,14 +1071,11 @@ fn branch_progress(
     previous: Option<&HistoryCursor>,
     next: Option<&HistoryCursor>,
 ) -> Result<(), api::Error> {
-    if let (Some(previous), Some(next)) = (previous, next) {
-        if !matches!((&previous.payload().position, &next.payload().position),
+    if let (Some(previous), Some(next)) = (previous, next)
+        && !matches!((&previous.payload().position, &next.payload().position),
             (HistoryPosition::Branch { branch_id: previous }, HistoryPosition::Branch { branch_id: next }) if next > previous)
-        {
-            return Err(
-                history::DecodeError::Relation("branch review cursor does not advance").into(),
-            );
-        }
+    {
+        return Err(history::DecodeError::Relation("branch review cursor does not advance").into());
     }
     Ok(())
 }

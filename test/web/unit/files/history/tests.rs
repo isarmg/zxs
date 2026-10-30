@@ -270,7 +270,7 @@ pub(crate) fn history(value: Value) -> Snapshot<FileHistory> {
         nodes: nodes.into(),
         branches: branches.into(),
         current_branch,
-        page: loaded.then(|| HistoryPageCursors {
+        page: loaded.then_some(HistoryPageCursors {
             previous_cursor: None,
             next_cursor: None,
         }),

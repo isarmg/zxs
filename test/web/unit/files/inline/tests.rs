@@ -5,6 +5,15 @@ fn unobserved_draft(state: RwSignal<State>) -> Draft {
     Draft::unobserved_in(state, EditScope::Location)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn init_native_effect_executor() {
+    static INITIALIZE: std::sync::Once = std::sync::Once::new();
+    INITIALIZE.call_once(|| {
+        task_dispatch::Executor::init_futures_executor()
+            .expect("inline tests initialize the process-wide effect executor once");
+    });
+}
+
 #[test]
 fn metadata_limits_are_bytes_without_splitting_utf8() {
     let ascii = "a".repeat(128);
@@ -285,7 +294,7 @@ fn old_editor_cleanup_cannot_release_a_new_sessions_history_navigation_gate() {
 #[test]
 fn history_invalidation_retains_editor_text_without_refreshing_its_write_basis() {
     use task_dispatch::Executor;
-    Executor::init_futures_executor().expect("test initializes the native effect executor once");
+    init_native_effect_executor();
     let root = Owner::new();
     root.with(|| {
         let mut initial = active_state();
@@ -474,7 +483,7 @@ fn page_context_is_shared_and_only_invalidates_on_editor_ownership_changes() {
 #[test]
 fn scheduled_shared_context_effects_preserve_pending_drafts_and_follow_page_ownership() {
     use task_dispatch::Executor;
-    Executor::init_futures_executor().expect("test initializes the native effect executor once");
+    init_native_effect_executor();
     let root = Owner::new();
     let state = root.with(|| RwSignal::new(active_state()));
     let page = root.with(Owner::new);

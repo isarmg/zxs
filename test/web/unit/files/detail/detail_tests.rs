@@ -34,14 +34,16 @@ fn an_unknown_loading_or_stale_note_cannot_be_submitted_as_an_empty_note() {
 #[test]
 fn branch_options_keep_page_order_without_duplicating_the_current_summary() {
     use crate::files::history::tests::branch_wire;
-    let mut model = Model::default();
-    model.file_history = crate::files::history::tests::history(json!({
+    let model = Model {
+        file_history: crate::files::history::tests::history(json!({
         "selected_branch_id":"current",
         "branches":[
             branch_wire(json!({"branch_id":"other","name":"z-other","state":"merged","read_only":true})),
             branch_wire(json!({"branch_id":"current","name":"a-current","current":true}))
         ]
-    }));
+        })),
+        ..Default::default()
+    };
     let options = branch_options(&model);
     assert_eq!(options.len(), 2);
     assert_eq!(options[0].value, "other");

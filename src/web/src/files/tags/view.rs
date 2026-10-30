@@ -175,10 +175,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                             let mut options=s.files.file_history.branches().iter().filter(|branch|branch.writable())
                                 .map(|branch|SelectOption::new(branch.id(),branch.name())).collect::<Vec<_>>();
                             if let Some(branch)=s.files.tag_edit.as_ref().and_then(|draft|draft.targets.get(&source.get_value())
-                                .and_then(|id|id.as_ref()).and_then(|id|draft.branches.get(id))) {
-                                if !s.files.file_history.branches().iter().any(|candidate|candidate.id()==branch.id) {
-                                    options.push(SelectOption::new(&branch.id,&branch.name));
-                                }
+                                .and_then(|id|id.as_ref()).and_then(|id|draft.branches.get(id)))
+                                && !s.files.file_history.branches().iter().any(|candidate|candidate.id()==branch.id)
+                            {
+                                options.push(SelectOption::new(&branch.id,&branch.name));
                             }
                             options
                         }));

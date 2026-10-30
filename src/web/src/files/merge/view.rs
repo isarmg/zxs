@@ -94,19 +94,17 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 .merge
                 .as_ref()
                 .and_then(|draft| draft.chosen.as_ref())
-            {
-                if !s
+                && !s
                     .files
                     .file_history
                     .nodes()
                     .iter()
                     .any(|node| node.id() == chosen.id)
-                {
-                    options.push(SelectOption::new(
-                        &chosen.id,
-                        format!("{} · {}", t("所选节点", "Selected node"), chosen.id),
-                    ));
-                }
+            {
+                options.push(SelectOption::new(
+                    &chosen.id,
+                    format!("{} · {}", t("所选节点", "Selected node"), chosen.id),
+                ));
             }
             options
         })
@@ -123,10 +121,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                         .skip(draft.selected_page * SELECTED_ROWS)
                         .take(SELECTED_ROWS)
                         .collect::<Vec<_>>();
-                    if let Some(branch) = draft.selected.get(&draft.survivor) {
-                        if !branches.iter().any(|candidate| candidate.id == branch.id) {
-                            branches.push(branch);
-                        }
+                    if let Some(branch) = draft.selected.get(&draft.survivor)
+                        && !branches.iter().any(|candidate| candidate.id == branch.id)
+                    {
+                        branches.push(branch);
                     }
                     branches
                         .into_iter()
