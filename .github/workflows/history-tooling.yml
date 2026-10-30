@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap]
 
 permissions:
   contents: read
@@ -100,6 +100,10 @@ jobs:
               '2a0b46be4457a87653cad0a597e550904f8102a3', '6ecf8f17fb1b2eca24236ccec3be946ec864dea5',
           ):
               raise SystemExit('SMB SDK retry requires the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'native-smb-overlap' and (source, tree) != (
+              '15b4b04b2e33cfd91abc398c391ad4442c28452f', '3ae7fc6e0a8a23fc9af5a232d235af4a64cf675c',
+          ):
+              raise SystemExit('Combined overlap requires the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -418,6 +422,20 @@ jobs:
               dict(id='smb-stream-sdk-format',
                   command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check test/smb-vfs/unit/module/seek_tests.rs'),
               dict(groups['smb-stream-repair'][2], id='smb-stream-sdk'),
+          ]
+          overlap = [dict(selector='smb_rpc::tests::stream_read_tests::', count=6)]
+          for witness in [
+              'smb_rpc::tests::namespace_tests::rpc_flush_returns_published_receipt_when_index_projection_fails',
+              'smb_rpc::tests::namespace_tests::rpc_namespace_returns_published_receipt_and_does_not_replay_after_index_failure',
+              'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence',
+              'smb_rpc::tests::actual_core_flush_publishes_full_file_and_old_reader_keeps_its_version',
+          ]:
+              overlap.append(dict(selector=witness, count=1, required=[witness], exact=True))
+          groups['native-smb-overlap'] = [
+              dict(id='native-smb-overlap-format', format_base='754aeb838669a7f50a630349359000182bd3dc94',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='native-smb-overlap', cache='server', package='storage-server',
+                  test_groups=json.dumps(overlap), command='Complete stream-read module and four exact combined outcome/retirement witnesses'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
