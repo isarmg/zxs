@@ -34,7 +34,16 @@ fn graph(browser: &Browser) -> Result<()> {
     )
 }
 
-fn choose(browser: &Browser, english: &str, chinese: &str, value: &str) -> Result<()> {
+enum Choice<'a> {
+    WindowNodeId(&'a str),
+    ExactLabel(&'a str),
+}
+
+fn choose(browser: &Browser, english: &str, chinese: &str, choice: Choice<'_>) -> Result<()> {
+    let (kind, value) = match choice {
+        Choice::WindowNodeId(id) => ("window_node_id", id),
+        Choice::ExactLabel(label) => ("exact_label", label),
+    };
     check(
         browser,
         "enabled bounded select trigger",
@@ -52,12 +61,34 @@ fn choose(browser: &Browser, english: &str, chinese: &str, value: &str) -> Resul
         "bounded select option",
         &format!(
             r#"
-        const panel=document.getElementById(window.__zxsHistoryWindows.selectPanel);
-        const option=Array.from(panel.querySelectorAll('[role=option]')).find(option=>option.textContent.includes({}));
-        if(!option||option.getAttribute('aria-disabled')==='true')return false;option.click();return true;
+        const p=window.__zxsHistoryWindows,target={},panel=document.getElementById(p.selectPanel);
+        const options=Array.from(panel.querySelectorAll('[role=option]'));
+        let index;
+        if(target.kind==='window_node_id'){{
+            // Both node controls preserve the admitted page order; every shared node has a body version.
+            if(!p.expected||p.expected.length!==32||new Set(p.expected).size!==32||options.length!==p.expected.length)return false;
+            index=p.expected.indexOf(target.value);
+            if(index<0)return false;
+        }}else{{
+            const matches=options.flatMap((option,index)=>option.textContent.trim()===target.value?[index]:[]);
+            if(matches.length!==1)return false;
+            index=matches[0];
+        }}
+        const option=options[index];
+        if(option.getAttribute('aria-disabled')==='true')return false;
+        p.selectOption=option.id;option.click();return true;
     "#,
-            json!(value)
+            json!({"kind":kind,"value":value})
         ),
+    )?;
+    check(
+        browser,
+        "bounded select accepts exactly the target option",
+        r#"
+        const p=window.__zxsHistoryWindows,panel=document.getElementById(p.selectPanel);
+        const selected=Array.from(panel.querySelectorAll('[role=option][aria-selected=true]'));
+        return selected.length===1&&selected[0].id===p.selectOption&&selected[0].getAttribute('aria-disabled')==='false';
+    "#,
     )
 }
 
@@ -125,7 +156,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 body.total_bytes=String(bytes.length);body.byte_offset=String(offset);body.text=decoder.decode(bytes.slice(offset,end));
                 body.end_of_field=end===bytes.length;
                 body.next_cursor=body.end_of_field?null:cursor(body.identity,null,'forward',{kind:'field',byte_offset:String(end)});
-                p.lastField={text:body.text,offset,end,total:bytes.length};
+                p.lastField={node:body.identity.collection.node_id,field:body.field,text:body.text,offset,end,total:bytes.length};
             }
             if(body.kind==='node_field'&&p.holdField){
                 p.holdField=false;
@@ -254,9 +285,14 @@ fn merge_review(browser: &Browser) -> Result<()> {
         browser,
         "Result node (any node of this file)",
         "结果节点（可选此文件任一节点）",
-        &older,
+        Choice::WindowNodeId(&older),
     )?;
-    choose(browser, "Surviving branch", "合并后保留的分支", &branch)?;
+    choose(
+        browser,
+        "Surviving branch",
+        "合并后保留的分支",
+        Choice::ExactLabel(&branch),
+    )?;
     click(browser, "Previous history page", "上一页历史")?;
     graph(browser)?;
     check(
@@ -264,6 +300,7 @@ fn merge_review(browser: &Browser) -> Result<()> {
         "off-page merge result and selected branch remain captured",
         "const p=window.__zxsHistoryWindows,text=document.querySelector('.zxs-merge-review').textContent;return text.includes(p.older)&&text.includes(p.branchName)&&/1\\s*(branches selected|个分支已选择)/.test(text)",
     )?;
+    captured_merge_selection(browser)?;
     browser.script("window.__zxsHistoryWindows.root='e'.repeat(64);return true")?;
     click(browser, "Refresh", "刷新")?;
     check(
@@ -292,8 +329,30 @@ fn merge_review(browser: &Browser) -> Result<()> {
         "merge root basis is accepted without submitting a write",
         "return Array.from(document.querySelectorAll('.zxs-merge-review button')).some(button=>['Confirm merge of selected branches','确认合并所选分支'].includes(button.textContent.trim())&&!button.disabled)",
     )?;
+    captured_merge_selection(browser)?;
     browser.script("window.__zxsHistoryWindows.reviewing=false;Array.from(document.querySelectorAll('.zxs-merge-review button')).find(button=>['Cancel','取消'].includes(button.textContent.trim())).click();return true")?;
     Ok(())
+}
+
+fn captured_merge_selection(browser: &Browser) -> Result<()> {
+    check(
+        browser,
+        "captured merge result and survivor retain their exact identities",
+        r#"
+        const p=window.__zxsHistoryWindows,panel=document.querySelector('.zxs-merge-review');
+        const control=labels=>Array.from(panel.querySelectorAll('[role=combobox]')).find(button=>labels.includes(document.getElementById(button.getAttribute('aria-labelledby'))?.textContent.trim()));
+        const result=control(['Result node (any node of this file)','结果节点（可选此文件任一节点）']);
+        const survivor=control(['Surviving branch','合并后保留的分支']);
+        if(!result||!survivor)return false;
+        const resultSelected=Array.from(document.getElementById(result.getAttribute('aria-controls')).querySelectorAll('[role=option][aria-selected=true]'));
+        const survivorSelected=Array.from(document.getElementById(survivor.getAttribute('aria-controls')).querySelectorAll('[role=option][aria-selected=true]'));
+        return resultSelected.length===1&&['Selected node · '+p.older,'所选节点 · '+p.older].includes(resultSelected[0].textContent.trim())
+            &&result.querySelector('.zxs-select-value').textContent.trim()===resultSelected[0].textContent.trim()
+            &&survivorSelected.length===1&&survivorSelected[0].textContent.trim()===p.branchName
+            &&survivor.querySelector('.zxs-select-value').textContent.trim()===p.branchName
+            &&/1\s*(branches selected|个分支已选择)/.test(panel.textContent);
+    "#,
+    )
 }
 
 fn fields_and_cancellation(browser: &Browser) -> Result<()> {
@@ -304,18 +363,23 @@ fn fields_and_cancellation(browser: &Browser) -> Result<()> {
         .as_str()
         .unwrap()
         .to_owned();
-    choose(browser, "Node on this page", "本页节点", &current)?;
+    choose(
+        browser,
+        "Node on this page",
+        "本页节点",
+        Choice::WindowNodeId(&current),
+    )?;
     click(browser, "Message", "提交说明")?;
     check(
         browser,
         "first bounded UTF-8 field fragment",
-        "const p=window.__zxsHistoryWindows,panel=document.querySelector('.zxs-history-field');return panel?.querySelector('pre').textContent===p.lastField.text&&panel.querySelector('pre').textContent.startsWith('first-fragment')&&panel.querySelector('[data-field-complete=false]')!==null",
+        "const p=window.__zxsHistoryWindows,panel=document.querySelector('.zxs-history-field');return p.lastField?.node===p.current&&p.lastField.field==='message'&&['Message · '+p.current,'提交说明 · '+p.current].includes(panel?.querySelector('h3').textContent.trim())&&panel.querySelector('pre').textContent===p.lastField.text&&panel.querySelector('pre').textContent.startsWith('first-fragment')&&panel.querySelector('[data-field-complete=false]')!==null",
     )?;
     click(browser, "Next field fragment", "下一片字段")?;
     check(
         browser,
         "last fragment replaces rather than accumulates earlier bytes",
-        "const p=window.__zxsHistoryWindows,panel=document.querySelector('.zxs-history-field'),text=panel?.querySelector('pre').textContent||'';return document.querySelectorAll('.zxs-history-field').length===1&&p.lastField.offset>0&&text===p.lastField.text&&!text.includes('first-fragment')&&text.endsWith('last-fragment')&&panel.querySelector('[data-field-complete=false]')!==null&&Array.from(panel.querySelectorAll('button')).some(button=>['Next field fragment','下一片字段'].includes(button.textContent.trim())&&button.disabled)",
+        "const p=window.__zxsHistoryWindows,panel=document.querySelector('.zxs-history-field'),text=panel?.querySelector('pre').textContent||'';return document.querySelectorAll('.zxs-history-field').length===1&&p.lastField.node===p.current&&p.lastField.field==='message'&&['Message · '+p.current,'提交说明 · '+p.current].includes(panel.querySelector('h3').textContent.trim())&&p.lastField.offset>0&&text===p.lastField.text&&!text.includes('first-fragment')&&text.endsWith('last-fragment')&&panel.querySelector('[data-field-complete=false]')!==null&&Array.from(panel.querySelectorAll('button')).some(button=>['Next field fragment','下一片字段'].includes(button.textContent.trim())&&button.disabled)",
     )?;
     click(browser, "Close field", "关闭字段")?;
     browser.script("window.__zxsHistoryWindows.holdField=true;return true")?;
