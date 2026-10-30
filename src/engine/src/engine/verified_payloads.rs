@@ -33,7 +33,7 @@ impl PayloadProofBudget {
         // Only the counter is shared; acquiring a lease publishes no other data.
         if self
             .held
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
                 (descriptors <= self.capacity - held).then(|| held + descriptors)
             })
             .is_err()
