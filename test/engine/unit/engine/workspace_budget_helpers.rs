@@ -17,12 +17,13 @@ impl Engine {
             let retention = if resident {
                 WorkspaceRetention::Resident
             } else {
-                WorkspaceRetention::Cold {
-                    fingerprint: blake3::hash(&canonical),
-                    mirrors: match self.workspace_budget.records[id].retention {
-                        WorkspaceRetention::Cold { mirrors, .. } => mirrors,
-                        WorkspaceRetention::Resident => panic!("missing resident workspace"),
+                match self.workspace_budget.records[id].retention {
+                    WorkspaceRetention::Cold { mirrors, kind, .. } => WorkspaceRetention::Cold {
+                        fingerprint: blake3::hash(&canonical),
+                        mirrors,
+                        kind,
                     },
+                    WorkspaceRetention::Resident => panic!("missing resident workspace"),
                 }
             };
             expected.records.insert(

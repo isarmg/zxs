@@ -612,18 +612,6 @@ fn public_preparation_fences_registration_and_finish_rechecks_live_receipt() {
         // this unit fixture to exercise the live-receipt branch independently of
         // today's global write fence; this is not a claim that writers bypass it.
         drop(prepared._admission.take());
-        if change == "actor" {
-            // Keep this synthetic conflicting-receipt fixture resident so finish
-            // exercises its actor recheck rather than a cold disk-proof refusal.
-            std::fs::write(
-                engine
-                    .workspace_data_directory(&workspace)
-                    .unwrap()
-                    .join("receipt-race"),
-                b"retained fixture evidence",
-            )
-            .unwrap();
-        }
         let registered = engine
             .commit_workspace_wire(registered_request, public_envelope(registered_body))
             .unwrap();

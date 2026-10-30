@@ -1,7 +1,7 @@
 //! Durable workspace manifests and restart reconciliation.
 use super::{
     Engine, ReadSource,
-    workspace_budget::{WorkspaceMirrors, WorkspaceRetention},
+    workspace_budget::{WorkspaceColdKind, WorkspaceMirrors, WorkspaceRetention},
 };
 use crate::journal::RecordType;
 use crate::{disk::*, *};
@@ -56,8 +56,8 @@ impl WorkspaceSource<'_> {
 struct LoadedWorkspace {
     workspace: Workspace,
     canonical: Vec<u8>,
-    retention: WorkspaceRetention,
     consistent: bool,
+    terminal: bool,
 }
 
 mod inventory;
@@ -258,14 +258,12 @@ impl Engine {
                 if paths.is_empty() {
                     continue;
                 }
-                let loaded = self.read_workspace_mirrors(id, &paths, &locations, authoritative)?;
-                let admission = self.check_workspace_budget(
-                    &loaded.workspace,
-                    &loaded.canonical,
-                    loaded.retention,
-                )?;
+                let loaded = self.read_workspace_mirrors(id, &paths, authoritative)?;
+                let retention = self.workspace_retention(&loaded, &paths, &locations)?;
+                let admission =
+                    self.check_workspace_budget(&loaded.workspace, &loaded.canonical, retention)?;
                 self.account_workspace(admission);
-                if !loaded.retention.is_cold() {
+                if !retention.is_cold() {
                     self.workspaces.insert(id.into(), loaded.workspace);
                 }
             }
@@ -277,7 +275,6 @@ impl Engine {
         &self,
         id: &str,
         paths: &[WorkspaceSource<'_>],
-        locations: &[WorkspaceLocation],
         authoritative: bool,
     ) -> Result<LoadedWorkspace> {
         let mut healthy = Vec::new();
@@ -388,28 +385,43 @@ impl Engine {
                 })?;
             }
         }
-        let retention = match workspace_mirrors(paths) {
-            Some(mirrors)
-                if !damaged
-                    && ((self.empty_aborted_workspace(&selected)
-                        && workspace_directories_clear(locations, id, false)?)
-                        || (terminal
-                            && consistent
-                            && self.published_normal_workspace(&selected)?
-                            && workspace_directories_clear(locations, id, true)?)) =>
-            {
-                WorkspaceRetention::Cold {
-                    fingerprint: blake3::hash(&canonical),
-                    mirrors,
-                }
-            }
-            _ => WorkspaceRetention::Resident,
-        };
         Ok(LoadedWorkspace {
             workspace: selected,
             canonical,
-            retention,
             consistent: consistent && !damaged,
+            terminal,
+        })
+    }
+
+    fn workspace_retention(
+        &self,
+        loaded: &LoadedWorkspace,
+        paths: &[WorkspaceSource<'_>],
+        locations: &[WorkspaceLocation],
+    ) -> Result<WorkspaceRetention> {
+        let workspace = &loaded.workspace;
+        let id = &workspace.workspace_id;
+        let kind = if !loaded.consistent {
+            None
+        } else if self.empty_aborted_workspace(workspace)
+            && workspace_directories_clear(locations, id, false)?
+        {
+            Some(WorkspaceColdKind::EmptyAbort)
+        } else if loaded.terminal
+            && self.published_normal_workspace(workspace)?
+            && workspace_directories_clear(locations, id, true)?
+        {
+            Some(WorkspaceColdKind::Published)
+        } else {
+            None
+        };
+        Ok(match (workspace_mirrors(paths), kind) {
+            (Some(mirrors), Some(kind)) => WorkspaceRetention::Cold {
+                fingerprint: blake3::hash(&loaded.canonical),
+                mirrors,
+                kind,
+            },
+            _ => WorkspaceRetention::Resident,
         })
     }
 
@@ -425,12 +437,34 @@ impl Engine {
         id: &str,
         admitted: WorkspaceRetention,
     ) -> Result<Workspace> {
+        self.read_admitted_cold_workspace(id, admitted, true)
+    }
+
+    fn read_admitted_cold_workspace(
+        &self,
+        id: &str,
+        admitted: WorkspaceRetention,
+        authoritative: bool,
+    ) -> Result<Workspace> {
+        let WorkspaceRetention::Cold {
+            fingerprint,
+            mirrors,
+            kind,
+        } = admitted
+        else {
+            unreachable!("invariant: cold point reads require cold admission");
+        };
         let locations = self.workspace_locations()?;
         let paths = workspace_paths(&locations, id)?;
-        let loaded = self.read_workspace_mirrors(id, &paths, &locations, true)?;
-        // A cold point read is a disk boundary, not permission to replace the
-        // admitted accounting/identity with different but syntactically valid data.
-        if loaded.retention != admitted {
+        let loaded = self.read_workspace_mirrors(id, &paths, authoritative)?;
+        // Admission already bound the publication. A point read must preserve
+        // its exact manifest/mirrors, not repeat retirement against damaged
+        // request copies. Replay still requires an exact healthy saved request.
+        if !loaded.consistent
+            || workspace_mirrors(&paths) != Some(mirrors)
+            || blake3::hash(&loaded.canonical) != fingerprint
+            || !workspace_directories_clear(&locations, id, kind == WorkspaceColdKind::Published)?
+        {
             return Err(recovery_required(
                 "cold workspace evidence changed; reopen for reconciliation",
             ));
@@ -438,9 +472,9 @@ impl Engine {
         Ok(loaded.workspace)
     }
 
-    /// Recovery may still be replaying an older prefix. Its cold hints were
-    /// bound to the complete published prefix before admission; point reads
-    /// recheck those exact bytes and mirrors without resurrecting a record.
+    /// The complete published prefix admitted cold hints before replay. At an
+    /// earlier replay slot, verify those same bytes/mirrors without requiring
+    /// its later operation to have been installed in the live State already.
     pub(crate) fn workspace_recovery_hint(&self, id: &str) -> Result<Cow<'_, Workspace>> {
         if let Some(workspace) = self.workspaces.get(id) {
             return Ok(Cow::Borrowed(workspace));
@@ -448,22 +482,9 @@ impl Engine {
         let admitted = self
             .cold_workspace_retention(id)
             .expect("invariant: retained ID is charged");
-        let locations = self.workspace_locations()?;
-        let paths = workspace_paths(&locations, id)?;
-        let loaded = self.read_workspace_mirrors(id, &paths, &locations, false)?;
-        let actual = workspace_mirrors(&paths).map(|mirrors| WorkspaceRetention::Cold {
-            fingerprint: blake3::hash(&loaded.canonical),
-            mirrors,
-        });
-        if !loaded.consistent
-            || actual != Some(admitted)
-            || !workspace_directories_clear(&locations, id, true)?
-        {
-            return Err(recovery_required(
-                "cold recovery hint changed; reopen for reconciliation",
-            ));
-        }
-        Ok(Cow::Owned(loaded.workspace))
+        Ok(Cow::Owned(
+            self.read_admitted_cold_workspace(id, admitted, false)?,
+        ))
     }
 
     fn workspace_has_preparation(&self, id: &str) -> bool {
@@ -532,12 +553,15 @@ impl Engine {
         let canonical = encode_metadata(workspace, MAX_METADATA)?;
         let id = &workspace.workspace_id;
         let owned = self.workspace_has_preparation(id);
-        let retention = if self.cold_workspace_retention(id).is_some() && !owned {
+        let retention = if !owned
+            && let Some(WorkspaceRetention::Cold { kind, .. }) = self.cold_workspace_retention(id)
+        {
             // Input is already bound to this process's admitted evidence. A
             // successful terminal write restores both mirrors in place.
             WorkspaceRetention::Cold {
                 fingerprint: blake3::hash(&canonical),
                 mirrors: WorkspaceMirrors::Both,
+                kind,
             }
         } else if !owned {
             let published = self.published_normal_workspace(workspace)?;
@@ -566,6 +590,11 @@ impl Engine {
                     WorkspaceRetention::Cold {
                         fingerprint: blake3::hash(&canonical),
                         mirrors: WorkspaceMirrors::Both,
+                        kind: if published {
+                            WorkspaceColdKind::Published
+                        } else {
+                            WorkspaceColdKind::EmptyAbort
+                        },
                     }
                 } else {
                     WorkspaceRetention::Resident

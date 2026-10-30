@@ -394,8 +394,9 @@ impl Engine {
         Ok(engine)
     }
 
-    /// Admission preflight is read-only apart from writer lock files. Keep this
-    /// same Engine and its locks through replay and authoritative reconciliation.
+    /// Hold the same Engine and writer locks through read-only receipt/workspace
+    /// admission, replay and authoritative reconciliation. No journal writer is
+    /// opened until both preflights have accepted the retained evidence.
     fn prepare_workspace_recovery(root: PathBuf, config: ValidatedConfig) -> Result<Self> {
         let disk_resources = Arc::new(DiskResources::open(&config, true)?);
         let locks = acquire_locks(&root, &disk_resources)?;

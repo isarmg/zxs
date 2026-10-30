@@ -24,7 +24,15 @@ pub(super) enum WorkspaceRetention {
     Cold {
         fingerprint: blake3::Hash,
         mirrors: WorkspaceMirrors,
+        kind: WorkspaceColdKind,
     },
+}
+
+/// In-memory admission proof, never a new manifest field or disk format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WorkspaceColdKind {
+    EmptyAbort,
+    Published,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
