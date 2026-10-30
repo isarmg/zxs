@@ -13,12 +13,17 @@
 | 接口 | 锁内职责 | 锁外职责 |
 | --- | --- | --- |
 | `Engine::prepare_integrity_scrub` | 拒绝已有 detached preparation；捕获 `Arc<State>`、配置、snapshot/sequence、各成员准确 admitted journal tail 和原 Engine 身份 | 不遍历所有版本，不读正文，不签发发布许可 |
-| `IntegrityScrubPlan::estimated_payload_bytes` | 无 | 遍历固定基线，计算 required payload 的期望字节数；这不是总 I/O 估计 |
+| `IntegrityScrubPlan::estimated_payload_bytes(&cancellation)` | 无 | 遍历固定基线，逐版本响应取消，计算 required payload 的期望字节数；取消不返回部分总数，这不是总 I/O 估计 |
 | `IntegrityScrubPlan::run` | 通过调用方回调逐版本准入 | 验证固定基线的完整恢复元数据闭包、journal prefix、必需正文副本；真实读取计费，普通回调每次最多 64 KiB；准入路径 marker 的累计实际字节在解锁后补计 |
 | `Engine::admit_integrity_scrub_batch` | 比较当前 owner/config、版本与放置/内容状态；取得一个版本 ReadLease，有限读取路径身份 marker 并打开正文 fd | checksum、proof、正文 hash 均不在 Engine 锁内；一个版本最多 64 个正文 fd，超出明确 ResourceLimit |
 | `Engine::finish_integrity_scrub` | 检验结果仍属于原 Engine/config | 输出 Complete、Cancelled、Superseded 或 Failed，不把过期基线当健康 |
 
 实际 job 强持 `Arc<EngineBackend>`，因此 Engine 及它拥有的真实 writer lock 始终保留；不额外复制每个 lock fd。公共 core plan 不单独提供写者锁生命周期保证，最终接纳仍须回到原 Engine；生产 adapter 的 owner 链覆盖全部 I/O、lease/fd 关闭与最终结果交接。
+
+估计在遍历前、每个版本及结束时检查同一单向取消 token。取消发生在估计阶段时，
+adapter 不发布未完成的 expected payload bytes，继续由原 plan/token 生成零存储
+读取的 `Cancelled` 报告，再交回原 live Engine 完成接纳；不会改成准入拒绝。
+身份重新核验和 plan 准入仍先于估计；正常完成才发布完整估计及 Running 基线。
 
 journal 扫描在捕获的准确尾 hash 停止，并实际探测之后的 1 byte；finish 核对当前 writer 尾与不确定状态，区分合法追加和静态未解释尾字节，不用 stat 代替读取。运行期元数据对象没有 GC 删除入口；将来新增元数据 GC 必须接入基线保留约束。正文 batch 以现有 ReadLease 保护准入后的 purge/cleanup；准入前 descriptor/路由/内容变化返回 Superseded，而非完整成功。普通不相关新发布可以和旧基线扫描交错，不会刷新这次基线。
 

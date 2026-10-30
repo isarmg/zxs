@@ -340,6 +340,91 @@ fn pre_cancelled_scrub_has_an_explicit_partial_result_and_performs_no_disk_probe
 }
 
 #[test]
+fn pre_cancelled_payload_planning_does_not_request_an_item() {
+    let cancellation = IntegrityScrubCancellation::new();
+    cancellation.cancel();
+    let versions = std::iter::from_fn(|| -> Option<(u64, usize)> {
+        panic!("cancelled planning must not traverse the baseline")
+    });
+    let error = estimate_required_payload_bytes(&cancellation, versions).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::OperationAborted);
+}
+
+#[test]
+fn payload_planning_cancellation_between_items_precedes_more_arithmetic() {
+    let cancellation = IntegrityScrubCancellation::new();
+    let mut requested = 0;
+    let versions = std::iter::from_fn(|| {
+        requested += 1;
+        match requested {
+            1 => Some((7, 3)),
+            2 => {
+                cancellation.cancel();
+                Some((u64::MAX, 2))
+            }
+            _ => panic!("planning continued after cancellation"),
+        }
+    });
+    let error = estimate_required_payload_bytes(&cancellation, versions).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::OperationAborted);
+    assert_eq!(requested, 2);
+}
+
+#[test]
+fn payload_planning_cancellation_at_end_does_not_return_a_completed_estimate() {
+    let cancellation = IntegrityScrubCancellation::new();
+    let mut requested = 0;
+    let versions = std::iter::from_fn(|| {
+        requested += 1;
+        if requested == 1 {
+            Some((7, 3))
+        } else {
+            cancellation.cancel();
+            None
+        }
+    });
+    let error = estimate_required_payload_bytes(&cancellation, versions).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::OperationAborted);
+    assert_eq!(requested, 2);
+}
+
+#[test]
+fn payload_planning_counts_available_routes_and_skips_retired_content() {
+    let (_temp, mut engine, repository) = fixture();
+    let sparse = save(&mut engine, &repository, &[1; 5]);
+    let available = save(&mut engine, &repository, &[2; 7]);
+    let purged = save(&mut engine, &repository, &[3; 11]);
+    let migrated = save(&mut engine, &repository, &[4; 13]);
+    let state = std::sync::Arc::make_mut(&mut engine.state);
+    state.content_states.remove(&sparse);
+    state.content_states.insert(available, ContentState::Available);
+    state.content_states.insert(purged, ContentState::Purged);
+    state.content_states.insert(migrated, ContentState::Migrated);
+    let plan = engine.prepare_integrity_scrub().unwrap();
+    let cancellation = IntegrityScrubCancellation::new();
+    assert_eq!(plan.estimated_payload_bytes(&cancellation).unwrap(), 36);
+    cancellation.cancel();
+    assert_eq!(
+        plan.estimated_payload_bytes(&cancellation).unwrap_err().code(),
+        ErrorCode::OperationAborted
+    );
+}
+
+#[test]
+fn payload_planning_retains_checked_multiplication_and_addition() {
+    let cancellation = IntegrityScrubCancellation::new();
+    assert_eq!(estimate_required_payload_bytes(&cancellation, []).unwrap(), 0);
+    assert_eq!(
+        estimate_required_payload_bytes(&cancellation, [(u64::MAX, 1), (u64::MAX, 0)]).unwrap(),
+        u64::MAX
+    );
+    for versions in [vec![(u64::MAX, 2)], vec![(u64::MAX, 1), (1, 1)]] {
+        let error = estimate_required_payload_bytes(&cancellation, versions).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    }
+}
+
+#[test]
 fn detached_preparation_is_rejected_before_scan_and_releases_admission_on_drop() {
     let (_temp, mut engine, repository) = fixture();
     let workspace = engine
@@ -612,7 +697,11 @@ fn offlock_scan_allows_real_concurrent_publication_and_stops_at_captured_frontie
         .metadata_members()
         .map(|member| scan(member).unwrap().records.len())
         .sum();
-    assert_eq!(plan.estimated_payload_bytes().unwrap(), 3 * 160 * 1024);
+    assert_eq!(
+        plan.estimated_payload_bytes(&IntegrityScrubCancellation::new())
+            .unwrap(),
+        3 * 160 * 1024
+    );
     let engine = Arc::new(Mutex::new(engine));
     let (paused, wait_pause) = mpsc::sync_channel(0);
     let (resume, wait_resume) = mpsc::sync_channel(0);
