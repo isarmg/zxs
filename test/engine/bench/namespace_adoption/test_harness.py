@@ -242,7 +242,7 @@ class RunnerBoundaryTests(unittest.TestCase):
         for observer in ('plain', 'seccomp-bpf'):
             with self.subTest(observer=observer), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
-                args = SimpleNamespace(output=root / 'results', pool_parent=root / 'pools',
+                args = SimpleNamespace(mode='final', output=root / 'results', pool_parent=root / 'pools',
                                        deadline_unix=runner.time.time() + 60, trace_observer=observer, observer_probe=None)
                 args.output.mkdir()
                 args.pool_parent.mkdir()
