@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics]
 
 permissions:
   contents: read
@@ -164,6 +164,10 @@ jobs:
               '09c8c9eb9c1728201fecbf5f7c9b5c635519fef9', 'ef8e1e2d616970f5d0d04b88e0478fa4cc12aa7f',
           ):
               raise SystemExit('History window Web checkpoint requires the exact cross-layer source and tree')
+          if os.environ['SCOPE'] == 'scrub-terminal-diagnostics' and (source, tree) != (
+              'bc51f061d4daa7f2a8d67f8851f913b150cfa04a', 'aeded80b572e29377d41149788f525b0eddee886',
+          ):
+              raise SystemExit('Scrub terminal diagnostics require the exact reviewed independent source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -744,6 +748,22 @@ jobs:
                   ]), command='Actual file-history consumer and UI session test inventories and native execution'),
               dict(id='history-window-web-production', web_production=True,
                   command='bash .github/scripts/check.sh web-production'),
+          ]
+          groups['scrub-terminal-diagnostics'] = [
+              dict(id='scrub-terminal-format', format_base='096f9a7f60025ca14781b179d9e7415f10c5b846',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='scrub-terminal-metadata-clippy', cache='server',
+                  command='cargo metadata --locked --offline --format-version 1 > .diagnostics/cargo-metadata.json\ncargo clippy --locked --offline -p storage-server -p storage-engine --lib --tests -- -D warnings'),
+              dict(id='scrub-terminal-engine', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([dict(selector='engine::integrity_scrub::schedule::tests::', count=9,
+                      required_suffixes=['healthy_scan_completed_after_max_age_has_no_usable_coverage'])]),
+                  command='Complete engine scrub schedule group including expired-at-completion coverage witness'),
+              dict(id='scrub-terminal-server', cache='server', package='storage-server',
+                  test_groups=json.dumps([dict(selector='integrity_scrub::', count=24, required_suffixes=[
+                      'terminal_feasibility_only_disproves_a_payload_lower_bound',
+                      'terminal_diagnostics_wire_preserves_wide_counts_and_unknown_observations',
+                      'terminal_diagnostics_keep_real_read_totals_and_the_running_clock'])]),
+                  command='Complete server scrub policy, wire and lifecycle groups'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
