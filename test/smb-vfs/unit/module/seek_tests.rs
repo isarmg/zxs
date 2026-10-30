@@ -129,7 +129,6 @@ fn with_seek_host(
         assert_eq!(seek(&mut host, &mut fsp, 0, libc::SEEK_END), -1);
         assert_eq!(*libc::__errno_location(), libc::EINVAL);
         drop(Box::from_raw(host.data.cast::<Context>()));
-        host.data = std::ptr::null_mut();
     }
     worker.join().unwrap();
     drop(file);
