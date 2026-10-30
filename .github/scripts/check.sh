@@ -15,6 +15,7 @@ case "${1:-}" in
     python3 -m unittest discover -s test/ci -p 'test_*.py'
     python3 tools/publication-model/selftest.py
     python3 -m unittest discover -s test/tools/perf-check -p 'test_*.py'
+    python3 -m unittest discover -s test/history-scale-bench -p 'test_*.py'
     for script in .github/scripts/*.sh test/ci/*.sh; do
       bash -n "$script"
     done
