@@ -111,16 +111,78 @@ fn native_commit_replay_uses_only_exact_bound_request_copies() {
 
 #[test]
 fn native_commit_replay_does_not_trust_matching_but_unbound_saved_json() {
-    let (_temp, mut engine, _repository, mut request) = saved();
-    let paths = request_paths(&engine, &request);
+    let (_temp, mut engine, _repository, original) = saved();
+    let paths = request_paths(&engine, &original);
+    let requests = paths.clone().map(|path| fs::read(path).unwrap());
+    let manifests = paths
+        .clone()
+        .map(|path| fs::read(path.with_file_name("workspace.json")).unwrap());
+    let workspace = engine.workspace(&original.workspace_id).unwrap();
+    let source = &workspace.files.values().next().unwrap().source_path;
+    let payload = fs::read(source).unwrap();
+    let receipt = engine.published_receipt(original.operation_id).unwrap();
+    let state = json_codec::to_vec(engine.state()).unwrap();
+    let mut request = original.clone();
     request.message = "not the published request".into();
     let forged = json_codec::to_vec(&request).unwrap();
-    for path in paths {
-        fs::write(path, &forged).unwrap();
+
+    for damaged_copies in 0..=2 {
+        if damaged_copies > 0 {
+            fs::write(&paths[damaged_copies - 1], &forged).unwrap();
+        }
+        let error = engine.commit_workspace(request.clone()).unwrap_err();
+        if damaged_copies < 2 {
+            // An authenticated surviving request still admits the workspace;
+            // the changed caller input must then fail the permanent digest.
+            assert_eq!(
+                error.code(),
+                storage_contract::ErrorCode::IdempotencyKeyReused
+            );
+            assert_eq!(
+                engine.commit_workspace(original.clone()).unwrap(),
+                receipt.clone().unwrap()
+            );
+        } else {
+            // Both forged copies destroy the cold workspace's completion proof.
+            // Refuse that evidence before attempting a replay digest comparison.
+            assert_eq!(error.code(), storage_contract::ErrorCode::RecoveryRequired);
+            assert_eq!(
+                error.message(),
+                "cold workspace evidence changed; reopen for reconciliation"
+            );
+        }
+        assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state);
+        assert_eq!(
+            engine.published_receipt(original.operation_id).unwrap(),
+            receipt
+        );
+        assert_eq!(
+            paths
+                .clone()
+                .map(|path| fs::read(path.with_file_name("workspace.json")).unwrap()),
+            manifests
+        );
+        assert_eq!(fs::read(source).unwrap(), payload);
+        for (index, path) in paths.iter().enumerate() {
+            let expected = if index < damaged_copies {
+                &forged
+            } else {
+                &requests[index]
+            };
+            assert_eq!(&fs::read(path).unwrap(), expected);
+        }
     }
+
+    // Reinstating the exact original fixture evidence permits the old ID to
+    // replay, without manufacturing a new publication or advancing its fence.
+    for (path, bytes) in paths.iter().zip(requests) {
+        fs::write(path, bytes).unwrap();
+    }
+    assert_eq!(engine.commit_workspace(original).unwrap(), receipt.unwrap());
+    assert_eq!(json_codec::to_vec(engine.state()).unwrap(), state);
     assert_eq!(
-        engine.commit_workspace(request).unwrap_err().code(),
-        storage_contract::ErrorCode::IdempotencyKeyReused
+        json_codec::to_vec(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
+        json_codec::to_vec(&workspace).unwrap()
     );
 }
 
