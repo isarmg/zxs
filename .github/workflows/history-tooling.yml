@@ -117,7 +117,7 @@ jobs:
           ):
               raise SystemExit('Payload proof diagnostics require the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'payload-proof-format' and (source, tree) != (
-              'b13ca412c0fdf9c45d154da80c9c1c7934945ffc', 'df6e406f5126797bb414ff6b0af787183f32cdf6',
+              '3d6f119d207a66e93a264b6ba4b77dc02df7bfe7', '20b083fc65d1946a09c22d9aa9fa7eabcc866fc8',
           ):
               raise SystemExit('Payload proof formatting requires the exact formatting successor and tree')
           groups = {}
