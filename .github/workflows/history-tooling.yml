@@ -24,6 +24,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: '1'
@@ -77,7 +81,7 @@ jobs:
           ):
               raise SystemExit('Release fixtures require the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'namespace-stage-b' and (source, tree) != (
-              '4545759d1c7992d7ea905c7776bcf1c9a41e6b3c', '8c688716c04f2168e2f51672322a11e2f7066d9d',
+              '8ed1547d313c29bf1a20f44dac534274e24864bc', '13f10077fbb58af0a46f68eddb867f70982c4b20',
           ):
               raise SystemExit('Stage B diagnostics require the exact reviewed source and tree')
           groups = {}
