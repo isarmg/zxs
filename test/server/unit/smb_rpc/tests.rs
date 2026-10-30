@@ -2428,7 +2428,18 @@ fn unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence() {
     let error = next
         .open("report.txt".into(), true, false, false, false, false)
         .unwrap_err();
-    assert_eq!(error.code, storage_contract::ErrorCode::ResourceLimit);
+    // The backend maps the native quota error to the public SMB/API code
+    // while retaining the exact core failure as its diagnostic source.
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::ResourceLimitExceeded
+    );
+    assert_eq!(error.status, ::http::StatusCode::TOO_MANY_REQUESTS);
+    let Some(crate::http_boundary::ApiErrorSource::Engine(cause)) = error.source.as_deref() else {
+        panic!("workspace quota rejection lost its engine source: {error:?}");
+    };
+    assert_eq!(cause.code(), storage_contract::ErrorCode::ResourceLimit);
+    assert!(cause.message().contains("global record count"));
     assert_eq!(backend.workspace_capacity(&actor).unwrap(), capacity);
     assert_eq!(fs::read(&source).unwrap(), b"unconfirmed");
     assert_eq!(
