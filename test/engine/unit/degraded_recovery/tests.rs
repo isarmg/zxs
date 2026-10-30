@@ -215,7 +215,12 @@ fn corrected_sealed_receipt_install_failure_precedes_publication_and_retries_sam
         result
     );
     assert_eq!(
-        engine.receipts_descending().next().unwrap().unwrap().result,
+        engine
+            .receipts_descending()
+            .next_record()
+            .unwrap()
+            .unwrap()
+            .result,
         result
     );
     engine

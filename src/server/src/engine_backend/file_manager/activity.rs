@@ -389,7 +389,8 @@ fn file_operation_events<'a>(
     // Newest-first: once the page is full and a receipt's slot is older than
     // the retained page, every later receipt is older still, so the pull
     // stops without reading further sealed segments.
-    for entry in engine.receipts_descending(&observe) {
+    let mut receipts = engine.receipts_descending(&observe);
+    while let Some(entry) = receipts.next_record() {
         checkpoint(control)?;
         let entry = entry.map_err(read_error)?;
         if !history_sequence_may_fit(events, entry.result.sequence) {
@@ -496,7 +497,8 @@ fn directory_operation_events<'a>(
     control: &HistoryReadControl,
 ) -> Result<(), ApiError> {
     let observe = || control.checkpoint().map_err(storage_engine::Error::from);
-    for entry in engine.receipts_descending(&observe) {
+    let mut receipts = engine.receipts_descending(&observe);
+    while let Some(entry) = receipts.next_record() {
         checkpoint(control)?;
         let entry = entry.map_err(read_error)?;
         if !history_sequence_may_fit(events, entry.result.sequence) {
@@ -577,7 +579,8 @@ fn backup_events<'a>(
     control: &HistoryReadControl,
 ) -> Result<(), ApiError> {
     let observe = || control.checkpoint().map_err(storage_engine::Error::from);
-    for entry in engine.receipts_descending(&observe) {
+    let mut receipts = engine.receipts_descending(&observe);
+    while let Some(entry) = receipts.next_record() {
         checkpoint(control)?;
         let entry = entry.map_err(read_error)?;
         if !history_sequence_may_fit(events, entry.result.sequence) {

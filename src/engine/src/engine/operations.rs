@@ -465,10 +465,11 @@ impl<'e> ReceiptsDescending<'e> {
             next_sealed: state.operations.sealed().len(),
         }
     }
-}
-impl Iterator for ReceiptsDescending<'_> {
-    type Item = Result<storage_contract::OperationRecordEntry>;
-    fn next(&mut self) -> Option<Self::Item> {
+
+    /// Borrow the next newest receipt until the next cursor advance.
+    /// Cold segment errors advance past that segment; cancellation before
+    /// an advance leaves the cursor unchanged.
+    pub fn next_record(&mut self) -> Option<Result<&storage_contract::OperationRecordEntry>> {
         if let Some(observe) = self.observe
             && let Err(error) = observe()
         {
@@ -476,16 +477,14 @@ impl Iterator for ReceiptsDescending<'_> {
         }
         if self.tail_remaining > 0 {
             self.tail_remaining -= 1;
-            return Some(Ok(self.state.operations.tail()[self.tail_remaining].clone()));
+            return Some(Ok(&self.state.operations.tail()[self.tail_remaining]));
         }
-        loop {
-            if let Some((segment, remaining)) = &mut self.segment {
-                if *remaining > 0 {
-                    *remaining -= 1;
-                    return Some(Ok(segment[*remaining].clone()));
-                }
-                self.segment = None;
-            }
+        if self
+            .segment
+            .as_ref()
+            .is_none_or(|(_, remaining)| *remaining == 0)
+        {
+            self.segment = None;
             self.next_sealed = self.next_sealed.checked_sub(1)?;
             let reference = &self.state.operations.sealed()[self.next_sealed];
             let reader = crate::segment_store::SegmentReader {
@@ -494,14 +493,19 @@ impl Iterator for ReceiptsDescending<'_> {
                 caches: self.caches,
                 observe: self.observe,
             };
-            match reader.operation_segment(reference) {
-                Ok(segment) => {
-                    let length = segment.len();
-                    self.segment = Some((segment, length));
-                }
+            let segment = match reader.operation_segment(reference) {
+                Ok(segment) => segment,
                 Err(error) => return Some(Err(error)),
-            }
+            };
+            let length = segment.len();
+            self.segment = Some((segment, length));
         }
+        let (segment, remaining) = self
+            .segment
+            .as_mut()
+            .expect("invariant: the next nonempty segment has been loaded");
+        *remaining -= 1;
+        Some(Ok(&segment[*remaining]))
     }
 }
 
