@@ -198,6 +198,14 @@ fn lookup_preserves_reference_failure_before_a_delayed_composed_path_error() {
     let actual = view.resolve_key(&format!("{prefix}/leaf")).unwrap_err();
     assert_eq!(actual.code(), expected.code());
     assert_eq!(actual.to_string(), expected.to_string());
+    for key in [&prefix, &format!("{prefix}/leaf")] {
+        let owned = view.resolve_key(key).unwrap_err();
+        let projected = view
+            .inspect_key(key, |_| panic!("invalid path must not reach the projection"))
+            .unwrap_err();
+        assert_eq!(projected.code(), owned.code());
+        assert_eq!(projected.to_string(), owned.to_string());
+    }
     let invalid_root = CommitNamespace {
         root: invalid,
         entries: 1,
@@ -208,3 +216,28 @@ fn lookup_preserves_reference_failure_before_a_delayed_composed_path_error() {
         .unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());
 }
+
+#[test]
+fn projection_borrows_leaf_ids_until_callback_returns() {
+    let (root, objects) = fixture_namespace(&wide_fixture());
+    let source = EvictingSource {
+        nodes: RefCell::new(objects.decoded),
+        previous: RefCell::new(None),
+        loads: Cell::new(0),
+    };
+    let view = NamespaceView::new(&root, &source);
+    let matched = view
+        .inspect_key("alpha/file-0299.txt", |entry| {
+            let previous = source.previous.borrow();
+            let HeldNode::Page(page) = previous.as_ref().unwrap() else {
+                panic!("resolved entry must belong to a leaf page");
+            };
+            let page = page.upgrade().expect("leaf lives through projection");
+            assert!(page.entries.iter().any(|stored| std::ptr::eq(stored, entry)));
+            matches!(entry, NamespacePageEntry::File { .. })
+        })
+        .unwrap();
+    assert_eq!(matched, Some(true));
+    assert!(!source.previous.borrow().as_ref().unwrap().alive());
+}
+

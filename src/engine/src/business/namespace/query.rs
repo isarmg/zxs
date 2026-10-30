@@ -45,6 +45,30 @@ impl NamespaceTree<'_> {
         crate::namespace::NamespaceView::new(&self.namespace, self).resolve_key(key)
     }
 
+    /// Test a file identity at a normalized key without materializing an owned
+    /// entry. Complete stored-path validation and lookup errors are unchanged.
+    pub(crate) fn contains_file_key(&self, key: &str, file_id: &str) -> Result<bool> {
+        Ok(crate::namespace::NamespaceView::new(&self.namespace, self)
+            .inspect_key(key, |entry| {
+                matches!(entry, storage_contract::NamespacePageEntry::File {
+                    file_id: actual, ..
+                } if actual == file_id)
+            })?
+            .unwrap_or(false))
+    }
+
+    /// Test a directory at a normalized key, optionally requiring its exact
+    /// identity. Missing entries and files return false; read errors propagate.
+    pub fn contains_directory_key(&self, key: &str, entry_id: Option<&str>) -> Result<bool> {
+        Ok(crate::namespace::NamespaceView::new(&self.namespace, self)
+            .inspect_key(key, |entry| {
+                matches!(entry, storage_contract::NamespacePageEntry::Directory {
+                    entry_id: actual, ..
+                } if entry_id.is_none_or(|expected| actual == expected))
+            })?
+            .unwrap_or(false))
+    }
+
     /// Materialize the complete canonical entry list. Whole-tree by
     /// definition; point queries use `get`/`get_key` instead.
     pub fn entries(&self) -> Result<Vec<Entry>> {
@@ -158,3 +182,4 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/business/namespace/query_tests.rs"]
 mod tests;
+

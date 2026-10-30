@@ -87,9 +87,8 @@ pub(in crate::engine_backend) fn capture(
         let within_key = name_policy::path_key(within);
         if !within.is_empty()
             && !namespace
-                .get_key(&within_key)
+                .contains_directory_key(&within_key, None)
                 .map_err(error)?
-                .is_some_and(|entry| entry.kind == storage_contract::NamespaceEntryKind::Directory)
         {
             return Err(ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
@@ -292,3 +291,4 @@ impl PrimaryListing {
 #[cfg(test)]
 #[path = "../../../../../test/server/unit/engine_backend/file_manager/listing_tests.rs"]
 mod tests;
+

@@ -24,6 +24,43 @@ fn take_work() -> Work {
     WORK.with(|work| work.replace(Work::default()))
 }
 
+#[test]
+fn identity_predicates_match_owned_lookup_for_unicode_missing_and_wrong_kinds() {
+    let (_temporary, engine, _repo) = published_fixture();
+    let entries = vec![
+        entry("Straße", NamespaceEntryKind::Directory),
+        entry("Straße/Café.txt", NamespaceEntryKind::File),
+    ];
+    let tree = planted_tree(&engine, &entries);
+    for path in [
+        "STRASSE",
+        "strasse/CAFE\u{301}.TXT",
+        "strasse/café.txt/missing",
+        "strasse/missing",
+        "",
+    ] {
+        let key = name_policy::path_key(path);
+        let owned = tree.get_key(&key).unwrap();
+        for file_id in [entries[1].file_id.as_str(), "wrong-file"] {
+            assert_eq!(
+                tree.contains_file_key(&key, file_id).unwrap(),
+                owned.as_ref().is_some_and(|entry| {
+                    entry.kind == NamespaceEntryKind::File && entry.file_id == file_id
+                }),
+            );
+        }
+        for entry_id in [None, Some(entries[0].entry_id.as_str()), Some("wrong-entry")] {
+            assert_eq!(
+                tree.contains_directory_key(&key, entry_id).unwrap(),
+                owned.as_ref().is_some_and(|entry| {
+                    entry.kind == NamespaceEntryKind::Directory
+                        && entry_id.is_none_or(|expected| entry.entry_id == expected)
+                }),
+            );
+        }
+    }
+}
+
 fn entry(path: &str, kind: NamespaceEntryKind) -> Entry {
     // The paged wire cannot carry payload fields on directories.
     let file = matches!(kind, NamespaceEntryKind::File);
@@ -527,3 +564,4 @@ fn entry_wire_rejects_mismatched_keys_names_and_non_nfc_display_at_read_boundary
         original
     );
 }
+

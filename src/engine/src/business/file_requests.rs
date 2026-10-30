@@ -1,7 +1,7 @@
 //! Canonical metadata mutation requests, including optional namespace context.
 use crate::{Engine, Error, FileMergeInput, FileTagTarget, Result};
 use json_codec::{Value, json};
-use storage_contract::{FileLocation, NamespaceEntryKind, OperationId};
+use storage_contract::{FileLocation, OperationId};
 
 pub struct FileNodeTagsUpdateRequest<'a> {
     pub file_id: &'a str,
@@ -61,8 +61,7 @@ pub(super) fn validate_location(
     if location.repository_id != repo.repository_id
         || !engine
             .namespace_tree(&repo.main_branch_id)?
-            .get_key(&key)?
-            .is_some_and(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
+            .contains_file_key(&key, file)?
     {
         return Err(Error::new(
             storage_contract::ErrorCode::FileNotFound,
@@ -75,3 +74,4 @@ pub(super) fn validate_location(
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/business/file_requests/tests.rs"]
 mod tests;
+

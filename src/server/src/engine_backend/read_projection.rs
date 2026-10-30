@@ -236,18 +236,15 @@ impl DirectoryRead {
             if entry_id != branch {
                 return Err(ApiError::invalid("invalid root directory identity"));
             }
-        } else {
-            let directory = tree.get_key(key).map_err(error)?;
-            if directory.is_none_or(|entry| {
-                entry.kind != storage_contract::NamespaceEntryKind::Directory
-                    || entry.entry_id != entry_id
-            }) {
-                return Err(ApiError::new(
-                    ::http::StatusCode::CONFLICT,
-                    storage_contract::ErrorCode::SmbRebindRequired,
-                    "opened directory identity changed",
-                ));
-            }
+        } else if !tree
+            .contains_directory_key(key, Some(entry_id))
+            .map_err(error)?
+        {
+            return Err(ApiError::new(
+                ::http::StatusCode::CONFLICT,
+                storage_contract::ErrorCode::SmbRebindRequired,
+                "opened directory identity changed",
+            ));
         }
         match selection {
             crate::DirectorySelection::Capture => Ok(Self::Captured(DirectorySnapshot {
@@ -331,3 +328,4 @@ impl DirectoryPagePlan {
 #[cfg(test)]
 #[path = "../../../../test/server/unit/engine_backend/read_projection/tests.rs"]
 mod tests;
+

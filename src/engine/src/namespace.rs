@@ -1548,6 +1548,18 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceView<'s, S> {
             .resolve_key_raw(key)?
             .map(|(location, entry)| materialized_entry(location, entry.entry())))
     }
+    /// Inspect a resolved leaf without cloning its IDs. The ordinary resolver
+    /// still constructs and validates the complete stored display path first.
+    pub(crate) fn inspect_key<T>(
+        &self,
+        key: &str,
+        inspect: impl FnOnce(&NamespacePageEntry) -> T,
+    ) -> Result<Option<T>> {
+        Ok(self
+            .resolve_key_raw(key)?
+            .map(|(_location, child)| inspect(child.entry())))
+    }
+
     fn resolve_key_raw(
         &self,
         key: &str,
@@ -2405,3 +2417,4 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/namespace/mutation_order_tests.rs"]
 mod mutation_order_tests;
+
