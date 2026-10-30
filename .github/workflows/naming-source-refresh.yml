@@ -1,0 +1,71 @@
+name: Reviewed naming source refresh
+on:
+  push:
+    branches: [verify/naming-provenance-20261030]
+permissions:
+  contents: read
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 7d15bba51cbc64ab86461f0345458050d289c180
+          path: product
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        working-directory: product
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository toolchain
+        working-directory: product
+        run: rustup show active-toolchain
+      - name: Review current mapping identity and refresh through official tool
+        working-directory: product
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 7d15bba51cbc64ab86461f0345458050d289c180
+          test "$(git rev-parse HEAD:test/naming/unit/lib/tests.rs)" = 80f2cd8e08431df0b15057e02056e97bff966ce5
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          mapping = Path("compliance/external-tests/integrated.json")
+          data = json.loads(mapping.read_text())
+          owner, = [o for o in data["owners"] if o["directory"] == "src/naming"]
+          row, = [r for r in owner["files"] if r["path"] == "test/naming/unit/lib/tests.rs"]
+          assert row == {"path": "test/naming/unit/lib/tests.rs", "sha256": "6a8cc62572fd612619f24dd3771c1efc068fdce5a071c84f9552bd290662e8a1", "source": "src/naming/src/lib.rs", "source_sha256_before": "619a98004dc108746a51157455bbf031c0f2c7112946e04b535b7391f87d20ad"}
+          digest = hashlib.sha256(Path(row["path"]).read_bytes()).hexdigest()
+          before = mapping.read_text()
+          assert before.count(row["sha256"]) == 1
+          mapping.write_text(before.replace(row["sha256"], digest))
+          print("REVIEWED_CURRENT_TEST_SHA256", digest)
+          PY
+          python3 tools/rust-sources/manage.py refresh
+          python3 tools/rust-sources/manage.py verify --metadata
+          python3 - <<'PY'
+          import subprocess
+          allowed = {"compliance/external-tests/integrated.json", "compliance/rust-sources.json", "docs/THIRD_PARTY_RUST_SOURCES.md"}
+          changed = set(subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines())
+          assert changed <= allowed, changed
+          print("GENERATED_DIFF_BEGIN")
+          print(subprocess.check_output(["git", "diff", "--no-ext-diff", "--unified=3"], text=True))
+          print("GENERATED_DIFF_END")
+          for path in sorted(changed):
+              print("GENERATED_BLOB", path, subprocess.check_output(["git", "hash-object", path], text=True).strip())
+          PY
+      - name: Execute all preserved naming unit tests
+        working-directory: product
+        run: cargo test --locked --offline -p name-policy --lib
+      - name: Export generated source bytes
+        working-directory: product
+        run: |
+          python3 - <<'PY'
+          import base64, subprocess
+          from pathlib import Path
+          for path in subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines():
+              data = Path(path).read_bytes()
+              print("GENERATED_FILE_BEGIN", path, len(data))
+              for offset in range(0, len(data), 24000):
+                  print("GENERATED_BYTES", path, offset, base64.b64encode(data[offset:offset+24000]).decode())
+              print("GENERATED_FILE_END", path)
+          PY
