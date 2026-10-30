@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality]
 
 permissions:
   contents: read
@@ -120,6 +120,10 @@ jobs:
               '3d6f119d207a66e93a264b6ba4b77dc02df7bfe7', '20b083fc65d1946a09c22d9aa9fa7eabcc866fc8',
           ):
               raise SystemExit('Payload proof formatting requires the exact formatting successor and tree')
+          if os.environ['SCOPE'] == 'payload-quality' and (source, tree) != (
+              '16ccd64551ddd232164e439c2ae73b8e57b4697a', 'b35525b26f3f9dd4775fb47b47bc15094b49ac22',
+          ):
+              raise SystemExit('Quality reproduction requires the exact frozen source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -543,6 +547,8 @@ jobs:
                   command='cargo test --locked --offline -p storage-engine --lib --features fault-injection engine::publication:: -- --nocapture'),
           ]
           groups['payload-proof-format'] = [groups['payload-proof-budget'][0]]
+          groups['payload-quality'] = [dict(id='payload-quality', quality=True,
+              command='ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality')]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -620,7 +626,7 @@ jobs:
           rustc --version
           cargo --version
       - name: Install the official production Web WASM target
-        if: matrix.web_production == true
+        if: matrix.web_production == true || matrix.quality == true
         run: rustup target add wasm32-unknown-unknown
       - name: Cache locally compiled Rust build helpers
         if: matrix.web_production == true
