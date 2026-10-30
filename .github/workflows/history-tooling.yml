@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap]
 
 permissions:
   contents: read
@@ -176,7 +176,7 @@ jobs:
               '26f406dc4336d434cb68f2885ff18a39cec99105', '5f7e8f37631a41d35fea2f6f37a5ab577d85b939',
           ):
               raise SystemExit('Mature documentation closure requires the exact anchor-only successor and tree')
-          if os.environ['SCOPE'] == 'history-main-precheck' and (source, tree) != (
+          if os.environ['SCOPE'] in ('history-main-precheck', 'history-main-overlap') and (source, tree) != (
               '1ad83b64e9a5e1abd57142d9cc7902426f0f37d5', '6c8740cf43b798a5629e51ff90e082becfd8c1dc',
           ):
               raise SystemExit('History/main precheck requires the exact reviewed composition and tree')
@@ -798,6 +798,29 @@ jobs:
               dict(groups['mature-static'][0], id='history-main-static'),
               dict(groups['mature-doc-contracts'][0], id='history-main-doc-contracts'),
           ]
+          history_overlap = [
+              dict(selector='backend_read::tests::', count=2),
+              dict(selector='engine_backend::file_manager::listing::detached_tests::', count=7),
+              dict(selector='engine_backend::file_manager::backup_namespace::lifecycle_tests::', count=6),
+          ]
+          for name in [
+              'engine_backend::revocation_tests::completed_account_revocation_precedes_all_engine_admissions',
+              'authorized_backend_tests::history_window_collections_forward_cursor_scope_results_errors_and_revocation',
+              'smb_rpc::tests::listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories',
+              'smb_rpc::tests::mtime_tests::mtime_failed_flush_keeps_the_confirmed_head_until_original_operation_is_reconciled',
+              'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence',
+              'smb_rpc::tests::close_tests::failed_vfs_close_detaches_only_its_writer_and_keeps_both_sessions_usable',
+          ]:
+              history_overlap.append(dict(selector=name, count=1, exact=True, required=[name]))
+          for name in [
+              'client::tests::remote_error_retains_operation_and_filesystem_errno',
+              'client::tests::successful_open_descriptor_keeps_the_shared_connection_reusable',
+              'client::tests::malformed_open_result_closes_descriptor_and_disconnects_every_clone',
+          ]:
+              history_overlap.append(dict(selector=name, package='smb-protocol', count=1, exact=True, required=[name]))
+          groups['history-main-overlap'] = [dict(id='history-main-overlap', cache='server', package='storage-server',
+              test_groups=json.dumps(history_overlap),
+              command='Bounded combined history/listing/auth/mtime/close/descriptor overlap: server21 plus SMB3')]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
