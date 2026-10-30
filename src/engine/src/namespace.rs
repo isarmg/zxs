@@ -1481,7 +1481,7 @@ pub(crate) fn build_from_entries(
 
 /// Read-only queries over one published namespace root.
 pub(crate) struct NamespaceView<'s, S: NamespaceSource + ?Sized> {
-    root: CommitNamespace,
+    root: &'s CommitNamespace,
     source: &'s S,
 }
 /// One resolved entry with its reconstructed absolute location.
@@ -1515,11 +1515,8 @@ pub(crate) fn materialized_entry(
     }
 }
 impl<'s, S: NamespaceSource + ?Sized> NamespaceView<'s, S> {
-    pub(crate) fn new(root: &CommitNamespace, source: &'s S) -> Self {
-        Self {
-            root: root.clone(),
-            source,
-        }
+    pub(crate) fn new(root: &'s CommitNamespace, source: &'s S) -> Self {
+        Self { root, source }
     }
     /// Resolve one normalized full-path key by descending components; index
     /// levels binary search their first keys before one page is read.
@@ -1558,14 +1555,17 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceView<'s, S> {
         if key.is_empty() {
             return Ok(None);
         }
-        let mut reference = self.root.root.clone();
-        // A missing suffix remains absent even if its existing prefix exceeds the path budget.
+        let mut components = key.split('/');
+        let first = components
+            .next()
+            .expect("invariant: a nonempty key has a component");
+        let Some(mut child) = locate_child_ref(&self.root.root, first, self.source)? else {
+            return Ok(None);
+        };
+        // Keep the page alive while its subtree reference is borrowed for the
+        // next read. A missing suffix still takes precedence over a path error.
         let mut location: Option<Result<name_policy::PortablePath>> = None;
-        let mut components = key.split('/').peekable();
-        while let Some(component) = components.next() {
-            let Some(child) = locate_child_ref(&reference, component, self.source)? else {
-                return Ok(None);
-            };
+        loop {
             location = Some(match location {
                 Some(Ok(parent)) => {
                     parent
@@ -1580,18 +1580,20 @@ impl<'s, S: NamespaceSource + ?Sized> NamespaceView<'s, S> {
                 Some(Err(error)) => Err(error),
                 None => Ok(name_policy::PortablePath::from(child.entry().component())),
             });
-            if components.peek().is_none() {
+            let Some(component) = components.next() else {
                 return Ok(Some((
                     location.expect("invariant: a resolved child has a location")?,
                     child,
                 )));
-            }
-            match child.entry() {
-                NamespacePageEntry::Directory { subtree, .. } => reference = subtree.clone(),
-                NamespacePageEntry::File { .. } => return Ok(None),
-            }
+            };
+            let NamespacePageEntry::Directory { subtree, .. } = child.entry() else {
+                return Ok(None);
+            };
+            let Some(next) = locate_child_ref(subtree, component, self.source)? else {
+                return Ok(None);
+            };
+            child = next;
         }
-        Ok(None)
     }
     /// The ancestor directory entries and the final entry along one key
     /// path, materialized in order; empty when the path does not resolve.
@@ -1866,9 +1868,9 @@ fn locate_child_ref(
     component_key: &str,
     source: &(impl NamespaceSource + ?Sized),
 ) -> Result<Option<LocatedChild>> {
-    let mut reference = reference.clone();
+    let mut node = source.node(reference)?;
     loop {
-        match source.node(&reference)? {
+        match node {
             NamespaceNode::Page(page) => {
                 return Ok(
                     match page
@@ -1887,7 +1889,7 @@ fn locate_child_ref(
                 let Some(child) = position.checked_sub(1).map(|p| &index.children[p]) else {
                     return Ok(None);
                 };
-                reference = child.reference.clone();
+                node = source.node(&child.reference)?;
             }
         }
     }

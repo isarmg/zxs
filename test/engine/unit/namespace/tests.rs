@@ -5,6 +5,8 @@ use super::*;
 use std::cell::Cell;
 use storage_contract::NamespaceOperation;
 
+#[path = "borrowed_lookup_tests.rs"]
+mod borrowed_lookup_tests;
 #[path = "composition_path_tests.rs"]
 mod composition_path_tests;
 #[path = "depth_bound_tests.rs"]
