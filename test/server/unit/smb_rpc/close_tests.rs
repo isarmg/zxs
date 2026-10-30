@@ -657,8 +657,9 @@ impl Backend for CloseFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadTree<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
-        self.inner.tree_snapshot(identity, request)
+        self.inner.tree_snapshot(identity, request, control)
     }
     fn create_write_session(
         &self,

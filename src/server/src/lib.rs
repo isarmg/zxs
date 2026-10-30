@@ -949,6 +949,7 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         request: ReadTree<'_>,
+        control: &HistoryReadControl,
     ) -> Result<TreeSnapshot, ApiError>;
     fn create_write_session(
         &self,
@@ -1695,9 +1696,10 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadTree<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
         self.backend
-            .tree_snapshot(&self.current(identity)?, request)
+            .tree_snapshot(&self.current(identity)?, request, control)
     }
     fn create_write_session(
         &self,
@@ -2695,25 +2697,25 @@ async fn tree(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiPath(branch): ApiPath<String>,
     ApiQuery(mut query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<TreeSnapshot>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
+    connection: Option<http_routing::Extension<crate::http_shutdown::ResponseConnection>>,
+) -> Result<Response, ApiError> {
     let commit = query.remove("commit_id");
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
+    crate::history_read::run(
+        state,
+        connection.map(|http_routing::Extension(connection)| connection),
+        move |backend, control| {
             backend.tree_snapshot(
                 &identity,
                 ReadTree {
                     branch: &branch,
                     commit: commit.as_deref(),
                 },
+                control,
             )
-        })
-        .await
-        .map(Json)
+        },
+        |snapshot| Ok(snapshot.into_encoded()),
+    )
+    .await
 }
 async fn version(
     State(state): State<AppState>,

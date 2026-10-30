@@ -18,8 +18,12 @@ impl Session {
                     branch: &self.branch,
                     commit: None,
                 },
+                &crate::tests::history_read_control(),
             )
-            .map(|snapshot| snapshot.entries)
+            .map(|snapshot| {
+                json_codec::from_value(crate::tests::tree_value(&snapshot)["entries"].clone())
+                    .unwrap()
+            })
     }
 }
 
@@ -751,8 +755,9 @@ impl Backend for LostCommitReply {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadTree<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
-        self.inner.tree_snapshot(identity, request)
+        self.inner.tree_snapshot(identity, request, control)
     }
     fn create_write_session(
         &self,
@@ -1039,8 +1044,9 @@ fn select_pending_file(shared: &Shared, branch: &str) -> String {
         .tree_snapshot(
             identity,
             crate::tests::tree_request(&(json!({"branch_id":branch}))),
+            &crate::tests::history_read_control(),
         )
-        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+        .map(|snapshot| crate::tests::tree_value(&snapshot))
         .unwrap();
     let entry = tree["entries"]
         .as_array()

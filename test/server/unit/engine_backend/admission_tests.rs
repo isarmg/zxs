@@ -370,6 +370,7 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
                     branch: &repo.main_branch_id,
                     commit: None,
                 },
+                &crate::tests::history_read_control(),
             )
             .unwrap();
         let context = crate::DownloadContext {
@@ -475,7 +476,8 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
                 crate::ReadTree {
                     branch: &repo.main_branch_id,
                     commit: None
-                }
+                },
+                &crate::tests::history_read_control(),
             )
             .unwrap_err()
             .status,
@@ -541,7 +543,8 @@ fn backend_missing_and_denied_reads_retain_projection_without_lazy_creation() {
                     crate::ReadTree {
                         branch: "missing",
                         commit: None
-                    }
+                    },
+                    &crate::tests::history_read_control(),
                 )
                 .is_err()
         );
@@ -627,8 +630,9 @@ fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() 
         .tree_snapshot(
             &caller(),
             crate::tests::tree_request(&(json!({"branch_id":repo.main_branch_id}))),
+            &crate::tests::history_read_control(),
         )
-        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+        .map(|snapshot| crate::tests::tree_value(&snapshot))
         .unwrap();
     assert_eq!(
         backend

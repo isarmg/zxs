@@ -5,6 +5,7 @@ mod ancestry;
 mod batch;
 pub(crate) mod directory;
 mod file;
+pub(crate) use file::pending_file_source;
 pub mod file_history_pages;
 pub(crate) mod file_merges;
 mod file_metadata;

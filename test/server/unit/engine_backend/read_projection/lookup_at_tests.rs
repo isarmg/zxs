@@ -48,8 +48,9 @@ fn snapshot_lookup_preserves_frozen_identity_equivalent_spelling_and_absence() {
                 crate::tests::tree_request(
                     &(json!({"branch_id":repo.main_branch_id,"query":{"commit_id":invalid}})),
                 ),
+                &tree_control(),
             )
-            .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+            .map(|snapshot| tree_value(&snapshot))
             .unwrap_err();
         let new = backend
             .lookup_at(&identity, &repo.main_branch_id, invalid, &path)
@@ -142,8 +143,9 @@ fn measure_snapshot_lookup_against_tree_round_trip() {
                     crate::tests::tree_request(
                         &(json!({"branch_id":repo.main_branch_id,"query":{"commit_id":commit}})),
                     ),
+                    &tree_control(),
                 )
-                .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+                .map(|snapshot| tree_value(&snapshot))
                 .unwrap();
             let entries: Vec<storage_contract::Entry> =
                 json_codec::from_value(snapshot["entries"].clone()).unwrap();
@@ -156,15 +158,8 @@ fn measure_snapshot_lookup_against_tree_round_trip() {
                 .lookup_at(&identity, &repo.main_branch_id, &commit, &path)
                 .unwrap()
         };
-        TREE_PROJECTION_WORK.with(|work| work.set((0, 0)));
         let expected = old();
-        let old_work = TREE_PROJECTION_WORK.with(|work| work.replace((0, 0)));
         assert_eq!(expected, new());
-        let typed_work = TREE_PROJECTION_WORK.with(|work| work.replace((0, 0)));
-        println!(
-            "entries={count} old_tree_projections={} old_copied_tree_entries={} typed_tree_projections={} typed_copied_tree_entries={}",
-            old_work.0, old_work.1, typed_work.0, typed_work.1
-        );
         let mut legacy = Vec::new();
         let mut typed = Vec::new();
         for _ in 0..101 {

@@ -1,5 +1,8 @@
 //! Typed, request-local namespace reads. None of these results grants future admission.
 use data_serialization::Serialize;
+mod tree;
+pub(crate) use tree::TreeEncoder;
+pub use tree::TreeSnapshot;
 
 /// A directory handle names either the synthetic root or a canonical directory.
 pub struct ReadDirectory<'a> {
@@ -176,14 +179,6 @@ pub struct ReadContent<'a> {
 pub struct ReadTree<'a> {
     pub branch: &'a str,
     pub commit: Option<&'a str>,
-}
-/// Owned response projection captured during one authorized admission.
-#[derive(Debug, Serialize)]
-pub struct TreeSnapshot {
-    pub branch_id: String,
-    pub commit_id: String,
-    pub entries: Vec<storage_contract::Entry>,
-    pub pending_file_versions: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]

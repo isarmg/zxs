@@ -1393,6 +1393,22 @@ pub(crate) fn select_change(
     )
 }
 
+pub(crate) fn file_context_for_current_entry<'a>(
+    state: &'a State,
+    repository: &str,
+    entry: &Entry,
+) -> Option<Cow<'a, FileContext>> {
+    if let Some(context) = state
+        .file_contexts
+        .get(&context_key_from_key(repository, entry.lookup_key()))
+    {
+        return Some(Cow::Borrowed(context));
+    }
+    let repo = state.repositories.get(repository)?;
+    (entry.kind == NamespaceEntryKind::File)
+        .then(|| Cow::Owned(context_for_entry(state, repo, entry)))
+}
+
 impl Engine {
     pub fn file_context(&self, repository: &str, path: &str) -> Result<Option<FileContext>> {
         self.with_namespace_source(|source| {
@@ -1413,16 +1429,7 @@ impl Engine {
         repository: &str,
         entry: &Entry,
     ) -> Option<std::borrow::Cow<'a, FileContext>> {
-        if let Some(context) = self
-            .state
-            .file_contexts
-            .get(&context_key_from_key(repository, entry.lookup_key()))
-        {
-            return Some(std::borrow::Cow::Borrowed(context));
-        }
-        let repo = self.state.repositories.get(repository)?;
-        (entry.kind == NamespaceEntryKind::File)
-            .then(|| std::borrow::Cow::Owned(context_for_entry(&self.state, repo, entry)))
+        file_context_for_current_entry(&self.state, repository, entry)
     }
     /// Explicitly initialize a directory's first composition identity.
     /// A new namespace need not have a named view; registration copies no data.

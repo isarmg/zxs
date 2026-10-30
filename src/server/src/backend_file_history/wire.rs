@@ -35,6 +35,7 @@ impl PageBudget {
 }
 
 /// An encoded JSON page body with the number of records it admitted.
+#[derive(Debug)]
 pub(crate) struct EncodedPage {
     body: Vec<u8>,
     #[cfg_attr(not(test), allow(dead_code, reason = "reported to byte-budget tests"))]
@@ -126,10 +127,44 @@ impl IntoResponse for EncodedPage {
 }
 
 /// A writer which refuses bytes before allocating beyond its admitted limit.
-struct BoundedWriter {
+pub(crate) struct BoundedWriter {
     bytes: Vec<u8>,
     limit: usize,
     exceeded: bool,
+}
+impl BoundedWriter {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            exceeded: false,
+        }
+    }
+
+    pub(crate) fn json(&mut self, value: &impl Serialize) -> Result<(), ApiError> {
+        match json_codec::to_writer(&mut *self, value) {
+            Ok(()) => Ok(()),
+            Err(_) if self.exceeded => Err(budget_error()),
+            Err(source) => Err(ApiError::new(
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
+                storage_contract::ErrorCode::StateInvalid,
+                "response encoding failed",
+            )
+            .with_source(source)),
+        }
+    }
+
+    /// Only fixed JSON punctuation belongs here; all data goes through `json`.
+    pub(crate) fn punctuation(&mut self, bytes: &'static [u8]) -> Result<(), ApiError> {
+        std::io::Write::write_all(self, bytes).map_err(|_| budget_error())
+    }
+
+    pub(crate) fn finish(self) -> EncodedPage {
+        EncodedPage {
+            body: self.bytes,
+            admitted: 1,
+        }
+    }
 }
 impl std::io::Write for BoundedWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

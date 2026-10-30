@@ -90,8 +90,9 @@ fn shared_snapshot_preserves_tree_errors_and_current_identity_admission() {
                 crate::tests::tree_request(
                     &(json!({"branch_id":branch,"query":{"commit_id":selected}})),
                 ),
+                &tree_control(),
             )
-            .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+            .map(|snapshot| tree_value(&snapshot))
             .unwrap_err();
         let new = backend
             .snapshot_at(&identity, branch, selected)
@@ -173,7 +174,7 @@ fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
         .snapshot_at(&identity, &archived.branch_id, &archived.head_commit_id)
         .unwrap();
     let tree = backend
-        .tree_snapshot(&identity, crate::tests::tree_request(&(json!({"branch_id":archived.branch_id,"query":{"commit_id":archived.head_commit_id}})))).map(|snapshot| json_codec::to_value(snapshot).unwrap())
+        .tree_snapshot(&identity, crate::tests::tree_request(&(json!({"branch_id":archived.branch_id,"query":{"commit_id":archived.head_commit_id}}))), &tree_control()).map(|snapshot| tree_value(&snapshot))
         .unwrap();
     assert_eq!(tree["commit_id"].as_str().unwrap(), frozen.commit_id);
     assert_eq!(
@@ -200,8 +201,9 @@ fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
             crate::tests::tree_request(
                 &(json!({"branch_id":repo.main_branch_id,"query":{"commit_id":cut}})),
             ),
+            &tree_control(),
         )
-        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+        .map(|snapshot| tree_value(&snapshot))
         .unwrap_err();
     let new = backend
         .snapshot_at(&identity, &repo.main_branch_id, &cut)
@@ -302,8 +304,9 @@ fn measure_shared_snapshot_against_publication_and_namespace_tree_round_trips() 
                     crate::tests::tree_request(
                         &(json!({"branch_id":repo.main_branch_id,"query":{"commit_id":commit}})),
                     ),
+                    &tree_control(),
                 )
-                .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+                .map(|snapshot| tree_value(&snapshot))
                 .unwrap();
             json_codec::from_value::<Vec<Entry>>(tree["entries"].clone()).unwrap()
         };

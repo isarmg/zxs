@@ -1,4 +1,4 @@
-//! One immutable publication's activity sources, detached from the writer.
+//! One immutable publication's activity and namespace sources, detached from the writer.
 use super::{
     Engine,
     operations::{ReceiptsDescending, receipt_by_sequence},
@@ -14,7 +14,7 @@ use std::{borrow::Cow, sync::Arc};
 /// Owns the admitted root and its exact read resources. It grants no authority.
 /// Published immutable metadata has no runtime garbage collection; the request
 /// owner bounds concurrent plans and cancels work before releasing its lease.
-pub struct ActivityReadPlan {
+pub struct PublishedReadView {
     state: Arc<State>,
     resources: Arc<DiskResources>,
     caches: Arc<SegmentCaches>,
@@ -26,8 +26,8 @@ pub struct ActivityReadPlan {
 impl Engine {
     /// Capture without reads or constructing a cold owner index. Existing owner
     /// membership is accepted only by `available_history_owners`' exact-root proof.
-    pub fn prepare_activity_read(&self) -> ActivityReadPlan {
-        ActivityReadPlan {
+    pub fn published_read_view(&self) -> PublishedReadView {
+        PublishedReadView {
             state: Arc::clone(&self.state),
             resources: Arc::clone(&self.disk_resources),
             caches: Arc::clone(&self.segment_caches),
@@ -38,9 +38,24 @@ impl Engine {
     }
 }
 
-impl ActivityReadPlan {
+impl PublishedReadView {
     pub fn state(&self) -> &State {
         &self.state
+    }
+
+    /// The frozen source selected by this publication, not the writer's current head.
+    pub fn pending_file_source(&self, branch_id: &str, file_id: &str) -> Option<&str> {
+        crate::business::pending_file_source(&self.state, branch_id, file_id)
+    }
+
+    /// Resolve an entry from this publication's current main commit. The caller
+    /// must not substitute an entry from another snapshot or repository.
+    pub fn file_context_for_current_entry<'a>(
+        &'a self,
+        repository: &str,
+        entry: &storage_contract::Entry,
+    ) -> Option<Cow<'a, storage_contract::FileContext>> {
+        crate::business::directory::file_context_for_current_entry(&self.state, repository, entry)
     }
 
     fn reader<'a>(&'a self, observe: &'a dyn Fn() -> Result<()>) -> SegmentReader<'a> {
@@ -142,5 +157,5 @@ impl ActivityReadPlan {
 }
 
 #[cfg(test)]
-#[path = "../../../../test/engine/unit/engine/activity_read_tests.rs"]
+#[path = "../../../../test/engine/unit/engine/published_read_tests.rs"]
 mod tests;

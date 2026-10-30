@@ -7,7 +7,7 @@ use crate::{
 };
 use json_codec::Value;
 use std::{cmp::Reverse, collections::BTreeMap};
-use storage_engine::ActivityReadPlan;
+use storage_engine::PublishedReadView;
 
 pub(in crate::engine_backend) fn checkpoint(control: &HistoryReadControl) -> Result<(), ApiError> {
     control.checkpoint().map_err(|source| {
@@ -20,7 +20,7 @@ pub(in crate::engine_backend) fn checkpoint(control: &HistoryReadControl) -> Res
     })
 }
 
-fn read_error(source: storage_engine::Error) -> ApiError {
+pub(in crate::engine_backend) fn read_error(source: storage_engine::Error) -> ApiError {
     if source.code() == storage_contract::ErrorCode::RequestTimeout {
         ApiError::new(
             ::http::StatusCode::REQUEST_TIMEOUT,
@@ -34,7 +34,7 @@ fn read_error(source: storage_engine::Error) -> ApiError {
 }
 
 fn file_repo<'a>(
-    plan: &'a ActivityReadPlan,
+    plan: &'a PublishedReadView,
     file: &str,
     control: &HistoryReadControl,
 ) -> Result<&'a storage_engine::Repository, ApiError> {
@@ -208,7 +208,7 @@ fn record_event<'a>(
 }
 
 fn commit_events<'a>(
-    engine: &'a ActivityReadPlan,
+    engine: &'a PublishedReadView,
     events: &mut ActivityRows<'a>,
     control: &HistoryReadControl,
 ) -> Result<(), ApiError> {
@@ -381,7 +381,7 @@ fn commit_events<'a>(
 }
 
 fn file_operation_events<'a>(
-    engine: &'a ActivityReadPlan,
+    engine: &'a PublishedReadView,
     events: &mut ActivityRows<'a>,
     control: &HistoryReadControl,
 ) -> Result<(), ApiError> {
@@ -492,7 +492,7 @@ fn file_operation_events<'a>(
 }
 
 fn directory_operation_events<'a>(
-    engine: &'a ActivityReadPlan,
+    engine: &'a PublishedReadView,
     events: &mut ActivityRows<'a>,
     control: &HistoryReadControl,
 ) -> Result<(), ApiError> {
@@ -574,7 +574,7 @@ fn directory_operation_events<'a>(
 }
 
 fn backup_events<'a>(
-    engine: &'a ActivityReadPlan,
+    engine: &'a PublishedReadView,
     events: &mut ActivityRows<'a>,
     control: &HistoryReadControl,
 ) -> Result<(), ApiError> {
@@ -641,7 +641,7 @@ fn backup_events<'a>(
 }
 
 fn path_events<'a>(
-    engine: &'a ActivityReadPlan,
+    engine: &'a PublishedReadView,
     events: &mut ActivityRows<'a>,
     control: &HistoryReadControl,
 ) -> Result<(), ApiError> {
@@ -681,7 +681,7 @@ fn path_events<'a>(
 }
 
 fn tree_events<'a>(
-    engine: &'a ActivityReadPlan,
+    engine: &'a PublishedReadView,
     events: &mut ActivityRows<'a>,
     control: &HistoryReadControl,
 ) -> Result<(), ApiError> {
@@ -763,7 +763,7 @@ fn tree_events<'a>(
 }
 
 pub(crate) fn read(
-    engine: ActivityReadPlan,
+    engine: PublishedReadView,
     control: &HistoryReadControl,
 ) -> Result<ActivityHistorySnapshot, ApiError> {
     checkpoint(control)?;

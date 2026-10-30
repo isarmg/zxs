@@ -52,8 +52,9 @@ fn select_same_version_draft(shared: &Shared, branch: &str, path: &str) -> Entry
         .tree_snapshot(
             identity,
             crate::tests::tree_request(&(json!({"branch_id":branch}))),
+            &crate::tests::history_read_control(),
         )
-        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+        .map(|snapshot| crate::tests::tree_value(&snapshot))
         .unwrap();
     let entries: Vec<Entry> = json_codec::from_value(tree["entries"].clone()).unwrap();
     let entry = entries

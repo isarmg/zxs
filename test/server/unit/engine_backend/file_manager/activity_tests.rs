@@ -184,7 +184,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
         Config::development([root.path().join("disk")]),
     )
     .unwrap();
-    let plan = engine.prepare_activity_read();
+    let plan = engine.published_read_view();
     let missing = super::file_repo(&plan, "file_missing", &control()).unwrap_err();
     assert_eq!(missing.status, http::StatusCode::NOT_FOUND);
     assert_eq!(missing.code, storage_contract::ErrorCode::FileNotFound);
@@ -228,7 +228,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
         .unwrap()
         .timestamp;
     let deletion_rows = |engine: &Engine| {
-        wire(super::read(engine.prepare_activity_read(), &control()).unwrap())["events"]
+        wire(super::read(engine.published_read_view(), &control()).unwrap())["events"]
             .as_array()
             .unwrap()
             .iter()

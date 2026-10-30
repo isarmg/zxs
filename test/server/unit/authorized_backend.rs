@@ -1270,6 +1270,7 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadTree<'_>,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
         self.record(
             "tree_snapshot",
@@ -2075,11 +2076,12 @@ impl Fixture {
                             branch: "branch",
                             commit: Some("commit"),
                         },
+                        &crate::tests::history_read_control(),
                     )
                     .map(|snapshot| {
                         assert_eq!(
-                            json_codec::to_value(snapshot).unwrap(),
-                            json_codec::to_value(recorded_tree()).unwrap()
+                            crate::tests::tree_value(&snapshot),
+                            crate::tests::tree_value(&recorded_tree())
                         );
                         json!({"returned_by":"tree_snapshot"})
                     }),
@@ -2627,15 +2629,13 @@ fn recorded_capacity() -> storage_contract::WorkspaceCapacity {
 }
 
 fn recorded_tree() -> crate::TreeSnapshot {
-    crate::TreeSnapshot {
-        branch_id: "branch".into(),
-        commit_id: "commit".into(),
-        entries: vec![],
-        pending_file_versions: std::collections::BTreeMap::from([(
-            "file".into(),
-            "version".into(),
-        )]),
-    }
+    crate::TreeSnapshot::encode(
+        "branch",
+        "commit",
+        std::iter::empty(),
+        &std::collections::BTreeMap::from([("file".into(), "version".into())]),
+    )
+    .unwrap()
 }
 
 fn recorded_branch() -> crate::BranchSnapshot {

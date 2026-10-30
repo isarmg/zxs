@@ -1245,6 +1245,7 @@ impl crate::Backend for RetainedGenerationBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadTree<'_>,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

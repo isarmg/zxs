@@ -116,7 +116,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
     let control = crate::HistoryReadControl::until(
         std::time::Instant::now() + std::time::Duration::from_secs(30),
     );
-    let snapshot = activity::read(engine.prepare_activity_read(), &control).unwrap();
+    let snapshot = activity::read(engine.published_read_view(), &control).unwrap();
     let activity = json_codec::to_value(
         crate::backend_activity::ActivityHistoryResponse::try_from(snapshot).unwrap(),
     )
@@ -129,7 +129,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
             .is_some_and(|time| time.len() == 20 && time.ends_with('Z'))
     }));
     assert_eq!(json_codec::to_value(engine.state()).unwrap(), before);
-    let snapshot = activity::read(engine.prepare_activity_read(), &control).unwrap();
+    let snapshot = activity::read(engine.published_read_view(), &control).unwrap();
     engine
         .set_file_note(
             &entry.file_id,
@@ -147,7 +147,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
         pinned, activity,
         "snapshot is owned and does not observe later publication"
     );
-    let next = activity::read(engine.prepare_activity_read(), &control).unwrap();
+    let next = activity::read(engine.published_read_view(), &control).unwrap();
     assert!(
         next.events
             .iter()

@@ -1,29 +1,96 @@
-//! Request-scoped owned transport projections. Authorization and version selection
-//! happen against the same locked engine; only owned data crosses the boundary.
-//! This is not a cache or a reusable authorization grant, and carries no State,
-//! private authentication data, content read plan, or publication capability.
-use super::wire::PendingSources;
+//! Request-local namespace projections. Whole-tree work uses one detached
+//! publication; only a complete bounded encoded response leaves that reader.
+use super::wire::{PendingContexts, PendingResolution};
 use super::{error, repo_for_branch};
 use crate::{ApiError, DirectorySnapshot, TreeSnapshot};
-use storage_engine::Engine;
+use std::collections::BTreeMap;
+use storage_engine::{Engine, PublishedReadView};
 
-impl TreeSnapshot {
-    pub(super) fn capture(engine: &Engine, request: crate::ReadTree<'_>) -> Result<Self, ApiError> {
-        let branch = request.branch;
-        let (commit, snapshot) = branch_snapshot(engine.state(), branch, request.commit)?;
-        #[cfg(test)]
-        tests::record_tree_projection(snapshot.namespace.entries as usize);
-        let entries = engine.list_tree_at(branch, commit).map_err(error)?;
-        let pending_file_versions = PendingSources::new(engine, branch, snapshot)
-            .pending_versions()
-            .map_err(error)?;
-        Ok(Self {
-            branch_id: branch.to_owned(),
-            commit_id: commit.to_owned(),
-            entries,
-            pending_file_versions,
-        })
+pub(super) fn capture_tree(
+    view: PublishedReadView,
+    request: crate::ReadTree<'_>,
+    control: &crate::HistoryReadControl,
+) -> Result<TreeSnapshot, ApiError> {
+    let branch = request.branch;
+    let (commit, snapshot) = branch_snapshot(view.state(), branch, request.commit)?;
+    super::file_manager::activity::checkpoint(control)?;
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+    let tree = view
+        .commit_namespace(commit, &observe)
+        .expect("invariant: admitted tree commit exists in captured publication");
+    let mut encoder = crate::backend_read::TreeEncoder::new(branch, commit)?;
+    let mut files = Vec::new();
+    let mut encoding_error = None;
+    tree.walk(|entry| {
+        control.checkpoint()?;
+        if let Err(error) = encoder.entry(entry) {
+            encoding_error = Some(error);
+            return Ok(false);
+        }
+        if entry.kind == storage_contract::NamespaceEntryKind::File {
+            // Every retained entry has already fit the encoded response budget.
+            files.push(entry.clone());
+        }
+        Ok(true)
+    })
+    .map_err(super::file_manager::activity::read_error)?;
+    if let Some(error) = encoding_error {
+        return Err(error);
     }
+
+    // Preserve namespace failures before pending-source resolution. Keep only
+    // target-key contexts, including a first match with no inherited source.
+    let source = PendingResolution::new(view.state(), branch, snapshot);
+    let historical = historical_contexts(&view, &files, snapshot, source.historical(), control)?;
+    let mut pending = BTreeMap::new();
+    for entry in &files {
+        super::file_manager::activity::checkpoint(control)?;
+        let context = source
+            .main_repository
+            .and_then(|repository| view.file_context_for_current_entry(repository, entry));
+        let contexts = PendingContexts {
+            current: context.as_deref(),
+            historical: historical.get(entry.lookup_key()).copied().flatten(),
+        };
+        if let Some(version) = source.resolve(entry, entry, contexts, || {
+            view.pending_file_source(branch, &entry.file_id)
+        }) {
+            // The original canonical walk overwrote only for Some(source).
+            pending.insert(entry.file_id.as_str(), version);
+        }
+    }
+    super::file_manager::activity::checkpoint(control)?;
+    encoder.finish(&pending)
+}
+
+fn historical_contexts<'a>(
+    view: &'a PublishedReadView,
+    files: &'a [storage_contract::Entry],
+    snapshot: &storage_contract::Commit,
+    historical: bool,
+    control: &crate::HistoryReadControl,
+) -> Result<BTreeMap<&'a str, Option<&'a storage_contract::FileContext>>, ApiError> {
+    if !historical {
+        return Ok(BTreeMap::new());
+    }
+    let mut contexts: BTreeMap<_, Option<&storage_contract::FileContext>> = BTreeMap::new();
+    for entry in files {
+        super::file_manager::activity::checkpoint(control)?;
+        contexts.insert(entry.lookup_key(), None);
+    }
+    for tree in view.state().directory_trees.values() {
+        super::file_manager::activity::checkpoint(control)?;
+        if tree.commit_id != snapshot.commit_id {
+            continue;
+        }
+        for (key, context) in &tree.file_contexts {
+            super::file_manager::activity::checkpoint(control)?;
+            if let Some(selected) = contexts.get_mut(key.as_str()) {
+                selected.get_or_insert(context);
+            }
+        }
+    }
+    Ok(contexts)
 }
 
 pub(super) fn resolve_entry(
@@ -65,7 +132,8 @@ pub(super) fn resolve_entry(
 }
 
 /// The same branch/head checks as Tree, without inspecting or copying entries.
-/// Callers must hold the engine admission lock; a snapshot is not an auth grant.
+/// Uses the current locked State or a coherently admitted immutable read view;
+/// neither the selected commit nor the view is an authorization grant.
 pub(super) fn branch_snapshot<'a>(
     state: &'a storage_contract::State,
     branch: &str,

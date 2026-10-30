@@ -139,15 +139,16 @@ fn assert_alias_sources(
     }
     let resolver = PendingSources::new(engine, &repo.main_branch_id, commit);
     assert_eq!(resolver.pending_versions().unwrap(), expected);
-    let snapshot = crate::TreeSnapshot::capture(
+    let snapshot = capture_tree_fixture(
         engine,
         crate::tests::tree_request(&json!({
             "branch_id": repo.main_branch_id, "query": {"commit_id": commit_id}
         })),
     )
     .unwrap();
-    assert_eq!(snapshot.entries, entries);
-    assert_eq!(snapshot.pending_file_versions, expected);
+    let snapshot = tree_value(&snapshot);
+    assert_eq!(snapshot["entries"], json!(entries));
+    assert_eq!(snapshot["pending_file_versions"], json!(expected));
     let first = entries.iter().find(|entry| entry.file_id == file).unwrap();
     assert_eq!(first.path(), "a-b/report.txt");
     assert_eq!(

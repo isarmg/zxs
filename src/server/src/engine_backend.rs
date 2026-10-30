@@ -66,6 +66,18 @@ pub struct EngineBackend {
     operation_health_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 impl EngineBackend {
+    fn finish_tree_snapshot(
+        &self,
+        identity: &Identity,
+        result: Result<crate::TreeSnapshot, ApiError>,
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::TreeSnapshot, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::activity::checkpoint(control)?;
+        result
+    }
+
     fn finish_activity_history(
         &self,
         identity: &Identity,
@@ -1637,7 +1649,7 @@ impl Backend for EngineBackend {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         file_manager::activity::checkpoint(control)?;
-        let plan = engine.prepare_activity_read();
+        let plan = engine.published_read_view();
         drop(engine);
         let page = file_manager::activity::read(plan, control);
         self.finish_activity_history(identity, page, control)
@@ -1714,10 +1726,15 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadTree<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        crate::TreeSnapshot::capture(&engine, request)
+        let view = engine.published_read_view();
+        drop(engine);
+        let result = read_projection::capture_tree(view, request, control);
+        // The captured State/resources are dropped before reacquiring admission.
+        self.finish_tree_snapshot(identity, result, control)
     }
     fn create_write_session(
         &self,

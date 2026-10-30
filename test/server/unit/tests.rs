@@ -627,6 +627,7 @@ impl Backend for TestBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadTree<'_>,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -1892,8 +1893,9 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             &self,
             identity: &crate::auth::Identity,
             request: crate::ReadTree<'_>,
+            control: &crate::HistoryReadControl,
         ) -> Result<crate::TreeSnapshot, crate::ApiError> {
-            self.delegate.tree_snapshot(identity, request)
+            self.delegate.tree_snapshot(identity, request, control)
         }
         fn create_write_session(
             &self,
@@ -2319,6 +2321,14 @@ async fn canonical_static_origin_drives_http_login_cookie_and_request_rejection(
             );
         }
     }
+}
+
+pub(crate) fn history_read_control() -> crate::HistoryReadControl {
+    crate::HistoryReadControl::until(std::time::Instant::now() + std::time::Duration::from_secs(30))
+}
+
+pub(crate) fn tree_value(snapshot: &crate::TreeSnapshot) -> Value {
+    json_codec::from_slice(snapshot.body()).unwrap()
 }
 
 // Existing JSON fixture vectors are test-client input, never an internal backend path.

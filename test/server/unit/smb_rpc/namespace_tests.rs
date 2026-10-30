@@ -879,8 +879,9 @@ impl Backend for NamespaceFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadTree<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
-        self.inner.tree_snapshot(identity, request)
+        self.inner.tree_snapshot(identity, request, control)
     }
     fn create_write_session(
         &self,
@@ -1226,8 +1227,9 @@ fn malformed_namespace_requests_are_rejected_before_creating_workspaces() {
         .tree_snapshot(
             &session.identity,
             crate::tests::tree_request(&(json!({"branch_id":branch}))),
+            &crate::tests::history_read_control(),
         )
-        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+        .map(|snapshot| crate::tests::tree_value(&snapshot))
         .unwrap();
     for (kind, path, destination, replace) in [
         (
@@ -1279,8 +1281,9 @@ fn malformed_namespace_requests_are_rejected_before_creating_workspaces() {
         .tree_snapshot(
             &session.identity,
             crate::tests::tree_request(&(json!({"branch_id":branch}))),
+            &crate::tests::history_read_control(),
         )
-        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+        .map(|snapshot| crate::tests::tree_value(&snapshot))
         .unwrap();
     assert_eq!(after, before);
     assert!(
@@ -1953,8 +1956,9 @@ impl Backend for PreparationFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadTree<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
-        self.inner.tree_snapshot(identity, request)
+        self.inner.tree_snapshot(identity, request, control)
     }
     fn create_write_session(
         &self,

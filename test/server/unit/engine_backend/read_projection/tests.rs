@@ -1,5 +1,6 @@
 use super::*;
-use crate::engine_backend::field;
+use crate::engine_backend::{field, wire::PendingSources};
+use crate::tests::{history_read_control as tree_control, tree_value};
 use crate::{
     Backend,
     auth::{AuthStore, Identity},
@@ -15,17 +16,11 @@ mod alias_order_tests;
 #[path = "authorization_tests.rs"]
 mod authorization_tests;
 
-std::thread_local! {
-    static TREE_PROJECTION_WORK: std::cell::Cell<(usize, usize)> = const {
-        std::cell::Cell::new((0, 0))
-    };
-}
-
-pub(super) fn record_tree_projection(entries: usize) {
-    TREE_PROJECTION_WORK.with(|work| {
-        let (projections, copied_entries) = work.get();
-        work.set((projections + 1, copied_entries + entries));
-    });
+fn capture_tree_fixture(
+    engine: &Engine,
+    request: crate::ReadTree<'_>,
+) -> Result<crate::TreeSnapshot, crate::ApiError> {
+    capture_tree(engine.published_read_view(), request, &tree_control())
 }
 
 fn fixture() -> (
@@ -55,26 +50,12 @@ fn fixture() -> (
 }
 
 #[test]
-fn rendering_releases_engine_before_serializer_runs() {
+fn encoded_tree_returns_without_retaining_engine_lock() {
     let (root, engine, repo, _) = fixture();
     let (backend, _auth, _token, identity) = authenticated_backend(engine, root.path());
-    struct Probe<'a>(&'a EngineBackend, crate::TreeSnapshot);
-    impl Serialize for Probe<'_> {
-        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            // The real typed backend has returned before HTTP serializes; another
-            // thread must be able to acquire its actual admission lock.
-            let available = std::thread::scope(|scope| {
-                scope
-                    .spawn(|| self.0.engine.try_lock().is_ok())
-                    .join()
-                    .unwrap()
-            });
-            if !available {
-                return Err(S::Error::custom("serialization retained Engine mutex"));
-            }
-            self.1.serialize(serializer)
-        }
-    }
+    let commit = backend.engine.lock().unwrap().state().branches[&repo.main_branch_id]
+        .head_commit_id
+        .clone();
     let snapshot = backend
         .tree_snapshot(
             &identity,
@@ -82,12 +63,234 @@ fn rendering_releases_engine_before_serializer_runs() {
                 branch: &repo.main_branch_id,
                 commit: None,
             },
+            &tree_control(),
         )
         .unwrap();
-    let expected = json!({"branch_id":repo.main_branch_id,"commit_id":snapshot.commit_id,"entries":[],"pending_file_versions":{}});
+    assert!(std::thread::scope(|scope| {
+        scope
+            .spawn(|| backend.engine.try_lock().is_ok())
+            .join()
+            .unwrap()
+    }));
+    let expected = json!({"branch_id":repo.main_branch_id,"commit_id":commit,"entries":[],"pending_file_versions":{}});
+    assert_eq!(tree_value(&snapshot), expected);
+}
+
+#[test]
+fn tree_encoder_accepts_exact_byte_cap_and_rejects_one_byte_more() {
+    use storage_contract::client_protocol::MAX_RESPONSE_BYTES;
+    let mut pending = BTreeMap::from([("file".to_owned(), String::new())]);
+    let shell = crate::TreeSnapshot::encode("branch", "commit", [], &pending).unwrap();
+    pending
+        .get_mut("file")
+        .unwrap()
+        .push_str(&"x".repeat(MAX_RESPONSE_BYTES - shell.body().len()));
+    let exact = crate::TreeSnapshot::encode("branch", "commit", [], &pending).unwrap();
+    assert_eq!(exact.body().len(), MAX_RESPONSE_BYTES);
+    assert_eq!(tree_value(&exact)["pending_file_versions"], json!(pending));
+    pending.get_mut("file").unwrap().push('x');
     assert_eq!(
-        json_codec::to_value(Probe(&backend, snapshot)).unwrap(),
-        expected
+        crate::TreeSnapshot::encode("branch", "commit", [], &pending)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::ResourceLimitExceeded,
+    );
+}
+
+#[test]
+fn tree_encoder_escapes_data_and_stops_before_consuming_later_entries() {
+    let branch = "branch\"\\\n";
+    let commit = "commit\t\u{1}é";
+    let pending = BTreeMap::from([("file\"\\".to_owned(), "source\n\t".to_owned())]);
+    let encoded = crate::TreeSnapshot::encode(branch, commit, [], &pending).unwrap();
+    assert_eq!(
+        tree_value(&encoded),
+        json!({
+            "branch_id": branch, "commit_id": commit, "entries": [],
+            "pending_file_versions": pending,
+        })
+    );
+
+    let mut oversized = directory_entry(0, "first.txt".into());
+    oversized.version_id = "x".repeat(storage_contract::client_protocol::MAX_RESPONSE_BYTES);
+    let visited = std::cell::Cell::new(0);
+    let entries = [oversized, directory_entry(1, "later.txt".into())]
+        .into_iter()
+        .inspect(|_| visited.set(visited.get() + 1));
+    assert_eq!(
+        crate::TreeSnapshot::encode("branch", "commit", entries, &BTreeMap::new())
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::ResourceLimitExceeded,
+    );
+    assert_eq!(visited.get(), 1);
+}
+
+#[test]
+fn detached_tree_view_keeps_publication_after_new_head_and_engine_drop() {
+    let (_root, mut engine, repo, _) = fixture();
+    save_projection_file(&mut engine, &repo.main_branch_id, "before.txt", b"before");
+    let request = crate::ReadTree {
+        branch: &repo.main_branch_id,
+        commit: None,
+    };
+    let expected = tree_value(&capture_tree_fixture(&engine, request).unwrap());
+    let view = engine.published_read_view();
+    save_projection_file(&mut engine, &repo.main_branch_id, "after.txt", b"after");
+    drop(engine);
+    let captured = capture_tree(
+        view,
+        crate::ReadTree {
+            branch: &repo.main_branch_id,
+            commit: None,
+        },
+        &tree_control(),
+    )
+    .unwrap();
+    assert_eq!(tree_value(&captured), expected);
+}
+
+#[test]
+fn detached_tree_read_honors_expired_control() {
+    let (_root, engine, repo, _) = fixture();
+    let expired = crate::HistoryReadControl::until(std::time::Instant::now());
+    let error = capture_tree(
+        engine.published_read_view(),
+        crate::ReadTree {
+            branch: &repo.main_branch_id,
+            commit: None,
+        },
+        &expired,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::RequestTimeout);
+    assert_eq!(error.status, ::http::StatusCode::REQUEST_TIMEOUT);
+}
+
+#[test]
+fn tree_completion_reauthorizes_before_results_read_errors_and_expiry() {
+    let (_root, mut engine, repo, identity) = fixture();
+    save_projection_file(&mut engine, &repo.main_branch_id, "before.txt", b"before");
+    let backend = EngineBackend::new(engine);
+    let view = backend.engine.lock().unwrap().published_read_view();
+    save_projection_file(
+        &mut backend.engine.lock().unwrap(),
+        &repo.main_branch_id,
+        "after.txt",
+        b"after",
+    );
+    let snapshot = capture_tree(
+        view,
+        crate::ReadTree {
+            branch: &repo.main_branch_id,
+            commit: None,
+        },
+        &tree_control(),
+    )
+    .unwrap();
+    assert_eq!(
+        tree_value(&snapshot)["entries"].as_array().unwrap().len(),
+        1
+    );
+    let failure = || {
+        crate::ApiError::new(
+            ::http::StatusCode::INTERNAL_SERVER_ERROR,
+            storage_contract::ErrorCode::ObjectCorrupt,
+            "selected namespace is corrupt",
+        )
+    };
+    assert_eq!(
+        backend
+            .finish_tree_snapshot(&identity, Err(failure()), &tree_control())
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::ObjectCorrupt,
+    );
+    install_test_administrator(&mut backend.engine.lock().unwrap(), "replacement");
+    for result in [Ok(snapshot), Err(failure())] {
+        assert_eq!(
+            backend
+                .finish_tree_snapshot(&identity, result, &tree_control())
+                .unwrap_err()
+                .code,
+            storage_contract::ErrorCode::Unauthorized,
+        );
+    }
+    let expired = crate::HistoryReadControl::until(std::time::Instant::now());
+    assert_eq!(
+        backend
+            .finish_tree_snapshot(&identity, Err(failure()), &expired)
+            .unwrap_err()
+            .code,
+        storage_contract::ErrorCode::Unauthorized,
+    );
+}
+
+#[test]
+fn detached_historical_context_first_none_suppresses_later_inheritance_and_fallback() {
+    let (_root, mut engine, repo, _) = fixture();
+    let (commit, entries) = synthetic_commit(&mut engine, &repo, 1);
+    let entry = &entries[0];
+    let mut state = engine.state().clone();
+    for (id, inherited) in [("a-first", None), ("z-later", Some("source".to_owned()))] {
+        state.directory_trees.insert(
+            id.into(),
+            storage_contract::DirectoryTree {
+                tree_id: id.into(),
+                directory_branch_id: "directory".into(),
+                parent_tree_id: None,
+                commit_id: commit.commit_id.clone(),
+                path: String::new(),
+                entries: Vec::new(),
+                file_branches: BTreeMap::new(),
+                file_contexts: BTreeMap::from([(
+                    entry.lookup_key().to_owned(),
+                    storage_contract::FileContext {
+                        node_id: None,
+                        selection_generation: 0,
+                        branch_id: repo.main_branch_id.clone(),
+                        inherited_from: inherited,
+                    },
+                )]),
+                inherited_files: BTreeMap::new(),
+                directory_refs: BTreeMap::new(),
+                sequence: state.sequence,
+            },
+        );
+    }
+    storage_engine::test_support::replace_state(&mut engine, state);
+    let snapshot = capture_tree_fixture(
+        &engine,
+        crate::ReadTree {
+            branch: &repo.main_branch_id,
+            commit: Some(&commit.commit_id),
+        },
+    )
+    .unwrap();
+    assert_eq!(tree_value(&snapshot)["pending_file_versions"], json!({}));
+    // Removing only the first context exposes the later inherited marker.
+    let mut state = engine.state().clone();
+    state
+        .directory_trees
+        .get_mut("a-first")
+        .unwrap()
+        .file_contexts
+        .clear();
+    storage_engine::test_support::replace_state(&mut engine, state);
+    let snapshot = capture_tree_fixture(
+        &engine,
+        crate::ReadTree {
+            branch: &repo.main_branch_id,
+            commit: Some(&commit.commit_id),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        tree_value(&snapshot)["pending_file_versions"],
+        json!(BTreeMap::from([(
+            entry.file_id.clone(),
+            entry.version_id.clone()
+        ),]))
     );
 }
 
@@ -113,8 +316,7 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
         "entries": engine.list_tree(&repo.main_branch_id).unwrap(),
         "pending_file_versions": {},
     });
-    let projection =
-        crate::TreeSnapshot::capture(&engine, crate::tests::tree_request(&input)).unwrap();
+    let projection = capture_tree_fixture(&engine, crate::tests::tree_request(&input)).unwrap();
     let other = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Other").unwrap(),
@@ -126,7 +328,7 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
         .unwrap();
     let foreign = &engine.state().branches[&other.main_branch_id].head_commit_id;
     assert_eq!(
-        crate::TreeSnapshot::capture(
+        capture_tree_fixture(
             &engine,
             crate::tests::tree_request(&json!({
                 "branch_id": repo.main_branch_id, "query": {"commit_id": foreign}
@@ -137,12 +339,16 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
         .code,
         storage_contract::ErrorCode::NotFound
     );
-    assert_eq!(json_codec::to_value(&projection).unwrap(), expected);
+    assert_eq!(tree_value(&projection), expected);
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
     assert_eq!(
         backend
-            .tree_snapshot(&identity, crate::tests::tree_request(&input))
-            .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+            .tree_snapshot(
+                &identity,
+                crate::tests::tree_request(&input),
+                &tree_control()
+            )
+            .map(|snapshot| tree_value(&snapshot))
             .unwrap(),
         expected
     );
@@ -152,33 +358,40 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
     };
     assert_eq!(
         backend
-            .tree_snapshot(&denied, crate::tests::tree_request(&input))
-            .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+            .tree_snapshot(&denied, crate::tests::tree_request(&input), &tree_control())
+            .map(|snapshot| tree_value(&snapshot))
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
     );
     let frozen = {
         let mut engine = backend.engine.lock().unwrap();
-        let frozen =
-            crate::TreeSnapshot::capture(&engine, crate::tests::tree_request(&input)).unwrap();
+        let frozen = capture_tree_fixture(&engine, crate::tests::tree_request(&input)).unwrap();
         save_projection_file(&mut engine, &repo.main_branch_id, "new.txt", b"new content");
         frozen
     };
     let current = backend
-        .tree_snapshot(&identity, crate::tests::tree_request(&input))
-        .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+        .tree_snapshot(
+            &identity,
+            crate::tests::tree_request(&input),
+            &tree_control(),
+        )
+        .map(|snapshot| tree_value(&snapshot))
         .unwrap();
     assert_ne!(current["commit_id"], expected["commit_id"]);
     assert_eq!(current["entries"].as_array().unwrap().len(), 1);
     auth.logout(&token).unwrap();
     // An admitted projection keeps its owned snapshot across live data changes
     // and revocation, but can never admit the session to a subsequent request.
-    assert_eq!(json_codec::to_value(&frozen).unwrap(), expected);
+    assert_eq!(tree_value(&frozen), expected);
     assert_eq!(
         backend
-            .tree_snapshot(&identity, crate::tests::tree_request(&input))
-            .map(|snapshot| json_codec::to_value(snapshot).unwrap())
+            .tree_snapshot(
+                &identity,
+                crate::tests::tree_request(&input),
+                &tree_control()
+            )
+            .map(|snapshot| tree_value(&snapshot))
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::Unauthorized
@@ -412,17 +625,15 @@ fn real_current_and_historical_tree_sources_match_previous_wire_output() {
                     .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect();
-        let projection = crate::TreeSnapshot::capture(
+        let projection = capture_tree_fixture(
             &engine,
             crate::tests::tree_request(&json!({
                 "branch_id": repo.main_branch_id, "query": {"commit_id": commit_id}
             })),
         )
         .unwrap();
-        assert_eq!(projection.pending_file_versions, expected);
-        assert_eq!(projection.entries, entries);
         assert_eq!(
-            json_codec::to_value(&projection).unwrap(),
+            tree_value(&projection),
             json!({
                 "branch_id": repo.main_branch_id,
                 "commit_id": commit_id,
@@ -496,17 +707,15 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
                     .map(|source| (entry.file_id.clone(), source.to_owned()))
             })
             .collect();
-        let tree = crate::TreeSnapshot::capture(
+        let tree = capture_tree_fixture(
             engine,
             crate::tests::tree_request(&json!({
                 "branch_id": branch, "query": {"commit_id": commit_id}
             })),
         )
         .unwrap();
-        assert_eq!(tree.pending_file_versions, legacy);
-        assert_eq!(tree.entries, entries);
         assert_eq!(
-            json_codec::to_value(&tree).unwrap(),
+            tree_value(&tree),
             json!({
                 "branch_id": branch,
                 "commit_id": commit_id,
@@ -631,14 +840,17 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
             .map(|source| (entry.file_id.clone(), source.to_owned()))
         })
         .collect();
-    let projection = crate::TreeSnapshot::capture(
+    let projection = capture_tree_fixture(
         &engine,
         crate::tests::tree_request(&json!({
             "branch_id": repo.main_branch_id, "query": {"commit_id": head}
         })),
     )
     .unwrap();
-    assert_eq!(projection.pending_file_versions, expected);
+    assert_eq!(
+        tree_value(&projection)["pending_file_versions"],
+        json!(expected)
+    );
 }
 
 fn directory_entry(index: usize, path: String) -> storage_contract::Entry {
@@ -926,7 +1138,8 @@ fn namespace_reads_preserve_migrated_branch_error() {
                 crate::ReadTree {
                     branch: &repo.main_branch_id,
                     commit: None
-                }
+                },
+                &tree_control(),
             )
             .unwrap_err()
             .code,

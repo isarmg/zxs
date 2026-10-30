@@ -60,7 +60,7 @@ fn collect_receipts(
 fn activity_plan_keeps_exact_root_receipts_and_namespace_after_publication_and_engine_drop() {
     let (_temporary, mut engine, repo) = pool();
     let first = save(&mut engine, &repo.main_branch_id, "first.txt");
-    let plan = engine.prepare_activity_read();
+    let plan = engine.published_read_view();
     assert!(Arc::ptr_eq(&plan.state, &engine.state));
     let expected = engine.list_tree(&repo.main_branch_id).unwrap();
     let receipts = collect_receipts(engine.receipts_descending()).unwrap();
@@ -99,12 +99,86 @@ fn activity_plan_keeps_exact_root_receipts_and_namespace_after_publication_and_e
 }
 
 #[test]
+fn published_view_keeps_pending_sources_and_current_contexts_on_its_exact_root() {
+    let (_temporary, mut engine, repo) = pool();
+    save(&mut engine, &repo.main_branch_id, "context.txt");
+    let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    let key =
+        crate::business::directory::context_key_from_key(&repo.repository_id, entry.lookup_key());
+    let state = Arc::make_mut(&mut engine.state);
+    state.file_contexts.remove(&key);
+    state.file_selections.remove(&entry.file_id);
+    state
+        .branches
+        .get_mut(&repo.main_branch_id)
+        .unwrap()
+        .pending_file_versions
+        .insert(entry.file_id.clone(), entry.version_id.clone());
+    let expected = engine
+        .file_context_for_current_entry(&repo.repository_id, &entry)
+        .unwrap()
+        .into_owned();
+    let synthesized = engine.published_read_view();
+    assert!(matches!(
+        synthesized.file_context_for_current_entry(&repo.repository_id, &entry),
+        Some(Cow::Owned(_))
+    ));
+    let mut registered = expected.clone();
+    registered.selection_generation = 7;
+    Arc::make_mut(&mut engine.state)
+        .file_contexts
+        .insert(key.clone(), registered.clone());
+    let explicit = engine.published_read_view();
+    assert!(matches!(
+        explicit.file_context_for_current_entry(&repo.repository_id, &entry),
+        Some(Cow::Borrowed(_))
+    ));
+    let state = Arc::make_mut(&mut engine.state);
+    state
+        .file_contexts
+        .get_mut(&key)
+        .unwrap()
+        .selection_generation = 8;
+    state
+        .branches
+        .get_mut(&repo.main_branch_id)
+        .unwrap()
+        .pending_file_versions
+        .remove(&entry.file_id);
+    assert_eq!(
+        engine.pending_file_source(&repo.main_branch_id, &entry.file_id),
+        None
+    );
+    drop(engine);
+    for view in [&synthesized, &explicit] {
+        assert_eq!(
+            view.pending_file_source(&repo.main_branch_id, &entry.file_id),
+            Some(entry.version_id.as_str())
+        );
+    }
+    assert_eq!(
+        synthesized
+            .file_context_for_current_entry(&repo.repository_id, &entry)
+            .unwrap()
+            .as_ref(),
+        &expected
+    );
+    assert_eq!(
+        explicit
+            .file_context_for_current_entry(&repo.repository_id, &entry)
+            .unwrap()
+            .as_ref(),
+        &registered
+    );
+}
+
+#[test]
 fn activity_capture_preserves_warm_owner_lookup_and_rejects_foreign_state_membership() {
     let (_temporary, mut engine, repo) = pool();
     save(&mut engine, &repo.main_branch_id, "owner.txt");
     let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
     engine.history_owners().unwrap();
-    let warm = engine.prepare_activity_read();
+    let warm = engine.published_read_view();
     assert!(warm.owners.is_some());
     let calls = Cell::new(0);
     let observe = || {
@@ -121,7 +195,7 @@ fn activity_capture_preserves_warm_owner_lookup_and_rejects_foreign_state_member
         .get_mut(&entry.version_id)
         .unwrap()
         .file_id = "file_rebound".into();
-    let cold = engine.prepare_activity_read();
+    let cold = engine.published_read_view();
     assert!(cold.owners.is_none());
     assert!(engine.available_history_owners().is_none());
     assert_eq!(
@@ -145,7 +219,7 @@ fn activity_cold_capture_does_not_build_owner_index_and_namespace_observes_cance
     drop(engine);
     let engine = Engine::open(&temporary.path().join("system")).unwrap();
     assert!(engine.available_history_owners().is_none());
-    let plan = engine.prepare_activity_read();
+    let plan = engine.published_read_view();
     assert!(plan.owners.is_none());
     assert!(engine.available_history_owners().is_none());
     let tree = plan
@@ -234,7 +308,7 @@ fn activity_plan_uses_captured_cold_receipt_segments_and_preserves_io_failures()
     assert!(log.cold_index().is_none());
     Arc::make_mut(&mut engine.state).operations = log;
     engine.operation_locator_root = Some(locator);
-    let plan = engine.prepare_activity_read();
+    let plan = engine.published_read_view();
     // A different publication's locator cannot alter this captured point read.
     engine.operation_locator_root = Some(crate::journal::stored_map(
         &engine.members(),
@@ -278,7 +352,7 @@ fn activity_plan_uses_captured_cold_receipt_segments_and_preserves_io_failures()
     );
 }
 
-fn mixed_receipt_plan() -> (tempfile::TempDir, ActivityReadPlan) {
+fn mixed_receipt_plan() -> (tempfile::TempDir, PublishedReadView) {
     use storage_contract::{
         OPERATION_SEGMENT_KIND, OPERATION_SEGMENT_RECORDS, OperationLog, OperationRecordEntry,
         OperationSegment,
@@ -317,7 +391,7 @@ fn mixed_receipt_plan() -> (tempfile::TempDir, ActivityReadPlan) {
     }
     log.begin_tracking();
     Arc::make_mut(&mut engine.state).operations = log;
-    (temporary, engine.prepare_activity_read())
+    (temporary, engine.published_read_view())
 }
 
 #[test]

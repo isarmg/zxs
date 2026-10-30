@@ -15,7 +15,7 @@ fn activity_completion_reauthorizes_before_results_and_read_errors() {
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
     let backend = EngineBackend::new(engine);
-    let plan = backend.engine.lock().unwrap().prepare_activity_read();
+    let plan = backend.engine.lock().unwrap().published_read_view();
     let page = file_manager::activity::read(plan, &control()).unwrap();
     let failure = || {
         ApiError::new(
@@ -62,7 +62,7 @@ fn activity_plan_remains_frozen_while_the_writer_publishes() {
         )
         .unwrap();
     let backend = EngineBackend::new(engine);
-    let plan = backend.engine.lock().unwrap().prepare_activity_read();
+    let plan = backend.engine.lock().unwrap().published_read_view();
     {
         let mut engine = backend.engine.lock().unwrap();
         let workspace = engine
@@ -189,7 +189,7 @@ fn activity_current_tree_failure_precedes_an_earlier_parent_lookup_failure() {
     drop(engine);
     // Reopen before corruption so the published metadata is admitted and the query cache is cold.
     let engine = Engine::open(&system).unwrap();
-    let plan = engine.prepare_activity_read();
+    let plan = engine.published_read_view();
     std::fs::remove_file(object_path(&parent)).unwrap();
     std::fs::write(object_path(&subtree), b"invalid-json").unwrap();
     let observe = || Ok(());

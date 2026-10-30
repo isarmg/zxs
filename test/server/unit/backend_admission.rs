@@ -690,6 +690,7 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadTree<'_>,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
         self.wait()?;
         Err(crate::ApiError::unsupported())
@@ -1267,15 +1268,21 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
 #[tokio::test]
 async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation() {
     for &(method, path) in TYPED_BACKEND_ROUTES {
+        let slots = match path {
+            "/api/branches/branch/tree?commit_id=commit"
+            | "/api/history-trees/history/graph?collection=commits"
+            | "/api/file-manager/history?ignored=true" => 2,
+            _ => HTTP_BACKEND_SLOTS,
+        };
         let root = crate::tests::private_tempdir();
         let (app, gate, _release) = fixture(root.path(), 0, false);
         let mut jobs = Vec::new();
-        for _ in 0..HTTP_BACKEND_SLOTS {
+        for _ in 0..slots {
             jobs.push(tokio::spawn(workspace_request(app.clone(), method, path)));
         }
         tokio::time::timeout(
             Duration::from_secs(5),
-            gate.started.acquire_many(HTTP_BACKEND_SLOTS as u32),
+            gate.started.acquire_many(slots as u32),
         )
         .await
         .unwrap_or_else(|error| panic!("typed route {path} did not enter its backend: {error}"))
@@ -1292,13 +1299,13 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
             workspace_request(app.clone(), method, path).await.status(),
             StatusCode::TOO_MANY_REQUESTS
         );
-        assert_eq!(gate.calls.load(Ordering::SeqCst), HTTP_BACKEND_SLOTS);
+        assert_eq!(gate.calls.load(Ordering::SeqCst), slots);
         gate.release();
         for job in jobs {
             assert_ne!(job.await.unwrap().status(), StatusCode::TOO_MANY_REQUESTS);
         }
         gate.finished
-            .acquire_many(HTTP_BACKEND_SLOTS as u32)
+            .acquire_many(slots as u32)
             .await
             .unwrap()
             .forget();
@@ -1310,6 +1317,60 @@ async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_c
             tokio::task::yield_now().await;
         }
     }
+}
+
+#[tokio::test]
+async fn tree_activity_and_graph_share_scan_slots_until_cancelled_workers_finish() {
+    let root = crate::tests::private_tempdir();
+    let (app, gate, _release) = fixture(root.path(), 0, false);
+    let tree = tokio::spawn(workspace_request(
+        app.clone(),
+        "GET",
+        "/api/branches/branch/tree",
+    ));
+    let activity = tokio::spawn(workspace_request(
+        app.clone(),
+        "GET",
+        "/api/file-manager/history",
+    ));
+    tokio::time::timeout(Duration::from_secs(5), gate.started.acquire_many(2))
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    let graph = "/api/history-trees/history/graph?collection=commits";
+    assert_eq!(
+        workspace_request(app.clone(), "GET", graph).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    tree.abort();
+    assert!(tree.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        workspace_request(app.clone(), "GET", graph).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        request(app.clone(), "/healthz").await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
+    gate.release();
+    assert_ne!(
+        activity.await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    gate.finished.acquire_many(2).await.unwrap().forget();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = workspace_request(app.clone(), "GET", graph).await;
+            if response.status() != StatusCode::TOO_MANY_REQUESTS {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completed tree and activity workers release their scan slots");
 }
 
 #[tokio::test]

@@ -647,9 +647,10 @@ impl Backend for PausedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadTree<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::TreeSnapshot, crate::ApiError> {
         self.enter();
-        self.inner.tree_snapshot(identity, request)
+        self.inner.tree_snapshot(identity, request, control)
     }
     fn create_write_session(
         &self,
@@ -1305,6 +1306,7 @@ impl Request {
                         branch: &fixture.repo.main_branch_id,
                         commit: None,
                     },
+                    &crate::tests::history_read_control(),
                 )
                 .map(|_| ()),
             Self::Snapshot => backend

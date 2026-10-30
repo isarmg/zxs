@@ -6,6 +6,56 @@ use storage_contract::{
     client_protocol::{OperationStatus, operation_status},
 };
 
+// Retain the old whole-tree projection only as a differential test oracle.
+impl<'a> PendingSources<'a> {
+    pub(in crate::engine_backend) fn pending_versions(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, storage_engine::Error> {
+        let historical = self
+            .current
+            .filter(|current| current.head_commit_id != self.commit.commit_id)
+            .map(|_| {
+                let mut contexts = std::collections::BTreeMap::new();
+                for tree in self
+                    .engine
+                    .state()
+                    .directory_trees
+                    .values()
+                    .filter(|tree| tree.commit_id == self.commit.commit_id)
+                {
+                    for (key, context) in &tree.file_contexts {
+                        // BTreeMap iteration preserves the original first tree.
+                        contexts.entry(key.as_str()).or_insert(context);
+                    }
+                }
+                contexts
+            });
+        let Some(tree) = self.engine.commit_namespace(&self.commit.commit_id) else {
+            return Ok(std::collections::BTreeMap::new());
+        };
+        let mut versions = std::collections::BTreeMap::new();
+        tree.walk(|entry| {
+            if entry.kind != storage_contract::NamespaceEntryKind::File {
+                return Ok(true);
+            }
+            let context = self.main_repository.and_then(|repository| {
+                self.engine
+                    .file_context_for_current_entry(repository, entry)
+            });
+            if let Some(source) = self.resolve(
+                entry,
+                entry,
+                CurrentContext::Resolved(context.as_deref()),
+                historical.as_ref(),
+            )? {
+                versions.insert(entry.file_id.clone(), source);
+            }
+            Ok(true)
+        })?;
+        Ok(versions)
+    }
+}
+
 fn domain(value: &Value) -> OperationOutcome {
     let content = value["operation_kind"] == "content_save";
     let result = &value["result"];
