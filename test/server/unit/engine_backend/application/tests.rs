@@ -90,7 +90,7 @@ fn protection_commands_preserve_core_replay_and_transport_contract() {
         };
         let replay = execute(&owner, "", 0, operation).unwrap();
         assert_eq!(replay, original);
-        let wire = crate::operation_wire::operation_wire(replay).unwrap();
+        let wire = crate::operation_wire::operation_wire(replay.into()).unwrap();
         assert_eq!(wire["request_digest"], original.request_digest);
         assert_eq!(wire["result"], original.result);
         assert_eq!(wire["publication_sequence"], original.sequence.to_string());

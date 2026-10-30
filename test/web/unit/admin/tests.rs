@@ -158,7 +158,11 @@ fn invalid_success_and_early_not_found_preserve_review_and_uncertainty() {
         uncertain_operation: Some(UncertainOperation::Known("original".into())),
         ..Default::default()
     };
-    reject(&mut model, &request::operation("original").contract, &error);
+    reject(
+        &mut model,
+        &request::operation_outcome("original").contract,
+        &error,
+    );
     assert_eq!(model.plan, reviewed);
     assert!(model.reload_blocked());
 }
@@ -337,9 +341,11 @@ fn missing_operation_identity_cannot_match_a_receipt_named_unknown() {
         "../files/fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
+    receipt.as_object_mut().unwrap().remove("current_health");
     receipt["operation_id"] = "unknown".into();
     assert!(response::terminal(&receipt, "unknown"));
-    respond(&mut model, &request::operation("unknown"), receipt);
+    respond(&mut model, &request::operation_outcome("unknown"), receipt);
     assert_eq!(
         model.uncertain_operation,
         Some(UncertainOperation::MissingId)
@@ -361,11 +367,35 @@ fn operation_receipt(commit: &str, state: &str, protection: &str) -> Value {
         "../files/fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
+    value.as_object_mut().unwrap().remove("current_health");
     value["operation_id"] = "original".into();
     value["commit_state"] = commit.into();
     value["state"] = state.into();
     value["protection_at_publish"] = protection.into();
     value
+}
+
+#[test]
+fn diagnostic_inspection_does_not_release_an_outcome_query_fence() {
+    let mut model = Model {
+        uncertain_operation: Some(UncertainOperation::Known("original".into())),
+        ..Default::default()
+    };
+    let mut observation = operation_receipt("PUBLISHED", "completed", "NOT_APPLICABLE");
+    observation["current_health"] = Value::Null;
+    respond(&mut model, &request::operation("original"), observation);
+    assert_eq!(
+        model.uncertain_operation,
+        Some(UncertainOperation::Known("original".into()))
+    );
+    assert!(model.reload_blocked());
+    respond(
+        &mut model,
+        &request::operation_outcome("original"),
+        operation_receipt("PUBLISHED", "completed", "NOT_APPLICABLE"),
+    );
+    assert!(model.uncertain_operation.is_none());
 }
 
 #[test]
@@ -385,7 +415,7 @@ fn only_the_original_terminal_operation_query_settles_the_fence() {
                 uncertain_operation: Some(UncertainOperation::Known("original".into())),
                 ..Default::default()
             };
-            let request = request::operation(queried);
+            let request = request::operation_outcome(queried);
             let mut value = operation_receipt(commit, state, protection);
             // A valid receipt for another lookup still cannot settle original.
             value["operation_id"] = queried.into();
@@ -414,7 +444,7 @@ fn wrong_operation_response_preserves_review_and_original_identity() {
     };
     let mut value = operation_receipt("PUBLISHED", "completed", "NOT_APPLICABLE");
     value["operation_id"] = "other".into();
-    respond(&mut model, &request::operation("original"), value);
+    respond(&mut model, &request::operation_outcome("original"), value);
     assert_eq!(model.plan, plan);
     assert!(model.acknowledged);
     assert_eq!(
@@ -578,7 +608,7 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
             },
             ..Default::default()
         });
-        let request = request::operation("original");
+        let request = request::operation_outcome("original");
         complete(
             state,
             4,
@@ -645,7 +675,7 @@ fn current_session_completion_releases_busy_and_unauthorized_session() {
             },
             ..Default::default()
         });
-        let request = request::operation("original");
+        let request = request::operation_outcome("original");
         complete(
             state,
             5,
@@ -734,7 +764,7 @@ fn typed_execution_checks_session_busy_and_storage_before_starting_work() {
                 request::build(Kind::Purge, &fields, "original", "admin").unwrap(),
             );
             if storage == Storage::Ready {
-                execute(state, request::operation("original"));
+                execute(state, request::operation_outcome("original"));
             }
             state.with_untracked(|s| {
                 assert_eq!(s.admin_console.busy, busy);

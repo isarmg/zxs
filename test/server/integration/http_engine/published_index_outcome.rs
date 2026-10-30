@@ -1,7 +1,5 @@
 //! Projection failure must not turn an authoritative receipt into an HTTP error.
-use super::projection_failure::{
-    fail_projection, projection_sequence, receipt_without_observation_time,
-};
+use super::projection_failure::{fail_projection, projection_sequence, receipt_outcome};
 use super::*;
 
 async fn sequence(app: &Router, token: &str) -> u64 {
@@ -39,6 +37,7 @@ async fn metadata_projection_failure_returns_published_http_receipt_and_same_id_
     let route = "/api/file-manager/disks/P01/namespace-batch";
 
     let saved = success(&app, &token, "POST", route, Some(request.clone())).await;
+    assert!(saved.get("current_health").is_none());
     assert_eq!(saved["operation_id"], operation);
     assert_eq!(saved["commit_state"], "PUBLISHED");
     assert_eq!(saved["publication_sequence"], (before + 1).to_string());
@@ -53,15 +52,30 @@ async fn metadata_projection_failure_returns_published_http_receipt_and_same_id_
         None,
     )
     .await;
-    assert_eq!(
-        receipt_without_observation_time(&queried),
-        receipt_without_observation_time(&saved)
+    capture_wire("namespace-batch-observation.json", &queried);
+    let outcome = success(
+        &app,
+        &token,
+        "GET",
+        &format!("/api/operations/{operation}/outcome"),
+        None,
+    )
+    .await;
+    assert!(outcome.get("current_health").is_none());
+    assert_eq!(outcome, saved);
+    capture_wire("namespace-batch-outcome.json", &outcome);
+    assert_capture_contract(
+        &outcome,
+        include_str!("../../../web/unit/files/fixtures/github-namespace-batch-outcome.json"),
     );
+    assert_capture_contract(
+        &queried,
+        include_str!("../../../web/unit/files/fixtures/github-namespace-batch-observation.json"),
+    );
+    assert_eq!(receipt_outcome(&queried), receipt_outcome(&saved));
     let replay = success(&app, &token, "POST", route, Some(request.clone())).await;
-    assert_eq!(
-        receipt_without_observation_time(&replay),
-        receipt_without_observation_time(&saved)
-    );
+    assert!(replay.get("current_health").is_none());
+    assert_eq!(receipt_outcome(&replay), receipt_outcome(&saved));
     assert_eq!(sequence(&app, &token).await, before + 1);
     assert_eq!(projection_sequence(&index), projected_before);
 
@@ -130,6 +144,7 @@ async fn native_client_receives_published_content_receipt_when_projection_update
     assert_eq!(projected_before, before.to_string());
 
     let saved = client.commit_prepared(&request).await.unwrap();
+    assert!(saved.get("current_health").is_none());
     assert_eq!(saved["operation_id"], operation);
     assert_eq!(saved["commit_state"], "PUBLISHED");
     assert_eq!(saved["operation_kind"], "content_save");
@@ -142,20 +157,13 @@ async fn native_client_receives_published_content_receipt_when_projection_update
     assert_index_unavailable(&app, &token).await;
     let route = format!("/api/operations/{operation}");
     let queried = client.request("GET", &route, None).await.unwrap();
-    assert_eq!(
-        receipt_without_observation_time(&queried),
-        receipt_without_observation_time(&saved)
-    );
+    assert!(queried["current_health"]["checked_at"].is_string());
+    assert_eq!(receipt_outcome(&queried), receipt_outcome(&saved));
     let http_query = success(&app, &token, "GET", &route, None).await;
-    assert_eq!(
-        receipt_without_observation_time(&http_query),
-        receipt_without_observation_time(&saved)
-    );
+    assert_eq!(receipt_outcome(&http_query), receipt_outcome(&saved));
     let replay = client.commit_prepared(&request).await.unwrap();
-    assert_eq!(
-        receipt_without_observation_time(&replay),
-        receipt_without_observation_time(&saved)
-    );
+    assert!(replay.get("current_health").is_none());
+    assert_eq!(receipt_outcome(&replay), receipt_outcome(&saved));
     assert_eq!(sequence(&app, &token).await, before + 1);
     assert_eq!(projection_sequence(&index), projected_before);
     stop.send(()).unwrap();

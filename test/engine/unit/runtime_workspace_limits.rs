@@ -147,6 +147,16 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
     let mut engine = f.initialize();
     let repo = repository(&mut engine, 1);
     let first = save(&mut engine, &repo.main_branch_id, "saved", b"saved payload");
+    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 0);
+    let retained = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(&retained.workspace_id, "unpublished", b"resident evidence")
+        .unwrap();
+    engine
+        .abort_workspace(&retained.workspace_id, "admin")
+        .unwrap();
     assert_eq!(
         engine
             .create_workspace(&repo.main_branch_id, "admin")
@@ -205,6 +215,16 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
             message: "raised budget".into(),
             request_digest: None,
         })
+        .unwrap();
+    assert!(!engine.workspaces.contains_key(&third.workspace_id));
+    let retained = engine
+        .create_workspace(&repo.main_branch_id, "writer")
+        .unwrap();
+    engine
+        .stage_bytes(&retained.workspace_id, "unpublished", b"writer evidence")
+        .unwrap();
+    engine
+        .abort_workspace(&retained.workspace_id, "writer")
         .unwrap();
     let error = engine
         .create_workspace(&repo.main_branch_id, "writer")

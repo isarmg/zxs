@@ -1098,7 +1098,7 @@ impl Engine {
         }
         w.state = WorkspaceState::Aborted;
         w.fencing_token = w.fencing_token.saturating_add(1);
-        self.persist_aborted_workspace(w)
+        self.persist_terminal_workspace(&w)
     }
     pub fn commit_workspace(&mut self, request: CommitRequest) -> Result<OperationResult> {
         self.commit_workspace_inner(request, None)
@@ -1130,7 +1130,7 @@ impl Engine {
     ) -> Result<WorkspaceMutation> {
         let workspace = self.workspace(&request.workspace_id)?;
         let replay = if self.state.operations.contains_key(&request.operation_id) {
-            Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
+            Some(self.operation_record(request.operation_id)?.into_result())
         } else {
             None
         };
@@ -1211,7 +1211,7 @@ impl Engine {
         Self::refresh_workspace_contexts(&self.state, &mut completed);
         completed.state = WorkspaceState::Committed;
         completed.fencing_token += 1;
-        if let Err(source) = self.persist_workspace(&completed) {
+        if let Err(source) = self.persist_terminal_workspace(&completed) {
             // Publication is already authoritative. Even pre-write budget/path
             // failures leave local completion unresolved, never a rejected save.
             self.blocked = true;
@@ -1219,8 +1219,6 @@ impl Engine {
                 PublishedWorkspaceReconciliation::new(result, &completed, source),
             )));
         }
-        self.workspaces
-            .insert(completed.workspace_id.clone(), completed);
         Ok(result)
     }
     pub(crate) fn build_version(
@@ -1409,14 +1407,14 @@ impl crate::engine::PlanningContext<'_> {
         workspace: Workspace,
         request: CommitRequest,
         wire: Option<crate::wire::WireCommit>,
-        replay: Option<crate::engine::OperationReadPlan>,
+        replay: Option<OperationResult>,
     ) -> Result<WorkspaceMutation> {
         if let Some(result) = replay {
             let digest = native_commit_digest(&workspace, &request)?;
             self.validate_workspace_commit_replay(&workspace, &request, &digest)?;
             self.require_saved_workspace_request(&workspace, &request)?;
             return Ok(WorkspaceMutation {
-                mutation: MutationPlan::Existing(result.check().into_result()),
+                mutation: MutationPlan::Existing(result),
                 workspace,
                 request,
                 wire,

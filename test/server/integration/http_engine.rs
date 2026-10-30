@@ -2298,6 +2298,83 @@ fn capture_wire(name: &str, wire: &Value) {
     }
 }
 
+fn assert_capture_contract(actual: &Value, fixture: &str) {
+    use storage_contract::client_protocol::{operation_observation_status, operation_status};
+
+    // Compare real routes with the historical captures. Generated identities
+    // receive stable labels while repeated references keep their aliasing.
+    fn normalize(
+        value: &Value,
+        field: &str,
+        identities: &mut std::collections::BTreeMap<String, usize>,
+    ) -> Value {
+        match value {
+            Value::Object(object) => Value::Object(
+                object
+                    .iter()
+                    .map(|(key, value)| (key.clone(), normalize(value, key, identities)))
+                    .collect(),
+            ),
+            Value::Array(array) => {
+                let mut entries: Vec<_> = array.iter().collect();
+                if field == "versions" {
+                    // The two-version recovery fixture is ordered by random
+                    // version IDs; retain the full protection facts per version.
+                    entries.sort_by_key(|version| {
+                        version["slots"][0]["state"].as_str().unwrap().to_owned()
+                    });
+                }
+                Value::Array(
+                    entries
+                        .into_iter()
+                        .map(|entry| normalize(entry, field, identities))
+                        .collect(),
+                )
+            }
+            Value::String(text) => {
+                if matches!(field, "request_digest" | "checked_at" | "timestamp") {
+                    return format!("<{field}>").into();
+                }
+                if let Some((prefix, _)) = text.split_once('_')
+                    && matches!(
+                        prefix,
+                        "op" | "br"
+                            | "commit"
+                            | "history"
+                            | "ver"
+                            | "disk"
+                            | "dbr"
+                            | "dtree"
+                            | "fnode"
+                            | "file"
+                            | "entry"
+                    )
+                {
+                    storage_contract::validate_id(text, prefix).unwrap();
+                    let next = identities.len();
+                    let label = identities.entry(text.clone()).or_insert(next);
+                    return format!("{prefix}_{label}").into();
+                }
+                value.clone()
+            }
+            _ => value.clone(),
+        }
+    }
+
+    let expected: Value = json_codec::from_str(fixture).unwrap();
+    let status = if expected.get("current_health").is_some() {
+        operation_observation_status
+    } else {
+        operation_status
+    };
+    assert!(status(&expected).is_some());
+    assert_eq!(status(actual), status(&expected));
+    assert_eq!(
+        normalize(actual, "", &mut std::collections::BTreeMap::new()),
+        normalize(&expected, "", &mut std::collections::BTreeMap::new())
+    );
+}
+
 fn seed_engine_authority(engine: &mut Engine, system: &Path) {
     let auth = AuthStore::initialize(system, "admin", "integration-test-password").unwrap();
     engine
@@ -2313,6 +2390,7 @@ async fn operation_over_http(
     engine: Engine,
     system: &Path,
     operation: storage_contract::OperationId,
+    outcome_evidence: &str,
 ) -> Value {
     let backend = Arc::new(EngineBackend::new(engine));
     let auth = backend
@@ -2320,14 +2398,31 @@ async fn operation_over_http(
         .unwrap();
     let app = storage_server::router(backend, auth, ServerConfig::loopback(system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
-    success(
+    let outcome_path = format!("/api/operations/{operation}/outcome?unused=accepted");
+    let outcome = success(&app, &token, "GET", &outcome_path, None).await;
+    assert!(outcome.get("current_health").is_none());
+    capture_wire(outcome_evidence, &outcome);
+    let observation = success(
         &app,
         &token,
         "GET",
         &format!("/api/operations/{operation}?unused=accepted"),
         None,
     )
-    .await
+    .await;
+    assert!(observation["current_health"]["checked_at"].is_string());
+    let mut observed_outcome = observation.clone();
+    observed_outcome
+        .as_object_mut()
+        .unwrap()
+        .remove("current_health");
+    assert_eq!(observed_outcome, outcome);
+    assert_eq!(
+        success(&app, &token, "GET", &outcome_path, None).await,
+        outcome,
+        "a diagnostic read must not add observations to the cheap outcome"
+    );
+    observation
 }
 
 #[tokio::test]
@@ -2416,7 +2511,24 @@ async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavail
     engine
         .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "admin", true)
         .unwrap();
-    let wire = operation_over_http(engine, &system, operation).await;
+    let wire = operation_over_http(
+        engine,
+        &system,
+        operation,
+        "degraded-save-operation-outcome.json",
+    )
+    .await;
+    assert_capture_contract(
+        &projection_failure::receipt_outcome_with_status(
+            &wire,
+            storage_contract::client_protocol::OperationStatus::Degraded,
+        ),
+        include_str!("../../web/unit/files/fixtures/github-degraded-save-outcome.json"),
+    );
+    assert_capture_contract(
+        &wire,
+        include_str!("../../web/unit/files/fixtures/github-degraded-save-observation.json"),
+    );
     assert_eq!(wire["state"], "completed");
     assert_eq!(wire["commit_state"], "PUBLISHED_DEGRADED");
     assert_eq!(wire["result"]["outcome"], "COMMITTED_DEGRADED");
@@ -2509,7 +2621,23 @@ async fn damage_after_normal_publication_keeps_original_target_met_in_save_wire(
     );
     std::fs::remove_file(&corrupted).unwrap();
     std::fs::write(&corrupted, b"corruption after successful publication").unwrap();
-    let wire = operation_over_http(engine, &root.path().join("system"), operation).await;
+    let wire = operation_over_http(
+        engine,
+        &root.path().join("system"),
+        operation,
+        "damaged-published-save-operation-outcome.json",
+    )
+    .await;
+    assert_capture_contract(
+        &projection_failure::receipt_outcome(&wire),
+        include_str!("../../web/unit/files/fixtures/github-damaged-published-save-outcome.json"),
+    );
+    assert_capture_contract(
+        &wire,
+        include_str!(
+            "../../web/unit/files/fixtures/github-damaged-published-save-observation.json"
+        ),
+    );
     assert_eq!(wire["commit_state"], "PUBLISHED");
     assert_eq!(wire["result"]["outcome"], "COMMITTED_AND_PROTECTED");
     assert_eq!(wire["result"]["protection_at_publish"], "TARGET_MET");
@@ -2616,19 +2744,11 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         Some(json!({"directory_branch_id":frozen,"operation_id":selection_operation})),
     )
     .await;
-    // Health is a fresh observation; only its timestamp varies across replay.
-    assert!(replay["current_health"]["checked_at"].is_string());
-    let mut first_receipt = selected.clone();
-    let mut replay_receipt = replay;
-    first_receipt["current_health"]
-        .as_object_mut()
-        .unwrap()
-        .remove("checked_at");
-    replay_receipt["current_health"]
-        .as_object_mut()
-        .unwrap()
-        .remove("checked_at");
-    assert_eq!(replay_receipt, first_receipt);
+    // Mutation replay returns the permanent outcome, not a fabricated health
+    // observation with a new timestamp.
+    assert!(selected.get("current_health").is_none());
+    assert!(replay.get("current_health").is_none());
+    assert_eq!(replay, selected);
     let changed = send(
         &app,
         Some(&session),
@@ -4263,7 +4383,7 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
     assert!(initialized["result"]["directory_branch_id"].is_string());
     assert_eq!(initialized["operation_kind"], "directory.scope.initialize");
     assert!(initialized["publication_sequence"].is_string());
-    assert!(initialized["current_health"]["checked_at"].is_string());
+    assert!(initialized.get("current_health").is_none());
     let replay = success(
         &app,
         &token,

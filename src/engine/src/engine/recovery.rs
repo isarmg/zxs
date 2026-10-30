@@ -7,6 +7,19 @@ use crate::publication_evidence::{
 use crate::{disk::*, journal::*, *};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod workspace_receipts;
+
+/// Read-only journal admission, retained with its held descriptors until apply.
+pub(super) struct PreparedRecovery {
+    members: Vec<DiskConfig>,
+    online: Vec<DiskConfig>,
+    prefixes: BTreeMap<String, BTreeSet<String>>,
+    journals: BTreeMap<String, OpenJournal>,
+    records: super::recovery_checkpoint::Records,
+    torn_tail: bool,
+    candidates: BTreeMap<u64, workspace_receipts::PreparedCandidate>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecoveryMode {
     CompletePending,
@@ -109,7 +122,7 @@ impl Engine {
         Ok(())
     }
 
-    pub(super) fn recover_mode(&mut self, mode: RecoveryMode) -> Result<()> {
+    pub(super) fn prepare_recovery(&mut self) -> Result<PreparedRecovery> {
         self.metadata_integrity.invalidate();
         self.published_state_base = None;
         self.recovery_warnings = super::RecoveryWarnings::default();
@@ -117,7 +130,6 @@ impl Engine {
         let mut online = Vec::new();
         let mut prefixes = BTreeMap::<String, BTreeSet<String>>::new();
         let mut opened_journals = BTreeMap::new();
-        let mut scanned_journals = BTreeMap::new();
         let mut torn_tail = false;
         let mut records = super::recovery_checkpoint::Records::new();
         for d in &members {
@@ -197,6 +209,39 @@ impl Engine {
             })
             .collect();
         self.reject_unjournaled_publications(&online, &journaled)?;
+        Ok(PreparedRecovery {
+            members,
+            online,
+            prefixes,
+            journals: opened_journals,
+            records,
+            torn_tail,
+            candidates: BTreeMap::new(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn recover_mode(&mut self, mode: RecoveryMode) -> Result<()> {
+        let mut prepared = self.prepare_recovery()?;
+        self.preflight_workspace_receipts(&mut prepared)?;
+        self.recover_prepared(mode, prepared)
+    }
+
+    pub(super) fn recover_prepared(
+        &mut self,
+        mode: RecoveryMode,
+        prepared: PreparedRecovery,
+    ) -> Result<()> {
+        let PreparedRecovery {
+            members,
+            online,
+            prefixes,
+            journals: mut opened_journals,
+            records,
+            torn_tail,
+            mut candidates,
+        } = prepared;
+        let mut scanned_journals = BTreeMap::new();
         for disk in &online {
             let opened = opened_journals
                 .remove(&disk.disk_id)
@@ -233,8 +278,8 @@ impl Engine {
         // historical root that references them. Never persist this evidence.
         let mut repaired_pages = BTreeSet::new();
         let mut repaired_histories = BTreeSet::new();
-        for (_seq, candidates) in records {
-            let active = candidates
+        for (sequence, records) in records {
+            let active = records
                 .into_iter()
                 .filter(|(_, rs)| {
                     rs.iter().any(|receipt| {
@@ -254,30 +299,32 @@ impl Engine {
             let Some((hash, rs)) = active.into_iter().next() else {
                 continue;
             };
-            let candidate: Candidate =
-                verified_object_at(&self.disk_resources, &online, "candidate", &hash)?;
-            self.verify_candidate_membership(&candidate)?;
-            if candidate.pool_id != self.config.pool_id
-                || candidate.previous_snapshot != self.snapshot
-            {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::LogFork,
-                    "candidate does not extend the verified publication prefix",
-                ));
-            }
-            let publication_record = rs
-                .iter()
-                .find(|receipt| receipt.record.record_type == RecordType::Publication);
-            let publication = if let Some(receipt) = publication_record {
-                Some(verified_object_at::<Publication>(
-                    &self.disk_resources,
+            let prepared = match candidates.remove(&sequence) {
+                Some(prepared) => prepared,
+                None => self.read_workspace_receipt_candidate(
                     &online,
-                    "publication",
-                    &receipt.record.object_hash,
-                )?)
-            } else {
-                crate::degraded_recovery::discover_publication(self, &candidate, &hash)?
+                    sequence,
+                    &hash,
+                    &rs,
+                    &self.snapshot,
+                )?,
             };
+            let candidate = prepared.candidate;
+            let publication = prepared.publication;
+            let mut barrier_failure = prepared.barrier_failure;
+            let admitted = prepared.snapshot.map(|snapshot| snapshot.into_admitted());
+            if online.len() == members.len()
+                && let Some(source) = barrier_failure.take()
+            {
+                self.recovery_warnings
+                    .seals
+                    .push(super::RecoverySealFailure {
+                        context: super::RecoverySealContext::Publication {
+                            candidate_hash: hash.clone(),
+                        },
+                        source,
+                    });
+            }
             if let Some(checkpoint) = checkpoint
                 .as_ref()
                 .filter(|c| candidate.sequence <= c.sequence)
@@ -299,14 +346,7 @@ impl Engine {
                         .read_json_observed(&publication_seal_path(d, &hash), &mut |_| Ok(()))?;
                     verify_publication_seal(&candidate, publication, &seal)?;
                 }
-                // Checkpoint coverage never substitutes for candidate-bound graph verification.
-                crate::history_package::bound_history_objects_at(
-                    &self.disk_resources,
-                    &online,
-                    &candidate,
-                    None,
-                )?;
-                if candidate.sequence == checkpoint.sequence {
+                let admitted = if candidate.sequence == checkpoint.sequence {
                     if hash != checkpoint.candidate_hash
                         || candidate.snapshot_hash != checkpoint.snapshot_hash
                     {
@@ -315,12 +355,28 @@ impl Engine {
                             "checkpoint boundary differs from journal",
                         ));
                     }
-                    let mut next = verified_snapshot_at(
-                        &self.disk_resources,
-                        &online,
-                        &candidate.snapshot_hash,
-                    )?
-                    .into_state();
+                    Some(match admitted {
+                        Some(admitted) => admitted,
+                        None => verified_snapshot_at(
+                            &self.disk_resources,
+                            &online,
+                            &candidate.snapshot_hash,
+                        )?,
+                    })
+                } else {
+                    None
+                };
+                // Checkpoint coverage never substitutes for candidate-bound graph
+                // verification. At the boundary, retain the original State proof
+                // for history-set and projected-manifest comparisons as well.
+                crate::history_package::bound_history_objects_at(
+                    &self.disk_resources,
+                    &online,
+                    &candidate,
+                    admitted.as_ref(),
+                )?;
+                if let Some(admitted) = admitted {
+                    let mut next = admitted.into_state();
                     if publication.recovery.is_some() {
                         next.operations
                             .insert(candidate.operation_id, publication.result.clone());
@@ -330,8 +386,12 @@ impl Engine {
                 self.snapshot = Some(candidate.snapshot_hash);
                 continue;
             }
-            let admitted =
-                verified_snapshot_at(&self.disk_resources, &online, &candidate.snapshot_hash)?;
+            let admitted = match admitted {
+                Some(admitted) => admitted,
+                None => {
+                    verified_snapshot_at(&self.disk_resources, &online, &candidate.snapshot_hash)?
+                }
+            };
             let history_objects = crate::history_package::bound_history_objects_at(
                 &self.disk_resources,
                 &online,
@@ -459,9 +519,13 @@ impl Engine {
                 // A PUBLICATION object or a single frame is not the complete
                 // barrier. Preserve the old visible state until all configured
                 // synchronized receipts can be checked after restart.
-                if let Err(source) =
-                    verified_publication_seal_at(&self.disk_resources, &online, &candidate, &p)
-                {
+                let barrier = match barrier_failure {
+                    Some(source) => Err(source),
+                    None => {
+                        verified_publication_seal_at(&self.disk_resources, &online, &candidate, &p)
+                    }
+                };
+                if let Err(source) = barrier {
                     self.recovery_warnings
                         .seals
                         .push(super::RecoverySealFailure {

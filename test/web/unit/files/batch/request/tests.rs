@@ -313,6 +313,8 @@ fn malformed_http_success_preserves_the_batch_draft_until_a_real_poll_receipt() 
             "../../fixtures/namespace-batch-operation.json"
         ))
         .unwrap();
+        // Project the captured diagnostic into the outcome-only wire contract.
+        receipt.as_object_mut().unwrap().remove("current_health");
         receipt["operation_id"] = "original".into();
         assert_eq!(
             file_actions::record_receipt(state, "original", receipt),
@@ -689,6 +691,8 @@ fn registration_poll_reloads_its_branch_records_without_reposting() {
             file_actions::record_operation(state, crate::files::FileOperation::unknown("scope-original"));
             assert!(state.with_untracked(file_actions::pending));
             let mut receipt: Value = json_codec::from_str(include_str!("../../fixtures/namespace-batch-operation.json")).unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
+    receipt.as_object_mut().unwrap().remove("current_health");
             receipt["operation_id"] = "scope-original".into();
             receipt["operation_kind"] = "directory.scope.initialize".into();
             receipt["result"] = json!({"directory_branch_id":"registered","head_tree_id":"registered-tree"});
@@ -767,6 +771,8 @@ fn scope_receipt() -> Value {
         "../../fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
+    receipt.as_object_mut().unwrap().remove("current_health");
     receipt["operation_id"] = "scope-original".into();
     receipt["operation_kind"] = "directory.scope.initialize".into();
     receipt["result"] =

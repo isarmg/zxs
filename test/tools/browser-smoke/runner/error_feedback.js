@@ -92,7 +92,7 @@ window.fetch = async function(...args) {
             throw new DOMException('Smoke mutation reply lost after publication', 'AbortError');
         }
     }
-    if (state.operation && url.pathname === '/api/operations/' + state.operation) {
+    if (state.operation && url.pathname === '/api/operations/' + state.operation + '/outcome') {
         state.polls++;
         state.pollPaths.push(url.pathname);
         if (!state.recover) {

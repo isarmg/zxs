@@ -22,11 +22,19 @@ impl PausedBackend {
     }
 }
 impl Backend for PausedBackend {
+    fn operation_outcome(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+        self.enter();
+        self.inner.operation_outcome(identity, operation_id)
+    }
     fn operation(
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
+    ) -> Result<crate::OperationObservation, ApiError> {
         self.enter();
         self.inner.operation(identity, operation_id)
     }
@@ -792,6 +800,7 @@ impl Fixture {
 #[derive(Clone, Copy, Debug)]
 enum Request {
     Operation,
+    OperationOutcome,
     CommitWorkspace,
     Metadata,
     Administrator,
@@ -1179,6 +1188,9 @@ impl Request {
                 )
                 .map(|_| ()),
             Self::Operation => backend.operation(identity, fixture.operation).map(|_| ()),
+            Self::OperationOutcome => backend
+                .operation_outcome(identity, fixture.operation)
+                .map(|_| ()),
             Self::CommitWorkspace => backend
                 .commit_workspace(
                     identity,
@@ -1637,6 +1649,7 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::CreateFileBranchFromNode,
                 Request::RenameFileBranch,
                 Request::Operation,
+                Request::OperationOutcome,
                 Request::DiskWriteSessionOnBranch,
                 Request::DiskWriteSession,
                 Request::CreateDiskDirectory,
@@ -1873,6 +1886,7 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
     let before = fixture.snapshot();
     for request in [
         Request::Operation,
+        Request::OperationOutcome,
         Request::DiskWriteSessionOnBranch,
         Request::DiskWriteSession,
         Request::CreateDiskDirectory,

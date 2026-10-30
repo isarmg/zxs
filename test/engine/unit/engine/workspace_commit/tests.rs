@@ -96,7 +96,8 @@ fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
             .as_str(),
         "committed"
     );
-    assert_eq!(engine.workspaces.len(), 4);
+    assert_eq!(engine.workspaces.len(), 3);
+    assert_eq!(engine.workspace_capacity("alice").principal.cold_records, 1);
     for (id, workspace) in &unrelated {
         assert_eq!(
             canonical_json(&engine.workspace(id).unwrap()).unwrap(),

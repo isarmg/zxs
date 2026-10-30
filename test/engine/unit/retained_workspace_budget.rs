@@ -349,9 +349,10 @@ fn capacity_reports_resident_lifecycle_counts_and_only_selected_principal() {
     let mut e = f.initialize();
     let repo = repository(&mut e, 1);
     assert_eq!(capacity_report(&e, "admin")["warning"], "ok");
-    // Commits and aborted sessions with payloads remain resident and charged.
+    // Published saves retain bytes in cold storage; unpublished aborted payloads
+    // still reach the resident pressure threshold.
     save(&mut e, &repo.main_branch_id, "saved.txt", b"saved");
-    for _ in 0..3 {
+    for _ in 0..4 {
         let w = e.create_workspace(&repo.main_branch_id, "admin").unwrap();
         e.stage_bytes(&w.workspace_id, "retained", b"evidence")
             .unwrap();
@@ -359,6 +360,7 @@ fn capacity_reports_resident_lifecycle_counts_and_only_selected_principal() {
     }
     let report = capacity_report(&e, "admin");
     assert_eq!(report["global"]["records"]["used"], "4");
+    assert_eq!(report["global"]["cold_records"], "1");
     assert_eq!(report["principal"]["records"]["remaining"], "1");
     assert_eq!(report["warning"], "near_limit");
     assert_eq!(report["automatic_retirement"], true);
