@@ -1088,8 +1088,8 @@ pub struct State {
     pub file_write_origins: crate::TrackedMap<String>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_contexts: crate::TrackedMap<FileContext>,
-    #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub file_path_nodes: crate::TrackedMap<FilePathNode>,
+    #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
+    pub file_path_nodes: crate::TrackedRecords<FilePathNode>,
     #[serialization(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub file_metadata_nodes: crate::TrackedMap<FileMetadataNode>,
     #[serialization(default, skip_serializing_if = "SharedRecords::is_empty")]
