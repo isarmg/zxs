@@ -262,7 +262,9 @@ impl<R: Read> JournalFrameReader<R> {
                 "log frame checksum differs",
             ));
         }
-        let record: Record = decode_strict(&payload)?;
+        let record: Record = decode_strict(&payload).map_err(|source| {
+            Error::from(source).context(ErrorCode::LogCorrupt, "log record JSON is invalid")
+        })?;
         if canonical_json(&record)? != payload
             || record.previous_frame_hash != self.previous
             || record.sequence < self.last_sequence

@@ -288,3 +288,95 @@ fn batch_health_owns_configuration_after_engine_drop_and_rechecks_member_identit
         assert_frozen(&observed, &published);
     }
 }
+
+#[test]
+fn pending_receipt_reports_checksum_valid_malformed_record_as_log_corruption() {
+    use std::error::Error as _;
+    let (_root, mut engine, repo) = fixture();
+    let published = save(&mut engine, &repo.main_branch_id, b"published content");
+    let operation = storage_contract::OperationId::generate();
+    engine.inject_fault_once("after_accept_1");
+    assert!(
+        engine
+            .create_repository(
+                &storage_contract::RepositoryName::parse("pending malformed record").unwrap(),
+                "P01",
+                3,
+                "owner",
+                operation,
+            )
+            .is_err()
+    );
+    let expected = engine.operation_record(operation).unwrap().result().clone();
+    let state = canonical_json(engine.state.as_ref()).unwrap();
+    let originals: Vec<_> = engine
+        .members()
+        .iter()
+        .map(|disk| {
+            let path = log_path(disk);
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    // A checksum proves frame bytes, not the record schema they encode.
+    for payload in [
+        b"{truncated".as_slice(),
+        br#"{"record_type":"UNKNOWN"}"#.as_slice(),
+    ] {
+        let mut frame = originals[0].1[..8].to_vec();
+        frame.extend((payload.len() as u32).to_le_bytes());
+        frame.extend(payload);
+        let digest = blake3::hash(&frame);
+        frame.extend(digest.as_bytes());
+        for (path, _) in &originals {
+            fs::write(path, &frame).unwrap();
+        }
+        for error in [
+            engine.operation_record(operation).err().unwrap(),
+            engine.operation_owner(operation).unwrap_err(),
+        ] {
+            assert_eq!(error.code(), ErrorCode::LogCorrupt);
+            assert_eq!(error.message(), "log record JSON is invalid");
+            assert!(!error.is_retryable());
+            assert!(error.published_result().is_none());
+            let mut source = error.source();
+            let mut found = false;
+            while let Some(cause) = source {
+                found |= cause.is::<json_codec::Error>();
+                source = cause.source();
+            }
+            assert!(found, "malformed stored record retains its JSON cause");
+        }
+        // Published metadata does not consult unrelated damaged pending evidence.
+        assert_eq!(
+            engine
+                .operation_record(published.operation_id)
+                .unwrap()
+                .result(),
+            &published
+        );
+        assert_eq!(
+            engine
+                .operation_owner(published.operation_id)
+                .unwrap()
+                .as_deref(),
+            Some("owner")
+        );
+        assert_eq!(canonical_json(engine.state.as_ref()).unwrap(), state);
+        assert!(engine.blocked);
+        for (path, _) in &originals {
+            assert_eq!(fs::read(path).unwrap(), frame);
+        }
+    }
+    for (path, bytes) in originals {
+        fs::write(path, bytes).unwrap();
+    }
+    assert_eq!(
+        engine.operation_record(operation).unwrap().result(),
+        &expected
+    );
+    assert_eq!(
+        engine.operation_owner(operation).unwrap().as_deref(),
+        Some("owner")
+    );
+}
