@@ -63,9 +63,7 @@ impl Drop for PayloadProofReservation {
 
 pub(super) fn payload_proof_budget() -> Arc<PayloadProofBudget> {
     #[cfg(test)]
-    if let Some(budget) =
-        TEST_PROOF_BUDGET.with(|budget| budget.borrow().as_ref().map(Arc::clone))
-    {
+    if let Some(budget) = TEST_PROOF_BUDGET.with(|budget| budget.borrow().as_ref().map(Arc::clone)) {
         return budget;
     }
     static BUDGET: OnceLock<Arc<PayloadProofBudget>> = OnceLock::new();

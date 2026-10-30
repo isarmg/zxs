@@ -490,8 +490,7 @@ fn large_preparation_rejects_corruption_like_reference() {
 fn benchmark_large_preparation_hash_passes() {
     let _budget = test_budget(LEGACY_DESCRIPTOR_BUDGET);
     let payload = vec![0x5a; 1024 * 1024];
-    let (_temp, engine, candidate) =
-        fixture_with_payload(11, &payload);
+    let (_temp, engine, candidate) = fixture_with_payload(11, &payload);
     for round in 0..4 {
         for reference in if round % 2 == 0 {
             [true, false]
@@ -1126,7 +1125,10 @@ fn ordered_proofs_reject_version_slot_hash_and_count_mismatches() {
             changed.versions.pop();
         }
         assert_eq!(
-            fallback.validate(&engine.config, &changed).unwrap_err().code(),
+            fallback
+                .validate(&engine.config, &changed)
+                .unwrap_err()
+                .code(),
             ErrorCode::PreparationStale
         );
     }
