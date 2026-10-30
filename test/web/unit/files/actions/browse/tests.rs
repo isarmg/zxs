@@ -154,6 +154,95 @@ fn selected_file_history_read_requires_an_active_session() {
     });
 }
 
+fn history_response(note: &str) -> FileHistory {
+    FileHistory::parse(
+        json_codec::json!({"file_id":"file","branches":[],"selected_branch_id":null,"note":note}),
+        "file",
+    )
+    .unwrap()
+}
+
+fn history_load_state() -> State {
+    State {
+        authenticated: true,
+        session_epoch: 3,
+        files: crate::files::Model {
+            selected: Some(crate::files::test_entries::entry(
+                json_codec::json!({"file_id":"file"}),
+            )),
+            file_history: history_response("installed").into(),
+            history_loading: true,
+            history_generation: 8,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn stale_history_success_and_failure_cannot_settle_the_current_read() {
+    for result in [Ok(history_response("late")), Err(disk_read_error(503))] {
+        let mut state = history_load_state();
+        let installed = state.files.file_history.clone();
+        let selected = state.files.selected.clone();
+        complete_history_load(&mut state, 3, 7, "file", result).unwrap();
+        assert_eq!(state.files.file_history, installed);
+        assert_eq!(state.files.selected, selected);
+        assert!(state.files.history_loading);
+        assert_eq!(state.files.history_generation, 8);
+    }
+}
+
+#[test]
+fn history_completion_requires_its_session_and_selected_file() {
+    for (epoch, file) in [(2, "file"), (3, "another-file")] {
+        let mut state = history_load_state();
+        let installed = state.files.file_history.clone();
+        complete_history_load(&mut state, epoch, 8, file, Ok(history_response("late"))).unwrap();
+        assert_eq!(state.files.file_history, installed);
+        assert!(state.files.history_loading);
+        assert!(state.session_active());
+    }
+    let mut state = history_load_state();
+    state.session_transition = crate::ui::SessionTransition::LoggingOut;
+    let installed = state.files.file_history.clone();
+    complete_history_load(&mut state, 3, 8, "file", Ok(history_response("late"))).unwrap();
+    assert_eq!(state.files.file_history, installed);
+    assert!(state.files.history_loading);
+}
+
+#[test]
+fn current_history_completion_settles_loading_and_failure_discards_stale_heads() {
+    let mut state = history_load_state();
+    complete_history_load(&mut state, 3, 8, "file", Ok(history_response("current"))).unwrap();
+    assert_eq!(state.files.file_history["note"], "current");
+    assert!(!state.files.history_loading);
+    assert!(state.files.history_cancellation.is_none());
+    state.files.history_loading = true;
+    state.files.history_generation = 9;
+    let error = complete_history_load(&mut state, 3, 9, "file", Err(disk_read_error(503)))
+        .unwrap_err();
+    assert_eq!(error.status, 503);
+    assert!(state.files.file_history.is_null());
+    assert!(!state.files.history_loading);
+    assert!(state.files.history_cancellation.is_none());
+}
+
+#[test]
+fn history_response_session_authority_precedes_the_request_generation_fence() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(history_load_state());
+        let unauthorized: Result<FileHistory, api::Error> = Err(disk_read_error(401));
+        assert!(!accept_read_response(state, 2, &unauthorized));
+        assert!(state.with_untracked(State::session_active));
+        assert!(state.with_untracked(|s| s.files.history_loading));
+        // Even an obsolete history generation cannot hide a current-session 401.
+        assert!(!accept_read_response(state, 3, &unauthorized));
+        assert!(!state.with_untracked(State::session_active));
+        assert!(state.with_untracked(|s| s.files.selected.is_none()));
+    });
+}
+
 #[test]
 fn a_failed_disk_refresh_invalidates_readiness_without_discarding_cached_rows() {
     Owner::new().with(|| {
