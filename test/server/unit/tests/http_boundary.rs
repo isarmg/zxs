@@ -953,14 +953,16 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _id: &str,
-    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        _control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
         panic!("private branch_snapshot panic detail")
     }
     fn branches_snapshot(
         &self,
         _identity: &crate::auth::Identity,
         _id: &str,
-    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        _control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
         panic!("private branches_snapshot panic detail")
     }
     fn repositories_snapshot(

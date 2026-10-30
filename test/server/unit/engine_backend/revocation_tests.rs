@@ -637,17 +637,19 @@ impl Backend for PausedBackend {
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
         self.enter();
-        self.inner.branch_snapshot(identity, id)
+        self.inner.branch_snapshot(identity, id, control)
     }
     fn branches_snapshot(
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
         self.enter();
-        self.inner.branches_snapshot(identity, id)
+        self.inner.branches_snapshot(identity, id, control)
     }
     fn repositories_snapshot(
         &self,
@@ -1722,10 +1724,18 @@ impl Request {
                 )
                 .map(|_| ()),
             Self::BranchSnapshot => backend
-                .branch_snapshot(identity, &fixture.repo.main_branch_id)
+                .branch_snapshot(
+                    identity,
+                    &fixture.repo.main_branch_id,
+                    &crate::tests::history_read_control(),
+                )
                 .map(|_| ()),
             Self::BranchesSnapshot => backend
-                .branches_snapshot(identity, &fixture.repo.repository_id)
+                .branches_snapshot(
+                    identity,
+                    &fixture.repo.repository_id,
+                    &crate::tests::history_read_control(),
+                )
                 .map(|_| ()),
             Self::RepositoriesSnapshot => backend.repositories_snapshot(identity).map(|_| ()),
             Self::RepositorySnapshot => backend

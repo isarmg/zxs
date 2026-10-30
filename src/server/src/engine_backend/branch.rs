@@ -4,6 +4,7 @@ use storage_contract::State;
 use storage_contract::{Branch, BranchState};
 use storage_engine::Engine;
 
+#[cfg(test)]
 pub(super) fn capture(engine: &Engine, branch: &Branch) -> storage_engine::Result<BranchSnapshot> {
     capture_owned(engine, branch.clone())
 }
@@ -33,8 +34,8 @@ pub(super) fn capture_owned(
     pending.extend(pending_file_versions);
     let file = match file_id.as_ref() {
         Some(file) => {
-            // A file branch's head holds its one file entry; this early-stop
-            // walk reads a single page.
+            // Resolve the first canonical file entry. File heads are usually
+            // small, but this early-stop walk can read multiple pages.
             let visible = engine
                 .commit_namespace(&head_commit_id)
                 .expect("invariant: admitted branch head references an existing commit")

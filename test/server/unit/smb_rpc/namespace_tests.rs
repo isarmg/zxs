@@ -872,15 +872,17 @@ impl Backend for NamespaceFailure {
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
-        self.inner.branch_snapshot(identity, id)
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+        self.inner.branch_snapshot(identity, id, control)
     }
     fn branches_snapshot(
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
-        self.inner.branches_snapshot(identity, id)
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+        self.inner.branches_snapshot(identity, id, control)
     }
     fn repositories_snapshot(
         &self,
@@ -1962,15 +1964,17 @@ impl Backend for PreparationFailure {
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
-        self.inner.branch_snapshot(identity, id)
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+        self.inner.branch_snapshot(identity, id, control)
     }
     fn branches_snapshot(
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
-        self.inner.branches_snapshot(identity, id)
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+        self.inner.branches_snapshot(identity, id, control)
     }
     fn repositories_snapshot(
         &self,

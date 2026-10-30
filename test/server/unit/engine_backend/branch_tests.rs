@@ -145,12 +145,25 @@ fn branch_projection_matches_fixed_legacy_shapes_and_pending_precedence() {
                             state.content_states.insert("visible".into(), disposition);
                         }
                         let expected = old_branch_wire(&state, &branch, visible).unwrap();
+                        state
+                            .branches
+                            .insert(branch.branch_id.clone(), branch.clone());
                         storage_engine::test_support::replace_state(&mut engine, state.clone());
                         let snapshot = capture(&engine, &branch).unwrap();
                         let actual = json_codec::to_value(BranchResponse::from(snapshot)).unwrap();
                         assert_eq!(
                             actual, expected,
                             "file={file} source={source:?} visible={visible:?} state={disposition:?} alias={alias}"
+                        );
+                        let detached = crate::engine_backend::branch_metadata::single(
+                            engine.published_read_view(),
+                            &branch.branch_id,
+                            &crate::tests::history_read_control(),
+                        )
+                        .unwrap();
+                        assert_eq!(
+                            json_codec::from_slice::<Value>(detached.body()).unwrap(),
+                            expected
                         );
                         assert_eq!(actual["generation"], u64::MAX.to_string());
                         assert_eq!(actual.get("alias_of").is_some(), file);

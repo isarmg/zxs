@@ -136,7 +136,9 @@ mod history_read;
 pub use history_read::HistoryReadControl;
 mod backend_branch;
 mod http_graph;
-pub use backend_branch::{BranchSnapshot, ContentDispositionSnapshot, FileBranchSnapshot};
+pub use backend_branch::{
+    BranchMetadataSnapshot, BranchSnapshot, ContentDispositionSnapshot, FileBranchSnapshot,
+};
 mod backend_directory_selection;
 pub use backend_directory_selection::{
     DirectorySelectionBranch, DirectorySelectionEntryInput, DirectorySelectionSnapshot,
@@ -945,12 +947,14 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         branch: &str,
-    ) -> Result<BranchSnapshot, ApiError>;
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, ApiError>;
     fn branches_snapshot(
         &self,
         identity: &Identity,
         repository: &str,
-    ) -> Result<Vec<BranchSnapshot>, ApiError>;
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, ApiError>;
     fn repositories_snapshot(
         &self,
         identity: &Identity,
@@ -1697,15 +1701,19 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
-        self.backend.branch_snapshot(&self.current(identity)?, id)
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+        self.backend
+            .branch_snapshot(&self.current(identity)?, id, control)
     }
     fn branches_snapshot(
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
-        self.backend.branches_snapshot(&self.current(identity)?, id)
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+        self.backend
+            .branches_snapshot(&self.current(identity)?, id, control)
     }
     fn repositories_snapshot(
         &self,
@@ -2668,45 +2676,30 @@ async fn branch_info(
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<backend_branch::BranchResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
-            backend
-                .branch_snapshot(&identity, &id)
-                .map(backend_branch::BranchResponse::from)
-        })
-        .await
-        .map(Json)
+    connection: Option<http_routing::Extension<crate::http_shutdown::ResponseConnection>>,
+) -> Result<Response, ApiError> {
+    crate::history_read::run(
+        state,
+        connection.map(|http_routing::Extension(connection)| connection),
+        move |backend, control| backend.branch_snapshot(&identity, &id, control),
+        |snapshot| Ok(snapshot.into_encoded()),
+    )
+    .await
 }
 async fn branches(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiPath(id): ApiPath<String>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<backend_branch::BranchListResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
-            backend.branches_snapshot(&identity, &id).map(|branches| {
-                backend_branch::BranchListResponse {
-                    branches: branches
-                        .into_iter()
-                        .map(backend_branch::BranchResponse::from)
-                        .collect(),
-                }
-            })
-        })
-        .await
-        .map(Json)
+    connection: Option<http_routing::Extension<crate::http_shutdown::ResponseConnection>>,
+) -> Result<Response, ApiError> {
+    crate::history_read::run(
+        state,
+        connection.map(|http_routing::Extension(connection)| connection),
+        move |backend, control| backend.branches_snapshot(&identity, &id, control),
+        |snapshot| Ok(snapshot.into_encoded()),
+    )
+    .await
 }
 async fn tree(
     State(state): State<AppState>,

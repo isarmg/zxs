@@ -614,14 +614,16 @@ impl Backend for TestBackend {
         &self,
         _identity: &crate::auth::Identity,
         _id: &str,
-    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        _control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn branches_snapshot(
         &self,
         _identity: &crate::auth::Identity,
         _id: &str,
-    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        _control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn repositories_snapshot(
@@ -1892,15 +1894,17 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             &self,
             identity: &crate::auth::Identity,
             id: &str,
-        ) -> Result<crate::BranchSnapshot, crate::ApiError> {
-            self.delegate.branch_snapshot(identity, id)
+            control: &crate::HistoryReadControl,
+        ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+            self.delegate.branch_snapshot(identity, id, control)
         }
         fn branches_snapshot(
             &self,
             identity: &crate::auth::Identity,
             id: &str,
-        ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
-            self.delegate.branches_snapshot(identity, id)
+            control: &crate::HistoryReadControl,
+        ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+            self.delegate.branches_snapshot(identity, id, control)
         }
         fn repositories_snapshot(
             &self,
@@ -2439,5 +2443,9 @@ pub(crate) fn directory_scopes_value(snapshot: &crate::DirectoryScopesSnapshot) 
 }
 
 pub(crate) fn default_directory_value(snapshot: &crate::DefaultDirectoryBranchSnapshot) -> Value {
+    json_codec::from_slice(snapshot.body()).unwrap()
+}
+
+pub(crate) fn branch_metadata_value(snapshot: &crate::BranchMetadataSnapshot) -> Value {
     json_codec::from_slice(snapshot.body()).unwrap()
 }

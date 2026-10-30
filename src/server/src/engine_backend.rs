@@ -11,6 +11,7 @@ use admission::AdmissionEngine;
 pub mod application;
 use application::Application;
 mod branch;
+mod branch_metadata;
 mod content;
 mod default_directory;
 mod directory_scopes;
@@ -73,6 +74,21 @@ impl EngineBackend {
         result: Result<storage_contract::BackupConfigurationSnapshot, ApiError>,
         control: &crate::HistoryReadControl,
     ) -> Result<storage_contract::BackupConfigurationSnapshot, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::activity::checkpoint(control)?;
+        result
+    }
+
+    fn finish_branch_metadata(
+        &self,
+        identity: &Identity,
+        result: Result<crate::BranchMetadataSnapshot, ApiError>,
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, ApiError> {
         let engine = self
             .engine
             .lock()
@@ -1817,27 +1833,37 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         repo_for_branch(&engine, id)?;
-        branch::capture(&engine, &engine.state().branches[id]).map_err(error)
+        file_manager::activity::checkpoint(control)?;
+        let view = engine.published_read_view();
+        drop(engine);
+        let result = branch_metadata::single(view, id, control);
+        self.finish_branch_metadata(identity, result, control)
     }
     fn branches_snapshot(
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
-        let engine = self.engine.lock().expect("service state lock poisoned");
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        let repo = repository(&engine, id)?;
-        engine
-            .state()
-            .branches
-            .values()
-            .filter(|branch| branch.history_tree_id == repo.history_tree_id)
-            .map(|branch| branch::capture(&engine, branch).map_err(error))
-            .collect()
+        repository(&engine, id)?;
+        file_manager::activity::checkpoint(control)?;
+        let view = engine.published_read_view();
+        drop(engine);
+        let result = branch_metadata::list(view, id, control);
+        self.finish_branch_metadata(identity, result, control)
     }
     fn repositories_snapshot(
         &self,

@@ -363,6 +363,16 @@ HTTP 与历史读取共用扫描槽、最长 30 秒协作工作期限、既有�
 
 HTTP 复用历史读取扫描槽、最长 30 秒协作工作期限及既有 Body／实际传输块租约，移交既有编码分配而不再次序列化。完整响应沿用 8 MiB 字节上限，超限返回 RESOURCE_LIMIT_EXCEEDED，不分页、不截断；这明确收紧此前该 GET 无服务端响应字节上限的行为。逐分支与排序、编码前后检查取消；标准排序和编码本身是非逐比较／逐字段中断的协作段。扫描 O(B)、排序 O(M log M)、借用行 O(M)；旧 State、借用行及排序空间不受正文 8 MiB 上限约束。此边界不涵盖通用分支 GET 或创建分支，不宣称吞吐提升；新增测试须在绑定源码的独立执行中验证，静态检查不是运行通过。
 
+### 通用分支元数据完整读取边界
+
+`GET /api/branches/{branch}` 与 `GET /api/repositories/{repo}/branches` 在当前身份及原有资源准入后捕获既有 PublishedReadView，锁外读取并编码。单分支仍按 branch→history→repository 顺序准入，Migrated 返回 TREE_MOVED；列表只准入仓库，按 branches 的 BTreeMap key 顺序过滤相同 history_tree_id，保留 Migrated 行，不逐行套用单分支拒绝规则。创建分支仍使用原有 owned BranchSnapshot/capture_owned，未改变变更授权与响应事实。
+
+读取借用实际 `Tracked<BTreeMap<String, Branch>>` 记录及共享 head commit，不深复制 pending map。一个实际复用的 `BranchResponse<S,P>` 字段定义分别承载变更拥有值与读取借用值；具体 PendingUnion 用双有序迭代器输出唯一升序键，branch 值覆盖 head 值，包括空字符串，不分配额外 O(P) map。file_id 存在时始终调用捕获 HEAD 的 NamespaceTree::find_file，即使有 pending source 或显式 node；这是规范顺序的提前停止遍历，不保证只读一页，保留真实对象完整性/I/O错误。文件显示内容仍为 source.or(visible) 后过滤空值，空 source 抑制 visible 回退但仍 inherited/PENDING；node 取显式 file_node_id 否则 visible，非 Active 或 alias 存在时只读。临时 Entry 所需的少量文件展示 ID 仍拥有复制。
+
+列表先按原顺序解析所有命名空间文件事实，再编码，因此读取故障仍先于完整响应字节上限错误。非文件行不增加命名空间读取。只有完整编码字节离开读取函数，旧视图在最终锁前释放；完成时先核验当前身份，再检查取消和传播成功/错误，不增加 generation 或仓库存在性冲突。普通 head 前进仍保留捕获结果。
+
+两 GET 复用历史读取槽、最长 30 秒协作期限、8 MiB 完整编码上限与 Body/实际传输块许可；不分页、不截断，超限明确 RESOURCE_LIMIT_EXCEEDED。这收紧以前未限额的完整响应。逐行扫描与命名空间观察器检查取消，编码前后亦检查；JSON 编码是非逐字段中断的协作段。8 MiB 不是总堆上限：旧 State、列表借用行与少量拥有文件事实、命名空间解码/遍历前沿另计。扫描 O(B)，pending 编码按实际键数线性合并，所有列表文件查询工作保留，不宣称吞吐改进。新增测试与既有矩阵、创建-vs-GET、HTTP 租约回归须经独立绑定源码执行；静态检查不是运行通过。
+
 ### 活动历史投影边界
 
 `GET /api/file-manager/history` 直接调用 `Backend::activity_history`，不经过 JSON action 分派。HTTP 仍解析 query，但不以额外 query 字段改变业务结果；当前凭据复核在排队后的 Backend/Engine 准入发生。阻塞任务只持有 Backend、认证所有者和准入许可，取消 HTTP future 不提前释放后台工作所需资源。

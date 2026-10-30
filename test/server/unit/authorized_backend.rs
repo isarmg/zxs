@@ -1273,17 +1273,21 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record("branch_snapshot", Some(identity), json!({"id":id}))?;
-        Ok(recorded_branch())
+        crate::BranchMetadataSnapshot::encode(recorded_branch())
     }
     fn branches_snapshot(
         &self,
         identity: &crate::auth::Identity,
         id: &str,
-    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record("branches_snapshot", Some(identity), json!({"id":id}))?;
-        Ok(vec![recorded_branch()])
+        crate::BranchMetadataSnapshot::encode_list([recorded_branch()])
     }
     fn repositories_snapshot(
         &self,
@@ -2096,17 +2100,17 @@ impl Fixture {
             ),
             (
                 "branch_snapshot",
-                backend.branch_snapshot(identity, "branch").map(|snapshot| {
-                    assert_eq!(snapshot.generation, u64::MAX);
+                backend.branch_snapshot(identity, "branch", &crate::tests::history_read_control()).map(|snapshot| {
+                    assert_eq!(crate::tests::branch_metadata_value(&snapshot)["generation"], u64::MAX.to_string());
                     json!({"returned_by":"branch_snapshot"})
                 }),
             ),
             (
                 "branches_snapshot",
                 backend
-                    .branches_snapshot(identity, "repository")
+                    .branches_snapshot(identity, "repository", &crate::tests::history_read_control())
                     .map(|snapshots| {
-                        assert_eq!(snapshots[0].generation, u64::MAX);
+                        assert_eq!(crate::tests::branch_metadata_value(&snapshots)["branches"][0]["generation"], u64::MAX.to_string());
                         json!({"returned_by":"branches_snapshot"})
                     }),
             ),
@@ -2874,6 +2878,8 @@ fn history_route_fixture(
     };
     let app = Router::new()
         .route("/api/compare", post(crate::http_comparison::compare))
+        .route("/api/branches/{branch}", get(crate::branch_info))
+        .route("/api/repositories/{repo}/branches", get(crate::branches))
         .route(
             "/api/repositories/{repo}/default-branch",
             get(crate::default_branch),
@@ -3272,6 +3278,59 @@ async fn default_directory_response_retains_backend_permit_until_collected_bytes
 fn default_directory_request() -> http_routing::http::Request<http_routing::body::Body> {
     http_routing::http::Request::builder()
         .uri("/api/repositories/repository/default-branch?repository_id=ignored&unused=yes")
+        .body(http_routing::body::Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn branch_metadata_routes_retain_shared_capacity_until_cancelled_worker_checkpoint() {
+    for list in [false, true] {
+        cancelled_history_route_keeps_capacity(branch_metadata_request(list)).await;
+    }
+}
+
+#[tokio::test]
+async fn branch_metadata_responses_retain_backend_permit_until_collected_bytes_drop() {
+    use service_stack::ServiceExt;
+    for list in [false, true] {
+        let fixture = Fixture::new();
+        let (app, scans, backends) = history_route_fixture(&fixture);
+        let response = app.oneshot(branch_metadata_request(list)).await.unwrap();
+        assert_eq!(response.status(), ::http::StatusCode::OK);
+        assert_eq!(scans.available_permits(), 2);
+        assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS - 1);
+        let bytes = http_routing::body::to_bytes(
+            response.into_body(),
+            storage_contract::client_protocol::MAX_RESPONSE_BYTES,
+        )
+        .await
+        .unwrap();
+        let branch = json!({
+            "branch_id":"branch", "history_tree_id":"history", "name":"Main",
+            "head_commit_id":"head", "fork_commit_id":"fork", "branch_kind":"full",
+            "pending_file_versions":{}, "generation":u64::MAX.to_string(), "state":"active",
+            "materialized":true, "inherited":false, "content_state":"LIVE"
+        });
+        let expected = if list {
+            json!({"branches":[branch]})
+        } else {
+            branch
+        };
+        assert_eq!(json_codec::from_slice::<Value>(&bytes).unwrap(), expected);
+        assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS - 1);
+        drop(bytes);
+        assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS);
+    }
+}
+
+fn branch_metadata_request(list: bool) -> http_routing::http::Request<http_routing::body::Body> {
+    let uri = if list {
+        "/api/repositories/repository/branches?repository_id=ignored&unused=yes"
+    } else {
+        "/api/branches/branch?branch_id=ignored&unused=yes"
+    };
+    http_routing::http::Request::builder()
+        .uri(uri)
         .body(http_routing::body::Body::empty())
         .unwrap()
 }

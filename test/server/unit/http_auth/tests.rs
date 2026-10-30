@@ -1618,14 +1618,16 @@ impl crate::Backend for RetryProbe {
         &self,
         _identity: &crate::auth::Identity,
         _id: &str,
-    ) -> Result<crate::BranchSnapshot, crate::ApiError> {
+        _control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn branches_snapshot(
         &self,
         _identity: &crate::auth::Identity,
         _id: &str,
-    ) -> Result<Vec<crate::BranchSnapshot>, crate::ApiError> {
+        _control: &crate::HistoryReadControl,
+    ) -> Result<crate::BranchMetadataSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
     fn repositories_snapshot(
