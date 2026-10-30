@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget]
 
 permissions:
   contents: read
@@ -112,6 +112,10 @@ jobs:
               '286ff86e73f52657fbf6f96b1fcc846fee1a4173', 'a9b23370998eab91c8f090a7f1a843c2a27249fb',
           ):
               raise SystemExit('Detached history overlap requires the exact reviewed merged source and tree')
+          if os.environ['SCOPE'] == 'payload-proof-budget' and (source, tree) != (
+              '76448d18cd8e5ffabf2c4e912260ec196fc2c399', 'ca67e3156d1b5e19f1ab4091c1e7d70a965b34d3',
+          ):
+              raise SystemExit('Payload proof diagnostics require the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -510,6 +514,30 @@ jobs:
                   test_groups=json.dumps([dict(selector=name, count=1, exact=True, required=[name])
                       for name in history_overlap]), command='Two exact merged history writer-progress and revocation witnesses'),
           ]
+          payload_witnesses = [
+              'descriptor_capacity_is_a_bounded_fraction_of_the_initial_soft_limit',
+              'default_payload_proof_budget_is_process_shared',
+              'concurrent_reservations_never_exceed_capacity_and_are_reusable',
+              'thirty_three_replica_decisions_have_exact_hash_and_linear_lookup_costs',
+              'held_preparations_on_distinct_engines_share_the_same_reservation_pool',
+              'partial_verification_failure_releases_reservations_and_preserves_open_errors',
+              'detached_reservations_release_on_drop_and_stale_decision',
+              'decision_error_releases_retained_proofs',
+              'existing_copy_reservations_follow_installation_success_and_error',
+              'ordered_proofs_reject_version_slot_hash_and_count_mismatches',
+              'incomplete_private_admission_is_not_an_uncached_request',
+              'incomplete_private_version_admission_cannot_be_truncated_by_zip',
+          ]
+          groups['payload-proof-budget'] = [
+              dict(id='payload-proof-budget-format', format_base='15b4b04b2e33cfd91abc398c391ad4442c28452f',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='payload-proof-budget', cache='storage-engine', package='storage-engine',
+                  test_groups=json.dumps([dict(selector='engine::publication::', features=['fault-injection'],
+                      count=74, allow_ignored=True, ignored_suffixes=[
+                          'benchmark_large_preparation_hash_passes', 'changed_history_reads_in_isolated_child'],
+                      required_suffixes=payload_witnesses)]),
+                  command='cargo test --locked --offline -p storage-engine --lib --features fault-injection engine::publication:: -- --nocapture'),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -719,6 +747,8 @@ jobs:
           for index, group in enumerate(groups, 1):
               name = group['selector']
               base = ['cargo', 'test', '--locked', '--offline', '-p', group.get('package', os.environ['TEST_PACKAGE'])]
+              if group.get('features'):
+                  base.extend(['--features', ','.join(group['features'])])
               if group.get('test_target'):
                   base.extend(['--test', group['test_target']])
               else:
