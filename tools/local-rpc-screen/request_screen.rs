@@ -16,7 +16,7 @@ fn status() -> Value {
     json!({"vmhwm_kib":field("VmHWM:"),"vmrss_kib":field("VmRSS:")})
 }
 
-fn open_request(path: String, writable: bool) -> Request {
+fn open_request(path: String, writable: bool) -> Request<storage_contract::OperationId> {
     Request::Open { path, writable, create: false, truncate: false,
         exclusive: false, write_through: false }
 }
@@ -176,11 +176,15 @@ fn bounded_request_screen() {
         assert_eq!(response["closed"], true);
         assert_eq!(response["aborted"], false);
         assert!(operations.insert(operation));
-        let receipt = backend.operation_outcome(&identity, operation).unwrap().unwrap();
-        assert_eq!(receipt.commit_state, storage_contract::CommitState::Published);
-        assert_eq!(receipt.sequence, (commits + round + 1) as u64);
-        assert!(receipt.commit_id.is_some());
-        receipts.push(crate::operation_wire::operation_wire(receipt).unwrap());
+        backend.test_with_engine_locked(|engine| {
+            let record = engine.operation_record(operation).unwrap();
+            assert_eq!(record.owner(), Some("bench"));
+            let receipt = record.result();
+            assert_eq!(receipt.commit_state, storage_contract::CommitState::Published);
+            assert_eq!(receipt.sequence, (commits + round + 1) as u64);
+            assert!(receipt.commit_id.is_some());
+        });
+        receipts.push(json!({"operation_id":operation.to_string()}));
     }
     fs::write(root.join("rpc-receipts.json"), json_codec::to_vec(&receipts).unwrap()).unwrap();
     drop(client);
