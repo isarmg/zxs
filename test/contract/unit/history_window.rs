@@ -602,6 +602,50 @@ fn query_hash_normalizes_requested_and_resolved_paths_and_binds_every_scope_dime
 }
 
 #[test]
+fn tagged_history_unit_variants_reject_surplus_fields_without_changing_valid_wire() {
+    fn closed_variant<T>(variant: T)
+    where
+        T: data_serialization::Serialize
+            + data_serialization::de::DeserializeOwned
+            + std::fmt::Debug
+            + PartialEq,
+    {
+        let wire = json_codec::to_value(&variant).unwrap();
+        assert_eq!(json_codec::from_value::<T>(wire.clone()).unwrap(), variant);
+        for field in ["cursor", "node_id", "source_version_id", "future"] {
+            for value in [json!(null), json!("unexpected")] {
+                let mut bad = wire.clone();
+                bad[field] = value;
+                assert!(
+                    json_codec::from_value::<T>(bad.clone()).is_err(),
+                    "surplus field accepted: {bad}"
+                );
+            }
+        }
+    }
+
+    for collection in [
+        HistoryCollection::Nodes,
+        HistoryCollection::Versions,
+        HistoryCollection::Branches,
+        HistoryCollection::Merges,
+    ] {
+        closed_variant(collection);
+    }
+    closed_variant(HistoryPosition::Start);
+    closed_variant(HistoryContentSource::Owned);
+    closed_variant(HistoryParentSet::Complete);
+
+    let valid = cursor(
+        HistoryCollection::NodeParents { node_id: node(6) },
+        HistoryPosition::Start,
+    );
+    let mut payload = json_codec::to_value(valid.payload()).unwrap();
+    payload["position"]["parent_node_id"] = json!(node(2));
+    assert!(HistoryCursor::parse(&hex(&json_codec::to_vec(&payload).unwrap())).is_err());
+}
+
+#[test]
 fn parent_preview_and_endpoint_tokens_do_not_invent_loaded_nodes_or_complete_unread_sets() {
     let parent_cursor = cursor(
         HistoryCollection::NodeParents { node_id: node(6) },
