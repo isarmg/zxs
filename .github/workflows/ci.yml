@@ -16,7 +16,14 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import hashlib, io, json, os, urllib.request, zipfile
+          import hashlib, io, json, os, urllib.request, urllib.parse, zipfile
+          class ScopedRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  target=super().redirect_request(req,fp,code,msg,headers,newurl)
+                  if urllib.parse.urlsplit(req.full_url).netloc != urllib.parse.urlsplit(newurl).netloc:
+                      target.remove_header('Authorization')
+                  return target
+          opener=urllib.request.build_opener(ScopedRedirect())
           artifacts = {
           12953800059: 'aaf34fa6a4846c17b74d28b64a7691c9bb753e47bcf8a6ba01ffadc231aed692',
           12952744124: 'b3fc9baf38916a92d6d297f058bd4add876a50d4bac2154b10a9865b1013540b',
@@ -24,7 +31,7 @@ jobs:
           def api(path):
               req=urllib.request.Request('https://api.github.com/repos/isarmg/zxs/'+path,
                   headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
-              return urllib.request.urlopen(req,timeout=60)
+              return opener.open(req,timeout=60)
           run=json.load(api('actions/runs/40999882456'))
           assert run['head_sha']=='01cc620e5cddbb7632fcebacd0a6b5c2db94c1b0'
           assert run['status']=='completed' and run['conclusion']=='success'
