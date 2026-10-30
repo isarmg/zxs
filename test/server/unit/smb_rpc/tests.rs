@@ -2342,9 +2342,26 @@ fn unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence() {
         config.max_retained_workspaces_per_principal = 2;
     });
     let actor = identity(&shared);
-    let sequence = backend
-        .inner
-        .test_with_engine_locked(|engine| engine.state().sequence);
+    let (sequence, published, retained) = backend.inner.test_with_engine_locked(|engine| {
+        let initial = engine.workspace_capacity(&actor.principal);
+        assert_eq!(initial.principal.records.used, 0);
+        assert_eq!(initial.principal.cold_records, 1);
+        assert!(initial.principal.metadata_bytes.used > 0);
+        let head = &engine.state().branches[&branch].head_commit_id;
+        let operation = engine.state().commits[head].operation_id;
+        let published = engine.published_receipt(operation).unwrap().unwrap();
+        // A published payload is cold, not a resident quota fixture. Keep real
+        // unpublished evidence in one slot while SMB repeatedly uses the other.
+        let retained = engine.create_workspace(&branch, &actor.principal).unwrap();
+        engine
+            .stage_bytes(&retained.workspace_id, "retained", b"quota evidence")
+            .unwrap();
+        engine
+            .abort_workspace(&retained.workspace_id, &actor.principal)
+            .unwrap();
+        let retained = engine.workspace(&retained.workspace_id).unwrap();
+        (engine.state().sequence, published, retained)
+    });
     let mut client = session(shared.clone(), &branch);
     let before = client
         .find(&name_policy::LookupPath::parse("report.txt").unwrap())
@@ -2363,8 +2380,8 @@ fn unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence() {
         client.close(opened.handle, false).unwrap();
         closed.push(workspace);
         let capacity = backend.workspace_capacity(&actor).unwrap();
-        assert_eq!(capacity.principal.records.used, 1); // Original published payload remains resident.
-        assert_eq!(capacity.principal.cold_records, closed.len() as u64);
+        assert_eq!(capacity.principal.records.used, 1);
+        assert_eq!(capacity.principal.cold_records, closed.len() as u64 + 1);
     }
     assert_eq!(backend.uploads.load(Ordering::SeqCst), 0);
     assert_eq!(
@@ -2390,9 +2407,16 @@ fn unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence() {
     drop(client);
     assert!(source.is_file());
     assert!(source.with_extension("work.json").is_file());
+    assert_eq!(fs::read(&source).unwrap(), b"unconfirmed");
+    let recovery_bytes = fs::read(source.with_extension("work.json")).unwrap();
+    let recovery: Value = json_codec::from_slice(&recovery_bytes).unwrap();
+    assert_eq!(recovery["descriptor_changes_unconfirmed"], true);
+    assert_eq!(recovery["published"], false);
+    assert_eq!(recovery["dirty"], false);
     let capacity = backend.workspace_capacity(&actor).unwrap();
     assert_eq!(capacity.principal.records.used, 2);
-    assert_eq!(capacity.principal.cold_records, 16);
+    assert_eq!(capacity.principal.cold_records, 17);
+    assert_eq!(capacity.principal.records.remaining, 0);
     assert_eq!(
         backend
             .workspace(&actor, opened.workspace_id.as_deref().unwrap())
@@ -2400,11 +2424,41 @@ fn unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence() {
             .state,
         storage_contract::WorkspaceState::Open
     );
+    let mut next = session(shared.clone(), &branch);
+    let error = next
+        .open("report.txt".into(), true, false, false, false, false)
+        .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::ResourceLimit);
+    assert_eq!(backend.workspace_capacity(&actor).unwrap(), capacity);
+    assert_eq!(fs::read(&source).unwrap(), b"unconfirmed");
+    assert_eq!(
+        fs::read(source.with_extension("work.json")).unwrap(),
+        recovery_bytes
+    );
+    drop(next);
     drop(file);
     drop(shared);
     drop(backend);
     let engine = Engine::open(&temp.path().join("state")).unwrap();
     assert_eq!(engine.workspace_capacity(&actor.principal), capacity);
+    assert_eq!(engine.state().sequence, sequence);
+    assert_eq!(
+        engine.published_receipt(published.operation_id).unwrap(),
+        Some(published)
+    );
+    assert_eq!(
+        engine.workspace(&retained.workspace_id).unwrap().state,
+        storage_contract::WorkspaceState::Aborted
+    );
+    assert_eq!(
+        fs::read(&retained.files.values().next().unwrap().source_path).unwrap(),
+        b"quota evidence"
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"unconfirmed");
+    assert_eq!(
+        fs::read(source.with_extension("work.json")).unwrap(),
+        recovery_bytes
+    );
     for id in closed {
         assert_eq!(
             engine.workspace(&id).unwrap().state,

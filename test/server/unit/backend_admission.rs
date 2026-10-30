@@ -1286,6 +1286,21 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
 async fn typed_workspace_jobs_retain_admission_until_blocking_completion_after_cancellation() {
     for &(method, path) in TYPED_BACKEND_ROUTES {
         let slots = match path {
+            // Bounded history, directory scopes and listings share the two scan
+            // permits, even though the general backend pool has eight slots.
+            path if method == "GET"
+                && (path.starts_with("/api/file-manager/files/file/history")
+                    || path.starts_with("/api/files/file/history")
+                    || path.starts_with("/api/repositories/repository/directory-branches")
+                    || path == "/api/file-manager/disks/P01/entries") =>
+            {
+                2
+            }
+            "/api/compare" | "/api/repositories/repository/directory-branches"
+                if method == "POST" =>
+            {
+                2
+            }
             "/api/repositories/repo/backup-configuration" if method == "GET" => 2,
             "/api/branches/branch/tree?commit_id=commit"
             | "/api/history-trees/history/graph?collection=commits"

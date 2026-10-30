@@ -89,7 +89,11 @@ fn returned_read_only_engine_reports_the_publication_seal_cause_only_once() {
     capture.rewind().unwrap();
     let mut log = String::new();
     capture.read_to_string(&mut log).unwrap();
-    assert_eq!(log.matches("recovery seal verification failed").count(), 1);
+    assert_eq!(
+        log.matches("recovery observed a seal verification failure")
+            .count(),
+        1
+    );
     assert!(log.contains("Publication"));
     assert!(log.contains("candidate_hash"));
     assert!(log.contains("NotFound"));
