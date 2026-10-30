@@ -406,6 +406,10 @@ pub struct HistoryPageIdentity {
     pub context: HistoryResolvedContext,
     pub query_hash: HistoryQueryHash,
     pub limit: HistoryPageLimit,
+    /// Effective Config.max_entries for complete merge/tag actions; independent
+    /// of the final encoded mutation request's existing 1 MiB boundary.
+    #[serialization(with = "crate::u64_string")]
+    pub action_max_entries: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -509,7 +513,7 @@ pub struct HistoryBranchSummary {
     pub name: String,
     pub head_commit_id: HistoryCommitId,
     pub fork_commit_id: HistoryCommitId,
-    pub node_id: HistoryNodeId,
+    pub node_id: Option<HistoryNodeId>,
     pub state: crate::BranchState,
     pub branch_kind: crate::BranchKind,
     #[serialization(with = "crate::u64_string")]
@@ -622,3 +626,7 @@ pub enum HistoryWindowPage {
         next_cursor: Option<HistoryCursor>,
     },
 }
+
+#[cfg(test)]
+#[path = "../../../test/contract/unit/history_window.rs"]
+mod tests;
