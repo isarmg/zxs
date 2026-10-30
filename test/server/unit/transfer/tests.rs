@@ -699,11 +699,18 @@ async fn stale_if_range_returns_complete_content_and_head_retains_length() {
 
 struct RetainedGenerationBackend;
 impl crate::Backend for RetainedGenerationBackend {
+    fn operation_outcome(
+        &self,
+        _: &crate::auth::Identity,
+        _: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationOutcome, crate::ApiError> {
+        unreachable!("test does not query operation outcomes")
+    }
     fn operation(
         &self,
         _: &crate::auth::Identity,
         _: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, crate::ApiError> {
+    ) -> Result<crate::OperationObservation, crate::ApiError> {
         unreachable!("test does not query operations")
     }
     fn commit_workspace(

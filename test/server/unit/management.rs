@@ -37,10 +37,10 @@ fn managed_readiness_exposes_real_index_failure_without_rejecting_published_oper
         storage_contract::CommitState::Published
     );
     let receipt =
-        crate::operation_wire::operation_wire(engine.state().operations[&operation].clone())
+        crate::operation_wire::operation_wire(engine.state().operations[&operation].clone().into())
             .unwrap();
     assert_eq!(
-        projection_failure::receipt_without_observation_time(&receipt)["commit_state"],
+        projection_failure::receipt_outcome(&receipt)["commit_state"],
         "PUBLISHED"
     );
     assert_eq!(

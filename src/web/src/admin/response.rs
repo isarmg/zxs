@@ -28,6 +28,9 @@ pub(super) enum Contract {
     Operation {
         id: String,
     },
+    OperationOutcome {
+        id: String,
+    },
     Plan {
         id: String,
     },
@@ -65,7 +68,10 @@ pub(super) enum Contract {
 impl Contract {
     pub(super) fn is_write(&self) -> bool {
         match self {
-            Self::Inspect | Self::Operation { .. } | Self::Plan { .. } => false,
+            Self::Inspect
+            | Self::Operation { .. }
+            | Self::OperationOutcome { .. }
+            | Self::Plan { .. } => false,
             Self::Repository { .. }
             | Self::Branch { .. }
             | Self::MergeLink { .. }
@@ -77,9 +83,11 @@ impl Contract {
 
     pub(super) fn mutation_operation(&self) -> Option<&str> {
         match self {
-            Self::Inspect | Self::Operation { .. } | Self::Plan { .. } | Self::Preview { .. } => {
-                None
-            }
+            Self::Inspect
+            | Self::Operation { .. }
+            | Self::OperationOutcome { .. }
+            | Self::Plan { .. }
+            | Self::Preview { .. } => None,
             Self::Repository { operation, .. }
             | Self::Branch { operation, .. }
             | Self::MergeLink { operation, .. }
@@ -92,6 +100,10 @@ impl Contract {
         let valid = match self {
             Self::Inspect => true,
             Self::Operation { id } => {
+                storage_contract::client_protocol::operation_observation_status(&value).is_some()
+                    && value["operation_id"].as_str() == Some(id.as_str())
+            }
+            Self::OperationOutcome { id } => {
                 operation_shape(&value) && value["operation_id"].as_str() == Some(id.as_str())
             }
             Self::Plan { id } => {

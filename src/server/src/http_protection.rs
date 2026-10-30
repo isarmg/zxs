@@ -185,7 +185,7 @@ pub(crate) async fn update_policy(
             let command = parse_policy(body)?;
             backend
                 .update_protection_policy(&identity, command)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)
@@ -207,7 +207,7 @@ pub(crate) async fn update_placement_rule(
             let command = parse_placement(body)?;
             backend
                 .update_placement_rule(&identity, command)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)

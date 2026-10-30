@@ -389,4 +389,13 @@ fn fixed_inspections_and_identity_queries_keep_get_encoding_and_contracts() {
     let queried = query(QueryKind::Operation, &fields).unwrap();
     assert_eq!(original.path, queried.path);
     assert_eq!(original.contract, queried.contract);
+    let outcome = operation_outcome("id/!");
+    assert_eq!(outcome.path, "/api/operations/id%2F!/outcome");
+    assert_eq!(
+        outcome.contract,
+        Contract::OperationOutcome { id: "id/!".into() }
+    );
+    assert_eq!(outcome.method, "GET");
+    assert!(outcome.body.is_none());
+    assert!(!outcome.contract.is_write());
 }

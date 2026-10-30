@@ -179,7 +179,7 @@ impl Engine {
                 && op.result["plan_id"].as_str() == Some(id)
                 && self.operation_owner(operation)?.as_deref() == Some(principal)
             {
-                return self.operation(operation);
+                return Ok(self.operation_record(operation)?.into_result());
             }
             return Err(Error::new(
                 storage_contract::ErrorCode::IdempotencyKeyReused,
@@ -270,7 +270,7 @@ impl Engine {
                 if matches!(op.kind.as_str(), "content.purge" | "history.split") {
                     self.cleanup_purged()?;
                 }
-                return self.operation(operation);
+                return Ok(self.operation_record(operation)?.into_result());
             }
             return Err(Error::new(
                 storage_contract::ErrorCode::IdempotencyKeyReused,

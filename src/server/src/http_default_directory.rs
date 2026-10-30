@@ -53,7 +53,7 @@ pub(crate) async fn select(
             let command = parse(body)?;
             backend
                 .select_default_directory_branch(&identity, command)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)
@@ -129,7 +129,7 @@ pub(crate) async fn rename(
             let command = parse_rename(body)?;
             backend
                 .rename_directory_branch(&identity, command)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)

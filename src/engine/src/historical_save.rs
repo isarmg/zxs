@@ -353,7 +353,7 @@ impl Engine {
                 && previous.result["plan_id"].as_str() == Some(id)
                 && self.operation_owner(operation)?.as_deref() == Some(principal)
             {
-                return self.operation(operation);
+                return Ok(self.operation_record(operation)?.into_result());
             }
             return Err(Error::new(
                 storage_contract::ErrorCode::IdempotencyKeyReused,

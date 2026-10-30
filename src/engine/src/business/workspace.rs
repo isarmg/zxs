@@ -1130,7 +1130,7 @@ impl Engine {
     ) -> Result<WorkspaceMutation> {
         let workspace = self.workspace(&request.workspace_id)?;
         let replay = if self.state.operations.contains_key(&request.operation_id) {
-            Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
+            Some(self.operation_record(request.operation_id)?.into_result())
         } else {
             None
         };
@@ -1409,14 +1409,14 @@ impl crate::engine::PlanningContext<'_> {
         workspace: Workspace,
         request: CommitRequest,
         wire: Option<crate::wire::WireCommit>,
-        replay: Option<crate::engine::OperationReadPlan>,
+        replay: Option<OperationResult>,
     ) -> Result<WorkspaceMutation> {
         if let Some(result) = replay {
             let digest = native_commit_digest(&workspace, &request)?;
             self.validate_workspace_commit_replay(&workspace, &request, &digest)?;
             self.require_saved_workspace_request(&workspace, &request)?;
             return Ok(WorkspaceMutation {
-                mutation: MutationPlan::Existing(result.check().into_result()),
+                mutation: MutationPlan::Existing(result),
                 workspace,
                 request,
                 wire,

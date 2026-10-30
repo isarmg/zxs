@@ -723,7 +723,7 @@ impl Engine {
         }
         if let Some(result) = self.state.operations.get(&plan.operation_id) {
             if result.result["recovery_id"].as_str() == Some(id) {
-                return self.operation(plan.operation_id);
+                return Ok(self.operation_record(plan.operation_id)?.into_result());
             }
             return Err(required(
                 "the original operation already has a different published result",
@@ -938,7 +938,7 @@ impl Engine {
             )));
         }
         self.blocked = false;
-        self.operation(result.operation_id)
+        Ok(self.operation_record(result.operation_id)?.into_result())
     }
 }
 

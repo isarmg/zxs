@@ -36,6 +36,8 @@ fn wire_operation() -> Value {
         "../files/fixtures/namespace-batch-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
+    value.as_object_mut().unwrap().remove("current_health");
     value["operation_id"] = "op_00000000000000000000000000000001".into();
     value
 }
@@ -74,7 +76,7 @@ fn operation_contracts_reject_missing_wrong_and_nonterminal_receipts() {
 }
 #[test]
 fn inspection_must_match_original_operation_and_terminal_state() {
-    let c = request::operation(OPERATION).contract;
+    let c = request::operation_outcome(OPERATION).contract;
     assert!(c.validate(wire_operation()).is_ok());
     assert!(c.validate(raw_operation()).is_err());
     assert!(terminal(
@@ -96,11 +98,13 @@ fn inspection_must_match_original_operation_and_terminal_state() {
 #[test]
 fn administration_uses_the_shared_current_wire_evidence() {
     use storage_contract::client_protocol::{OperationStatus, operation_status};
-    let c = request::operation(OPERATION).contract;
+    let c = request::operation_outcome(OPERATION).contract;
     let mut content: Value = json_codec::from_str(include_str!(
         "../files/fixtures/damaged-published-save-operation.json"
     ))
     .unwrap();
+    // Project the captured diagnostic into the outcome-only wire contract.
+    content.as_object_mut().unwrap().remove("current_health");
     content["operation_id"] = "op_00000000000000000000000000000001".into();
     for valid in [wire_operation(), content] {
         assert!(c.validate(valid.clone()).is_ok());
@@ -109,7 +113,7 @@ fn administration_uses_the_shared_current_wire_evidence() {
         let mut malformed = valid.clone();
         malformed["result"] = Value::Null;
         let mut incomplete = valid.clone();
-        incomplete.as_object_mut().unwrap().remove("current_health");
+        incomplete.as_object_mut().unwrap().remove("commit_state");
         let mut contradictory = valid.clone();
         contradictory["state"] = "in_doubt".into();
         let mut extra = valid.clone();
@@ -127,6 +131,24 @@ fn administration_uses_the_shared_current_wire_evidence() {
             assert_eq!(operation_status(&invalid), None);
         }
     }
+}
+
+#[test]
+fn diagnostic_and_outcome_contracts_cannot_be_interchanged() {
+    let outcome = wire_operation();
+    let mut diagnostic = outcome.clone();
+    diagnostic["current_health"] =
+        json!({"state":"UNAVAILABLE","checked_at":"2026-10-24T05:33:19Z"});
+    let inspect = request::operation(OPERATION).contract;
+    let reconcile = request::operation_outcome(OPERATION).contract;
+    assert!(inspect.validate(diagnostic.clone()).is_ok());
+    assert!(inspect.validate(outcome.clone()).is_err());
+    assert!(reconcile.validate(outcome).is_ok());
+    assert!(reconcile.validate(diagnostic.clone()).is_err());
+    diagnostic["current_health"] = Value::Null;
+    assert!(inspect.validate(diagnostic.clone()).is_ok());
+    diagnostic["operation_id"] = "unrelated".into();
+    assert!(inspect.validate(diagnostic).is_err());
 }
 #[test]
 fn domain_and_preview_contracts_accept_real_shapes_not_generic_receipts() {

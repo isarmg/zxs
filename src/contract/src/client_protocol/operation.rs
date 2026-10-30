@@ -15,6 +15,22 @@ pub enum OperationStatus {
 /// Validate the current receipt before interpreting publication evidence. None
 /// means malformed, not rejected: callers must retain their original operation.
 pub fn operation_status(value: &Value) -> Option<OperationStatus> {
+    parse_operation(value, Projection::Outcome)
+}
+
+/// Diagnostic responses explicitly carry either a completed health observation
+/// or null when no published content scope was inspected.
+pub fn operation_observation_status(value: &Value) -> Option<OperationStatus> {
+    parse_operation(value, Projection::Observation)
+}
+
+#[derive(Clone, Copy)]
+enum Projection {
+    Outcome,
+    Observation,
+}
+
+fn parse_operation(value: &Value, projection: Projection) -> Option<OperationStatus> {
     let content = value["operation_kind"] == "content_save";
     let fields = if content {
         &[
@@ -25,7 +41,6 @@ pub fn operation_status(value: &Value) -> Option<OperationStatus> {
             "commit_state",
             "result",
             "error",
-            "current_health",
         ][..]
     } else {
         &[
@@ -36,12 +51,27 @@ pub fn operation_status(value: &Value) -> Option<OperationStatus> {
             "commit_state",
             "result",
             "error",
-            "current_health",
             "protection_at_publish",
             "publication_sequence",
         ][..]
     };
-    if !keys(value, fields)
+    let shape = match projection {
+        Projection::Outcome => keys(value, fields),
+        Projection::Observation => value.as_object().is_some_and(|object| {
+            object.len() == fields.len() + 1
+                && fields.iter().all(|field| object.contains_key(*field))
+                && object.get("current_health").is_some_and(|health| {
+                    health.is_null()
+                        || (keys(health, &["state", "checked_at"])
+                            && strings(health, &["checked_at"])
+                            && matches!(
+                                health["state"].as_str(),
+                                Some("HEALTHY" | "DEGRADED" | "UNAVAILABLE" | "UNKNOWN")
+                            ))
+                })
+        }),
+    };
+    if !shape
         || !strings(value, &["operation_id", "operation_kind"])
         || !value["request_digest"].as_str().is_some_and(|digest| {
             digest.len() == 64
@@ -49,16 +79,19 @@ pub fn operation_status(value: &Value) -> Option<OperationStatus> {
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         })
-        || !keys(&value["current_health"], &["state", "checked_at"])
-        || !strings(&value["current_health"], &["checked_at"])
-        || !matches!(
-            value["current_health"]["state"].as_str(),
-            Some("HEALTHY" | "DEGRADED" | "UNAVAILABLE" | "UNKNOWN")
-        )
     {
         return None;
     }
     let commit = json_codec::from_value::<CommitState>(value["commit_state"].clone()).ok()?;
+    if matches!(projection, Projection::Observation)
+        && !matches!(
+            commit,
+            CommitState::Published | CommitState::Acked | CommitState::PublishedDegraded
+        )
+        && !value["current_health"].is_null()
+    {
+        return None;
+    }
     if content {
         content_status(value, commit)
     } else {
