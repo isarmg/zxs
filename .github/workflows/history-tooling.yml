@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, smb-stream]
 
 permissions:
   contents: read
@@ -84,6 +84,10 @@ jobs:
               '8ed1547d313c29bf1a20f44dac534274e24864bc', '13f10077fbb58af0a46f68eddb867f70982c4b20',
           ):
               raise SystemExit('Stage B diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'smb-stream' and (source, tree) != (
+              '486bb70f01f5d47d5b56193dce2381d0e44d2e8f', '4b9877902b78313d9098d86a812809054acf3ed9',
+          ):
+              raise SystemExit('SMB stream diagnostics require the exact reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -323,7 +327,8 @@ jobs:
                   command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
               dict(id='namespace-stage-b-namespace', cache='storage-engine', package='storage-engine',
                   test_groups=json.dumps([
-                      dict(selector='namespace', allow_ignored=True, ignored_suffixes=['parsed_path_namespace_cost']),
+                      dict(selector='namespace', allow_ignored=True, ignored_suffixes=[
+                          'parsed_path_namespace_cost', 'enrich_canonical_publication_fixture_namespace_objects']),
                       dict(selector='segment_store::tests', allow_ignored=True,
                           required_suffixes=['admission_namespace_cache_moves_nodes_budget_and_fifo_without_loading']),
                   ]), command='Reviewed namespace and segment store module commands'),
@@ -337,6 +342,49 @@ jobs:
                       dict(selector='engine::integrity_scrub', allow_ignored=True),
                   ]), command='Reviewed recovery and integrity scrub module commands'),
           ]
+          sdk_witnesses = [
+              'module::tests::sync_and_async_immutable_reads_use_verified_rpc_bytes_with_a_directory_placeholder',
+              'module::tests::typed_handle_stat_matches_path_stat_without_json_reencoding',
+              'module::asynchronous::tests::sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth',
+          ]
+          sdk_command = '\n'.join([
+              'bash .github/scripts/smb-sdk.sh',
+              'sdk_source="$PWD/target/smb-sdk/samba-4.23.0"',
+              'export ZXS_SMB_SDK_SOURCE="$sdk_source" ZXS_SMB_SDK_BUILD="$sdk_source/bin/default"',
+              'export ZXS_SMB_SDK_CLANG_ARGS_JSON="${ZXS_SMB_SDK_CLANG_ARGS_JSON:-[]}"',
+              'export LD_LIBRARY_PATH="$sdk_source/bin/shared:$sdk_source/bin/shared/private${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"',
+              'cargo test --locked --offline -p smb-vfs -- --list 2>&1 | tee .diagnostics/sdk-list.log',
+              'cargo test --locked --offline -p smb-vfs -- --ignored --list 2>&1 | tee .diagnostics/sdk-ignored-list.log',
+              'cp target/smb-sdk/vfs-panic-abort.log .diagnostics/sdk-panic-abort.log',
+          ])
+          groups['smb-stream'] = [
+              dict(id='smb-stream-format', format_base='7ed4e001f428377807e0d2510fd5cc2ff65bb9f2',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check'),
+              dict(id='smb-stream-engine-protocol', cache='server', package='storage-engine',
+                  test_groups=json.dumps([
+                      dict(selector='engine::reads::tests::', count=25, required_suffixes=[
+                          'read_leases_release_once_across_plan_moves_and_engine_drop',
+                          'export_verifies_while_copying_and_falls_back_from_bad_replica']),
+                      dict(selector='', package='smb-protocol', allow_ignored=True, required=[
+                          'client::tests::read::bounded_reads_continue_after_chunk_boundaries_and_stop_at_eof',
+                          'client::tests::read::malformed_read_disconnects_every_clone_and_business_failure_does_not']),
+                  ]), command='Engine read ownership and full protocol/client unit commands'),
+              dict(id='smb-stream-server', cache='server', package='storage-server',
+                  test_groups=json.dumps([
+                      dict(selector='content_proof_budget::tests::', count=1, required_suffixes=[
+                          'concurrent_content_opens_share_capacity_until_the_actual_owner_drops']),
+                      dict(selector='smb_rpc::', allow_ignored=True, required_suffixes=[
+                          'read_open_does_not_scan_the_body_and_never_transfers_a_payload_descriptor',
+                          'read_cache_serves_the_same_verified_bytes_but_still_checks_live_authorization',
+                          'read_uses_a_verified_same_version_fallback',
+                          'cached_rpc_read_rejects_a_rebound_session',
+                          'first_chunk_succeeds_without_verifying_an_unrequested_corrupt_tail',
+                          'held_payload_identity_survives_path_replacement_and_late_truncation_is_an_error',
+                      ]),
+                  ]), command='Shared proof budget and full SMB RPC unit commands'),
+              dict(id='smb-stream-real-sdk', cache='smb-vfs', smb_sdk=True,
+                  required_names=json.dumps(sdk_witnesses), command=sdk_command),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -349,7 +397,7 @@ jobs:
     name: Diagnostic (${{ matrix.id }})
     needs: select
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ matrix.web_production == true && 45 || 30 }}
+    timeout-minutes: ${{ (matrix.web_production == true || matrix.smb_sdk == true) && 45 || 30 }}
     strategy:
       fail-fast: false
       max-parallel: 6
@@ -424,6 +472,19 @@ jobs:
           key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
           restore-keys: |
             rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install official Ubuntu Samba SDK build prerequisites
+        if: matrix.smb_sdk == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential pkg-config python3 perl libparse-yapp-perl flex bison m4 \
+            clang libclang-dev libgnutls28-dev libkrb5-dev zlib1g-dev libpopt-dev
+      - name: Cache pinned configured Samba source and real libraries
+        if: matrix.smb_sdk == true
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/smb-sdk
+          key: samba-4.23.0-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.github/scripts/smb-sdk.sh') }}
       - name: Check feature-changed Rust files without modifying source
         if: matrix.format_base != ''
         run: |
@@ -532,7 +593,10 @@ jobs:
           ]
           for index, group in enumerate(groups, 1):
               name = group['selector']
-              base = ['cargo', 'test', '--locked', '--offline', '-p', os.environ['TEST_PACKAGE'], '--lib', name, '--']
+              base = ['cargo', 'test', '--locked', '--offline', '-p', group.get('package', os.environ['TEST_PACKAGE']), '--lib']
+              if name:
+                  base.append(name)
+              base.append('--')
               if group.get('exact'):
                   base.append('--exact')
               def run(label, flags):
@@ -614,6 +678,26 @@ jobs:
           PY
           fi
           exit "$status"
+      - name: Verify actual real SDK inventory and callback witnesses
+        if: matrix.smb_sdk == true
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+          names = [line[:-6] for line in Path('.diagnostics/sdk-list.log').read_text().splitlines() if line.endswith(': test')]
+          ignored = [line[:-6] for line in Path('.diagnostics/sdk-ignored-list.log').read_text().splitlines() if line.endswith(': test')]
+          log = Path('.diagnostics/test.log').read_text()
+          counts = [tuple(map(int, row)) for row in re.findall(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', log)]
+          if len(names) <= len(ignored) or sum(map(sum, counts)) != len(names) or sum(row[2] for row in counts) != len(ignored) or any(row[1] for row in counts):
+              raise SystemExit(f'Real SDK execution does not match actual inventory: {len(names)}, {counts!r}')
+          for name in json.loads(os.environ['REQUIRED_NAMES']):
+              if names.count(name) != 1 or name in ignored or not re.search(r'^test ' + re.escape(name) + r' \.\.\. ok$', log, re.MULTILINE):
+                  raise SystemExit(f'Real Samba SDK callback witness did not pass: {name}')
+          Path('.diagnostics/sdk-results.json').write_text(json.dumps(dict(tests=names, ignored=ignored, summaries=counts), indent=2))
+          print(f'Verified real Samba SDK tests: {counts!r}; required callbacks passed')
+          PY
       - name: Retain production assets for native acceptance in this run
         if: matrix.web_production == true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
