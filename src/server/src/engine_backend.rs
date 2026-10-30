@@ -66,6 +66,21 @@ pub struct EngineBackend {
     operation_health_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 impl EngineBackend {
+    fn finish_directory_scopes(
+        &self,
+        identity: &Identity,
+        result: Result<crate::DirectoryScopesSnapshot, ApiError>,
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::DirectoryScopesSnapshot, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::activity::checkpoint(control)?;
+        result
+    }
+
     fn finish_directory_selection(
         &self,
         identity: &Identity,
@@ -1478,16 +1493,19 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectoryScopes<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
         let engine = self
             .engine
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        let mut snapshot = directory_scopes::capture(&engine, request)?;
+        repository(&engine, request.repository_id)?;
+        file_manager::activity::checkpoint(control)?;
+        let view = engine.published_read_view();
         drop(engine);
-        directory_scopes::sort(&mut snapshot);
-        Ok(snapshot)
+        let result = directory_scopes::read(view, request, control);
+        self.finish_directory_scopes(identity, result, control)
     }
     fn default_directory_branch(
         &self,

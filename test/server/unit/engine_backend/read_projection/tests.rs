@@ -1421,12 +1421,13 @@ fn directory_scope_order_agrees_across_full_summary_listing_and_selection() {
                     filter: &filter,
                     projection,
                 },
+                &crate::tests::history_read_control(),
             )
             .unwrap();
         let ids = match snapshot.branches {
             DirectoryScopeRows::Full(branches) => branches
                 .into_iter()
-                .map(|row| row.branch.directory_branch_id)
+                .map(|row| row.branch.directory_branch_id.clone())
                 .collect::<Vec<_>>(),
             DirectoryScopeRows::Summary(branches) => branches
                 .into_iter()
@@ -1484,6 +1485,7 @@ fn directory_scope_order_agrees_across_full_summary_listing_and_selection() {
                     filter: &missing,
                     projection,
                 },
+                &crate::tests::history_read_control(),
             )
             .unwrap();
         match snapshot.branches {
@@ -1497,6 +1499,7 @@ fn directory_scope_order_agrees_across_full_summary_listing_and_selection() {
                 filter: &filter,
                 projection,
             },
+            &crate::tests::history_read_control(),
         ) else {
             panic!("missing repository admitted");
         };
@@ -1534,7 +1537,12 @@ fn owned_directory_scope_sort_preserves_tie_breaks_and_current_flags() {
             branch.sequence = sequence;
             branch.directory_branch_id = id.into();
             DirectoryScopeBranch {
-                branch,
+                file_count: branch
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
+                    .count(),
+                branch: std::sync::Arc::new(branch),
                 current: id == "z",
             }
         })

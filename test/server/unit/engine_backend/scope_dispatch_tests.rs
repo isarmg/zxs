@@ -37,6 +37,7 @@ fn typed_scope_read_and_bounded_selection_do_not_change_state() {
                 filter: &crate::DirectoryBranchFilter::All,
                 projection: crate::DirectoryBranchProjection::Full,
             },
+            &crate::tests::history_read_control(),
         )
         .unwrap();
     let crate::DirectoryScopeRows::Full(branches) = direct.branches else {
@@ -73,7 +74,8 @@ fn typed_scope_read_and_bounded_selection_do_not_change_state() {
                     repository_id: &repo.repository_id,
                     filter: &crate::DirectoryBranchFilter::All,
                     projection: crate::DirectoryBranchProjection::Full
-                }
+                },
+                &crate::tests::history_read_control()
             )
             .err()
             .unwrap()

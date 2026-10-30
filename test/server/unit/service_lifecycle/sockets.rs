@@ -429,6 +429,7 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadDirectoryScopes<'_>,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

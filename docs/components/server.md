@@ -331,6 +331,16 @@ Web 窗口夹具 `test/fixtures/file-history-window.json`）、`engine_backend/f
 
 树读取与活动/历史图共用两个旧根扫描槽及最长 30 秒协作工作期限；逐条目录项、目录树及上下文扫描检查取消，底层读取保留已有对象身份/完整性检查。协作期限不保证中断阻塞的系统调用。普通 backend 许可继续覆盖编码结果、Body 及实际传输块，沿用既有空闲/总发送期限与准确连接租约。测试覆盖边界编码、当前/历史来源、别名覆盖顺序、冻结快照、撤权及共享槽取消；源码接线不代表本地或 CI 测试已经执行。
 
+### 目录作用域完整读取边界
+
+`GET /api/repositories/{repo}/directory-branches` 的 All、根目录与路径过滤在当前身份、仓库准入后捕获 `PublishedReadView`。锁外依据该发布根解析主分支命名空间，复用 `ScopeMatch` 的稳定目录 ID／缺失路径回退规则，逐分支筛选、逐条目计数并排序。完成时仅复核当前身份，再检查取消和传播读取结果；普通发布不使冻结响应失效，不增加完成时仓库存在性或 generation 检查。POST 有界选择及主目录 listing 的匹配语义不变。
+
+Full 保存实际 `State.directory_branches.get_shared` 返回的不可变 `Arc<DirectoryBranch>`、捕获时的 current 和 file_count；wire 借用原始 entries 与上下文 map，不深复制目录分支、不经 Value 往返。Summary 仍只复制既有选择字段。sequence 与 file_count 继续输出十进制字符串，空可选 map 继续省略，entries／file_branches 字段保留；顺序仍是 sequence 降序、分支 ID 升序。
+
+HTTP 与历史读取共用扫描槽、最长 30 秒协作工作期限、既有完整响应 8 MiB 编码器及 Body／实际传输块租约。超限失败，不分页、不截断。这收紧了此前 GET 完整响应无字节上限的行为；8 MiB 不是总堆内存上限：旧发布根及全部匹配 Arc 行句柄仍随历史／匹配分支数增长。逐分支、逐条目及命名空间读取检查取消；标准排序前后检查取消，排序本身及编码是不可逐比较／逐字段中断的协作段。分支扫描 O(B)，Full 句柄查找 O(M log B)，匹配条目计数 O(E)，排序 O(M log M)；未提供吞吐提升测量。
+
+根 test 目录覆盖冻结发布／共享记录身份、路径别名、排序、Full 字节与空字段、Summary 数量、撤权优先级、取消、字节超限和传输块租约。格式与静态检查不代替编译或实际执行；运行结果由对应验证提交记录。
+
 ### 活动历史投影边界
 
 `GET /api/file-manager/history` 直接调用 `Backend::activity_history`，不经过 JSON action 分派。HTTP 仍解析 query，但不以额外 query 字段改变业务结果；当前凭据复核在排队后的 Backend/Engine 准入发生。阻塞任务只持有 Backend、认证所有者和准入许可，取消 HTTP future 不提前释放后台工作所需资源。

@@ -471,15 +471,15 @@ fn scope_response(
     repository_id: &str,
     filter: crate::DirectoryBranchFilter,
 ) -> Result<Value, ApiError> {
-    let mut snapshot = crate::engine_backend::directory_scopes::capture(
-        engine,
+    let snapshot = crate::engine_backend::directory_scopes::read(
+        engine.published_read_view(),
         crate::ReadDirectoryScopes {
             repository_id,
             filter: &filter,
             projection: crate::DirectoryBranchProjection::Full,
         },
+        &crate::tests::history_read_control(),
     )?;
-    crate::engine_backend::directory_scopes::sort(&mut snapshot);
     Ok(json_codec::to_value(
         crate::backend_directory_scopes::DirectoryScopesResponse::from(snapshot),
     )

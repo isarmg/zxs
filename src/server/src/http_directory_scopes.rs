@@ -5,7 +5,7 @@ use crate::{
     backend_directory_scopes::DirectoryScopesResponse,
     http_boundary::{ApiPath, ApiQuery},
 };
-use http_routing::{Extension, Json, extract::State};
+use http_routing::{Extension, extract::State, response::Response};
 use std::collections::BTreeMap;
 
 fn parse(
@@ -36,28 +36,30 @@ pub(crate) async fn read(
     Extension(identity): Extension<Identity>,
     ApiPath(repository_id): ApiPath<String>,
     ApiQuery(query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<DirectoryScopesResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
+    connection: Option<Extension<crate::http_shutdown::ResponseConnection>>,
+) -> Result<Response, ApiError> {
+    crate::history_read::run(
+        state,
+        connection.map(|Extension(connection)| connection),
+        move |backend, control| {
             let (filter, projection) = parse(query)?;
-            backend
-                .directory_scopes(
-                    &identity,
-                    ReadDirectoryScopes {
-                        repository_id: &repository_id,
-                        filter: &filter,
-                        projection,
-                    },
-                )
-                .map(DirectoryScopesResponse::from)
-        })
-        .await
-        .map(Json)
+            backend.directory_scopes(
+                &identity,
+                ReadDirectoryScopes {
+                    repository_id: &repository_id,
+                    filter: &filter,
+                    projection,
+                },
+                control,
+            )
+        },
+        |snapshot| {
+            crate::backend_file_history::encode_response_bounded(DirectoryScopesResponse::from(
+                snapshot,
+            ))
+        },
+    )
+    .await
 }
 
 #[cfg(test)]

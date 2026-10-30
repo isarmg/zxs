@@ -474,6 +474,7 @@ impl Backend for TestBackend {
         &self,
         _identity: &crate::auth::Identity,
         request: crate::ReadDirectoryScopes<'_>,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
         assert_eq!(request.repository_id, "repo");
         assert!(matches!(request.filter, crate::DirectoryBranchFilter::All));
@@ -1755,8 +1756,9 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             &self,
             identity: &crate::auth::Identity,
             request: crate::ReadDirectoryScopes<'_>,
+            control: &crate::HistoryReadControl,
         ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
-            self.delegate.directory_scopes(identity, request)
+            self.delegate.directory_scopes(identity, request, control)
         }
         fn default_directory_branch(
             &self,

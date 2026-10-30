@@ -819,6 +819,7 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadDirectoryScopes<'_>,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
         panic!("private directory scopes panic detail")
     }

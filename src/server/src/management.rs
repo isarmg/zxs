@@ -1149,8 +1149,11 @@ impl Backend for ManagementBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectoryScopes<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
-        self.inner.backend()?.directory_scopes(identity, request)
+        self.inner
+            .backend()?
+            .directory_scopes(identity, request, control)
     }
     fn default_directory_branch(
         &self,

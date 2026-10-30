@@ -611,8 +611,9 @@ impl Backend for LostCommitReply {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectoryScopes<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
-        self.inner.directory_scopes(identity, request)
+        self.inner.directory_scopes(identity, request, control)
     }
     fn default_directory_branch(
         &self,
@@ -1243,6 +1244,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
                     filter: &crate::DirectoryBranchFilter::All,
                     projection: crate::DirectoryBranchProjection::Summary,
                 },
+                &crate::tests::history_read_control(),
             )
             .unwrap();
         let crate::DirectoryScopeRows::Summary(rows) = snapshot.branches else {

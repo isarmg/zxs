@@ -1,6 +1,7 @@
 //! Owned directory-scope observations; summary reads never copy namespace payloads.
-use data_serialization::Serialize;
+use data_serialization::{Serialize, Serializer, ser::SerializeSeq};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use storage_contract::{DirectoryBranch, DirectoryReference, Entry, FileContext};
 
 pub enum DirectoryBranchFilter {
@@ -37,8 +38,9 @@ pub enum DirectoryScopeRows {
     Summary(Vec<DirectoryBranchChoice>),
 }
 pub struct DirectoryScopeBranch {
-    pub branch: DirectoryBranch,
+    pub branch: Arc<DirectoryBranch>,
     pub current: bool,
+    pub file_count: usize,
 }
 pub struct DirectoryBranchChoice {
     pub directory_branch_id: String,
@@ -112,8 +114,18 @@ pub(crate) struct DirectoryScopesResponse {
 #[derive(Serialize)]
 #[serialization(untagged)]
 enum DirectoryScopeResponses {
-    Full(Vec<DirectoryScopeRecord>),
+    Full(SharedDirectoryScopes),
     Summary(Vec<DirectoryChoiceRecord>),
+}
+struct SharedDirectoryScopes(Vec<DirectoryScopeBranch>);
+impl Serialize for SharedDirectoryScopes {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
+        for row in &self.0 {
+            sequence.serialize_element(&DirectoryScopeRecord::from(row))?;
+        }
+        sequence.end()
+    }
 }
 #[derive(Serialize)]
 pub(crate) struct DirectoryChoiceRecord {
@@ -164,32 +176,36 @@ impl From<DirectoryBranchChoice> for DirectoryChoiceRecord {
     }
 }
 #[derive(Serialize)]
-struct DirectoryScopeRecord {
-    directory_branch_id: String,
-    repository_id: String,
-    directory_id: String,
-    path: String,
-    name: String,
-    parent_branch_id: Option<String>,
-    head_tree_id: String,
-    commit_id: String,
-    entries: Vec<Entry>,
-    file_branches: BTreeMap<String, String>,
+struct DirectoryScopeRecord<'a> {
+    directory_branch_id: &'a str,
+    repository_id: &'a str,
+    directory_id: &'a str,
+    path: &'a str,
+    name: &'a str,
+    parent_branch_id: &'a Option<String>,
+    head_tree_id: &'a str,
+    commit_id: &'a str,
+    entries: &'a [Entry],
+    file_branches: &'a BTreeMap<String, String>,
     #[serialization(skip_serializing_if = "BTreeMap::is_empty")]
-    file_contexts: BTreeMap<String, FileContext>,
+    file_contexts: &'a BTreeMap<String, FileContext>,
     #[serialization(skip_serializing_if = "BTreeMap::is_empty")]
-    inherited_files: BTreeMap<String, String>,
+    inherited_files: &'a BTreeMap<String, String>,
     #[serialization(skip_serializing_if = "BTreeMap::is_empty")]
-    directory_refs: BTreeMap<String, DirectoryReference>,
+    directory_refs: &'a BTreeMap<String, DirectoryReference>,
     materialized: bool,
     #[serialization(with = "storage_contract::u64_string")]
     sequence: u64,
     current: bool,
     file_count: String,
 }
-impl From<DirectoryScopeBranch> for DirectoryScopeRecord {
-    fn from(snapshot: DirectoryScopeBranch) -> Self {
-        let DirectoryScopeBranch { branch, current } = snapshot;
+impl<'a> From<&'a DirectoryScopeBranch> for DirectoryScopeRecord<'a> {
+    fn from(snapshot: &'a DirectoryScopeBranch) -> Self {
+        let DirectoryScopeBranch {
+            branch,
+            current,
+            file_count,
+        } = snapshot;
         let DirectoryBranch {
             directory_branch_id,
             repository_id,
@@ -206,11 +222,7 @@ impl From<DirectoryScopeBranch> for DirectoryScopeRecord {
             directory_refs,
             materialized,
             sequence,
-        } = branch;
-        let file_count = entries
-            .iter()
-            .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
-            .count();
+        } = branch.as_ref();
         Self {
             directory_branch_id,
             repository_id,
@@ -225,29 +237,25 @@ impl From<DirectoryScopeBranch> for DirectoryScopeRecord {
             file_contexts,
             inherited_files,
             directory_refs,
-            materialized,
-            sequence,
-            current,
+            materialized: *materialized,
+            sequence: *sequence,
+            current: *current,
             file_count: file_count.to_string(),
         }
     }
 }
 impl From<DirectoryScopesSnapshot> for DirectoryScopesResponse {
     fn from(snapshot: DirectoryScopesSnapshot) -> Self {
-        let DirectoryScopesSnapshot {
-            repository_id,
-            branches,
-        } = snapshot;
-        let directory_branches = match branches {
-            DirectoryScopeRows::Full(rows) => DirectoryScopeResponses::Full(
-                rows.into_iter().map(DirectoryScopeRecord::from).collect(),
-            ),
+        let directory_branches = match snapshot.branches {
+            DirectoryScopeRows::Full(rows) => {
+                DirectoryScopeResponses::Full(SharedDirectoryScopes(rows))
+            }
             DirectoryScopeRows::Summary(rows) => DirectoryScopeResponses::Summary(
                 rows.into_iter().map(DirectoryChoiceRecord::from).collect(),
             ),
         };
         Self {
-            repository_id,
+            repository_id: snapshot.repository_id,
             directory_branches,
         }
     }

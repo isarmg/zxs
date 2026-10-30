@@ -852,6 +852,7 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         request: ReadDirectoryScopes<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<DirectoryScopesSnapshot, ApiError>;
     fn default_directory_branch(
         &self,
@@ -1544,9 +1545,10 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectoryScopes<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
         self.backend
-            .directory_scopes(&self.current(identity)?, request)
+            .directory_scopes(&self.current(identity)?, request, control)
     }
     fn default_directory_branch(
         &self,

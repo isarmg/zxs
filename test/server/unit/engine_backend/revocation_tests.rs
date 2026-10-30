@@ -482,9 +482,10 @@ impl Backend for PausedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectoryScopes<'_>,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
         self.enter();
-        self.inner.directory_scopes(identity, request)
+        self.inner.directory_scopes(identity, request, control)
     }
     fn default_directory_branch(
         &self,
@@ -1489,7 +1490,9 @@ impl Request {
                     filter: &crate::DirectoryBranchFilter::All,
                     projection: crate::DirectoryBranchProjection::Full,
                 };
-                backend.directory_scopes(identity, request).map(|_| ())
+                backend
+                    .directory_scopes(identity, request, &crate::tests::history_read_control())
+                    .map(|_| ())
             }
             Self::RenameDirectoryBranch => {
                 let request = crate::RenameDirectoryBranch {

@@ -968,6 +968,7 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectoryScopes<'_>,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectoryScopesSnapshot, crate::ApiError> {
         self.record("directory_scopes",Some(identity),json!({"repository_id":request.repository_id,"key":request.filter.key(),"summary":matches!(request.projection,crate::DirectoryBranchProjection::Summary)}))?;
         Ok(crate::DirectoryScopesSnapshot {
@@ -1929,7 +1930,7 @@ impl Fixture {
                 })
             }),
             ("listing", backend.listing(identity, crate::ReadListing::parse("P01".into(), [("path".into(), "Folder".into())].into()).unwrap(), &crate::tests::history_read_control()).map(|snapshot| { assert_eq!(snapshot.path, "Folder"); json!({"returned_by":"listing"}) })),
-            ("directory_scopes",backend.directory_scopes(identity,crate::ReadDirectoryScopes {repository_id:"repository",filter:&crate::DirectoryBranchFilter::Directory(name_policy::LookupPath::parse("Folder").unwrap()),projection:crate::DirectoryBranchProjection::Summary}).map(|snapshot|{assert_eq!(snapshot.repository_id,"repository");assert!(matches!(snapshot.branches,crate::DirectoryScopeRows::Summary(rows) if rows.is_empty()));json!({"returned_by":"directory_scopes"})})),
+            ("directory_scopes",backend.directory_scopes(identity,crate::ReadDirectoryScopes {repository_id:"repository",filter:&crate::DirectoryBranchFilter::Directory(name_policy::LookupPath::parse("Folder").unwrap()),projection:crate::DirectoryBranchProjection::Summary}, &crate::tests::history_read_control()).map(|snapshot|{assert_eq!(snapshot.repository_id,"repository");assert!(matches!(snapshot.branches,crate::DirectoryScopeRows::Summary(rows) if rows.is_empty()));json!({"returned_by":"directory_scopes"})})),
             (
                 "default_directory_branch",
                 backend
