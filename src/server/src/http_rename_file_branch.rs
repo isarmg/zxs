@@ -56,7 +56,7 @@ pub(crate) async fn rename(
         .run(move |backend| {
             backend
                 .rename_file_branch(&identity, parse(body)?)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)

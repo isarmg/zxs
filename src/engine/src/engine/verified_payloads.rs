@@ -88,8 +88,7 @@ impl PayloadPreparation {
                 let handle = resources.get(disk)?;
                 let path = disk.root.join("disk.json");
                 let seal = HeldFile::open(&handle.root, &path)?;
-                let stored: DiskSeal =
-                    decode_strict(&handle.root.read_bytes(&path, MAX_METADATA)?)?;
+                let stored = decode_seal(&handle.root.read_bytes(&path, MAX_METADATA)?)?;
                 validate_stored_seal(&stored, &handle.seal)?;
                 Ok(HeldSeal {
                     metadata_member: disk.metadata_member,

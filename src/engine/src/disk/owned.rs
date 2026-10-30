@@ -307,7 +307,7 @@ impl DiskHandle {
         let seal = identity_at(config, disk, root.directory.directory())?;
         if sealed {
             let stored =
-                decode_strict(&root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?)?;
+                decode_seal(&root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?)?;
             validate_stored_seal(&stored, &seal)?;
         }
         Ok(Self { root, seal })

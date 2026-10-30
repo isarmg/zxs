@@ -112,7 +112,7 @@ pub(crate) async fn update_smb_binding(
                         operation: body.operation,
                     },
                 )
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)

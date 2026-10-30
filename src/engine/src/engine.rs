@@ -23,7 +23,7 @@ pub use integrity_scrub::{
 mod observations;
 mod operations;
 pub use observations::{DiskObservation, DiskObservationPlan, MetadataMemberProbe};
-pub use operations::{OperationReadPlan, OperationRecord};
+pub use operations::{OperationReadObservation, OperationReadPlan, OperationRecord};
 pub(crate) mod provenance;
 mod publication;
 pub(crate) use publication::{DetachedPublication, PublishedDependencyReuse};
@@ -453,7 +453,7 @@ impl Engine {
         let mut configs = BTreeMap::<String, (ValidatedConfig, usize)>::new();
         let mut seals = BTreeMap::new();
         for path in disks {
-            let seal: DiskSeal = read_json(&path.join("disk.json"))?;
+            let seal = decode_seal(&read_bytes(&path.join("disk.json"), MAX_METADATA)?)?;
             let config = ValidatedConfig::try_from(read_json::<Config>(
                 &path.join("metadata/pool-membership/config.json"),
             )?)?;
@@ -811,7 +811,7 @@ impl Engine {
             if result.request_digest == digest
                 && self.operation_owner(operation_id)?.as_deref() == Some(principal)
             {
-                return self.operation(operation_id).map(MutationPlan::Existing);
+                return Ok(MutationPlan::Existing(result.clone()));
             }
             return Err(Error::new(
                 storage_contract::ErrorCode::IdempotencyKeyReused,

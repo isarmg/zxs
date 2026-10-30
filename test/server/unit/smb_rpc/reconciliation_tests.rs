@@ -45,7 +45,9 @@ fn terminal_mirror_failure_retains_active_and_detached_smb_work_after_publicatio
         );
         assert!(failure.message.contains("published"));
         assert!(failure.message.contains(&operation.to_string()));
-        let receipt = backend.operation(&client.identity, operation).unwrap();
+        let receipt = backend
+            .operation_outcome(&client.identity, operation)
+            .unwrap();
         assert_eq!(
             receipt.commit_state,
             storage_contract::CommitState::Published
@@ -237,7 +239,9 @@ fn explicit_abort_after_completed_publication_does_not_erase_lost_reply_receipt(
         client.flush(opened.handle).unwrap_err().code,
         storage_contract::ErrorCode::InjectedFailure
     );
-    let receipt = backend.operation(&client.identity, operation).unwrap();
+    let receipt = backend
+        .operation_outcome(&client.identity, operation)
+        .unwrap();
     assert_eq!(
         receipt.commit_state,
         storage_contract::CommitState::Published
@@ -262,7 +266,9 @@ fn explicit_abort_after_completed_publication_does_not_erase_lost_reply_receipt(
     assert!(!source.exists());
     assert!(!source.with_extension("work.json").exists());
     assert!(!source.with_extension("budget.json").exists());
-    let retained = backend.operation(&client.identity, operation).unwrap();
+    let retained = backend
+        .operation_outcome(&client.identity, operation)
+        .unwrap();
     assert_eq!(retained.commit_state, receipt.commit_state);
     assert_eq!(retained.sequence, receipt.sequence);
     assert_eq!(retained.request_digest, receipt.request_digest);
@@ -301,7 +307,7 @@ fn failed_publication_reconciliation_retries_without_restaging_or_second_version
                 storage_contract::ErrorCode::MetadataUnavailable
             );
             let published = backend
-                .operation(&one.identity, operation_id)
+                .operation_outcome(&one.identity, operation_id)
                 .and_then(crate::operation_wire::operation_wire)
                 .unwrap();
             assert_eq!(published["commit_state"], "PUBLISHED");

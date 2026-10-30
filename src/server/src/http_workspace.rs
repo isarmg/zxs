@@ -157,7 +157,7 @@ pub(crate) async fn commit(
             let command = public_commit(&id, body)?;
             backend
                 .commit_workspace_public(&identity, command)
-                .and_then(crate::operation_wire::operation_wire)
+                .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         })
         .await
         .map(Json)

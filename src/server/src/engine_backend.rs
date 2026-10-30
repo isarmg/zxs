@@ -313,30 +313,28 @@ impl EngineBackend {
         engine: std::sync::MutexGuard<'_, AdmissionEngine>,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
-        // Reject foreign owners before loading even the pending result
-        // pages. Unknown/pending operations never trigger payload I/O.
-        if let Some(owner) = engine
-            .operation_owner(operation_id)
-            .map_err(crate::engine_backend::error)?
-            && owner != identity.principal
-        {
-            return Err(ApiError::forbidden());
-        }
-        let record = engine.operation_record(operation_id).map_err(error)?;
-        operations::authorize_record(&engine, identity, &record)?;
+    ) -> Result<crate::OperationObservation, ApiError> {
+        let record = operations::authorized_record(&engine, identity, operation_id)?;
         let plan = engine.prepare_operation_health(record);
         drop(engine);
         #[cfg(test)]
         if let Some(hook) = self.operation_health_hook.lock().unwrap().clone() {
             hook();
         }
-        let record = plan.check();
+        let observed = plan.observe();
+        let health = observed
+            .health()
+            .map(crate::operation_observation::CheckedOperationHealth::completed)
+            .transpose()?;
+        let record = observed.into_record();
         let engine = self.engine.lock().expect("service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         operations::authorize_record(&engine, &current, &record)?;
         drop(engine);
-        Ok(record.into_result())
+        Ok(crate::OperationObservation {
+            outcome: record.into_result().into(),
+            health,
+        })
     }
 }
 
@@ -345,11 +343,22 @@ impl Backend for EngineBackend {
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
+    ) -> Result<crate::OperationObservation, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         let identity = &current;
         self.operation_admitted(engine, identity, operation_id)
+    }
+
+    fn operation_outcome(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        let record = operations::authorized_record(&engine, &current, operation_id)?;
+        Ok(record.into_result().into())
     }
 
     fn commit_workspace(

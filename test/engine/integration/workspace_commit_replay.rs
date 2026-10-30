@@ -848,12 +848,14 @@ fn absent_primary_preserves_read_only_workspace_receipt_recovery() {
         let mut engine = Engine::open(&root).unwrap();
         assert!(engine.is_read_only());
         let replayed = engine.commit_workspace(request).unwrap();
-        assert_eq!(replayed.current_health.as_str(), "UNAVAILABLE");
-        // Publication identity and protection-at-publish are immutable, while
-        // current health must reflect the now-absent primary.
+        assert_eq!(replayed, receipt);
+        // Replay returns the frozen receipt; explicit observation reports the
+        // now-absent primary without rewriting publication facts.
+        let observed = engine.operation(receipt.operation_id).unwrap();
+        assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
         let mut expected = receipt;
         expected.current_health = storage_contract::CurrentHealth::Unavailable;
-        assert_eq!(replayed, expected);
+        assert_eq!(observed, expected);
         if empty_mountpoint {
             assert_eq!(fs::read_dir(primary).unwrap().count(), 0);
         }

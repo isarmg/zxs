@@ -36,6 +36,7 @@ fn first_save(
     }
     let uploads = backend.uploads.load(Ordering::SeqCst);
     let saved = client.flush(opened.handle).unwrap();
+    assert!(saved.get("current_health").is_none());
     assert_eq!(saved["commit_state"], "PUBLISHED");
     assert_eq!(saved["operation_id"], operation.to_string());
     if lose_reply {
@@ -71,7 +72,7 @@ fn select_same_version_draft(shared: &Shared, branch: &str, path: &str) -> Entry
                 operation_id: storage_contract::OperationId::generate(),
             },
         )
-        .and_then(crate::operation_wire::operation_wire)
+        .and_then(|result| crate::operation_wire::operation_wire(result.into()))
         .unwrap();
     assert_eq!(created["result"]["materialized"], false);
     shared

@@ -132,7 +132,7 @@ impl Engine {
         let envelope = admit_public_commit(envelope, &request, &self.state)?;
         let workspace = self.workspace(&request.workspace_id)?;
         let replay = if self.state.operations.contains_key(&request.operation_id) {
-            Some(self.prepare_operation_health(self.operation_record(request.operation_id)?))
+            Some(self.operation_record(request.operation_id)?.into_result())
         } else {
             None
         };
@@ -171,7 +171,7 @@ impl crate::engine::PlanningContext<'_> {
         workspace: Workspace,
         mut request: CommitRequest,
         envelope: ReceiptCheckedEnvelope<'_>,
-        replay: Option<crate::engine::OperationReadPlan>,
+        replay: Option<OperationResult>,
     ) -> Result<crate::business::WorkspaceMutation> {
         let envelope = envelope.envelope;
         let wire_digest = envelope.digest().to_owned();
@@ -197,7 +197,7 @@ impl crate::engine::PlanningContext<'_> {
             self.validate_workspace_commit_replay(&w, &request, &wire_digest)?;
             let workspace = w;
             return Ok(crate::business::WorkspaceMutation {
-                mutation: crate::engine::MutationPlan::Existing(result.check().into_result()),
+                mutation: crate::engine::MutationPlan::Existing(result),
                 workspace,
                 request,
                 wire: None,

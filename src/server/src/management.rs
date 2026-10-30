@@ -621,8 +621,17 @@ impl Backend for ManagementBackend {
         &self,
         identity: &Identity,
         operation_id: storage_contract::OperationId,
-    ) -> Result<storage_contract::OperationResult, ApiError> {
+    ) -> Result<crate::OperationObservation, ApiError> {
         self.inner.backend()?.operation(identity, operation_id)
+    }
+    fn operation_outcome(
+        &self,
+        identity: &Identity,
+        operation_id: storage_contract::OperationId,
+    ) -> Result<storage_contract::OperationOutcome, ApiError> {
+        self.inner
+            .backend()?
+            .operation_outcome(identity, operation_id)
     }
     fn commit_workspace(
         &self,

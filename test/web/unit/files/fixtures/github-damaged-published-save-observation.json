@@ -1,0 +1,57 @@
+{
+  "commit_state": "PUBLISHED",
+  "current_health": {
+    "checked_at": "2026-10-30T08:36:42.644232761Z",
+    "state": "DEGRADED"
+  },
+  "error": null,
+  "operation_id": "op_41ecab9396d5434884b73edffa914771",
+  "operation_kind": "content_save",
+  "request_digest": "d0b664b8dccd8cf61703e80c354ddd6bc1a83abc58bc80f4b17c8e8d23e19c80",
+  "result": {
+    "branch_generation": "2",
+    "branch_id": "br_4a10cc8d4e1847a88af8ed042eaf4f1a",
+    "commit_id": "commit_e53ea6d9987e4cec86e99081b8874e64",
+    "membership_epoch": "1",
+    "outcome": "COMMITTED_AND_PROTECTED",
+    "protection_at_publish": "TARGET_MET",
+    "publication_sequence": "3",
+    "versions": [
+      {
+        "primary_slot_id": "P01",
+        "required_slots": [
+          "P01",
+          "B01",
+          "C01"
+        ],
+        "slots": [
+          {
+            "binding_generation": "1",
+            "copy_level": 1,
+            "disk_id": "disk_e53ac5e670964cc69aa219e9d505485b",
+            "slot_id": "P01",
+            "state": "COMPLETE_VERIFIED"
+          },
+          {
+            "binding_generation": "1",
+            "copy_level": 2,
+            "disk_id": "disk_23d3329d174f43d29ffb5228f511dfdc",
+            "slot_id": "B01",
+            "state": "COMPLETE_VERIFIED"
+          },
+          {
+            "binding_generation": "1",
+            "copy_level": 3,
+            "disk_id": "disk_f065217d71b842f09877ebe433c1dac8",
+            "slot_id": "C01",
+            "state": "COMPLETE_VERIFIED"
+          }
+        ],
+        "target_copies": 3,
+        "topology_generation": "1",
+        "version_id": "ver_6260194c7feb48bba3e4dfb5d8963780"
+      }
+    ]
+  },
+  "state": "completed"
+}
