@@ -1,0 +1,351 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 3,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "early_ack"
+  },
+  "counts": {
+    "expanded": 1,
+    "max_depth": 1,
+    "queued": 1,
+    "states": 2,
+    "transitions": 2
+  },
+  "coverage": {
+    "max_full_trace_depth": 28,
+    "suffix_phases_checked": [
+      "ACCEPT",
+      "DONE"
+    ]
+  },
+  "elapsed_seconds": 0.005801584000010962,
+  "limits": {
+    "max_depth": 8,
+    "max_seconds": 10,
+    "max_states": 1000,
+    "max_transitions": 10000
+  },
+  "prefix": {
+    "crashes_consumed": 0,
+    "end_digest": "bbd6c3b966ccc72d3855578b6b12a4e7404bd123e2524a92c5cf8cfbc2ee96e4",
+    "faults_consumed": 0,
+    "generated_successors": 59,
+    "length": 27,
+    "max_steps": 512,
+    "max_successors_per_step": 100000,
+    "requested_length": 27,
+    "source": "initial(config) followed by legal, property-checked actions",
+    "trace": {
+      "config": {
+        "crashes": 0,
+        "fault_budget": 0,
+        "n": 3,
+        "operations": 1,
+        "replicas": 1,
+        "retries": true,
+        "variant": "early_ack"
+      },
+      "initial_digest": "969523a7432a00712da4beb96dda42d53ad03d59a6e8da8941c48e2b60b69b86",
+      "schema": "zxs-publication-model-trace-v1",
+      "steps": [
+        {
+          "action": "CONTENT:0:write",
+          "state_digest": "98c2f8d8bee20096e97e451309da8372dbe9acb0572d1236d6bb5519f6119b72"
+        },
+        {
+          "action": "CONTENT:0:file_sync",
+          "state_digest": "92b748cffa2b54b28b7eeb8183c7fc059a47768c6d8ba45685736557a3cfb1d1"
+        },
+        {
+          "action": "CONTENT:0:install",
+          "state_digest": "e52c1f2d8844326f840bc6a1d146867381dcbf87b85a289c5b2a6e53195dfa7d"
+        },
+        {
+          "action": "CONTENT:0:directory_sync",
+          "state_digest": "b82eb569e5cfaa995d25d77364b130ba9af76be402d05c96a9e1dfa4b4c12a0a"
+        },
+        {
+          "action": "barrier:CONTENT",
+          "state_digest": "3fea7cd680462c7372debbdcb200b6757136c3a1d1c6c5893d751f1dc19b6384"
+        },
+        {
+          "action": "PREPARE:0:write",
+          "state_digest": "e69447f6085cd6225979892f2bf35eb71ade67bd2387e52ffdd51e8175fc67d1"
+        },
+        {
+          "action": "PREPARE:0:file_sync",
+          "state_digest": "9467bb935306247bbc4c5c92f4f4dd22e6784129563a3530157b1d35795ffb92"
+        },
+        {
+          "action": "PREPARE:0:install",
+          "state_digest": "510801e62e7dae4fae09bad1aac7eb9c02e4939b1cc8886a8717f781b9344457"
+        },
+        {
+          "action": "PREPARE:0:directory_sync",
+          "state_digest": "af2edbf6ebeee9ee5cc189bcb802fdbd5776212396e08d8347b3fc05469c3b82"
+        },
+        {
+          "action": "PREPARE:1:write",
+          "state_digest": "a8a8390c586e8604f1d82f2f5991ff2b08406e50273a702be0dd75d22c1107b6"
+        },
+        {
+          "action": "PREPARE:1:file_sync",
+          "state_digest": "f43d83bc0147463d8198aa7ee581058b7274ee53a84c473b1c91c68177a77e6e"
+        },
+        {
+          "action": "PREPARE:1:install",
+          "state_digest": "925ac224ee2ddc05d96f5d0b9e80fe2c2a2f010259dd3c06ff70a648eedec7d6"
+        },
+        {
+          "action": "PREPARE:1:directory_sync",
+          "state_digest": "34e4876ddabf4548db57beea019d3db082b00b1fe9f84444cea55bb0371a5d5b"
+        },
+        {
+          "action": "PREPARE:2:write",
+          "state_digest": "244bdc195770a0b6056c3657dc327052755fe297781a8db2a8fcfc256dcdeadc"
+        },
+        {
+          "action": "PREPARE:2:file_sync",
+          "state_digest": "9b43d89a7bfc8e92e784823c90377ec1653bda4174d379c0dc90a2d5b5f288e0"
+        },
+        {
+          "action": "PREPARE:2:install",
+          "state_digest": "9fc4b10c1068a47f66b29f646e14d06f9a5712b0fd313a02528110ffd5b00ea3"
+        },
+        {
+          "action": "PREPARE:2:directory_sync",
+          "state_digest": "045e3c60adcf0a42200f75c81a0a4afbd149235d644828ac99c3867afa8096d6"
+        },
+        {
+          "action": "barrier:PREPARE",
+          "state_digest": "a1b286a8d2000889d4b75ca612aface773064de5b1c5ae59547a6e7c5006df97"
+        },
+        {
+          "action": "issue_accept",
+          "state_digest": "8b0e44bc8616a039d9e25e5afbbb1b10d0d94e0df693451df9c98ccc86526a18"
+        },
+        {
+          "action": "ACCEPT:2:write",
+          "state_digest": "c581e5e410f6c019e87cb1d406938638d2d9e5279a020a10abca9afdee5d4e62"
+        },
+        {
+          "action": "ACCEPT:2:file_sync",
+          "state_digest": "dc6d4976fd3cc2956f07ab18014f4eeeb2173666ddb6cf6863df84cc05750def"
+        },
+        {
+          "action": "ACCEPT:2:install",
+          "state_digest": "ecd6622e922d51aa48374259349644769d92f9e8dc94498dbb180ecefe48389f"
+        },
+        {
+          "action": "ACCEPT:2:directory_sync",
+          "state_digest": "bf0420abb0b1730df9ea2374622d9cf226ea47b9ccff52c21ec2967c52bc96ed"
+        },
+        {
+          "action": "ACCEPT:0:write",
+          "state_digest": "ea337c703ee8e074682678fbf33b6f44b4c68fc1b05ffda8f3c91208088184a9"
+        },
+        {
+          "action": "ACCEPT:0:file_sync",
+          "state_digest": "863086f0de2bece98c882b20b924c4bb1d6d095407caaa1a0e62bf5198e595a8"
+        },
+        {
+          "action": "ACCEPT:0:install",
+          "state_digest": "645b549246c3aac304e5571f50e430bbd63dd22e96ec78647a239c45988d180b"
+        },
+        {
+          "action": "ACCEPT:0:directory_sync",
+          "state_digest": "bbd6c3b966ccc72d3855578b6b12a4e7404bd123e2524a92c5cf8cfbc2ee96e4"
+        }
+      ]
+    }
+  },
+  "schema": "zxs-publication-model-suffix-v1",
+  "scope": "selected-prefix-suffix",
+  "status": "Counterexample",
+  "trace": {
+    "config": {
+      "crashes": 0,
+      "fault_budget": 0,
+      "n": 3,
+      "operations": 1,
+      "replicas": 1,
+      "retries": true,
+      "variant": "early_ack"
+    },
+    "initial_digest": "969523a7432a00712da4beb96dda42d53ad03d59a6e8da8941c48e2b60b69b86",
+    "schema": "zxs-publication-model-trace-v1",
+    "steps": [
+      {
+        "action": "CONTENT:0:write",
+        "state_digest": "98c2f8d8bee20096e97e451309da8372dbe9acb0572d1236d6bb5519f6119b72"
+      },
+      {
+        "action": "CONTENT:0:file_sync",
+        "state_digest": "92b748cffa2b54b28b7eeb8183c7fc059a47768c6d8ba45685736557a3cfb1d1"
+      },
+      {
+        "action": "CONTENT:0:install",
+        "state_digest": "e52c1f2d8844326f840bc6a1d146867381dcbf87b85a289c5b2a6e53195dfa7d"
+      },
+      {
+        "action": "CONTENT:0:directory_sync",
+        "state_digest": "b82eb569e5cfaa995d25d77364b130ba9af76be402d05c96a9e1dfa4b4c12a0a"
+      },
+      {
+        "action": "barrier:CONTENT",
+        "state_digest": "3fea7cd680462c7372debbdcb200b6757136c3a1d1c6c5893d751f1dc19b6384"
+      },
+      {
+        "action": "PREPARE:0:write",
+        "state_digest": "e69447f6085cd6225979892f2bf35eb71ade67bd2387e52ffdd51e8175fc67d1"
+      },
+      {
+        "action": "PREPARE:0:file_sync",
+        "state_digest": "9467bb935306247bbc4c5c92f4f4dd22e6784129563a3530157b1d35795ffb92"
+      },
+      {
+        "action": "PREPARE:0:install",
+        "state_digest": "510801e62e7dae4fae09bad1aac7eb9c02e4939b1cc8886a8717f781b9344457"
+      },
+      {
+        "action": "PREPARE:0:directory_sync",
+        "state_digest": "af2edbf6ebeee9ee5cc189bcb802fdbd5776212396e08d8347b3fc05469c3b82"
+      },
+      {
+        "action": "PREPARE:1:write",
+        "state_digest": "a8a8390c586e8604f1d82f2f5991ff2b08406e50273a702be0dd75d22c1107b6"
+      },
+      {
+        "action": "PREPARE:1:file_sync",
+        "state_digest": "f43d83bc0147463d8198aa7ee581058b7274ee53a84c473b1c91c68177a77e6e"
+      },
+      {
+        "action": "PREPARE:1:install",
+        "state_digest": "925ac224ee2ddc05d96f5d0b9e80fe2c2a2f010259dd3c06ff70a648eedec7d6"
+      },
+      {
+        "action": "PREPARE:1:directory_sync",
+        "state_digest": "34e4876ddabf4548db57beea019d3db082b00b1fe9f84444cea55bb0371a5d5b"
+      },
+      {
+        "action": "PREPARE:2:write",
+        "state_digest": "244bdc195770a0b6056c3657dc327052755fe297781a8db2a8fcfc256dcdeadc"
+      },
+      {
+        "action": "PREPARE:2:file_sync",
+        "state_digest": "9b43d89a7bfc8e92e784823c90377ec1653bda4174d379c0dc90a2d5b5f288e0"
+      },
+      {
+        "action": "PREPARE:2:install",
+        "state_digest": "9fc4b10c1068a47f66b29f646e14d06f9a5712b0fd313a02528110ffd5b00ea3"
+      },
+      {
+        "action": "PREPARE:2:directory_sync",
+        "state_digest": "045e3c60adcf0a42200f75c81a0a4afbd149235d644828ac99c3867afa8096d6"
+      },
+      {
+        "action": "barrier:PREPARE",
+        "state_digest": "a1b286a8d2000889d4b75ca612aface773064de5b1c5ae59547a6e7c5006df97"
+      },
+      {
+        "action": "issue_accept",
+        "state_digest": "8b0e44bc8616a039d9e25e5afbbb1b10d0d94e0df693451df9c98ccc86526a18"
+      },
+      {
+        "action": "ACCEPT:2:write",
+        "state_digest": "c581e5e410f6c019e87cb1d406938638d2d9e5279a020a10abca9afdee5d4e62"
+      },
+      {
+        "action": "ACCEPT:2:file_sync",
+        "state_digest": "dc6d4976fd3cc2956f07ab18014f4eeeb2173666ddb6cf6863df84cc05750def"
+      },
+      {
+        "action": "ACCEPT:2:install",
+        "state_digest": "ecd6622e922d51aa48374259349644769d92f9e8dc94498dbb180ecefe48389f"
+      },
+      {
+        "action": "ACCEPT:2:directory_sync",
+        "state_digest": "bf0420abb0b1730df9ea2374622d9cf226ea47b9ccff52c21ec2967c52bc96ed"
+      },
+      {
+        "action": "ACCEPT:0:write",
+        "state_digest": "ea337c703ee8e074682678fbf33b6f44b4c68fc1b05ffda8f3c91208088184a9"
+      },
+      {
+        "action": "ACCEPT:0:file_sync",
+        "state_digest": "863086f0de2bece98c882b20b924c4bb1d6d095407caaa1a0e62bf5198e595a8"
+      },
+      {
+        "action": "ACCEPT:0:install",
+        "state_digest": "645b549246c3aac304e5571f50e430bbd63dd22e96ec78647a239c45988d180b"
+      },
+      {
+        "action": "ACCEPT:0:directory_sync",
+        "state_digest": "bbd6c3b966ccc72d3855578b6b12a4e7404bd123e2524a92c5cf8cfbc2ee96e4"
+      },
+      {
+        "action": "mutant:ack_at_decision",
+        "state_digest": "2497a060ab6e250b13080fbdefe8667a56c775fee1e7e24010540bb878324ebc"
+      }
+    ],
+    "violations": [
+      {
+        "message": "slot 0: member 0 lacks durable metadata/publication evidence",
+        "name": "publication_barrier",
+        "spec": "10.3(2-3); 10.10(1,3)"
+      },
+      {
+        "message": "slot 0: required member 0 lacks durable content/proof evidence",
+        "name": "publication_barrier",
+        "spec": "10.3(1,2,4); 10.10(2,4)"
+      },
+      {
+        "message": "slot 0: member 1 lacks durable metadata/publication evidence",
+        "name": "publication_barrier",
+        "spec": "10.3(2-3); 10.10(1,3)"
+      },
+      {
+        "message": "slot 0: member 2 lacks durable metadata/publication evidence",
+        "name": "publication_barrier",
+        "spec": "10.3(2-3); 10.10(1,3)"
+      },
+      {
+        "message": "slot 0: permanent result differs from the historical publication kind",
+        "name": "fixed_result",
+        "spec": "10.10"
+      }
+    ]
+  },
+  "truncation": null,
+  "violations": [
+    {
+      "message": "slot 0: member 0 lacks durable metadata/publication evidence",
+      "name": "publication_barrier",
+      "spec": "10.3(2-3); 10.10(1,3)"
+    },
+    {
+      "message": "slot 0: required member 0 lacks durable content/proof evidence",
+      "name": "publication_barrier",
+      "spec": "10.3(1,2,4); 10.10(2,4)"
+    },
+    {
+      "message": "slot 0: member 1 lacks durable metadata/publication evidence",
+      "name": "publication_barrier",
+      "spec": "10.3(2-3); 10.10(1,3)"
+    },
+    {
+      "message": "slot 0: member 2 lacks durable metadata/publication evidence",
+      "name": "publication_barrier",
+      "spec": "10.3(2-3); 10.10(1,3)"
+    },
+    {
+      "message": "slot 0: permanent result differs from the historical publication kind",
+      "name": "fixed_result",
+      "spec": "10.10"
+    }
+  ]
+}

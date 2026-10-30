@@ -1,0 +1,11 @@
+{
+  "arguments": [
+    "test/publication-model/run_validation.py",
+    "--output",
+    "/tmp/publication-evidence/results"
+  ],
+  "platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+  "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+  "spec_commit": "e2f33d9882cf7263412d9370b6a703e0b216357d",
+  "tool_commit": "0c4b4d37a5b751ff51824df82e021fd8a2ef26b0"
+}

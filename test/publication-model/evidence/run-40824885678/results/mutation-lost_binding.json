@@ -1,0 +1,224 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "lost_binding"
+  },
+  "counts": {
+    "expanded": 373,
+    "max_depth": 39,
+    "queued": 23,
+    "states": 396,
+    "transitions": 575
+  },
+  "elapsed_seconds": 0.020184071000002746,
+  "limits": {
+    "max_depth": 220,
+    "max_seconds": 45,
+    "max_states": 80000,
+    "max_transitions": 900000
+  },
+  "schema": "zxs-publication-model-search-v1",
+  "scope": "declared finite abstraction only",
+  "status": "Counterexample",
+  "trace": {
+    "config": {
+      "crashes": 0,
+      "fault_budget": 0,
+      "n": 1,
+      "operations": 1,
+      "replicas": 1,
+      "retries": true,
+      "variant": "lost_binding"
+    },
+    "initial_digest": "2dc1c0dcebde45172023d8e84cae918f687728eecb9e40a634f3265bb892a2b0",
+    "schema": "zxs-publication-model-trace-v1",
+    "steps": [
+      {
+        "action": "CONTENT:0:write",
+        "state_digest": "4039d5fec4351bd2076b0e91ba84e4c7cf39f36a169d2ff2cad6bbcc1f66d374"
+      },
+      {
+        "action": "CONTENT:0:file_sync",
+        "state_digest": "0d9af90e13cb183ea8acac523f556143a60758979a246102f7814faf036964b6"
+      },
+      {
+        "action": "CONTENT:0:install",
+        "state_digest": "64a941324cda64bc52deaa7bdb06459ff6e81b811eb16d4aaff0f512f337eb45"
+      },
+      {
+        "action": "CONTENT:0:directory_sync",
+        "state_digest": "9f4b2cb5c650208d8c339d4547d3a1542e5c3b004a4fb76ce79f8b29173cbc0c"
+      },
+      {
+        "action": "barrier:CONTENT",
+        "state_digest": "a943fcadbb6d7f3c42e435996d8fc380590c312b9fc8d3e88459d6eb46ff081a"
+      },
+      {
+        "action": "PREPARE:0:write",
+        "state_digest": "2a45e2ded2e4663e32b0382100684ac1d15403d61848a9fcdfd9427520c89210"
+      },
+      {
+        "action": "PREPARE:0:file_sync",
+        "state_digest": "85ba4b6f9c714c9e6e058380617cf5ceef8bc50be37519b41be506e098981e32"
+      },
+      {
+        "action": "PREPARE:0:install",
+        "state_digest": "e31973a5f0365e59ed3d49af072f3959300fb02c2d4f93c2183562eaf7be76bd"
+      },
+      {
+        "action": "PREPARE:0:directory_sync",
+        "state_digest": "c07ee5ceab2a830cd6d1c07f899eb223dfdcca20861c19e7fd3c11e0c529e017"
+      },
+      {
+        "action": "barrier:PREPARE",
+        "state_digest": "75251eef3694d90c74a294c5986c574b62842c76faac966437b654ec9427a7ec"
+      },
+      {
+        "action": "issue_accept",
+        "state_digest": "abe871ae8bddde33ddc3e3b2478b806acf9e3bc124058fec01e7e95ba8958164"
+      },
+      {
+        "action": "ACCEPT:0:write",
+        "state_digest": "a27e32e7304e290b52de40e0b5e9c95b43f8e1d1025d5b0b7de860d0814cd937"
+      },
+      {
+        "action": "ACCEPT:0:file_sync",
+        "state_digest": "42e4161290372155015e4a00ad38d40c517d5beada319a5bc08566c8c372c6af"
+      },
+      {
+        "action": "ACCEPT:0:install",
+        "state_digest": "b228ea3a89ab2a4cd25c9c3594f2f5e15bfa4b5a6b963d6c0668ea7401658eab"
+      },
+      {
+        "action": "ACCEPT:0:directory_sync",
+        "state_digest": "171df44e823752b47cbde43e6c919fe4f8edcbb44a67ae1b908bc669ac8d4f3c"
+      },
+      {
+        "action": "barrier:ACCEPT",
+        "state_digest": "22eadaf9c75139e38065c462260a9800398208e583ad5a751bf42960a0e34abc"
+      },
+      {
+        "action": "FINALIZE:0:write",
+        "state_digest": "ef5839584a725a1681b449bf316f678cd3965201e9fbb3e57adce88a8b455d49"
+      },
+      {
+        "action": "FINALIZE:0:file_sync",
+        "state_digest": "5bb341c1b60b4ebac4b3d854be4b22b35a5c2a9855780af2d743fedc1f68dce3"
+      },
+      {
+        "action": "FINALIZE:0:install",
+        "state_digest": "b485195fd22c05836c010ab4513f01e90b4d6b0d0c1f8ae529c40a268fd363cc"
+      },
+      {
+        "action": "FINALIZE:0:directory_sync",
+        "state_digest": "09afdd92038bee40efdc9cce3f1dd617ec262e592b09ddcffcb49e764fb55f20"
+      },
+      {
+        "action": "barrier:FINALIZE",
+        "state_digest": "107c675a62f32c7aa2105c2133a2f7c356058f105bd0141b3a64bee977c6e11b"
+      },
+      {
+        "action": "COMMIT_PROOF:0:write",
+        "state_digest": "2c5c6c141adcd2e64657fa7ba8ed771caaacbaa1347f15922ebf260b79e7fbcf"
+      },
+      {
+        "action": "COMMIT_PROOF:0:file_sync",
+        "state_digest": "04efa31a52ac0f863512ca23b88d1b1da567bdcb0f8b3652a7f4150cc05c6e34"
+      },
+      {
+        "action": "COMMIT_PROOF:0:install",
+        "state_digest": "8f0a4e50daa1f791444d65c5cd069287c64844f14059cff271b7707d0b8fbb34"
+      },
+      {
+        "action": "COMMIT_PROOF:0:directory_sync",
+        "state_digest": "9ed9daad38573f939f7b386b3f1ced60ffb8f1d972658db294e23bad2cd56b31"
+      },
+      {
+        "action": "barrier:COMMIT_PROOF",
+        "state_digest": "8ee527135e771ed6c689febd3844932e5e688ad057fc9facad0adf1979e545af"
+      },
+      {
+        "action": "PUBLICATION:0:write",
+        "state_digest": "b4dc7b95b4721e11c05cb5e05fb325ca841cc4a5981eefeafddb91b876a119a0"
+      },
+      {
+        "action": "PUBLICATION:0:file_sync",
+        "state_digest": "fb354f757a8d4888d3ac9d8399e0c4c7ce682eca621e273d13be0ad2066a988e"
+      },
+      {
+        "action": "PUBLICATION:0:install",
+        "state_digest": "bdf26ae05574c2d1c9576114f4b69270549b4c33235e9c31fbbcb6e588c33ffe"
+      },
+      {
+        "action": "PUBLICATION:0:directory_sync",
+        "state_digest": "448633e51187ac50e8f46ba734732d4b79bf6c239e76b419798c68e61d9147df"
+      },
+      {
+        "action": "barrier:PUBLICATION",
+        "state_digest": "67c958634bc3de4a7a1c78f4a9b1e82b6e82f598eb9ae116cc47bde39c0bd8ee"
+      },
+      {
+        "action": "PUBLICATION_PROOF:0:write",
+        "state_digest": "878f5f054a4a474013086c556e1eb9df2301e14569cc535c3161a482533f7ebe"
+      },
+      {
+        "action": "PUBLICATION_PROOF:0:file_sync",
+        "state_digest": "a9b0a2859b70085614ab80265e9c9eb001633abfff935536b370a3a35e314ef8"
+      },
+      {
+        "action": "PUBLICATION_PROOF:0:install",
+        "state_digest": "1bb845642d82c6463d4c3d7c4487360500f482eb347109dcb7eca15f8bd75bbe"
+      },
+      {
+        "action": "PUBLICATION_PROOF:0:directory_sync",
+        "state_digest": "89a61edfbd218e0fa3c39da7c161842dfcf1d1771ac80219348cabe819e8a150"
+      },
+      {
+        "action": "barrier:PUBLICATION_PROOF",
+        "state_digest": "cd00cbbbe080bd411d856a5856db206070d97659347cffbedf277635ebc74d26"
+      },
+      {
+        "action": "publish:atomic_state_receipt_event",
+        "state_digest": "7b9967bc9efd58a1be983c6adb55e84b7c6d118995f1f4335cf6102d12b1d149"
+      },
+      {
+        "action": "reply:delivered",
+        "state_digest": "d2af6296d634b0cb10c0f636720400562954b62e43853762189a0665fdd8d881"
+      },
+      {
+        "action": "mutant:retry_without_binding",
+        "state_digest": "025c2252a92038d02979146c909199b20d1edf9afc13e50470d304a251948784"
+      }
+    ],
+    "violations": [
+      {
+        "message": "events repeat or violate decision-slot order",
+        "name": "unique_publication",
+        "spec": "10.2; 10.3(5); 10.10"
+      },
+      {
+        "message": "slot 0: operation has multiple business effects",
+        "name": "unique_publication",
+        "spec": "10.3(5); 18"
+      }
+    ]
+  },
+  "truncation": null,
+  "violations": [
+    {
+      "message": "events repeat or violate decision-slot order",
+      "name": "unique_publication",
+      "spec": "10.2; 10.3(5); 10.10"
+    },
+    {
+      "message": "slot 0: operation has multiple business effects",
+      "name": "unique_publication",
+      "spec": "10.3(5); 18"
+    }
+  ]
+}

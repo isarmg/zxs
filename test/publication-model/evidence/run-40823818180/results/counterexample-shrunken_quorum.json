@@ -1,0 +1,106 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 1,
+    "n": 2,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "shrunken_quorum"
+  },
+  "initial_digest": "142be735488ac4d789c020dd42f30b8aff3a8d93dc905e49907ae082ff8ab21d",
+  "schema": "zxs-publication-model-trace-v1",
+  "steps": [
+    {
+      "action": "CONTENT:0:write",
+      "state_digest": "5aaa49fe777e974b673b168d51e297516d904c1e6b080a036fb22782545235ea"
+    },
+    {
+      "action": "CONTENT:0:file_sync",
+      "state_digest": "7501970c7fbeae29bc91912fb54266d8930f713e75c9c2ed3a99273f68201d01"
+    },
+    {
+      "action": "CONTENT:0:install",
+      "state_digest": "a881927499b49fa4b1bab86ea67fe4541c42395883deeba0c6daeeb11284c81a"
+    },
+    {
+      "action": "CONTENT:0:directory_sync",
+      "state_digest": "cf1e79d4ad8cd627228b6de0d7ef431bde240c2bc5d646531e6fe0d40095663d"
+    },
+    {
+      "action": "barrier:CONTENT",
+      "state_digest": "80b2991f4fb7d6b9b19e14404e92c2fc099ef7274af0441401a96d0805a3644c"
+    },
+    {
+      "action": "PREPARE:0:write",
+      "state_digest": "6464c37ab3dbbf026fab2e70557a1c6019c83577b4de503af0b85ca55afea3ed"
+    },
+    {
+      "action": "PREPARE:0:file_sync",
+      "state_digest": "07c78b240ca31ea943333210aec575b1ae986f59b308908b18004262c6fd0356"
+    },
+    {
+      "action": "PREPARE:0:install",
+      "state_digest": "f15466c099d80df3e0972b04210718fbcb8e6182b076ffb23741d594fb8b38ec"
+    },
+    {
+      "action": "PREPARE:0:directory_sync",
+      "state_digest": "7953918da724a304ed4673ce12195afe0d534b2995b01c630bb3d5c06bfc9292"
+    },
+    {
+      "action": "PREPARE:1:write",
+      "state_digest": "d600afd7b225b30f69c19b4827dc2718f418358cac5cf857a90b26aef1c68d1c"
+    },
+    {
+      "action": "PREPARE:1:file_sync",
+      "state_digest": "0f3ef25ec064191d855a2aa05012dd804f4b9111fc3734a3dea2f2beb050f331"
+    },
+    {
+      "action": "PREPARE:1:install",
+      "state_digest": "498d3faf4cbff8a83a2602c6a5cac11a6a99ac73a451abf4fb523e4ece5fb4d2"
+    },
+    {
+      "action": "PREPARE:1:directory_sync",
+      "state_digest": "96237f25648288da9ab279121ee6bb3a877edde69ae88f22e76fa3d7a8f8f86b"
+    },
+    {
+      "action": "barrier:PREPARE",
+      "state_digest": "d3188d325d6008a4a9e5ddc3870822a216fbc75cab75bf0ada2c62b20fca45b8"
+    },
+    {
+      "action": "issue_accept",
+      "state_digest": "50ce65ea53bcb50b2e1d338e481aefde4f59dbecd32af4c877be5c91c5954aeb"
+    },
+    {
+      "action": "ACCEPT:0:write",
+      "state_digest": "d58b4e199a74758dc43aabf2a8eb4431ca401af84037497e888bc6114ac22c61"
+    },
+    {
+      "action": "ACCEPT:0:file_sync",
+      "state_digest": "02082b9f4bd27bcc30e166895829ce039abb6e33b0a708a09ff2daf06a9a4eb2"
+    },
+    {
+      "action": "ACCEPT:0:install",
+      "state_digest": "9a8e691d648b8a6b4c791c270e9f88fb9f1bfbc2ff12c8876dcd7f4737e807d9"
+    },
+    {
+      "action": "ACCEPT:0:directory_sync",
+      "state_digest": "c86015bf2c8c8b196f42b71ba8485161866771bd6061d203d5f925833c061d71"
+    },
+    {
+      "action": "disk:offline:0",
+      "state_digest": "64f9623e6ad366ca64c3116ae00122f5e5e964edf9d88f5fc7a41e68525bff07"
+    },
+    {
+      "action": "mutant:decide_using_online_quorum",
+      "state_digest": "085e70c538e0351ef32fe98ebdc639440c70354ebe7fa6499e29b52756c327f2"
+    }
+  ],
+  "violations": [
+    {
+      "message": "slot 0: decision witness has fewer than fixed Q distinct members",
+      "name": "fixed_quorum",
+      "spec": "10.2; 10.6; 10.7"
+    }
+  ]
+}

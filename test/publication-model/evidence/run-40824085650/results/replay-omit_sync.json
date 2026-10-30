@@ -1,0 +1,24 @@
+{
+  "config": {
+    "crashes": 0,
+    "fault_budget": 0,
+    "n": 1,
+    "operations": 1,
+    "replicas": 1,
+    "retries": true,
+    "variant": "omit_sync"
+  },
+  "counterexample": true,
+  "final_digest": "08e45de9369ac171818a03fcc6890acc923e7bb8d77c3b4d29e2a230bbbb7439",
+  "first_violation_step": 5,
+  "schema": "zxs-publication-model-replay-v1",
+  "steps": 5,
+  "valid": true,
+  "violations": [
+    {
+      "message": "CONTENT: member 0 advanced without durable complete bytes and directory entry",
+      "name": "durability_barrier",
+      "spec": "10.3; 10.5; 10.10"
+    }
+  ]
+}
