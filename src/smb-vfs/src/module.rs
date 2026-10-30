@@ -349,6 +349,49 @@ unsafe extern "C" fn pread(
         }
     }
 }
+unsafe extern "C" fn lseek(
+    handle: *mut sdk::vfs_handle_struct,
+    fsp: *mut sdk::files_struct,
+    offset: sdk::off_t,
+    whence: i32,
+) -> sdk::off_t {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> std::io::Result<sdk::off_t> {
+            // SAFETY: The host supplies a live handle on its owning event loop;
+            // fsp is only an opaque lookup key and is never dereferenced here.
+            let context = unsafe { context(handle) }?;
+            let opened = context.files.get(&(fsp as usize)).ok_or_else(bad)?;
+            let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+            context.client.call(Request::AuthorizeRead {
+                handle: opened.info.handle,
+            })?;
+            if !opened.writable {
+                // SMB2/3 tracks file position independently of VFS lseek.
+                // The non-content FD proves neither position nor allocation;
+                // reject raw seeks rather than query its directory geometry.
+                return Err(std::io::Error::from_raw_os_error(libc::ENOTSUP));
+            }
+            // SAFETY: The private work descriptor remains owned and its I/O
+            // lock is held. lseek receives scalar inputs and no host pointers.
+            let position = unsafe { libc::lseek(opened.fd.as_raw_fd(), offset, whence) };
+            if position < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(position)
+        },
+    ));
+    match result {
+        Ok(Ok(position)) => position,
+        Ok(Err(error)) => {
+            errno(error_errno(&error));
+            -1
+        }
+        Err(_) => {
+            errno(libc::EIO);
+            -1
+        }
+    }
+}
 unsafe extern "C" fn pwrite(
     handle: *mut sdk::vfs_handle_struct,
     fsp: *mut sdk::files_struct,
@@ -1289,6 +1332,7 @@ pub unsafe extern "C" fn samba_init_module() -> sdk::NTSTATUS {
         pread_fn: Some(pread),
         pread_send_fn: Some(pread_send),
         pread_recv_fn: Some(io_recv),
+        lseek_fn: Some(lseek),
         pwrite_fn: Some(pwrite),
         pwrite_send_fn: Some(pwrite_send),
         pwrite_recv_fn: Some(io_recv),
