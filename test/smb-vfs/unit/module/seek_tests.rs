@@ -19,16 +19,17 @@ fn with_seek_host(
     let stem = format!(
         "zxs-vfs-seek-{}-{}",
         std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     );
     let socket = std::env::temp_dir().join(format!("{stem}.sock"));
     let work = std::env::temp_dir().join(format!("{stem}.work"));
     let listener = UnixListener::bind(&socket).unwrap();
     let worker = std::thread::spawn(move || {
-        let mut stream = FrameStream::with_timeout(
-            listener.accept().unwrap().0,
-            Duration::from_secs(5),
-        ).unwrap();
+        let (connection, _) = listener.accept().unwrap();
+        let mut stream = FrameStream::with_timeout(connection, Duration::from_secs(5)).unwrap();
         assert!(matches!(
             stream.receive::<Request>().unwrap().0,
             Request::Hello { .. }
@@ -65,7 +66,9 @@ fn with_seek_host(
         ));
         stream
             .send(
-                &Response::Ok { result: json_codec::json!({"closed":true}) },
+                &Response::Ok {
+                    result: json_codec::json!({"closed":true}),
+                },
                 None,
             )
             .unwrap();
@@ -102,7 +105,9 @@ fn with_seek_host(
     let context = Box::new(Context {
         samba_username: "alice".into(),
         client,
-        files: [(&mut fsp as *mut _ as usize, opened)].into_iter().collect(),
+        files: [(&mut fsp as *mut _ as usize, opened)]
+            .into_iter()
+            .collect(),
     });
     let mut authenticated = authentication::tests::AuthenticatedSession::new();
     let mut host = authenticated.handle();

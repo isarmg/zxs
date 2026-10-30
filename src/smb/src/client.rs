@@ -605,7 +605,8 @@ impl Client {
                 handle,
                 offset,
                 length,
-            })? else {
+            })?
+            else {
                 unreachable!("invariant: successful reads admit typed bounded bytes")
             };
             let count = result.bytes.len();

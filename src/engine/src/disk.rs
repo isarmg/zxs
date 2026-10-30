@@ -743,7 +743,10 @@ fn decode_checksum_manifest(checks: &[u8], version: &FileVersion) -> Result<Chec
     decode_authenticated_checksums(checks, version)
 }
 
-fn decode_authenticated_checksums(checks: &[u8], version: &FileVersion) -> Result<ChecksumManifest> {
+fn decode_authenticated_checksums(
+    checks: &[u8],
+    version: &FileVersion,
+) -> Result<ChecksumManifest> {
     let manifest = ChecksumManifest::decode(checks)?;
     if manifest.logical_size != version.logical_size
         || manifest.chunk_bytes != version.checksum_chunk_bytes

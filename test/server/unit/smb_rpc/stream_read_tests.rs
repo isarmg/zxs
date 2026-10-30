@@ -20,8 +20,11 @@ fn read_open_does_not_scan_the_body_and_never_transfers_a_payload_descriptor() {
     let (opened, descriptor) = open_file(&mut active, false);
     assert_eq!(opened.size, 3);
     assert_eq!(
-        descriptor.read_at(&mut [0; 3], 0).unwrap_err().raw_os_error(),
-        Some(libc::EISDIR)
+        descriptor
+            .read_at(&mut [0; 3], 0)
+            .unwrap_err()
+            .raw_os_error(),
+        Some(rustix::io::Errno::ISDIR.raw_os_error())
     );
     let error = active.read(opened.handle, 0, 3).unwrap_err();
     assert_eq!(error.code, storage_contract::ErrorCode::ContentUnavailable);
@@ -53,7 +56,13 @@ fn read_cache_serves_the_same_verified_bytes_but_still_checks_live_authorization
     assert!(read_session(&mut active, opened.handle, 3, 1).is_empty());
     assert!(read_session(&mut active, opened.handle, u64::MAX, 1).is_empty());
     assert!(
-        active.read(opened.handle, 0, (smb_protocol::protocol::MAX_READ_BYTES + 1) as u32).is_err()
+        active
+            .read(
+                opened.handle,
+                0,
+                (smb_protocol::protocol::MAX_READ_BYTES + 1) as u32
+            )
+            .is_err()
     );
     active.close(opened.handle, true).unwrap();
     assert!(active.read_cache.is_none());
@@ -100,15 +109,28 @@ fn cached_rpc_read_rejects_a_rebound_session() {
     binding_tests::rebind(&shared, &branch, false);
     let (reply, fd) = binding_tests::exchange(
         &mut wire,
-        Request::Read { handle: opened.handle, offset: 1, length: 2 },
+        Request::Read {
+            handle: opened.handle,
+            offset: 1,
+            length: 2,
+        },
     );
     assert!(fd.is_none());
     assert!(matches!(
         reply,
-        Response::Error { code: storage_contract::ErrorCode::SmbRebindRequired, .. }
+        Response::Error {
+            code: storage_contract::ErrorCode::SmbRebindRequired,
+            ..
+        }
     ));
     assert!(matches!(
-        binding_tests::exchange(&mut wire, Request::Detach { handle: opened.handle }).0,
+        binding_tests::exchange(
+            &mut wire,
+            Request::Detach {
+                handle: opened.handle
+            }
+        )
+        .0,
         Response::Ok { .. }
     ));
     drop(descriptor);
@@ -119,10 +141,20 @@ fn cached_rpc_read_rejects_a_rebound_session() {
 fn large_fixture() -> (Fixture, Arc<Shared>, String, usize, Vec<PathBuf>) {
     let (temp, shared, backend, branch) = fixture();
     let width = backend.inner.test_with_engine_locked(|engine| {
-        let width = engine.state().versions.values().next().unwrap().checksum_chunk_bytes as usize;
+        let width = engine
+            .state()
+            .versions
+            .values()
+            .next()
+            .unwrap()
+            .checksum_chunk_bytes as usize;
         let workspace = engine.create_workspace(&branch, "alice").unwrap();
         engine
-            .stage_bytes(&workspace.workspace_id, "report.txt", &vec![42; width * 3 + 17])
+            .stage_bytes(
+                &workspace.workspace_id,
+                "report.txt",
+                &vec![42; width * 3 + 17],
+            )
             .unwrap();
         engine
             .commit_workspace(CommitRequest {
@@ -142,7 +174,9 @@ fn large_fixture() -> (Fixture, Arc<Shared>, String, usize, Vec<PathBuf>) {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 visit(&path, size, found);
-            } else if path.components().any(|part| part.as_os_str() == "file-containers")
+            } else if path
+                .components()
+                .any(|part| part.as_os_str() == "file-containers")
                 && path.metadata().unwrap().len() == size
             {
                 found.push(path);
@@ -168,9 +202,15 @@ fn first_chunk_succeeds_without_verifying_an_unrequested_corrupt_tail() {
         read_session(&mut active, opened.handle, (width - 1) as u64, 2),
         [42]
     );
-    assert_eq!(read_session(&mut active, opened.handle, width as u64, 1), [42]);
     assert_eq!(
-        active.read(opened.handle, (width * 2) as u64, 1).unwrap_err().code,
+        read_session(&mut active, opened.handle, width as u64, 1),
+        [42]
+    );
+    assert_eq!(
+        active
+            .read(opened.handle, (width * 2) as u64, 1)
+            .unwrap_err()
+            .code,
         storage_contract::ErrorCode::ContentUnavailable
     );
     assert!(active.read_cache.is_none());

@@ -40,10 +40,10 @@ mod published_selection_tests;
 mod reconciliation_tests;
 #[path = "recovery_record_tests.rs"]
 mod recovery_record_tests;
-#[path = "write_generation_tests.rs"]
-mod write_generation_tests;
 #[path = "stream_read_tests.rs"]
 mod stream_read_tests;
+#[path = "write_generation_tests.rs"]
+mod write_generation_tests;
 
 const RECONCILIATION_SNAPSHOT: usize = 1;
 const RECONCILIATION_CONTENT: usize = 2;

@@ -400,7 +400,7 @@ fn existing_reader_keeps_its_version_on_normal_writes_but_stops_after_binding_ch
         panic!("read open failed")
     };
     let opened: OpenResult = json_codec::from_value(result).unwrap();
-    let _read = File::from(fd.unwrap());
+    let read = File::from(fd.unwrap());
     let mut writer = session(shared.clone(), &branch);
     let (write, bytes) = open_file(&mut writer, true);
     bytes.write_all_at(b"new", 0).unwrap();

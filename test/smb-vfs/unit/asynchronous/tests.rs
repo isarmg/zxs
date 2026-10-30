@@ -195,6 +195,16 @@ fn sync_and_async_reads_bound_immutable_extents_but_allow_workspace_growth() {
                     json_codec::json!({"protocol": PROTOCOL, "capabilities": REQUIRED_CAPABILITIES})
                 }
                 Request::AuthorizeRead { handle: 7 } => json_codec::json!({"authorized":true}),
+                Request::Read {
+                    handle: 7,
+                    offset,
+                    length,
+                } => {
+                    let immutable = b"good";
+                    let start = usize::try_from(offset).unwrap().min(immutable.len());
+                    let count = (length as usize).min(immutable.len() - start);
+                    json_codec::json!({"bytes": &immutable[start..start + count]})
+                }
                 _ => panic!("unexpected request"),
             };
             stream.send(&Response::Ok { result }, None).unwrap();

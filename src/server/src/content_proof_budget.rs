@@ -24,11 +24,14 @@ impl Budget {
             .filter(|bytes| *bytes <= LIMIT)
             .ok_or_else(|| ApiError::limit("content checksum proof exceeds memory budget"))?;
         self.0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 used.checked_add(bytes).filter(|total| *total <= LIMIT)
             })
             .map_err(|_| ApiError::limit("content checksum proof memory capacity reached"))?;
-        Ok(Reservation { budget: self, bytes })
+        Ok(Reservation {
+            budget: self,
+            bytes,
+        })
     }
 }
 

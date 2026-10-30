@@ -2,8 +2,8 @@ use super::*;
 use storage_contract::ErrorCode;
 
 mod admission;
-mod write_sequence;
 mod read;
+mod write_sequence;
 
 #[test]
 fn module_client_requires_authenticated_account_and_durable_reservations() {

@@ -571,7 +571,8 @@ unsafe extern "C" fn pread_send(
                 } else {
                     opened
                         .client
-                        .read(opened.info.handle, offset as u64, &mut bytes)? as isize
+                        .read(opened.info.handle, offset as u64, &mut bytes)?
+                        as isize
                 };
                 bytes.truncate(result as usize);
                 Ok(asynchronous::Completion { result, bytes })

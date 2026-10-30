@@ -397,7 +397,11 @@ impl Session {
     /// Unlike Flush, Close always consumes the handle. A failed publication
     /// becomes retained detached work, not a lock with no VFS owner.
     pub(super) fn close(&mut self, handle: u64, abort: bool) -> Result<Value, ApiError> {
-        if self.read_cache.as_ref().is_some_and(|(owner, _)| *owner == handle) {
+        if self
+            .read_cache
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner == handle)
+        {
             self.read_cache = None;
         }
         if !self.handles.contains_key(&handle) {
@@ -436,7 +440,11 @@ impl Session {
     /// Used when a local worker failed before Close could safely attempt a save.
     /// Detach is not Abort: no backend mutation, source deletion or new operation.
     pub(super) fn detach(&mut self, handle: u64) -> Result<Value, ApiError> {
-        if self.read_cache.as_ref().is_some_and(|(owner, _)| *owner == handle) {
+        if self
+            .read_cache
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner == handle)
+        {
             self.read_cache = None;
         }
         let entry = self.handles.remove(&handle).ok_or_else(|| {

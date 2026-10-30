@@ -278,7 +278,9 @@ impl Session {
                 },
             )?;
             let manifest = content.checksum_manifest.as_ref().ok_or_else(|| {
-                ApiError::invalid("SMB immutable content requires an authenticated checksum manifest")
+                ApiError::invalid(
+                    "SMB immutable content requires an authenticated checksum manifest",
+                )
             })?;
             crate::verified_chunk::validate_manifest(manifest, content.size)?;
             let size = content.size;
@@ -339,7 +341,12 @@ impl Session {
         Ok(json!({"authorized":true}))
     }
 
-    pub(super) fn read(&mut self, handle: u64, offset: u64, length: u32) -> Result<Value, ApiError> {
+    pub(super) fn read(
+        &mut self,
+        handle: u64,
+        offset: u64,
+        length: u32,
+    ) -> Result<Value, ApiError> {
         if length as usize > smb_protocol::protocol::MAX_READ_BYTES {
             return Err(ApiError::limit("SMB read exceeds bounded reply size"));
         }
@@ -369,9 +376,10 @@ impl Session {
             None => {
                 // Evict first: at most one complete checksum chunk per session.
                 self.read_cache = None;
-                let manifest = content.checksum_manifest.as_ref().expect(
-                    "invariant: immutable Open retained its authenticated manifest",
-                );
+                let manifest = content
+                    .checksum_manifest
+                    .as_ref()
+                    .expect("invariant: immutable Open retained its authenticated manifest");
                 let chunk = crate::verified_chunk::read(
                     &mut content.file,
                     &mut content.fallback_files,
