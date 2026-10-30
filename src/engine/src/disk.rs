@@ -1108,8 +1108,8 @@ pub(crate) fn offline_check_in_context(
     root: &Path,
     metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<CheckReport> {
-    let loaded = read_bytes(&root.join("disk.json"), MAX_METADATA)
-        .and_then(|bytes| decode_seal(&bytes));
+    let loaded =
+        read_bytes(&root.join("disk.json"), MAX_METADATA).and_then(|bytes| decode_seal(&bytes));
     let _seal: DiskSeal = match metadata {
         Some(metadata) => metadata.seal(loaded)?,
         None => loaded?,
