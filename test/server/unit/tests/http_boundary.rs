@@ -827,6 +827,14 @@ impl Backend for PanickingBackend {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         panic!("private default directory branch panic detail")
     }
+    fn history_window(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::history_window::HistoryWindowRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, crate::ApiError> {
+        panic!("private file history panic detail")
+    }
     fn file_history_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -1008,7 +1016,46 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
     .unwrap();
     let (token, _, _) = authenticated(&app).await;
     for (method, path, body) in [
-        ("GET", "/api/file-manager/files/file/history", None),
+        (
+            "GET",
+            "/api/file-manager/files/file_00000000000000000000000000000000/history",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file_00000000000000000000000000000000/history/branches?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file_00000000000000000000000000000000/history/merges?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file_00000000000000000000000000000000/history/nodes/fmeta_00000000000000000000000000000000/parents?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file_00000000000000000000000000000000/history/merges/fmerge_00000000000000000000000000000000/inputs?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file_00000000000000000000000000000000/history/merges/fmerge_00000000000000000000000000000000/parents?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/file-manager/files/file_00000000000000000000000000000000/history/nodes/ver_00000000000000000000000000000000/fields/message?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
+        (
+            "GET",
+            "/api/files/file_00000000000000000000000000000000/history/versions/ver_00000000000000000000000000000000/sources?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+            None,
+        ),
         ("GET", "/api/capabilities", None),
         ("GET", "/readyz", None),
         ("GET", "/api/workspaces/capacity", None),
@@ -1178,7 +1225,11 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
         ("GET", "/api/events?after=17", None),
         ("GET", "/api/file-manager/history?ignored=true", None),
         ("GET", "/api/backup-topologies/default", None),
-        ("GET", "/api/files/file/history", None),
+        (
+            "GET",
+            "/api/files/file_00000000000000000000000000000000/history",
+            None,
+        ),
         ("GET", "/api/repositories/repository/default-branch", None),
         (
             "PATCH",

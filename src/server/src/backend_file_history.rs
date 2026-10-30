@@ -148,6 +148,7 @@ pub struct HistoryRevision {
     pub message: String,
     pub tags: BTreeSet<String>,
 }
+#[cfg(test)]
 #[derive(Serialize)]
 pub(crate) struct FileHistoryResponse {
     file_id: String,
@@ -164,12 +165,14 @@ pub(crate) struct FileHistoryResponse {
     #[serialization(flatten)]
     content: Option<crate::backend_branch::ContentDispositionResponse>,
 }
+#[cfg(test)]
 #[derive(Serialize)]
 struct HistoryBranchResponse {
     #[serialization(flatten)]
     branch: crate::backend_branch::BranchResponse,
     current: bool,
 }
+#[cfg(test)]
 impl From<FileHistorySnapshot> for FileHistoryResponse {
     fn from(snapshot: FileHistorySnapshot) -> Self {
         let FileHistorySnapshot {
@@ -220,6 +223,7 @@ fn serialize_content_state<S: data_serialization::Serializer>(
     )
 }
 
+#[cfg(test)]
 #[derive(Serialize)]
 struct HistoryMergeResponse {
     merge_id: String,
@@ -236,6 +240,7 @@ struct HistoryMergeResponse {
     #[serialization(with = "storage_contract::u64_string")]
     sequence: u64,
 }
+#[cfg(test)]
 impl From<storage_contract::FileBranchMerge> for HistoryMergeResponse {
     fn from(merge: storage_contract::FileBranchMerge) -> Self {
         let storage_contract::FileBranchMerge {

@@ -33,6 +33,9 @@ mod verified_chunk;
 mod web_assets;
 
 mod backend_file_history;
+mod history_window_encode;
+mod history_window_http;
+mod history_window_query;
 pub use backend_file_history::{
     ContentNodeKind, FileHistorySnapshot, HistoryBranch, HistoryNode, HistoryRevision,
     HistoryVersion, HistoryVersionData, ReadFileHistory, RenameNodeKind, RevisionKind,
@@ -655,6 +658,12 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         repository_id: &str,
     ) -> Result<DefaultDirectoryBranchSnapshot, ApiError>;
+    fn history_window(
+        &self,
+        identity: &Identity,
+        request: storage_contract::history_window::HistoryWindowRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, ApiError>;
     fn file_history_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -1254,6 +1263,15 @@ impl Backend for AuthorizedBackend {
     ) -> Result<crate::DefaultDirectoryBranchSnapshot, crate::ApiError> {
         self.backend
             .default_directory_branch(&self.current(identity)?, repository_id)
+    }
+    fn history_window(
+        &self,
+        identity: &Identity,
+        request: storage_contract::history_window::HistoryWindowRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, ApiError> {
+        self.backend
+            .history_window(&self.current(identity)?, request, cancellation)
     }
     fn file_history_snapshot(
         &self,
@@ -1882,7 +1900,14 @@ fn router_shared(
         .route("/api/versions/{version}", get(version))
         .route("/api/versions/{version}/placement", get(placement))
         .route("/api/versions/{version}/checksums", get(checksums))
-        .route("/api/files/{file}/history", get(history))
+        .route(
+            "/api/files/{file}/history",
+            get(history_window_http::versions),
+        )
+        .route(
+            "/api/files/{file}/history/versions/{version}/sources",
+            get(history_window_http::version_sources),
+        )
         .route("/api/commits/{commit}", get(commit_info))
         .route("/api/history-trees/{history}/graph", get(graph))
         .route(
@@ -2332,26 +2357,6 @@ async fn placement(
             backend
                 .placement_snapshot(&identity, &version)
                 .map(backend_storage_metadata::PlacementResponse::from)
-        })
-        .await
-        .map(Json)
-}
-async fn history(
-    State(state): State<AppState>,
-    http_routing::Extension(identity): http_routing::Extension<Identity>,
-    ApiPath(file): ApiPath<String>,
-    ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<backend_read::FileHistoryResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
-            backend
-                .file_history(&identity, &file)
-                .map(|versions| backend_read::FileHistoryResponse::new(file, versions))
         })
         .await
         .map(Json)

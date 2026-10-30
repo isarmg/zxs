@@ -492,6 +492,15 @@ impl Backend for PausedBackend {
         self.enter();
         self.inner.default_directory_branch(identity, repository_id)
     }
+    fn history_window(
+        &self,
+        identity: &crate::auth::Identity,
+        request: storage_contract::history_window::HistoryWindowRequest,
+        cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, crate::ApiError> {
+        self.enter();
+        self.inner.history_window(identity, request, cancellation)
+    }
     fn file_history_snapshot(
         &self,
         identity: &crate::auth::Identity,
@@ -833,6 +842,15 @@ enum Request {
     TopologySnapshot,
     FileHistory,
     FileHistorySnapshot,
+    HistoryNodes,
+    HistoryVersions,
+    HistoryBranches,
+    HistoryMerges,
+    HistoryNodeParents,
+    HistoryVersionSources,
+    HistoryMergeInputs,
+    HistoryMergeParents,
+    HistoryField,
     DefaultDirectoryBranch,
     Listing,
     DirectoryScopes,
@@ -892,8 +910,27 @@ enum Request {
 }
 impl Request {
     fn execute(self, fixture: &Fixture, backend: &dyn Backend) -> Result<(), ApiError> {
+        use storage_contract::history_window::*;
         let identity = &fixture.identity;
         let workspace = &fixture.workspace.workspace_id;
+        let history_window = |collection: HistoryCollection| {
+            backend
+                .history_window(
+                    identity,
+                    HistoryWindowRequest {
+                        file_id: HistoryFileId::parse("file_00000000000000000000000000000000")
+                            .unwrap(),
+                        limit: HistoryPageLimit::default_for(&collection),
+                        collection,
+                        location: None,
+                        history_root: Some(HistoryRoot::parse(&"0".repeat(64)).unwrap()),
+                        cursor: None,
+                        anchor_node_id: None,
+                    },
+                    HistoryWindowCancellation::new(),
+                )
+                .map(|_| ())
+        };
         match self {
             Self::BackupConfiguration => backend
                 .backup_configuration(
@@ -1492,6 +1529,27 @@ impl Request {
                 )
                 .map(|_| ()),
             Self::FileHistory => backend.file_history(identity, "missing-file").map(|_| ()),
+            Self::HistoryNodes => history_window(HistoryCollection::Nodes),
+            Self::HistoryVersions => history_window(HistoryCollection::Versions),
+            Self::HistoryBranches => history_window(HistoryCollection::Branches),
+            Self::HistoryMerges => history_window(HistoryCollection::Merges),
+            Self::HistoryNodeParents => history_window(HistoryCollection::NodeParents {
+                node_id: HistoryNodeId::parse("fmeta_00000000000000000000000000000000").unwrap(),
+            }),
+            Self::HistoryVersionSources => history_window(HistoryCollection::VersionSources {
+                version_id: HistoryVersionId::parse("ver_00000000000000000000000000000000")
+                    .unwrap(),
+            }),
+            Self::HistoryMergeInputs => history_window(HistoryCollection::MergeInputs {
+                merge_id: HistoryMergeId::parse("fmerge_00000000000000000000000000000000").unwrap(),
+            }),
+            Self::HistoryMergeParents => history_window(HistoryCollection::MergeParents {
+                merge_id: HistoryMergeId::parse("fmerge_00000000000000000000000000000000").unwrap(),
+            }),
+            Self::HistoryField => history_window(HistoryCollection::NodeField {
+                node_id: HistoryNodeId::parse("ver_00000000000000000000000000000000").unwrap(),
+                field: HistoryField::Message,
+            }),
             Self::TopologySnapshot => backend.topology_snapshot(identity).map(|_| ()),
             Self::PlacementSnapshot => backend
                 .placement_snapshot(identity, &fixture.version)
@@ -1688,6 +1746,15 @@ fn completed_account_revocation_precedes_all_engine_admissions() {
                 Request::HistoryGraph,
                 Request::FileHistory,
                 Request::FileHistorySnapshot,
+                Request::HistoryNodes,
+                Request::HistoryVersions,
+                Request::HistoryBranches,
+                Request::HistoryMerges,
+                Request::HistoryNodeParents,
+                Request::HistoryVersionSources,
+                Request::HistoryMergeInputs,
+                Request::HistoryMergeParents,
+                Request::HistoryField,
                 Request::DiskDirectorySelect,
                 Request::DiskDirectoryCreate,
                 Request::InitializeDirectoryScope,
@@ -1926,6 +1993,15 @@ fn embedded_backend_without_protected_credentials_fails_closed() {
         Request::TopologySnapshot,
         Request::FileHistory,
         Request::FileHistorySnapshot,
+        Request::HistoryNodes,
+        Request::HistoryVersions,
+        Request::HistoryBranches,
+        Request::HistoryMerges,
+        Request::HistoryNodeParents,
+        Request::HistoryVersionSources,
+        Request::HistoryMergeInputs,
+        Request::HistoryMergeParents,
+        Request::HistoryField,
         Request::DefaultDirectoryBranch,
         Request::Listing,
         Request::DirectoryScopes,

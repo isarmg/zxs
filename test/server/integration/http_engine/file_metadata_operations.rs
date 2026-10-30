@@ -446,8 +446,14 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     let tag_node = tagged["result"]["nodes"][0]["node_id"].as_str().unwrap();
     assert!(tag_node.starts_with("fmeta_"));
     let initial = history(&app, &token, file).await;
-    assert_eq!(initial["versions"].as_array().unwrap().len(), 1);
-    assert_eq!(initial["node_id"], tag_node);
+    assert_eq!(
+        history_versions(&app, &token, file, &initial, None).await["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(initial["identity"]["context"]["current_node_id"], tag_node);
     let snapshot = initial["nodes"]
         .as_array()
         .unwrap()
@@ -456,7 +462,16 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         .unwrap();
     assert_eq!(snapshot["kind"], "tags");
     assert_eq!(snapshot["tags"], json!(["work", "已审核"]));
-    assert_eq!(snapshot["parent_node_ids"], json!([base]));
+    let parents = history_related(
+        &app,
+        &token,
+        file,
+        &initial,
+        &format!("nodes/{tag_node}/parents"),
+        None,
+    )
+    .await;
+    assert_eq!(parents["parents"], json!([{"parent_node_id":base}]));
     success(
         &app,
         &token,
@@ -467,15 +482,31 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     .await;
     manager_namespace(&app, &token, "rename", "report.txt", Some("renamed.txt")).await;
     let renamed = history(&app, &token, file).await;
-    let path_node = renamed["node_id"].as_str().unwrap();
+    let path_node = renamed["identity"]["context"]["current_node_id"]
+        .as_str()
+        .unwrap();
     manager_upload(&app, &token, "renamed.txt", b"left body").await;
     let written = history(&app, &token, file).await;
-    let left_node = written["node_id"].as_str().unwrap();
+    let left_node = written["identity"]["context"]["current_node_id"]
+        .as_str()
+        .unwrap();
     assert_eq!(written["nodes"][0]["tags"], json!(["work", "已审核"]));
-    assert_eq!(written["nodes"][0]["parent_node_ids"], json!([path_node]));
+    let parents = history_related(
+        &app,
+        &token,
+        file,
+        &written,
+        &format!("nodes/{left_node}/parents"),
+        None,
+    )
+    .await;
+    assert_eq!(parents["parents"], json!([{"parent_node_id":path_node}]));
     let historical=success(&app,&token,"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":tag_node,"expected_node_id":left_node}],"add":["归档"],"remove":["work"],"operation_id":new_id("op")}))).await;
     assert_eq!(historical["result"]["nodes"][0]["advanced"], false);
-    assert_eq!(history(&app, &token, file).await["node_id"], left_node);
+    assert_eq!(
+        history(&app, &token, file).await["identity"]["context"]["current_node_id"],
+        left_node
+    );
     let before_invalid = history(&app, &token, file).await;
     for bad in [" bad".to_string(), "bad\nlabel".into(), "文".repeat(43)] {
         assert_eq!(send(&app,Some(&token),"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":left_node,"expected_node_id":left_node}],"add":[bad],"remove":[],"operation_id":new_id("op")}))).await.0,StatusCode::BAD_REQUEST);
@@ -484,7 +515,9 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     select(&app, &token, file, &right).await;
     manager_upload(&app, &token, "renamed.txt", b"right body").await;
     let right_history = history(&app, &token, file).await;
-    let right_node = right_history["node_id"].as_str().unwrap();
+    let right_node = right_history["identity"]["context"]["current_node_id"]
+        .as_str()
+        .unwrap();
     let merge_route = format!("/api/file-manager/files/{file}/merge");
     let request = json!({"inputs":[{"branch_id":left,"expected_node_id":left_node},{"branch_id":right,"expected_node_id":right_node}],"chosen_node_id":tag_node,"surviving_branch_id":left,"confirmed":true,"repository_id":repo,"path":"renamed.txt","operation_id":new_id("op")});
     let mut unconfirmed = request.clone();
@@ -511,9 +544,15 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     let node = merged["result"]["node_id"].as_str().unwrap();
     assert!(node.starts_with("fmeta_"));
     let after = history(&app, &token, file).await;
-    assert_eq!(after["versions"].as_array().unwrap().len(), 3);
-    assert_eq!(after["node_id"], node);
-    assert_eq!(after["version_id"], base);
+    assert_eq!(
+        history_versions(&app, &token, file, &after, None).await["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(after["identity"]["context"]["current_node_id"], node);
+    assert_eq!(after["context"]["content"]["version_id"], base);
     let result = after["nodes"]
         .as_array()
         .unwrap()
@@ -526,7 +565,8 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         "merge metadata describes its chosen source, independent of parent UUID order"
     );
     assert_eq!(result["tags"], json!(["work", "已审核"]));
-    let alias = after["branches"]
+    let branches = history_related(&app, &token, file, &after, "branches", None).await;
+    let alias = branches["branches"]
         .as_array()
         .unwrap()
         .iter()
@@ -535,7 +575,58 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     assert_eq!(alias["read_only"], true);
     assert_eq!(alias["alias_of"], left);
     assert_eq!(alias["node_id"], right_node);
-    assert_eq!(after["merges"].as_array().unwrap().len(), 1);
+    let merges = history_related(&app, &token, file, &after, "merges", None).await;
+    let records = merges["merges"].as_array().unwrap();
+    assert_eq!(records.len(), 1);
+    let merge = &records[0];
+    assert_eq!(merge["chosen_node_id"], tag_node);
+    assert_eq!(merge["result_node_id"], node);
+    assert_eq!(merge["surviving_branch_id"], left);
+    let merge_id = merge["merge_id"].as_str().unwrap();
+    let inputs = history_related(
+        &app,
+        &token,
+        file,
+        &after,
+        &format!("merges/{merge_id}/inputs"),
+        None,
+    )
+    .await;
+    assert!(inputs["page"]["next_cursor"].is_null());
+    let inputs = inputs["inputs"].as_array().unwrap();
+    assert_eq!(merge["input_count"], inputs.len().to_string());
+    assert_eq!(inputs.len(), 2);
+    for (ordinal, (branch, head)) in [(&left, left_node), (&right, right_node)]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(inputs[ordinal]["ordinal"], ordinal.to_string());
+        assert_eq!(inputs[ordinal]["branch_id"], branch.as_str());
+        assert_eq!(inputs[ordinal]["node_id"], head);
+    }
+    let parents = history_related(
+        &app,
+        &token,
+        file,
+        &after,
+        &format!("merges/{merge_id}/parents"),
+        None,
+    )
+    .await;
+    assert!(parents["page"]["next_cursor"].is_null());
+    let parents = parents["parents"].as_array().unwrap();
+    assert_eq!(merge["parent_count"], parents.len().to_string());
+    assert_eq!(parents.len(), 3);
+    for (ordinal, parent) in parents.iter().enumerate() {
+        assert_eq!(parent["ordinal"], ordinal.to_string());
+    }
+    for head in [left_node, right_node, tag_node] {
+        assert!(
+            parents
+                .iter()
+                .any(|parent| parent["parent_node_id"] == head)
+        );
+    }
     assert_eq!(version_bytes(&app, &token, base).await, b"base body");
     assert_eq!(
         send(
@@ -563,7 +654,10 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     );
 
     let session = login(&app, "admin", "integration-test-password").await;
-    assert_eq!(history(&app, &session, file).await["node_id"], node);
+    assert_eq!(
+        history(&app, &session, file).await["identity"]["context"]["current_node_id"],
+        node
+    );
     success(&app, &session, "POST", "/api/auth/logout", None).await;
     assert_eq!(
         send(
@@ -724,6 +818,7 @@ async fn contextual_branch_selection_preserves_current_file_when_target_body_is_
     select(&app, &token, file, &other).await;
     manager_upload(&app, &token, "report.txt", b"still readable body").await;
     let before = history(&app, &token, file).await;
+    let before_versions = history_versions(&app, &token, file, &before, None).await;
     drop(app);
     let engine = reopen_after_router_drop(&system).await;
     let history_id = &engine.state().versions[version].history_tree_id;
@@ -754,9 +849,18 @@ async fn contextual_branch_selection_preserves_current_file_when_target_body_is_
         assert_eq!(response["error"]["code"], "CONTENT_UNAVAILABLE");
     }
     let after = history(&app, &token, file).await;
-    assert_eq!(after["selected_branch_id"], before["selected_branch_id"]);
-    assert_eq!(after["current_node_id"], before["current_node_id"]);
-    assert_eq!(after["versions"], before["versions"]);
+    assert_eq!(
+        after["identity"]["context"]["selected_branch_id"],
+        before["identity"]["context"]["selected_branch_id"]
+    );
+    assert_eq!(
+        after["identity"]["context"]["current_node_id"],
+        before["identity"]["context"]["current_node_id"]
+    );
+    assert_eq!(
+        history_versions(&app, &token, file, &after, None).await["versions"],
+        before_versions["versions"]
+    );
 }
 
 #[tokio::test]

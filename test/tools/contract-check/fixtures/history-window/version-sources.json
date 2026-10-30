@@ -1,0 +1,31 @@
+{
+  "kind": "version_sources",
+  "identity": {
+    "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
+    "collection": {
+      "kind": "version_sources",
+      "version_id": "ver_87aacbfd592e4b539fc94e3f1653367d"
+    },
+    "context": {
+      "repository_id": "repo_4f185d7fabb3444ebeaf32bcd61440fa",
+      "history_tree_id": "history_47238cab7fbb497aa8f81160f3643427",
+      "path": "renamed.txt",
+      "current_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "selected_branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4"
+    },
+    "query_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "limit": 256,
+    "action_max_entries": "100000"
+  },
+  "sources": [
+    {
+      "ordinal": "0",
+      "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68"
+    }
+  ],
+  "page": {
+    "previous_cursor": null,
+    "next_cursor": null
+  }
+}

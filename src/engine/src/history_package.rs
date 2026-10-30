@@ -483,6 +483,7 @@ pub(crate) fn bound_history_objects(
     bound_history_objects_with(candidate, admitted, |kind, hash| {
         crate::publication_evidence::verified_graph_object(members, kind, hash)
     })
+    .map(|(objects, _)| objects)
 }
 
 pub(crate) fn bound_history_objects_at(
@@ -491,6 +492,19 @@ pub(crate) fn bound_history_objects_at(
     candidate: &Candidate,
     admitted: Option<&AdmittedState>,
 ) -> Result<HistoryGraphObjects> {
+    bound_history_objects_with_roots_at(resources, members, candidate, admitted)
+        .map(|(objects, _)| objects)
+}
+
+/// The catalog is returned only after its complete authenticated history graphs
+/// have been checked against the same admitted State. Recovery retains it with
+/// that allocation; it is not a database candidate or a disk-health receipt.
+pub(crate) fn bound_history_objects_with_roots_at(
+    resources: &DiskResources,
+    members: &[DiskConfig],
+    candidate: &Candidate,
+    admitted: Option<&AdmittedState>,
+) -> Result<(HistoryGraphObjects, BTreeMap<String, String>)> {
     bound_history_objects_with(candidate, admitted, |kind, hash| {
         crate::publication_evidence::verified_graph_object_at(resources, members, kind, hash)
     })
@@ -500,7 +514,7 @@ fn bound_history_objects_with(
     candidate: &Candidate,
     admitted: Option<&AdmittedState>,
     mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
-) -> Result<HistoryGraphObjects> {
+) -> Result<(HistoryGraphObjects, BTreeMap<String, String>)> {
     let (catalog, catalog_objects) = resolve_catalog(&candidate.history_roots, &mut load)?;
     let mut objects = Vec::new();
     let mut seen = BTreeSet::new();
@@ -545,7 +559,7 @@ fn bound_history_objects_with(
             objects.push(object);
         }
     }
-    Ok(objects)
+    Ok((objects, catalog))
 }
 
 #[cfg(test)]

@@ -1,0 +1,37 @@
+{
+  "kind": "merges",
+  "identity": {
+    "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
+    "collection": {
+      "kind": "merges"
+    },
+    "context": {
+      "repository_id": "repo_4f185d7fabb3444ebeaf32bcd61440fa",
+      "history_tree_id": "history_47238cab7fbb497aa8f81160f3643427",
+      "path": "renamed.txt",
+      "current_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "selected_branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4"
+    },
+    "query_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "limit": 64,
+    "action_max_entries": "100000"
+  },
+  "merges": [
+    {
+      "merge_id": "fmerge_dc77fb31b3ae4efe8bcf7e3e57cfa51b",
+      "sequence": "15",
+      "chosen_node_id": "fmeta_e6235fa19d6445f196f4d68386fefbe8",
+      "result_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "surviving_branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
+      "reused_node": false,
+      "operation_id": "op_35c9bc927ea140bba28336a7ea6e690b",
+      "input_count": "2",
+      "parent_count": "3"
+    }
+  ],
+  "page": {
+    "previous_cursor": null,
+    "next_cursor": null
+  }
+}

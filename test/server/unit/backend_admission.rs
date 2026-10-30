@@ -535,6 +535,15 @@ impl Backend for BackendProbe {
         self.wait()?;
         Err(crate::ApiError::unsupported())
     }
+    fn history_window(
+        &self,
+        _identity: &crate::auth::Identity,
+        _request: storage_contract::history_window::HistoryWindowRequest,
+        _cancellation: storage_contract::history_window::HistoryWindowCancellation,
+    ) -> Result<storage_contract::history_window::HistoryWindowPage, crate::ApiError> {
+        self.wait()?;
+        Err(crate::ApiError::unsupported())
+    }
     fn file_history_snapshot(
         &self,
         _identity: &crate::auth::Identity,
@@ -1106,7 +1115,38 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/branches/branch/tree?commit_id=commit"),
     ("GET", "/api/repositories/repository"),
     ("GET", "/api/branches/branch"),
-    ("GET", "/api/file-manager/files/file/history"),
+    (
+        "GET",
+        "/api/file-manager/files/file_00000000000000000000000000000000/history",
+    ),
+    (
+        "GET",
+        "/api/file-manager/files/file_00000000000000000000000000000000/history/branches?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+    ),
+    (
+        "GET",
+        "/api/file-manager/files/file_00000000000000000000000000000000/history/merges?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+    ),
+    (
+        "GET",
+        "/api/file-manager/files/file_00000000000000000000000000000000/history/nodes/fmeta_00000000000000000000000000000000/parents?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+    ),
+    (
+        "GET",
+        "/api/file-manager/files/file_00000000000000000000000000000000/history/merges/fmerge_00000000000000000000000000000000/inputs?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+    ),
+    (
+        "GET",
+        "/api/file-manager/files/file_00000000000000000000000000000000/history/merges/fmerge_00000000000000000000000000000000/parents?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+    ),
+    (
+        "GET",
+        "/api/file-manager/files/file_00000000000000000000000000000000/history/nodes/ver_00000000000000000000000000000000/fields/message?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+    ),
+    (
+        "GET",
+        "/api/files/file_00000000000000000000000000000000/history/versions/ver_00000000000000000000000000000000/sources?history_root=0000000000000000000000000000000000000000000000000000000000000000",
+    ),
     ("POST", "/api/file-manager/files/file/metadata"),
     ("POST", "/api/file-manager/versions/version/metadata"),
     ("PATCH", "/api/file-manager/files/file/nodes/node"),
@@ -1135,7 +1175,10 @@ const TYPED_BACKEND_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/events?after=17"),
     ("GET", "/api/file-manager/history?ignored=true"),
     ("GET", "/api/backup-topologies/default"),
-    ("GET", "/api/files/file/history"),
+    (
+        "GET",
+        "/api/files/file_00000000000000000000000000000000/history",
+    ),
     ("GET", "/api/repositories/repository/default-branch"),
     ("GET", "/api/repositories/repository/directory-branches"),
     ("POST", "/api/repositories/repository/directory-branches"),

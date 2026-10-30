@@ -1,0 +1,86 @@
+{
+  "kind": "branches",
+  "identity": {
+    "history_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "file_id": "file_d07361b3589047f193b3cd5fdca0b6d9",
+    "collection": {
+      "kind": "branches"
+    },
+    "context": {
+      "repository_id": "repo_4f185d7fabb3444ebeaf32bcd61440fa",
+      "history_tree_id": "history_47238cab7fbb497aa8f81160f3643427",
+      "path": "renamed.txt",
+      "current_node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "selected_branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4"
+    },
+    "query_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "limit": 64,
+    "action_max_entries": "100000"
+  },
+  "branches": [
+    {
+      "branch_id": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
+      "name": "left",
+      "head_commit_id": "commit_244859da15164d7bb719e3a62b90381b",
+      "fork_commit_id": "commit_0ad62b2d294c4ab4a2eed96fd4534f19",
+      "node_id": "fmeta_ddd8db65c3b340b890ea34caa697a368",
+      "state": "active",
+      "branch_kind": "file",
+      "generation": "5",
+      "current": true,
+      "read_only": false,
+      "alias_of": null,
+      "content": {
+        "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+        "source": {
+          "kind": "owned"
+        },
+        "stored_state": "AVAILABLE"
+      }
+    },
+    {
+      "branch_id": "br_beb2fa7127f84eeea9110644558cb526",
+      "name": "main",
+      "head_commit_id": "commit_50c138b2954040f380b504c49feef222",
+      "fork_commit_id": "commit_0ad62b2d294c4ab4a2eed96fd4534f19",
+      "node_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+      "state": "active",
+      "branch_kind": "file",
+      "generation": "1",
+      "current": false,
+      "read_only": false,
+      "alias_of": null,
+      "content": {
+        "version_id": "ver_7a52dbf0d7d048fa9187aa30301d4d68",
+        "source": {
+          "kind": "owned"
+        },
+        "stored_state": "AVAILABLE"
+      }
+    },
+    {
+      "branch_id": "br_c74d8572ee234bc8aca8299a0b17fb22",
+      "name": "right",
+      "head_commit_id": "commit_e3bd9209dd144ecbbaf9cedc02606640",
+      "fork_commit_id": "commit_0ad62b2d294c4ab4a2eed96fd4534f19",
+      "node_id": "ver_87aacbfd592e4b539fc94e3f1653367d",
+      "state": "merged",
+      "branch_kind": "file",
+      "generation": "3",
+      "current": false,
+      "read_only": true,
+      "alias_of": "br_31992afdd8274ce5b3b2b81ab3abb2b4",
+      "content": {
+        "version_id": "ver_87aacbfd592e4b539fc94e3f1653367d",
+        "source": {
+          "kind": "owned"
+        },
+        "stored_state": "AVAILABLE"
+      }
+    }
+  ],
+  "page": {
+    "previous_cursor": null,
+    "next_cursor": null
+  }
+}

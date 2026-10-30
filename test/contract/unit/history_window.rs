@@ -1043,3 +1043,61 @@ fn declared_node_and_field_budgets_include_json_escaping_and_shared_response_cei
     assert_eq!(bytes.len(), 6 * MAX_HISTORY_FIELD_BYTES + 2);
     assert!(MAX_HISTORY_ENVELOPE_BYTES + bytes.len() <= MAX_HISTORY_RESPONSE_BYTES);
 }
+
+#[test]
+fn cancellation_latched_while_queued_survives_request_drop_before_worker_execution() {
+    use std::{sync::mpsc, time::Duration};
+    let request = HistoryWindowCancellation::new();
+    let (enqueue, queued) = mpsc::sync_channel(1);
+    enqueue.send(request.clone()).unwrap();
+    let (ready, ready_receiver) = mpsc::sync_channel(1);
+    let (execute, execution) = mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        ready.send(()).unwrap();
+        execution.recv_timeout(Duration::from_secs(10)).unwrap();
+        let signal = queued.recv_timeout(Duration::from_secs(10)).unwrap();
+        signal.is_cancelled()
+    });
+    ready_receiver
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    request.cancel();
+    request.cancel();
+    drop(request);
+    // The simulated backend job remains queued until cancellation has completed
+    // and the caller has gone away; no scheduling race or sleep establishes it.
+    execute.send(()).unwrap();
+    assert!(worker.join().unwrap());
+}
+
+#[test]
+fn cancellation_clones_share_a_monotone_signal_without_affecting_independent_reads() {
+    use std::{sync::mpsc, time::Duration};
+    let request = HistoryWindowCancellation::new();
+    let worker_signal = request.clone();
+    let independent_new = HistoryWindowCancellation::new();
+    let independent_default = HistoryWindowCancellation::default();
+    assert!(!request.is_cancelled());
+    assert!(!worker_signal.is_cancelled());
+    assert!(!independent_new.is_cancelled());
+    assert!(!independent_default.is_cancelled());
+    let (cancelled, observed) = mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        worker_signal.cancel();
+        worker_signal.cancel();
+        cancelled.send(()).unwrap();
+    });
+    observed.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(request.is_cancelled());
+    let late_observer = request.clone();
+    request.cancel();
+    drop(request);
+    worker.join().unwrap();
+    assert!(late_observer.is_cancelled());
+    assert!(!independent_new.is_cancelled());
+    assert!(!independent_default.is_cancelled());
+    independent_default.cancel();
+    independent_default.cancel();
+    assert!(independent_default.is_cancelled());
+    assert!(!independent_new.is_cancelled());
+}
