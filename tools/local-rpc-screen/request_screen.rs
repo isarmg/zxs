@@ -1,4 +1,4 @@
-//! Verification-only local Unix RPC screen; not network SMB or physical-disk evidence.
+//! Client-side save attribution only; not an adoption rerun or network SMB evidence.
 use super::*;
 use smb_protocol::client::{Client, Mutation, WriteSequence, close_descriptor};
 use std::{os::unix::net::UnixListener, time::Instant};
@@ -71,7 +71,7 @@ fn list_cycle(client: &Client, directory: usize) -> (u128, Vec<Value>) {
 fn bounded_request_screen() {
     let root = PathBuf::from(std::env::var_os("ZXS_RPC_ROOT").unwrap());
     let commits: usize = std::env::var("ZXS_RPC_COMMITS").unwrap().parse().unwrap();
-    assert!(matches!(commits, 22 | 220));
+    assert_eq!(commits, 220);
     let started = Instant::now();
     let mut engine = Engine::open(&root.join("state")).unwrap();
     let open_ns = started.elapsed().as_nanos();
@@ -138,6 +138,7 @@ fn bounded_request_screen() {
     let read_memory = status();
     let mut save_ns = Vec::with_capacity(20);
     let mut responses = Vec::with_capacity(20);
+    let mut save_stages = Vec::with_capacity(20);
     let batch = Instant::now();
     for round in 0..20 {
         let index = (round * 37) % 500;
@@ -145,25 +146,42 @@ fn bounded_request_screen() {
         let request = open_request(path_for(index), true);
         let start = Instant::now();
         let (opened, fd) = client.open(request).unwrap();
+        let open_ns = start.elapsed().as_nanos();
         let file = File::from(fd);
         let mut sequence = WriteSequence::new(false);
+        let (mut prepare_ns, mut dirty_ns, mut mutation_ns) = (0, 0, 0);
+        let (mut prepare_calls, mut dirty_calls) = (0, 0);
         sequence.mutate(opened.handle, body.len() as u64, body.len() as u64,
-            |request| client.call(request), || {
+            |request| {
+                let prepare = matches!(&request, Request::PrepareWrite { .. });
+                assert!(prepare || matches!(&request, Request::Dirty { .. }));
+                let before = Instant::now();
+                let result = client.call(request);
+                let elapsed = before.elapsed().as_nanos();
+                if prepare { prepare_ns += elapsed; prepare_calls += 1; }
+                else { dirty_ns += elapsed; dirty_calls += 1; }
+                result
+            }, || {
+                let before = Instant::now();
                 file.write_all_at(&body, 0)?;
                 file.set_len(body.len() as u64)?;
+                mutation_ns = before.elapsed().as_nanos();
                 Ok(((), Mutation::Changed))
             }).unwrap();
         let mut response = None;
+        let before_close = Instant::now();
         close_descriptor(opened.handle, file.into(), &Mutex::new(()), |request| {
             response = Some(client.call(request)?);
             Ok(())
         }).unwrap();
+        let close_ns = before_close.elapsed().as_nanos();
         save_ns.push(start.elapsed().as_nanos());
+        save_stages.push((open_ns, prepare_ns, mutation_ns, dirty_ns, close_ns, prepare_calls, dirty_calls));
         responses.push(response.unwrap());
     }
     let save_batch_ns = batch.elapsed().as_nanos();
     let save_memory = status();
-    // Assertions and receipt materialization are outside all request timers.
+    // Receipt oracles and materialization are outside all request timers.
     let mut published = backend.test_with_engine_locked(|engine| {
         engine.state().commits.values().filter(|commit| commit.sequence > commits as u64)
             .map(|commit| (commit.sequence, commit.operation_id)).collect::<Vec<_>>()
@@ -172,6 +190,7 @@ fn bounded_request_screen() {
     assert_eq!(published.len(), 20);
     let mut operations = BTreeSet::new();
     let mut receipts = Vec::with_capacity(20);
+    let mut stage_records = Vec::with_capacity(20);
     for (round, ((_, operation), response)) in published.into_iter().zip(&responses).enumerate() {
         assert_eq!(response["closed"], true);
         assert_eq!(response["aborted"], false);
@@ -185,6 +204,12 @@ fn bounded_request_screen() {
             assert!(receipt.commit_id.is_some());
         });
         receipts.push(json!({"operation_id":operation.to_string()}));
+        let (open, prepare, mutation, dirty, close, prepare_calls, dirty_calls) = save_stages[round];
+        assert_eq!((prepare_calls, dirty_calls), (1, 1));
+        stage_records.push(json!({"round":round,"path":path_for((round*37)%500),
+            "operation_id":operation.to_string(),"sequence":commits+round+1,
+            "open_ns":open,"prepare_write_ns":prepare,"fd_mutation_ns":mutation,
+            "dirty_ns":dirty,"close_ns":close,"prepare_calls":prepare_calls,"dirty_calls":dirty_calls}));
     }
     fs::write(root.join("rpc-receipts.json"), json_codec::to_vec(&receipts).unwrap()).unwrap();
     drop(client);
@@ -195,6 +220,7 @@ fn bounded_request_screen() {
         "hello_ns":hello_ns,"first_read_ns":first.0,"first_open_ns":first.1,
         "read_ns":read_ns,"read_open_ns":read_open_ns,"list_ns":list_ns,
         "save_ns":save_ns,"save_batch_ns":save_batch_ns,"read_memory":read_memory,
+        "save_stages":stage_records,"diagnostic_only":"nested client wall timers; no adoption reevaluation; no diagnostic engine cache access during timings",
         "save_memory":save_memory,"verified_reads":1001,"verified_lists":1000,"verified_receipts":20,
         "transport":"production local Unix RPC; not network SMB; no peer-accept-loop measurement"}));
 }

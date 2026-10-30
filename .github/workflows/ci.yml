@@ -1,4 +1,4 @@
-name: Bounded local RPC engineering screen
+name: Bounded local RPC save substage diagnostic
 on:
   push:
     branches: [verify/adoption-performance-stage-a-20261030]
@@ -89,7 +89,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        commits: [22, 220]
+        commits: [220]
         pair: [0, 1]
     env:
       RPC_MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
@@ -130,7 +130,7 @@ jobs:
         with:
           pattern: rpc-*-*
           path: ${{ runner.temp }}/rpc-pairs
-      - name: Evaluate prospective criteria without rewriting historical gate
+      - name: Report diagnostic stages without reevaluating adoption
         run: |
           python3 tools/local-rpc-screen/screen.py summary "$RUNNER_TEMP/rpc-pairs" "$RUNNER_TEMP/rpc-screen.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

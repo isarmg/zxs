@@ -1,7 +1,6 @@
 """Single bounded local-RPC experiment. Runtime is GitHub Actions only."""
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import resource
@@ -76,7 +75,8 @@ def prepare(workspace, evidence):
                         save_p95_delta_ms=50, open_vmhwm_reduction_220=0.20, startup_ratio_220=1.10),
           old_parity_gate='FAILED unchanged; independent prospective engineering screen',
           exclusions=['not user SLO','not capacity certification','not network SMB','not physical12disk'],
-          protocol='500 files;22/220 seed commits;1 file branch;1000 read/list cycles;20 committed closes;AB/BA'))
+          protocol='diagnostic only;500 files;220 seed commits;1 file branch;1000 read/list cycles;20 committed closes;AB/BA',
+          prior_engineering_screen='41062775195 FAIL; not reevaluated by nested-timer diagnostic'))
 
 def seal(workspace, evidence, bundle):
     before = json.loads((evidence / 'source-before.json').read_text())
@@ -157,7 +157,7 @@ def phase(command, env, directory, name, deadline):
     return values[0]
 
 def run(bundle, out, commits, pair):
-    assert commits in (22,220) and pair in (0,1)
+    assert commits == 220 and pair in (0,1)
     manifest = json.loads((bundle / 'manifest.json').read_text())
     assert sha(bundle / 'manifest.json') == os.environ['RPC_MANIFEST_SHA256']
     assert manifest['controller']['sha'] == os.environ['GITHUB_SHA']
@@ -198,13 +198,12 @@ def run(bundle, out, commits, pair):
         write(out / 'pair.json', report)
         print('RPC_PAIR', json.dumps(report))
 
-def quantile(values, p):
-    return sorted(values)[math.ceil(len(values)*p)-1]
-
 def summary(root, out):
-    report = dict(status='incomplete', old_parity_gate='FAILED unchanged', prospective_screen='NOT EVALUATED', pairs=[])
+    report = dict(status='incomplete', old_parity_gate='FAILED unchanged',
+                  prior_engineering_screen='41062775195 FAIL; not reevaluated',
+                  scope='client-side save substage diagnostic only; nested wall timers perturb totals', pairs=[])
     try:
-        for commits in (22,220):
+        for commits in (220,):
             for pair in (0,1):
                 path = root / f'rpc-{commits}-{pair}' / 'pair.json'
                 data = json.loads(path.read_text())
@@ -225,26 +224,18 @@ def summary(root, out):
                     assert requests['verified_reads'] == 1001 and requests['verified_lists'] == 1000 and requests['verified_receipts'] == 20
                     assert all(len(requests[key]) == 1000 for key in ('read_ns','read_open_ns','list_ns'))
                     assert len(requests['save_ns']) == 20
-                b,c = [arms[label]['phases']['requests'] for label in PINS]
-                checks = {}
-                for kind in ('read','list'):
-                    for percentile, tolerance in ((.95,2e6),(.99,5e6)):
-                        baseline,candidate = quantile(b[kind+'_ns'],percentile),quantile(c[kind+'_ns'],percentile)
-                        checks[f'{kind}_p{int(percentile*100)}'] = dict(baseline_ns=baseline,candidate_ns=candidate,
-                            delta_ns=candidate-baseline,limit_ns=tolerance,passed=candidate-baseline<=tolerance)
-                for name, baseline, candidate, tolerance in (
-                    ('save_batch',b['save_batch_ns'],c['save_batch_ns'],1e9),
-                    ('save_p95',quantile(b['save_ns'],.95),quantile(c['save_ns'],.95),50e6)):
-                    checks[name] = dict(baseline_ns=baseline,candidate_ns=candidate,delta_ns=candidate-baseline,
-                                        limit_ns=tolerance,passed=candidate-baseline<=tolerance)
-                if commits == 220:
-                    checks['open_vmhwm'] = dict(baseline_kib=b['open_memory']['vmhwm_kib'],candidate_kib=c['open_memory']['vmhwm_kib'],
-                        passed=c['open_memory']['vmhwm_kib'] <= .8*b['open_memory']['vmhwm_kib'])
-                    checks['startup'] = dict(baseline_ns=b['open_ns'],candidate_ns=c['open_ns'],passed=c['open_ns']<=1.1*b['open_ns'])
-                report['pairs'].append(dict(commits=commits,pair=pair,checks=checks,
+                    assert len(requests['save_stages']) == 20
+                    for index, stage in enumerate(requests['save_stages']):
+                        assert stage['round'] == index and stage['sequence'] == commits+index+1
+                        assert stage['prepare_calls'] == stage['dirty_calls'] == 1
+                        component = sum(stage[key] for key in ('open_ns','prepare_write_ns','fd_mutation_ns','dirty_ns','close_ns'))
+                        assert component <= requests['save_ns'][index]
+                report['pairs'].append(dict(commits=commits,pair=pair,
+                    diagnostic_arms={label:dict(save_ns=arms[label]['phases']['requests']['save_ns'],
+                        stages=arms[label]['phases']['requests']['save_stages']) for label in PINS},
                     metadata={label:arms[label]['inventory'] for label in PINS},
                     warnings={label:arms[label]['phases']['requests']['recovery_warnings'] for label in PINS}))
-        report.update(status='completed',prospective_screen='PASS' if all(check['passed'] for pair in report['pairs'] for check in pair['checks'].values()) else 'FAIL')
+        report.update(status='completed_diagnostic_only',prospective_screen='NOT REEVALUATED')
     finally:
         write(out, report)
         print('RPC_SCREEN',json.dumps(report))
