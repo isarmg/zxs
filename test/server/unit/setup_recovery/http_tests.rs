@@ -413,6 +413,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadDirectorySelection,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

@@ -459,6 +459,7 @@ impl Backend for TestBackend {
         &self,
         _identity: &crate::auth::Identity,
         request: crate::ReadDirectorySelection,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
         assert_eq!(request.repository_id(), "repo");
         assert!(request.scope().is_none());
@@ -1741,8 +1742,10 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
             &self,
             identity: &crate::auth::Identity,
             request: crate::ReadDirectorySelection,
+            control: &crate::HistoryReadControl,
         ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
-            self.delegate.directory_selection(identity, request)
+            self.delegate
+                .directory_selection(identity, request, control)
         }
         fn directory_scopes(
             &self,

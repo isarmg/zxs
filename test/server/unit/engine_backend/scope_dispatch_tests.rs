@@ -56,7 +56,9 @@ fn typed_scope_read_and_bounded_selection_do_not_change_state() {
         )
         .unwrap()
     };
-    let selected = backend.directory_selection(&identity, request()).unwrap();
+    let selected = backend
+        .directory_selection(&identity, request(), &crate::tests::history_read_control())
+        .unwrap();
     assert_eq!(selected.branches.len(), 1);
     assert!(selected.branches[0].entries.is_empty());
     let stranger = Identity {
@@ -80,7 +82,7 @@ fn typed_scope_read_and_bounded_selection_do_not_change_state() {
     );
     assert_eq!(
         backend
-            .directory_selection(&stranger, request())
+            .directory_selection(&stranger, request(), &crate::tests::history_read_control())
             .err()
             .unwrap()
             .code,

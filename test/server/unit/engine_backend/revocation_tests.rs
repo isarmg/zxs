@@ -473,9 +473,10 @@ impl Backend for PausedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectorySelection,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
         self.enter();
-        self.inner.directory_selection(identity, request)
+        self.inner.directory_selection(identity, request, control)
     }
     fn directory_scopes(
         &self,
@@ -1465,7 +1466,9 @@ impl Request {
                     vec![],
                 )
                 .unwrap();
-                backend.directory_selection(identity, request).map(|_| ())
+                backend
+                    .directory_selection(identity, request, &crate::tests::history_read_control())
+                    .map(|_| ())
             }
             Self::Listing => backend
                 .listing(

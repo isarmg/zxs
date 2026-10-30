@@ -57,6 +57,20 @@ pub struct DirectoryBranchChoice {
 impl DirectoryBranchChoice {
     #[cfg(feature = "core")]
     pub(crate) fn capture(branch: &DirectoryBranch, current: bool) -> Self {
+        let file_count = branch
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
+            .count();
+        Self::capture_counted(branch, current, file_count)
+    }
+
+    #[cfg(feature = "core")]
+    pub(crate) fn capture_counted(
+        branch: &DirectoryBranch,
+        current: bool,
+        file_count: usize,
+    ) -> Self {
         let DirectoryBranch {
             directory_branch_id,
             repository_id,
@@ -66,7 +80,7 @@ impl DirectoryBranchChoice {
             parent_branch_id,
             head_tree_id,
             commit_id,
-            entries,
+            entries: _,
             file_branches: _,
             file_contexts: _,
             inherited_files: _,
@@ -86,10 +100,7 @@ impl DirectoryBranchChoice {
             materialized: *materialized,
             current,
             sequence: *sequence,
-            file_count: entries
-                .iter()
-                .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
-                .count(),
+            file_count,
         }
     }
 }

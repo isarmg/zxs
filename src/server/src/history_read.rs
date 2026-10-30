@@ -1,4 +1,4 @@
-//! Cooperative cancellation shared by graph, activity, directory listings and complete-tree readers.
+//! Cooperative cancellation shared by graph, activity, directory listings and complete-tree and bounded-selection readers.
 use crate::{
     ApiError, AppState, Backend, backend_file_history::EncodedPage,
     http_shutdown::ResponseConnection,

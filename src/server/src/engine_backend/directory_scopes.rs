@@ -11,38 +11,62 @@ pub(super) fn matching<'a>(
     requested_key: Option<&str>,
 ) -> Result<Vec<&'a storage_contract::DirectoryBranch>, ApiError> {
     let state = engine.state();
-    let requested_directory_id = match requested_key {
-        Some("") => Some(repository.repository_id.clone()),
-        Some(key) => {
-            let namespace = state
-                .branches
-                .get(&repository.main_branch_id)
-                .expect("invariant: admitted repository references its main branch");
-            // One indexed point read locates the directory identity.
-            engine
-                .commit_namespace(&namespace.head_commit_id)
-                .expect("invariant: admitted branch references its head commit")
-                .get_key(key)
-                .map_err(error)?
-                .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::Directory)
-                .map(|entry| entry.entry_id)
-        }
-        None => None,
-    };
-    let branches = state
+    let namespace = requested_key.filter(|key| !key.is_empty()).map(|_| {
+        let branch = state
+            .branches
+            .get(&repository.main_branch_id)
+            .expect("invariant: admitted repository references its main branch");
+        engine
+            .commit_namespace(&branch.head_commit_id)
+            .expect("invariant: admitted branch references its head commit")
+    });
+    let scope = ScopeMatch::resolve(repository, requested_key, namespace)?;
+    Ok(state
         .directory_branches
         .values()
-        .filter(|branch| {
-            branch.repository_id == repository.repository_id
-                && requested_key.is_none_or(|key| {
-                    requested_directory_id.as_deref().map_or_else(
-                        || name_policy::path_key(&branch.path) == key,
-                        |id| branch.directory_id == id,
-                    )
-                })
+        .filter(|branch| scope.matches(branch))
+        .collect())
+}
+
+/// The same stable-directory/fallback-path rule for catalogues and bounded IDs.
+pub(super) struct ScopeMatch<'a> {
+    repository_id: &'a str,
+    requested_key: Option<&'a str>,
+    requested_directory_id: Option<String>,
+}
+
+impl<'a> ScopeMatch<'a> {
+    pub(super) fn resolve(
+        repository: &'a Repository,
+        requested_key: Option<&'a str>,
+        namespace: Option<storage_engine::NamespaceTree<'_>>,
+    ) -> Result<Self, ApiError> {
+        let requested_directory_id = match requested_key {
+            Some("") => Some(repository.repository_id.clone()),
+            Some(key) => namespace
+                .expect("invariant: non-root scope resolution supplies its main namespace")
+                .get_key(key)
+                .map_err(file_manager::activity::read_error)?
+                .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::Directory)
+                .map(|entry| entry.entry_id),
+            None => None,
+        };
+        Ok(Self {
+            repository_id: &repository.repository_id,
+            requested_key,
+            requested_directory_id,
         })
-        .collect::<Vec<_>>();
-    Ok(branches)
+    }
+
+    pub(super) fn matches(&self, branch: &storage_contract::DirectoryBranch) -> bool {
+        branch.repository_id == self.repository_id
+            && self.requested_key.is_none_or(|key| {
+                self.requested_directory_id.as_deref().map_or_else(
+                    || name_policy::path_key(&branch.path) == key,
+                    |id| branch.directory_id == id,
+                )
+            })
+    }
 }
 pub(super) fn capture(
     engine: &Engine,

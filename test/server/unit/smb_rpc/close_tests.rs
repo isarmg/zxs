@@ -505,8 +505,9 @@ impl Backend for CloseFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectorySelection,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
-        self.inner.directory_selection(identity, request)
+        self.inner.directory_selection(identity, request, control)
     }
     fn directory_scopes(
         &self,

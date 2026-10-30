@@ -1459,7 +1459,9 @@ fn directory_scope_order_agrees_across_full_summary_listing_and_selection() {
     );
     assert_eq!(listing.entries.len(), 1);
     assert!(listing.next_cursor.is_some());
-    let selected = backend.directory_selection(&identity, selection).unwrap();
+    let selected = backend
+        .directory_selection(&identity, selection, &tree_control())
+        .unwrap();
     assert_eq!(
         selected
             .branches

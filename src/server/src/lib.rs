@@ -846,6 +846,7 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         request: ReadDirectorySelection,
+        control: &crate::HistoryReadControl,
     ) -> Result<DirectorySelectionSnapshot, ApiError>;
     fn directory_scopes(
         &self,
@@ -1530,9 +1531,10 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectorySelection,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
         self.backend
-            .directory_selection(&self.current(identity)?, request)
+            .directory_selection(&self.current(identity)?, request, control)
     }
     fn directory_scopes(
         &self,

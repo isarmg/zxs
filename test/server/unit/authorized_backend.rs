@@ -16,6 +16,7 @@ struct RecordingBackend {
     fail: AtomicBool,
     file: std::fs::File,
     history_gates: Mutex<std::collections::VecDeque<HistoryGate>>,
+    selection_repository: Mutex<Option<String>>,
 }
 
 fn sentinel_error(method: &str) -> ApiError {
@@ -949,10 +950,17 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectorySelection,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record("directory_selection",Some(identity),json!({"repository_id":request.repository_id(),"key":request.scope().map(name_policy::LookupPath::key),"sources":request.sources().len(),"entries":request.entries().len()}))?;
         Ok(crate::DirectorySelectionSnapshot {
-            repository_id: request.repository_id().into(),
+            repository_id: self
+                .selection_repository
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(|| request.repository_id().into()),
             branches: vec![],
         })
     }
@@ -1505,6 +1513,7 @@ impl Fixture {
             fail: AtomicBool::new(false),
             file: source.file.try_clone().unwrap(),
             history_gates: Mutex::new(std::collections::VecDeque::new()),
+            selection_repository: Mutex::new(None),
         });
         let auth = Arc::new(Mutex::new(auth));
         let backend = AuthorizedBackend {
@@ -1905,7 +1914,7 @@ impl Fixture {
                         path: "Folder/File.txt".into(),
                     }],
                 ).unwrap();
-                backend.directory_selection(identity, request).map(|snapshot| {
+                backend.directory_selection(identity, request, &crate::tests::history_read_control()).map(|snapshot| {
                     assert_eq!(snapshot.repository_id, "repository");
                     assert!(snapshot.branches.is_empty());
                     json!({"returned_by":"directory_selection"})
@@ -2829,6 +2838,10 @@ fn history_route_fixture(
             "/api/history-trees/{history}/graph",
             get(crate::http_graph::graph),
         )
+        .route(
+            "/api/repositories/{repo}/directory-branches",
+            post(crate::http_directory_selection::read),
+        )
         .merge(crate::file_manager::routes())
         .layer(http_routing::Extension(fixture.identity.clone()))
         .with_state(state);
@@ -2848,6 +2861,69 @@ async fn graph_route_cancellation_retains_capacity_until_worker_checkpoint() {
 #[tokio::test]
 async fn listing_route_cancellation_retains_shared_capacity_until_worker_checkpoint() {
     cancelled_history_route_keeps_capacity(listing_request()).await;
+}
+
+#[tokio::test]
+async fn selected_facts_route_cancellation_retains_shared_capacity_until_worker_checkpoint() {
+    cancelled_history_route_keeps_capacity(selection_request()).await;
+}
+
+#[tokio::test]
+async fn selected_facts_response_retains_backend_permit_until_collected_bytes_drop() {
+    use service_stack::ServiceExt;
+    let fixture = Fixture::new();
+    let (app, scans, backends) = history_route_fixture(&fixture);
+    let response = app.oneshot(selection_request()).await.unwrap();
+    assert_eq!(response.status(), ::http::StatusCode::OK);
+    assert_eq!(scans.available_permits(), 2);
+    assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS - 1);
+    let bytes = http_routing::body::to_bytes(
+        response.into_body(),
+        storage_contract::client_protocol::MAX_RESPONSE_BYTES,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        json_codec::from_slice::<Value>(&bytes).unwrap(),
+        json!({"repository_id":"repository","directory_branches":[]})
+    );
+    assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS - 1);
+    drop(bytes);
+    assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS);
+}
+
+#[tokio::test]
+async fn selected_facts_complete_response_uses_eight_mib_not_history_page_cap() {
+    use service_stack::ServiceExt;
+    use storage_contract::client_protocol::{MAX_HISTORY_PAGE_BYTES, MAX_RESPONSE_BYTES};
+    let fixture = Fixture::new();
+    let (app, scans, backends) = history_route_fixture(&fixture);
+    // The backend fixture isolates the route's complete-response encoder.
+    let shell = json_codec::to_vec(&json!({"repository_id":"","directory_branches":[]}))
+        .unwrap()
+        .len();
+    let payload = MAX_RESPONSE_BYTES - shell;
+    *fixture.probe.selection_repository.lock().unwrap() = Some("x".repeat(payload));
+    let response = app.clone().oneshot(selection_request()).await.unwrap();
+    assert_eq!(response.status(), ::http::StatusCode::OK);
+    let bytes = http_routing::body::to_bytes(response.into_body(), MAX_RESPONSE_BYTES)
+        .await
+        .unwrap();
+    assert!(bytes.len() > MAX_HISTORY_PAGE_BYTES);
+    assert_eq!(bytes.len(), MAX_RESPONSE_BYTES);
+    drop(bytes);
+    *fixture.probe.selection_repository.lock().unwrap() = Some("x".repeat(payload + 1));
+    let response = app.oneshot(selection_request()).await.unwrap();
+    assert_eq!(response.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
+    let bytes = http_routing::body::to_bytes(response.into_body(), MAX_RESPONSE_BYTES)
+        .await
+        .unwrap();
+    let error: Value = json_codec::from_slice(&bytes).unwrap();
+    assert_eq!(error["error"]["code"], "RESOURCE_LIMIT_EXCEEDED");
+    assert!(error.get("directory_branches").is_none());
+    drop(bytes);
+    assert_eq!(scans.available_permits(), 2);
+    assert_eq!(backends.available_permits(), HTTP_BACKEND_SLOTS);
 }
 
 #[tokio::test]
@@ -2916,6 +2992,8 @@ async fn cancelled_history_route_keeps_capacity(
     let overloaded = app.clone().oneshot(activity_request()).await.unwrap();
     assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
     let overloaded = app.clone().oneshot(listing_request()).await.unwrap();
+    assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
+    let overloaded = app.clone().oneshot(selection_request()).await.unwrap();
     assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(history_read_slots.available_permits(), 0);
     assert_eq!(backend_slots.available_permits(), HTTP_BACKEND_SLOTS - 2);
@@ -3014,5 +3092,16 @@ fn listing_request() -> http_routing::http::Request<http_routing::body::Body> {
     http_routing::http::Request::builder()
         .uri("/api/file-manager/disks/P01/entries")
         .body(http_routing::body::Body::empty())
+        .unwrap()
+}
+
+fn selection_request() -> http_routing::http::Request<http_routing::body::Body> {
+    http_routing::http::Request::builder()
+        .method("POST")
+        .uri("/api/repositories/repository/directory-branches")
+        .header(::http::header::CONTENT_TYPE, "application/json")
+        .body(http_routing::body::Body::from(
+            r#"{"path":"","sources":[],"entries":[]}"#,
+        ))
         .unwrap()
 }

@@ -66,6 +66,23 @@ pub struct EngineBackend {
     operation_health_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 impl EngineBackend {
+    fn finish_directory_selection(
+        &self,
+        identity: &Identity,
+        result: Result<crate::DirectorySelectionSnapshot, ApiError>,
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::DirectorySelectionSnapshot, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::activity::checkpoint(control)?;
+        // Facts remain observations of their captured publication, not a grant
+        // for a later mutation; that mutation checks its own current baseline.
+        result
+    }
+
     fn finish_listing(
         &self,
         identity: &Identity,
@@ -1439,13 +1456,19 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadDirectorySelection,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
         let engine = self
             .engine
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        directory_selection::read(&engine, &request)
+        repository(&engine, request.repository_id())?;
+        file_manager::activity::checkpoint(control)?;
+        let view = engine.published_read_view();
+        drop(engine);
+        let result = directory_selection::read(view, &request, control);
+        self.finish_directory_selection(identity, result, control)
     }
     fn directory_scopes(
         &self,

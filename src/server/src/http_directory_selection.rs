@@ -6,8 +6,9 @@ use crate::{
 };
 use data_serialization::Deserialize;
 use http_routing::{
-    Extension, Json,
+    Extension,
     extract::{Request, State},
+    response::Response,
 };
 
 #[derive(Deserialize)]
@@ -62,27 +63,28 @@ pub(crate) async fn read(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
     ApiPath(repository_id): ApiPath<String>,
+    connection: Option<Extension<crate::http_shutdown::ResponseConnection>>,
     request: Request,
-) -> Result<Json<DirectorySelectionResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let body = crate::with_id(
         crate::json_body(request).await?,
         "repository_id",
         repository_id,
     )?;
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
+    crate::history_read::run(
+        state,
+        connection.map(|Extension(connection)| connection),
+        move |backend, control| {
             let selection = parse(body)?;
-            backend
-                .directory_selection(&identity, selection)
-                .map(DirectorySelectionResponse::from)
-        })
-        .await
-        .map(Json)
+            backend.directory_selection(&identity, selection, control)
+        },
+        |snapshot| {
+            crate::backend_file_history::encode_response_bounded(DirectorySelectionResponse::from(
+                snapshot,
+            ))
+        },
+    )
+    .await
 }
 
 #[cfg(test)]

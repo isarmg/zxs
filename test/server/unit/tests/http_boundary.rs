@@ -811,6 +811,7 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadDirectorySelection,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::DirectorySelectionSnapshot, crate::ApiError> {
         panic!("private directory selection panic detail")
     }
