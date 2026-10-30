@@ -86,10 +86,12 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
     let before = json_codec::to_value(engine.state()).unwrap();
     let history = storage_contract::strict_json(
         &json_codec::to_vec(&crate::backend_file_history::FileHistoryResponse::from(
-            file_history(
+            FileHistoryRead::capture(
                 &engine,
                 crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap(),
             )
+            .unwrap()
+            .project()
             .unwrap(),
         ))
         .unwrap(),

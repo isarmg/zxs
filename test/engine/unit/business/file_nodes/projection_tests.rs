@@ -94,6 +94,51 @@ fn engine_with_state(state: State) -> (tempfile::TempDir, Engine) {
 }
 
 #[test]
+fn metadata_view_shares_one_generation_and_releases_it_without_a_cache() {
+    let mut state = State::default();
+    body(&mut state, "body", "file");
+    metadata(&mut state, "tags", &[], &["original"]);
+    path(&mut state, "child", &["tags"]);
+    let (_root, mut engine) = engine_with_state(state);
+    let original = std::sync::Arc::downgrade(&engine.state);
+    assert_eq!(original.strong_count(), 1);
+    let view = engine.metadata_view();
+    assert_eq!(original.strong_count(), 2);
+    assert!(std::ptr::eq(view.state(), engine.state()));
+    let request = || FileNodeProjectionRequest {
+        file_id: "file",
+        node_ids: &["child", "tags"],
+    };
+    let before = view.project_file_nodes(request());
+    assert_eq!(
+        original.strong_count(),
+        2,
+        "projection retains no extra view"
+    );
+    std::sync::Arc::make_mut(&mut engine.state)
+        .file_metadata_nodes
+        .get_mut("tags")
+        .unwrap()
+        .tags
+        .insert("later".into());
+    assert_eq!(original.strong_count(), 1);
+    for (node, summary) in view.project_file_nodes(request()) {
+        assert_eq!(summary.unwrap(), *before[&node].as_ref().unwrap());
+    }
+    assert!(
+        engine.project_file_nodes(request())["child"]
+            .as_ref()
+            .unwrap()
+            .tags
+            .contains("later")
+    );
+    drop(engine);
+    assert_eq!(original.strong_count(), 1);
+    drop(view);
+    assert!(original.upgrade().is_none());
+}
+
+#[test]
 fn projection_matches_uncached_nodes_and_serialized_bytes() {
     let mut state = State::default();
     metadata(&mut state, "tagged", &["tagged"], &["z", "a"]);

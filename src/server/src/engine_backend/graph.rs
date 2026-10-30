@@ -1,7 +1,25 @@
-//! Pure same-state capture; sorting and wire serialization need no admission lock.
+//! Pure metadata projection after retaining one generation under admission.
 use crate::HistoryGraphSnapshot;
 use std::sync::Arc;
 use storage_contract::State;
+
+/// Recheck the actual history owner and split scope, not a global publication
+/// counter. Ordinary writes may advance while the old projection is produced.
+pub(super) fn authorize_current(
+    state: &State,
+    captured: &storage_contract::HistoryTree,
+) -> Result<(), crate::ApiError> {
+    super::repo_for_history_in_state(state, &captured.history_tree_id)?;
+    let current = &state.histories[&captured.history_tree_id];
+    if current.repository_id != captured.repository_id || current.generation != captured.generation
+    {
+        return Err(crate::ApiError::conflict(
+            storage_contract::ErrorCode::TreeMoved,
+            "history scope changed during the read",
+        ));
+    }
+    Ok(())
+}
 
 /// Caller has authorized this history and its repository in this same State.
 pub(super) fn capture(state: &State, history: &str) -> HistoryGraphSnapshot {
@@ -33,3 +51,7 @@ pub(super) fn capture(state: &State, history: &str) -> HistoryGraphSnapshot {
             .collect(),
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/server/unit/engine_backend/detached_history_tests.rs"]
+pub(super) mod tests;

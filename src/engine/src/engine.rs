@@ -105,6 +105,19 @@ pub struct Engine {
     #[cfg(feature = "fault-injection")]
     fault: Option<FaultInjection>,
 }
+
+/// An engine-created immutable metadata generation. This owns no disk resources,
+/// read lease or authorization; callers must recheck their current read scope.
+/// Keeping it alive can make a later mutation copy State's shared fields.
+pub struct MetadataView {
+    state: Arc<State>,
+}
+
+impl MetadataView {
+    pub fn state(&self) -> &State {
+        self.state.as_ref()
+    }
+}
 #[cfg(feature = "fault-injection")]
 struct FaultInjection {
     point: String,
@@ -560,6 +573,12 @@ impl Engine {
     }
     pub fn state(&self) -> &State {
         self.state.as_ref()
+    }
+    /// Retain the current metadata without cloning State or opening payloads.
+    pub fn metadata_view(&self) -> MetadataView {
+        MetadataView {
+            state: Arc::clone(&self.state),
+        }
     }
     pub fn root(&self) -> &Path {
         &self.root

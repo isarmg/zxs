@@ -41,10 +41,10 @@ pub use engine::{
     IndexHealth, IntegrityScrubArea, IntegrityScrubBatch, IntegrityScrubBatchAdmission,
     IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
     IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport, IntegrityScrubSchedule,
-    IntegrityScrubTarget, MetadataMemberProbe, OpenedContent, OperationReadObservation,
-    OperationReadPlan, OperationRecord, RangeContent, ReadLease, RecoverySealContext,
-    RecoverySealFailure, RecoveryWarnings, RetainedWorkspaceLimits, ValidatedConfig,
-    WorkspaceInventory, WorkspaceInventoryRecord, WorkspaceReadPlan,
+    IntegrityScrubTarget, MetadataMemberProbe, MetadataView, OpenedContent,
+    OperationReadObservation, OperationReadPlan, OperationRecord, RangeContent, ReadLease,
+    RecoverySealContext, RecoverySealFailure, RecoveryWarnings, RetainedWorkspaceLimits,
+    ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord, WorkspaceReadPlan,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

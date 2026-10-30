@@ -127,10 +127,12 @@ fn file_history_matches_preprojection_graph_json() {
     let before = json_codec::to_vec(engine.state()).unwrap();
     let mut actual = storage_contract::strict_json(
         &json_codec::to_vec(&crate::backend_file_history::FileHistoryResponse::from(
-            super::super::file_history(
+            super::super::FileHistoryRead::capture(
                 &engine,
                 crate::ReadFileHistory::parse(first.file_id.clone(), None, None).unwrap(),
             )
+            .unwrap()
+            .project()
             .unwrap(),
         ))
         .unwrap(),
@@ -205,7 +207,7 @@ fn history_propagates_projection_error_instead_of_inventing_empty_graph() {
     .unwrap();
     let versions = [projected_version("missing", 10)];
     let error = unified_history(
-        &engine,
+        &engine.metadata_view(),
         "file",
         "history",
         &versions,
@@ -255,7 +257,7 @@ fn display_order_retains_full_typed_sequences_and_id_ties() {
     ]
     .map(|(id, sequence)| projected_version(id, sequence));
     let nodes = unified_history(
-        &engine,
+        &engine.metadata_view(),
         &first.file_id,
         &repo.history_tree_id,
         &versions,
@@ -299,7 +301,10 @@ fn typed_history_owns_only_projection_and_keeps_detached_files_readable() {
         "created",
     );
     let request = || crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap();
-    let attached = super::super::file_history(&engine, request()).unwrap();
+    let attached = super::super::FileHistoryRead::capture(&engine, request())
+        .unwrap()
+        .project()
+        .unwrap();
     let HistoryNode::Content { version, .. } = &attached.nodes[0] else {
         panic!("content-only history must expose a content node")
     };
@@ -318,7 +323,10 @@ fn typed_history_owns_only_projection_and_keeps_detached_files_readable() {
             storage_contract::OperationId::generate(),
         )
         .unwrap();
-    let detached = super::super::file_history(&engine, request()).unwrap();
+    let detached = super::super::FileHistoryRead::capture(&engine, request())
+        .unwrap()
+        .project()
+        .unwrap();
     assert!(detached.path.is_none());
     assert!(detached.current_node_id.is_none());
     assert!(detached.content.is_none());
