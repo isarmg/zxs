@@ -478,7 +478,7 @@ fn exhaustive_paging_of_every_collection_matches_whole_history_oracles() {
     // Five bodies, one rename, one tags node and one merge node.
     assert_eq!(nodes.len(), 8, "{nodes:?}");
     exhaust(&nodes, |boundary, limit| {
-        scope.select_nodes(boundary, limit)
+        scope.select_nodes(boundary, limit).unwrap()
     });
     let merges = oracle_merges(state, &g.file, &history);
     assert_eq!(merges.len(), 2);
@@ -493,16 +493,18 @@ fn exhaustive_paging_of_every_collection_matches_whole_history_oracles() {
     let branches = oracle_branches(state, &g.file, &history);
     assert!(branches.len() >= 3, "{branches:?}");
     exhaust(&branches, |boundary, limit| {
-        scope.branch_window(
-            boundary.map(|(id, direction)| (id.as_str(), direction)),
-            limit,
-        )
+        scope
+            .branch_window(
+                boundary.map(|(id, direction)| (id.as_str(), direction)),
+                limit,
+            )
+            .unwrap()
     });
     for limit in 1..=branches.len() + 1 {
         let mut collected = Vec::new();
         let mut after: Option<String> = None;
         loop {
-            let page = scope.select_branches(after.as_deref(), limit);
+            let page = scope.select_branches(after.as_deref(), limit).unwrap();
             assert!(page.keys.len() <= limit);
             collected.extend(page.keys.iter().cloned());
             if !page.more_after {
@@ -593,7 +595,7 @@ fn exhaustive_paging_of_every_collection_matches_whole_history_oracles() {
     let other_nodes = oracle_nodes(&g.pool.engine, other.owners, &g.other_file, &history);
     assert_eq!(other_nodes.len(), 2);
     exhaust(&other_nodes, |boundary, limit| {
-        other.select_nodes(boundary, limit)
+        other.select_nodes(boundary, limit).unwrap()
     });
     assert_eq!(
         scope.node_key(&other_nodes[0].node_id).unwrap_err().code(),
@@ -626,10 +628,16 @@ fn exhaustive_paging_of_every_collection_matches_whole_history_oracles() {
     );
     assert!(other.select_merges(None, 10).keys.is_empty());
     assert_eq!(
-        other.select_branches(None, 10).keys,
+        other.select_branches(None, 10).unwrap().keys,
         oracle_branches(state, &g.other_file, &history)
     );
-    assert!(!other.select_branches(None, 10).keys.contains(&g.left));
+    assert!(
+        !other
+            .select_branches(None, 10)
+            .unwrap()
+            .keys
+            .contains(&g.left)
+    );
     // Empty sets and an unknown history: no keys, no continuation.
     let empty = g
         .pool
@@ -637,7 +645,7 @@ fn exhaustive_paging_of_every_collection_matches_whole_history_oracles() {
         .file_history_scope("file_missing", &history)
         .unwrap();
     assert_eq!(
-        empty.select_nodes(None, 3),
+        empty.select_nodes(None, 3).unwrap(),
         Selection {
             keys: vec![],
             more_before: false,
@@ -826,21 +834,29 @@ fn anchor_boundaries_and_u64_max_sequences_page_without_loss_or_cycles() {
     assert_eq!(nodes[1].sequence, nodes[2].sequence);
     assert!(nodes[1].node_id < nodes[2].node_id);
     exhaust(&nodes, |boundary, limit| {
-        scope.select_nodes(boundary, limit)
+        scope.select_nodes(boundary, limit).unwrap()
     });
     // Anchor: a page that starts at the anchor. The server positions the page
     // by selecting forward from the key preceding the anchor; model it here.
     for anchor in &nodes {
-        let before = scope.select_nodes(Some((anchor, Direction::Backward)), 1);
+        let before = scope
+            .select_nodes(Some((anchor, Direction::Backward)), 1)
+            .unwrap();
         let start = before.keys.first();
-        let page = scope.select_nodes(start.map(|key| (key, Direction::Forward)), 2);
+        let page = scope
+            .select_nodes(start.map(|key| (key, Direction::Forward)), 2)
+            .unwrap();
         assert_eq!(page.keys.first(), Some(anchor));
         assert_eq!(page.more_before, start.is_some());
     }
     let last = nodes.last().unwrap();
-    let after_last = scope.select_nodes(Some((last, Direction::Forward)), 5);
+    let after_last = scope
+        .select_nodes(Some((last, Direction::Forward)), 5)
+        .unwrap();
     assert!(after_last.keys.is_empty() && !after_last.more_after && after_last.more_before);
-    let before_first = scope.select_nodes(Some((&nodes[0], Direction::Backward)), 5);
+    let before_first = scope
+        .select_nodes(Some((&nodes[0], Direction::Backward)), 5)
+        .unwrap();
     assert!(before_first.keys.is_empty() && !before_first.more_before && before_first.more_after);
 }
 
@@ -1008,7 +1024,7 @@ fn current_context_follows_the_deterministic_owner_rule_and_survives_deletion() 
     let nodes = oracle_nodes(&g.pool.engine, scope.owners, &g.file, &history);
     assert!(!nodes.is_empty(), "deleted files keep readable history");
     exhaust(&nodes, |boundary, limit| {
-        scope.select_nodes(boundary, limit)
+        scope.select_nodes(boundary, limit).unwrap()
     });
 }
 
@@ -1133,7 +1149,7 @@ fn history_root_is_the_exact_catalog_hash_stable_across_unrelated_writes_and_reo
     assert_eq!(reopened.file_history_owner("file_missing"), None);
     let nodes = oracle_nodes(&reopened, scope.owners, &file, &repo.history_tree_id);
     exhaust(&nodes, |boundary, limit| {
-        scope.select_nodes(boundary, limit)
+        scope.select_nodes(boundary, limit).unwrap()
     });
     drop(_temporary);
 }
@@ -1223,13 +1239,13 @@ fn observe_all_history_relations(
     merge: &str,
 ) -> impl PartialEq + std::fmt::Debug + use<> {
     let scope = engine.file_history_scope(file, history).unwrap();
-    let nodes = scope.select_nodes(None, 2);
+    let nodes = scope.select_nodes(None, 2).unwrap();
     let records = nodes
         .keys
         .iter()
         .map(|key| scope.node_record(key).unwrap())
         .collect::<Vec<_>>();
-    let branches = scope.select_branches(None, 2);
+    let branches = scope.select_branches(None, 2).unwrap();
     let branch_records = branches
         .keys
         .iter()
@@ -1445,7 +1461,10 @@ fn branch_windows_keep_history_and_migrated_filters_without_requiring_a_version(
     for file in ["file-a", "file-b", "absent"] {
         for history in ["h1", "h2", "absent"] {
             let scope = FileHistoryScope {
-                engine: &pool.engine,
+                resources: &pool.engine.disk_resources,
+                caches: &pool.engine.segment_caches,
+                members: std::borrow::Cow::Owned(pool.engine.members()),
+                observe: None,
                 state: &state,
                 owners: &owners,
                 file_id: file,
@@ -1453,10 +1472,12 @@ fn branch_windows_keep_history_and_migrated_filters_without_requiring_a_version(
             };
             let expected = oracle_branches(&state, file, history);
             exhaust(&expected, |boundary, limit| {
-                scope.branch_window(
-                    boundary.map(|(id, direction)| (id.as_str(), direction)),
-                    limit,
-                )
+                scope
+                    .branch_window(
+                        boundary.map(|(id, direction)| (id.as_str(), direction)),
+                        limit,
+                    )
+                    .unwrap()
             });
         }
     }
@@ -1619,6 +1640,7 @@ fn detached_merge_pages_match_borrowed_windows_and_reject_invalid_boundaries() {
         let other = FileHistoryScope {
             file_id,
             history_id,
+            members: scope.members.clone(),
             ..scope
         };
         let (selection, records) = other.prepare_merge_page(None, 2).unwrap().read();

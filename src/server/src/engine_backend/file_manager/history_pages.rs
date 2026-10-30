@@ -1,10 +1,8 @@
 //! Bounded file-history pages over the engine's page projection.
 //!
-//! Reads admit under the engine mutex held by the caller: each resolves
-//! the file's repository, captures the exact current root, compares it with
-//! the request's observed root (409 on change), selects a bounded page and
-//! copies only that page's records. Version and merge selection use owned plans outside
-//! the lock; other projections remain borrowed. JSON encoding is also unlocked.
+//! File/root admission is locked; detached resource owners perform node,
+//! branch, parent and field projection outside the writer lock. Version and
+//! merge selection retain their existing plans. JSON encoding is unlocked.
 use super::*;
 use crate::backend_activity::utc_timestamp;
 use crate::backend_file_history::{
@@ -30,13 +28,15 @@ struct Admitted<'a> {
 /// Resolve the file's repository, capture the current root, and refuse a
 /// request bound to another root. Object authorization (`file_repo`) runs
 /// before the root comparison so an unauthorized object never leaks change.
-fn admit<'a>(
+fn admit_root<'a>(
     engine: &'a Engine,
     file: &'a str,
     observed: Option<&HistoryRootText>,
-) -> Result<Admitted<'a>, ApiError> {
+) -> Result<(&'a Repository, storage_engine::HistoryRoot), ApiError> {
     let repo = file_repo(engine, file)?;
-    let root = engine.history_root(&repo.history_tree_id).map_err(error)?;
+    let root = engine
+        .history_root(&repo.history_tree_id)
+        .map_err(super::activity::read_error)?;
     if let Some(observed) = observed
         && observed.as_str() != root.as_str()
     {
@@ -45,10 +45,99 @@ fn admit<'a>(
             "file history changed; reload the first page or re-anchor",
         ));
     }
+    Ok((repo, root))
+}
+
+fn admit<'a>(
+    engine: &'a Engine,
+    file: &'a str,
+    observed: Option<&HistoryRootText>,
+) -> Result<Admitted<'a>, ApiError> {
+    let (repo, root) = admit_root(engine, file, observed)?;
     let scope = engine
         .file_history_scope(file, &repo.history_tree_id)
-        .map_err(error)?;
+        .map_err(super::activity::read_error)?;
     Ok(Admitted { repo, root, scope })
+}
+
+/// Captured authorization context is only a projection source, never authority.
+pub(in crate::engine_backend) struct FileHistoryCapture {
+    view: storage_engine::FileHistoryReadView,
+    root: storage_engine::HistoryRoot,
+    file: String,
+    repository: String,
+}
+
+pub(in crate::engine_backend) fn capture(
+    engine: &Engine,
+    file: &str,
+    observed: Option<&HistoryRootText>,
+) -> Result<FileHistoryCapture, ApiError> {
+    let (repo, root) = admit_root(engine, file, observed)?;
+    Ok(FileHistoryCapture {
+        view: engine
+            .file_history_read_view()
+            .map_err(super::activity::read_error)?,
+        root,
+        file: file.to_owned(),
+        repository: repo.repository_id.clone(),
+    })
+}
+
+impl FileHistoryCapture {
+    fn admitted<'a>(
+        &'a self,
+        observe: &'a dyn Fn() -> storage_engine::Result<()>,
+    ) -> Result<Admitted<'a>, ApiError> {
+        let repo = self
+            .view
+            .state()
+            .repositories
+            .get(&self.repository)
+            .expect("invariant: captured repository belongs to captured State");
+        let scope = self
+            .view
+            .file_history_scope(&self.file, &repo.history_tree_id, observe)
+            .map_err(super::activity::read_error)?;
+        Ok(Admitted {
+            repo,
+            root: self.root.clone(),
+            scope,
+        })
+    }
+
+    pub(in crate::engine_backend) fn file_history(
+        self,
+        request: ReadFileHistory,
+        control: &crate::HistoryReadControl,
+    ) -> Result<FileHistoryPage, ApiError> {
+        let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+        file_history(self.admitted(&observe)?, request)
+    }
+    pub(in crate::engine_backend) fn node_parents(
+        self,
+        request: ReadNodeParents,
+        control: &crate::HistoryReadControl,
+    ) -> Result<NodeParentsPage, ApiError> {
+        let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+        node_parents(self.admitted(&observe)?, request)
+    }
+    pub(in crate::engine_backend) fn branches(
+        self,
+        request: ReadHistoryBranches,
+        control: &crate::HistoryReadControl,
+    ) -> Result<HistoryBranchesPage, ApiError> {
+        let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+        branches(self.admitted(&observe)?, request)
+    }
+    pub(in crate::engine_backend) fn node_field(
+        self,
+        request: ReadNodeField,
+        control: &crate::HistoryReadControl,
+    ) -> Result<NodeFieldSlice, ApiError> {
+        let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+        node_field(self.admitted(&observe)?, request)
+    }
 }
 
 fn seed(admitted: &Admitted<'_>, kind: CursorKind, request: &Value) -> HistoryCursorSeed {
@@ -115,7 +204,7 @@ fn context(
             let context = admitted
                 .scope
                 .current_context(ContextLocation::PathKey(path.key()))
-                .map_err(error)?;
+                .map_err(super::activity::read_error)?;
             if context.current.is_none() {
                 return Err(ApiError::new(
                     ::http::StatusCode::NOT_FOUND,
@@ -128,7 +217,7 @@ fn context(
         None => admitted
             .scope
             .current_context(ContextLocation::Resolve)
-            .map_err(error)?,
+            .map_err(super::activity::read_error)?,
     };
     // The resolved context binds every cursor of this page: a continuation
     // cannot silently resolve to another alias of the same file.
@@ -177,18 +266,17 @@ fn boundary_key(cursor: &NodeCursor) -> (NodeKey, Direction) {
     )
 }
 
-pub(in crate::engine_backend) fn file_history(
-    engine: &Engine,
+fn file_history(
+    admitted: Admitted<'_>,
     request: ReadFileHistory,
 ) -> Result<FileHistoryPage, ApiError> {
     let ReadFileHistory {
-        file_id,
+        file_id: _,
         location,
         limit,
         position,
-        root,
+        root: _,
     } = request;
-    let admitted = admit(engine, file_id.as_str(), root.as_ref())?;
     let (context, identity) = context(
         &admitted,
         location
@@ -200,27 +288,47 @@ pub(in crate::engine_backend) fn file_history(
         CursorKind::Nodes,
         &json!({"context":identity,"limit":limit,"order":"sequence-desc-node-id-asc","budget":"history-page-v1"}),
     );
-    let scope = admitted.scope;
+    let scope = &admitted.scope;
     let backward = matches!(&position, NodePosition::Cursor(cursor) if cursor.backward);
     let (selection, anchor) = match position {
-        NodePosition::First => (scope.select_nodes(None, limit), None),
+        NodePosition::First => (
+            scope
+                .select_nodes(None, limit)
+                .map_err(super::activity::read_error)?,
+            None,
+        ),
         NodePosition::Cursor(cursor) => {
             cursor.seed.admit(&seed)?;
             let (key, direction) = boundary_key(&cursor);
-            if scope.node_key(&key.node_id).map_err(error)? != key {
+            if scope
+                .node_key(&key.node_id)
+                .map_err(super::activity::read_error)?
+                != key
+            {
                 return Err(ApiError::invalid(
                     "cursor boundary sequence does not match its node",
                 ));
             }
-            (scope.select_nodes(Some((&key, direction)), limit), None)
+            (
+                scope
+                    .select_nodes(Some((&key, direction)), limit)
+                    .map_err(super::activity::read_error)?,
+                None,
+            )
         }
         NodePosition::Anchor(anchor) => {
-            let key = scope.node_key(anchor.as_str()).map_err(error)?;
+            let key = scope
+                .node_key(anchor.as_str())
+                .map_err(super::activity::read_error)?;
             // Position the page so the anchor is its first node: the key just
             // before the anchor is the exclusive forward boundary.
-            let before = scope.select_nodes(Some((&key, Direction::Backward)), 1);
+            let before = scope
+                .select_nodes(Some((&key, Direction::Backward)), 1)
+                .map_err(super::activity::read_error)?;
             let start = before.keys.first();
-            let selection = scope.select_nodes(start.map(|key| (key, Direction::Forward)), limit);
+            let selection = scope
+                .select_nodes(start.map(|key| (key, Direction::Forward)), limit)
+                .map_err(super::activity::read_error)?;
             let in_page = selection
                 .keys
                 .iter()
@@ -250,7 +358,7 @@ pub(in crate::engine_backend) fn file_history(
     );
     let mut nodes = Vec::with_capacity(selection.keys.len());
     for key in &selection.keys {
-        let record = reader.record(key).map_err(error)?;
+        let record = reader.record(key).map_err(super::activity::read_error)?;
         let preview_limit = edges_left.min(limits::MAX_PARENT_PREVIEW_PER_NODE);
         let parents = if preview_limit == 0 {
             // No budget left: still an honest, continuable parent state.
@@ -268,7 +376,7 @@ pub(in crate::engine_backend) fn file_history(
         } else {
             let parents = reader
                 .parents(&key.node_id, None, preview_limit)
-                .map_err(error)?;
+                .map_err(super::activity::read_error)?;
             edges_left -= parents.keys.len();
             let edges = parents
                 .keys
@@ -334,15 +442,14 @@ pub(in crate::engine_backend) fn file_history(
     })
 }
 
-pub(in crate::engine_backend) fn node_parents(
-    engine: &Engine,
+fn node_parents(
+    admitted: Admitted<'_>,
     request: ReadNodeParents,
 ) -> Result<NodeParentsPage, ApiError> {
     let ReadNodeParents {
         node_id,
         collection,
     } = request;
-    let admitted = admit(engine, collection.file_id.as_str(), Some(&collection.root))?;
     let seed = seed(
         &admitted,
         CursorKind::Parents,
@@ -377,7 +484,7 @@ pub(in crate::engine_backend) fn node_parents(
     let selection = admitted
         .scope
         .node_parent_window(node_id.as_str(), after, collection.limit)
-        .map_err(error)?;
+        .map_err(super::activity::read_error)?;
     Ok(NodeParentsPage {
         file_id: admitted.scope.file_id().to_owned(),
         history_tree_id: admitted.repo.history_tree_id.clone(),
@@ -395,12 +502,11 @@ pub(in crate::engine_backend) fn node_parents(
     })
 }
 
-pub(in crate::engine_backend) fn branches(
-    engine: &Engine,
+fn branches(
+    admitted: Admitted<'_>,
     request: ReadHistoryBranches,
 ) -> Result<HistoryBranchesPage, ApiError> {
     let collection = request.0;
-    let admitted = admit(engine, collection.file_id.as_str(), Some(&collection.root))?;
     let seed = seed(
         &admitted,
         CursorKind::Branches,
@@ -412,7 +518,7 @@ pub(in crate::engine_backend) fn branches(
             admitted
                 .scope
                 .branch_record(&cursor.key.after)
-                .map_err(error)?;
+                .map_err(super::activity::read_error)?;
             Some((
                 cursor.key.after.as_str(),
                 if cursor.backward {
@@ -424,18 +530,22 @@ pub(in crate::engine_backend) fn branches(
         }
         None => None,
     };
-    let scope = admitted.scope;
-    let selection = scope.branch_window(after, collection.limit);
+    let scope = &admitted.scope;
+    let selection = scope
+        .branch_window(after, collection.limit)
+        .map_err(super::activity::read_error)?;
     let selected = scope
         .current_context(ContextLocation::Resolve)
-        .map_err(error)?
+        .map_err(super::activity::read_error)?
         .selected_branch_id;
     let state = admitted.scope_state();
     let branches = selection
         .keys
         .iter()
         .map(|id| {
-            let record = scope.branch_record(id).map_err(error)?;
+            let record = scope
+                .branch_record(id)
+                .map_err(super::activity::read_error)?;
             Ok(FileBranchSummary {
                 current: selected.as_deref() == Some(record.branch_id.as_str()),
                 content: super::super::branch::capture_content(
@@ -526,7 +636,7 @@ pub(in crate::engine_backend) fn prepare_merge_page(
         merges: admitted
             .scope
             .prepare_merge_page(boundary, collection.limit)
-            .map_err(error)?,
+            .map_err(super::activity::read_error)?,
     })
 }
 
@@ -574,7 +684,7 @@ fn indexed<T>(
         request.offset,
         request.limit,
     )
-    .map_err(error)?;
+    .map_err(super::activity::read_error)?;
     Ok(IndexedSlice {
         file_id: admitted.scope.file_id().to_owned(),
         history_tree_id: admitted.repo.history_tree_id.clone(),
@@ -613,16 +723,12 @@ pub(in crate::engine_backend) fn version_sources(
     })
 }
 
-pub(in crate::engine_backend) fn node_field(
-    engine: &Engine,
-    request: ReadNodeField,
-) -> Result<NodeFieldSlice, ApiError> {
+fn node_field(admitted: Admitted<'_>, request: ReadNodeField) -> Result<NodeFieldSlice, ApiError> {
     // One raw byte can become six JSON bytes (\u00xx). Reserve 8 KiB for
     // the fixed shell, bounded identities and numeric fields before copying
     // any field text; the encoder independently bounds the complete body.
     const MAX_ENCODE_SAFE_FIELD_BYTES: usize =
         (storage_contract::client_protocol::MAX_HISTORY_PAGE_BYTES - 8192) / 6;
-    let admitted = admit(engine, request.file_id.as_str(), Some(&request.root))?;
     let field = match request.field {
         NodeFieldName::Message => NodeField::Message,
         NodeFieldName::Author => NodeField::Author,
@@ -635,7 +741,7 @@ pub(in crate::engine_backend) fn node_field(
             request.offset,
             request.max_bytes.min(MAX_ENCODE_SAFE_FIELD_BYTES),
         )
-        .map_err(error)?;
+        .map_err(super::activity::read_error)?;
     Ok(NodeFieldSlice {
         file_id: admitted.scope.file_id().to_owned(),
         history_tree_id: admitted.repo.history_tree_id.clone(),
@@ -702,7 +808,7 @@ pub(in crate::engine_backend) fn prepare_version_page(
         versions: admitted
             .scope
             .prepare_version_page(boundary, collection.limit)
-            .map_err(error)?,
+            .map_err(super::activity::read_error)?,
     })
 }
 

@@ -6,7 +6,7 @@
 //! wire DTOs: the server formats timestamps and u64 text at its boundary.
 use super::*;
 use crate::state_projection::DerivedOwners;
-use std::collections::BTreeSet;
+use std::{borrow::Cow, collections::BTreeSet};
 use storage_contract::client_protocol::MAX_INLINE_TEXT_BYTES;
 
 /// Canonical page direction. `Forward` reads after the boundary in canonical
@@ -230,11 +230,13 @@ pub struct CurrentEntry {
 }
 
 /// Borrowed read scope: one file, one history, one admitted State. Obtain it
-/// from [`Engine::file_history_scope`]; it borrows the engine and grants no
-/// authorization.
-#[derive(Clone, Copy)]
+/// from [`Engine::file_history_scope`] or a detached published read owner.
+/// It grants no authorization.
 pub struct FileHistoryScope<'a> {
-    pub(crate) engine: &'a Engine,
+    pub(crate) resources: &'a crate::disk::DiskResources,
+    pub(crate) caches: &'a crate::segment_store::SegmentCaches,
+    pub(crate) members: Cow<'a, [crate::DiskConfig]>,
+    pub(crate) observe: Option<&'a dyn Fn() -> Result<()>>,
     pub(crate) state: &'a State,
     pub(crate) owners: &'a DerivedOwners,
     pub(crate) file_id: &'a str,
@@ -383,7 +385,10 @@ impl Engine {
         history_id: &'a str,
     ) -> Result<FileHistoryScope<'a>> {
         Ok(FileHistoryScope {
-            engine: self,
+            resources: &self.disk_resources,
+            caches: &self.segment_caches,
+            members: Cow::Owned(self.members()),
+            observe: None,
             state: &self.state,
             owners: self.history_owners()?,
             file_id,
@@ -393,13 +398,34 @@ impl Engine {
 }
 
 impl<'a> FileHistoryScope<'a> {
+    fn checkpoint(&self) -> Result<()> {
+        if let Some(observe) = self.observe {
+            observe()?;
+        }
+        Ok(())
+    }
+
+    fn commit_namespace(&self, commit_id: &str) -> Option<crate::NamespaceTree<'_>> {
+        self.state.commits.get(commit_id).map(|commit| {
+            crate::NamespaceTree::captured(
+                commit.namespace.clone(),
+                crate::segment_store::SegmentReader {
+                    resources: self.resources,
+                    caches: self.caches,
+                    members: &self.members,
+                    observe: self.observe,
+                },
+            )
+        })
+    }
+
     pub fn file_id(&self) -> &'a str {
         self.file_id
     }
     pub fn history_id(&self) -> &'a str {
         self.history_id
     }
-    /// The admitted State this scope reads; borrowed from the engine.
+    /// The admitted State this scope reads, retained by its resource owner.
     pub fn state(&self) -> &'a State {
         self.state
     }
@@ -567,7 +593,6 @@ impl<'a> FileHistoryScope<'a> {
     }
     fn commit_entry(&self, commit: &Commit, version_id: &str) -> Result<Option<Entry>> {
         let tree = self
-            .engine
             .commit_namespace(&commit.commit_id)
             .expect("invariant: first publisher is an admitted commit");
         let mut found = None;
@@ -587,6 +612,7 @@ impl<'a> FileHistoryScope<'a> {
             .into_iter()
             .flat_map(|rows| rows.branches.keys())
         {
+            self.checkpoint()?;
             let branch = &self.state.branches[id];
             let commit = self
                 .state
@@ -618,30 +644,50 @@ impl<'a> FileHistoryScope<'a> {
         }
     }
 
-    fn parent_ids<'b>(&'b self, node: &'b str) -> impl Iterator<Item = &'a String> + 'b {
-        self.base_parents(node).iter().chain(
-            self.merges()
-                .filter(move |event| event.result_node_id == node)
-                .flat_map(move |event| {
-                    event
-                        .parent_node_ids
-                        .iter()
-                        .filter(move |parent| parent.as_str() != node)
-                }),
-        )
+    fn visit_parent_ids(
+        &self,
+        node: &str,
+        mut visit: impl FnMut(&'a String) -> bool,
+    ) -> Result<()> {
+        for parent in self.base_parents(node) {
+            self.checkpoint()?;
+            if !visit(parent) {
+                return Ok(());
+            }
+        }
+        for id in self
+            .file_rows()
+            .into_iter()
+            .flat_map(|rows| rows.merges.keys())
+        {
+            self.checkpoint()?;
+            if let Some(event) = self.merge(id) {
+                if event.result_node_id != node {
+                    continue;
+                }
+                for parent in &event.parent_node_ids {
+                    self.checkpoint()?;
+                    if parent != node && !visit(parent) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Admitted histories are acyclic. Follow only the inherited first-parent
     /// chain, retaining no ancestor frontier/cache and copying one tag set.
-    fn tags(&self, node: &str) -> BTreeSet<String> {
+    fn tags(&self, node: &str) -> Result<BTreeSet<String>> {
         let mut current = node;
         loop {
+            self.checkpoint()?;
             if let Some(metadata) = self.state.file_metadata_nodes.get(current) {
-                return metadata.tags.clone();
+                return Ok(metadata.tags.clone());
             }
             match self.base_parents(current).first() {
                 Some(parent) => current = parent,
-                None => return BTreeSet::new(),
+                None => return Ok(BTreeSet::new()),
             }
         }
     }
@@ -651,6 +697,7 @@ impl<'a> FileHistoryScope<'a> {
     /// # Errors
     /// `FileNodeNotFound` when the id is not a node of this file history.
     pub fn node_key(&self, node_id: &str) -> Result<NodeKey> {
+        self.checkpoint()?;
         let sequence = if let Some(version) = self.version(node_id) {
             self.content_sequence(version)
         } else if let Some(node) = self.path_node(node_id) {
@@ -670,12 +717,13 @@ impl<'a> FileHistoryScope<'a> {
         &self,
         boundary: Option<(&NodeKey, Direction)>,
         limit: usize,
-    ) -> Selection<NodeKey> {
+    ) -> Result<Selection<NodeKey>> {
         let mut selector = Selector::new(boundary, limit);
-        for id in self.version_ids() {
-            let version = self
-                .version(id)
-                .expect("invariant: version ids were filtered to this scope");
+        for id in self.owners.versions(self.file_id) {
+            self.checkpoint()?;
+            let Some(version) = self.version(id) else {
+                continue;
+            };
             selector.consider(NodeKey {
                 sequence: self.content_sequence(version),
                 node_id: id.clone(),
@@ -683,6 +731,7 @@ impl<'a> FileHistoryScope<'a> {
         }
         if let Some(rows) = self.file_rows() {
             for id in rows.path_nodes.keys() {
+                self.checkpoint()?;
                 if let Some(node) = self.path_node(id) {
                     selector.consider(NodeKey {
                         sequence: node.sequence,
@@ -691,6 +740,7 @@ impl<'a> FileHistoryScope<'a> {
                 }
             }
             for id in rows.metadata_nodes.keys() {
+                self.checkpoint()?;
                 if let Some(node) = self.metadata_node(id) {
                     selector.consider(NodeKey {
                         sequence: node.sequence,
@@ -699,13 +749,13 @@ impl<'a> FileHistoryScope<'a> {
                 }
             }
         }
-        selector.finish()
+        Ok(selector.finish())
     }
 
     /// Constant-space reader. Only selected nodes are projected; source
     /// relations are borrowed and scanned rather than cached per request.
-    pub fn node_reader(&self) -> NodeReader<'a> {
-        NodeReader { scope: *self }
+    pub fn node_reader(&self) -> NodeReader<'_, 'a> {
+        NodeReader { scope: self }
     }
 
     /// One node with all bounded fields through a fresh reader.
@@ -749,6 +799,7 @@ impl<'a> FileHistoryScope<'a> {
     fn metadata_path(&self, node: &FileMetadataNode) -> Result<String> {
         let mut current = node.node_id.as_str();
         loop {
+            self.checkpoint()?;
             if let Some(path) = self.state.file_path_nodes.get(current) {
                 return Ok(path.path.clone());
             }
@@ -769,10 +820,20 @@ impl<'a> FileHistoryScope<'a> {
                 .get(current)
                 .expect("invariant: admitted file history references an existing node");
             let source = if metadata.kind == FileMetadataKind::Merge {
-                self.merges()
-                    .filter(|merge| !merge.reused_node && merge.result_node_id == current)
-                    .last()
-                    .map(|merge| merge.chosen_node_id.as_str())
+                let mut chosen = None;
+                for id in self
+                    .file_rows()
+                    .into_iter()
+                    .flat_map(|rows| rows.merges.keys())
+                {
+                    self.checkpoint()?;
+                    if let Some(merge) = self.merge(id) {
+                        if !merge.reused_node && merge.result_node_id == current {
+                            chosen = Some(merge.chosen_node_id.as_str());
+                        }
+                    }
+                }
+                chosen
             } else {
                 metadata.parent_node_ids.first().map(String::as_str)
             };
@@ -805,32 +866,39 @@ impl<'a> FileHistoryScope<'a> {
         boundary: Option<(&str, Direction)>,
         limit: usize,
     ) -> Result<Selection<String>> {
+        self.checkpoint()?;
         if !self.contains_node(node_id) {
             return Err(node_not_found());
         }
-        if let Some((parent, _)) = boundary
-            && !self
-                .parent_ids(node_id)
-                .any(|id| id == parent && self.contains_node(id))
-        {
-            return Err(Error::new(
-                storage_contract::ErrorCode::InvalidCursor,
-                "parent cursor boundary is not in this node's parent relation",
-            ));
+        if let Some((parent, _)) = boundary {
+            let mut found = false;
+            self.visit_parent_ids(node_id, |id| {
+                found = id == parent && self.contains_node(id);
+                !found
+            })?;
+            if !found {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::InvalidCursor,
+                    "parent cursor boundary is not in this node's parent relation",
+                ));
+            }
         }
         let owned = boundary.map(|(key, direction)| (key.to_owned(), direction));
         let mut selector = Selector::new(
             owned.as_ref().map(|(key, direction)| (key, *direction)),
             limit,
         );
-        for parent in self.parent_ids(node_id).filter(|id| self.contains_node(id)) {
-            selector.consider(parent.clone());
-        }
+        self.visit_parent_ids(node_id, |parent| {
+            if self.contains_node(parent) {
+                selector.consider(parent.clone());
+            }
+            true
+        })?;
         Ok(selector.finish())
     }
 
     /// Displayable branches of this file history, branch id ascending.
-    pub fn select_branches(&self, after: Option<&str>, limit: usize) -> Selection<String> {
+    pub fn select_branches(&self, after: Option<&str>, limit: usize) -> Result<Selection<String>> {
         self.branch_window(after.map(|key| (key, Direction::Forward)), limit)
     }
 
@@ -838,7 +906,7 @@ impl<'a> FileHistoryScope<'a> {
         &self,
         boundary: Option<(&str, Direction)>,
         limit: usize,
-    ) -> Selection<String> {
+    ) -> Result<Selection<String>> {
         let boundary = boundary.map(|(key, direction)| (key.to_owned(), direction));
         let mut selector = Selector::new(
             boundary.as_ref().map(|(key, direction)| (key, *direction)),
@@ -848,11 +916,13 @@ impl<'a> FileHistoryScope<'a> {
             .file_rows()
             .into_iter()
             .flat_map(|rows| rows.branches.keys())
-            .filter(|id| self.branch(id).is_some())
         {
-            selector.consider(id.clone());
+            self.checkpoint()?;
+            if self.branch(id).is_some() {
+                selector.consider(id.clone());
+            }
         }
-        selector.finish()
+        Ok(selector.finish())
     }
 
     /// One branch without its pending map.
@@ -860,6 +930,7 @@ impl<'a> FileHistoryScope<'a> {
     /// # Errors
     /// `FileBranchNotFound` when the branch is not a displayable branch of this file history.
     pub fn branch_record(&self, branch_id: &str) -> Result<BranchRecord> {
+        self.checkpoint()?;
         let branch = self.branch(branch_id).ok_or_else(branch_not_found)?;
         let head = self
             .state
@@ -867,7 +938,6 @@ impl<'a> FileHistoryScope<'a> {
             .get(&branch.head_commit_id)
             .expect("invariant: admitted branch head references an existing commit");
         let visible = self
-            .engine
             .commit_namespace(&head.commit_id)
             .expect("invariant: admitted branch head exists")
             .find_file(self.file_id)?
@@ -877,12 +947,13 @@ impl<'a> FileHistoryScope<'a> {
             .get(self.file_id)
             .or_else(|| head.pending_file_versions.get(self.file_id))
             .cloned();
-        let pending_count = head.pending_file_versions.len()
-            + branch
-                .pending_file_versions
-                .keys()
-                .filter(|file| !head.pending_file_versions.contains_key(*file))
-                .count();
+        let mut pending_count = head.pending_file_versions.len();
+        for file in branch.pending_file_versions.keys() {
+            self.checkpoint()?;
+            if !head.pending_file_versions.contains_key(file) {
+                pending_count += 1;
+            }
+        }
         let alias_of = self.state.file_branch_aliases.get(branch_id).cloned();
         Ok(BranchRecord {
             branch_id: branch.branch_id.clone(),
@@ -1085,6 +1156,7 @@ impl<'a> FileHistoryScope<'a> {
         offset: usize,
         max_bytes: usize,
     ) -> Result<FieldSlice> {
+        self.checkpoint()?;
         let text: &str = if let Some(_version) = self.version(node_id) {
             let commit = self.first_commit(node_id);
             match field {
@@ -1171,7 +1243,6 @@ impl<'a> FileHistoryScope<'a> {
             .get(&main.head_commit_id)
             .expect("invariant: admitted branch head references an existing commit");
         let tree = self
-            .engine
             .commit_namespace(&commit.commit_id)
             .expect("invariant: admitted main branch head exists");
         let current = match location {
@@ -1192,9 +1263,11 @@ impl<'a> FileHistoryScope<'a> {
             }
         };
         let context = match current.as_ref() {
-            Some(entry) => self
-                .engine
-                .file_context_for_current_entry(&repo.repository_id, entry),
+            Some(entry) => crate::business::directory::file_context_for_current_entry(
+                self.state,
+                &repo.repository_id,
+                entry,
+            ),
             None => None,
         };
         let current_node = context
@@ -1258,11 +1331,11 @@ impl<'a> FileHistoryScope<'a> {
 }
 
 /// Page-local node reader; see [`FileHistoryScope::node_reader`].
-pub struct NodeReader<'a> {
-    scope: FileHistoryScope<'a>,
+pub struct NodeReader<'s, 'a> {
+    scope: &'s FileHistoryScope<'a>,
 }
 
-impl<'a> NodeReader<'a> {
+impl<'a> NodeReader<'_, 'a> {
     /// One node with all bounded fields; tags follow the inherited first-parent
     /// chain over this file's own merge events (memoized in this reader).
     ///
@@ -1288,7 +1361,7 @@ impl<'a> NodeReader<'a> {
                 path: entry.map_or_else(|| download_name.clone(), |entry| entry.path().to_owned()),
                 previous_path: None,
                 note: scope.version_note(id),
-                tags: scope.tags(id),
+                tags: scope.tags(id)?,
                 size: version.logical_size,
                 content_hash: version.content_hash,
                 content_state: scope.state.content_states.get(id).copied(),
@@ -1311,7 +1384,7 @@ impl<'a> NodeReader<'a> {
                 path: node.path.clone(),
                 previous_path: Some(node.previous_path.clone()),
                 note: scope.node_note(id),
-                tags: scope.tags(id),
+                tags: scope.tags(id)?,
                 size: body.logical_size,
                 content_hash: body.content_hash,
                 content_state: scope.state.content_states.get(&node.version_id).copied(),

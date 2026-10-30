@@ -102,6 +102,41 @@ fn fixture() -> State {
     state
 }
 
+#[test]
+fn observed_cold_first_publishers_preserve_namespace_failure_and_success_order() {
+    use std::cell::Cell;
+
+    struct FailingSource(Cell<usize>);
+    impl crate::namespace::NamespaceSource for FailingSource {
+        fn node(
+            &self,
+            _: &storage_contract::NamespaceReference,
+        ) -> crate::Result<crate::namespace::NamespaceNode> {
+            self.0.set(self.0.get() + 1);
+            Err(crate::Error::new(
+                storage_contract::ErrorCode::ObjectCorrupt,
+                "first namespace read failed",
+            ))
+        }
+    }
+
+    let state = fixture();
+    let expected = DerivedOwners::from_state(&state, &FixtureSource).unwrap();
+    let actual = DerivedOwners::from_state_observed(&state, &FixtureSource, &|| Ok(())).unwrap();
+    assert_eq!(actual, expected);
+    assert_first_commits(&state, &actual);
+
+    let source = FailingSource(Cell::new(0));
+    let failed = DerivedOwners::from_state_observed(&state, &source, &|| Ok(())).unwrap_err();
+    assert_eq!(failed.code(), storage_contract::ErrorCode::ObjectCorrupt);
+    assert_eq!(failed.message(), "first namespace read failed");
+    assert_eq!(source.0.get(), 1);
+    assert_eq!(
+        DerivedOwners::from_state_observed(&state, &FixtureSource, &|| Ok(())).unwrap(),
+        expected
+    );
+}
+
 fn candidate(before: &State) -> State {
     let mut after = before.clone();
     after.begin_tracking();

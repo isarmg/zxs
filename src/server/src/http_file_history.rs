@@ -71,11 +71,11 @@ pub(crate) async fn nodes(
     ApiPath(file): ApiPath<String>,
     HistoryQuery { query, connection }: HistoryQuery,
 ) -> Result<Response, ApiError> {
-    page(
+    crate::history_read::run(
         state,
         connection,
-        move |backend| {
-            backend.file_history_snapshot(&identity, ReadFileHistory::parse(file, query)?)
+        move |backend, control| {
+            backend.file_history_snapshot(&identity, ReadFileHistory::parse(file, query)?, control)
         },
         |captured| captured.encode(PageBudget::PROTOCOL),
     )
@@ -88,11 +88,15 @@ pub(crate) async fn node_parents(
     ApiPath((file, node)): ApiPath<(String, String)>,
     HistoryQuery { query, connection }: HistoryQuery,
 ) -> Result<Response, ApiError> {
-    page(
+    crate::history_read::run(
         state,
         connection,
-        move |backend| {
-            backend.file_history_node_parents(&identity, ReadNodeParents::parse(file, node, query)?)
+        move |backend, control| {
+            backend.file_history_node_parents(
+                &identity,
+                ReadNodeParents::parse(file, node, query)?,
+                control,
+            )
         },
         |captured| captured.encode(PageBudget::PROTOCOL),
     )
@@ -105,14 +109,17 @@ pub(crate) async fn node_field(
     ApiPath((file, node, field)): ApiPath<(String, String, String)>,
     HistoryQuery { query, connection }: HistoryQuery,
 ) -> Result<Response, ApiError> {
-    page(
+    crate::history_read::run(
         state,
         connection,
-        move |backend| {
-            backend
-                .file_history_node_field(&identity, ReadNodeField::parse(file, node, field, query)?)
+        move |backend, control| {
+            backend.file_history_node_field(
+                &identity,
+                ReadNodeField::parse(file, node, field, query)?,
+                control,
+            )
         },
-        NodeFieldSlice::encode,
+        |captured| captured.encode(),
     )
     .await
 }
@@ -123,11 +130,15 @@ pub(crate) async fn branches(
     ApiPath(file): ApiPath<String>,
     HistoryQuery { query, connection }: HistoryQuery,
 ) -> Result<Response, ApiError> {
-    page(
+    crate::history_read::run(
         state,
         connection,
-        move |backend| {
-            backend.file_history_branches(&identity, ReadHistoryBranches::parse(file, query)?)
+        move |backend, control| {
+            backend.file_history_branches(
+                &identity,
+                ReadHistoryBranches::parse(file, query)?,
+                control,
+            )
         },
         |captured| captured.encode(PageBudget::PROTOCOL),
     )

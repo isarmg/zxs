@@ -54,8 +54,9 @@ macro_rules! define_fields {
             pub(super) fn name(self) -> &'static str {
                 match self { $(Self::$variant => $name,)* }
             }
-            fn keys(self, state: &State, mut visit: impl FnMut(&str)) {
+            fn keys(self, state: &State, mut visit: impl FnMut(&str) -> Result<()>) -> Result<()> {
                 match self { $(Self::$variant => field_keys!($field, state, visit),)* }
+                Ok(())
             }
             pub(super) fn value(self, state: &State, key: &str) -> Result<Option<Value>> {
                 match self { $(Self::$variant => field_value!($field, state, key),)* }
@@ -165,12 +166,12 @@ macro_rules! owner_for {
 macro_rules! field_keys {
     (content_states, $state:ident, $visit:ident) => {
         for key in $state.versions.keys() {
-            $visit(key);
+            $visit(key)?;
         }
     };
     ($field:ident, $state:ident, $visit:ident) => {
         for key in $state.$field.keys() {
-            $visit(key);
+            $visit(key)?;
         }
     };
 }
@@ -524,8 +525,20 @@ impl DerivedOwners {
         state: &State,
         source: &dyn crate::namespace::NamespaceSource,
     ) -> crate::Result<Self> {
+        Self::from_state_observed(state, source, &|| Ok(()))
+    }
+
+    /// Build a complete immutable derivation before its owner publishes it.
+    /// Observation errors discard this local index, never a cached partial value.
+    pub(crate) fn from_state_observed(
+        state: &State,
+        source: &dyn crate::namespace::NamespaceSource,
+        observe: &dyn Fn() -> Result<()>,
+    ) -> crate::Result<Self> {
+        observe()?;
         let mut index = Self::default();
         for history in state.histories.values() {
+            observe()?;
             index
                 .repositories
                 .add(&history.repository_id, &history.history_tree_id);
@@ -534,6 +547,7 @@ impl DerivedOwners {
                 .add(&history.repository_id, &history.history_tree_id);
         }
         for (key, version) in state.versions.iter() {
+            observe()?;
             index
                 .files
                 .add(&version.file_id, &version.history_tree_id, key);
@@ -542,11 +556,13 @@ impl DerivedOwners {
         // namespace; object reads share the bounded cache, and the full
         // enumeration stays confined to this rebuild-from-scratch entry.
         for commit in state.commits.values() {
+            observe()?;
             crate::namespace::directory_reference_deltas(
                 None,
                 Some((&commit.namespace, &commit.history_tree_id)),
                 source,
                 &mut |entry_id, history, _| {
+                    observe()?;
                     index.directories.add(entry_id, history);
                     Ok(())
                 },
@@ -554,12 +570,15 @@ impl DerivedOwners {
             index.commit_first_versions(commit, source)?;
         }
         for (key, branch) in state.file_selections.iter() {
+            observe()?;
             index.selected_files.add(branch, key);
         }
         for (key, branch) in state.directory_selections.iter() {
+            observe()?;
             index.selected_directories.add(branch, key);
         }
         for (key, tree) in state.directory_trees.iter() {
+            observe()?;
             index.directory_trees.add(&tree.directory_branch_id, key);
         }
         for field in [
@@ -568,16 +587,24 @@ impl DerivedOwners {
             Field::ProtectionPolicies,
             Field::FileContexts,
         ] {
-            field.keys(state, |key| index.repository_row(state, field, key, true));
+            field.keys(state, |key| {
+                observe()?;
+                index.repository_row(state, field, key, true);
+                Ok(())
+            })?;
         }
         for &field in Field::ALL {
             field.keys(state, |key| {
+                observe()?;
                 for history in field.owners(state, &index, key) {
+                    observe()?;
                     index.member(&history, field, key, true);
                 }
-            });
+                Ok(())
+            })?;
         }
-        index.build_file_rows(state);
+        index.build_file_rows(state, observe)?;
+        observe()?;
         Ok(index)
     }
     pub(super) fn rows(&self, history: &str) -> Option<&Rows> {

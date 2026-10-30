@@ -9,7 +9,10 @@ use crate::{
     segment_store::{ReceiptLookup, SegmentCaches, SegmentReader},
     state_projection::DerivedOwners,
 };
-use std::{borrow::Cow, sync::Arc};
+use std::{
+    borrow::Cow,
+    sync::{Arc, OnceLock},
+};
 
 /// Owns the admitted root and its exact read resources. It grants no authority.
 /// Published immutable metadata has no runtime garbage collection; the request
@@ -23,7 +26,70 @@ pub struct PublishedReadView {
     owners: Option<DerivedOwners>,
 }
 
+/// A file-history read owns the same captured resources and the existing
+/// generation-bound cold index cell. It grants no authority.
+pub struct FileHistoryReadView {
+    view: PublishedReadView,
+    owners: Arc<OnceLock<DerivedOwners>>,
+}
+
+impl FileHistoryReadView {
+    pub fn state(&self) -> &State {
+        self.view.state()
+    }
+
+    /// Construct the existing projection outside the writer lock. A failed or
+    /// cancelled rebuild installs nothing; concurrent successful builders may
+    /// duplicate work, but never hold the cell initializer across a scan.
+    ///
+    /// # Errors
+    /// Propagates namespace I/O/integrity failures and the observer's cancellation.
+    pub fn file_history_scope<'a>(
+        &'a self,
+        file_id: &'a str,
+        history_id: &'a str,
+        observe: &'a dyn Fn() -> Result<()>,
+    ) -> Result<crate::business::file_history_pages::FileHistoryScope<'a>> {
+        observe()?;
+        let owners = if let Some(owners) = &self.view.owners {
+            owners
+        } else if let Some(owners) = self.owners.get() {
+            owners
+        } else {
+            let reader = self.view.reader(observe);
+            let source = crate::namespace::LoaderSource(
+                |reference: &storage_contract::NamespaceReference| reader.namespace_node(reference),
+            );
+            let completed = DerivedOwners::from_state_observed(&self.view.state, &source, observe)?;
+            observe()?;
+            self.owners.get_or_init(|| completed)
+        };
+        Ok(crate::business::file_history_pages::FileHistoryScope {
+            resources: &self.view.resources,
+            caches: &self.view.caches,
+            members: Cow::Borrowed(&self.view.members),
+            observe: Some(observe),
+            state: &self.view.state,
+            owners,
+            file_id,
+            history_id,
+        })
+    }
+}
+
 impl Engine {
+    /// Capture one exact admitted catalog's existing index owner without I/O.
+    ///
+    /// # Errors
+    /// Returns `RecoveryRequired` if no catalog binds the current State.
+    pub fn file_history_read_view(&self) -> Result<FileHistoryReadView> {
+        let owners = self.history_owner_cell()?;
+        Ok(FileHistoryReadView {
+            view: self.published_read_view(),
+            owners,
+        })
+    }
+
     /// Capture without reads or constructing a cold owner index. Existing owner
     /// membership is accepted only by `available_history_owners`' exact-root proof.
     pub fn published_read_view(&self) -> PublishedReadView {

@@ -435,6 +435,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadFileHistory,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::FileHistoryPage, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -442,6 +443,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadNodeParents,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeParentsPage, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -449,6 +451,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadHistoryBranches,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -477,6 +480,7 @@ impl Backend for Probe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadNodeField,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

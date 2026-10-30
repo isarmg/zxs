@@ -22,9 +22,13 @@ fn pool() -> (tempfile::TempDir, Engine, storage_contract::Repository) {
 }
 
 fn save(engine: &mut Engine, branch: &str, path: &str) -> OperationResult {
+    save_content(engine, branch, path, b"body")
+}
+
+fn save_content(engine: &mut Engine, branch: &str, path: &str, body: &[u8]) -> OperationResult {
     let workspace = engine.create_workspace(branch, "owner").unwrap();
     engine
-        .stage_bytes(&workspace.workspace_id, path, b"body")
+        .stage_bytes(&workspace.workspace_id, path, body)
         .unwrap();
     engine
         .commit_workspace(CommitRequest {
@@ -44,6 +48,300 @@ fn proceed() -> Result<()> {
 }
 fn stop() -> Result<()> {
     Err(Error::new(ErrorCode::RequestTimeout, "request cancelled"))
+}
+
+fn file_history_projection(
+    view: &FileHistoryReadView,
+    file: &str,
+    history: &str,
+) -> impl PartialEq + std::fmt::Debug + use<> {
+    use crate::business::file_history_pages::{ContextLocation, NodeField};
+
+    let scope = view.file_history_scope(file, history, &proceed).unwrap();
+    let nodes = scope.select_nodes(None, 20).unwrap();
+    let records = nodes
+        .keys
+        .iter()
+        .map(|key| scope.node_record(key).unwrap())
+        .collect::<Vec<_>>();
+    let parents = nodes
+        .keys
+        .iter()
+        .map(|key| scope.node_parent_window(&key.node_id, None, 20).unwrap())
+        .collect::<Vec<_>>();
+    let fields = nodes
+        .keys
+        .iter()
+        .map(|key| {
+            (
+                scope
+                    .node_field(&key.node_id, NodeField::Author, 0, 128)
+                    .unwrap(),
+                scope
+                    .node_field(&key.node_id, NodeField::Message, 0, 128)
+                    .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let branches = scope.select_branches(None, 20).unwrap();
+    let branch_records = branches
+        .keys
+        .iter()
+        .map(|id| scope.branch_record(id).unwrap())
+        .collect::<Vec<_>>();
+    (
+        nodes,
+        records,
+        parents,
+        fields,
+        branches,
+        branch_records,
+        scope.current_context(ContextLocation::Resolve).unwrap(),
+    )
+}
+
+#[test]
+fn file_history_view_warm_and_recovered_cold_projections_match() {
+    let (temporary, mut engine, repo) = pool();
+    save(&mut engine, &repo.main_branch_id, "history.txt");
+    save_content(
+        &mut engine,
+        &repo.main_branch_id,
+        "history.txt",
+        b"replacement",
+    );
+    let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    let warm = engine.file_history_read_view().unwrap();
+    assert!(warm.view.owners.is_some());
+    assert!(Arc::ptr_eq(&warm.view.state, &engine.state));
+    let expected = file_history_projection(&warm, &entry.file_id, &repo.history_tree_id);
+    drop(warm);
+    drop(engine);
+
+    let engine = Engine::open(&temporary.path().join("system")).unwrap();
+    let cold = engine.file_history_read_view().unwrap();
+    assert!(cold.view.owners.is_none());
+    assert!(cold.owners.get().is_none());
+    assert!(engine.available_history_owners().is_none());
+    assert_eq!(
+        file_history_projection(&cold, &entry.file_id, &repo.history_tree_id),
+        expected
+    );
+    assert!(cold.owners.get().is_some());
+    assert!(engine.available_history_owners().is_some());
+    assert!(std::ptr::eq(
+        cold.owners.get().unwrap(),
+        engine.history_owners().unwrap()
+    ));
+}
+
+#[test]
+fn file_history_view_retains_old_generation_resources_after_publication_and_engine_drop() {
+    let (_temporary, mut engine, repo) = pool();
+    save(&mut engine, &repo.main_branch_id, "history.txt");
+    let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    let old = engine.file_history_read_view().unwrap();
+    let expected = file_history_projection(&old, &entry.file_id, &repo.history_tree_id);
+    save_content(
+        &mut engine,
+        &repo.main_branch_id,
+        "history.txt",
+        b"replacement",
+    );
+    let current = engine.file_history_read_view().unwrap();
+    assert!(!Arc::ptr_eq(&old.view.state, &current.view.state));
+    assert!(!Arc::ptr_eq(&old.owners, &current.owners));
+    assert_ne!(
+        file_history_projection(&current, &entry.file_id, &repo.history_tree_id),
+        expected
+    );
+    drop(current);
+    drop(engine);
+    assert_eq!(
+        file_history_projection(&old, &entry.file_id, &repo.history_tree_id),
+        expected
+    );
+}
+
+#[test]
+fn file_history_cold_cancellation_leaves_shared_cell_empty_and_retry_publishes_complete_index() {
+    let (temporary, mut engine, repo) = pool();
+    save(&mut engine, &repo.main_branch_id, "history.txt");
+    let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    drop(engine);
+    let engine = Engine::open(&temporary.path().join("system")).unwrap();
+    let first = engine.file_history_read_view().unwrap();
+    let second = engine.file_history_read_view().unwrap();
+    assert!(Arc::ptr_eq(&first.owners, &second.owners));
+    let calls = Cell::new(0);
+    let cancel = || {
+        calls.set(calls.get() + 1);
+        if calls.get() == 4 { stop() } else { proceed() }
+    };
+    let failed = first.file_history_scope(&entry.file_id, &repo.history_tree_id, &cancel);
+    assert_eq!(failed.err().unwrap().code(), ErrorCode::RequestTimeout);
+    assert_eq!(calls.get(), 4);
+    assert!(first.owners.get().is_none());
+    assert!(engine.available_history_owners().is_none());
+    let expected = file_history_projection(&second, &entry.file_id, &repo.history_tree_id);
+    assert!(first.owners.get().is_some());
+    assert_eq!(
+        file_history_projection(&first, &entry.file_id, &repo.history_tree_id),
+        expected
+    );
+}
+
+#[test]
+fn file_history_cold_namespace_failure_does_not_install_an_index_and_can_retry() {
+    let (temporary, mut engine, repo) = pool();
+    save(&mut engine, &repo.main_branch_id, "history.txt");
+    let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    let warm = engine.file_history_read_view().unwrap();
+    let expected = file_history_projection(&warm, &entry.file_id, &repo.history_tree_id);
+    drop(warm);
+    drop(engine);
+    let engine = Engine::open(&temporary.path().join("system")).unwrap();
+    let mut cold = engine.file_history_read_view().unwrap();
+    cold.view.caches = Arc::new(SegmentCaches::new());
+    let root = &cold.state().commits.values().next().unwrap().namespace.root;
+    let kind = match root.kind {
+        storage_contract::NamespaceRefKind::Page => storage_contract::NAMESPACE_PAGE_KIND,
+        storage_contract::NamespaceRefKind::Index => storage_contract::NAMESPACE_INDEX_KIND,
+    };
+    let originals = cold
+        .view
+        .members
+        .iter()
+        .map(|member| {
+            let path = crate::journal::object_path(member, kind, &root.hash);
+            let bytes = std::fs::read(&path).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        cold.file_history_scope(&entry.file_id, &repo.history_tree_id, &proceed)
+            .is_err()
+    );
+    assert!(cold.owners.get().is_none());
+    assert!(engine.available_history_owners().is_none());
+    for (path, bytes) in originals {
+        std::fs::write(path, bytes).unwrap();
+    }
+    assert_eq!(
+        file_history_projection(&cold, &entry.file_id, &repo.history_tree_id),
+        expected
+    );
+    assert!(engine.available_history_owners().is_some());
+}
+
+#[test]
+fn file_history_cold_build_does_not_hold_cell_initializer_while_observer_is_blocked() {
+    use std::{sync::mpsc, time::Duration};
+
+    let (temporary, mut engine, repo) = pool();
+    save(&mut engine, &repo.main_branch_id, "history.txt");
+    let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    drop(engine);
+    let engine = Engine::open(&temporary.path().join("system")).unwrap();
+    let first = engine.file_history_read_view().unwrap();
+    let second = engine.file_history_read_view().unwrap();
+    let cell = Arc::clone(&first.owners);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (completed_tx, completed_rx) = mpsc::channel();
+    let file = entry.file_id.as_str();
+    let history = repo.history_tree_id.as_str();
+
+    std::thread::scope(|threads| {
+        // Own the release sender in this scope closure: early assertion
+        // unwinding drops it before scoped workers are joined.
+        let release_first = release_tx;
+        let first_worker = threads.spawn(move || {
+            let calls = Cell::new(0);
+            let observe = || {
+                calls.set(calls.get() + 1);
+                // Enter the derivation, not the view's first admission check.
+                if calls.get() == 3 {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }
+                Ok(())
+            };
+            first
+                .file_history_scope(file, history, &observe)
+                .unwrap()
+                .select_nodes(None, 20)
+                .unwrap()
+        });
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(cell.get().is_none());
+        let second_worker = threads.spawn(move || {
+            let nodes = second
+                .file_history_scope(file, history, &proceed)
+                .unwrap()
+                .select_nodes(None, 20)
+                .unwrap();
+            completed_tx.send(()).unwrap();
+            nodes
+        });
+        // Always release before asserting: a regression that scans inside
+        // OnceLock must fail the test, not leave its waiting worker stranded.
+        let completed_while_first_blocked =
+            completed_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+        release_first.send(()).unwrap();
+        let first_nodes = first_worker.join().unwrap();
+        let second_nodes = second_worker.join().unwrap();
+        assert!(completed_while_first_blocked);
+        assert_eq!(first_nodes, second_nodes);
+    });
+    assert!(std::ptr::eq(
+        cell.get().unwrap(),
+        engine.history_owners().unwrap()
+    ));
+}
+
+#[test]
+fn file_history_cold_owner_cell_survives_only_plans_rebinding_not_foreign_state() {
+    let (temporary, mut engine, repo) = pool();
+    save(&mut engine, &repo.main_branch_id, "history.txt");
+    let entry = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
+    drop(engine);
+    let mut engine = Engine::open(&temporary.path().join("system")).unwrap();
+    let old = engine.file_history_read_view().unwrap();
+    assert!(old.owners.get().is_none());
+    engine.install_local_plan(storage_contract::Plan {
+        plan_id: "local-owner-test".into(),
+        kind: storage_contract::PlanKind::Purge,
+        principal: "owner".into(),
+        expected_sequence: engine.state.business_generation,
+        digest: "0".repeat(64),
+        input: json_codec::Value::Null,
+        state: storage_contract::PlanState::Ready,
+    });
+    let rebound = engine.file_history_read_view().unwrap();
+    assert!(!Arc::ptr_eq(&old.view.state, &rebound.view.state));
+    assert!(Arc::ptr_eq(&old.owners, &rebound.owners));
+    assert!(!old.state().plans.contains_key("local-owner-test"));
+    assert!(rebound.state().plans.contains_key("local-owner-test"));
+    let expected = file_history_projection(&old, &entry.file_id, &repo.history_tree_id);
+    assert_eq!(
+        file_history_projection(&rebound, &entry.file_id, &repo.history_tree_id),
+        expected
+    );
+    Arc::make_mut(&mut engine.state)
+        .versions
+        .get_mut(&entry.version_id)
+        .unwrap()
+        .file_id = "foreign-file".into();
+    assert_eq!(
+        engine.file_history_read_view().err().unwrap().code(),
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(
+        file_history_projection(&old, &entry.file_id, &repo.history_tree_id),
+        expected
+    );
 }
 
 fn collect_receipts(

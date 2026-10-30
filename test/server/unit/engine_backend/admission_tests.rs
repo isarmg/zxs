@@ -365,6 +365,7 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
             .file_history_snapshot(
                 &caller(),
                 crate::ReadFileHistory::parse(entry.file_id.clone(), BTreeMap::new()).unwrap(),
+                &crate::tests::history_read_control(),
             )
             .unwrap();
         backend
@@ -434,7 +435,8 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
         backend
             .file_history_snapshot(
                 &caller(),
-                crate::ReadFileHistory::parse(entry.file_id.clone(), BTreeMap::new()).unwrap()
+                crate::ReadFileHistory::parse(entry.file_id.clone(), BTreeMap::new()).unwrap(),
+                &crate::tests::history_read_control()
             )
             .unwrap_err()
             .status,
@@ -746,6 +748,7 @@ fn file_manager_borrowed_tree_reads_preserve_listing_and_path_context() {
             .file_history_snapshot(
                 &caller(),
                 crate::ReadFileHistory::parse(entry.file_id.clone(), query).unwrap(),
+                &crate::tests::history_read_control(),
             )
             .and_then(|page| page.encode(crate::backend_file_history::PageBudget::PROTOCOL))
             .map(|encoded| json_codec::from_slice::<Value>(encoded.body()).unwrap())

@@ -234,18 +234,25 @@ impl DerivedOwners {
         }
     }
 
-    pub(super) fn build_file_rows(&mut self, state: &State) {
+    pub(super) fn build_file_rows(
+        &mut self,
+        state: &State,
+        observe: &dyn Fn() -> crate::Result<()>,
+    ) -> crate::Result<()> {
         for (key, branch) in state.branches.iter() {
+            observe()?;
             if let Some(file) = &branch.file_id {
                 self.file_member(file, FileField::Branch, key, true);
             }
             for file in branch.pending_file_versions.keys() {
+                observe()?;
                 self.file_member(file, FileField::PendingBranch, key, true);
             }
         }
         macro_rules! direct {
             ($field:ident, $kind:ident) => {
                 for (key, row) in state.$field.iter() {
+                    observe()?;
                     self.file_member(&row.file_id, FileField::$kind, key, true);
                 }
             };
@@ -254,16 +261,19 @@ impl DerivedOwners {
         direct!(file_metadata_nodes, MetadataNode);
         direct!(file_branch_merges, Merge);
         for (key, context) in state.file_contexts.iter() {
+            observe()?;
             self.branch_context(&context.branch_id, key, true);
             if let Some(file) = context_file(state, key) {
                 self.file_member(file, FileField::Context, key, true);
             }
         }
         for key in state.file_branch_aliases.keys() {
+            observe()?;
             if let Some(file) = alias_file(state, key) {
                 self.file_member(file, FileField::Alias, key, true);
             }
         }
+        Ok(())
     }
 
     pub(super) fn update_file_rows(

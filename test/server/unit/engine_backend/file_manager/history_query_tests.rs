@@ -52,7 +52,7 @@ fn history_context_preserves_projection_and_current_admission() {
         let request =
             crate::ReadFileHistory::parse(input["file_id"].as_str().unwrap().into(), query)?;
         backend
-            .file_history_snapshot(&identity, request)
+            .file_history_snapshot(&identity, request, &crate::tests::history_read_control())
             .and_then(|page| page.encode(crate::backend_file_history::PageBudget::PROTOCOL))
             .map(|encoded| json_codec::from_slice::<Value>(encoded.body()).unwrap())
     };

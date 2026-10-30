@@ -87,14 +87,16 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
         .unwrap();
     let before = json_codec::to_value(engine.state()).unwrap();
     let history = storage_contract::strict_json(
-        history_pages::file_history(
-            &engine,
-            crate::ReadFileHistory::parse(entry.file_id.clone(), BTreeMap::new()).unwrap(),
-        )
-        .unwrap()
-        .encode(crate::backend_file_history::PageBudget::PROTOCOL)
-        .unwrap()
-        .body(),
+        history_pages::capture(&engine, &entry.file_id, None)
+            .unwrap()
+            .file_history(
+                crate::ReadFileHistory::parse(entry.file_id.clone(), BTreeMap::new()).unwrap(),
+                &crate::tests::history_read_control(),
+            )
+            .unwrap()
+            .encode(crate::backend_file_history::PageBudget::PROTOCOL)
+            .unwrap()
+            .body(),
     )
     .unwrap();
     let nodes = history["nodes"].as_array().unwrap();

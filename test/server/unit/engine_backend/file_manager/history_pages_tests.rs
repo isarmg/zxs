@@ -4,6 +4,34 @@ use super::*;
 use crate::backend_file_history::{PageBudget, ReadIndexedSlice};
 use storage_engine::{CommitRequest, Config, FileMergeInput};
 
+// Keep the existing projection fixtures on the production detached capture path.
+fn file_history(engine: &Engine, request: ReadFileHistory) -> Result<FileHistoryPage, ApiError> {
+    let captured = capture(engine, request.file_id.as_str(), request.root.as_ref())?;
+    captured.file_history(request, &crate::tests::history_read_control())
+}
+
+fn branches(
+    engine: &Engine,
+    request: ReadHistoryBranches,
+) -> Result<HistoryBranchesPage, ApiError> {
+    let captured = capture(engine, request.0.file_id.as_str(), Some(&request.0.root))?;
+    captured.branches(request, &crate::tests::history_read_control())
+}
+
+fn node_parents(engine: &Engine, request: ReadNodeParents) -> Result<NodeParentsPage, ApiError> {
+    let captured = capture(
+        engine,
+        request.collection.file_id.as_str(),
+        Some(&request.collection.root),
+    )?;
+    captured.node_parents(request, &crate::tests::history_read_control())
+}
+
+fn node_field(engine: &Engine, request: ReadNodeField) -> Result<NodeFieldSlice, ApiError> {
+    let captured = capture(engine, request.file_id.as_str(), Some(&request.root))?;
+    captured.node_field(request, &crate::tests::history_read_control())
+}
+
 struct Graph {
     _root: tempfile::TempDir,
     engine: Engine,
@@ -159,7 +187,7 @@ fn query(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 }
 
 fn page(engine: &Engine, file: &str, pairs: &[(&str, &str)]) -> Result<Value, ApiError> {
-    history_pages::file_history(
+    self::file_history(
         engine,
         crate::ReadFileHistory::parse(file.into(), query(pairs))?,
     )
@@ -183,7 +211,7 @@ fn parent_and_branch_pages_round_trip_through_every_previous_cursor() {
     for parents in [true, false] {
         let read = |pairs: &[(&str, &str)]| {
             let encoded = if parents {
-                history_pages::node_parents(
+                self::node_parents(
                     &g.engine,
                     crate::ReadNodeParents::parse(
                         g.file.clone(),
@@ -195,7 +223,7 @@ fn parent_and_branch_pages_round_trip_through_every_previous_cursor() {
                 .unwrap()
                 .encode(PageBudget::PROTOCOL)
             } else {
-                history_pages::branches(
+                self::branches(
                     &g.engine,
                     crate::ReadHistoryBranches::parse(g.file.clone(), query(pairs)).unwrap(),
                 )
@@ -251,7 +279,7 @@ fn escaped_field_pages_fit_the_wire_budget_and_reassemble_with_utf8_progress() {
     let mut assembled = String::new();
     loop {
         let offset_text = offset.to_string();
-        let page = history_pages::node_field(
+        let page = self::node_field(
             &g.engine,
             crate::ReadNodeField::parse(
                 g.file.clone(),
@@ -285,7 +313,7 @@ fn escaped_field_pages_fit_the_wire_budget_and_reassemble_with_utf8_progress() {
     }
     assert_eq!(assembled, message);
     for (offset, bytes) in [(2, 1), (4, 3), (3, 100)] {
-        let error = history_pages::node_field(
+        let error = self::node_field(
             &g.engine,
             crate::ReadNodeField::parse(
                 g.file.clone(),
@@ -461,7 +489,7 @@ fn anchors_position_the_page_and_parent_previews_always_remain_continuable() {
         .collect::<Vec<_>>();
     let mut next = Some(cursor);
     while let Some(cursor) = next.take() {
-        let more = history_pages::node_parents(
+        let more = self::node_parents(
             &g.engine,
             crate::ReadNodeParents::parse(
                 g.file.clone(),
@@ -491,7 +519,7 @@ fn anchors_position_the_page_and_parent_previews_always_remain_continuable() {
         "parent ids ascend across preview and pages"
     );
     // A continuation whose node differs from the path is a malformed query.
-    let foreign = history_pages::node_parents(
+    let foreign = self::node_parents(
         &g.engine,
         crate::ReadNodeParents::parse(
             g.file.clone(),
@@ -540,7 +568,7 @@ fn page_parent_edge_budget_leaves_later_nodes_a_restart_cursor() {
     // 200 nodes with up to 32 previews each cannot exceed 2048 edges here, so
     // model the exhausted budget through the per-page limit semantics: a page
     // whose previews consume the budget must still mint a cursor per node.
-    let all = history_pages::file_history(
+    let all = self::file_history(
         &g.engine,
         crate::ReadFileHistory::parse(g.file.clone(), query(&[("limit", "200")])).unwrap(),
     )
@@ -578,7 +606,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
     let g = graph();
     let first = page(&g.engine, &g.file, &[("limit", "1")]).unwrap();
     let root = first["history_root"].as_str().unwrap().to_owned();
-    let branches = history_pages::branches(
+    let branches = self::branches(
         &g.engine,
         crate::ReadHistoryBranches::parse(
             g.file.clone(),
@@ -603,7 +631,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
         .collect::<Vec<_>>();
     let mut next = encoded["next_cursor"].as_str().map(str::to_owned);
     while let Some(cursor) = next.take() {
-        let page = history_pages::branches(
+        let page = self::branches(
             &g.engine,
             crate::ReadHistoryBranches::parse(
                 g.file.clone(),
@@ -742,7 +770,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
         sources.items,
         g.engine.state().versions[&versions.versions[1].version_id].source_version_ids
     );
-    let field = history_pages::node_field(
+    let field = self::node_field(
         &g.engine,
         crate::ReadNodeField::parse(
             g.file.clone(),
@@ -762,7 +790,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
         ),
         (4, 0, "ba", false)
     );
-    let rest = history_pages::node_field(
+    let rest = self::node_field(
         &g.engine,
         crate::ReadNodeField::parse(
             g.file.clone(),
@@ -788,7 +816,7 @@ fn branch_merge_version_and_field_pages_bind_the_same_root() {
 fn retried_requests_under_the_same_root_return_byte_identical_pages() {
     let g = graph();
     let body = |pairs: &[(&str, &str)]| {
-        history_pages::file_history(
+        self::file_history(
             &g.engine,
             crate::ReadFileHistory::parse(g.file.clone(), query(pairs)).unwrap(),
         )

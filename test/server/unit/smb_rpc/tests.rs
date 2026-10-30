@@ -625,22 +625,26 @@ impl Backend for LostCommitReply {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::FileHistoryPage, crate::ApiError> {
-        self.inner.file_history_snapshot(identity, request)
+        self.inner.file_history_snapshot(identity, request, control)
     }
     fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeParentsPage, crate::ApiError> {
-        self.inner.file_history_node_parents(identity, request)
+        self.inner
+            .file_history_node_parents(identity, request, control)
     }
     fn file_history_branches(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryBranches,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
-        self.inner.file_history_branches(identity, request)
+        self.inner.file_history_branches(identity, request, control)
     }
     fn file_history_merges(
         &self,
@@ -667,8 +671,10 @@ impl Backend for LostCommitReply {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeField,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
-        self.inner.file_history_node_field(identity, request)
+        self.inner
+            .file_history_node_field(identity, request, control)
     }
     fn file_version_page(
         &self,
@@ -982,6 +988,7 @@ pub(super) fn history_probe(backend: &dyn Backend, identity: &Identity, file: &s
         .file_history_snapshot(
             identity,
             crate::ReadFileHistory::parse(file.into(), BTreeMap::new()).unwrap(),
+            &crate::tests::history_read_control(),
         )
         .unwrap();
     let encoded = page
@@ -996,6 +1003,7 @@ pub(super) fn history_probe(backend: &dyn Backend, identity: &Identity, file: &s
                 BTreeMap::from([("history_root".to_owned(), page.history_root.clone())]),
             )
             .unwrap(),
+            &crate::tests::history_read_control(),
         )
         .unwrap();
     let branches = branches

@@ -140,10 +140,14 @@ impl EngineBackend {
         identity: &Identity,
         file_id: &str,
         page: Result<T, ApiError>,
+        control: Option<&crate::HistoryReadControl>,
     ) -> Result<T, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         file_manager::file_repo(&engine, file_id)?;
+        if let Some(control) = control {
+            file_manager::activity::checkpoint(control)?;
+        }
         page
     }
 
@@ -1525,31 +1529,52 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::FileHistoryPage, crate::ApiError> {
         let engine = self
             .engine
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::history_pages::file_history(&engine, request)
+        let file_id = request.file_id.as_str().to_owned();
+        let capture =
+            file_manager::history_pages::capture(&engine, &file_id, request.root.as_ref())?;
+        drop(engine);
+        let page = capture.file_history(request, control);
+        self.finish_file_history_page(identity, &file_id, page, Some(control))
     }
     fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeParentsPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::history_pages::node_parents(&engine, request)
+        let file_id = request.collection.file_id.as_str().to_owned();
+        let capture = file_manager::history_pages::capture(
+            &engine,
+            &file_id,
+            Some(&request.collection.root),
+        )?;
+        drop(engine);
+        let page = capture.node_parents(request, control);
+        self.finish_file_history_page(identity, &file_id, page, Some(control))
     }
     fn file_history_branches(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryBranches,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::history_pages::branches(&engine, request)
+        let file_id = request.0.file_id.as_str().to_owned();
+        let capture =
+            file_manager::history_pages::capture(&engine, &file_id, Some(&request.0.root))?;
+        drop(engine);
+        let page = capture.branches(request, control);
+        self.finish_file_history_page(identity, &file_id, page, Some(control))
     }
     fn file_history_merges(
         &self,
@@ -1561,7 +1586,7 @@ impl Backend for EngineBackend {
         let file_id = request.0.file_id.as_str().to_owned();
         let plan = file_manager::history_pages::prepare_merge_page(&engine, request)?;
         drop(engine);
-        self.finish_file_history_page(identity, &file_id, Ok(plan.read()))
+        self.finish_file_history_page(identity, &file_id, Ok(plan.read()), None)
     }
     fn file_history_merge_inputs(
         &self,
@@ -1585,10 +1610,15 @@ impl Backend for EngineBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeField,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::history_pages::node_field(&engine, request)
+        let file_id = request.file_id.as_str().to_owned();
+        let capture = file_manager::history_pages::capture(&engine, &file_id, Some(&request.root))?;
+        drop(engine);
+        let page = capture.node_field(request, control);
+        self.finish_file_history_page(identity, &file_id, page, Some(control))
     }
     fn file_version_page(
         &self,
@@ -1600,7 +1630,7 @@ impl Backend for EngineBackend {
         let file_id = request.file_id.as_str().to_owned();
         let plan = file_manager::history_pages::prepare_version_page(&engine, request)?;
         drop(engine);
-        self.finish_file_history_page(identity, &file_id, plan.read())
+        self.finish_file_history_page(identity, &file_id, plan.read(), None)
     }
     fn file_version_sources(
         &self,

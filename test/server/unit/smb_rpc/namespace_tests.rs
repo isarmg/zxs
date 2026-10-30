@@ -749,22 +749,26 @@ impl Backend for NamespaceFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::FileHistoryPage, crate::ApiError> {
-        self.inner.file_history_snapshot(identity, request)
+        self.inner.file_history_snapshot(identity, request, control)
     }
     fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeParentsPage, crate::ApiError> {
-        self.inner.file_history_node_parents(identity, request)
+        self.inner
+            .file_history_node_parents(identity, request, control)
     }
     fn file_history_branches(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryBranches,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
-        self.inner.file_history_branches(identity, request)
+        self.inner.file_history_branches(identity, request, control)
     }
     fn file_history_merges(
         &self,
@@ -791,8 +795,10 @@ impl Backend for NamespaceFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeField,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
-        self.inner.file_history_node_field(identity, request)
+        self.inner
+            .file_history_node_field(identity, request, control)
     }
     fn file_version_page(
         &self,
@@ -1828,22 +1834,26 @@ impl Backend for PreparationFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::FileHistoryPage, crate::ApiError> {
-        self.inner.file_history_snapshot(identity, request)
+        self.inner.file_history_snapshot(identity, request, control)
     }
     fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeParentsPage, crate::ApiError> {
-        self.inner.file_history_node_parents(identity, request)
+        self.inner
+            .file_history_node_parents(identity, request, control)
     }
     fn file_history_branches(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryBranches,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
-        self.inner.file_history_branches(identity, request)
+        self.inner.file_history_branches(identity, request, control)
     }
     fn file_history_merges(
         &self,
@@ -1870,8 +1880,10 @@ impl Backend for PreparationFailure {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeField,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
-        self.inner.file_history_node_field(identity, request)
+        self.inner
+            .file_history_node_field(identity, request, control)
     }
     fn file_version_page(
         &self,

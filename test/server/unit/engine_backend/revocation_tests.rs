@@ -498,25 +498,29 @@ impl Backend for PausedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::FileHistoryPage, crate::ApiError> {
         self.enter();
-        self.inner.file_history_snapshot(identity, request)
+        self.inner.file_history_snapshot(identity, request, control)
     }
     fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeParentsPage, crate::ApiError> {
         self.enter();
-        self.inner.file_history_node_parents(identity, request)
+        self.inner
+            .file_history_node_parents(identity, request, control)
     }
     fn file_history_branches(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryBranches,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
         self.enter();
-        self.inner.file_history_branches(identity, request)
+        self.inner.file_history_branches(identity, request, control)
     }
     fn file_history_merges(
         &self,
@@ -546,9 +550,11 @@ impl Backend for PausedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeField,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
         self.enter();
-        self.inner.file_history_node_field(identity, request)
+        self.inner
+            .file_history_node_field(identity, request, control)
     }
     fn file_version_page(
         &self,
@@ -1569,6 +1575,7 @@ impl Request {
                         std::collections::BTreeMap::new(),
                     )
                     .unwrap(),
+                    &crate::tests::history_read_control(),
                 )
                 .map(|_| ()),
             Self::FileHistory => backend
@@ -1590,6 +1597,7 @@ impl Request {
                         rooted_query(),
                     )
                     .unwrap(),
+                    &crate::tests::history_read_control(),
                 )
                 .map(|_| ()),
             Self::FileHistoryBranches => backend
@@ -1597,6 +1605,7 @@ impl Request {
                     identity,
                     crate::ReadHistoryBranches::parse("missing-file".into(), rooted_query())
                         .unwrap(),
+                    &crate::tests::history_read_control(),
                 )
                 .map(|_| ()),
             Self::FileHistoryMerges => backend
@@ -1643,6 +1652,7 @@ impl Request {
                         rooted_query(),
                     )
                     .unwrap(),
+                    &crate::tests::history_read_control(),
                 )
                 .map(|_| ()),
             Self::FileVersionSources => backend

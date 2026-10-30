@@ -17,7 +17,7 @@ mod published_read;
 pub use event_read::EventPageReadPlan;
 pub(crate) use history_window::HistoryCatalog;
 pub use history_window::HistoryRoot;
-pub use published_read::PublishedReadView;
+pub use published_read::{FileHistoryReadView, PublishedReadView};
 mod index;
 pub use index::{IndexFailure, IndexFailureStage, IndexHealth};
 mod integrity_scrub;

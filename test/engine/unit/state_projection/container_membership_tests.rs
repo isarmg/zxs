@@ -237,6 +237,77 @@ fn fixture() -> State {
     state
 }
 
+#[test]
+fn observed_cold_memberships_cancel_at_every_state_checkpoint_and_retry_identically() {
+    use std::cell::Cell;
+
+    // This fixture has no commits: cancellation cannot rely on namespace I/O.
+    let state = fixture();
+    let source = crate::namespace::fixture_store::FixtureSource;
+    let expected = DerivedOwners::from_state(&state, &source).unwrap();
+    let count = Cell::new(0);
+    let actual = DerivedOwners::from_state_observed(&state, &source, &|| {
+        count.set(count.get() + 1);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(actual, expected);
+    assert_memberships(&state, &actual);
+    assert!(count.get() > state.versions.len() + state.branches.len());
+
+    for stop in 1..=count.get() {
+        let visits = Cell::new(0);
+        let failed = DerivedOwners::from_state_observed(&state, &source, &|| {
+            visits.set(visits.get() + 1);
+            if visits.get() == stop {
+                return Err(crate::Error::new(
+                    storage_contract::ErrorCode::RequestTimeout,
+                    "cancel cold membership derivation",
+                ));
+            }
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(failed.code(), storage_contract::ErrorCode::RequestTimeout);
+        assert_eq!(
+            visits.get(),
+            stop,
+            "construction continued after cancellation"
+        );
+    }
+    assert_eq!(
+        DerivedOwners::from_state_observed(&state, &source, &|| Ok(())).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn file_row_build_observes_every_pending_file_and_each_row_kind() {
+    use std::cell::Cell;
+
+    let state = fixture();
+    let expected = state.branches.len()
+        + state
+            .branches
+            .values()
+            .map(|branch| branch.pending_file_versions.len())
+            .sum::<usize>()
+        + state.file_path_nodes.len()
+        + state.file_metadata_nodes.len()
+        + state.file_branch_merges.len()
+        + state.file_contexts.len()
+        + state.file_branch_aliases.len();
+    let calls = Cell::new(0);
+    let mut index = DerivedOwners::default();
+    index
+        .build_file_rows(&state, &|| {
+            calls.set(calls.get() + 1);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(calls.get(), expected);
+}
+
 fn candidate(before: &State) -> State {
     let mut after = before.clone();
     after.begin_tracking();

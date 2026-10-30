@@ -863,16 +863,19 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::FileHistoryPage, crate::ApiError>;
     fn file_history_node_parents(
         &self,
         identity: &Identity,
         request: crate::ReadNodeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeParentsPage, ApiError>;
     fn file_history_branches(
         &self,
         identity: &Identity,
         request: crate::ReadHistoryBranches,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryBranchesPage, ApiError>;
     fn file_history_merges(
         &self,
@@ -893,6 +896,7 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
         request: crate::ReadNodeField,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeFieldSlice, ApiError>;
     /// One bounded body-version page (advanced route), same root identity.
     fn file_version_page(
@@ -1556,25 +1560,28 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::FileHistoryPage, crate::ApiError> {
         self.backend
-            .file_history_snapshot(&self.current(identity)?, request)
+            .file_history_snapshot(&self.current(identity)?, request, control)
     }
     fn file_history_node_parents(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeParents,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeParentsPage, crate::ApiError> {
         self.backend
-            .file_history_node_parents(&self.current(identity)?, request)
+            .file_history_node_parents(&self.current(identity)?, request, control)
     }
     fn file_history_branches(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryBranches,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryBranchesPage, crate::ApiError> {
         self.backend
-            .file_history_branches(&self.current(identity)?, request)
+            .file_history_branches(&self.current(identity)?, request, control)
     }
     fn file_history_merges(
         &self,
@@ -1604,9 +1611,10 @@ impl Backend for AuthorizedBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadNodeField,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::NodeFieldSlice, crate::ApiError> {
         self.backend
-            .file_history_node_field(&self.current(identity)?, request)
+            .file_history_node_field(&self.current(identity)?, request, control)
     }
     fn file_version_page(
         &self,

@@ -64,7 +64,7 @@ pub(crate) struct HistoryCatalog {
     state: Weak<State>,
     source: CatalogSource,
     memo: Mutex<BTreeMap<String, HistoryRoot>>,
-    owners: OnceLock<crate::state_projection::DerivedOwners>,
+    owners: Arc<OnceLock<crate::state_projection::DerivedOwners>>,
 }
 
 impl HistoryCatalog {
@@ -81,7 +81,7 @@ impl HistoryCatalog {
             state: Arc::downgrade(state),
             source,
             memo: Mutex::new(BTreeMap::new()),
-            owners: OnceLock::new(),
+            owners: Arc::new(OnceLock::new()),
         }
     }
 
@@ -110,6 +110,15 @@ impl Engine {
             .as_ref()
             .filter(|catalog| catalog.binds(&self.state))
             .ok_or_else(no_catalog)
+    }
+
+    /// Retain the existing index cell only after proving its exact State binding.
+    /// The caller must keep the captured State with this cell; plans-only
+    /// rebinding is safe because plans do not contribute to history projection.
+    pub(super) fn history_owner_cell(
+        &self,
+    ) -> Result<Arc<OnceLock<crate::state_projection::DerivedOwners>>> {
+        Ok(Arc::clone(&self.bound_history_catalog()?.owners))
     }
 
     /// The exact published `history-manifest` hash of one history in the
