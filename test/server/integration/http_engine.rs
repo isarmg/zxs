@@ -2519,7 +2519,10 @@ async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavail
     )
     .await;
     assert_capture_contract(
-        &projection_failure::receipt_outcome(&wire),
+        &projection_failure::receipt_outcome_with_status(
+            &wire,
+            storage_contract::client_protocol::OperationStatus::Degraded,
+        ),
         include_str!("../../web/unit/files/fixtures/github-degraded-save-outcome.json"),
     );
     assert_capture_contract(
