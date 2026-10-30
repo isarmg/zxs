@@ -782,17 +782,38 @@ fn checkpoint_inventory_load_and_save_stay_on_the_admitted_root() {
     assert!(
         matches!(
             verify_coverage(&engine, &saved.checkpoint, &BTreeSet::new()),
-            Err(Error::Contract(storage_contract::Error::Json { .. }))
+            Err(Error::Context {
+                code: ErrorCode::DiskIdentityMismatch,
+                source,
+                ..
+            }) if matches!(
+                source.as_ref(),
+                Error::Contract(storage_contract::Error::Json { .. })
+            )
         ),
         "the held root is not a cached assertion that its seal bytes remain valid"
     );
     assert!(matches!(
         load(&engine, &prefixes, &Records::new()),
-        Err(Error::Contract(storage_contract::Error::Json { .. }))
+        Err(Error::Context {
+            code: ErrorCode::DiskIdentityMismatch,
+            source,
+            ..
+        }) if matches!(
+            source.as_ref(),
+            Error::Contract(storage_contract::Error::Json { .. })
+        )
     ));
     assert!(matches!(
         save(&engine, &journals),
-        Err(Error::Contract(storage_contract::Error::Json { .. }))
+        Err(Error::Context {
+            code: ErrorCode::DiskIdentityMismatch,
+            source,
+            ..
+        }) if matches!(
+            source.as_ref(),
+            Error::Contract(storage_contract::Error::Json { .. })
+        )
     ));
     changed_seal.binding_generation += 1;
     write_json(&seal_path, &changed_seal, true).unwrap();
