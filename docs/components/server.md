@@ -285,12 +285,23 @@ HTTP query 只接收 `repository_id`、`path`；二者成对解析，路径使�
 阻塞任务独立持有准入许可和认证所有者，HTTP future 取消不提前释放其所需资源。
 此静态错误优先级不同于旧 dispatcher 在查询字段前先查询文件的顺序。
 
-锁内只收集该文件的投影：版本数字保持 `u64`，内容节点与版本行共享不可变
-`Arc<HistoryVersionData>`，不再 clone／修改 JSON 对象。分支复用 `BranchSnapshot`，
-当前正文复用 `ContentDispositionSnapshot`；merge 映射没有共享记录句柄，因此只复制
-选中的 merge，并在响应层显式列出字段。锁外构造响应及序列化，整数文本编码仅属于 wire。
-当前条目保持借用，不复制整个 namespace／State。现有文件历史排序、首次 commit 扫描、
-节点路径 memoization 与图边过滤算法不变，未引入跨请求缓存或新的同步／fsync。
+锁内保留现有 `Engine::file_history` 的选择性 SQLite 查询及原有失效／小规模扫描回退，
+并取得当前路径、选择、正文处置和一个 Engine 创建的 `MetadataView`。视图只持有既有
+`Arc<State>`，不克隆 State；当前条目只复制一个匹配项，不复制整个 namespace。
+首次 commit 条目扫描、分支／merge 筛选、节点祖先、标签、路径 memoization 及排序全部
+使用该视图在锁外完成；现有 State-only `NodeProjection` 同样服务 Engine 和视图。
+版本数字保持 `u64`，内容节点与版本行共享 `Arc<HistoryVersionData>`，整数文本编码仍在 wire。
+
+`GET /api/history-trees/{history}/graph` 也在锁内检查身份和历史归属后取得同一种视图；
+提交、分支、link、boundary 的筛选／收集及排序全部在锁外完成，提交继续共享既有
+`Arc<Commit>`。两个入口返回前回锁复核当前身份、仓库存在性和该历史自身的拆分代数；
+显式文件路径查询还复核当前路径仍属于该文件。普通写入不因全局代数变化而拒绝旧投影，
+响应也不把新的当前字段拼入旧视图。无路径的历史查询仍允许文件已离开当前 namespace。
+
+视图由既有 backend job 持有，取消 HTTP 等待仍保留其槽位、认证和视图，直到 worker 结束；
+没有新增准入层或跨请求缓存。视图不持有磁盘资源，不打开正文，不是授权或 GC 租约，
+也不能证明正文当前存活。旧视图存活时后续写入可能触发 State 的 copy-on-write；
+索引查询及当前上下文解析仍在锁内，本改动不表示所有锁内扫描或 I/O 已消除，未增加 fsync。
 
 无当前路径、无备注、未选分支、历史版本无首次 commit 均保留原有缺省语义：
 路径／选择为 null、备注／message 为空串、无当前路径不输出当前正文属性。
@@ -301,7 +312,8 @@ HTTP query 只接收 `repository_id`、`path`；二者成对解析，路径使�
 测试入口：`backend_file_history` 的无 core wire／query 单测、
 `file_manager::history_nodes` 的固定图与脱离当前 namespace 场景、真实 HTTP `history_query`、
 `authorized_backend` 的参数／结果／错误转发、排队撤权四路与无凭据矩阵，以及阻塞 panic／
-取消槽位测试。源代码接线不等于这些测试已经执行；执行结果由对应验证提交记录。
+取消槽位测试；`engine_backend::graph::tests` 另覆盖捕获后写入、撤权、路径删除、实际拆分、
+目标替换和取消时视图／槽位所有权。源代码接线不等于这些测试已经执行；执行结果由对应验证提交记录。
 
 ### 活动历史投影边界
 

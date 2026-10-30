@@ -1323,12 +1323,24 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         request: crate::ReadFileHistory,
     ) -> Result<crate::FileHistorySnapshot, crate::ApiError> {
+        let read = {
+            let engine = self
+                .engine
+                .lock()
+                .expect("invariant: service state lock poisoned");
+            current_protected_identity(&engine, identity)?;
+            file_manager::FileHistoryRead::capture(&engine, request)?
+        };
+        #[cfg(test)]
+        graph::tests::after_capture(&read.view);
+        let snapshot = read.project();
         let engine = self
             .engine
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::file_history(&engine, request)
+        read.authorize_current(&engine)?;
+        snapshot
     }
     fn file_history(
         &self,
@@ -1421,12 +1433,19 @@ impl Backend for EngineBackend {
         identity: &crate::auth::Identity,
         id: &str,
     ) -> Result<crate::HistoryGraphSnapshot, crate::ApiError> {
+        let view = {
+            let engine = self.engine.lock().expect("service state lock poisoned");
+            current_protected_identity(&engine, identity)?;
+            repo_for_history(&engine, id)?;
+            engine.metadata_view()
+        };
+        #[cfg(test)]
+        graph::tests::after_capture(&view);
+        let mut snapshot = graph::capture(view.state(), id);
+        snapshot.commits.sort_by_key(|commit| commit.sequence);
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        repo_for_history(&engine, id)?;
-        let mut snapshot = graph::capture(engine.state(), id);
-        drop(engine);
-        snapshot.commits.sort_by_key(|commit| commit.sequence);
+        graph::authorize_current(engine.state(), &snapshot.history)?;
         Ok(snapshot)
     }
     fn commit_snapshot(

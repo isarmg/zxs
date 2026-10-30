@@ -33,14 +33,14 @@ fn take_summary(
 /// Metadata UUID order is unrelated to graph order. Resolve a path through the
 /// explicit source chain and memoize it without recursive stack growth.
 struct NodePaths<'a> {
-    engine: &'a Engine,
+    state: &'a storage_contract::State,
     commits: &'a BTreeMap<&'a str, &'a storage_contract::Commit>,
     chosen: BTreeMap<&'a str, &'a str>,
     cache: BTreeMap<String, String>,
 }
 impl NodePaths<'_> {
     fn get(&mut self, node: &str) -> String {
-        let state = self.engine.state();
+        let state = self.state;
         let mut current = node.to_owned();
         let mut trail = Vec::new();
         let mut seen = BTreeSet::new();
@@ -95,16 +95,16 @@ impl NodePaths<'_> {
 }
 
 pub(super) fn unified_history(
-    engine: &Engine,
+    view: &storage_engine::MetadataView,
     file: &str,
     history: &str,
     versions: &[HistoryVersion],
     first_commits: &BTreeMap<&str, &storage_contract::Commit>,
     current_node: Option<&str>,
 ) -> Result<Vec<HistoryNode>, ApiError> {
-    let state = engine.state();
+    let state = view.state();
     let mut paths = NodePaths {
-        engine,
+        state,
         commits: first_commits,
         chosen: state
             .file_branch_merges
@@ -139,7 +139,7 @@ pub(super) fn unified_history(
             nodes
         });
     let node_ids = visible.keys().copied().collect::<Vec<_>>();
-    let mut summaries = engine
+    let mut summaries = view
         .project_file_nodes(storage_engine::FileNodeProjectionRequest {
             file_id: file,
             node_ids: &node_ids,

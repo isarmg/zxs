@@ -110,8 +110,8 @@ pub(crate) fn node_tags(state: &State, node: &str) -> BTreeSet<String> {
     BTreeSet::new()
 }
 
-/// A call-local, immutable-state projection. Never reuse this across publications:
-/// metadata nodes and merge provenance can change the meaning of an old node.
+/// A call-local projection over one immutable generation. Metadata nodes and
+/// merge provenance from a later publication must never enter this projection.
 pub(crate) struct NodeProjection<'a> {
     state: &'a State,
     tags: std::collections::BTreeMap<String, std::rc::Rc<BTreeSet<String>>>,
@@ -266,6 +266,16 @@ pub(crate) fn branch_head(state: &State, branch: &str) -> Result<String> {
         })?;
     node_version(state, file, &node)?;
     Ok(node)
+}
+
+impl MetadataView {
+    /// Project against this retained generation, without an Engine borrow.
+    pub fn project_file_nodes(
+        &self,
+        request: FileNodeProjectionRequest<'_>,
+    ) -> BTreeMap<String, Result<FileNodeSummary>> {
+        NodeProjection::new(self.state()).summaries(request)
+    }
 }
 
 impl Engine {
