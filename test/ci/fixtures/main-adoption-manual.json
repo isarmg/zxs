@@ -1,0 +1,18 @@
+{
+  "note": "Synthetic manual-event variants of main-adoption-run.json; the captured real run itself was push, not manual.",
+  "cases": [
+    {"name": "complete official manual candidate", "adopt": true},
+    {"name": "manual subset missing workspace", "missing_job": "Tests (workspace)", "adopt": false},
+    {"name": "manual suite execution skipped", "skipped_job": "Tests (workspace)", "adopt": false},
+    {"name": "manual installation artifact missing", "missing_artifact": "installation-candidate-linux-web", "adopt": false},
+    {"name": "manual different source SHA", "run_overrides": {"head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, "adopt": false},
+    {"name": "manual foreign head repository", "run_overrides": {"head_repository": {"id": 1, "full_name": "someone/zxs"}}, "adopt": false},
+    {"name": "manual different workflow", "run_overrides": {"workflow_id": 123, "path": ".github/workflows/release.yml"}, "adopt": false},
+    {"name": "manual PR merge ref", "run_overrides": {"head_branch": "refs/pull/1/merge"}, "adopt": false},
+    {"name": "manual main reuse chain", "run_overrides": {"head_branch": "main"}, "adopt": false},
+    {"name": "unreviewed manual subset input", "dispatch_input": "suite", "adopt": false},
+    {"name": "unreviewed manual alternate SHA input", "dispatch_input": "source_sha", "adopt": false},
+    {"name": "unreviewed manual alternate repository input", "dispatch_input": "source_repository", "adopt": false},
+    {"name": "unreviewed manual alternate workflow input", "dispatch_input": "source_workflow", "adopt": false}
+  ]
+}

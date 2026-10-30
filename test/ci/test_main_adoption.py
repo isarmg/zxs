@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("main_adoption", ROOT / ".github/scripts/check-main-adoption.py")
@@ -57,7 +58,7 @@ class Evidence(unittest.TestCase):
             return self.current
         if path.startswith("/actions/workflows/389550847/runs?"):
             self.assertIn("head_sha=" + self.environment["GITHUB_SHA"], path)
-            self.assertIn("event=push", path)
+            self.assertNotIn("event=", path)  # Both push and official full dispatch are eligible.
             self.assertIn("status=success", path)
             self.assertIn("per_page=3", path)
             return {"workflow_runs": self.candidates}
@@ -96,9 +97,39 @@ class Evidence(unittest.TestCase):
         run, reason = self.decide()
         self.assertEqual(run["id"], self.run["id"], reason)
 
+    def test_manual_candidate_cases_keep_full_execution_and_source_identity_requirements(self):
+        cases = json.loads((ROOT / "test/ci/fixtures/main-adoption-manual.json").read_text())["cases"]
+        workflow = adoption.WORKFLOW_FILE.read_text()
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                self.setUp()
+                overrides = dict(event="workflow_dispatch", **case.get("run_overrides", {}))
+                self.run.update(overrides)
+                self.listed.update(overrides)
+                if "missing_job" in case:
+                    self.jobs["jobs"] = [job for job in self.jobs["jobs"] if job["name"] != case["missing_job"]]
+                if "skipped_job" in case:
+                    job = next(job for job in self.jobs["jobs"] if job["name"] == case["skipped_job"])
+                    next(step for step in job["steps"] if step["name"] == "Run locked test suite")["conclusion"] = "skipped"
+                if "missing_artifact" in case:
+                    self.artifacts["artifacts"] = [item for item in self.artifacts["artifacts"] if item["name"] != case["missing_artifact"]]
+                source = workflow
+                if "dispatch_input" in case:
+                    source = source.replace("  workflow_dispatch:\n", "  workflow_dispatch:\n    inputs:\n"
+                                            f"      {case['dispatch_input']}:\n        type: string\n", 1)
+                with mock.patch.object(adoption, "WORKFLOW_FILE") as workflow_file:
+                    workflow_file.read_text.return_value = source
+                    run, reason = self.decide()
+                self.assertEqual(run is not None, case["adopt"], reason)
+                if run is not None:
+                    self.assertEqual(run["event"], "workflow_dispatch")
+                    self.assertEqual(run["head_sha"], self.environment["GITHUB_SHA"])
+                    self.assertEqual(len(self.calls), 6)
+
     def test_candidate_branches_pr_and_manual_runs_always_validate_without_api(self):
         for event, ref in (("push", "refs/heads/work/candidate"), ("push", "refs/tags/v1"),
-                           ("pull_request", "refs/pull/1/merge"), ("workflow_dispatch", "refs/heads/main")):
+                           ("pull_request", "refs/pull/1/merge"), ("workflow_dispatch", "refs/heads/main"),
+                           ("workflow_dispatch", "refs/heads/work/candidate")):
             with self.subTest(event=event, ref=ref):
                 self.environment.update(GITHUB_EVENT_NAME=event, GITHUB_REF=ref)
                 self.assert_full()
@@ -146,14 +177,17 @@ class Evidence(unittest.TestCase):
 
     def test_current_and_candidate_changes_during_lookup_select_full(self):
         for target, key, value in (("current", "head_sha", "a" * 40),
+                                    ("current", "event", "workflow_dispatch"),
                                     ("current", "run_attempt", 2),
                                     ("run", "run_attempt", 2),
+                                    ("run", "event", "workflow_dispatch"),
                                     ("run", "head_repository", None)):
             with self.subTest(target=target, key=key):
                 self.setUp()
                 getattr(self, target)[key] = value
                 self.assert_full()
-        for key, value in (("run_attempt", 2), ("status", "queued"), ("head_sha", "a" * 40)):
+        for key, value in (("run_attempt", 2), ("status", "queued"), ("head_sha", "a" * 40),
+                           ("event", "workflow_dispatch")):
             with self.subTest(recheck=key):
                 self.setUp()
                 self.latest = dict(self.run, **{key: value})

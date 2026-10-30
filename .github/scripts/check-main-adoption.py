@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adopt one exact-SHA, fully executed CI push run when main receives that SHA.
+"""Adopt one exact-SHA, fully executed CI candidate when main receives that SHA.
 
 Only public, unauthenticated GitHub reads are used. A lookup miss/error selects
 the existing full validation path; it never constitutes validation success.
@@ -17,6 +17,7 @@ REPOSITORY = "isarmg/zxs"
 REPOSITORY_ID = 1424437655
 WORKFLOW_ID = 389550847
 WORKFLOW_PATH = ".github/workflows/ci.yml"
+WORKFLOW_FILE = Path(__file__).resolve().parents[2] / WORKFLOW_PATH
 API = f"https://api.github.com/repos/{REPOSITORY}"
 MAX_CANDIDATES = 3
 MAX_RESPONSE_BYTES = 1024 * 1024
@@ -121,17 +122,26 @@ def run_identity(run, sha):
             "different workflow identity")
     require(same_repository(run["repository"]) and same_repository(run["head_repository"]),
             "different repository or head repository")
-    require(run["event"] == "push" and run["head_sha"] == sha and run["head_commit"]["id"] == sha,
-            "different event or complete head SHA")
+    require(run["head_sha"] == sha and run["head_commit"]["id"] == sha, "different complete head SHA")
 
 
 def completed_candidate(run, sha, current_id):
     run_identity(run, sha)
-    require(run["id"] != current_id and isinstance(run["head_branch"], str)
+    require(run["event"] in {"push", "workflow_dispatch"}
+            and run["id"] != current_id and isinstance(run["head_branch"], str)
             and run["head_branch"] and run["head_branch"] != "main"
-            and not run["head_branch"].startswith("refs/"), "not a candidate branch push")
+            and not run["head_branch"].startswith("refs/"), "not a candidate branch push or dispatch")
     require(run["status"] == "completed" and run["conclusion"] == "success",
             "candidate attempt is not successful and complete")
+
+
+def verify_manual_workflow():
+    # The reviewed official dispatch has no inputs: callers cannot select a
+    # subset, source ref or alternate workflow. Unknown declarations run full.
+    source = WORKFLOW_FILE.read_text(encoding="utf-8")
+    triggers = source.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    require(triggers.strip() == "push:\n  pull_request:\n  workflow_dispatch:",
+            "manual workflow has unreviewed inputs or trigger declaration")
 
 
 def verify_jobs(document, run):
@@ -213,9 +223,9 @@ def find_adoption(environment, event, get=public_get, now=None):
         current_id = int(environment["GITHUB_RUN_ID"])
         current = get(f"/actions/runs/{current_id}")
         run_identity(current, sha)
-        require(current["id"] == current_id and current["head_branch"] == "main"
+        require(current["event"] == "push" and current["id"] == current_id and current["head_branch"] == "main"
                 and current["run_attempt"] == int(environment["GITHUB_RUN_ATTEMPT"]), "current run changed")
-        query = urllib.parse.urlencode({"head_sha": sha, "event": "push", "status": "success",
+        query = urllib.parse.urlencode({"head_sha": sha, "status": "success",
                                         "per_page": MAX_CANDIDATES})
         candidates = get(f"/actions/workflows/{WORKFLOW_ID}/runs?{query}")["workflow_runs"]
         require(isinstance(candidates, list) and len(candidates) <= MAX_CANDIDATES, "unbounded run response")
@@ -226,14 +236,18 @@ def find_adoption(environment, event, get=public_get, now=None):
                 continue
             run = get(f"/actions/runs/{listed['id']}")
             completed_candidate(run, sha, current_id)
-            require(run["id"] == listed["id"] and run["run_attempt"] == listed["run_attempt"], "candidate changed")
+            require(run["id"] == listed["id"] and run["run_attempt"] == listed["run_attempt"]
+                    and run["event"] == listed["event"], "candidate changed")
+            if run["event"] == "workflow_dispatch":
+                verify_manual_workflow()
             steps = verify_jobs(get(f"/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs?per_page=100"), run)
             verify_artifacts(get(f"/actions/runs/{run['id']}/artifacts?per_page=100"), run, steps, now)
             latest = get(f"/actions/runs/{run['id']}")
             completed_candidate(latest, sha, current_id)
-            require(latest["id"] == run["id"] and latest["run_attempt"] == run["run_attempt"], "candidate rerun started")
+            require(latest["id"] == run["id"] and latest["run_attempt"] == run["run_attempt"]
+                    and latest["event"] == run["event"], "candidate attempt or event changed")
             return run, "all 17 jobs, execution steps and original artifacts verified"
-        return None, "no complete exact-SHA candidate push found in bounded lookup"
+        return None, "no complete exact-SHA candidate push or dispatch found in bounded lookup"
     except (LookupError, TypeError, ValueError, OSError, http.client.HTTPException) as error:
         return None, f"evidence unavailable: {type(error).__name__}: {error}"
 
