@@ -209,7 +209,7 @@ jobs:
           ):
               raise SystemExit('Static asset regression requires the exact source and tree')
           if os.environ['SCOPE'] == 'head-range-semantics' and (source, tree) != (
-              '22855c19fcdbb9ab3ee07c3343044f9461846ac9', '68e6cc670d358fd794a9d47b8912ed45e24dad6f',
+              'a19521357ffc14845a7eaaff80a87e9e3d036a9c', '831b591b9d61811b657dab43e5475b17c541e42b',
           ):
               raise SystemExit('HEAD Range semantics requires the exact source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
@@ -897,14 +897,23 @@ jobs:
           head_range_tests = [
               'transfer::tests::malformed_duplicate_and_unsatisfiable_ranges_include_size_and_head_is_empty',
               'transfer::tests::stale_if_range_returns_complete_content_and_head_retains_length',
+              'transfer::tests::ranges_obey_boundaries_and_reject_non_decimal_syntax',
+              'transfer::tests::download_lease_survives_until_body_consumption_or_cancellation',
+              'tests::authenticated_range_download_returns_exact_immutable_bytes',
           ]
           groups['head-range-semantics'] = [
               dict(id='head-range-regression', cache='server', package='storage-server',
                   test_groups=json.dumps([dict(selector=name, exact=True, count=1, required=[name])
-                      for name in head_range_tests]),
-                  command='Exact two existing Range/HEAD tests with corrected semantics and GET controls'),
-              dict(id='head-range-format', command='rustfmt +1.99.0 --edition 2024 --config skip_children=true '
-                  '--check test/server/unit/transfer/tests.rs'),
+                      for name in head_range_tests] + [dict(selector='transfer_limits::tests::', count=7)]),
+                  command='Five exact existing HEAD/GET/If-Range/auth/lease consumers plus seven transfer-limit tests'),
+              dict(id='head-range-server-checks', cache='server',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check '
+                      'src/server/src/transfer.rs test/server/unit/tests.rs test/server/unit/transfer/tests.rs\n'
+                      "cargo tree --locked --offline -p storage-server -e normal,build,dev -i http --format '{p} features={f}' | tee .diagnostics/http-features.txt\n"
+                      'cargo metadata --locked --offline --no-deps --format-version 1 > .diagnostics/cargo-metadata.json\n'
+                      'cargo clippy --locked --offline -p storage-server --lib --tests -- -D warnings\n'
+                      'python3 .github/scripts/check-architecture.py\n'
+                      'python3 tools/rust-sources/manage.py verify'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
