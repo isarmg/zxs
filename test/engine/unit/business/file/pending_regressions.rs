@@ -262,6 +262,7 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
             resources: &engine.disk_resources,
             members: &members,
             caches: &engine.segment_caches,
+            observe: None,
         };
         let base =
             crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {

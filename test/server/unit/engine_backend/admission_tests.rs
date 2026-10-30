@@ -330,7 +330,14 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
     use crate::Backend;
     let (_root, backend, repo, entry) = backend_fixture();
     for _ in 0..3 {
-        backend.activity_history(&caller()).unwrap();
+        backend
+            .activity_history(
+                &caller(),
+                &crate::HistoryReadControl::until(
+                    std::time::Instant::now() + std::time::Duration::from_secs(60),
+                ),
+            )
+            .unwrap();
         backend
             .listing(&caller(), listing_request("P01", &repo.name))
             .unwrap();
@@ -428,7 +435,18 @@ fn backend_read_requests_reuse_validation_and_completed_revocation_denies_each_r
             .status,
         401
     );
-    assert_eq!(backend.activity_history(&caller()).unwrap_err().status, 401);
+    assert_eq!(
+        backend
+            .activity_history(
+                &caller(),
+                &crate::HistoryReadControl::until(
+                    std::time::Instant::now() + std::time::Duration::from_secs(60),
+                ),
+            )
+            .unwrap_err()
+            .status,
+        401
+    );
     assert_eq!(
         backend
             .listing(&caller(), listing_request("P01", &repo.name))

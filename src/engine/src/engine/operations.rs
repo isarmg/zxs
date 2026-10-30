@@ -146,6 +146,7 @@ impl Engine {
             resources: &self.disk_resources,
             members,
             caches: &self.segment_caches,
+            observe: None,
         }
     }
 
@@ -195,33 +196,8 @@ impl Engine {
         &self,
         sequence: u64,
     ) -> Result<Option<storage_contract::OperationRecordEntry>> {
-        let log = &self.state.operations;
-        let tail = log.tail();
-        if let Some(first) = tail.first()
-            && sequence >= first.result.sequence
-        {
-            let rank = tail.partition_point(|entry| entry.result.sequence < sequence);
-            return Ok(tail
-                .get(rank)
-                .filter(|entry| entry.result.sequence == sequence)
-                .cloned());
-        }
-        let sealed = log.sealed();
-        let Some(index) = sealed
-            .partition_point(|segment| segment.first_sequence <= sequence)
-            .checked_sub(1)
-        else {
-            return Ok(None);
-        };
         let members = self.members();
-        let segment = self
-            .segment_reader(&members)
-            .operation_segment(&sealed[index])?;
-        let rank = segment.partition_point(|entry| entry.result.sequence < sequence);
-        Ok(segment
-            .get(rank)
-            .filter(|entry| entry.result.sequence == sequence)
-            .cloned())
+        receipt_by_sequence(&self.state, &self.segment_reader(&members), sequence)
     }
 
     /// Pull permanent receipts newest-first. Each sealed segment is read on
@@ -229,8 +205,11 @@ impl Engine {
     /// the segments it visited.
     pub fn receipts_descending(&self) -> ReceiptsDescending<'_> {
         ReceiptsDescending {
-            engine: self,
-            members: self.members(),
+            state: &self.state,
+            resources: &self.disk_resources,
+            caches: &self.segment_caches,
+            members: Cow::Owned(self.members()),
+            observe: None,
             tail_remaining: self.state.operations.tail().len(),
             segment: None,
             next_sealed: self.state.operations.sealed().len(),
@@ -423,11 +402,46 @@ impl Engine {
     }
 }
 
-/// Newest-first pull over the permanent receipt log. Owned items; segment
-/// bodies stay in the bounded cache, never pinned by the iterator.
+/// One exact published decision slot, shared by live and detached readers.
+pub(super) fn receipt_by_sequence(
+    state: &State,
+    reader: &crate::segment_store::SegmentReader<'_>,
+    sequence: u64,
+) -> Result<Option<OperationRecordEntry>> {
+    reader.checkpoint()?;
+    let log = &state.operations;
+    let tail = log.tail();
+    if let Some(first) = tail.first()
+        && sequence >= first.result.sequence
+    {
+        let rank = tail.partition_point(|entry| entry.result.sequence < sequence);
+        return Ok(tail
+            .get(rank)
+            .filter(|entry| entry.result.sequence == sequence)
+            .cloned());
+    }
+    let sealed = log.sealed();
+    let Some(index) = sealed
+        .partition_point(|segment| segment.first_sequence <= sequence)
+        .checked_sub(1)
+    else {
+        return Ok(None);
+    };
+    let segment = reader.operation_segment(&sealed[index])?;
+    let rank = segment.partition_point(|entry| entry.result.sequence < sequence);
+    Ok(segment
+        .get(rank)
+        .filter(|entry| entry.result.sequence == sequence)
+        .cloned())
+}
+
+/// Newest-first receipts; the iterator holds only its current segment body.
 pub struct ReceiptsDescending<'e> {
-    engine: &'e Engine,
-    members: Vec<DiskConfig>,
+    state: &'e State,
+    resources: &'e DiskResources,
+    caches: &'e crate::segment_store::SegmentCaches,
+    members: Cow<'e, [DiskConfig]>,
+    observe: Option<&'e dyn Fn() -> Result<()>>,
     tail_remaining: usize,
     segment: Option<(
         std::sync::Arc<Vec<storage_contract::OperationRecordEntry>>,
@@ -435,14 +449,34 @@ pub struct ReceiptsDescending<'e> {
     )>,
     next_sealed: usize,
 }
+impl<'e> ReceiptsDescending<'e> {
+    pub(super) fn captured(
+        state: &'e State,
+        reader: crate::segment_store::SegmentReader<'e>,
+    ) -> Self {
+        Self {
+            state,
+            resources: reader.resources,
+            caches: reader.caches,
+            members: Cow::Borrowed(reader.members),
+            observe: reader.observe,
+            tail_remaining: state.operations.tail().len(),
+            segment: None,
+            next_sealed: state.operations.sealed().len(),
+        }
+    }
+}
 impl Iterator for ReceiptsDescending<'_> {
     type Item = Result<storage_contract::OperationRecordEntry>;
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(observe) = self.observe
+            && let Err(error) = observe()
+        {
+            return Some(Err(error));
+        }
         if self.tail_remaining > 0 {
             self.tail_remaining -= 1;
-            return Some(Ok(
-                self.engine.state.operations.tail()[self.tail_remaining].clone()
-            ));
+            return Some(Ok(self.state.operations.tail()[self.tail_remaining].clone()));
         }
         loop {
             if let Some((segment, remaining)) = &mut self.segment {
@@ -453,12 +487,14 @@ impl Iterator for ReceiptsDescending<'_> {
                 self.segment = None;
             }
             self.next_sealed = self.next_sealed.checked_sub(1)?;
-            let reference = &self.engine.state.operations.sealed()[self.next_sealed];
-            match self
-                .engine
-                .segment_reader(&self.members)
-                .operation_segment(reference)
-            {
+            let reference = &self.state.operations.sealed()[self.next_sealed];
+            let reader = crate::segment_store::SegmentReader {
+                resources: self.resources,
+                members: &self.members,
+                caches: self.caches,
+                observe: self.observe,
+            };
+            match reader.operation_segment(reference) {
                 Ok(segment) => {
                     let length = segment.len();
                     self.segment = Some((segment, length));

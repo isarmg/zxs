@@ -577,6 +577,7 @@ impl Backend for TestBackend {
     fn activity_history(
         &self,
         _identity: &crate::auth::Identity,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -584,7 +585,7 @@ impl Backend for TestBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadHistoryGraph,
-        _control: &crate::GraphReadControl,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -1841,14 +1842,15 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         fn activity_history(
             &self,
             identity: &crate::auth::Identity,
+            control: &crate::HistoryReadControl,
         ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
-            self.delegate.activity_history(identity)
+            self.delegate.activity_history(identity, control)
         }
         fn history_graph(
             &self,
             identity: &crate::auth::Identity,
             request: crate::ReadHistoryGraph,
-            control: &crate::GraphReadControl,
+            control: &crate::HistoryReadControl,
         ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
             self.delegate.history_graph(identity, request, control)
         }

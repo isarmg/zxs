@@ -523,6 +523,7 @@ impl Backend for BackendProbe {
     fn activity_history(
         &self,
         _identity: &crate::auth::Identity,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }
@@ -530,7 +531,7 @@ impl Backend for BackendProbe {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadHistoryGraph,
-        _control: &crate::GraphReadControl,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         Err(crate::ApiError::unsupported())
     }

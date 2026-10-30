@@ -12,7 +12,7 @@ use super::{
 use crate::ApiError;
 use data_serialization::Serialize;
 use http_routing::response::{IntoResponse, Response};
-use storage_contract::client_protocol::MAX_HISTORY_PAGE_BYTES;
+use storage_contract::client_protocol::{MAX_HISTORY_PAGE_BYTES, MAX_RESPONSE_BYTES};
 
 /// Complete encoded page bound. The protocol value is a constant; tests may
 /// shrink it through the test-only constructor to force short pages.
@@ -178,7 +178,16 @@ fn bounded_encoded(value: impl Serialize, limit: usize) -> Result<Option<Vec<u8>
 
 /// Encode a bounded DTO once, retaining the same transport lease as list pages.
 pub(crate) fn encode_bounded(value: impl Serialize) -> Result<EncodedPage, ApiError> {
-    let body = bounded_encoded(value, MAX_HISTORY_PAGE_BYTES)?.ok_or_else(budget_error)?;
+    encode_with_limit(value, MAX_HISTORY_PAGE_BYTES)
+}
+
+/// Existing activity rows keep their fields; oversized responses fail intact.
+pub(crate) fn encode_response_bounded(value: impl Serialize) -> Result<EncodedPage, ApiError> {
+    encode_with_limit(value, MAX_RESPONSE_BYTES)
+}
+
+fn encode_with_limit(value: impl Serialize, limit: usize) -> Result<EncodedPage, ApiError> {
+    let body = bounded_encoded(value, limit)?.ok_or_else(budget_error)?;
     Ok(EncodedPage { body, admitted: 1 })
 }
 

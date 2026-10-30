@@ -1,13 +1,56 @@
-//! Read-only, bounded activity projection across committed history sources.
-use super::file_repo;
+//! Read-only activity projection over one admitted published root.
+//! Selection retains 200 rows; their strings and the old State are not byte-bounded.
 use crate::{
-    ActivityHistorySnapshot, ApiError,
+    ActivityHistorySnapshot, ApiError, HistoryReadControl,
     backend_activity::{ActivityDetailSnapshot, ActivityEventSnapshot, HISTORY_LIMIT},
-    engine_backend::{branch::capture_content, repo_for_history},
+    engine_backend::{branch::capture_content, repo_for_history_in_state},
 };
 use json_codec::Value;
 use std::{cmp::Reverse, collections::BTreeMap};
-use storage_engine::Engine;
+use storage_engine::ActivityReadPlan;
+
+pub(in crate::engine_backend) fn checkpoint(control: &HistoryReadControl) -> Result<(), ApiError> {
+    control.checkpoint().map_err(|source| {
+        ApiError::new(
+            ::http::StatusCode::REQUEST_TIMEOUT,
+            source.code(),
+            source.message(),
+        )
+        .with_source(source)
+    })
+}
+
+fn read_error(source: storage_engine::Error) -> ApiError {
+    if source.code() == storage_contract::ErrorCode::RequestTimeout {
+        ApiError::new(
+            ::http::StatusCode::REQUEST_TIMEOUT,
+            source.code(),
+            source.message(),
+        )
+        .with_source(source)
+    } else {
+        crate::engine_backend::error(source)
+    }
+}
+
+fn file_repo<'a>(
+    plan: &'a ActivityReadPlan,
+    file: &str,
+    control: &HistoryReadControl,
+) -> Result<&'a storage_engine::Repository, ApiError> {
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+    let history = plan
+        .file_history_owner(file, &observe)
+        .map_err(read_error)?
+        .ok_or_else(|| {
+            ApiError::new(
+                ::http::StatusCode::NOT_FOUND,
+                storage_contract::ErrorCode::FileNotFound,
+                "file not found",
+            )
+        })?;
+    repo_for_history_in_state(plan.state(), history)
+}
 
 // Operation receipts retain an open JSON payload on disk. Parse only fields
 // consumed here; malformed retained rows are external state errors, not bugs.
@@ -164,17 +207,24 @@ fn record_event<'a>(
     }
 }
 
-fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<(), ApiError> {
+fn commit_events<'a>(
+    engine: &'a ActivityReadPlan,
+    events: &mut ActivityRows<'a>,
+    control: &HistoryReadControl,
+) -> Result<(), ApiError> {
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
     for commit in engine.state().commits.values() {
+        checkpoint(control)?;
         if !history_sequence_may_fit(events, commit.sequence) {
             continue;
         }
-        let repo = repo_for_history(engine, &commit.history_tree_id)?;
+        let repo = repo_for_history_in_state(engine.state(), &commit.history_tree_id)?;
         // Deletions are committed namespace facts, independent of content
         // identity and of whether another alias still names the same file.
         // The ordinal preserves repeated removal of one path in a transaction.
         if let Some(deletions) = &commit.namespace_deletions {
             for (ordinal, deleted) in deletions.paths.iter().enumerate() {
+                checkpoint(control)?;
                 let display = if repo.file_manager_root {
                     deleted.path.clone()
                 } else {
@@ -212,8 +262,8 @@ fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
             continue;
         }
         let receipt = engine
-            .published_receipt(commit.operation_id)
-            .map_err(crate::engine_backend::error)?;
+            .published_receipt(commit.operation_id, &observe)
+            .map_err(read_error)?;
         if commit.kind == "file_selection"
             && receipt
                 .as_ref()
@@ -228,7 +278,7 @@ fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
         let parent_tree = commit
             .parent_commit_ids
             .first()
-            .and_then(|id| engine.commit_namespace(id));
+            .and_then(|id| engine.commit_namespace(id, &observe));
         // Branch registration is an audit event, but it does not
         // claim the source version as newly written branch content.
         let pending_creation = matches!(
@@ -250,85 +300,98 @@ fn commit_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
         } else {
             commit.kind.clone()
         };
-        let commit_entries = engine
-            .commit_namespace(&commit.commit_id)
-            .expect("invariant: iterated commit exists")
-            .entries()
-            .map_err(crate::engine_backend::error)?;
-        for entry in &commit_entries {
-            let pending_source = commit
-                .pending_file_versions
-                .get(&entry.file_id)
-                .or_else(|| pending_creation.then_some(&entry.version_id));
-            if pending_creation && entry.kind != storage_contract::NamespaceEntryKind::File {
-                continue;
+        let tree = engine
+            .commit_namespace(&commit.commit_id, &observe)
+            .expect("invariant: iterated commit exists");
+        let mut projection = Ok(());
+        tree.walk(|entry| {
+            observe()?;
+            // Preserve complete current-tree read errors ahead of parent/projection errors.
+            if projection.is_err() {
+                return Ok(true);
             }
-            // An unchanged entry is one the parent view resolves identically
-            // at the same key: a point read, never a parent-list scan.
-            let unchanged = !(pending_creation
-                && entry.kind == storage_contract::NamespaceEntryKind::File)
-                && match (&parent, &parent_tree) {
-                    (Some(p), Some(tree)) => tree
-                        .get_key(entry.lookup_key())
-                        .map_err(crate::engine_backend::error)?
-                        .is_some_and(|old| {
-                            old.entry_id == entry.entry_id
-                                && old.path == entry.path
-                                && old.version_id == entry.version_id
-                                && p.pending_file_versions.contains_key(&old.file_id)
-                                    == pending_source.is_some()
-                        }),
-                    _ => false,
-                };
-            if unchanged {
-                continue;
-            }
-            let display = if repo.file_manager_root {
-                entry.path().to_owned()
-            } else {
-                format!("{}/{}", repo.name, entry.path)
-            };
-            let detail = if entry.kind == storage_contract::NamespaceEntryKind::File {
-                ActivityDetailSnapshot::Content(capture_content(
-                    engine.state(),
-                    Some(&entry.version_id),
-                    pending_source.map(String::as_str),
-                ))
-            } else {
-                ActivityDetailSnapshot::Plain {
-                    version_id: Some(entry.version_id.clone()),
+            projection = (|| {
+                let pending_source = commit
+                    .pending_file_versions
+                    .get(&entry.file_id)
+                    .or_else(|| pending_creation.then_some(&entry.version_id));
+                if pending_creation && entry.kind != storage_contract::NamespaceEntryKind::File {
+                    return Ok(());
                 }
-            };
-            let event = PendingEvent {
-                timestamp: Timestamp::Resolved(timestamp),
-                slot_id: repo.primary_slot_id.clone(),
-                path: display,
-                action: action.clone(),
-                principal: Some(commit.author.clone()),
-                file_id: entry.file_id.clone(),
-                message: commit.message.clone(),
-                detail: PendingDetail::Captured(detail),
-            };
-            record_event(
-                events,
-                commit.sequence,
-                format!("{}:{}:{}", commit.commit_id, entry.entry_id, entry.path),
-                event,
-            );
-        }
+                // An unchanged entry is one the parent view resolves identically
+                // at the same key: a point read, never a parent-list scan.
+                let unchanged = !(pending_creation
+                    && entry.kind == storage_contract::NamespaceEntryKind::File)
+                    && match (&parent, &parent_tree) {
+                        (Some(p), Some(tree)) => tree
+                            .get_key(entry.lookup_key())
+                            .map_err(read_error)?
+                            .is_some_and(|old| {
+                                old.entry_id == entry.entry_id
+                                    && old.path == entry.path
+                                    && old.version_id == entry.version_id
+                                    && p.pending_file_versions.contains_key(&old.file_id)
+                                        == pending_source.is_some()
+                            }),
+                        _ => false,
+                    };
+                if unchanged {
+                    return Ok(());
+                }
+                let display = if repo.file_manager_root {
+                    entry.path().to_owned()
+                } else {
+                    format!("{}/{}", repo.name, entry.path)
+                };
+                let detail = if entry.kind == storage_contract::NamespaceEntryKind::File {
+                    ActivityDetailSnapshot::Content(capture_content(
+                        engine.state(),
+                        Some(&entry.version_id),
+                        pending_source.map(String::as_str),
+                    ))
+                } else {
+                    ActivityDetailSnapshot::Plain {
+                        version_id: Some(entry.version_id.clone()),
+                    }
+                };
+                let event = PendingEvent {
+                    timestamp: Timestamp::Resolved(timestamp),
+                    slot_id: repo.primary_slot_id.clone(),
+                    path: display,
+                    action: action.clone(),
+                    principal: Some(commit.author.clone()),
+                    file_id: entry.file_id.clone(),
+                    message: commit.message.clone(),
+                    detail: PendingDetail::Captured(detail),
+                };
+                record_event(
+                    events,
+                    commit.sequence,
+                    format!("{}:{}:{}", commit.commit_id, entry.entry_id, entry.path),
+                    event,
+                );
+                Ok(())
+            })();
+            Ok(true)
+        })
+        .map_err(read_error)?;
+        projection?;
     }
     Ok(())
 }
 
 fn file_operation_events<'a>(
-    engine: &'a Engine,
+    engine: &'a ActivityReadPlan,
     events: &mut ActivityRows<'a>,
+    control: &HistoryReadControl,
 ) -> Result<(), ApiError> {
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
     // Newest-first: once the page is full and a receipt's slot is older than
     // the retained page, every later receipt is older still, so the pull
     // stops without reading further sealed segments.
-    for entry in engine.receipts_descending() {
-        let entry = entry.map_err(crate::engine_backend::error)?;
+    for entry in engine.receipts_descending(&observe) {
+        checkpoint(control)?;
+        let entry = entry.map_err(read_error)?;
         if !history_sequence_may_fit(events, entry.result.sequence) {
             break;
         }
@@ -348,7 +411,7 @@ fn file_operation_events<'a>(
         let Some(file) = operation.result.get("file_id").and_then(Value::as_str) else {
             continue;
         };
-        let repo = match file_repo(engine, file) {
+        let repo = match file_repo(engine, file, control) {
             Ok(repo) => repo,
             Err(error) if error.code == storage_contract::ErrorCode::FileNotFound => continue,
             Err(error) => return Err(error),
@@ -363,23 +426,31 @@ fn file_operation_events<'a>(
             .get("node_id")
             .and_then(Value::as_str)
             .and_then(|id| engine.state().file_metadata_nodes.get(id));
-        let current = engine
-            .list_tree(&repo.main_branch_id)
-            .map_err(crate::engine_backend::error)?
-            .into_iter()
-            .find(|entry| entry.file_id == file);
+        let mut current = None;
+        engine
+            .namespace_tree(&repo.main_branch_id, &observe)
+            .map_err(read_error)?
+            .walk(|entry| {
+                observe()?;
+                if current.is_none() && entry.file_id == file {
+                    current = Some(entry.clone());
+                }
+                Ok(true)
+            })
+            .map_err(read_error)?;
         let relative = path_node
             .map(|node| node.path.clone())
             .or_else(|| current.map(|entry| entry.path.into_string()))
-            .or_else(|| {
-                engine
-                    .state()
-                    .versions
-                    .values()
-                    .find(|v| v.file_id == file)
-                    .map(|v| v.creation_name.clone())
-            })
-            .unwrap_or_default();
+            .map(Ok)
+            .unwrap_or_else(|| {
+                for version in engine.state().versions.values() {
+                    checkpoint(control)?;
+                    if version.file_id == file {
+                        return Ok(version.creation_name.clone());
+                    }
+                }
+                Ok(String::new())
+            })?;
         let display = if repo.file_manager_root {
             relative
         } else {
@@ -420,11 +491,14 @@ fn file_operation_events<'a>(
 }
 
 fn directory_operation_events<'a>(
-    engine: &'a Engine,
+    engine: &'a ActivityReadPlan,
     events: &mut ActivityRows<'a>,
+    control: &HistoryReadControl,
 ) -> Result<(), ApiError> {
-    for entry in engine.receipts_descending() {
-        let entry = entry.map_err(crate::engine_backend::error)?;
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+    for entry in engine.receipts_descending(&observe) {
+        checkpoint(control)?;
+        let entry = entry.map_err(read_error)?;
         if !history_sequence_may_fit(events, entry.result.sequence) {
             break;
         }
@@ -497,9 +571,15 @@ fn directory_operation_events<'a>(
     Ok(())
 }
 
-fn backup_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<(), ApiError> {
-    for entry in engine.receipts_descending() {
-        let entry = entry.map_err(crate::engine_backend::error)?;
+fn backup_events<'a>(
+    engine: &'a ActivityReadPlan,
+    events: &mut ActivityRows<'a>,
+    control: &HistoryReadControl,
+) -> Result<(), ApiError> {
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
+    for entry in engine.receipts_descending(&observe) {
+        checkpoint(control)?;
+        let entry = entry.map_err(read_error)?;
         if !history_sequence_may_fit(events, entry.result.sequence) {
             break;
         }
@@ -515,7 +595,7 @@ fn backup_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
                     "backup configuration receipt lacks history identity",
                 )
             })?;
-        let repo = match repo_for_history(engine, history) {
+        let repo = match repo_for_history_in_state(engine.state(), history) {
             Ok(repo) => repo,
             Err(error) if error.status == ::http::StatusCode::NOT_FOUND => continue,
             Err(error) => return Err(error),
@@ -557,12 +637,17 @@ fn backup_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Resul
     Ok(())
 }
 
-fn path_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<(), ApiError> {
+fn path_events<'a>(
+    engine: &'a ActivityReadPlan,
+    events: &mut ActivityRows<'a>,
+    control: &HistoryReadControl,
+) -> Result<(), ApiError> {
     for node in engine.state().file_path_nodes.values() {
+        checkpoint(control)?;
         if !history_sequence_may_fit(events, node.sequence) {
             continue;
         }
-        let repo = repo_for_history(engine, &node.history_tree_id)?;
+        let repo = repo_for_history_in_state(engine.state(), &node.history_tree_id)?;
         let display = if repo.file_manager_root {
             node.path.clone()
         } else {
@@ -592,16 +677,22 @@ fn path_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<
     Ok(())
 }
 
-fn tree_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<(), ApiError> {
+fn tree_events<'a>(
+    engine: &'a ActivityReadPlan,
+    events: &mut ActivityRows<'a>,
+    control: &HistoryReadControl,
+) -> Result<(), ApiError> {
+    let observe = || control.checkpoint().map_err(storage_engine::Error::from);
     for tree in engine.state().directory_trees.values() {
+        checkpoint(control)?;
         if !history_sequence_may_fit(events, tree.sequence) {
             continue;
         }
         // One bounded lookup per retained tree: the receipt published at this
         // tree's exact decision slot.
         let Some(entry) = engine
-            .receipt_by_sequence(tree.sequence)
-            .map_err(crate::engine_backend::error)?
+            .receipt_by_sequence(tree.sequence, &observe)
+            .map_err(read_error)?
         else {
             continue;
         };
@@ -668,17 +759,24 @@ fn tree_events<'a>(engine: &'a Engine, events: &mut ActivityRows<'a>) -> Result<
     Ok(())
 }
 
-pub(crate) fn read(engine: &Engine) -> Result<ActivityHistorySnapshot, ApiError> {
+pub(crate) fn read(
+    engine: ActivityReadPlan,
+    control: &HistoryReadControl,
+) -> Result<ActivityHistorySnapshot, ApiError> {
+    checkpoint(control)?;
     let mut events = BTreeMap::new();
-    commit_events(engine, &mut events)?;
-    file_operation_events(engine, &mut events)?;
-    directory_operation_events(engine, &mut events)?;
-    backup_events(engine, &mut events)?;
-    path_events(engine, &mut events)?;
-    tree_events(engine, &mut events)?;
+    commit_events(&engine, &mut events, control)?;
+    file_operation_events(&engine, &mut events, control)?;
+    directory_operation_events(&engine, &mut events, control)?;
+    backup_events(&engine, &mut events, control)?;
+    path_events(&engine, &mut events, control)?;
+    tree_events(&engine, &mut events, control)?;
     let events = events
         .into_iter()
-        .map(|((Reverse(sequence), id), event)| event.finish(sequence, id))
+        .map(|((Reverse(sequence), id), event)| {
+            checkpoint(control)?;
+            event.finish(sequence, id)
+        })
         .collect::<Result<Vec<_>, ApiError>>()?;
     Ok(ActivityHistorySnapshot { events })
 }

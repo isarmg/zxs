@@ -2189,6 +2189,7 @@ pub(crate) fn resources_source<'a>(
             resources,
             members,
             caches,
+            observe: None,
         }
         .namespace_node(reference)
     })

@@ -131,7 +131,9 @@ pub use backend_activity::{
 mod backend_events;
 pub use backend_events::EventPage;
 mod backend_graph;
-pub use backend_graph::{GraphRead, GraphReadControl, HistoryGraphResponse, ReadHistoryGraph};
+pub use backend_graph::{GraphRead, HistoryGraphResponse, ReadHistoryGraph};
+mod history_read;
+pub use history_read::HistoryReadControl;
 mod backend_branch;
 mod http_graph;
 pub use backend_branch::{BranchSnapshot, ContentDispositionSnapshot, FileBranchSnapshot};
@@ -908,12 +910,16 @@ pub trait Backend: Send + Sync {
         version: &str,
     ) -> Result<storage_contract::Placement, ApiError>;
     fn event_page(&self, identity: &Identity, after: u64) -> Result<EventPage, ApiError>;
-    fn activity_history(&self, identity: &Identity) -> Result<ActivityHistorySnapshot, ApiError>;
+    fn activity_history(
+        &self,
+        identity: &Identity,
+        control: &HistoryReadControl,
+    ) -> Result<ActivityHistorySnapshot, ApiError>;
     fn history_graph(
         &self,
         identity: &Identity,
         request: ReadHistoryGraph,
-        control: &GraphReadControl,
+        control: &HistoryReadControl,
     ) -> Result<HistoryGraphResponse, ApiError>;
     fn commit_snapshot(
         &self,
@@ -1636,14 +1642,16 @@ impl Backend for AuthorizedBackend {
     fn activity_history(
         &self,
         identity: &crate::auth::Identity,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
-        self.backend.activity_history(&self.current(identity)?)
+        self.backend
+            .activity_history(&self.current(identity)?, control)
     }
     fn history_graph(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryGraph,
-        control: &crate::GraphReadControl,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         self.backend
             .history_graph(&self.current(identity)?, request, control)
@@ -2036,7 +2044,7 @@ struct AppState {
     password_slots: Arc<tokio::sync::Semaphore>,
     authorization_slots: Arc<tokio::sync::Semaphore>,
     backend_slots: Arc<tokio::sync::Semaphore>,
-    graph_slots: Arc<tokio::sync::Semaphore>,
+    history_read_slots: Arc<tokio::sync::Semaphore>,
     management_slots: Arc<tokio::sync::Semaphore>,
     upload_slots: Arc<transfer_limits::Admission>,
     read_slots: Arc<transfer_limits::Admission>,
@@ -2163,7 +2171,7 @@ fn router_shared(
         password_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         authorization_slots: Arc::new(tokio::sync::Semaphore::new(8)),
         backend_slots: Arc::new(tokio::sync::Semaphore::new(HTTP_BACKEND_SLOTS)),
-        graph_slots: Arc::new(tokio::sync::Semaphore::new(2)),
+        history_read_slots: Arc::new(tokio::sync::Semaphore::new(2)),
         management_slots: Arc::new(tokio::sync::Semaphore::new(2)),
         upload_slots: transfer_limits::Admission::new(&config.http_transfer_limits),
         read_slots: transfer_limits::Admission::new(&config.http_transfer_limits),

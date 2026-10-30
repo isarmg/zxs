@@ -187,6 +187,7 @@ impl<'a> PlanningContext<'a> {
                 resources: self.disk_resources,
                 members: &members,
                 caches: self.segment_caches,
+                observe: None,
             },
             locator_root: self.operation_locator_root,
         }
@@ -203,6 +204,7 @@ impl<'a> PlanningContext<'a> {
             resources: self.disk_resources,
             members: &members,
             caches: self.segment_caches,
+            observe: None,
         };
         let source =
             crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {
@@ -234,6 +236,7 @@ impl<'a> PlanningContext<'a> {
             resources: self.disk_resources,
             members: &members,
             caches: self.segment_caches,
+            observe: None,
         };
         let published =
             crate::namespace::LoaderSource(|reference: &storage_contract::NamespaceReference| {

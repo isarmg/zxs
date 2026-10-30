@@ -63,9 +63,11 @@ fn planted_tree<'a>(engine: &'a Engine, entries: &[Entry]) -> NamespaceTree<'a> 
         object.store(&members).unwrap();
     }
     NamespaceTree {
-        engine,
+        resources: &engine.disk_resources,
+        caches: &engine.segment_caches,
         namespace,
-        members,
+        members: Cow::Owned(members),
+        observe: None,
     }
 }
 

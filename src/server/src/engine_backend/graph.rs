@@ -1,6 +1,7 @@
 //! Admit a history root, project outside the mutex, then re-admit the result.
 use super::*;
-use crate::backend_graph::{GraphRead, GraphReadControl, HistoryGraphResponse, ReadHistoryGraph};
+use crate::HistoryReadControl;
+use crate::backend_graph::{GraphRead, HistoryGraphResponse, ReadHistoryGraph};
 use storage_contract::history_graph::{DeletionsPage, GraphPage, PendingPage, TextPage};
 
 fn changed() -> ApiError {
@@ -21,7 +22,7 @@ fn read_error(source: storage_engine::Error) -> ApiError {
         error(source)
     }
 }
-fn checkpoint(control: &GraphReadControl) -> Result<(), ApiError> {
+fn checkpoint(control: &HistoryReadControl) -> Result<(), ApiError> {
     control
         .checkpoint()
         .map_err(storage_engine::Error::from)
@@ -32,7 +33,7 @@ pub(super) fn read(
     backend: &EngineBackend,
     identity: &Identity,
     request: ReadHistoryGraph,
-    control: &GraphReadControl,
+    control: &HistoryReadControl,
 ) -> Result<HistoryGraphResponse, ApiError> {
     let (history, observed, selection) = request.into_parts();
     checkpoint(control)?;
@@ -71,7 +72,7 @@ fn project(
     request: GraphRead,
     history: &str,
     root: &str,
-    control: &GraphReadControl,
+    control: &HistoryReadControl,
 ) -> Result<HistoryGraphResponse, ApiError> {
     let observer = || control.checkpoint().map_err(storage_engine::Error::from);
     Ok(match request {

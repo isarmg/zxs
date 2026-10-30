@@ -66,6 +66,18 @@ pub struct EngineBackend {
     operation_health_hook: Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
 }
 impl EngineBackend {
+    fn finish_activity_history(
+        &self,
+        identity: &Identity,
+        page: Result<crate::ActivityHistorySnapshot, ApiError>,
+        control: &crate::HistoryReadControl,
+    ) -> Result<crate::ActivityHistorySnapshot, ApiError> {
+        let engine = self.engine.lock().expect("service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        file_manager::activity::checkpoint(control)?;
+        page
+    }
+
     fn finish_event_page(
         &self,
         identity: &Identity,
@@ -1620,16 +1632,21 @@ impl Backend for EngineBackend {
     fn activity_history(
         &self,
         identity: &Identity,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::ActivityHistorySnapshot, ApiError> {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        file_manager::activity::read(&engine)
+        file_manager::activity::checkpoint(control)?;
+        let plan = engine.prepare_activity_read();
+        drop(engine);
+        let page = file_manager::activity::read(plan, control);
+        self.finish_activity_history(identity, page, control)
     }
     fn history_graph(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryGraph,
-        control: &crate::GraphReadControl,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         graph::read(self, identity, request, control)
     }
@@ -1996,6 +2013,9 @@ impl Backend for EngineBackend {
     }
 }
 
+#[cfg(test)]
+#[path = "../../../test/server/unit/engine_backend/activity_read_tests.rs"]
+mod activity_read_tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/engine_backend/authorization_tests.rs"]
 mod authorization_tests;

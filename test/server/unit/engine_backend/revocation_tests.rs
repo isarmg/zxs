@@ -590,15 +590,16 @@ impl Backend for PausedBackend {
     fn activity_history(
         &self,
         identity: &crate::auth::Identity,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
         self.enter();
-        self.inner.activity_history(identity)
+        self.inner.activity_history(identity, control)
     }
     fn history_graph(
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryGraph,
-        control: &crate::GraphReadControl,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         self.enter();
         self.inner.history_graph(identity, request, control)
@@ -1655,7 +1656,14 @@ impl Request {
             Self::PlacementSnapshot => backend
                 .placement_snapshot(identity, &fixture.version)
                 .map(|_| ()),
-            Self::ActivityHistorySnapshot => backend.activity_history(identity).map(|_| ()),
+            Self::ActivityHistorySnapshot => backend
+                .activity_history(
+                    identity,
+                    &crate::HistoryReadControl::until(
+                        std::time::Instant::now() + std::time::Duration::from_secs(60),
+                    ),
+                )
+                .map(|_| ()),
             Self::EventPage => backend.event_page(identity, u64::MAX).map(|_| ()),
             Self::HistoryGraph => backend
                 .history_graph(
@@ -1665,7 +1673,7 @@ impl Request {
                         std::collections::BTreeMap::from([("collection".into(), "commits".into())]),
                     )
                     .unwrap(),
-                    &crate::GraphReadControl::until(
+                    &crate::HistoryReadControl::until(
                         std::time::Instant::now() + std::time::Duration::from_secs(60),
                     ),
                 )

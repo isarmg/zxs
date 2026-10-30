@@ -6,12 +6,12 @@ use std::{
 
 #[test]
 fn graph_read_control_expires_and_owner_drop_cancels_without_releasing_permits() {
-    let expired = GraphReadControl::until(Instant::now());
+    let expired = HistoryReadControl::until(Instant::now());
     assert_eq!(
         expired.checkpoint().unwrap_err().code(),
         storage_contract::ErrorCode::RequestTimeout
     );
-    let control = GraphReadControl::until(Instant::now() + Duration::from_secs(30));
+    let control = HistoryReadControl::until(Instant::now() + Duration::from_secs(30));
     let wait = control.wait_owner();
     control.checkpoint().unwrap();
     let slots = Arc::new(tokio::sync::Semaphore::new(1));
@@ -30,7 +30,7 @@ fn graph_read_control_expires_and_owner_drop_cancels_without_releasing_permits()
 async fn cancelled_wait_keeps_scan_permit_until_blocking_worker_observes_stop() {
     let slots = Arc::new(tokio::sync::Semaphore::new(1));
     let permit = slots.clone().try_acquire_owned().unwrap();
-    let control = GraphReadControl::until(Instant::now() + Duration::from_secs(30));
+    let control = HistoryReadControl::until(Instant::now() + Duration::from_secs(30));
     let wait = control.wait_owner();
     let (started, start) = tokio::sync::oneshot::channel();
     let (release, released) = std::sync::mpsc::channel();

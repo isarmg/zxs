@@ -116,18 +116,16 @@ async fn history(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     ApiQuery(_query): ApiQuery<BTreeMap<String, String>>,
-) -> Result<Json<backend_activity::ActivityHistoryResponse>, ApiError> {
-    let permit = state
-        .backend_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| {
-            backend
-                .activity_history(&identity)
-                .and_then(backend_activity::ActivityHistoryResponse::try_from)
-        })
-        .await
-        .map(Json)
+    connection: Option<http_routing::Extension<crate::http_shutdown::ResponseConnection>>,
+) -> Result<http_routing::response::Response, ApiError> {
+    crate::history_read::run(
+        state,
+        connection.map(|http_routing::Extension(connection)| connection),
+        move |backend, control| backend.activity_history(&identity, control),
+        |captured| {
+            let response = backend_activity::ActivityHistoryResponse::try_from(captured)?;
+            backend_file_history::encode_response_bounded(response)
+        },
+    )
+    .await
 }

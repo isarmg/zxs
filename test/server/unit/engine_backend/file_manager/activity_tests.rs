@@ -8,6 +8,10 @@ use crate::backend_activity::{
 use json_codec::{Value, json};
 use std::{cmp::Reverse, collections::BTreeMap};
 
+fn control() -> crate::HistoryReadControl {
+    crate::HistoryReadControl::until(std::time::Instant::now() + std::time::Duration::from_secs(30))
+}
+
 fn pending<'a>(message: &str) -> PendingEvent<'a> {
     PendingEvent {
         timestamp: Timestamp::Resolved(None),
@@ -180,10 +184,11 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
         Config::development([root.path().join("disk")]),
     )
     .unwrap();
-    let missing = super::file_repo(&engine, "file_missing").unwrap_err();
+    let plan = engine.prepare_activity_read();
+    let missing = super::file_repo(&plan, "file_missing", &control()).unwrap_err();
     assert_eq!(missing.status, http::StatusCode::NOT_FOUND);
     assert_eq!(missing.code, storage_contract::ErrorCode::FileNotFound);
-    assert!(super::read(&engine).unwrap().events.is_empty());
+    assert!(super::read(plan, &control()).unwrap().events.is_empty());
     let repo = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Audit").unwrap(),
@@ -223,7 +228,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
         .unwrap()
         .timestamp;
     let deletion_rows = |engine: &Engine| {
-        wire(super::read(engine).unwrap())["events"]
+        wire(super::read(engine.prepare_activity_read(), &control()).unwrap())["events"]
             .as_array()
             .unwrap()
             .iter()

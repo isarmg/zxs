@@ -106,6 +106,7 @@ pub(crate) struct SegmentReader<'a> {
     pub(crate) resources: &'a DiskResources,
     pub(crate) members: &'a [DiskConfig],
     pub(crate) caches: &'a SegmentCaches,
+    pub(crate) observe: Option<&'a dyn Fn() -> Result<()>>,
 }
 
 /// The unseen event suffix after a cursor, up to `limit` events: the resident
@@ -159,12 +160,19 @@ pub(crate) fn read_event_segments(
 }
 
 impl SegmentReader<'_> {
+    pub(crate) fn checkpoint(&self) -> Result<()> {
+        if let Some(observe) = self.observe {
+            observe()?;
+        }
+        Ok(())
+    }
     /// A sealed event segment: exactly the format span, nondecreasing
     /// sequences, first sequence matching its resident directory entry.
     pub(crate) fn event_segment(
         &self,
         reference: &EventSegmentRef,
     ) -> Result<Arc<Vec<storage_contract::Event>>> {
+        self.checkpoint()?;
         if let Some(cached) = SegmentCaches::lock(&self.caches.events).get(&reference.hash) {
             return Ok(cached);
         }
@@ -210,6 +218,7 @@ impl SegmentReader<'_> {
         &self,
         reference: &OperationSegmentRef,
     ) -> Result<Arc<Vec<OperationRecordEntry>>> {
+        self.checkpoint()?;
         if let Some(cached) = SegmentCaches::lock(&self.caches.operations).get(&reference.hash) {
             return Ok(cached);
         }
@@ -258,6 +267,7 @@ impl SegmentReader<'_> {
         id: storage_contract::OperationId,
     ) -> Result<Option<u64>> {
         let value = crate::metadata_map::lookup(root, &id.to_string(), |kind, hash| {
+            self.checkpoint()?;
             if let Some(cached) =
                 SegmentCaches::lock(&self.caches.locator_pages).get(&format!("{kind}/{hash}"))
             {
@@ -300,6 +310,7 @@ impl SegmentReader<'_> {
         &self,
         reference: &storage_contract::NamespaceReference,
     ) -> Result<crate::namespace::NamespaceNode> {
+        self.checkpoint()?;
         reference.validate()?;
         let hash = reference
             .hash

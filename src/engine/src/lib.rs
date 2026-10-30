@@ -42,15 +42,16 @@ pub use disk::{offline_check, offline_export};
 #[cfg(feature = "fault-injection")]
 pub use engine::MemberFault;
 pub use engine::{
-    ContentReadPlan, DiskObservation, DiskObservationPlan, Engine, EventPageReadPlan, HistoryRoot,
-    IndexFailure, IndexFailureStage, IndexHealth, IntegrityScrubArea, IntegrityScrubBatch,
-    IntegrityScrubBatchAdmission, IntegrityScrubCancellation, IntegrityScrubCompletion,
-    IntegrityScrubIssue, IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport,
-    IntegrityScrubSchedule, IntegrityScrubTarget, MetadataMemberProbe, OpenedContent,
-    OperationLookup, OperationReadObservation, OperationReadPlan, OperationRecord,
-    PublicationStageReport, RangeContent, ReadLease, RecoverySealContext, RecoverySealFailure,
-    RecoveryWarnings, RetainedWorkspaceLimits, StageIo, StageKind, StageTiming, ValidatedConfig,
-    WorkspaceInventory, WorkspaceInventoryRecord, WorkspaceReadPlan,
+    ActivityReadPlan, ContentReadPlan, DiskObservation, DiskObservationPlan, Engine,
+    EventPageReadPlan, HistoryRoot, IndexFailure, IndexFailureStage, IndexHealth,
+    IntegrityScrubArea, IntegrityScrubBatch, IntegrityScrubBatchAdmission,
+    IntegrityScrubCancellation, IntegrityScrubCompletion, IntegrityScrubIssue,
+    IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport, IntegrityScrubSchedule,
+    IntegrityScrubTarget, MetadataMemberProbe, OpenedContent, OperationLookup,
+    OperationReadObservation, OperationReadPlan, OperationRecord, PublicationStageReport,
+    RangeContent, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
+    RetainedWorkspaceLimits, StageIo, StageKind, StageTiming, ValidatedConfig, WorkspaceInventory,
+    WorkspaceInventoryRecord, WorkspaceReadPlan,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

@@ -71,6 +71,7 @@ impl EventPageReadPlan {
                 resources: &self.resources,
                 members: &self.members,
                 caches: &self.caches,
+                observe: None,
             },
             self.after,
         )

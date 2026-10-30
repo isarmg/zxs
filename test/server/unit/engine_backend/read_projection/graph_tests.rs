@@ -16,8 +16,8 @@ fn graph_request(
     }
     crate::ReadHistoryGraph::page(history.into(), query).unwrap()
 }
-fn control() -> crate::GraphReadControl {
-    crate::GraphReadControl::until(std::time::Instant::now() + std::time::Duration::from_secs(30))
+fn control() -> crate::HistoryReadControl {
+    crate::HistoryReadControl::until(std::time::Instant::now() + std::time::Duration::from_secs(30))
 }
 
 #[test]

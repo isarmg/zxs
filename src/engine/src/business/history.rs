@@ -2,6 +2,36 @@
 use super::*;
 use crate::engine::MutationPlan;
 use json_codec::json;
+pub(crate) fn tree_commit<'a>(state: &'a State, branch_id: &str) -> Result<&'a Commit> {
+    let branch = state
+        .branches
+        .get(branch_id)
+        .ok_or_else(|| Error::new(ErrorCode::BranchNotFound, "branch not found"))?;
+    tree_commit_at(state, branch_id, &branch.head_commit_id)
+}
+
+fn tree_commit_at<'a>(state: &'a State, branch_id: &str, commit_id: &str) -> Result<&'a Commit> {
+    let branch = state
+        .branches
+        .get(branch_id)
+        .ok_or_else(|| Error::new(ErrorCode::BranchNotFound, "branch not found"))?;
+    if branch.state == BranchState::Migrated {
+        return Err(Error::new(
+            ErrorCode::TreeMoved,
+            "this branch moved during a history split; use the published mapping",
+        ));
+    }
+    state
+        .commits
+        .get(commit_id)
+        .filter(|commit| commit.history_tree_id == branch.history_tree_id)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::CommitNotFound,
+                "selected snapshot is outside this branch's history",
+            )
+        })
+}
 fn branch_contains_commit(state: &State, branch: &Branch, target: &str) -> Result<bool> {
     if branch.state == BranchState::Migrated {
         return Err(Error::new(
@@ -46,40 +76,13 @@ impl Engine {
 
     /// The branch head commit that owns the current frozen namespace.
     pub(crate) fn tree_commit(&self, branch_id: &str) -> Result<&Commit> {
-        let branch = self.state.branches.get(branch_id).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::BranchNotFound,
-                "branch not found",
-            )
-        })?;
-        self.tree_commit_at(branch_id, &branch.head_commit_id)
+        tree_commit(&self.state, branch_id)
     }
 
     /// A selected frozen snapshot within the branch's history. Like
     /// `list_tree_at`, rejects migrated branches and foreign snapshots.
     pub(crate) fn tree_commit_at(&self, branch_id: &str, commit_id: &str) -> Result<&Commit> {
-        let branch = self.state.branches.get(branch_id).ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::BranchNotFound,
-                "branch not found",
-            )
-        })?;
-        if branch.state == BranchState::Migrated {
-            return Err(Error::new(
-                storage_contract::ErrorCode::TreeMoved,
-                "this branch moved during a history split; use the published mapping",
-            ));
-        }
-        self.state
-            .commits
-            .get(commit_id)
-            .filter(|commit| commit.history_tree_id == branch.history_tree_id)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::CommitNotFound,
-                    "selected snapshot is outside this branch's history",
-                )
-            })
+        tree_commit_at(&self.state, branch_id, commit_id)
     }
     pub fn file_history(&self, file_id: &str) -> Result<Vec<FileVersion>> {
         if self.history_index_is_selective(file_id)

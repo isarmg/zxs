@@ -82,6 +82,7 @@ fn event_pages_locate_segments_through_the_directory_and_never_expand_history() 
         resources: &resources,
         members: &members,
         caches: &caches,
+        observe: None,
     };
     let all: Vec<Event> = sequences(count).into_iter().map(event).collect();
     let boundary = events.sealed()[1].first_sequence;
@@ -128,6 +129,7 @@ fn event_pages_locate_segments_through_the_directory_and_never_expand_history() 
         resources: &resources,
         members: &members,
         caches: &fresh,
+        observe: None,
     };
     let from_second = events_page(&events, &reader, boundary, count).unwrap();
     assert_eq!(
@@ -218,6 +220,7 @@ fn namespace_cache_shares_authenticated_nodes_without_aliasing_kind_or_invalid_h
         resources: &resources,
         members: &config.disks,
         caches: &caches,
+        observe: None,
     };
     let NamespaceNode::Page(first) = reader.namespace_node(&reference).unwrap() else {
         panic!("expected a namespace page");
@@ -274,6 +277,7 @@ fn authenticated_segment_and_locator_schema_failures_are_corrupt_evidence() {
         resources: &resources,
         members: &members,
         caches: &caches,
+        observe: None,
     };
     let malformed = json_codec::json!({"unexpected":true});
     let event_hash = store_object(&members[0], EVENT_SEGMENT_KIND, &malformed).unwrap();

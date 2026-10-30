@@ -3,14 +3,16 @@
 //! order. Lookup descends the per-directory pages, binary searching an index
 //! level before one page is read; it never folds every stored display path.
 use super::*;
+use std::borrow::Cow;
 
 /// One published commit's namespace, queried through the engine's bounded
 /// object cache. It is neither a second index nor an authorization grant.
 pub struct NamespaceTree<'a> {
-    engine: &'a Engine,
+    resources: &'a crate::disk::DiskResources,
+    caches: &'a crate::segment_store::SegmentCaches,
     namespace: storage_contract::CommitNamespace,
-    // The immutable engine borrow keeps this selected read scope current.
-    members: Vec<storage_contract::DiskConfig>,
+    members: Cow<'a, [storage_contract::DiskConfig]>,
+    observe: Option<&'a dyn Fn() -> Result<()>>,
 }
 
 impl crate::namespace::NamespaceSource for NamespaceTree<'_> {
@@ -18,9 +20,13 @@ impl crate::namespace::NamespaceSource for NamespaceTree<'_> {
         &self,
         reference: &storage_contract::NamespaceReference,
     ) -> Result<crate::namespace::NamespaceNode> {
-        self.engine
-            .segment_reader(&self.members)
-            .namespace_node(reference)
+        crate::segment_store::SegmentReader {
+            resources: self.resources,
+            caches: self.caches,
+            members: &self.members,
+            observe: self.observe,
+        }
+        .namespace_node(reference)
     }
 }
 
@@ -91,6 +97,21 @@ impl NamespaceTree<'_> {
     }
 }
 
+impl<'a> NamespaceTree<'a> {
+    pub(crate) fn captured(
+        namespace: storage_contract::CommitNamespace,
+        reader: crate::segment_store::SegmentReader<'a>,
+    ) -> Self {
+        Self {
+            resources: reader.resources,
+            caches: reader.caches,
+            members: Cow::Borrowed(reader.members),
+            observe: reader.observe,
+            namespace,
+        }
+    }
+}
+
 impl Engine {
     /// Lookup of a commit in this Engine's published State only.
     /// This does not validate branch/history scope and is not authorization.
@@ -99,9 +120,11 @@ impl Engine {
             .commits
             .get(commit_id)
             .map(|commit| NamespaceTree {
-                engine: self,
+                resources: &self.disk_resources,
+                caches: &self.segment_caches,
                 namespace: commit.namespace.clone(),
-                members: self.members(),
+                members: Cow::Owned(self.members()),
+                observe: None,
             })
     }
 
@@ -110,9 +133,11 @@ impl Engine {
     pub fn namespace_tree(&self, branch_id: &str) -> Result<NamespaceTree<'_>> {
         let namespace = self.tree_commit(branch_id)?.namespace.clone();
         Ok(NamespaceTree {
-            engine: self,
+            resources: &self.disk_resources,
+            caches: &self.segment_caches,
             namespace,
-            members: self.members(),
+            members: Cow::Owned(self.members()),
+            observe: None,
         })
     }
 
@@ -121,9 +146,11 @@ impl Engine {
     pub fn namespace_tree_at(&self, branch_id: &str, commit_id: &str) -> Result<NamespaceTree<'_>> {
         let namespace = self.tree_commit_at(branch_id, commit_id)?.namespace.clone();
         Ok(NamespaceTree {
-            engine: self,
+            resources: &self.disk_resources,
+            caches: &self.segment_caches,
             namespace,
-            members: self.members(),
+            members: Cow::Owned(self.members()),
+            observe: None,
         })
     }
 }

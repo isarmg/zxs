@@ -913,6 +913,7 @@ impl Backend for PanickingBackend {
     fn activity_history(
         &self,
         _identity: &crate::auth::Identity,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
         panic!("private activity history panic detail")
     }
@@ -920,7 +921,7 @@ impl Backend for PanickingBackend {
         &self,
         _identity: &crate::auth::Identity,
         _request: crate::ReadHistoryGraph,
-        _control: &crate::GraphReadControl,
+        _control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
         panic!("private history graph panic detail")
     }

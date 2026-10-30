@@ -9,6 +9,32 @@ use json_codec::{Value, json};
 use std::collections::BTreeSet;
 use storage_contract::client_protocol::{MAX_HISTORY_PAGE_BYTES, MAX_RESPONSE_BYTES};
 
+#[test]
+fn activity_encoding_uses_the_client_response_cap_without_truncation() {
+    let value = "a".repeat(MAX_RESPONSE_BYTES - 2);
+    let encoded = encode_response_bounded(&value).unwrap();
+    assert_eq!(encoded.body.len(), MAX_RESPONSE_BYTES);
+    assert_eq!(encoded.body.first(), Some(&b'"'));
+    assert_eq!(encoded.body.last(), Some(&b'"'));
+    assert!(encode_bounded(&value).is_err());
+    let oversized = format!("{value}a");
+    let Err(error) = encode_response_bounded(&oversized) else {
+        panic!("oversized activity response must fail intact");
+    };
+    assert_eq!(error.status, ::http::StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[test]
+fn activity_encoding_budgets_escaped_bytes_not_string_length() {
+    let units = (MAX_RESPONSE_BYTES - 2) / 6;
+    let value = "\0".repeat(units);
+    let encoded = encode_response_bounded(&value).unwrap();
+    assert_eq!(encoded.body.len(), 2 + units * 6);
+    let oversized = format!("{value}\0");
+    assert!(oversized.len() < MAX_RESPONSE_BYTES);
+    assert!(encode_response_bounded(&oversized).is_err());
+}
+
 fn root() -> String {
     "cd".repeat(32)
 }

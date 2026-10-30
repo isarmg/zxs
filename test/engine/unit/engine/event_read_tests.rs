@@ -55,6 +55,7 @@ fn detached_event_selection_matches_the_sequence_suffix_with_bounded_capture() {
         resources: &resources,
         members: &members,
         caches: &caches,
+        observe: None,
     };
     for after in [0, 1, 20, 2046, 2048, 4094, 4096, 6142, 6144, u64::MAX] {
         let rows = EventRows::capture(&events, after);
@@ -95,6 +96,7 @@ fn detached_event_read_does_not_touch_an_unneeded_second_segment() {
         resources: &resources,
         members: &members,
         caches: &caches,
+        observe: None,
     };
     let rows = EventRows::capture(&events, 0);
     assert!(rows.tail.is_empty());
@@ -124,6 +126,7 @@ fn detached_event_selection_skips_repeated_first_sequences_without_changing_curs
         resources: &resources,
         members: &members,
         caches: &caches,
+        observe: None,
     };
     let rows = EventRows::capture(&events, 1);
     assert_eq!(rows.sealed.len(), 2);
@@ -148,6 +151,7 @@ fn detached_event_selection_skips_repeated_first_sequences_without_changing_curs
         resources: &resources,
         members: &members,
         caches: &fresh,
+        observe: None,
     };
     assert!(
         EventRows::capture(&events, u64::MAX)
@@ -172,6 +176,7 @@ fn detached_event_rows_survive_a_new_tail_seal() {
         resources: &resources,
         members: &members,
         caches: &caches,
+        observe: None,
     };
     assert_eq!(
         rows.read(&reader, after).unwrap(),

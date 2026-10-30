@@ -15,7 +15,7 @@ struct RecordingBackend {
     calls: Mutex<Vec<Recorded>>,
     fail: AtomicBool,
     file: std::fs::File,
-    graph_gates: Mutex<std::collections::VecDeque<GraphGate>>,
+    history_gates: Mutex<std::collections::VecDeque<HistoryGate>>,
 }
 
 fn sentinel_error(method: &str) -> ApiError {
@@ -30,6 +30,31 @@ fn sentinel_error(method: &str) -> ApiError {
 }
 
 impl RecordingBackend {
+    fn wait_for_history_scan(&self, control: &crate::HistoryReadControl) -> Result<(), ApiError> {
+        let gate = self.history_gates.lock().unwrap().pop_front();
+        if let Some(gate) = gate {
+            gate.started.send(()).unwrap();
+            gate.release
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            let result = control.checkpoint();
+            gate.finished
+                .send(result.as_ref().map(|()| ()).map_err(|error| error.code()))
+                .unwrap();
+            result.map_err(|source| {
+                ApiError::new(
+                    ::http::StatusCode::REQUEST_TIMEOUT,
+                    source.code(),
+                    source.message(),
+                )
+                .with_source(source)
+            })?;
+        } else {
+            control.checkpoint().unwrap();
+        }
+        Ok(())
+    }
+
     fn record(
         &self,
         method: &'static str,
@@ -1172,7 +1197,9 @@ impl Backend for RecordingBackend {
     fn activity_history(
         &self,
         identity: &crate::auth::Identity,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::ActivityHistorySnapshot, crate::ApiError> {
+        self.wait_for_history_scan(control)?;
         self.record("activity_history", Some(identity), json!({}))?;
         Ok(crate::ActivityHistorySnapshot { events: vec![] })
     }
@@ -1180,29 +1207,9 @@ impl Backend for RecordingBackend {
         &self,
         identity: &crate::auth::Identity,
         request: crate::ReadHistoryGraph,
-        control: &crate::GraphReadControl,
+        control: &crate::HistoryReadControl,
     ) -> Result<crate::HistoryGraphResponse, crate::ApiError> {
-        let gate = self.graph_gates.lock().unwrap().pop_front();
-        if let Some(gate) = gate {
-            gate.started.send(()).unwrap();
-            gate.release
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .unwrap();
-            let result = control.checkpoint();
-            gate.finished
-                .send(result.as_ref().map(|()| ()).map_err(|error| error.code()))
-                .unwrap();
-            result.map_err(|source| {
-                ApiError::new(
-                    ::http::StatusCode::REQUEST_TIMEOUT,
-                    source.code(),
-                    source.message(),
-                )
-                .with_source(source)
-            })?;
-        } else {
-            control.checkpoint().unwrap();
-        }
+        self.wait_for_history_scan(control)?;
         let crate::GraphRead::Page {
             collection,
             after,
@@ -1494,7 +1501,7 @@ impl Fixture {
             calls: Mutex::new(vec![]),
             fail: AtomicBool::new(false),
             file: source.file.try_clone().unwrap(),
-            graph_gates: Mutex::new(std::collections::VecDeque::new()),
+            history_gates: Mutex::new(std::collections::VecDeque::new()),
         });
         let auth = Arc::new(Mutex::new(auth));
         let backend = AuthorizedBackend {
@@ -1965,10 +1972,17 @@ impl Fixture {
             ),
             (
                 "activity_history",
-                backend.activity_history(identity).map(|history| {
-                    assert!(history.events.is_empty());
-                    json!({"returned_by":"activity_history"})
-                }),
+                backend
+                    .activity_history(
+                        identity,
+                        &crate::HistoryReadControl::until(
+                            std::time::Instant::now() + std::time::Duration::from_secs(60),
+                        ),
+                    )
+                    .map(|history| {
+                        assert!(history.events.is_empty());
+                        json!({"returned_by":"activity_history"})
+                    }),
             ),
             (
                 "event_page",
@@ -1990,7 +2004,7 @@ impl Fixture {
                             ]),
                         )
                         .unwrap(),
-                        &crate::GraphReadControl::until(
+                        &crate::HistoryReadControl::until(
                             std::time::Instant::now() + std::time::Duration::from_secs(60),
                         ),
                     )
@@ -2758,13 +2772,13 @@ fn recorded_merge_link(operation_id: storage_contract::OperationId) -> storage_c
     }
 }
 
-struct GraphGate {
+struct HistoryGate {
     started: tokio::sync::oneshot::Sender<()>,
     release: std::sync::mpsc::Receiver<()>,
     finished: tokio::sync::oneshot::Sender<Result<(), storage_contract::ErrorCode>>,
 }
 
-fn graph_route_fixture(
+fn history_route_fixture(
     fixture: &Fixture,
 ) -> (
     Router,
@@ -2778,7 +2792,7 @@ fn graph_route_fixture(
     let config = ServerConfig::loopback(fixture._root.path())
         .admit()
         .unwrap();
-    let graph_slots = Arc::new(tokio::sync::Semaphore::new(2));
+    let history_read_slots = Arc::new(tokio::sync::Semaphore::new(2));
     let backend_slots = Arc::new(tokio::sync::Semaphore::new(HTTP_BACKEND_SLOTS));
     let state = AppState {
         auth_reader: crate::lock(&fixture.auth).reader(),
@@ -2800,7 +2814,7 @@ fn graph_route_fixture(
         password_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         authorization_slots: Arc::new(tokio::sync::Semaphore::new(8)),
         backend_slots: Arc::clone(&backend_slots),
-        graph_slots: Arc::clone(&graph_slots),
+        history_read_slots: Arc::clone(&history_read_slots),
         management_slots: Arc::new(tokio::sync::Semaphore::new(2)),
         upload_slots: transfer_limits::Admission::new(&config.http_transfer_limits),
         read_slots: transfer_limits::Admission::new(&config.http_transfer_limits),
@@ -2813,35 +2827,47 @@ fn graph_route_fixture(
             "/api/history-trees/{history}/graph",
             get(crate::http_graph::graph),
         )
+        .merge(crate::file_manager::routes())
         .layer(http_routing::Extension(fixture.identity.clone()))
         .with_state(state);
-    (app, graph_slots, backend_slots)
+    (app, history_read_slots, backend_slots)
+}
+
+#[tokio::test]
+async fn activity_and_graph_share_capacity_until_cancelled_worker_checkpoint() {
+    cancelled_history_route_keeps_capacity(activity_request()).await;
 }
 
 #[tokio::test]
 async fn graph_route_cancellation_retains_capacity_until_worker_checkpoint() {
+    cancelled_history_route_keeps_capacity(graph_request()).await;
+}
+
+async fn cancelled_history_route_keeps_capacity(
+    first_request: http_routing::http::Request<http_routing::body::Body>,
+) {
     use service_stack::ServiceExt;
     use std::time::Duration;
     let fixture = Fixture::new();
-    let (app, graph_slots, backend_slots) = graph_route_fixture(&fixture);
+    let (app, history_read_slots, backend_slots) = history_route_fixture(&fixture);
     let mut requests = Vec::new();
     let mut releases = Vec::new();
     let mut finishes = Vec::new();
-    for _ in 0..2 {
+    for request in [first_request, graph_request()] {
         let (started, start) = tokio::sync::oneshot::channel();
         let (release, released) = std::sync::mpsc::channel();
         let (finished, finish) = tokio::sync::oneshot::channel();
         fixture
             .probe
-            .graph_gates
+            .history_gates
             .lock()
             .unwrap()
-            .push_back(GraphGate {
+            .push_back(HistoryGate {
                 started,
                 release: released,
                 finished,
             });
-        let request = app.clone().oneshot(graph_request());
+        let request = app.clone().oneshot(request);
         requests.push(tokio::spawn(async move { request.await.unwrap() }));
         releases.push(release);
         finishes.push(finish);
@@ -2850,14 +2876,16 @@ async fn graph_route_cancellation_retains_capacity_until_worker_checkpoint() {
             .unwrap()
             .unwrap();
     }
-    assert_eq!(graph_slots.available_permits(), 0);
+    assert_eq!(history_read_slots.available_permits(), 0);
     assert_eq!(backend_slots.available_permits(), HTTP_BACKEND_SLOTS - 2);
     let cancelled = requests.remove(0);
     cancelled.abort();
     assert!(cancelled.await.unwrap_err().is_cancelled());
     let overloaded = app.clone().oneshot(graph_request()).await.unwrap();
     assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(graph_slots.available_permits(), 0);
+    let overloaded = app.clone().oneshot(activity_request()).await.unwrap();
+    assert_eq!(overloaded.status(), ::http::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(history_read_slots.available_permits(), 0);
     assert_eq!(backend_slots.available_permits(), HTTP_BACKEND_SLOTS - 2);
     releases.remove(0).send(()).unwrap();
     assert_eq!(
@@ -2867,11 +2895,13 @@ async fn graph_route_cancellation_retains_capacity_until_worker_checkpoint() {
             .unwrap(),
         Err(storage_contract::ErrorCode::RequestTimeout),
     );
-    let released_scan =
-        tokio::time::timeout(Duration::from_secs(5), graph_slots.clone().acquire_owned())
-            .await
-            .unwrap()
-            .unwrap();
+    let released_scan = tokio::time::timeout(
+        Duration::from_secs(5),
+        history_read_slots.clone().acquire_owned(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let released_backend = tokio::time::timeout(
         Duration::from_secs(5),
         backend_slots
@@ -2882,6 +2912,18 @@ async fn graph_route_cancellation_retains_capacity_until_worker_checkpoint() {
     .unwrap()
     .unwrap();
     drop((released_scan, released_backend));
+    let resumed_activity = app.clone().oneshot(activity_request()).await.unwrap();
+    assert_eq!(resumed_activity.status(), ::http::StatusCode::OK);
+    let activity = http_routing::body::to_bytes(
+        resumed_activity.into_body(),
+        storage_contract::client_protocol::MAX_RESPONSE_BYTES,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        json_codec::from_slice::<Value>(&activity).unwrap(),
+        json!({"events": [], "limit": 200}),
+    );
     let resumed = app.clone().oneshot(graph_request()).await.unwrap();
     assert_eq!(resumed.status(), ::http::StatusCode::OK);
     let bytes = http_routing::body::to_bytes(resumed.into_body(), 4 * 1024 * 1024)
@@ -2907,7 +2949,10 @@ async fn graph_route_cancellation_retains_capacity_until_worker_checkpoint() {
     http_routing::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
         .await
         .unwrap();
-    let all_scans = graph_slots.clone().try_acquire_many_owned(2).unwrap();
+    let all_scans = history_read_slots
+        .clone()
+        .try_acquire_many_owned(2)
+        .unwrap();
     let all_backends = backend_slots
         .clone()
         .try_acquire_many_owned(HTTP_BACKEND_SLOTS as u32)
@@ -2918,6 +2963,13 @@ async fn graph_route_cancellation_retains_capacity_until_worker_checkpoint() {
 fn graph_request() -> http_routing::http::Request<http_routing::body::Body> {
     http_routing::http::Request::builder()
         .uri("/api/history-trees/history/graph?collection=commits")
+        .body(http_routing::body::Body::empty())
+        .unwrap()
+}
+
+fn activity_request() -> http_routing::http::Request<http_routing::body::Body> {
+    http_routing::http::Request::builder()
+        .uri("/api/file-manager/history?unused=unchanged")
         .body(http_routing::body::Body::empty())
         .unwrap()
 }

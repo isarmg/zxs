@@ -10,7 +10,7 @@ pub use cursors::{
     BranchCursor, BranchCursorKey, CursorKind, HistoryCursorSeed, MergeCursor, MergeCursorKey,
     NodeCursor, NodeCursorKey, ParentCursor, ParentCursorKey, VersionCursor, VersionCursorKey,
 };
-pub(crate) use wire::{EncodedPage, PageBudget, encode_bounded};
+pub(crate) use wire::{EncodedPage, PageBudget, encode_bounded, encode_response_bounded};
 
 /// Page record limits per collection. These bound one response, not the history.
 pub mod limits {

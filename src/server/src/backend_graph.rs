@@ -4,50 +4,11 @@ use crate::{
     backend_file_history::{HistoryRootText, QueryFields, RequestId, required_root},
 };
 use data_serialization::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Instant,
-};
+use std::collections::BTreeMap;
 use storage_contract::history_graph::{
     BoundaryField, CommitField, DeletionsPage, GraphCollection, GraphKey, GraphPage, HistoryField,
     MergeLinkField, PageLimit, PendingPage, PendingTarget, TextLimit, TextPage, TextTarget,
 };
-
-/// A request-local stop signal. It never releases a running worker's permit.
-pub struct GraphReadControl {
-    cancelled: Arc<AtomicBool>,
-    deadline: Instant,
-}
-pub(crate) struct GraphReadWait(Arc<AtomicBool>);
-impl Drop for GraphReadWait {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::Relaxed);
-    }
-}
-impl GraphReadControl {
-    pub fn until(deadline: Instant) -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-            deadline,
-        }
-    }
-    pub(crate) fn wait_owner(&self) -> GraphReadWait {
-        GraphReadWait(Arc::clone(&self.cancelled))
-    }
-    pub fn checkpoint(&self) -> storage_contract::Result<()> {
-        if self.cancelled.load(Ordering::Relaxed) || Instant::now() >= self.deadline {
-            return Err(storage_contract::Error::new(
-                storage_contract::ErrorCode::RequestTimeout,
-                "history inspection was cancelled or its deadline expired",
-            ));
-        }
-        Ok(())
-    }
-}
 
 pub struct ReadHistoryGraph {
     history: RequestId,
