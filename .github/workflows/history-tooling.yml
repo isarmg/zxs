@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-browser]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-browser, detached-backup-listing]
 
 permissions:
   contents: read
@@ -140,6 +140,10 @@ jobs:
               'ee0a9b08ff4b16ce2019b4b36e4153671ede91ae', '3b5d347cc36756dd5ee173818e77f6a0ae124e84',
           ):
               raise SystemExit('Web history diagnostics require the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
+              'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
+          ):
+              raise SystemExit('Detached backup listing requires the exact published reviewed source and tree')
           groups = {}
           for name, test in [
               ('smb-close', 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'),
@@ -593,6 +597,26 @@ jobs:
                       dict(selector='backup_namespace::', test_target='http_engine', count=4, required_suffixes=[
                           'backup_path_collisions_are_rejected_for_every_session_without_overwriting_bodies']),
                   ]), command='Real HTTP paginated listing and backup namespace/collision groups'),
+          ]
+          backup_groups = [
+              dict(selector='engine_backend::file_manager::backup_namespace::tests::', count=7),
+              dict(selector='engine_backend::file_manager::backup_namespace::entry_tests::', count=3),
+              dict(selector='engine_backend::file_manager::backup_namespace::lifecycle_tests::', count=6,
+                  required_suffixes=[
+                      'writers_finish_during_backup_scan_and_changed_pages_never_project_old_indices',
+                      'revoked_identity_wins_over_a_changed_backup_listing_without_projecting_rows',
+                      'revoked_identity_wins_over_global_backup_conflict_discovered_during_scan',
+                      'auth_only_publication_keeps_backup_snapshot_selection_and_bounded_projection',
+                      'same_token_engine_reopen_rejects_backup_file_and_directory_pages_before_projection',
+                      'canceled_backup_listing_retains_historical_view_auth_and_existing_slot_until_worker_exits',
+                  ]),
+          ]
+          groups['detached-backup-listing'] = [
+              dict(groups['detached-listing'][0], id='detached-backup-listing-format'),
+              dict(groups['detached-listing'][1], id='detached-backup-listing-server',
+                  test_groups=json.dumps(backup_groups + json.loads(groups['detached-listing'][1]['test_groups'])),
+                  command='Sixteen new backup listing bodies plus twenty-one primary listing preservation bodies'),
+              dict(groups['detached-listing'][2], id='detached-backup-listing-http'),
           ]
           groups['scrub-planning'] = [
               dict(id='scrub-planning-format', format_base='286ff86e73f52657fbf6f96b1fcc846fee1a4173',
