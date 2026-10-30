@@ -185,7 +185,7 @@ fn verify(engine: &Engine, branch: &str, files: usize, root: &Path) -> Result<()
     assert_eq!(events.len(), commits());
     assert_eq!(engine.state().sequence, commits() as u64);
     let branch_record = &engine.state().branches[branch];
-    let mut commits = std::collections::BTreeSet::new();
+    let mut verified_commits = std::collections::BTreeSet::new();
     let mut previous_commit: Option<String> = None;
     for (index, (id, event)) in ids.iter().zip(&events).enumerate() {
         let record = engine.operation_record(*id)?;
@@ -217,7 +217,7 @@ fn verify(engine: &Engine, branch: &str, files: usize, root: &Path) -> Result<()
             .commit_id
             .as_ref()
             .expect("invariant: every benchmark operation creates a commit");
-        assert!(commits.insert(commit_id.clone()));
+        assert!(verified_commits.insert(commit_id.clone()));
         let commit = &engine.state().commits[commit_id];
         assert_eq!(commit.operation_id, *id);
         assert_eq!(commit.sequence, receipt.sequence);
