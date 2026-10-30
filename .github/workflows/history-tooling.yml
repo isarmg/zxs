@@ -166,6 +166,8 @@ jobs:
           ), indent=2))
           PY
           cat .diagnostics/identity.json >> "$GITHUB_STEP_SUMMARY"
+          git ls-files -z | xargs -0 sha256sum --zero > .diagnostics/source-before.sha256z
+          sha256sum .diagnostics/source-before.sha256z | tee .diagnostics/source-before.txt
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
       - name: Install repository Rust toolchain
@@ -213,6 +215,7 @@ jobs:
                   raise SystemExit(f'Expected one regression body named {name!r}; found {matches!r}')
           print(f'Inventoried {len(tests)} tests for {os.environ["TEST_FILTER"]}')
           PY
+          cargo test --locked --offline --release -p "$TEST_PACKAGE" --lib "$TEST_FILTER" -- --ignored --list 2>&1 | tee .diagnostics/ignored-list.log
       - name: Execute selected locked offline tests and retain failures
         run: |
           printf 'Source: %s\nCommand: %s\n' "$SOURCE_SHA" "$TEST_COMMAND" | tee .diagnostics/command.txt
@@ -241,8 +244,19 @@ jobs:
               raise SystemExit(f'Executed count must match {expected} listed tests; found {results!r}')
           PY
           fi
-          git diff --exit-code HEAD
           exit "$status"
+      - name: Verify tracked source contents are unchanged
+        if: always()
+        run: |
+          git diff --exit-code HEAD
+          git ls-files -z | xargs -0 sha256sum --zero > .diagnostics/source-after.sha256z
+          sha256sum .diagnostics/source-after.sha256z | tee .diagnostics/source-after.txt
+          cmp .diagnostics/source-before.sha256z .diagnostics/source-after.sha256z
+      - name: Record diagnostic SHA256 manifest
+        if: always()
+        run: |
+          find .diagnostics -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > .diagnostics/SHA256SUMS
+          cat .diagnostics/SHA256SUMS
       - name: Retain source identity, exact commands and test output
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
