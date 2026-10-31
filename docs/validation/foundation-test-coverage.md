@@ -20,6 +20,8 @@ CI foundation 作业
      └─ python3 .github/scripts/check-foundation-behaviour.py
          ├─ 根工作区单元测试：cargo test --lib -p <包>
          │    src/foundation/<组>/<包>/src/…  #[cfg(test)] #[path]/include!  →  test/foundation/<包>/unit|modules/…
+         ├─ 临时成员测试：原样复制主体源码、build.rs、外置测试与原始文档，保留相对深度
+         │    仅临时 Cargo 依赖路径及目标接线改变；subject 解析特性须与根图逐项相等
          └─ 临时工作区集成测试（每个套件一个成员包，共用锁文件与 target）
               [dependencies] <组件> = { path = src/foundation/…, default-features = false, features = 生产解析特性 }
               [features]    镜像组件自身特性名，默认启用同一组（保留测试的 cfg(feature = …) 与上游语义一致）
@@ -117,7 +119,34 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 
 TLS 的项目消费者回归另由默认工作区成员 `storage-client` 的 `tls_trust_regression` 执行，登记为 P：`rustls-webpki`、`webpki-roots`、`rustls-pki-types`、`rustls`、`hyper-rustls` 和 `tokio-rustls`。该目标的八项测试核对全部八份公告 SPKI 在叶、中间及信任锚位置的拒绝、移除根、正常链与坏签名，并通过真实本地 HTTPS 握手检查客户端的信任和发送边界；见[TLS 回归范围](../security/TLS_TEST_FIXTURES.md)。它们未执行这些组件的保留上游套件，不能以 P 替代 U；旧报告只描述当时范围。
 
-需要但未执行的高风险项仍包括 `tower-http`、`httparse`、`http` 等 HTTP 组件与 `subtle`。TLS 保留上游测试仍缺 `rcgen` 等提供者；`rustls-pki-types` 库内测试缺 `crabgrind`，`http` 库内测试缺 `doc_comment`，不能以编译失败或零测试充当执行。`cmov`、`constant_time_eq` 和 `httpdate` 的限定功能接线不消除上节列出的提供者、目标与常数时间验证缺口。
+需要但未执行的高风险项仍包括 `tower-http`、`http` 等 HTTP 组件与 `subtle`。TLS 保留上游测试仍缺 `rcgen` 等提供者；`rustls-pki-types` 库内测试缺 `crabgrind`，`http` 库内测试缺 `doc_comment`，不能以编译失败或零测试充当执行。`cmov`、`constant_time_eq` 和 `httpdate` 的限定功能接线不消除上节列出的提供者、目标与常数时间验证缺口。
+
+### 101 项追加覆盖的第一批
+
+以 `19b295271279b1cc31a97f8cdf9baa2e782dd498` 的 101 个“需要但未执行”包为固定起点，执行路线分为 82 个可用现有本地源码／标准工具链推进、1 个已有直接消费者断言但漏登记（`shell-tokenizer`）、18 个保留 lib 测试仍缺未登记软件提供者。这里的“可推进”包括修复测试接线或补针对实际消费者的断言，不等于已通过。所有包都有活动生产消费者；没有把零 lib 测试归为不适用，也没有把缺测试软件归为人工设备项。
+
+第一批实际运行 `check-foundation-behaviour.py --write`：73 个套件、2,858 个逐名测试通过，全部为 0 ignored、0 filtered out；清单由该次完整行为门禁生成。新增 32 个根 lib、7 个保留真实 build.rs 的临时成员、10 个保留集成套件；原 24 个套件及其名称保持不变。`typed-builder-macro`、`walrus-macro` 分别由 builder 值／所有权断言与生成指令的遍历断言登记 F；`shell-tokenizer` 原本就有 native-c-toolchain 的直接 split 输出断言，现补 P 登记，并另执行其 7 个保留单元测试。因此原 101 个包中 51 个获得执行入口，其余 50 个继续保留未执行分类。这是本地定向结果，最终组合的 GitHub CI 仍由集成验证器执行。
+
+本批测试修复的边界：arrayvec 的 `matches` 使用标准宏，const-oid 的固定十六进制输入改为同字节数组；lazy_static 保留其 2015 edition、明确 unsafe 初始化的测试目的及全部断言；mime 只修测试宏的表达式分号与“全无效输入”夹具误用合法 MIME。wasm-bindgen-shared 与校验过发行归档的差异只有 lib.rs 的外置测试 `#[path]` 行，tys.rs 完全相同；只批准该测试接线导致的文件哈希变化，不改变 schema version、opcode 或编码定义。displaydoc 探针编译失败及其特性相关 ignore 尚未闭环，本批未给它执行登记。
+
+剩余 32 个现有本地来源路线为：`allocator-api2`、`clang-sys`、`console_error_panic_hook`、`const_str_slice_concat`、`displaydoc`、`equivalent`、`foldhash`、`gloo-events`、`gloo-timers`、`html-escape`、`icu_locale_core`、`icu_provider`、`indexmap`、`js-sys`、`libloading`、`litemap`、`mime_guess`、`next_tuple`、`or_poisoned`、`pin-project-lite`、`proc-macro2-diagnostics`、`rust-source-format`、`stable_deref_trait`、`subtle`、`sync_wrapper`、`throw_error`、`unicode-ident`、`wasm-encoder`、`wasmparser`、`web-sys`、`yoke`、`zerofrom`。其中浏览器组件需要真实 WASM／Chrome 执行；仅在宿主列出零测试不能完成它们的覆盖。
+
+以下 18 个包的保留 lib 探针仍缺软件提供者；所列不是不可恢复或人工设备阻塞，也不表示这些包没有可编写的项目消费者测试。
+
+| 包 | 该条保留测试路线的具体缺口 |
+| --- | --- |
+| http、nu-ansi-term、glob | doc_comment；原始锁／官方发行归档可核，尚未作为活动来源导入 |
+| sharded-slab、unicode-segmentation | proptest；sharded-slab 的其他保留路线另含 loom |
+| slotmap | quickcheck、fxhash |
+| zerovec、potential_utf | databake；potential_utf 还引用 bincode，部分序列化提供者已有本地实现但未接线 |
+| rayon、rayon-core、tinystr、writeable | rand／rand_xorshift；另有特性与测试辅助接线问题 |
+| base64 | rand、rstest、rstest_reuse |
+| crc32fast、http-range-header | quickcheck／quickcheck_macros；后者的 regex 已有本地来源 |
+| gimli | test_assembler |
+| tower-http | async_compression、brotli、flate2，另有外置夹具路径错误 |
+| convert_case | rstest |
+
+crabgrind 0.1.9 不属于原 101 项（rustls-pki-types 已有 P），它阻塞的是额外的 Valgrind 内存定义性用例；需要真实头文件与 Valgrind 执行，Native 模式的 SKIPPED 输出不能算通过。doc-comment 0.3.4 和 crabgrind 0.1.9 的官方归档摘要已与原始锁文件核对，下载本身不等于来源导入或测试执行。erased 的功能测试与其既有版权材料缺口相互独立，本批没有扩充法律结论。
 
 ### 行为套件的初次集成记录
 

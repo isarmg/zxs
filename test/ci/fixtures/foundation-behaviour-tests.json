@@ -1305,6 +1305,62 @@
         ]
       }
     },
+    "integration:cpu-feature-detect": {
+      "features": [],
+      "subject": "cpu-feature-detect",
+      "targets": {
+        "x86": [
+          "init",
+          "init_get"
+        ]
+      }
+    },
+    "integration:fastrand": {
+      "features": [
+        "alloc",
+        "default",
+        "std"
+      ],
+      "subject": "fastrand",
+      "targets": {
+        "char": [
+          "test_char"
+        ],
+        "smoke": [
+          "alphabetic",
+          "bool",
+          "char",
+          "char_panic",
+          "choice",
+          "choice_empty",
+          "choose_multiple",
+          "digit",
+          "f32",
+          "f32_inclusive",
+          "f64",
+          "f64_inclusive",
+          "fill",
+          "global_rng_alphabetic",
+          "global_rng_choice",
+          "global_rng_fill",
+          "global_rng_lowercase",
+          "global_rng_uppercase",
+          "i8",
+          "lowercase",
+          "rng",
+          "rng_digit",
+          "rng_digit_panic_1",
+          "rng_digit_panic_2",
+          "rng_init",
+          "u128",
+          "u32",
+          "u64",
+          "u8",
+          "uppercase",
+          "with_seed"
+        ]
+      }
+    },
     "integration:flume": {
       "features": [
         "async"
@@ -1735,6 +1791,42 @@
         ]
       }
     },
+    "integration:itoa": {
+      "features": [],
+      "subject": "itoa",
+      "targets": {
+        "test": [
+          "test_i128_max",
+          "test_i128_min",
+          "test_i16_0",
+          "test_i16_min",
+          "test_i64_min",
+          "test_max_str_len",
+          "test_u128_0",
+          "test_u128_max",
+          "test_u64_0",
+          "test_u64_half",
+          "test_u64_max"
+        ]
+      }
+    },
+    "integration:lazy_static": {
+      "features": [],
+      "subject": "lazy_static",
+      "targets": {
+        "test": [
+          "item_name_shadowing",
+          "lifetime_name",
+          "pre_init",
+          "s3",
+          "test_basic",
+          "test_meta",
+          "test_repeat",
+          "test_visibility",
+          "visibility::sub_test"
+        ]
+      }
+    },
     "integration:once_cell": {
       "features": [
         "alloc",
@@ -1833,6 +1925,118 @@
           "same_parker",
           "unpark",
           "waker"
+        ]
+      }
+    },
+    "integration:quote": {
+      "features": [
+        "default",
+        "proc-macro"
+      ],
+      "subject": "quote",
+      "targets": {
+        "test": [
+          "test_advanced",
+          "test_append_tokens",
+          "test_array",
+          "test_box_str",
+          "test_btreeset_repetition",
+          "test_c_str",
+          "test_c_string",
+          "test_char",
+          "test_closure",
+          "test_cow",
+          "test_duplicate",
+          "test_duplicate_name_repetition",
+          "test_duplicate_name_repetition_no_copy",
+          "test_empty_quote",
+          "test_fancy_repetition",
+          "test_floating",
+          "test_format_ident",
+          "test_format_ident_strip_raw",
+          "test_ident",
+          "test_inner_attr",
+          "test_inner_block_comment",
+          "test_inner_line_comment",
+          "test_integer",
+          "test_interpolated_literal",
+          "test_iter",
+          "test_nested_fancy_repetition",
+          "test_nonrep_in_repetition",
+          "test_outer_attr",
+          "test_outer_block_comment",
+          "test_outer_line_comment",
+          "test_quote_impl",
+          "test_quote_raw_id",
+          "test_quote_raw_lifetime",
+          "test_quote_spanned_impl",
+          "test_star_after_repetition",
+          "test_str",
+          "test_string",
+          "test_substitution",
+          "test_type_inference_for_span",
+          "test_underscore",
+          "test_variable_name_conflict"
+        ]
+      }
+    },
+    "integration:rustversion": {
+      "features": [],
+      "subject": "rustversion",
+      "targets": {
+        "test_eval": [
+          "test"
+        ],
+        "test_parse": [
+          "test_parse"
+        ]
+      }
+    },
+    "integration:semver": {
+      "features": [
+        "default",
+        "std"
+      ],
+      "subject": "semver",
+      "targets": {
+        "test_identifier": [
+          "test_eq",
+          "test_new",
+          "test_prerelease"
+        ],
+        "test_version": [
+          "test_align",
+          "test_display",
+          "test_eq",
+          "test_ge",
+          "test_gt",
+          "test_le",
+          "test_lt",
+          "test_ne",
+          "test_parse",
+          "test_spec_order"
+        ],
+        "test_version_req": [
+          "test_any",
+          "test_basic",
+          "test_caret",
+          "test_cargo3202",
+          "test_comparator_parse",
+          "test_default",
+          "test_digit_after_wildcard",
+          "test_eq_hash",
+          "test_exact",
+          "test_greater_than",
+          "test_leading_digit_in_pre_and_build",
+          "test_less_than",
+          "test_logical_or",
+          "test_multiple",
+          "test_parse",
+          "test_pre",
+          "test_tilde",
+          "test_whitespace_delimited_comparator_sets",
+          "test_wildcard",
+          "test_wildcard_and_another"
         ]
       }
     },
@@ -1985,6 +2189,432 @@
         ]
       }
     },
+    "integration:typed-builder": {
+      "features": [],
+      "subject": "typed-builder",
+      "targets": {
+        "tests": [
+          "test_2d_const_generics",
+          "test_build_method",
+          "test_builder_method",
+          "test_builder_name",
+          "test_builder_on_struct_with_keywords",
+          "test_builder_on_struct_with_keywords_prefix_suffix",
+          "test_builder_type",
+          "test_builder_type_skip_into",
+          "test_builder_type_stability",
+          "test_builder_type_stability_with_other_generics",
+          "test_builder_type_with_default_on_generic_type",
+          "test_builder_type_with_derive_attribute",
+          "test_clone_builder",
+          "test_clone_builder_with_generics",
+          "test_const_generics_with_other_generics",
+          "test_custom_default_with_generic_bounds",
+          "test_default",
+          "test_default_builder_type",
+          "test_default_code",
+          "test_default_with_generic_bounds",
+          "test_docs",
+          "test_field_defaults_default_value",
+          "test_field_defaults_setter_options",
+          "test_field_defaults_strip_option_fallback_prefix",
+          "test_field_defaults_strip_option_fallback_prefix_and_suffix",
+          "test_field_defaults_strip_option_fallback_suffix",
+          "test_field_defaults_strip_option_ignore_invalid",
+          "test_field_dependencies_in_build",
+          "test_field_setter_transform_closure",
+          "test_field_setter_transform_fn",
+          "test_generics",
+          "test_into",
+          "test_into_angle_bracket_type",
+          "test_into_set_generic_impl_from",
+          "test_into_set_generic_impl_into",
+          "test_into_with_strip_option",
+          "test_into_with_strip_option_with_fallback",
+          "test_issue_118",
+          "test_lifetime",
+          "test_lifetime_bounded",
+          "test_multiple_const_generics",
+          "test_mutable_borrows",
+          "test_mutable_defaults",
+          "test_mutators_field",
+          "test_mutators_for_generic_fields",
+          "test_mutators_item",
+          "test_mutators_with_type_param",
+          "test_prefix",
+          "test_prefix_and_suffix",
+          "test_preinitialized_fields",
+          "test_simple",
+          "test_skip",
+          "test_strip_bool",
+          "test_strip_bool_with_fallback",
+          "test_strip_option_with_fallback",
+          "test_strip_option_with_into",
+          "test_suffix",
+          "test_unsized_generic_params"
+        ]
+      }
+    },
+    "integration:untrusted": {
+      "features": [],
+      "subject": "untrusted",
+      "targets": {
+        "tests": [
+          "const_fn",
+          "size_assumptions",
+          "test_debug",
+          "test_from_slice",
+          "test_input_as_slice_less_safe",
+          "test_input_clone_and_copy",
+          "test_input_from",
+          "test_input_is_empty",
+          "test_input_len",
+          "test_input_read_all",
+          "test_input_read_all_unconsume",
+          "test_vec_into",
+          "using_reader_after_skip_and_get_error_returns_error_must_not_panic"
+        ]
+      }
+    },
+    "integration:zerovec-derive": {
+      "features": [],
+      "subject": "zerovec-derive",
+      "targets": {
+        "sparse_enum_test": [
+          "make_ule_complex_sparse_enum",
+          "make_ule_new_from_u8_rejects_invalid_discriminant",
+          "make_ule_non_zero_contiguous_enum",
+          "make_ule_sparse_enum_parse_rejects_invalid_discriminant"
+        ]
+      }
+    },
+    "standalone:heck": {
+      "features": [],
+      "subject": "heck",
+      "targets": {
+        "lib": [
+          "kebab::tests::test1",
+          "kebab::tests::test10",
+          "kebab::tests::test11",
+          "kebab::tests::test12",
+          "kebab::tests::test13",
+          "kebab::tests::test2",
+          "kebab::tests::test3",
+          "kebab::tests::test4",
+          "kebab::tests::test5",
+          "kebab::tests::test6",
+          "kebab::tests::test7",
+          "kebab::tests::test8",
+          "kebab::tests::test9",
+          "lower_camel::tests::test1",
+          "lower_camel::tests::test10",
+          "lower_camel::tests::test2",
+          "lower_camel::tests::test3",
+          "lower_camel::tests::test4",
+          "lower_camel::tests::test5",
+          "lower_camel::tests::test6",
+          "lower_camel::tests::test7",
+          "lower_camel::tests::test8",
+          "lower_camel::tests::test9",
+          "shouty_kebab::tests::test1",
+          "shouty_kebab::tests::test10",
+          "shouty_kebab::tests::test11",
+          "shouty_kebab::tests::test2",
+          "shouty_kebab::tests::test3",
+          "shouty_kebab::tests::test4",
+          "shouty_kebab::tests::test5",
+          "shouty_kebab::tests::test6",
+          "shouty_kebab::tests::test7",
+          "shouty_kebab::tests::test8",
+          "shouty_kebab::tests::test9",
+          "shouty_snake::tests::test1",
+          "shouty_snake::tests::test10",
+          "shouty_snake::tests::test2",
+          "shouty_snake::tests::test3",
+          "shouty_snake::tests::test4",
+          "shouty_snake::tests::test5",
+          "shouty_snake::tests::test6",
+          "shouty_snake::tests::test7",
+          "shouty_snake::tests::test8",
+          "shouty_snake::tests::test9",
+          "snake::tests::test1",
+          "snake::tests::test10",
+          "snake::tests::test11",
+          "snake::tests::test12",
+          "snake::tests::test13",
+          "snake::tests::test14",
+          "snake::tests::test16",
+          "snake::tests::test17",
+          "snake::tests::test18",
+          "snake::tests::test19",
+          "snake::tests::test2",
+          "snake::tests::test20",
+          "snake::tests::test21",
+          "snake::tests::test22",
+          "snake::tests::test23",
+          "snake::tests::test24",
+          "snake::tests::test25",
+          "snake::tests::test3",
+          "snake::tests::test4",
+          "snake::tests::test5",
+          "snake::tests::test6",
+          "snake::tests::test7",
+          "snake::tests::test8",
+          "snake::tests::test9",
+          "title::tests::test1",
+          "title::tests::test10",
+          "title::tests::test2",
+          "title::tests::test3",
+          "title::tests::test4",
+          "title::tests::test5",
+          "title::tests::test6",
+          "title::tests::test7",
+          "title::tests::test8",
+          "title::tests::test9",
+          "train::tests::test1",
+          "train::tests::test10",
+          "train::tests::test11",
+          "train::tests::test12",
+          "train::tests::test13",
+          "train::tests::test14",
+          "train::tests::test16",
+          "train::tests::test17",
+          "train::tests::test18",
+          "train::tests::test19",
+          "train::tests::test2",
+          "train::tests::test20",
+          "train::tests::test21",
+          "train::tests::test22",
+          "train::tests::test23",
+          "train::tests::test24",
+          "train::tests::test25",
+          "train::tests::test3",
+          "train::tests::test4",
+          "train::tests::test5",
+          "train::tests::test6",
+          "train::tests::test7",
+          "train::tests::test8",
+          "upper_camel::tests::test1",
+          "upper_camel::tests::test10",
+          "upper_camel::tests::test2",
+          "upper_camel::tests::test3",
+          "upper_camel::tests::test4",
+          "upper_camel::tests::test5",
+          "upper_camel::tests::test6",
+          "upper_camel::tests::test7",
+          "upper_camel::tests::test8",
+          "upper_camel::tests::test9"
+        ]
+      }
+    },
+    "standalone:pkg-config": {
+      "features": [],
+      "subject": "pkg-config",
+      "targets": {
+        "lib": [
+          "tests::link_filename_apple",
+          "tests::link_filename_linux",
+          "tests::link_filename_mingw",
+          "tests::link_filename_msvc",
+          "tests::system_library_linux_test"
+        ]
+      }
+    },
+    "standalone:proc-macro2": {
+      "features": [
+        "default",
+        "proc-macro",
+        "span-locations"
+      ],
+      "subject": "proc-macro2",
+      "targets": {
+        "marker": [
+          "Delimiter",
+          "Group",
+          "Ident",
+          "LexError",
+          "Literal",
+          "Punct",
+          "Spacing",
+          "Span",
+          "TokenStream",
+          "TokenTree",
+          "unwind_safe::Delimiter",
+          "unwind_safe::Group",
+          "unwind_safe::Ident",
+          "unwind_safe::LexError",
+          "unwind_safe::Literal",
+          "unwind_safe::Punct",
+          "unwind_safe::Spacing",
+          "unwind_safe::Span",
+          "unwind_safe::TokenStream",
+          "unwind_safe::TokenTree"
+        ],
+        "test": [
+          "byte_order_mark",
+          "default_tokenstream_is_empty",
+          "fail",
+          "ident_empty",
+          "ident_invalid",
+          "ident_number",
+          "ident_raw_reserved",
+          "ident_raw_underscore",
+          "idents",
+          "joint_last_token",
+          "lifetime_empty",
+          "lifetime_invalid",
+          "lifetime_number",
+          "lifetimes",
+          "literal_byte_character",
+          "literal_byte_string",
+          "literal_c_string",
+          "literal_character",
+          "literal_float",
+          "literal_integer",
+          "literal_iter_negative",
+          "literal_parse",
+          "literal_raw_string",
+          "literal_span",
+          "literal_string",
+          "literal_suffix",
+          "no_panic",
+          "non_ascii_tokens",
+          "punct_before_comment",
+          "raw_ident_empty",
+          "raw_ident_invalid",
+          "raw_ident_number",
+          "raw_identifier",
+          "raw_idents",
+          "roundtrip",
+          "source_text",
+          "span_test",
+          "test_debug_ident",
+          "test_debug_tokenstream",
+          "test_display_ident",
+          "test_display_tokenstream",
+          "test_invalidate_current_thread_spans",
+          "test_use_span_after_invalidation",
+          "tokenstream_size_hint",
+          "tuple_indexing",
+          "whitespace"
+        ],
+        "test_fmt": [
+          "test_fmt_group"
+        ]
+      }
+    },
+    "standalone:shared-value": {
+      "features": [],
+      "subject": "shared-value",
+      "targets": {
+        "lib": [
+          "tests::add_should_concatenate_strings",
+          "tests::as_slice_should_return_a_slice",
+          "tests::as_str_should_return_a_str",
+          "tests::cloned_borrowed_str_should_make_borrowed_str",
+          "tests::cloned_counted_str_should_make_counted_str",
+          "tests::cloned_inplace_borrowed_str_should_make_borrowed_str_and_remain_borrowed",
+          "tests::cloned_inplace_counted_str_should_make_counted_str_and_remain_counted",
+          "tests::cloned_inplace_owned_string_should_make_counted_str_and_become_counted",
+          "tests::cloned_owned_string_should_make_counted_str",
+          "tests::debug_fmt_should_display_quotes_for_strings",
+          "tests::default_for_any_option_should_return_none",
+          "tests::default_for_slice_should_return_an_empty_slice",
+          "tests::default_for_str_should_return_an_empty_string",
+          "tests::deserialization_works",
+          "tests::partial_eq_should_compare_slice_to_slice",
+          "tests::partial_eq_should_compare_str_to_str",
+          "tests::serialization_works"
+        ]
+      }
+    },
+    "standalone:shell-tokenizer": {
+      "features": [
+        "default",
+        "std"
+      ],
+      "subject": "shell-tokenizer",
+      "targets": {
+        "lib": [
+          "bytes::test_invalid_utf8",
+          "bytes::test_lineno",
+          "bytes::test_split",
+          "test_fallible",
+          "test_lineno",
+          "test_quote",
+          "test_split"
+        ]
+      }
+    },
+    "standalone:synstructure": {
+      "features": [
+        "default",
+        "proc-macro"
+      ],
+      "subject": "synstructure",
+      "targets": {
+        "lib": [
+          "tests::test_each_enum"
+        ]
+      }
+    },
+    "standalone:version_check": {
+      "features": [],
+      "subject": "version_check",
+      "targets": {
+        "lib": [
+          "date::tests::display",
+          "tests::test_parse_current",
+          "tests::test_stable_compatibility",
+          "tests::test_verbose_version_parse",
+          "tests::test_version_parse",
+          "version::tests::display",
+          "version::tests::test_comparisons",
+          "version::tests::test_from_mmp",
+          "version::tests::test_malformed",
+          "version::tests::test_str_to_mmp"
+        ]
+      }
+    },
+    "unit:anyhow": {
+      "features": [
+        "default",
+        "std"
+      ],
+      "subject": "anyhow",
+      "targets": {
+        "lib": [
+          "fmt::tests::no_digits",
+          "fmt::tests::one_digit",
+          "fmt::tests::two_digits"
+        ]
+      }
+    },
+    "unit:arrayvec": {
+      "features": [],
+      "subject": "arrayvec",
+      "targets": {
+        "lib": [
+          "char::test_encode_utf8",
+          "char::test_encode_utf8_oob"
+        ]
+      }
+    },
+    "unit:bumpalo": {
+      "features": [
+        "default"
+      ],
+      "subject": "bumpalo",
+      "targets": {
+        "lib": [
+          "tests::allocated_bytes",
+          "tests::chunk_footer_is_five_words",
+          "tests::invalid_read",
+          "tests::realloc_old_size_zero",
+          "tests::test_realloc"
+        ]
+      }
+    },
     "unit:bytes": {
       "features": [
         "default",
@@ -1995,6 +2625,16 @@
         "lib": [
           "bytes_mut::tests::test_original_capacity_from_repr",
           "bytes_mut::tests::test_original_capacity_to_repr"
+        ]
+      }
+    },
+    "unit:cfg-if": {
+      "features": [],
+      "subject": "cfg-if",
+      "targets": {
+        "lib": [
+          "tests::it_works",
+          "tests::test_usage_within_a_function"
         ]
       }
     },
@@ -2012,6 +2652,119 @@
           "slice::tests::cmovnz_remainder",
           "slice::tests::slice_to_word",
           "slice::tests::word_to_slice"
+        ]
+      }
+    },
+    "unit:const-oid": {
+      "features": [],
+      "subject": "const-oid",
+      "targets": {
+        "lib": [
+          "encoder::tests::base128_byte",
+          "encoder::tests::encode",
+          "parser::tests::parse",
+          "parser::tests::reject_empty_string",
+          "parser::tests::reject_non_digits",
+          "parser::tests::reject_trailing_dot"
+        ]
+      }
+    },
+    "unit:either": {
+      "features": [
+        "default",
+        "std",
+        "use_std"
+      ],
+      "subject": "either",
+      "targets": {
+        "lib": [
+          "basic",
+          "deref",
+          "error",
+          "fmt_traits",
+          "iter",
+          "macros",
+          "read_write",
+          "seek"
+        ]
+      }
+    },
+    "unit:erased": {
+      "features": [],
+      "subject": "erased",
+      "targets": {
+        "lib": [
+          "erased_box::tests::basic_test",
+          "erased_box::tests::ref_test",
+          "erased_mut_ref::tests::basic_test",
+          "erased_ref::tests::basic_test",
+          "erased_ref::tests::heterogeneous_test",
+          "erased_ref::tests::lifetimed_test"
+        ]
+      }
+    },
+    "unit:errno": {
+      "features": [
+        "default",
+        "std"
+      ],
+      "subject": "errno",
+      "targets": {
+        "lib": [
+          "check_description",
+          "check_error_into_errno",
+          "it_works",
+          "it_works_with_to_string"
+        ]
+      }
+    },
+    "unit:fallible-iterator": {
+      "features": [
+        "alloc",
+        "std"
+      ],
+      "subject": "fallible-iterator",
+      "targets": {
+        "lib": [
+          "test::all",
+          "test::any",
+          "test::chain",
+          "test::count",
+          "test::cycle",
+          "test::enumerate",
+          "test::filter",
+          "test::filter_map",
+          "test::find",
+          "test::find_map",
+          "test::flat_map",
+          "test::flatten",
+          "test::fold",
+          "test::for_each",
+          "test::inspect",
+          "test::iterator",
+          "test::last",
+          "test::map",
+          "test::map_err",
+          "test::max",
+          "test::max_by",
+          "test::max_by_key",
+          "test::min",
+          "test::min_by",
+          "test::min_by_key",
+          "test::nth",
+          "test::partition",
+          "test::peekable",
+          "test::position",
+          "test::scan",
+          "test::skip",
+          "test::skip_while",
+          "test::step_by",
+          "test::take",
+          "test::take_while",
+          "test::unwrap",
+          "test::unwrap_panic",
+          "test::unzip",
+          "test::wrap_std_iter_into_fallible"
         ]
       }
     },
@@ -2120,6 +2873,117 @@
         ]
       }
     },
+    "unit:httparse": {
+      "features": [
+        "default",
+        "std"
+      ],
+      "subject": "httparse",
+      "targets": {
+        "lib": [
+          "simd::avx2::avx2_code_matches_header_value_chars_table",
+          "simd::avx2::avx2_code_matches_uri_chars_table",
+          "simd::sse42::sse_code_matches_header_value_chars_table",
+          "simd::sse42::sse_code_matches_uri_chars_table",
+          "simd::swar::test_is_header_value_block",
+          "simd::swar::test_is_uri_block",
+          "simd::swar::test_offsetnz",
+          "tests::partial_permutations",
+          "tests::test_all_utf8_char_in_paths",
+          "tests::test_allow_request_with_multiple_space_delimiters",
+          "tests::test_allow_response_response_with_space_before_first_header",
+          "tests::test_allow_response_with_multiple_space_delimiters",
+          "tests::test_allow_response_with_obsolete_line_folding_at_end",
+          "tests::test_allow_response_with_obsolete_line_folding_at_start",
+          "tests::test_allow_response_with_obsolete_line_folding_in_empty_header",
+          "tests::test_allow_response_with_obsolete_line_folding_in_middle",
+          "tests::test_allow_response_with_whitespace_between_header_name_and_colon",
+          "tests::test_bad_utf8_in_path",
+          "tests::test_chunk_size",
+          "tests::test_forbid_request_with_multiple_space_delimiters",
+          "tests::test_forbid_request_with_weird_whitespace_delimiters",
+          "tests::test_forbid_request_with_whitespace_between_header_name_and_colon",
+          "tests::test_forbid_response_with_multiple_space_delimiters",
+          "tests::test_forbid_response_with_obsolete_line_folding_at_end",
+          "tests::test_forbid_response_with_obsolete_line_folding_at_start",
+          "tests::test_forbid_response_with_obsolete_line_folding_in_empty_header",
+          "tests::test_forbid_response_with_obsolete_line_folding_in_middle",
+          "tests::test_forbid_response_with_space_before_first_header",
+          "tests::test_forbid_response_with_weird_whitespace_delimiters",
+          "tests::test_forbid_response_with_whitespace_between_header_name_and_colon",
+          "tests::test_header_with_cr_in_header_name",
+          "tests::test_header_with_invalid_char_in_value",
+          "tests::test_header_with_invalid_char_in_value_with_folding",
+          "tests::test_header_with_nul_in_value",
+          "tests::test_header_with_nul_in_whitespace_before_colon",
+          "tests::test_ignore_header_line_with_missing_colon_in_request",
+          "tests::test_ignore_header_line_with_missing_colon_in_response",
+          "tests::test_ignore_header_line_with_whitespaces_after_header_name_in_request",
+          "tests::test_ignore_header_line_with_whitespaces_after_header_name_in_response",
+          "tests::test_method_within_buffer",
+          "tests::test_no_space_after_colon",
+          "tests::test_request_empty_lines_prefix",
+          "tests::test_request_empty_lines_prefix_lf_only",
+          "tests::test_request_header_no_space_after_colon",
+          "tests::test_request_header_value_htab_long",
+          "tests::test_request_header_value_htab_med",
+          "tests::test_request_header_value_htab_short",
+          "tests::test_request_header_with_missing_colon_with_folding",
+          "tests::test_request_header_with_nul_in_header_name",
+          "tests::test_request_headers",
+          "tests::test_request_headers_max",
+          "tests::test_request_headers_optional_whitespace",
+          "tests::test_request_method_no_delimiter",
+          "tests::test_request_method_only",
+          "tests::test_request_method_path_no_delimiter",
+          "tests::test_request_method_path_only",
+          "tests::test_request_multibyte",
+          "tests::test_request_newlines",
+          "tests::test_request_one_byte_method",
+          "tests::test_request_partial",
+          "tests::test_request_partial_method",
+          "tests::test_request_partial_parses_headers_as_much_as_it_can",
+          "tests::test_request_partial_version",
+          "tests::test_request_path_backslash",
+          "tests::test_request_simple",
+          "tests::test_request_simple_with_query_params",
+          "tests::test_request_simple_with_whatwg_query_params",
+          "tests::test_request_with_del_in_path",
+          "tests::test_request_with_empty_header_name",
+          "tests::test_request_with_empty_method",
+          "tests::test_request_with_empty_method_and_path",
+          "tests::test_request_with_empty_path",
+          "tests::test_request_with_invalid_but_short_version",
+          "tests::test_request_with_invalid_char_between_header_name_and_colon",
+          "tests::test_request_with_invalid_method",
+          "tests::test_request_with_invalid_token_delimiter",
+          "tests::test_request_with_leading_space",
+          "tests::test_request_with_multiple_spaces_and_bad_path",
+          "tests::test_request_with_whitespace_between_header_name_and_colon",
+          "tests::test_response_code_missing_space",
+          "tests::test_response_empty_lines_prefix_lf_only",
+          "tests::test_response_header_with_missing_colon_with_folding",
+          "tests::test_response_header_with_nul_in_header_name",
+          "tests::test_response_newlines",
+          "tests::test_response_no_cr",
+          "tests::test_response_partial_parses_headers_as_much_as_it_can",
+          "tests::test_response_reason_missing",
+          "tests::test_response_reason_missing_no_space",
+          "tests::test_response_reason_missing_no_space_with_headers",
+          "tests::test_response_reason_with_nul_byte",
+          "tests::test_response_reason_with_obsolete_text_byte",
+          "tests::test_response_reason_with_space_and_tab",
+          "tests::test_response_simple",
+          "tests::test_response_version_missing_space",
+          "tests::test_response_with_empty_header_name",
+          "tests::test_response_with_invalid_char_between_header_name_and_colon",
+          "tests::test_response_with_spaces_in_code",
+          "tests::test_still_forbid_request_with_weird_whitespace_delimiters",
+          "tests::test_still_forbid_response_with_weird_whitespace_delimiters",
+          "tests::test_utf8_in_path_ok"
+        ]
+      }
+    },
     "unit:httpdate": {
       "features": [],
       "subject": "httpdate",
@@ -2132,6 +2996,193 @@
           "tests::test_fmt",
           "tests::test_parse_bad_date",
           "tests::test_rfc_example"
+        ]
+      }
+    },
+    "unit:hybrid-array": {
+      "features": [],
+      "subject": "hybrid-array",
+      "targets": {
+        "lib": [
+          "flatten::test::flatten",
+          "iter::tests::mut_array_ref_into_iterator",
+          "sizes::base",
+          "traits::tests::core_as_array_mut",
+          "traits::tests::core_as_array_ref",
+          "traits::tests::hybrid_as_array_mut",
+          "traits::tests::hybrid_as_array_ref",
+          "traits::tests::slice_as_hybrid_array",
+          "traits::tests::slice_as_hybrid_chunks",
+          "traits::tests::slice_as_hybrid_chunks_mut",
+          "traits::tests::slice_as_mut_hybrid_array"
+        ]
+      }
+    },
+    "unit:ipnet": {
+      "features": [
+        "default",
+        "std"
+      ],
+      "subject": "ipnet",
+      "targets": {
+        "lib": [
+          "ipext::tests::test_ipaddrrange",
+          "ipnet::tests::ipnet_aggregate",
+          "ipnet::tests::ipnet_default",
+          "ipnet::tests::ipv4net_default",
+          "ipnet::tests::ipv4net_new_assert_panics",
+          "ipnet::tests::ipv6net_default",
+          "ipnet::tests::ipv6net_new_assert_panics",
+          "ipnet::tests::new_assert",
+          "ipnet::tests::test_ipv4_subnets_max_max",
+          "ipnet::tests::test_ipv4_subnets_none",
+          "ipnet::tests::test_ipv4_subnets_one",
+          "ipnet::tests::test_ipv4_subnets_taper",
+          "ipnet::tests::test_ipv4_subnets_two",
+          "ipnet::tests::test_ipv4_subnets_zero_max",
+          "ipnet::tests::test_ipv4_subnets_zero_max_minus_one",
+          "ipnet::tests::test_ipv4_subnets_zero_zero",
+          "ipnet::tests::test_ipv6_subnets_max_max",
+          "ipnet::tests::test_ipv6_subnets_none",
+          "ipnet::tests::test_ipv6_subnets_one",
+          "ipnet::tests::test_ipv6_subnets_taper",
+          "ipnet::tests::test_ipv6_subnets_two",
+          "ipnet::tests::test_ipv6_subnets_zero_max",
+          "ipnet::tests::test_ipv6_subnets_zero_max_minus_one",
+          "ipnet::tests::test_ipv6_subnets_zero_zero",
+          "ipnet::tests::test_make_ipnet_vec",
+          "mask::tests::invalid_v4_mask_to_prefix",
+          "mask::tests::invalid_v6_mask_to_prefix",
+          "mask::tests::ipv4net_with_netmask",
+          "mask::tests::ipv6net_with_netmask",
+          "mask::tests::v4_mask_to_prefix",
+          "mask::tests::v4_mask_to_prefix_max",
+          "mask::tests::v6_mask_to_prefix",
+          "mask::tests::v6_mask_to_prefix_max"
+        ]
+      }
+    },
+    "unit:iterator-toolkit": {
+      "features": [
+        "default",
+        "use_alloc",
+        "use_std"
+      ],
+      "subject": "iterator-toolkit",
+      "targets": {
+        "lib": [
+          "adaptors::test_checked_binomial",
+          "next_array::test::push_4",
+          "next_array::test::tracked_drop",
+          "next_array::test::zero_len_push",
+          "next_array::test::zero_len_take",
+          "size_hint::mul_size_hints"
+        ]
+      }
+    },
+    "unit:leb128": {
+      "features": [],
+      "subject": "leb128",
+      "targets": {
+        "lib": [
+          "tests::dogfood_signed",
+          "tests::dogfood_unsigned",
+          "tests::test_low_bits_of_byte",
+          "tests::test_low_bits_of_u64",
+          "tests::test_read_multiple",
+          "tests::test_read_multiple_with_overflow",
+          "tests::test_read_signed",
+          "tests::test_read_signed_63_bits",
+          "tests::test_read_signed_not_enough_data",
+          "tests::test_read_signed_overflow",
+          "tests::test_read_signed_thru_dyn_trait",
+          "tests::test_read_unsigned",
+          "tests::test_read_unsigned_not_enough_data",
+          "tests::test_read_unsigned_overflow",
+          "tests::test_read_unsigned_thru_dyn_trait",
+          "tests::test_write_signed_len",
+          "tests::test_write_signed_not_enough_space",
+          "tests::test_write_signed_thru_dyn_trait",
+          "tests::test_write_unsigned_len",
+          "tests::test_write_unsigned_not_enough_space",
+          "tests::test_write_unsigned_thru_dyn_trait"
+        ]
+      }
+    },
+    "unit:leb128fmt": {
+      "features": [],
+      "subject": "leb128fmt",
+      "targets": {
+        "lib": [
+          "tests::test_decode_s32",
+          "tests::test_decode_s32_errors",
+          "tests::test_decode_s33",
+          "tests::test_decode_s33_errors",
+          "tests::test_decode_s64",
+          "tests::test_decode_s64_errors",
+          "tests::test_decode_u32",
+          "tests::test_decode_u32_errors",
+          "tests::test_decode_u64",
+          "tests::test_decode_u64_errors",
+          "tests::test_encode_u32",
+          "tests::test_encode_u64",
+          "tests::test_encode_u64_as_33_bits_2",
+          "tests::test_encode_u64_as_33_bits_with_too_large_value",
+          "tests::test_encode_u8"
+        ]
+      }
+    },
+    "unit:libsqlite3-sys": {
+      "features": [
+        "bundled",
+        "bundled_bindings",
+        "cc",
+        "default",
+        "min_sqlite_version_3_34_1",
+        "pkg-config"
+      ],
+      "subject": "libsqlite3-sys",
+      "targets": {
+        "lib": [
+          "error::test::error_new"
+        ]
+      }
+    },
+    "unit:matchit": {
+      "features": [
+        "default"
+      ],
+      "subject": "matchit",
+      "targets": {
+        "lib": [
+          "params::tests::heap_alloc",
+          "params::tests::ignore_array_default",
+          "params::tests::stack_alloc"
+        ]
+      }
+    },
+    "unit:mime": {
+      "features": [],
+      "subject": "mime",
+      "targets": {
+        "lib": [
+          "parse::test_lookup_tables",
+          "parse::test_parse_iterator",
+          "parse::test_parse_iterator_all_invalid",
+          "parse::test_parse_iterator_invalid",
+          "test_mimes_macro_consts",
+          "test_names_macro_consts",
+          "tests::test_case_sensitive_values",
+          "tests::test_essence_str",
+          "tests::test_get_param",
+          "tests::test_matching",
+          "tests::test_mime_fmt",
+          "tests::test_mime_from_str",
+          "tests::test_mime_from_str_empty_parameter_list",
+          "tests::test_name_eq",
+          "tests::test_subtype",
+          "tests::test_suffix",
+          "tests::test_type_"
         ]
       }
     },
@@ -2150,6 +3201,56 @@
           "imp::tests::stampede_once",
           "imp::tests::test_size",
           "imp::tests::wait_for_force_to_finish"
+        ]
+      }
+    },
+    "unit:pastey": {
+      "features": [],
+      "subject": "pastey",
+      "targets": {
+        "lib": [
+          "segment::tests::test_is_quoted_string_or_char"
+        ]
+      }
+    },
+    "unit:rstml": {
+      "features": [
+        "default"
+      ],
+      "subject": "rstml",
+      "targets": {
+        "lib": [
+          "node::atoms::test::close_tag_start::parse_quote",
+          "node::atoms::test::comend::parse_quote",
+          "node::atoms::test::comstart::parse_quote",
+          "node::atoms::test::docstart::parse_quote",
+          "node::atoms::test::open_tag_end1::parse_quote",
+          "node::atoms::test::open_tag_end2::parse_quote",
+          "node::atoms::test::parse_quote_doc_comp_custom_punct",
+          "visitor::tests::collect_node_elements",
+          "visitor::tests::collect_node_names",
+          "visitor::tests::collect_raw_text",
+          "visitor::tests::collect_rust_blocks",
+          "visitor::tests::collect_string_literals",
+          "visitor::tests::modify_text_visitor"
+        ]
+      }
+    },
+    "unit:rustc-hash": {
+      "features": [
+        "default",
+        "std"
+      ],
+      "subject": "rustc-hash",
+      "targets": {
+        "lib": [
+          "seeded_state::tests::cloned_seeded_states_are_equal",
+          "seeded_state::tests::different_states_are_different",
+          "seeded_state::tests::same_seed_produces_same_hasher",
+          "tests::bytes",
+          "tests::signed",
+          "tests::unsigned",
+          "tests::with_seed_actually_different"
         ]
       }
     },
@@ -2207,6 +3308,82 @@
           "vec_map::tests::insert_remove",
           "vec_map::tests::insert_update_get",
           "vec_map::tests::insertion_order"
+        ]
+      }
+    },
+    "unit:smallvec": {
+      "features": [
+        "const_generics",
+        "const_new"
+      ],
+      "subject": "smallvec",
+      "targets": {
+        "lib": [
+          "tests::const_generics",
+          "tests::const_new",
+          "tests::drain",
+          "tests::drain_forget",
+          "tests::drain_overflow",
+          "tests::drain_rev",
+          "tests::empty_macro",
+          "tests::grow_spilled_same_size",
+          "tests::grow_to_shrink",
+          "tests::insert_many_panic::panic_early_at_end",
+          "tests::insert_many_panic::panic_early_at_start",
+          "tests::insert_many_panic::panic_early_in_middle",
+          "tests::insert_many_panic::panic_late_at_end",
+          "tests::insert_many_panic::panic_late_at_start",
+          "tests::into_iter",
+          "tests::into_iter_drop",
+          "tests::into_iter_rev",
+          "tests::issue_4",
+          "tests::issue_5",
+          "tests::max_dont_panic",
+          "tests::max_remove",
+          "tests::max_swap_remove",
+          "tests::resumable_extend",
+          "tests::shrink_to_fit_unspill",
+          "tests::test_as_mut",
+          "tests::test_as_ref",
+          "tests::test_borrow",
+          "tests::test_borrow_mut",
+          "tests::test_capacity",
+          "tests::test_clone_from",
+          "tests::test_dedup",
+          "tests::test_double_spill",
+          "tests::test_drop_panic_smallvec",
+          "tests::test_eq",
+          "tests::test_exact_size_iterator",
+          "tests::test_extend_from_slice",
+          "tests::test_from",
+          "tests::test_from_slice",
+          "tests::test_from_vec",
+          "tests::test_hash",
+          "tests::test_inline",
+          "tests::test_insert_from_slice",
+          "tests::test_insert_many",
+          "tests::test_insert_many_long_hint",
+          "tests::test_insert_many_overflow",
+          "tests::test_insert_many_short_hint",
+          "tests::test_insert_out_of_bounds",
+          "tests::test_into_inner",
+          "tests::test_into_iter_as_slice",
+          "tests::test_into_iter_clone",
+          "tests::test_into_iter_clone_empty_smallvec",
+          "tests::test_into_iter_clone_partially_consumed_iterator",
+          "tests::test_into_vec",
+          "tests::test_invalid_grow",
+          "tests::test_ord",
+          "tests::test_resize",
+          "tests::test_retain",
+          "tests::test_retain_panic_preserves_unprocessed_tail",
+          "tests::test_retain_patterns_and_zst",
+          "tests::test_spill",
+          "tests::test_truncate",
+          "tests::test_with_capacity",
+          "tests::test_zero",
+          "tests::uninhabited",
+          "tests::zero_size_items"
         ]
       }
     },
@@ -2275,6 +3452,199 @@
           "tests::test_drop",
           "tests::test_earlyreturn_buckets",
           "thread_id::test_thread"
+        ]
+      }
+    },
+    "unit:tinyvec": {
+      "features": [
+        "alloc",
+        "default"
+      ],
+      "subject": "tinyvec",
+      "targets": {
+        "lib": [
+          "arrayvec::test::array_like_debug",
+          "arrayvec::test::retain_mut_all_elements",
+          "arrayvec::test::retain_mut_empty_vec",
+          "arrayvec::test::retain_mut_no_elements",
+          "arrayvec::test::retain_mut_some_elements",
+          "arrayvec::test::retain_mut_zero_capacity",
+          "slicevec::test::array_like_debug"
+        ]
+      }
+    },
+    "unit:typenum": {
+      "features": [
+        "const-generics"
+      ],
+      "subject": "typenum",
+      "targets": {
+        "lib": [
+          "bit::bit_creation_tests::bit_creation",
+          "bit::bit_op_tests::bit_operations",
+          "int::tests::int_toint_test",
+          "int::tests::to_ix_min",
+          "private::test_double_inversion",
+          "private::test_inversion",
+          "tuple::test::tuple_index",
+          "tuple::test::tuple_index_mut",
+          "tuple::test::tuple_len",
+          "type_operators::fold_test",
+          "type_operators::pow_test",
+          "uint::div_tests::test_div",
+          "uint::fmt_tests::binary",
+          "uint::gcd_tests::gcd",
+          "uint::sqrt_test",
+          "uint::test_get_bit",
+          "uint::test_set_bit",
+          "uint::tests::log2_test",
+          "uint::tests::uint_toint_test"
+        ]
+      }
+    },
+    "unit:unicase": {
+      "features": [],
+      "subject": "unicase",
+      "targets": {
+        "lib": [
+          "ascii::tests::test_ascii_new_const",
+          "ascii::tests::test_case_cmp",
+          "ascii::tests::test_case_insensitive",
+          "tests::test_case_cmp",
+          "tests::test_copy_for_refs",
+          "tests::test_eq_ascii",
+          "tests::test_eq_unicode",
+          "tests::test_eq_unicode_left_is_substring",
+          "tests::test_from_impls",
+          "tests::test_into_impls",
+          "tests::test_str_ascii",
+          "tests::test_unicase_unicode_const",
+          "unicode::map::lookup_consistency",
+          "unicode::tests::test_ascii_folding",
+          "unicode::tests::test_full_case_folding",
+          "unicode::tests::test_simple_case_folding",
+          "unicode::tests::test_three_char_case_folding",
+          "unicode::tests::test_to_folded_case"
+        ]
+      }
+    },
+    "unit:utf8_iter": {
+      "features": [],
+      "subject": "utf8_iter",
+      "targets": {
+        "lib": [
+          "report::tests::test_eq",
+          "report::tests::test_size"
+        ]
+      }
+    },
+    "unit:view-alternatives": {
+      "features": [
+        "default",
+        "no_std"
+      ],
+      "subject": "view-alternatives",
+      "targets": {
+        "lib": [
+          "tests::either_macro",
+          "tests::either_or",
+          "tests::unwrap_wrong_either"
+        ]
+      }
+    },
+    "unit:walrus": {
+      "features": [
+        "parallel",
+        "rayon"
+      ],
+      "subject": "walrus",
+      "targets": {
+        "lib": [
+          "ir::traversals::tests::dfs_in_order",
+          "ir::traversals::tests::dfs_in_order_try_table",
+          "ir::traversals::tests::dfs_pre_order_mut",
+          "module::debug::dwarf::tests::convert_callback_invoke",
+          "module::debug::dwarf::tests::test_convert_high_pc",
+          "module::debug::dwarf::tests::test_converted_address",
+          "module::debug::dwarf::tests::test_converted_none_address",
+          "module::debug::expression::tests::test_code_address_converter",
+          "module::debug::expression::tests::test_code_address_generator",
+          "module::debug::units::tests::test_create_instance",
+          "module::exports::tests::delete",
+          "module::exports::tests::get_exported_func",
+          "module::exports::tests::get_exported_func_should_return_none_for_unknown_function_id",
+          "module::exports::tests::get_exported_global",
+          "module::exports::tests::get_exported_global_should_return_none_for_unknown_global_id",
+          "module::exports::tests::get_exported_memory",
+          "module::exports::tests::get_exported_memory_should_return_none_for_unknown_memory_id",
+          "module::exports::tests::get_exported_table",
+          "module::exports::tests::get_exported_table_should_return_none_for_unknown_table_id",
+          "module::exports::tests::get_func_by_name",
+          "module::exports::tests::iter_mut_can_update_export_item",
+          "module::functions::tests::get_memory_id",
+          "module::functions::tests::replace_exported_func",
+          "module::functions::tests::replace_exported_func_generated_no_op",
+          "module::functions::tests::replace_imported_func",
+          "module::functions::tests::replace_imported_func_generated_no_op",
+          "module::imports::tests::get_func_by_name",
+          "module::imports::tests::get_imported_func",
+          "module::memories::tests::memories_len",
+          "tombstone_arena::tests::can_delete"
+        ]
+      }
+    },
+    "unit:wasm-bindgen-shared": {
+      "features": [],
+      "subject": "wasm-bindgen-shared",
+      "targets": {
+        "lib": [
+          "schema_hash_approval::schema_version"
+        ]
+      }
+    },
+    "unit:yoke-derive": {
+      "features": [],
+      "subject": "yoke-derive",
+      "targets": {
+        "lib": [
+          "lifetimes::tests::replace_lt_ab",
+          "lifetimes::tests::replace_lt_macro",
+          "lifetimes::tests::replace_lt_static",
+          "lifetimes::tests::replace_raw",
+          "visitor::tests::test_assoc_types",
+          "visitor::tests::test_macro_types",
+          "visitor::tests::test_raw_types",
+          "visitor::tests::test_simple_type",
+          "visitor::tests::test_yoke_lifetime"
+        ]
+      }
+    },
+    "unit:zerofrom-derive": {
+      "features": [],
+      "subject": "zerofrom-derive",
+      "targets": {
+        "lib": [
+          "visitor::tests::test_assoc_types",
+          "visitor::tests::test_simple_type"
+        ]
+      }
+    },
+    "unit:zerotrie": {
+      "features": [
+        "yoke",
+        "zerofrom"
+      ],
+      "subject": "zerotrie",
+      "targets": {
+        "lib": [
+          "helpers::test_const_fmt_int",
+          "varint::tests::test_extended_roundtrip",
+          "varint::tests::test_latent_values",
+          "varint::tests::test_max",
+          "varint::tests::test_read",
+          "varint::tests::test_read_write",
+          "varint::tests::test_roundtrip",
+          "varint::tests::text_extended_max"
         ]
       }
     }

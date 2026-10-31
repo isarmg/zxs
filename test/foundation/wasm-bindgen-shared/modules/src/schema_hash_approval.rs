@@ -24,7 +24,10 @@
 // CLI's exact-string check (`verify_schema_matches` in `wasm-bindgen-cli-support`) would then
 // wave through a genuinely incompatible macro/CLI pair. Hence "next unreleased version", and
 // hence only one bump per release cycle however many schema changes land in it.
-const APPROVED_SCHEMA_FILE_HASH: &str = "3669243020486715919";
+// The local lib.rs adds only the #[path] for this external test module; the
+// shared_api! definitions and tys.rs are byte-identical to the 0.2.129 archive.
+// This test-only relocation does not change SCHEMA_VERSION or the wire schema.
+const APPROVED_SCHEMA_FILE_HASH: &str = "12733054093661579673";
 
 #[test]
 fn schema_version() {

@@ -102,6 +102,10 @@ def behaviour_entries(behaviour):
     for name in behaviour.UNIT_SUITES:
         entries[name].append({'kind': 'U', 'shard': 'foundation-async', 'scripts': [script],
                               'detail': 'cargo test --lib -p ' + name + '; names equal the generated inventory'})
+    for suite in behaviour.STANDALONE_SUITES:
+        entries[suite.subject].append({'kind': 'U', 'shard': 'foundation-async', 'scripts': [script],
+                                      'detail': 'retained tests in a temporary copied member, real source/build script'
+                                      ' and root-resolved features; names equal the generated inventory'})
     for suite in behaviour.INTEGRATION_SUITES:
         retained = [path for path in suite.tests if path.startswith('test/foundation/')]
         authored = [path for path in suite.tests if not path.startswith('test/foundation/')]
