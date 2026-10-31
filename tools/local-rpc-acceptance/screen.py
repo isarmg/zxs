@@ -182,14 +182,84 @@ def phase(command, env, directory, name, deadline):
     assert len(values) == 1, raw[-3000:]
     return values[0]
 
+REUSE = dict(run_id=41166634669, carrier_sha='dab1b15d99122a59655a80ad1e2c28b626f97748',
+             source_sha='70ff4929252b24c6f4b53719940cbec127b77561',
+             source_tree='7ec07a6323a7b2244c0adc7135f35e56169752c5',
+             manifest_sha256='bc2cc8e53b796d8aa6fb2bd9fb493133b15445e5e764aa5cb166d199b8975700',
+             build_job=124437082759)
+CONTROLLER_PATCHES = {'tools/local-rpc-acceptance/screen.py',
+                      'tools/local-rpc-acceptance/reuse-workflow.yml',
+                      'test/tools/local-rpc-acceptance/test_screen.py',
+                      'docs/validation/final-local-rpc-acceptance.md'}
+
+
+def read_observation(path):
+    """An absent cgroup control is observable, never an inferred unlimited budget."""
+    try:
+        return dict(status='present', path=str(path), raw=Path(path).read_text())
+    except FileNotFoundError as error:
+        return dict(status='not_present', path=str(path), errno=error.errno)
+
+
+def host_observation():
+    affinity = sorted(os.sched_getaffinity(0))
+    assert len(affinity) >= 2, 'two CPUs required'
+    return dict(uname=list(os.uname()), cpu=Path('/proc/cpuinfo').read_text(),
+                memory=Path('/proc/meminfo').read_text(), affinity=affinity, child_cpus=affinity[:2],
+                proc_cgroup=Path('/proc/self/cgroup').read_text(),
+                cpu_max=read_observation('/sys/fs/cgroup/cpu.max'),
+                memory_max=read_observation('/sys/fs/cgroup/memory.max'))
+
+
+def validate_reuse(manifest):
+    controller = manifest['controller']
+    assert controller['sha'] == REUSE['carrier_sha']
+    assert controller['run_id'] == str(REUSE['run_id'])
+    assert controller['normal_source_sha'] == REUSE['source_sha']
+    assert controller['normal_source_tree'] == REUSE['source_tree']
+    assert controller['source_pins'] == {k:list(v) for k,v in PINS.items()}
+    assert git(ROOT, 'rev-parse', 'HEAD') == os.environ['RPC_SOURCE_SHA']
+    changes = set(git(ROOT, 'diff', '--name-only', REUSE['source_sha'], 'HEAD').splitlines())
+    assert changes and changes <= CONTROLLER_PATCHES, changes
+    # Authenticate exactly the compiled harness, not just its product source.
+    for label in PINS:
+        overlay = manifest['source'][label]['overlay']
+        for path in ADDED[:2]:
+            assert sha(ROOT / path) == overlay[path]['after_sha256'], path
+        adapter = 'baseline' if label == 'baseline' else 'current'
+        assert sha(ROOT / f'test/server/bench/final_rpc_{adapter}_read.rs') == overlay[ADDED[2]]['after_sha256']
+
+
+def reuse(evidence):
+    manifest_path = evidence / 'manifest.json'
+    assert sha(manifest_path) == REUSE['manifest_sha256']
+    manifest = json.loads(manifest_path.read_text())
+    validate_reuse(manifest)
+    run = json.loads((evidence / 'reuse-run.json').read_text())
+    jobs = json.loads((evidence / 'reuse-jobs.json').read_text())['jobs']
+    assert run['id'] == REUSE['run_id'] and run['head_sha'] == REUSE['carrier_sha']
+    assert run['event'] == 'workflow_dispatch' and run['status'] == 'completed'
+    assert run['repository']['full_name'] == 'isarmg/zxs'
+    build = [job for job in jobs if job['id'] == REUSE['build_job']]
+    assert len(build) == 1 and build[0]['conclusion'] == 'success'
+    assert manifest['source'] == json.loads((evidence / 'source-after.json').read_text())
+    assert json.loads((evidence / 'source-before.json').read_text()) == manifest['source']
+    print('REUSED_BUILD', json.dumps(dict(**REUSE, controller_sha=os.environ['GITHUB_SHA'],
+          normal_source_sha=os.environ['RPC_SOURCE_SHA'], original_deadline_unix=manifest['controller']['deadline_unix'])))
+
 def run(bundle, out, commits, pair):
     assert os.environ.get('GITHUB_ACTIONS') == 'true', 'workloads require GitHub Actions'
     assert commits in (22,220) and pair in (0,1)
     manifest = json.loads((bundle / 'manifest.json').read_text())
     assert sha(bundle / 'manifest.json') == os.environ['RPC_MANIFEST_SHA256']
-    assert manifest['controller']['sha'] == os.environ['GITHUB_SHA']
-    assert manifest['controller']['normal_source_sha'] == os.environ['RPC_SOURCE_SHA'] == git(ROOT, 'rev-parse', 'HEAD')
-    assert manifest['controller']['normal_source_tree'] == git(ROOT, 'rev-parse', 'HEAD^{tree}')
+    if os.environ.get('RPC_REUSE_BUILD') == str(REUSE['run_id']):
+        assert sha(bundle / 'manifest.json') == REUSE['manifest_sha256']
+        validate_reuse(manifest)
+    else:
+        assert not os.environ.get('RPC_REUSE_BUILD'), 'unsupported build reuse'
+        assert manifest['controller']['sha'] == os.environ['GITHUB_SHA']
+        assert manifest['controller']['normal_source_sha'] == os.environ['RPC_SOURCE_SHA'] == git(ROOT, 'rev-parse', 'HEAD')
+        assert manifest['controller']['normal_source_tree'] == git(ROOT, 'rev-parse', 'HEAD^{tree}')
     assert manifest['controller']['source_pins'] == {k:list(v) for k,v in PINS.items()}
     assert set(manifest['binaries']) == {label+'-'+kind for label in PINS for kind in ('seed','server')}
     for name, digest in manifest['binaries'].items():
@@ -198,14 +268,12 @@ def run(bundle, out, commits, pair):
     out.mkdir(parents=True, exist_ok=False)
     report = dict(commits=commits, pair=pair, order=['baseline','candidate'] if pair == 0 else ['candidate','baseline'],
                   status='incomplete', manifest_sha256=sha(bundle / 'manifest.json'), runs=[],
-                  host=dict(uname=list(os.uname()), cpu=Path('/proc/cpuinfo').read_text(),
-                            memory=Path('/proc/meminfo').read_text(),
-                            affinity=sorted(os.sched_getaffinity(0)), child_cpus=sorted(os.sched_getaffinity(0))[:2],
-                            cpu_max=Path('/sys/fs/cgroup/cpu.max').read_text(),
-                            memory_max=Path('/sys/fs/cgroup/memory.max').read_text()),
+                  host={}, controller_sha=os.environ['GITHUB_SHA'],
+                  normal_source_sha=os.environ['RPC_SOURCE_SHA'], reused_build=os.environ.get('RPC_REUSE_BUILD'),
                   checkpoint_selection='not observable via existing public API; warnings recorded',
                   caveat='pre-request full verification/inventory may warm OS caches; not cold device')
     try:
+        report['host'] = host_observation()
         for label in report['order']:
             arm = out / label
             arm.mkdir()
@@ -337,6 +405,7 @@ if __name__ == '__main__':
     action, *args = sys.argv[1:]
     if action == 'prepare': prepare(*map(Path,args))
     elif action == 'seal': seal(*map(Path,args))
+    elif action == 'reuse': reuse(*map(Path,args))
     elif action == 'run': run(Path(args[0]),Path(args[1]),int(args[2]),int(args[3]))
     elif action == 'summary': summary(*map(Path,args))
     else: raise ValueError('unsupported action')
