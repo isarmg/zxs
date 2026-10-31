@@ -104,6 +104,11 @@ def exponent(history: list[dict], metric: str, stage: str | None = None) -> floa
         if ratio < 1.5:
             continue  # Adjacent boundary points amplify ordinary timing noise.
         a, b = (left[metric], right[metric]) if stage is None else (left[metric][stage], right[metric][stage])
+        if metric == "wall" and stage in {"reopen", "recovery"}:
+            # Both APIs enter recover_prepared. A usable optional checkpoint
+            # changes restore cost discontinuously; budget the cold envelope.
+            a = max(left["wall"]["reopen"], left["wall"]["recovery"])
+            b = max(right["wall"]["reopen"], right["wall"]["recovery"])
         if a <= 0 or b <= 0:
             raise ValueError("positive observed costs are required for projection")
         result = max(result, math.log(b / a) / math.log(ratio) + EXPONENT_MARGIN)
@@ -113,7 +118,8 @@ def exponent(history: list[dict], metric: str, stage: str | None = None) -> floa
 def project(history: list[dict], target: int, repeats: int) -> dict:
     last = history[-1]
     ratio = target / last["size"]
-    wall = {stage: last["wall"][stage] * ratio ** exponent(history, "wall", stage) * SAFETY for stage in STAGES}
+    wall = {stage: (max(last["wall"]["reopen"], last["wall"]["recovery"]) if stage in {"reopen", "recovery"} else last["wall"][stage])
+            * ratio ** exponent(history, "wall", stage) * SAFETY for stage in STAGES}
     rss = last["rss"] * ratio ** exponent(history, "rss") * SAFETY
     disk = last["disk"] * ratio ** exponent(history, "disk") * SAFETY
     return {"phase_seconds": wall, "cohort_seconds": repeats * sum(wall.values()) + COHORT_FINISH_SECONDS,
@@ -167,6 +173,7 @@ def admit(plan: dict, profile: str, policy: dict, root: Path, prior_run: str, pr
               "profile": profile, "predecessor_run_id": prior_run, "predecessor_carrier_sha": prior_sha,
               "resource_history": history, "forecast": forecast,
               "forecast_kind": "empirical conservative projection, not a proven resource bound", "safety_factor": SAFETY,
+              "admission_time_envelope": "max(reopen, recovery); raw observations remain unchanged; optional checkpoint eligibility can change",
               "admitted": not reasons, "denial_reasons": reasons,
               "coverage": {"timing": True, "full_oracle": True, "counts": False,
                            "counts_not_executed_reason": "higher-tier syscall tracing is outside this bounded timing experiment; retained measured trace coverage ends at N1025"},
