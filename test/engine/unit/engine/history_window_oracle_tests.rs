@@ -1060,6 +1060,46 @@ fn assert_public_walk(view: &MetadataView, mut request: HistoryWindowRequest, ex
 }
 
 #[test]
+fn content_commit_order_cannot_be_replaced_by_version_sequence_candidates() {
+    let view = fixture();
+    let query = request(HistoryCollection::Nodes, 2);
+    let HistoryWindowPage::Nodes { nodes, .. } = public_page(&view, &query) else {
+        panic!("node page requested");
+    };
+    let actual = nodes
+        .iter()
+        .map(|node| node.node_id.to_string())
+        .collect::<Vec<_>>();
+    let expected = oracle_node_keys(view.state())
+        .into_iter()
+        .take(2)
+        .map(|(_, id)| id)
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+    assert_eq!(actual, [id("ver", 16), id("ver", 14)]);
+    let mut body_order = view
+        .state()
+        .versions
+        .values()
+        .filter(|version| version.file_id == FILE && version.history_tree_id == HISTORY)
+        .map(|version| {
+            (
+                std::cmp::Reverse(version.version_sequence),
+                version.version_id.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    body_order.sort();
+    let premature_candidates = body_order
+        .into_iter()
+        .take(2)
+        .map(|(_, id)| id)
+        .collect::<Vec<_>>();
+    assert_eq!(premature_candidates, [id("ver", 16), id("ver", 15)]);
+    assert_ne!(actual, premature_candidates);
+}
+
+#[test]
 fn every_public_record_collection_matches_its_independent_complete_oracle() {
     let view = fixture();
     let state = view.state();
