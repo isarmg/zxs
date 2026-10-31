@@ -114,6 +114,14 @@ INTEGRATION_SUITES = (
     Suite('semver', tuple(FOUNDATION_TESTS + 'semver/tests/' + name + '.rs'
                          for name in ('test_identifier', 'test_version', 'test_version_req'))),
     Suite('zerovec-derive', (FOUNDATION_TESTS + 'zerovec-derive/tests/sparse_enum_test.rs',), ('zerovec',)),
+    Suite('allocator-api2', ('test/ci/fixtures/foundation-native-collections.rs',),
+          ('equivalent', 'foldhash', 'litemap', 'stable_deref_trait', 'yoke', 'zerofrom',
+           'sync_wrapper', 'sharded-slab'), edition='2024'),
+    Suite('displaydoc', ('test/ci/fixtures/foundation-codegen-consumers.rs',),
+          ('proc-macro2', 'proc-macro2-diagnostics', 'rust-syntax', 'rust-source-format'), edition='2024'),
+    Suite('html-escape', ('test/ci/fixtures/foundation-html-consumer.rs',), edition='2024'),
+    Suite('indexmap', (FOUNDATION_TESTS + 'indexmap/tests/equivalent_trait.rs',)),
+    Suite('pin-project-lite', (FOUNDATION_TESTS + 'pin-project-lite/tests/drop_order.rs',)),
 )
 
 # Cargo 1.99 cannot select some non-member build dependencies for lib tests.
