@@ -6,7 +6,7 @@ on:
     inputs:
       stage:
         type: choice
-        options: ['2048', '4096', '10000', '20000']
+        options: ['2048', '4096', '10000', '20000', 'counts-2048']
         required: true
       prior_run_id:
         type: string
@@ -20,7 +20,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: history-growth-stage-${{ github.ref }}
+  group: history-growth-stage-${{ github.ref }}-${{ inputs.stage }}
   cancel-in-progress: false
 
 env:
@@ -69,7 +69,7 @@ jobs:
   validation:
     needs: checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: ${{ inputs.stage == 'counts-2048' && 210 || 75 }}
     env:
       PROFILE: growth-${{ inputs.stage }}
       PRIOR_RUN_ID: ${{ inputs.prior_run_id }}
@@ -118,7 +118,7 @@ jobs:
         if: inputs.stage != '2048'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: history-growth-${{ inputs.stage == '4096' && 'growth-2048' || inputs.stage == '10000' && 'growth-4096' || 'growth-10000' }}-${{ inputs.prior_run_id }}
+          name: history-growth-${{ (inputs.stage == '4096' || inputs.stage == 'counts-2048') && 'growth-2048' || inputs.stage == '10000' && 'growth-4096' || 'growth-10000' }}-${{ inputs.prior_run_id }}
           run-id: ${{ inputs.prior_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: prerequisites/prior
@@ -177,6 +177,11 @@ jobs:
       - name: Admit and execute only this tier, preserving complete oracle
         run: |
           set -euo pipefail
+          if [ "$PROFILE" = growth-counts-2048 ]; then
+            resource_args=(--rss-mib 2048 --disk-mib 12288 --cohort-disk-mib 24576 --minimum-free-mib 16384)
+          else
+            resource_args=(--rss-mib 2048 --disk-mib 4096 --cohort-disk-mib 8192 --minimum-free-mib 8192)
+          fi
           taskset -c "$HISTORY_CPUSET" python3 carrier/tools/history-scale-bench/run.py --candidate-only \
             --plan carrier/.github/history-current-plan.json --profile "$PROFILE" \
             --growth-policy carrier/.github/history-growth-policy.json --growth-evidence-root prerequisites \
@@ -184,7 +189,7 @@ jobs:
             --candidate-source candidate-source --candidate-binary binaries/candidate/history-scale-driver \
             --candidate-provenance binaries/candidate/provenance.json \
             --build-run-id 41157643469 --build-carrier-sha a6c96a2ff4d5d566ad91a4de9686669bd5677f1f \
-            --output-root "evidence/$PROFILE" --rss-mib 2048 --disk-mib 4096 --cohort-disk-mib 8192 --minimum-free-mib 8192 \
+            --output-root "evidence/$PROFILE" "${resource_args[@]}" \
             2>&1 | tee evidence/run.log
       - name: Retain exact policy, metadata and tool inputs
         if: always()
