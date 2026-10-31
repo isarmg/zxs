@@ -102,6 +102,23 @@
 | 220 BA | [13033565753](https://github.com/isarmg/zxs/actions/runs/41174023827/artifacts/13033565753) | `14f45e7c44d2c7ef89ab07bcfd2a2b171d74ea2ff7cf5dc8e5cc68d45219a5f9` |
 | summary | [13033191203](https://github.com/isarmg/zxs/actions/runs/41174023827/artifacts/13033191203) | `ea60d366863367e3895a877a399496e310f9c3054fe7d7cc335ea5c9547c8b1a` |
 
+### 新源码的独立 220 复测入口
+
+[新密封模板](../../tools/local-rpc-acceptance/candidate-220-workflow.yml) 与
+[candidate_220.py](../../tools/local-rpc-acceptance/candidate_220.py) 专供已独立审阅的新产品源码，
+不把旧 d3 二进制或旧 manifest 当成修复后的测量。必填输入是正常 CI controller 的完整
+`validation_sha`、独立冻结产品 `product_sha` 与 `product_tree`；carrier 不进入产品祖先。
+对照仍固定 e2f33d 及其原 tree。新产品和对照分别核对源码、仅测试接线、前后 tree、编译器、
+特性与二进制摘要后形成新 seal；已有 tracked bench 只在与 controller 字节完全一致时复用，
+不允许静默覆盖。全部原机械／实际消费者前置仍执行。
+
+流程为 validation→新两臂 build/seal→selection 冻结 45 分钟计划→原 220 AB/BA→summary。
+每阶段 1200 秒、每 pair 45 分钟、两 CPU、8GiB 地址空间／可用空间下限与原八项门槛不变。
+SHA、tree、manifest／binary／plan hash 不符、顺序或 oracle／样本不完整均拒绝。
+只复测五阶段，不重复已证明超默认容量的连续尾合同；旧 22 仅作为历史 d3 证据引用，
+不计作新产品通过。即使新 220 数值通过，连续容量 FAIL 仍单列且 summary 非零。
+模板提交不代表已启动或通过；实际 run、产品 SHA/tree 和新密封摘要必须另行记录。
+
 ## 只需人工／物理环境执行的项目
 
 - 在指定 32GB／8 核／512GB 系统盘和 12×15.6TB 数据盘上记录型号、固件、文件系统、占用量及完整副本拓扑，执行同一有限合同，验证稳态／拥塞时读写尾延迟与资源预算；GitHub 开发盘数据不能外推。

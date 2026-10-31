@@ -539,7 +539,9 @@ fn bound_history_objects_with(
         match state {
             Some(state) => {
                 let expected = HistoryManifest::project_state(state, id)?;
-                if canonical_json(&expected)? != canonical_json(&manifest)? {
+                // Both operands are closed typed manifests. Structural equality checks
+                // every field without two complete temporary JSON trees/buffers.
+                if expected != manifest {
                     return Err(Error::new(
                         storage_contract::ErrorCode::ObjectCorrupt,
                         "bound history projection differs",

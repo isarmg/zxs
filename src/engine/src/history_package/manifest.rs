@@ -12,7 +12,7 @@ use storage_contract::{
 };
 use storage_contract::{BranchKind, BranchState, FileMetadataKind};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serialization(deny_unknown_fields)]
 pub struct HistoryManifest {
     pub repository: Repository,

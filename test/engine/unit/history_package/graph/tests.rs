@@ -676,3 +676,64 @@ fn markerless_and_previous_domain_history_roots_are_rejected_without_rewriting()
 
 #[path = "descriptor_tests.rs"]
 mod descriptor_tests;
+
+#[test]
+fn manifest_structural_equality_matches_canonical_closed_fields() {
+    let bundle: Value =
+        json_codec::from_slice(include_bytes!("manifest-sharing-golden.json")).unwrap();
+    let logical: Value = json_codec::from_str(bundle["logical"].as_str().unwrap()).unwrap();
+    let original: HistoryManifest = json_codec::from_value(logical.clone()).unwrap();
+    assert_eq!(original, original.clone());
+    let mut multiple = original.clone();
+    let mut second = multiple.commits.get("commit").unwrap().clone();
+    second.commit_id = "second".into();
+    multiple.commits.insert("second".into(), second);
+    let mut independently_allocated = multiple.clone();
+    independently_allocated.commits = multiple
+        .commits
+        .iter()
+        .rev()
+        .map(|(id, record)| (id.clone(), record.clone()))
+        .collect();
+    assert!(
+        !multiple
+            .commits
+            .shares_storage_with(&independently_allocated.commits)
+    );
+    assert_eq!(multiple, independently_allocated);
+    assert_eq!(
+        canonical_json(&multiple).unwrap(),
+        canonical_json(&independently_allocated).unwrap()
+    );
+    // Exact large-u64 strings, Unicode, sparse fields, shared commits and trees.
+    for (pointer, replacement) in [
+        ("/repository/name", json!("changed")),
+        ("/repository/smb_enabled", json!(false)),
+        ("/history/generation", json!("18446744073709551614")),
+        ("/history/main_branch_id", Value::Null),
+        ("/commits/commit/message", json!("different 📁")),
+        ("/commits/commit/sequence", json!("9007199254740993")),
+        ("/directory_trees/tree/path", json!("other/目录")),
+        (
+            "/file_selection_generations/file",
+            json!("9007199254740993"),
+        ),
+    ] {
+        let mut changed = logical.clone();
+        *changed.pointer_mut(pointer).unwrap() = replacement;
+        let changed: HistoryManifest = json_codec::from_value(changed).unwrap();
+        assert_ne!(original, changed, "{pointer}");
+        assert_eq!(
+            original == changed,
+            canonical_json(&original).unwrap() == canonical_json(&changed).unwrap()
+        );
+    }
+    let mut sparse = json_codec::to_value(manifest()).unwrap();
+    sparse["directory_trees"] = json!({});
+    let explicit: HistoryManifest = json_codec::from_value(sparse).unwrap();
+    assert_eq!(manifest(), explicit);
+    assert_eq!(
+        canonical_json(&manifest()).unwrap(),
+        canonical_json(&explicit).unwrap()
+    );
+}

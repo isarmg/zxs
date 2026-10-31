@@ -48,10 +48,12 @@ def effective_tree(root):
 
 def identity(root):
     assert set(git(root, 'diff', '--name-only').splitlines()) == set(TRACKED)
-    assert set(git(root, 'ls-files', '--others', '--exclude-standard').splitlines()) == set(ADDED)
+    tracked_benches = {path for path in ADDED if git(root, 'ls-files', '--', path)}
+    assert not git(root, 'diff', '--', *ADDED), 'tracked bench bytes changed'
+    assert set(git(root, 'ls-files', '--others', '--exclude-standard').splitlines()) == set(ADDED) - tracked_benches
     changes = {}
     for path in TRACKED + ADDED:
-        before = subprocess.check_output(['git', '-C', str(root), 'show', 'HEAD:' + path]) if path in TRACKED else None
+        before = subprocess.check_output(['git', '-C', str(root), 'show', 'HEAD:' + path]) if path in TRACKED or path in tracked_benches else None
         changes[path] = dict(before_sha256=hashlib.sha256(before).hexdigest() if before is not None else None,
                              after_sha256=sha(root / path))
     return dict(product_sha=git(root, 'rev-parse', 'HEAD'), base_tree=git(root, 'rev-parse', 'HEAD^{tree}'),
@@ -72,6 +74,11 @@ def prepare(workspace, evidence):
             target.write_bytes(target.read_bytes() + suffix)
         for path in ADDED:
             (root / path).parent.mkdir(parents=True, exist_ok=True)
+        adapter = 'baseline' if label == 'baseline' else 'current'
+        sources = [ROOT / ADDED[0], ROOT / ADDED[1], ROOT / f'test/server/bench/final_rpc_{adapter}_read.rs']
+        for target, source in zip(ADDED, sources):
+            if git(root, 'ls-files', '--', target):
+                assert (root / target).read_bytes() == source.read_bytes(), 'tracked bench differs from authenticated controller'
         shutil.copyfile(ROOT / ADDED[0], root / ADDED[0])
         shutil.copyfile(ROOT / ADDED[1], root / ADDED[1])
         adapter = 'baseline' if label == 'baseline' else 'current'
