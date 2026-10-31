@@ -203,7 +203,33 @@ jobs:
             cp prerequisites/prior/growth-*/summary.json evidence/admission-inputs/prior-summary.json
             cp prerequisites/prior/growth-*/environment.json evidence/admission-inputs/prior-environment.json
           fi
-      - name: Retain all results including denials and failures
+      - name: Record larger targets as analysis only without execution
+        if: always()
+        run: |
+          if [ "$PROFILE" = growth-counts-2048 ] || [ ! -f "evidence/$PROFILE/summary.json" ]; then
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, "carrier/tools/history-scale-bench")
+          from growth import observed, project
+          root = Path("evidence", os.environ["PROFILE"])
+          summary = json.loads((root / "summary.json").read_text())
+          if summary.get("all_requested_samples_passed") is not True:
+              sys.exit(0)
+          review = json.loads((root / "growth-review.json").read_text())
+          size = summary["samples"][0]["operations"]
+          history = review["resource_history"] + [observed(summary["samples"], size)]
+          value = {"source_sha": review["source_sha"], "source_tree": review["source_tree"],
+                   "binary_sha256": review["binary_sha256"], "basis_run_id": os.environ["GITHUB_RUN_ID"],
+                   "analysis_only": True, "execution_enabled": False,
+                   "scope": "same frozen binary, two-CPU cloud fixture; empirical estimate, not a capacity bound",
+                   "hosted_job_seconds": 21600, "finite_lifecycle_seconds": 19800,
+                   "targets": {str(n): project(history, n, 1) for n in (10000, 100000)}}
+          Path("evidence/larger-target-projections.json").write_text(json.dumps(value, indent=2) + "\n")
+          PY
+      - name: Upload all results including denials and failures
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
