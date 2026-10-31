@@ -239,8 +239,9 @@
 #![warn(trivial_casts, trivial_numeric_casts)]
 // #![warn(unused_extern_crates, unused_qualifications)]
 
-#[cfg(test)]
-doc_comment::doctest!("../README.md");
+#[cfg(doctest)]
+#[path = "../../../../../test/foundation/nu-ansi-term/modules/readme.rs"]
+mod readme_doctests;
 
 extern crate alloc;
 

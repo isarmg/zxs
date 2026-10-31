@@ -1,11 +1,13 @@
 """Static wiring of the foundation behaviour gate: suites, inventory, features and owners."""
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import re
 import tempfile
 import tomllib
 import unittest
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("behaviour_gate", ROOT / ".github/scripts/check-foundation-behaviour.py")
@@ -98,6 +100,83 @@ class FoundationBehaviourGateTests(unittest.TestCase):
         suite = next(suite for suite in GATE.INTEGRATION_SUITES if suite.subject == "lazy_static")
         manifest = tomllib.loads(GATE.member_manifest(suite, GATE.production_features()))
         self.assertEqual(manifest["package"]["edition"], "2015")
+
+    def test_documentation_reports_ignored_and_compile_only_examples_honestly(self):
+        log = Mock()
+        log.run.side_effect = [
+            'example (line 1): test\nexample (line 2): test\n',
+            'test example (line 1) - compile ... ok\n'
+            'test example (line 2) ... ignored\n'
+            'test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\n',
+        ]
+        self.assertEqual(GATE.cargo_doctests(log, ROOT, ['-p', 'example'], 'doc'),
+                         {'executed': [], 'compile_only': ['example (line 1)'], 'ignored': ['example (line 2)']})
+        log.run.side_effect = [
+            'example (line 1): test\n',
+            'test example (line 1) ... ignored\n'
+            'test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\n',
+        ]
+        with self.assertRaisesRegex(AssertionError, 'no documentation example checked'):
+            GATE.cargo_doctests(log, ROOT, ['-p', 'example'], 'doc')
+
+    def test_append_executes_only_new_keys_and_never_overwrites_prior_evidence(self):
+        old = {'unit:old': {'subject': 'old', 'features': [], 'targets': {'lib': ['old_test']}}}
+        new = {'unit:new': {'subject': 'new', 'features': [], 'targets': {'lib': ['new_test']}}}
+        with tempfile.TemporaryDirectory() as temporary:
+            inventory = Path(temporary) / 'inventory.json'
+            inventory.write_text(GATE.inventory_text(old))
+            with patch.object(GATE, 'INVENTORY', inventory), \
+                    patch.object(GATE, 'suite_keys', return_value=['unit:old', 'unit:new']), \
+                    patch.object(GATE, 'run_suites', return_value=new) as run, \
+                    patch('sys.argv', ['gate', '--append']), patch('builtins.print'):
+                GATE.main()
+            run.assert_called_once_with({'unit:new'})
+            self.assertEqual(json.loads(inventory.read_text())['suites'], old | new)
+            with patch.object(GATE, 'INVENTORY', inventory), \
+                    patch.object(GATE, 'suite_keys', return_value=['unit:new']), \
+                    patch.object(GATE, 'run_suites') as run, \
+                    patch('sys.argv', ['gate', '--append']):
+                with self.assertRaisesRegex(AssertionError, 'only additional suite keys'):
+                    GATE.main()
+            run.assert_not_called()
+
+    def test_ansi_readme_adapts_only_the_retired_variant_spelling_and_keeps_its_origin(self):
+        original = ROOT / 'docs/upstream/nu-ansi-term-0.50.3/README.md'
+        current = ROOT / 'test/foundation/nu-ansi-term/modules/readme.rs'
+        adapted = original.read_text().replace('Color::RGB', 'Color::Rgb').replace('RGB(', 'Rgb(')
+        adapted = adapted.replace('nu-ansi-term = "0.49"\n\n# optional gnu-legacy mode',
+                                  'nu-ansi-term = "0.49"\n```\n\n```toml\n[dependencies]\n'
+                                  '# optional gnu-legacy mode')
+        documentation = (ROOT / 'docs/validation/nu-ansi-term-examples.md').read_text()
+        self.assertTrue(documentation.endswith(adapted))
+        self.assertIn('原始 README', documentation[:-len(adapted)])
+        self.assertEqual(current.read_text(),
+                         '#![doc = include_str!("../../../../docs/validation/nu-ansi-term-examples.md")]\n')
+        mapping = json.loads((ROOT / 'compliance/external-tests/foundation.json').read_text())
+        owner = next(o for o in mapping['owners'] if o['directory'].endswith('/nu-ansi-term'))
+        row = next(r for r in owner['files'] if r['path'] == str(current.relative_to(ROOT)))
+        self.assertEqual(row['source_kind'], 'project-authored')
+        self.assertEqual(row['source'], row['path'])
+        self.assertEqual(row['source_sha256_before'], hashlib.sha256(current.read_bytes()).hexdigest())
+
+    def test_every_retained_ansi_readme_rust_block_is_present_in_the_doctest_inventory(self):
+        suite = next(s for s in GATE.STANDALONE_SUITES if s.subject == 'nu-ansi-term')
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            GATE.standalone_member(suite, work)
+            subject = GATE.foundation_path(ROOT, suite.subject).relative_to(ROOT)
+            self.assertTrue((work / subject / 'Cargo.toml').is_file())
+            documentation = 'docs/validation/nu-ansi-term-examples.md'
+            self.assertEqual((work / documentation).read_bytes(), (ROOT / documentation).read_bytes())
+        original = (ROOT / 'docs/upstream/nu-ansi-term-0.50.3/README.md').read_text()
+        attributes = re.findall(r'^```rust([^\n]*)', original, re.M)
+        ignored = sum('ignore' in tags.split(',') for tags in attributes)
+        documentation = json.loads(GATE.INVENTORY.read_text())['suites']['standalone:nu-ansi-term']['doctests']
+        selected = {key: [name for name in names if ' - readme_doctests (' in name]
+                    for key, names in documentation.items()}
+        self.assertEqual(len(selected['ignored']), ignored)
+        self.assertEqual(len(selected['executed']), len(attributes) - ignored)
+        self.assertFalse(selected['compile_only'])
 
     def test_comparison_and_date_suites_use_only_retained_functional_targets(self):
         self.assertIn("cmov", GATE.UNIT_SUITES)

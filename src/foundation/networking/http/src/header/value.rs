@@ -417,7 +417,7 @@ macro_rules! from_integers {
             let val = HeaderValue::from(n);
             assert_eq!(val, &n.to_string());
 
-            let n = ::std::$t::MAX;
+            let n = <$t>::MAX;
             let val = HeaderValue::from(n);
             assert_eq!(val, &n.to_string());
         }
@@ -455,7 +455,10 @@ from_integers! {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/http/unit/src/header/value/from_header_name_tests_457.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/http/unit/src/header/value/from_header_name_tests_457.rs"
+));
 
 impl FromStr for HeaderValue {
     type Err = InvalidHeaderValue;
@@ -518,7 +521,10 @@ impl TryFrom<Vec<u8>> for HeaderValue {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/http/unit/src/header/value/try_from_header_name_tests_544.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/http/unit/src/header/value/try_from_header_name_tests_544.rs"
+));
 
 const fn is_visible_ascii(b: u8) -> bool {
     b >= 32 && b < 127 || b == b'\t'
@@ -717,7 +723,13 @@ impl PartialOrd<HeaderValue> for &str {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/http/functions/src/header/value/test_try_from_719.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/http/functions/src/header/value/test_try_from_719.rs"
+));
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/http/functions/src/header/value/test_debug_724.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/http/functions/src/header/value/test_debug_724.rs"
+));

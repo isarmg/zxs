@@ -42,3 +42,11 @@ path = "../../collections/bytes"
 version = "1"
 path = "../../core-types/itoa"
 
+[dev-dependencies.data-serialization]
+version = "1"
+path = "../../data-storage/data-serialization"
+
+[dev-dependencies.json-codec]
+version = "1"
+path = "../../data-storage/json-codec"
+

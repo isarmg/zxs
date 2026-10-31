@@ -159,12 +159,9 @@
 #[cfg(not(feature = "std"))]
 compile_error!("`std` feature currently required, support for `no_std` may be added later");
 
-#[cfg(test)]
-#[macro_use]
-extern crate doc_comment;
-
-#[cfg(test)]
-doctest!("../README.md");
+#[cfg(doctest)]
+#[doc = include_str!("../../../../../docs/upstream/http-1.5.0/README.md")]
+mod readme_doctests {}
 
 #[macro_use]
 mod convert;
@@ -193,4 +190,7 @@ pub use crate::uri::Uri;
 pub use crate::version::Version;
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/http/unit/src/lib/tests_195.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/http/unit/src/lib/tests_195.rs"
+));

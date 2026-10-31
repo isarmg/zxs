@@ -10580,6 +10580,13 @@
           "source_sha256_before": "f571290bb57f4c8afad019a28f1362c19ba316b6771022fd8d5d2bc0bb5d45fb"
         },
         {
+          "path": "test/foundation/nu-ansi-term/modules/readme.rs",
+          "sha256": "fbbd7b43ea41768fcd66cef23328ce402a4b8023a03568897754e98fbae81233",
+          "source": "test/foundation/nu-ansi-term/modules/readme.rs",
+          "source_sha256_before": "fbbd7b43ea41768fcd66cef23328ce402a4b8023a03568897754e98fbae81233",
+          "source_kind": "project-authored"
+        },
+        {
           "path": "test/foundation/nu-ansi-term/tests/style.rs",
           "sha256": "836c63da13f3dd3bfe9a1ef52557f098a56e4c4ef77b59631d15b9fb11832ff1",
           "source": "src/foundation/nu-ansi-term/tests/style.rs",
