@@ -1,0 +1,210 @@
+name: Evidence-gated current history growth
+run-name: Current history growth ${{ inputs.stage }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        type: choice
+        options: ['2048', '4096', '10000', '20000']
+        required: true
+      prior_run_id:
+        type: string
+        required: true
+      prior_carrier_sha:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: history-growth-stage-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: '0'
+  RUSTUP_TOOLCHAIN: '1.99.0'
+  CARGO_BUILD_JOBS: '2'
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Deterministic admission and affected checks
+        run: |
+          set -euo pipefail
+          mkdir -p target/growth-checks
+          python3 -m unittest discover -s test/history-scale-bench -p 'test_*.py' -v 2>&1 | tee target/growth-checks/tests.log
+          {
+            python3 .github/scripts/check-workflows.py
+            python3 .github/scripts/check-architecture.py
+            python3 tools/rust-sources/documentation.py verify
+          } 2>&1 | tee target/growth-checks/static.log
+      - name: Initialize offline Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Fixed compiler, actual source export and documentation
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup component add rustfmt --toolchain 1.99.0
+          rustc +1.99.0 --version --verbose > target/growth-checks/rustc.txt
+          rustfmt +1.99.0 --edition 2024 --check tools/history-scale-bench/driver.rs
+          cargo +1.99.0 test --locked --offline -p contract-check --test source_export -- --nocapture 2>&1 | tee target/growth-checks/source-export.log
+          cargo +1.99.0 run --locked --offline -p contract-check -- --root . 2>&1 | tee target/growth-checks/docs.log
+      - name: Retain checks including failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: history-growth-checks-${{ github.run_id }}
+          path: target/growth-checks/
+          retention-days: 30
+          if-no-files-found: error
+
+  validation:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      PROFILE: growth-${{ inputs.stage }}
+      PRIOR_RUN_ID: ${{ inputs.prior_run_id }}
+      PRIOR_CARRIER_SHA: ${{ inputs.prior_carrier_sha }}
+    steps:
+      - name: Checkout exact observer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: carrier
+      - name: Checkout unchanged frozen product source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: d3eefd289e53a2803703870fe4250d08cadff9b5
+          persist-credentials: false
+          path: candidate-source
+      - name: Reuse original ordinary binary
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: history-growth-binary-candidate-41157643469
+          run-id: 41157643469
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: binaries/candidate
+      - name: Fetch original passed micro selection
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: history-growth-controller-41157643469
+          run-id: 41157643469
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: prerequisites/micro-controller
+      - name: Fetch original passed micro evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: history-growth-small-selftest-41157643469
+          run-id: 41157643469
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: prerequisites/micro
+      - name: Fetch reviewed boundary evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: history-growth-boundaries-41158008645
+          run-id: 41158008645
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: prerequisites/basis
+      - name: Fetch immediate predecessor evidence
+        if: inputs.stage != '2048'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: history-growth-${{ inputs.stage == '4096' && 'growth-2048' || inputs.stage == '10000' && 'growth-4096' || 'growth-10000' }}-${{ inputs.prior_run_id }}
+          run-id: ${{ inputs.prior_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: prerequisites/prior
+      - name: Bind original build, micro and predecessor runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, "carrier/tools/history-scale-bench")
+          from controller import positive_id, commit_sha
+          positive_id(os.environ["PRIOR_RUN_ID"])
+          commit_sha(os.environ["PRIOR_CARRIER_SHA"])
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/41157643469" > prerequisites/build-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/41157643469/jobs?per_page=100" > prerequisites/build-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/41158008645" > prerequisites/basis-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PRIOR_RUN_ID" > prerequisites/prior-run.json
+          python3 - <<'PY'
+          import json, sys
+          from pathlib import Path
+          sys.path.insert(0, "carrier/tools/history-scale-bench")
+          from controller import validate_build_jobs, validate_reuse_run, validate_reused_selftest
+          read = lambda name: json.loads(Path("prerequisites", name).read_text())
+          build = read("build-run.json")
+          validate_reuse_run(build, "41157643469", "a6c96a2ff4d5d566ad91a4de9686669bd5677f1f")
+          validate_build_jobs(build, read("build-jobs.json"), "41157643469", "a6c96a2ff4d5d566ad91a4de9686669bd5677f1f", candidate_only=True)
+          validate_reused_selftest(read("micro-controller/selection.json"), read("micro/small-selftest/summary.json"),
+                                   "41157643469", "a6c96a2ff4d5d566ad91a4de9686669bd5677f1f",
+                                   "d3eefd289e53a2803703870fe4250d08cadff9b5", candidate_only=True)
+          PY
+      - name: Initialize offline Cargo home
+        run: bash carrier/.github/scripts/initialize-cargo-home.sh
+      - name: Install fixed observer prerequisites
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y strace time
+          chmod +x binaries/candidate/history-scale-driver
+      - name: Record CPU affinity and frozen source
+        run: |
+          mkdir -p evidence
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          cpus = sorted(os.sched_getaffinity(0))[:2]
+          if len(cpus) != 2:
+              raise RuntimeError("two available logical CPUs are required")
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write("HISTORY_CPUSET=" + ",".join(map(str, cpus)) + "\n")
+          identity = subprocess.check_output(["git", "-C", "candidate-source", "rev-parse", "HEAD", "HEAD^{tree}"], text=True).splitlines()
+          Path("evidence/runner-contract.json").write_text(json.dumps({"source_sha": identity[0], "source_tree": identity[1],
+              "cpus": cpus, "profile": os.environ["PROFILE"], "non_representative_cloud_directory_fixture": True}, indent=2) + "\n")
+          PY
+      - name: Admit and execute only this tier, preserving complete oracle
+        run: |
+          set -euo pipefail
+          taskset -c "$HISTORY_CPUSET" python3 carrier/tools/history-scale-bench/run.py --candidate-only \
+            --plan carrier/.github/history-current-plan.json --profile "$PROFILE" \
+            --growth-policy carrier/.github/history-growth-policy.json --growth-evidence-root prerequisites \
+            --prior-run-id "$PRIOR_RUN_ID" --prior-carrier-sha "$PRIOR_CARRIER_SHA" \
+            --candidate-source candidate-source --candidate-binary binaries/candidate/history-scale-driver \
+            --candidate-provenance binaries/candidate/provenance.json \
+            --build-run-id 41157643469 --build-carrier-sha a6c96a2ff4d5d566ad91a4de9686669bd5677f1f \
+            --output-root "evidence/$PROFILE" --rss-mib 2048 --disk-mib 4096 --cohort-disk-mib 8192 --minimum-free-mib 8192 \
+            2>&1 | tee evidence/run.log
+      - name: Retain exact policy, metadata and tool inputs
+        if: always()
+        run: |
+          mkdir -p evidence/admission-inputs
+          cp carrier/.github/history-current-plan.json carrier/.github/history-growth-policy.json evidence/admission-inputs/
+          cp prerequisites/*-run.json prerequisites/build-jobs.json evidence/admission-inputs/
+          cp prerequisites/basis/boundaries/summary.json evidence/admission-inputs/basis-summary.json
+          cp prerequisites/basis/boundaries/environment.json evidence/admission-inputs/basis-environment.json
+          if [ "$PROFILE" != growth-2048 ]; then
+            cp prerequisites/prior/growth-*/summary.json evidence/admission-inputs/prior-summary.json
+            cp prerequisites/prior/growth-*/environment.json evidence/admission-inputs/prior-environment.json
+          fi
+      - name: Retain all results including denials and failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: history-growth-growth-${{ inputs.stage }}-${{ github.run_id }}
+          path: |
+            evidence/
+            !evidence/**/pool/**
+          retention-days: 30
+          if-no-files-found: error
