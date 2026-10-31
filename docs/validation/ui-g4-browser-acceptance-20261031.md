@@ -33,16 +33,16 @@
 
 ## 新增可执行 witness
 
-以下场景接入现有 Chrome runner，尚未因基线通过而自动记为通过；需由统一 validator 在候选上实际执行。
+以下场景已在[正式 Chrome job 124485872867](https://github.com/isarmg/zxs/actions/runs/41183041841/job/124485872867)实际执行。2026-10-31 UTC，精确候选 `0787d77cf8fa074f6d268bbf05444e54cc07ca52`、tree `a1819b18ccb1a1362cb4a53ae7b5c4729bd63a8d`；逐条读取六个 PASS marker，不以完整 CI 状态代替场景证据。
 
 | 场景 | 源码与要求 | 当前状态 |
 | --- | --- | --- |
-| 初始化成功回执丢失后防重复 | `runner/management.rs`：真实成功响应丢失；原表单重复 submit、清空输入与真实状态重查均保留 unknown 围栏；只发一次 setup POST；原账户登录及 Config／权威字节不变 | 未运行 |
-| JS/WASM 故障及迟到初始化 | `runner/stylesheets.rs`：必需运行资源阻断后手动重载；原 WASM Response 晚于非缓存离开或真实启动 deadline 交付，不能重新挂载 | 未运行 |
+| 初始化成功回执丢失后防重复 | `runner/management.rs`：真实成功响应丢失；原表单重复 submit、清空输入与真实状态重查均保留 unknown 围栏；只发一次 setup POST；原账户登录及 Config／权威字节不变 | 已运行：08:23:37.545 UTC PASS |
+| JS/WASM 故障及迟到初始化 | `runner/stylesheets.rs`：必需运行资源阻断后手动重载；原 WASM Response 晚于非缓存离开或真实启动 deadline 交付，不能重新挂载 | 已运行：08:22:58.233／58.905（JS／WASM 阻断）；08:22:59.142／59.907（两次 pagehide 迟到）；08:23:30.522（自然 30 秒 deadline 后迟到）均 PASS |
 
-源码、格式检查及工具单测均不替代这两条真实 Chrome 结果。测试交付 gate 不改原 Response 字节，资源阻断也不冒称真实服务端 404、跨发行版升级或网络性能证明。
+上述是两类场景的六次真实 Chrome witness，不是源码、格式或单测推定。迟到 WASM 日志均记录原 Response 的 `status=200`、`mime=application/wasm`、`sameResponse=true`、`module=true`、`instance=true` 且 `completedPhase=failed`，证明真实实例化完成也不能越过终态重挂载。测试交付 gate 不改原 Response 字节，资源阻断也不冒称真实服务端 404、跨发行版升级或网络性能证明。
 
-本批已执行：固定 Rust 1.99 格式化及两个受影响 Rust 文件的格式检查、`git diff --check`、一次独立边界审阅；均通过，审阅无 must-fix 项。本地未运行 Cargo、测试或浏览器，未自行触发工作流；新增运行结果由统一 validator 绑定候选提交后补记。
+原开发批次仅执行 Rust 1.99 格式、差异检查及独立边界审阅；本节随后补记上述精确候选的真实运行结果。只复用既有日志，没有为文档登记重跑浏览器，也不外推移动设备、其它浏览器内核、HTTPS 部署或旧资源留存。
 
 ## 发布环境待验收清单
 
