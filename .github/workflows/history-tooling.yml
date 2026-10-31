@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion, github-completion-precheck]
 
 permissions:
   contents: read
@@ -224,6 +224,10 @@ jobs:
               '7618c7f31cffb1f4cb6a46e08d1f8c22ef3d0f4e', '26c963870a38aef76ba6649ee4ff701edffe2fa0',
           ):
               raise SystemExit('UI completion requires the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'github-completion-precheck' and (source, tree) != (
+              'cd18837b2e85d52a64d80c5b7ed19ec5f63a1fcc', 'b64b7ddcf698d18b1d78d000d58d1f68ac5b709a',
+          ):
+              raise SystemExit('Combined completion precheck requires the exact merged source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -943,6 +947,15 @@ jobs:
                   command='Complete nonignored browser harness unit inventory and execution'),
               dict(id='github-ui-production', web_production=True,
                   command='bash .github/scripts/check.sh web-production'),
+          ]
+          groups['github-completion-precheck'] = [
+              # Explicitly include the standalone benchmark Rust files outside Cargo targets.
+              dict(groups['payload-quality'][0], id='github-completion-quality',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check src/engine/src/engine.rs test/engine/bench/final_rpc_seed.rs test/engine/unit/engine/history_window_oracle_tests.rs test/engine/unit/engine/history_window_retention_tests.rs test/engine/unit/engine/recovery_checkpoint/lifecycle_tests.rs test/engine/unit/engine/recovery_checkpoint/tests.rs test/server/bench/final_rpc_baseline_read.rs test/server/bench/final_rpc_current_read.rs test/server/bench/final_rpc_requests.rs test/server/unit/management/integrity_scrub/scheduling_tests.rs test/server/unit/smb_rpc/bounded_lifecycle_tests.rs test/server/unit/smb_rpc/tests.rs test/tools/browser-smoke/runner/management.rs test/tools/browser-smoke/runner/stylesheets.rs\n'
+                      'python3 tools/rust-sources/foundation_coverage.py --check\n'
+                      'ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality'),
+              dict(groups['mature-static'][0], id='github-completion-static'),
+              dict(groups['mature-doc-contracts'][0], id='github-completion-doc-contracts'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
