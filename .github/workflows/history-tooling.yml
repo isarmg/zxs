@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion, github-completion-precheck]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion, github-completion-precheck, github-history-batched]
 
 permissions:
   contents: read
@@ -228,6 +228,10 @@ jobs:
               'cd18837b2e85d52a64d80c5b7ed19ec5f63a1fcc', 'b64b7ddcf698d18b1d78d000d58d1f68ac5b709a',
           ):
               raise SystemExit('Combined completion precheck requires the exact merged source and tree')
+          if os.environ['SCOPE'] == 'github-history-batched' and (source, tree) != (
+              '1f1904ad35b0cc3214e42e495907c95ce714e367', '0d7fa468a9826ab89cdcbb5d156a128572577255',
+          ):
+              raise SystemExit('Batched history requires the exact frozen merged source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -956,6 +960,27 @@ jobs:
                       'ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality'),
               dict(groups['mature-static'][0], id='github-completion-static'),
               dict(groups['mature-doc-contracts'][0], id='github-completion-doc-contracts'),
+          ]
+          batched_history = json.loads(groups['github-history-completion'][0]['test_groups'])[:1]
+          batched_history[0]['required_suffixes'].extend([
+              'per_candidate_reference_counts_commit_traversals_and_matches_complete_oracle',
+              'batched_selection_reduces_actual_commit_header_visits_at_every_page_budget',
+              'batched_public_pages_exhaust_oracle_with_forward_backward_and_every_anchor',
+              'batched_selection_keeps_commit_id_ties_fallback_and_boundary_errors',
+              'batched_selection_cancels_inside_a_commit_scan_before_returning_a_page',
+          ])
+          groups['github-history-batched'] = [
+              dict(groups['github-history-completion'][0], id='github-history-batched-engine',
+                  test_groups=json.dumps(batched_history),
+                  command='Complete history_window inventory with fault injection on final merged source'),
+              dict(id='github-history-batched-server', cache='server', package='storage-server',
+                  test_groups=json.dumps([
+                      dict(selector='history_window', required_suffixes=[
+                          'history_window_collections_forward_cursor_scope_results_errors_and_revocation']),
+                      dict(selector='history_query::', test_target='http_engine', count=2, required_suffixes=[
+                          'history_query_rejects_unknown_fields_and_preserves_paired_context',
+                          'history_window_roots_change_with_metadata_but_not_authentication']),
+                  ]), command='Complete matching server window/auth consumers and both real HTTP history-query tests'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
