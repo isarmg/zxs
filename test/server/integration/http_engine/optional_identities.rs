@@ -588,8 +588,15 @@ async fn contextual_content_uses_typed_lookup_and_preserves_ranges_and_error_ord
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
-        assert_eq!(response.headers()["content-range"], "bytes 0-1/3");
+        if method == "HEAD" {
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["content-length"], "3");
+            assert!(!response.headers().contains_key("content-range"));
+        } else {
+            assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+            assert_eq!(response.headers()["content-range"], "bytes 0-1/3");
+            assert_eq!(response.headers()["content-length"], "2");
+        }
         assert!(
             response.headers()["content-disposition"]
                 .to_str()
