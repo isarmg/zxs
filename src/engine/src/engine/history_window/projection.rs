@@ -97,8 +97,12 @@ impl<'a> Query<'a> {
 
     fn fields(&self, node: Node<'a>) -> Result<HistoryNodeFields> {
         if let Node::Content(version) = node {
-            let commit =
-                nodes::first_commit(self.state, self.scope(), &version.version_id, self.cancel)?;
+            let commit = match self.indexed_version_commit(&version.version_id) {
+                Some(commit) => commit,
+                None => {
+                    nodes::first_commit(self.state, self.scope(), &version.version_id, self.cancel)?
+                }
+            };
             return content_fields(version, commit, self.cancel);
         }
         Ok(HistoryNodeFields {

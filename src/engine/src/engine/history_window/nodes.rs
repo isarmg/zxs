@@ -3,6 +3,15 @@ use super::*;
 use crate::{Commit, FileMetadataNode, FilePathNode, FileVersion};
 use std::collections::BTreeSet;
 
+#[cfg(test)]
+thread_local! {
+    static FIRST_COMMIT_HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(super) fn take_first_commit_headers() -> usize {
+    FIRST_COMMIT_HEADERS.with(|count| count.replace(0))
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Scope<'a> {
     pub(super) file: &'a str,
@@ -138,6 +147,8 @@ pub(super) fn first_commit_in<'a>(
 ) -> Result<Option<&'a Commit>> {
     let mut first = None::<&Commit>;
     for commit in commits {
+        #[cfg(test)]
+        FIRST_COMMIT_HEADERS.with(|count| count.set(count.get() + 1));
         cancel.checkpoint()?;
         if commit.history_tree_id != scope.history {
             continue;

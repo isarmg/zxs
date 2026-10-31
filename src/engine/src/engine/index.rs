@@ -12,6 +12,13 @@ use sqlite_access::{Connection, Executor, Row};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 use storage_contract::{MapChanges, TrackedRecords};
 
+mod scope;
+mod snapshot;
+pub(crate) use scope::{ScopeNode, ScopeReader};
+#[cfg(test)]
+pub(crate) use scope::{reset_scope_read_metrics, scope_read_metrics};
+pub(crate) use snapshot::OwnedScopeRead;
+
 const HISTORY_INDEX_MIN_VERSIONS: usize = 300_000;
 const HISTORY_INDEX_MAX_CANDIDATES: usize = 100;
 
@@ -26,6 +33,8 @@ const HISTORY_INDEX: &str = "CREATE INDEX file_history_lookup ON file_history_ve
 pub(super) struct QueryProof {
     sequence: u64,
     counts: BTreeMap<String, usize>,
+    scope_counts: BTreeMap<(String, String), [usize; 4]>,
+    read_generation: Arc<()>,
     availability: IndexAvailability,
     #[cfg(test)]
     indexed_reads: usize,
@@ -316,6 +325,7 @@ impl IndexConnection {
             .connection
             .as_mut()
             .expect("invariant: admitted index worker is open");
+        let scope_delta = scope::Delta::between(before, after);
         let result = platform_io::sqlite::block_on_sqlite_connection(async {
             // Preserve the former reopen boundary for disk reads. Cached b-tree
             // pages must not hide in-place damage behind a valid schema cookie.
@@ -326,6 +336,7 @@ impl IndexConnection {
             let mut tx = c.begin().await.map_err(ProjectionFailure::from)?;
             if let Some(before) = before {
                 check_projection_marker(&mut tx, before.sequence).await?;
+                scope::check_schema(&mut tx).await?;
             } else {
                 recreate_projection(&mut tx).await?;
             }
@@ -342,6 +353,7 @@ impl IndexConnection {
                 .bind(*id).bind(&v.file_id).bind(&v.history_tree_id).bind(v.version_sequence.to_be_bytes().as_slice())
                 .execute(&mut *tx).await.map_err(ProjectionFailure::from)?;
             }
+            scope_delta.project(&mut tx, after).await?;
             // Metadata-only publications still advance the marker in this transaction.
             sqlite_access::query("INSERT INTO current_state VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET sequence=excluded.sequence")
             .bind(after.sequence.to_string()).execute(&mut *tx).await.map_err(ProjectionFailure::from)?;
@@ -396,6 +408,7 @@ async fn recreate_projection(
     for (name, drop_view) in [
         ("current_state", "DROP VIEW current_state"),
         ("entities", "DROP VIEW entities"),
+        ("history_scope_members", "DROP VIEW history_scope_members"),
         ("file_history_versions", "DROP VIEW file_history_versions"),
     ] {
         let kind: Option<String> =
@@ -411,7 +424,7 @@ async fn recreate_projection(
                 .map_err(ProjectionFailure::from)?;
         }
     }
-    connection.execute("DROP TABLE IF EXISTS current_state;DROP TABLE IF EXISTS entities;DROP TABLE IF EXISTS file_history_versions;")
+    connection.execute("DROP TABLE IF EXISTS current_state;DROP TABLE IF EXISTS entities;DROP TABLE IF EXISTS file_history_versions;DROP TABLE IF EXISTS history_scope_members;")
                 .await
                 .map_err(ProjectionFailure::from)?;
     connection
@@ -420,6 +433,14 @@ async fn recreate_projection(
         .map_err(ProjectionFailure::from)?;
     connection
         .execute(HISTORY_TABLE)
+        .await
+        .map_err(ProjectionFailure::from)?;
+    connection
+        .execute(scope::TABLE)
+        .await
+        .map_err(ProjectionFailure::from)?;
+    connection
+        .execute(scope::LOOKUP)
         .await
         .map_err(ProjectionFailure::from)?;
     connection
@@ -572,6 +593,13 @@ impl Engine {
                 rebuild().map_err(Error::from)?
             }
         };
+        proof.read_generation = Arc::new(());
+        proof.scope_counts.clear();
+        scope::Delta::between(None, &self.state).apply_counts(
+            &mut proof.scope_counts,
+            None,
+            &self.state,
+        );
         proof.counts.clear();
         for v in self.state.versions.values() {
             *proof.counts.entry(v.file_id.clone()).or_default() += 1;
@@ -610,6 +638,11 @@ impl Engine {
             proof.disable(source, IndexFailureStage::Update, self.state.sequence);
             return;
         }
+        scope::Delta::between(Some(previous), &self.state).apply_counts(
+            &mut proof.scope_counts,
+            Some(previous),
+            &self.state,
+        );
         // Reuse the changed-version delta, including replacements/moves.
         for id in delta.deletes.iter().chain(&delta.upserts) {
             if let Some(old) = previous.versions.get(*id) {

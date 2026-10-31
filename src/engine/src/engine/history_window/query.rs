@@ -4,6 +4,10 @@ use nodes::Scope;
 use selection::{Position, Selection, Selector};
 use std::cmp::Reverse;
 
+#[path = "query_indexed.rs"]
+mod indexed;
+pub(crate) use indexed::{IndexedSelection, prepare_indexed_selection};
+
 type NodeKey<'a> = (Reverse<u64>, &'a str);
 type NodeSelection<'a> = Selection<NodeKey<'a>, (nodes::Node<'a>, Option<&'a crate::Commit>)>;
 type NodeSelector<'a> = Selector<NodeKey<'a>, (nodes::Node<'a>, Option<&'a crate::Commit>)>;
@@ -30,6 +34,7 @@ pub(super) struct Query<'a> {
     pub(super) cancel: &'a HistoryWindowCancellation,
     pub(super) identity: HistoryPageIdentity,
     anchor: Option<&'a HistoryNodeId>,
+    indexed: Option<&'a IndexedSelection>,
 }
 
 impl MetadataView {
@@ -38,8 +43,9 @@ impl MetadataView {
     /// must recheck it before publishing the result. No body is opened.
     ///
     /// Added space is O(page records + preview edges + field bytes), bounded by
-    /// shared policy constants. Cold selection scans State; node commit/path
+    /// shared policy constants. Unavailable-index fallback scans State; commit/path
     /// and first-parent facts can additionally scan commits and ancestor chains.
+    #[cfg(test)]
     pub(crate) fn history_window(
         &self,
         request: &HistoryWindowRequest,
@@ -51,16 +57,27 @@ impl MetadataView {
 }
 
 impl<'a> Query<'a> {
+    #[cfg(test)]
     pub(super) fn new(
         view: &'a MetadataView,
         request: &'a HistoryWindowRequest,
         context: &'a HistoryResolvedContext,
         cancel: &'a HistoryWindowCancellation,
     ) -> Result<Self> {
+        Self::new_with_owner(view, request, context, cancel, None)
+    }
+
+    pub(super) fn new_with_owner(
+        view: &'a MetadataView,
+        request: &'a HistoryWindowRequest,
+        context: &'a HistoryResolvedContext,
+        cancel: &'a HistoryWindowCancellation,
+        owner_version: Option<&str>,
+    ) -> Result<Self> {
         cancel.checkpoint()?;
         validate_request(request)?;
         let state = view.business_projection();
-        validate_scope(state, request, context, cancel)?;
+        validate_scope(state, request, context, cancel, owner_version)?;
         let root = HistoryRoot::parse(view.history_root(context.history_tree_id.as_str())?)?;
         let (anchor, query_hash) = validate_cursor(state, request, context, root)?;
         Ok(Self {
@@ -78,6 +95,7 @@ impl<'a> Query<'a> {
                 action_max_entries: u64::try_from(view.history_action_max_entries)?,
             },
             anchor,
+            indexed: None,
         })
     }
 
@@ -200,16 +218,11 @@ impl<'a> Query<'a> {
         })
     }
 
-    fn offer_content_batch(
+    fn offer_resolved_batch(
         &self,
-        commits: impl Iterator<Item = &'a crate::Commit>,
         batch: &mut nodes::ContentBatch<'a>,
         selector: &mut NodeSelector<'a>,
     ) -> Result<()> {
-        if batch.is_empty() {
-            return Ok(());
-        }
-        nodes::first_commits(commits, self.scope(), batch, self.cancel)?;
         for (id, (version, commit)) in std::mem::take(batch) {
             self.cancel.checkpoint()?;
             let node = nodes::Node::Content(version);
@@ -223,27 +236,41 @@ impl<'a> Query<'a> {
         mut commits: impl FnMut() -> I,
         position: Position<NodeKey<'a>>,
     ) -> Result<NodeSelection<'a>> {
+        self.select_nodes_from(
+            nodes::all_nodes(self.state, self.scope(), self.cancel),
+            |batch| nodes::first_commits(commits(), self.scope(), batch, self.cancel),
+            position,
+        )
+    }
+
+    fn select_nodes_from(
+        &self,
+        candidates: impl Iterator<Item = Result<nodes::Node<'a>>>,
+        mut resolve: impl FnMut(&mut nodes::ContentBatch<'a>) -> Result<()>,
+        position: Position<NodeKey<'a>>,
+    ) -> Result<NodeSelection<'a>> {
         let mut selector = Selector::new(position, self.request.limit.get())?;
         let mut batch = nodes::ContentBatch::new();
-        // Batch space follows the shared maximum even for a one-record page.
-        // Only borrowed records and first-commit pointers live here.
         let batch_limit = HistoryCollection::Nodes.maximum_limit();
-        for candidate in nodes::all_nodes(self.state, self.scope(), self.cancel) {
+        for candidate in candidates {
             let node = candidate?;
             match node {
                 nodes::Node::Content(version) => {
                     batch.insert(version.version_id.as_str(), (version, None));
                     if batch.len() == batch_limit {
-                        self.offer_content_batch(commits(), &mut batch, &mut selector)?;
+                        resolve(&mut batch)?;
+                        self.offer_resolved_batch(&mut batch, &mut selector)?;
                     }
                 }
                 nodes::Node::Path(_) | nodes::Node::Metadata(_) => {
-                    // Revisions own their sequence; commit lookup cannot alter it.
                     selector.offer((Reverse(node.sequence(None)), node.id()), (node, None));
                 }
             }
         }
-        self.offer_content_batch(commits(), &mut batch, &mut selector)?;
+        if !batch.is_empty() {
+            resolve(&mut batch)?;
+            self.offer_resolved_batch(&mut batch, &mut selector)?;
+        }
         selector.finish()
     }
 
@@ -264,17 +291,23 @@ impl<'a> Query<'a> {
     }
 
     fn node_page(&self) -> Result<HistoryWindowPage> {
-        let position = if let Some(anchor) = self.request.anchor_node_id.as_ref() {
-            self.anchor_position(anchor.as_str(), self.state.commits.values())?
+        let selection = if let Some(indexed::CapturedPage::Nodes(selected)) =
+            self.indexed.map(|index| &index.page)
+        {
+            self.restore_nodes(selected)?
         } else {
-            self.position(|position| match position {
-                HistoryPosition::Node { sequence, node_id } => {
-                    Ok((Reverse(*sequence), node_id.as_str()))
-                }
-                _ => Err(invalid("node cursor position required")),
-            })?
+            let position = if let Some(anchor) = self.request.anchor_node_id.as_ref() {
+                self.anchor_position(anchor.as_str(), self.state.commits.values())?
+            } else {
+                self.position(|position| match position {
+                    HistoryPosition::Node { sequence, node_id } => {
+                        Ok((Reverse(*sequence), node_id.as_str()))
+                    }
+                    _ => Err(invalid("node cursor position required")),
+                })?
+            };
+            self.select_nodes(|| self.state.commits.values(), position)?
         };
-        let selection = self.select_nodes(|| self.state.commits.values(), position)?;
         let page = self.page_cursors(&selection, |(Reverse(sequence), id)| {
             Ok(HistoryPosition::Node {
                 sequence: *sequence,
@@ -344,26 +377,32 @@ impl<'a> Query<'a> {
     }
 
     fn version_page(&self) -> Result<HistoryWindowPage> {
-        let position = self.position(|position| match position {
-            HistoryPosition::Version {
-                sequence,
-                version_id,
-            } => Ok((*sequence, version_id.as_str())),
-            _ => Err(invalid("version cursor position required")),
-        })?;
-        let mut selector = Selector::new(position, self.request.limit.get())?;
-        for version in self.state.versions.values() {
-            self.cancel.checkpoint()?;
-            if version.file_id == self.scope().file
-                && version.history_tree_id == self.scope().history
-            {
-                selector.offer(
-                    (version.version_sequence, version.version_id.as_str()),
-                    version,
-                );
+        let selection = if let Some(indexed::CapturedPage::Versions(selected)) =
+            self.indexed.map(|index| &index.page)
+        {
+            self.restore_versions(selected)?
+        } else {
+            let position = self.position(|position| match position {
+                HistoryPosition::Version {
+                    sequence,
+                    version_id,
+                } => Ok((*sequence, version_id.as_str())),
+                _ => Err(invalid("version cursor position required")),
+            })?;
+            let mut selector = Selector::new(position, self.request.limit.get())?;
+            for version in self.state.versions.values() {
+                self.cancel.checkpoint()?;
+                if version.file_id == self.scope().file
+                    && version.history_tree_id == self.scope().history
+                {
+                    selector.offer(
+                        (version.version_sequence, version.version_id.as_str()),
+                        version,
+                    );
+                }
             }
-        }
-        let selection = selector.finish()?;
+            selector.finish()?
+        };
         let page = self.page_cursors(&selection, |(sequence, id)| {
             Ok(HistoryPosition::Version {
                 sequence: *sequence,
@@ -705,6 +744,7 @@ fn validate_scope(
     request: &HistoryWindowRequest,
     context: &HistoryResolvedContext,
     cancel: &HistoryWindowCancellation,
+    owner_version: Option<&str>,
 ) -> Result<()> {
     let history = context.history_tree_id.as_str();
     let repository = state
@@ -727,12 +767,18 @@ fn validate_scope(
             "history repository ownership differs",
         ));
     }
-    let mut found = false;
-    for version in state.versions.values() {
-        cancel.checkpoint()?;
-        if version.file_id == request.file_id.as_str() && version.history_tree_id == history {
-            found = true;
-            break;
+    let mut found = owner_version.is_some_and(|id| {
+        state.versions.get(id).is_some_and(|version| {
+            version.file_id == request.file_id.as_str() && version.history_tree_id == history
+        })
+    });
+    if owner_version.is_none() {
+        for version in state.versions.values() {
+            cancel.checkpoint()?;
+            if version.file_id == request.file_id.as_str() && version.history_tree_id == history {
+                found = true;
+                break;
+            }
         }
     }
     if !found {

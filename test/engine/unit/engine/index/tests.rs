@@ -1179,6 +1179,8 @@ fn startup_removes_obsolete_snapshot_and_entity_projections() {
                     ("current_state".into(), CURRENT_STATE_TABLE.into()),
                     ("file_history_lookup".into(), HISTORY_INDEX.into()),
                     ("file_history_versions".into(), HISTORY_TABLE.into()),
+                    ("history_scope_lookup".into(), scope::LOOKUP.into()),
+                    ("history_scope_members".into(), scope::TABLE.into()),
                 ]
             );
             c.close().await.unwrap();
@@ -1523,3 +1525,6 @@ fn failed_rebuild_preserves_original_runtime_failure_until_success() {
         Some(scan(&engine, "file"))
     );
 }
+
+#[path = "scope_tests.rs"]
+mod scope_tests;

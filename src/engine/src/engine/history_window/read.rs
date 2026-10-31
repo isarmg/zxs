@@ -7,6 +7,8 @@ pub struct HistoryWindowRead {
     context: HistoryResolvedContext,
     cancellation: HistoryWindowCancellation,
     max_entries: usize,
+    indexed: std::sync::Mutex<Option<query::IndexedSelection>>,
+    scope: Option<crate::engine::index::OwnedScopeRead>,
 }
 
 impl std::fmt::Debug for HistoryWindowRead {
@@ -24,8 +26,27 @@ impl HistoryWindowRead {
     /// backend admission slot through encoding and sending and rechecks current
     /// identity and `Engine::recheck_history_window` before releasing the page.
     pub fn page(&self) -> Result<HistoryWindowPage> {
-        self.view
-            .history_window(&self.request, &self.context, &self.cancellation)
+        let mut indexed = self
+            .indexed
+            .lock()
+            .expect("invariant: history selection lock poisoned");
+        if indexed.is_none()
+            && let Some(scope) = &self.scope
+        {
+            *indexed = query::prepare_indexed_selection(
+                scope,
+                &self.view,
+                &self.request,
+                &self.context,
+                &self.cancellation,
+            )?;
+        }
+        self.view.history_window_selected(
+            &self.request,
+            &self.context,
+            &self.cancellation,
+            indexed.as_ref(),
+        )
     }
 
     pub fn cancellation(&self) -> HistoryWindowCancellation {
@@ -52,15 +73,31 @@ impl Engine {
         request: HistoryWindowRequest,
         cancellation: HistoryWindowCancellation,
     ) -> Result<HistoryWindowRead> {
-        let context = self.history_window_context(&request, &cancellation)?;
+        let (context, owner_version) = self.history_window_context(&request, &cancellation)?;
         let view = self.metadata_view();
-        query::Query::new(&view, &request, &context, &cancellation)?;
+        query::Query::new_with_owner(
+            &view,
+            &request,
+            &context,
+            &cancellation,
+            Some(&owner_version),
+        )?;
+        let scope = if matches!(
+            request.collection,
+            HistoryCollection::Nodes | HistoryCollection::Versions
+        ) {
+            self.capture_history_scope(request.file_id.as_str(), context.history_tree_id.as_str())?
+        } else {
+            None
+        };
         Ok(HistoryWindowRead {
             view,
             request,
             context,
             cancellation,
             max_entries: self.config.max_entries,
+            indexed: std::sync::Mutex::new(None),
+            scope,
         })
     }
 
@@ -68,7 +105,10 @@ impl Engine {
     /// histories may publish while this read prepares. A retained view conveys
     /// neither current authentication nor access to an old-root service.
     pub fn recheck_history_window(&self, read: &HistoryWindowRead) -> Result<()> {
-        let context = self.history_window_context(&read.request, &read.cancellation)?;
+        if let Some(scope) = &read.scope {
+            self.record_scope_failure(scope);
+        }
+        let (context, _) = self.history_window_context(&read.request, &read.cancellation)?;
         if context != read.context || self.config.max_entries != read.max_entries {
             return Err(query::changed());
         }
@@ -87,13 +127,15 @@ impl Engine {
         &self,
         request: &HistoryWindowRequest,
         cancel: &HistoryWindowCancellation,
-    ) -> Result<HistoryResolvedContext> {
+    ) -> Result<(HistoryResolvedContext, String)> {
         cancel.checkpoint()?;
         let file = request.file_id.as_str();
-        let version = nodes::owner_version(self.state.versions.values(), file, cancel)?
-            .ok_or_else(|| {
-                Error::new(storage_contract::ErrorCode::FileNotFound, "file not found")
-            })?;
+        let version = match self.indexed_history_owner(file, cancel)? {
+            Some(version) => version,
+            None => nodes::owner_version(self.state.versions.values(), file, cancel)?.ok_or_else(
+                || Error::new(storage_contract::ErrorCode::FileNotFound, "file not found"),
+            )?,
+        };
         let repository = self
             .planning_context()
             .repository_for_history(&version.history_tree_id)?;
@@ -152,12 +194,15 @@ impl Engine {
             .as_ref()
             .map(|context| context.branch_id.as_str())
             .or_else(|| self.state.file_selections.get(file).map(String::as_str));
-        Ok(HistoryResolvedContext {
-            repository_id: HistoryRepositoryId::parse(&repository.repository_id)?,
-            history_tree_id: HistoryTreeId::parse(&repository.history_tree_id)?,
-            path: current.map(|entry| entry.path.clone()),
-            current_node_id: current_node.map(HistoryNodeId::parse).transpose()?,
-            selected_branch_id: selected.map(HistoryBranchId::parse).transpose()?,
-        })
+        Ok((
+            HistoryResolvedContext {
+                repository_id: HistoryRepositoryId::parse(&repository.repository_id)?,
+                history_tree_id: HistoryTreeId::parse(&repository.history_tree_id)?,
+                path: current.map(|entry| entry.path.clone()),
+                current_node_id: current_node.map(HistoryNodeId::parse).transpose()?,
+                selected_branch_id: selected.map(HistoryBranchId::parse).transpose()?,
+            },
+            version.version_id.clone(),
+        ))
     }
 }

@@ -32,7 +32,7 @@ pub use read::HistoryWindowRead;
 mod oracle_tests;
 
 /// Keep engine errors local while every transport/worker uses the shared token.
-trait HistoryCancellationCheckpoint {
+pub(super) trait HistoryCancellationCheckpoint {
     fn checkpoint(&self) -> Result<()>;
 }
 
