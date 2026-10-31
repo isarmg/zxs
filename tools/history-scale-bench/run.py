@@ -23,6 +23,7 @@ from summarize import aggregate, summarize_driver
 from tracing import parse_trace
 from controller import load_plan, profile_settings
 from verify_build import validate_precompiled
+from growth import TIERS, RESOURCES, admit, load_policy
 
 
 STAGES = ("build", "reopen", "recovery")
@@ -436,14 +437,19 @@ def environment(args: argparse.Namespace) -> dict:
             "toolchain_config_sha256": sha256(source / "rust-toolchain.toml"),
         })
         args.provenances[label] = proof
+        if args.growth_review is not None and proof["binary_sha256"] != args.growth_policy_data["binary_sha256"]:
+            raise ValueError("actual verified binary differs from the growth policy")
         validate_build_identity(proof["build_identity"], args.build_run_id, args.build_carrier_sha)
         sources[label] = {
             "head": head, "status": source_status,
+            "tree": command_output(["git", "rev-parse", "HEAD^{tree}"], source),
             "lockfile_sha256": sha256(source / "Cargo.lock"),
             "precompiled_provenance": proof,
             "provenance_sha256": sha256(getattr(args, label + "_provenance")),
         }
     allowlist = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTUP_TOOLCHAIN", "CARGO_INCREMENTAL", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA", "RUNNER_OS", "RUNNER_ARCH")
+    if args.growth_review is not None and sources["candidate"]["tree"] != args.growth_policy_data["source_tree"]:
+        raise ValueError("growth product tree differs from the reviewed source")
     return {
         "rustc": rustc, "cargo": command_output(["cargo", "+1.99.0", "--version"]),
         "platform": platform.platform(), "cpu": command_output(["lscpu", "--json"]),
@@ -461,6 +467,7 @@ def environment(args: argparse.Namespace) -> dict:
         "query_protocol": args.query_protocol,
         "expected_build_identity": {"GITHUB_SHA": args.build_carrier_sha, "GITHUB_RUN_ID": args.build_run_id},
         "observer_identity": {key: os.environ.get(key) for key in ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")},
+        "growth_review": args.growth_review,
     }
 
 
@@ -477,7 +484,11 @@ def arguments() -> argparse.Namespace:
         parser.add_argument(f"--{label}-provenance", type=Path)
     parser.add_argument("--candidate-only", action="store_true")
     parser.add_argument("--plan", type=Path, required=True)
-    parser.add_argument("--profile", choices=("small-selftest", "boundaries", "1000", "10000"), required=True)
+    parser.add_argument("--profile", choices=("small-selftest", "boundaries", "1000", "10000", *TIERS), required=True)
+    parser.add_argument("--growth-policy", type=Path)
+    parser.add_argument("--growth-evidence-root", type=Path)
+    parser.add_argument("--prior-run-id")
+    parser.add_argument("--prior-carrier-sha")
     parser.add_argument("--build-run-id", required=True)
     parser.add_argument("--build-carrier-sha", required=True)
     parser.add_argument("--output-root", type=Path, required=True)
@@ -494,13 +505,28 @@ def arguments() -> argparse.Namespace:
                 parser.error(f"--{label}-{suffix} is required for the selected source matrix")
     if args.candidate_only and any(getattr(args, "baseline_" + suffix) is not None for suffix in ("binary", "source", "provenance")):
         parser.error("current-only experiment does not accept baseline inputs")
-    if args.candidate_only and args.profile not in {"small-selftest", "boundaries"}:
+    if args.candidate_only and args.profile not in {"small-selftest", "boundaries", *TIERS}:
         parser.error("current-only experiment is limited to selftest and boundaries")
     if re.fullmatch(r"[1-9][0-9]*", args.build_run_id) is None or re.fullmatch(r"[0-9a-f]{40}", args.build_carrier_sha) is None:
         parser.error("build reuse requires an exact positive run ID and lowercase 40-hex carrier SHA")
     args.plan = args.plan.resolve(strict=True)
     args.plan_data = load_plan(args.plan)
-    settings = profile_settings(args.plan_data, args.profile)
+    args.growth_review = None
+    if args.profile in TIERS:
+        if not args.candidate_only or any(value is None for value in (args.growth_policy, args.growth_evidence_root, args.prior_run_id, args.prior_carrier_sha)):
+            parser.error("growth requires current-only mode and complete predecessor evidence")
+        args.growth_policy_data = load_policy(args.growth_policy.resolve(strict=True))
+        if (args.build_run_id, args.build_carrier_sha) != (args.growth_policy_data["build_run_id"], args.growth_policy_data["build_carrier_sha"]):
+            parser.error("growth must reuse the original reviewed binary build")
+        settings, args.growth_review = admit(args.plan_data, args.profile, args.growth_policy_data,
+                                           args.growth_evidence_root.resolve(strict=True), args.prior_run_id, args.prior_carrier_sha)
+        for name, value in RESOURCES.items():
+            if getattr(args, name) != value:
+                parser.error(f"growth requires its reviewed {name} budget: {value}")
+    else:
+        if any(value is not None for value in (args.growth_policy, args.growth_evidence_root, args.prior_run_id, args.prior_carrier_sha)):
+            parser.error("predecessor growth evidence is only accepted by growth profiles")
+        settings = profile_settings(args.plan_data, args.profile)
     for key in ("sizes", "repeats", "counts_repeats", "counts_sizes", "phase_seconds", "cohort_seconds"):
         setattr(args, key, settings[key])
     args.revisions = {"baseline": settings["baseline_sha"], "candidate": settings["candidate_sha"]}
@@ -534,7 +560,22 @@ def main() -> int:
                         "label": label, "operations": operations, "repeat": repeat, "mode": mode,
                     })
     write_json(args.output_root / "requested.json", requested)
-    write_json(args.output_root / "environment.json", environment(args))
+    observed_environment = environment(args)
+    if args.growth_review is not None:
+        free = shutil.disk_usage(args.output_root).free
+        needed = args.growth_review["forecast"]["cohort_bytes"] + args.minimum_free_mib * 1048576
+        args.growth_review["initial_free_bytes"] = free
+        args.growth_review["required_free_bytes"] = needed
+        if free < needed:
+            args.growth_review["admitted"] = False
+            args.growth_review["denial_reasons"].append("initial free space cannot retain forecast fresh pools plus reserve")
+        write_json(args.output_root / "growth-review.json", args.growth_review)
+    write_json(args.output_root / "environment.json", observed_environment)
+    if args.growth_review is not None:
+        if not args.growth_review["admitted"]:
+            write_json(args.output_root / "summary.json", growth_summary(args))
+            print(json.dumps(args.growth_review, sort_keys=True), flush=True)
+            return 2
     for label, proof in args.provenances.items():
         write_json(args.output_root / f"{label}-precompiled-provenance.json", proof)
     deadline = time.monotonic() + args.cohort_seconds
@@ -548,14 +589,23 @@ def main() -> int:
                     sample = run_sample(label, getattr(args, label + "_source"), getattr(args, label + "_binary"), operations, repeat, mode, args, deadline, halted.get(key))
                     if sample["status"] in {"failed", "incomplete"}:
                         halted[key] = "earlier_sample_failed_or_incomplete_under_same_budget"
-                    write_json(args.output_root / "summary.json", aggregate(args.output_root))
+                    write_json(args.output_root / "summary.json", growth_summary(args))
     requested["cohort_complete"] = True
     write_json(args.output_root / "requested.json", requested)
-    summary = aggregate(args.output_root)
+    summary = growth_summary(args)
     write_json(args.output_root / "summary.json", summary)
     if summary["status_counts"].get("failed", 0):
         return 1
     return 0 if summary["all_requested_samples_passed"] else 2
+
+
+def growth_summary(args: argparse.Namespace) -> dict:
+    summary = aggregate(args.output_root)
+    if args.growth_review is not None:
+        summary["coverage"] = args.growth_review["coverage"]
+        summary["all_growth_capacity_metrics_passed"] = False  # Higher-tier syscall counts remain unexecuted.
+        summary["growth_admitted"] = args.growth_review["admitted"]
+    return summary
 
 
 if __name__ == "__main__":
