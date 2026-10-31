@@ -386,6 +386,15 @@
       "detail": "retained atomic-waker/tests/basic.rs + project primitives contracts (exactly 18; race x3)"
     },
     {
+      "package": "hyper-rustls",
+      "kind": "P",
+      "shard": "workspace",
+      "scripts": [
+        ".github/scripts/check.sh"
+      ],
+      "detail": "test/client/integration/tls_trust_regression.rs (8 project-authored tests), default storage-client workspace consumer; retained upstream tests NOT run"
+    },
+    {
       "package": "icu_collections",
       "kind": "P",
       "shard": "foundation-language",
@@ -609,6 +618,33 @@
         ".github/scripts/check-linux-syscalls.py"
       ],
       "detail": "rustc --test build.rs (target guard) + test/tools/rust-sources/fixtures/linux_syscalls.rs (4 tests) against all-apis linux-raw and use-libc builds; rustix lib unit tests NOT run"
+    },
+    {
+      "package": "rustls",
+      "kind": "P",
+      "shard": "workspace",
+      "scripts": [
+        ".github/scripts/check.sh"
+      ],
+      "detail": "test/client/integration/tls_trust_regression.rs (8 project-authored tests), default storage-client workspace consumer; retained upstream tests NOT run"
+    },
+    {
+      "package": "rustls-pki-types",
+      "kind": "P",
+      "shard": "workspace",
+      "scripts": [
+        ".github/scripts/check.sh"
+      ],
+      "detail": "test/client/integration/tls_trust_regression.rs (8 project-authored tests), default storage-client workspace consumer; retained upstream tests NOT run"
+    },
+    {
+      "package": "rustls-webpki",
+      "kind": "P",
+      "shard": "workspace",
+      "scripts": [
+        ".github/scripts/check.sh"
+      ],
+      "detail": "test/client/integration/tls_trust_regression.rs (8 project-authored tests), default storage-client workspace consumer; retained upstream tests NOT run"
     },
     {
       "package": "schema-validation",
@@ -866,6 +902,15 @@
       "detail": "#[tokio::test] used by executed fixtures (runtime-join-map.rs, runtime-adapters.rs, consumer.rs)"
     },
     {
+      "package": "tokio-rustls",
+      "kind": "P",
+      "shard": "workspace",
+      "scripts": [
+        ".github/scripts/check.sh"
+      ],
+      "detail": "test/client/integration/tls_trust_regression.rs (8 project-authored tests), default storage-client workspace consumer; retained upstream tests NOT run"
+    },
+    {
       "package": "toml",
       "kind": "P",
       "shard": "foundation-language",
@@ -1017,6 +1062,15 @@
         ".github/scripts/check-foundation.sh"
       ],
       "detail": "cargo test -p wasm-text-printer"
+    },
+    {
+      "package": "webpki-roots",
+      "kind": "P",
+      "shard": "workspace",
+      "scripts": [
+        ".github/scripts/check.sh"
+      ],
+      "detail": "test/client/integration/tls_trust_regression.rs (8 project-authored tests), default storage-client workspace consumer; retained upstream tests NOT run"
     },
     {
       "package": "winnow",

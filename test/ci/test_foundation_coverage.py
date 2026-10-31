@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -50,6 +51,27 @@ class FoundationCoverageConsumerTests(unittest.TestCase):
 
 
 class FoundationCoverageMapTests(unittest.TestCase):
+    def test_tls_security_consumer_is_executed_without_claiming_upstream_suites(self):
+        root = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        self.assertIn("src/client", root["workspace"]["default-members"])
+        client = tomllib.loads((ROOT / "src/client/Cargo.toml").read_text())
+        target = next(target for target in client["test"] if target["name"] == "tls_trust_regression")
+        self.assertEqual(target["path"], "../../test/client/integration/tls_trust_regression.rs")
+        self.assertTrue((ROOT / "src/client" / target["path"]).is_file())
+        workspace = (ROOT / ".github/scripts/check.sh").read_text().split("  workspace)\n", 1)[1].split(";;", 1)[0]
+        self.assertIn("    cargo test --locked --offline\n", workspace)
+        packages = {package["package"]: package for package in MAP["packages"]}
+        for name in ("rustls-webpki", "webpki-roots", "rustls-pki-types", "rustls", "hyper-rustls", "tokio-rustls"):
+            with self.subTest(package=name):
+                package = packages[name]
+                self.assertEqual(package["classification"], "executed")
+                gates = [gate for gate in package["gates"] if gate["shard"] == "workspace"]
+                self.assertEqual(len(gates), 1)
+                self.assertEqual(gates[0]["kind"], "P")
+                self.assertEqual(gates[0]["scripts"], [".github/scripts/check.sh"])
+                self.assertIn("test/client/integration/tls_trust_regression.rs", gates[0]["detail"])
+                self.assertIn("upstream tests NOT run", gates[0]["detail"])
+
     def test_every_active_foundation_package_is_mapped_once(self):
         active = sorted(d for d in CATALOG["packages"] if d.startswith("src/foundation/"))
         self.assertEqual([package["directory"] for package in MAP["packages"]], active)

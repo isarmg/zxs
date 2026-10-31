@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("release_native", ROOT / ".github/scripts/release-native.py")
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+REAL_CHECK_OUTPUT = subprocess.check_output
 
 
 class NativeRelease(unittest.TestCase):
@@ -31,9 +33,18 @@ class NativeRelease(unittest.TestCase):
         self.enterContext(patch.object(MODULE, "__file__", str(self.root / ".github/scripts/release-native.py")))
         self.enterContext(patch.object(MODULE.os, "chdir"))
         self.enterContext(patch.dict(os.environ, {"RELEASE_VERSION": "0.1.0", "CFLAGS": "-DPRIVATE=secret"}, clear=True))
-        self.enterContext(patch.object(MODULE.subprocess, "check_output",
-                                      side_effect=["a" * 40 + "\n", "rustc fixture\nhost: x86_64-unknown-linux-gnu\n",
-                                                   "a" * 40 + "\n"]))
+        self.commit = "a" * 40
+        self.source_status = ""
+        self.queries = self.enterContext(patch.object(MODULE.subprocess, "check_output", side_effect=self.query))
+
+    def query(self, command, **kwargs):
+        if command == ["git", "rev-parse", "HEAD"]:
+            return self.commit + "\n"
+        if command == ["git", "status", "--porcelain", "--untracked-files=normal"]:
+            return self.source_status
+        if command[-1] == "-vV":
+            return "rustc fixture\nhost: x86_64-unknown-linux-gnu\n"
+        self.fail(f"unexpected native build query: {command}")
 
     def test_build_uses_explicit_target_and_records_outputs_without_environment_values(self):
         with patch.object(MODULE.subprocess, "run") as run:
@@ -60,9 +71,83 @@ class NativeRelease(unittest.TestCase):
         with patch.dict(os.environ, {"CARGO_BUILD_RUSTC": "/private/toolchain/rustc"}), \
                 patch.object(MODULE.subprocess, "run"):
             MODULE.main()
-        self.assertEqual(MODULE.subprocess.check_output.call_args_list[1].args[0],
+        self.assertEqual(MODULE.subprocess.check_output.call_args_list[2].args[0],
                          ["/private/toolchain/rustc", "-vV"])
         self.assertNotIn("/private/toolchain", self.receipt.read_text())
+
+    def test_dirty_source_never_starts_a_release_build_or_keeps_old_receipt(self):
+        for status in (" M src/server/src/lib.rs\n", "M  src/server/src/lib.rs\n",
+                       "?? src/server/src/new_module.rs\n"):
+            with self.subTest(status=status):
+                self.receipt.write_text("stale successful build")
+                self.source_status = status
+                with patch.object(MODULE.subprocess, "run") as run:
+                    with self.assertRaisesRegex(RuntimeError, "clean source checkout"):
+                        MODULE.main()
+                run.assert_not_called()
+                self.assertFalse(self.receipt.exists())
+
+    def test_same_commit_cannot_hide_source_changes_during_the_build(self):
+        with patch.object(MODULE.subprocess, "run", side_effect=lambda *args, **kwargs:
+                          setattr(self, "source_status", " M src/server/src/lib.rs\n")) as run:
+            with self.assertRaisesRegex(RuntimeError, "clean source checkout"):
+                MODULE.main()
+        run.assert_called_once()
+        self.assertFalse(self.receipt.exists())
+
+    def test_source_commit_changes_do_not_leave_a_receipt(self):
+        with patch.object(MODULE.subprocess, "run", side_effect=lambda *args, **kwargs:
+                          setattr(self, "commit", "b" * 40)):
+            with self.assertRaisesRegex(RuntimeError, "source commit changed"):
+                MODULE.main()
+        self.assertFalse(self.receipt.exists())
+
+    def test_build_input_changes_do_not_leave_a_receipt(self):
+        with patch.object(MODULE.subprocess, "run", side_effect=lambda *args, **kwargs:
+                          (self.root / ".cargo/config.toml").write_text("changed configuration")):
+            with self.assertRaisesRegex(RuntimeError, "configuration changed"):
+                MODULE.main()
+        self.assertFalse(self.receipt.exists())
+
+    def real_source(self, build):
+        source = self.root / "src/main.rs"
+        source.parent.mkdir()
+        source.write_text("original source")
+        (self.root / ".gitignore").write_text("target/\n")
+        subprocess.run(["git", "init", "--quiet", str(self.root)], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "fixture"], check=True)
+        def query(command, **kwargs):
+            if command[0] == "git":
+                return REAL_CHECK_OUTPUT(command, cwd=self.root, **kwargs)
+            return self.query(command, **kwargs)
+
+        return source, SimpleNamespace(check_output=query, run=build)
+
+    def test_real_git_clean_checkout_allows_ignored_build_outputs(self):
+        _, process = self.real_source(lambda *args, **kwargs: None)
+        with patch.object(MODULE, "subprocess", process):
+            MODULE.main()
+        commit = REAL_CHECK_OUTPUT(["git", "rev-parse", "HEAD"], cwd=self.root, text=True).strip()
+        self.assertIn(f"commit={commit}\n", self.receipt.read_text())
+
+    def test_real_git_rejects_uncommitted_source_before_build(self):
+        build = unittest.mock.Mock()
+        source, process = self.real_source(build)
+        source.write_text("modified source")
+        with patch.object(MODULE, "subprocess", process):
+            with self.assertRaisesRegex(RuntimeError, "clean source checkout"):
+                MODULE.main()
+        build.assert_not_called()
+        self.assertFalse(self.receipt.exists())
+
+    def test_real_git_rejects_source_change_during_build_at_the_same_commit(self):
+        source, process = self.real_source(lambda *args, **kwargs: source.write_text("changed during build"))
+        with patch.object(MODULE, "subprocess", process):
+            with self.assertRaisesRegex(RuntimeError, "clean source checkout"):
+                MODULE.main()
+        self.assertFalse(self.receipt.exists())
 
 
 if __name__ == "__main__":

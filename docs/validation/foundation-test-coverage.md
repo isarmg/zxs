@@ -115,7 +115,9 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 
 `foundation_coverage.py --write` 在集成提交生成[覆盖映射](foundation-test-coverage-map.md)，当前活动、执行、风险分层与退役数量以该生成表为准，不在本文维护第二份总数。每个包的消费者与特性来自各 profile 入口的 `cargo tree`，门禁来自已审阅登记 `tools/rust-sources/foundation-test-gates.json` 与本门禁套件表。登记中引用的脚本必须存在且被 CI 入口调用；`check-rust-syntax-migration.py` 未被任何入口调用，因此未计入。“已执行”只表示有针对该包的测试入口，不表示全部 API、目标或密码学性质已验证。
 
-需要但未执行的高风险项仍包括 HTTP／TLS 栈（`rustls`、`rustls-webpki`、`tokio-rustls`、`hyper-rustls`、`tower-http`、`httparse`、`http` 等，缺失夹具或依赖 `serde_test`、`rcgen` 等不存在的提供者）与 `subtle`。`cmov`、`constant_time_eq` 和 `httpdate` 的限定功能接线不消除上节列出的提供者、目标与常数时间验证缺口。
+TLS 的项目消费者回归另由默认工作区成员 `storage-client` 的 `tls_trust_regression` 执行，登记为 P：`rustls-webpki`、`webpki-roots`、`rustls-pki-types`、`rustls`、`hyper-rustls` 和 `tokio-rustls`。该目标的八项测试核对全部八份公告 SPKI 在叶、中间及信任锚位置的拒绝、移除根、正常链与坏签名，并通过真实本地 HTTPS 握手检查客户端的信任和发送边界；见[TLS 回归范围](../security/TLS_TEST_FIXTURES.md)。它们未执行这些组件的保留上游套件，不能以 P 替代 U；旧报告只描述当时范围。
+
+需要但未执行的高风险项仍包括 `tower-http`、`httparse`、`http` 等 HTTP 组件与 `subtle`。TLS 保留上游测试仍缺 `rcgen` 等提供者；`rustls-pki-types` 库内测试缺 `crabgrind`，`http` 库内测试缺 `doc_comment`，不能以编译失败或零测试充当执行。`cmov`、`constant_time_eq` 和 `httpdate` 的限定功能接线不消除上节列出的提供者、目标与常数时间验证缺口。
 
 ### 行为套件的初次集成记录
 

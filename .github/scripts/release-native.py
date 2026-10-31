@@ -20,6 +20,11 @@ def digest(path):
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
+def require_clean_source():
+    if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"], text=True):
+        raise RuntimeError("native release requires a clean source checkout")
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     os.chdir(root)
@@ -28,6 +33,7 @@ def main():
     receipt.unlink(missing_ok=True)
     version = os.environ["RELEASE_VERSION"]
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    require_clean_source()
     # Do not publish arbitrary environment values: compiler/flag overrides may
     # contain private paths or defines. Fingerprints preserve comparison only.
     variables = {key: value for key, value in os.environ.items()
@@ -47,6 +53,7 @@ def main():
                     "--message-format=json"], check=True)
     if commit != subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip():
         raise RuntimeError("native release source commit changed during build")
+    require_clean_source()
     if inputs != {name: digest(root / name) for name in inputs}:
         raise RuntimeError("native release build configuration changed during build")
     fields = {
