@@ -21,6 +21,8 @@
 
 ## 现代浏览器契约
 
+当前能力契约与具体已执行环境分开登记；2026-10-31 UTC 的 Chrome、G4、模板及异步消费者证据见 [UI/G4 与浏览器验收记录](../validation/ui-g4-browser-acceptance-20261031.md)。六种 CSS 视口不代表六种浏览器或移动设备。
+
 只支持满足当前能力契约的现代浏览器，不按浏览器名称或发行版本兜底，不提供旧浏览器 polyfill、前缀替代或缺能力时的原生圆角兼容模式。WebAssembly、ES modules、FinalizationRegistry、WebAssembly.instantiateStreaming 和实际 DOM/SVG 是运行前提；不支持脚本语法／WASM 的浏览器无法运行本应用，资源引导错误不构成兼容实现。
 
 共享 `mount` 在创建组件、主题监听器及字体任务之前执行一次准入：要求 `TextEncoder.prototype.encodeInto`、`ResizeObserver`、`MutationObserver`、`requestAnimationFrame`、`cancelAnimationFrame`、`matchMedia`、`AbortController`、`CSS.registerProperty` 与 `CSS.supports`；CSS 要求无前缀的 mask-image URL、clip-path path、`:has()` 和 inline-size container queries。取消契约还通过一次性 controller 和独立对象 reason 检查真实语义：`abort(reason)` 后 signal 必须已中止且 `signal.reason` 严格等于该对象；缺少 reason 或忽略参数均明确拒绝，不让 `undefined` 拒绝值与缺失 reason 误匹配。缺失返回包含具体能力名的错误并进入 `failed`，不发布 ready，也不以原生 CSS 圆角继续运行。内部请求信任该取消契约，不添加逐请求能力探测或降级；图表和版本树直接使用观察器契约，仍按 owner 清理。此准入是支持下限，不是对全部浏览器行为、CSP 或资源可用性的穷尽证明；实际 API 操作失败仍保留具体错误。
