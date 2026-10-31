@@ -18,7 +18,7 @@ fn publish(engine: &mut Engine, branch: &str, payload: &[u8]) -> (CommitRequest,
     (request, result)
 }
 
-fn manifests(fixture: &Fixture, id: &str) -> [std::path::PathBuf; 2] {
+pub(super) fn manifests(fixture: &Fixture, id: &str) -> [std::path::PathBuf; 2] {
     [
         fixture
             .root
@@ -547,7 +547,7 @@ fn damaged_request_mirror_replays_admitted_cold_but_restart_keeps_record_residen
 }
 
 #[test]
-fn historical_workspace_commit_abort_and_restart_keep_resident_charge() {
+fn historical_workspace_commit_abort_and_restart_keep_published_evidence() {
     let mut f = Fixture::new();
     f.config.max_retained_workspaces = 1;
     f.config.max_retained_workspaces_per_principal = 1;
@@ -577,7 +577,7 @@ fn historical_workspace_commit_abort_and_restart_keep_resident_charge() {
             &repo.history_tree_id,
             crate::HistoricalSaveOptions {
                 source_commit_id: head,
-                name: "historical resident witness".into(),
+                name: "historical publication witness".into(),
                 workspace_id: Some(workspace.workspace_id.clone()),
                 primary_slot_id: None,
                 target_copies: None,
@@ -599,10 +599,18 @@ fn historical_workspace_commit_abort_and_restart_keep_resident_charge() {
     let committed = engine.workspace(&workspace.workspace_id).unwrap();
     assert_eq!(committed.purpose, WorkspacePurpose::HistoricalBranch);
     assert_eq!(committed.state, WorkspaceState::Committed);
-    assert!(engine.workspaces.contains_key(&workspace.workspace_id));
+    assert!(!engine.workspaces.contains_key(&workspace.workspace_id));
+    assert_eq!(engine.workspace_capacity("admin").principal.records.used, 0);
+    assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 1);
+    // A separate live workspace still exhausts the resident allowance. Replay
+    // and terminal updates of the historical receipt must work at that limit.
+    let active = engine
+        .create_workspace(&repo.main_branch_id, "admin")
+        .unwrap();
     let capacity = engine.workspace_capacity("admin");
+    assert!(engine.workspaces.contains_key(&active.workspace_id));
     assert_eq!(capacity.principal.records.used, 1);
-    assert_eq!(capacity.principal.cold_records, 0);
+    assert_eq!(capacity.principal.cold_records, 1);
     assert!(capacity.principal.metadata_bytes.used > 0);
     assert_eq!(
         engine
@@ -616,7 +624,7 @@ fn historical_workspace_commit_abort_and_restart_keep_resident_charge() {
     drop(engine);
     let mut engine = Engine::open(&f.root).unwrap();
     assert_eq!(engine.workspace_capacity("admin"), capacity);
-    assert!(engine.workspaces.contains_key(&workspace.workspace_id));
+    assert!(!engine.workspaces.contains_key(&workspace.workspace_id));
     assert_eq!(
         canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
         canonical_json(&committed).unwrap()
@@ -638,7 +646,7 @@ fn historical_workspace_commit_abort_and_restart_keep_resident_charge() {
     let aborted = engine.workspace(&workspace.workspace_id).unwrap();
     assert_eq!(aborted.purpose, WorkspacePurpose::HistoricalBranch);
     assert_eq!(aborted.state, WorkspaceState::Aborted);
-    assert!(engine.workspaces.contains_key(&workspace.workspace_id));
+    assert!(!engine.workspaces.contains_key(&workspace.workspace_id));
     assert_eq!(engine.workspace_capacity("admin"), capacity);
     for path in manifests(&f, &workspace.workspace_id) {
         assert_eq!(fs::read(path).unwrap(), canonical_json(&aborted).unwrap());
@@ -647,7 +655,7 @@ fn historical_workspace_commit_abort_and_restart_keep_resident_charge() {
     drop(engine);
     let mut engine = Engine::open(&f.root).unwrap();
     assert_eq!(engine.workspace_capacity("admin"), capacity);
-    assert!(engine.workspaces.contains_key(&workspace.workspace_id));
+    assert!(!engine.workspaces.contains_key(&workspace.workspace_id));
     assert_eq!(
         canonical_json(&engine.workspace(&workspace.workspace_id).unwrap()).unwrap(),
         canonical_json(&aborted).unwrap()
@@ -674,7 +682,7 @@ fn historical_workspace_commit_abort_and_restart_keep_resident_charge() {
     engine.assert_workspace_budget_consistent();
 }
 
-fn evidence_entries(
+pub(super) fn evidence_entries(
     root: &std::path::Path,
 ) -> std::collections::BTreeMap<std::path::PathBuf, Option<blake3::Hash>> {
     let mut entries = std::collections::BTreeMap::new();
