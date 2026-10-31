@@ -188,6 +188,34 @@ class GrowthTests(unittest.TestCase):
         self.assertLess(forecast["phase_seconds"]["recovery"], 600)
         self.assertEqual(history[0]["wall"]["recovery"], 2)
 
+    def test_measured_replay_growth_keeps_complete_cohort_inside_hosted_limit(self):
+        history = [{"size": 2048, "wall": {"build": 66.862511334, "reopen": 73.073033687, "recovery": 71.920595386},
+                    "rss": 37126144, "disk": 242044928},
+                   {"size": 4096, "wall": {"build": 355.875552146, "reopen": 590.111177936, "recovery": 577.497994163},
+                    "rss": 57937920, "disk": 444223488}]
+        forecast = growth.project(history, 5000, 2)
+        self.assertLess(forecast["cohort_seconds"], growth.TIERS["growth-5000"][4])
+        self.assertGreater(growth.project(history, 10000, 1)["cohort_seconds"], 6 * 3600)
+        self.assertNotIn("growth-10000", growth.TIERS)
+        self.assertNotIn("growth-100000", growth.TIERS)
+        # A small next step uses both rounds' worst actual cost, but does not
+        # fit a noisy new exponent from the narrow 4096 -> 5000 ratio.
+        later = {"size": 5000, "wall": {"build": 500, "reopen": 900, "recovery": 880},
+                 "rss": 65000000, "disk": 550000000}
+        extended = history + [later]
+        self.assertEqual(growth.exponent(history, "wall", "reopen"), growth.exponent(extended, "wall", "reopen"))
+        self.assertGreater(growth.project(extended, 8192, 1)["phase_seconds"]["recovery"], 900 * growth.SAFETY)
+
+    def test_repeated_tier_uses_worst_actual_stage_and_full_sample(self):
+        first, second = sample(5000, repeat=1), sample(5000, repeat=2)
+        first["total_sample_inventory"] = {"allocated_bytes": 90000000}
+        second["total_sample_inventory"] = {"allocated_bytes": 80000000}
+        first["stages"]["build"]["supervisor"]["wall_seconds"] = 100
+        second["stages"]["build"]["supervisor"]["wall_seconds"] = 125
+        actual = growth.observed([first, second], 5000)
+        self.assertEqual(actual["wall"]["build"], 125)
+        self.assertEqual(actual["disk"], 90000000)
+
     def test_counts_projection_binds_native_predecessor_and_uses_cold_open(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -260,6 +288,31 @@ class GrowthTests(unittest.TestCase):
             write(root, "prior/growth-2048/environment.json", env)
             with self.assertRaisesRegex(ValueError, "resource history"):
                 growth.admit(plan, "growth-4096", p, root, "125", "f" * 40)
+
+    def test_8192_requires_completed_5000_both_rounds_and_entire_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan, p, _ = self.fixture(root)
+            prior_run, prior_sha = "124", "c" * 40
+            for profile, run_id in (("growth-2048", "125"), ("growth-4096", "126"), ("growth-5000", "127")):
+                _, review = growth.admit(plan, profile, p, root, prior_run, prior_sha)
+                self.assertTrue(review["admitted"])
+                size, _, repeats, _, _ = growth.TIERS[profile]
+                env = environment(profile, run_id, "f" * 40)
+                env["growth_review"] = review
+                write(root, f"prior/{profile}/environment.json", env)
+                value = self.raw(root / "prior", profile, summary([sample(size, repeat=r) for r in range(1, repeats + 1)]))
+                write(root, f"prior/{profile}/summary.json", value)
+                write(root, "prior-run.json", metadata(run_id, "f" * 40))
+                prior_run, prior_sha = run_id, "f" * 40
+            settings, review = growth.admit(plan, "growth-8192", p, root, prior_run, prior_sha)
+            self.assertTrue(review["admitted"])
+            self.assertEqual(settings["sizes"], [8192])
+            self.assertEqual([row["size"] for row in review["resource_history"]], [257, 1025, 2048, 4096, 5000])
+            value["samples"].pop()
+            write(root, "prior/growth-5000/summary.json", value)
+            with self.assertRaisesRegex(ValueError, "matrix"):
+                growth.admit(plan, "growth-8192", p, root, prior_run, prior_sha)
 
     def test_insufficient_initial_space_keeps_denial_and_never_creates_a_pool(self):
         with tempfile.TemporaryDirectory() as directory:
