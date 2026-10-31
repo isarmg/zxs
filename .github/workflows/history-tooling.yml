@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion]
 
 permissions:
   contents: read
@@ -220,6 +220,10 @@ jobs:
               'a6cac56acd9a05635cb8037322499c4eb646fc03', '0bb3a30b5d9a2faa20c38f4dcea5f0a114bec1f8',
           ):
               raise SystemExit('History completion requires the exact reviewed source and tree')
+          if os.environ['SCOPE'] == 'github-ui-completion' and (source, tree) != (
+              '7618c7f31cffb1f4cb6a46e08d1f8c22ef3d0f4e', '26c963870a38aef76ba6649ee4ff701edffe2fa0',
+          ):
+              raise SystemExit('UI completion requires the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -933,6 +937,13 @@ jobs:
                   dict(selector=history_missing_page, features=['fault-injection'], exact=True,
                       count=1, required=[history_missing_page]),
               ]), command='Complete history_window filter plus exact retained old-page scrub witness; fault injection enabled')]
+          groups['github-ui-completion'] = [
+              dict(id='github-ui-unit', cache='server', package='browser-smoke',
+                  test_groups=json.dumps([dict(selector='', bin='browser-smoke')]),
+                  command='Complete nonignored browser harness unit inventory and execution'),
+              dict(id='github-ui-production', web_production=True,
+                  command='bash .github/scripts/check.sh web-production'),
+          ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
@@ -1379,8 +1390,8 @@ jobs:
           retention-days: 7
 
   native-release-browser:
-    name: ${{ inputs.scope == 'history-window-web-browser' && 'Real Chrome history windows and observer lifetime' || 'Extracted native release and browser acceptance' }}
-    if: inputs.scope == 'native-release-acceptance' || inputs.scope == 'history-window-web-browser'
+    name: ${{ inputs.scope == 'github-ui-completion' && 'Real Chrome setup and terminal resource lifecycle' || inputs.scope == 'history-window-web-browser' && 'Real Chrome history windows and observer lifetime' || 'Extracted native release and browser acceptance' }}
+    if: inputs.scope == 'native-release-acceptance' || inputs.scope == 'history-window-web-browser' || inputs.scope == 'github-ui-completion'
     needs: diagnostic
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -1391,6 +1402,7 @@ jobs:
       SOURCE_SHA: ${{ inputs.source_sha }}
       SOURCE_TREE: ${{ inputs.source_tree }}
       WORKFLOW_SHA: ${{ github.workflow_sha }}
+      DIAGNOSTIC_SCOPE: ${{ inputs.scope }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1460,8 +1472,8 @@ jobs:
           bash .github/scripts/release-acceptance.sh 2>&1 | tee .native-diagnostics/release-acceptance.log
           python3 .github/scripts/check-csr-browser.py 2>&1 | tee .native-diagnostics/csr-browser.log
           bash .github/scripts/release-assemble.sh 2>&1 | tee .native-diagnostics/assembly.log
-      - name: Exercise real Chrome history windows and owner disposal
-        if: inputs.scope == 'history-window-web-browser'
+      - name: Exercise real Chrome history and terminal lifecycle contracts
+        if: inputs.scope == 'history-window-web-browser' || inputs.scope == 'github-ui-completion'
         env:
           ZXS_REQUIRE_BROWSER: '1'
           ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
@@ -1477,8 +1489,15 @@ jobs:
           BASH
           grep -Fx 'PASS synthetic history AbortSignal replacement, late completion ownership, real-file selection and navigation cleanup' .native-diagnostics/history-window-browser.log
           grep -Fx 'PASS synthetic 32-node window replacement/observer disposal, real-ID tag and merge basis review, replace-only UTF-8 fields and stale auxiliary delivery (no writes submitted)' .native-diagnostics/history-window-browser.log
+          if [[ "$DIAGNOSTIC_SCOPE" == 'github-ui-completion' ]]; then
+            grep -Fx 'PASS real successful initialization response loss: unknown form and reload fences, one setup POST, existing-status recheck and original administrator recovery' .native-diagnostics/history-window-browser.log
+            grep -Fx 'PASS browser-blocked JS/WASM transport /pkg/zxs.js, terminal startup and real reload' .native-diagnostics/history-window-browser.log
+            grep -Fx 'PASS browser-blocked JS/WASM transport /pkg/zxs_bg.wasm, terminal startup and real reload' .native-diagnostics/history-window-browser.log
+            test "$(grep -c '^PASS real held WASM 200/MIME delivery after non-cached pagehide: ' .native-diagnostics/history-window-browser.log)" -eq 2
+            test "$(grep -c '^PASS real held WASM 200/MIME delivery after natural 30-second deadline: ' .native-diagnostics/history-window-browser.log)" -eq 1
+          fi
       - name: Retain history window browser failure diagnostics
-        if: always() && inputs.scope == 'history-window-web-browser'
+        if: always() && (inputs.scope == 'history-window-web-browser' || inputs.scope == 'github-ui-completion')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: history-window-browser-failure-${{ inputs.source_sha }}
