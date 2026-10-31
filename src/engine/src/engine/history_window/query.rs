@@ -4,6 +4,14 @@ use nodes::Scope;
 use selection::{Position, Selection, Selector};
 use std::cmp::Reverse;
 
+type NodeKey<'a> = (Reverse<u64>, &'a str);
+type NodeSelection<'a> = Selection<NodeKey<'a>, (nodes::Node<'a>, Option<&'a crate::Commit>)>;
+type NodeSelector<'a> = Selector<NodeKey<'a>, (nodes::Node<'a>, Option<&'a crate::Commit>)>;
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/history_window_batched_tests.rs"]
+mod tests;
+
 fn invalid(message: &str) -> Error {
     Error::new(storage_contract::ErrorCode::InvalidRequest, message)
 }
@@ -192,6 +200,53 @@ impl<'a> Query<'a> {
         })
     }
 
+    fn offer_content_batch(
+        &self,
+        commits: impl Iterator<Item = &'a crate::Commit>,
+        batch: &mut nodes::ContentBatch<'a>,
+        selector: &mut NodeSelector<'a>,
+    ) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+        nodes::first_commits(commits, self.scope(), batch, self.cancel)?;
+        for (id, (version, commit)) in std::mem::take(batch) {
+            self.cancel.checkpoint()?;
+            let node = nodes::Node::Content(version);
+            selector.offer((Reverse(node.sequence(commit)), id), (node, commit));
+        }
+        Ok(())
+    }
+
+    fn select_nodes<I: Iterator<Item = &'a crate::Commit>>(
+        &self,
+        mut commits: impl FnMut() -> I,
+        position: Position<NodeKey<'a>>,
+    ) -> Result<NodeSelection<'a>> {
+        let mut selector = Selector::new(position, self.request.limit.get())?;
+        let mut batch = nodes::ContentBatch::new();
+        // Batch space follows the shared maximum even for a one-record page.
+        // Only borrowed records and first-commit pointers live here.
+        let batch_limit = HistoryCollection::Nodes.maximum_limit();
+        for candidate in nodes::all_nodes(self.state, self.scope(), self.cancel) {
+            let node = candidate?;
+            match node {
+                nodes::Node::Content(version) => {
+                    batch.insert(version.version_id.as_str(), (version, None));
+                    if batch.len() == batch_limit {
+                        self.offer_content_batch(commits(), &mut batch, &mut selector)?;
+                    }
+                }
+                nodes::Node::Path(_) | nodes::Node::Metadata(_) => {
+                    // Revisions own their sequence; commit lookup cannot alter it.
+                    selector.offer((Reverse(node.sequence(None)), node.id()), (node, None));
+                }
+            }
+        }
+        self.offer_content_batch(commits(), &mut batch, &mut selector)?;
+        selector.finish()
+    }
+
     fn node_page(&self) -> Result<HistoryWindowPage> {
         let scope = self.scope();
         let position = if let Some(anchor) = self.request.anchor_node_id.as_ref() {
@@ -211,18 +266,7 @@ impl<'a> Query<'a> {
                 _ => Err(invalid("node cursor position required")),
             })?
         };
-        let mut selector = Selector::new(position, self.request.limit.get())?;
-        for candidate in nodes::all_nodes(self.state, scope, self.cancel) {
-            let node = candidate?;
-            let commit = nodes::first_commit(
-                self.state,
-                scope,
-                &node.version(self.state).version_id,
-                self.cancel,
-            )?;
-            selector.offer((Reverse(node.sequence(commit)), node.id()), (node, commit));
-        }
-        let selection = selector.finish()?;
+        let selection = self.select_nodes(|| self.state.commits.values(), position)?;
         let page = self.page_cursors(&selection, |(Reverse(sequence), id)| {
             Ok(HistoryPosition::Node {
                 sequence: *sequence,
