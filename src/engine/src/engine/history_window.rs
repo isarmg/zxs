@@ -6,8 +6,9 @@
 //! CPU is deliberately not O(L). With S total nodes, N scoped content records,
 //! B the shared maximum node-page budget, H commit headers and C scoped commit
 //! entries, cold node selection is O(S + ceil(N/B)*(H + C*log(B))), plus bounded
-//! selector comparisons. Selected path/tag facts can walk ancestor chains;
-//! path and head lookup scan merge/branch/commit records, and parent/source/input
+//! selector comparisons. Selected content reuses its first commit for fields
+//! and path. Revision path/tag facts can walk ancestor chains; inherited path,
+//! standalone fields and head lookup can scan merge/branch/commit records. Parent/source/input
 //! reads scan their borrowed member arrays. Every such scan has cancellation
 //! checkpoints. Publication, resident State and cold recovery remain unbounded
 //! in total retained history, as before this read protocol.

@@ -386,7 +386,7 @@ fn oracle_tags(state: &State, node: &str) -> BTreeSet<String> {
     BTreeSet::new()
 }
 
-fn oracle_path<'a>(state: &'a State, node: &'a str) -> &'a str {
+pub(super) fn oracle_path<'a>(state: &'a State, node: &'a str) -> &'a str {
     let mut current = node;
     let mut seen = BTreeSet::new();
     while seen.insert(current) {

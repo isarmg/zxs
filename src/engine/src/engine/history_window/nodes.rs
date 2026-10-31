@@ -9,6 +9,22 @@ pub(super) struct Scope<'a> {
     pub(super) history: &'a str,
 }
 
+/// Admitted version keys equal version_id and the source is in key order, so
+/// the first file match is the same minimum ID as a complete ownership scan.
+pub(super) fn owner_version<'a>(
+    versions: impl Iterator<Item = &'a FileVersion>,
+    file: &str,
+    cancel: &HistoryWindowCancellation,
+) -> Result<Option<&'a FileVersion>> {
+    for version in versions {
+        cancel.checkpoint()?;
+        if version.file_id == file {
+            return Ok(Some(version));
+        }
+    }
+    Ok(None)
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum Node<'a> {
     Content(&'a FileVersion),
@@ -216,15 +232,8 @@ pub(super) fn path<'a>(
         match current {
             Node::Path(node) => return Ok(&node.path),
             Node::Content(version) => {
-                if let Some(commit) = first_commit(state, scope, &version.version_id, cancel)? {
-                    for entry in &commit.entries {
-                        cancel.checkpoint()?;
-                        if entry.file_id == scope.file && entry.version_id == version.version_id {
-                            return Ok(entry.path());
-                        }
-                    }
-                }
-                return Ok(&version.creation_name);
+                let commit = first_commit(state, scope, &version.version_id, cancel)?;
+                return content_path(scope, version, commit, cancel);
             }
             Node::Metadata(metadata) => {
                 let source = if metadata.kind == crate::FileMetadataKind::Merge {
@@ -254,6 +263,26 @@ pub(super) fn path<'a>(
         storage_contract::ErrorCode::StateInvalid,
         "history source chain is cyclic",
     ))
+}
+
+/// A selected content node already carries its exact first commit. Reuse that
+/// borrowed fact without accessing the pool-wide commit collection again.
+pub(super) fn content_path<'a>(
+    scope: Scope<'_>,
+    version: &'a FileVersion,
+    commit: Option<&'a Commit>,
+    cancel: &HistoryWindowCancellation,
+) -> Result<&'a str> {
+    cancel.checkpoint()?;
+    if let Some(commit) = commit {
+        for entry in &commit.entries {
+            cancel.checkpoint()?;
+            if entry.file_id == scope.file && entry.version_id == version.version_id {
+                return Ok(entry.path());
+            }
+        }
+    }
+    Ok(&version.creation_name)
 }
 
 pub(super) fn visit_parents<'a>(

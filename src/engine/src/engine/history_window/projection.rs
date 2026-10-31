@@ -4,6 +4,10 @@ use nodes::Node;
 use query::Query;
 use std::borrow::Cow;
 
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/history_window_projection_tests.rs"]
+mod tests;
+
 impl<'a> Query<'a> {
     pub(super) fn node(&self, id: &str) -> Result<Node<'a>> {
         nodes::node(self.state, self.scope(), id).ok_or_else(|| {
@@ -92,6 +96,11 @@ impl<'a> Query<'a> {
     }
 
     fn fields(&self, node: Node<'a>) -> Result<HistoryNodeFields> {
+        if let Node::Content(version) = node {
+            let commit =
+                nodes::first_commit(self.state, self.scope(), &version.version_id, self.cancel)?;
+            return content_fields(version, commit, self.cancel);
+        }
         Ok(HistoryNodeFields {
             message: HistoryFieldInfo {
                 byte_length: u64::try_from(self.field(node, HistoryField::Message)?.len())?,
@@ -150,7 +159,7 @@ impl<'a> Query<'a> {
     pub(super) fn node_summary(
         &self,
         node: Node<'a>,
-        commit: Option<&crate::Commit>,
+        commit: Option<&'a crate::Commit>,
         parents: HistoryParentSet,
     ) -> Result<HistoryNodeSummary> {
         self.cancel.checkpoint()?;
@@ -189,7 +198,15 @@ impl<'a> Query<'a> {
                 .as_ref()
                 .is_some_and(|current| current.as_str() == node.id()),
             branch_id,
-            path: nodes::path(self.state, self.scope(), node, self.cancel)?.into(),
+            path: match node {
+                Node::Content(version) => {
+                    nodes::content_path(self.scope(), version, commit, self.cancel)?
+                }
+                Node::Path(_) | Node::Metadata(_) => {
+                    nodes::path(self.state, self.scope(), node, self.cancel)?
+                }
+            }
+            .into(),
             previous_path,
             note: note.map_or("", String::as_str).into(),
             tags: nodes::tags(self.state, self.scope(), node.id(), self.cancel)?
@@ -203,7 +220,10 @@ impl<'a> Query<'a> {
             download_name: self.download_name(version).into(),
             storage_name: version.storage_name.clone(),
             parents,
-            fields: self.fields(node)?,
+            fields: match node {
+                Node::Content(version) => content_fields(version, commit, self.cancel)?,
+                Node::Path(_) | Node::Metadata(_) => self.fields(node)?,
+            },
         })
     }
 
@@ -409,6 +429,27 @@ impl<'a> Query<'a> {
             content,
         })
     }
+}
+
+// Only the selected version and its resolved first commit are available here;
+// field length projection cannot iterate the complete commit collection.
+fn content_fields(
+    version: &crate::FileVersion,
+    commit: Option<&crate::Commit>,
+    cancel: &HistoryWindowCancellation,
+) -> Result<HistoryNodeFields> {
+    cancel.checkpoint()?;
+    Ok(HistoryNodeFields {
+        message: HistoryFieldInfo {
+            byte_length: u64::try_from(commit.map_or(0, |commit| commit.message.len()))?,
+        },
+        author: HistoryFieldInfo {
+            byte_length: u64::try_from(commit.map_or(0, |commit| commit.author.len()))?,
+        },
+        created_at: HistoryFieldInfo {
+            byte_length: u64::try_from(version.created_at.len())?,
+        },
+    })
 }
 
 fn created_at(timestamp: u64) -> Result<String> {
