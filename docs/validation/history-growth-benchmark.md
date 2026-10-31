@@ -8,7 +8,7 @@
 ## 默认停止与历史身份
 
 [控制计划](../../tools/history-scale-bench/acceptance-plan.json) 的 reviewed/frozen candidate
-均为 `null`，包括微型自测在内的所有测量都明确拒绝。没有 push 自动触发的基准。
+均为 `null`，包括微型自测在内的所有正式 GitHub 测量都明确拒绝。没有 push 自动触发的基准。
 后续由主任务明确选择、审阅精确当前源码 SHA，才可启用单独验证；不自动跟随 main。
 10k 另需已记录的初档结果／资源审阅，100k 不在允许 profile 中。本次工具采用不授权重档运行。
 
@@ -26,6 +26,16 @@
 1024 候选 reopen 虽写出完整业务 complete，但缺最终 RSS／退出证据，保持 failed，
 其 recovery 未执行。监督器修复与新单测不能追认旧数据通过。10k／100k 在该轮未启动。
 旧日志、失败和 Incomplete 都保留原 run/SHA，不改记为当前 main 执行。
+
+## 显式本地短校准
+
+助手云可在精确源码工作树中注册同一 driver，以 `--local-calibration` 显式运行本地短校准；
+不设置假的 `GITHUB_ACTIONS`。原 `--scale-authorized` 准入、全部 oracle 和操作数解析保持不变。
+配置收据标注 `execution_environment=local-calibration`，正式 GitHub 默认解析器明确拒绝把它
+当成规模验收；仅本地调用显式传入 `allow_local_calibration=True` 才可汇总。
+本次校准选择 256／512 个操作，不是产品限制或新的永久测试上限。
+本地观察器必须记录真实源码／二进制、编译 profile、资源预算和退出状态；不同机器、profile
+与观察器的绝对时延不可直接对比，更不能把短校准记作 1 万／10 万或业务版本树通过。
 
 ## 固定工作负载与完整 oracle
 

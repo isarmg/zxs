@@ -119,11 +119,16 @@ def verify_pages(reader: ResultReader, operations: int) -> None:
 
 
 def summarize_driver(path: Path, stage: str, operations: int, mode: str = "timing", baseline: bool | None = None,
-                     required_protocol: str | None = None) -> dict:
+                     required_protocol: str | None = None, *, allow_local_calibration: bool = False) -> dict:
     """Require the complete, ordered driver protocol; a green marker alone fails."""
     with path.open(encoding="utf-8") as lines:
         reader = ResultReader(lines)
         configuration = reader.take("configuration", stage=stage, operations=operations, mode=mode, metadata_members=1)
+        execution = configuration.get("execution_environment")
+        if execution not in (None, "github-actions", "local-calibration"):
+            raise ValueError("unsupported execution environment")
+        if execution == "local-calibration" and not allow_local_calibration:
+            raise ValueError("local calibration is not formal GitHub scale evidence")
         protocol = configuration.get("query_protocol")
         separated = protocol == "separate-outcome-health"
         if protocol is not None and not separated:

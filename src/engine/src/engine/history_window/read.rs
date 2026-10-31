@@ -2,7 +2,8 @@
 use super::*;
 
 pub struct HistoryWindowRead {
-    view: MetadataView,
+    preparation: std::sync::Mutex<PagePreparation>,
+    history_root: HistoryRoot,
     request: HistoryWindowRequest,
     context: HistoryResolvedContext,
     cancellation: HistoryWindowCancellation,
@@ -10,8 +11,18 @@ pub struct HistoryWindowRead {
     // Produced with this exact frozen view by one immutable Engine borrow.
     // Both healthy-index and authoritative-scan capture paths verify the member.
     owner_version: String,
-    indexed: std::sync::Mutex<Option<query::IndexedSelection>>,
     scope: Option<crate::engine::index::OwnedScopeRead>,
+}
+
+// Release frozen business tables before waiting to reacquire the Engine lock.
+// Direct API callers may retain this handle longer; it then owns only the page.
+// Only successful projection changes state.
+enum PagePreparation {
+    Pending {
+        view: MetadataView,
+        indexed: Option<query::IndexedSelection>,
+    },
+    Prepared(Box<HistoryWindowPage>),
 }
 
 impl std::fmt::Debug for HistoryWindowRead {
@@ -29,28 +40,37 @@ impl HistoryWindowRead {
     /// backend admission slot through encoding and sending and rechecks current
     /// identity and `Engine::recheck_history_window` before releasing the page.
     pub fn page(&self) -> Result<HistoryWindowPage> {
-        let mut indexed = self
-            .indexed
+        self.cancellation.checkpoint()?;
+        let mut preparation = self
+            .preparation
             .lock()
-            .expect("invariant: history selection lock poisoned");
+            .expect("invariant: history preparation lock poisoned");
+        self.cancellation.checkpoint()?;
+        let (view, indexed) = match &mut *preparation {
+            PagePreparation::Pending { view, indexed } => (view, indexed),
+            PagePreparation::Prepared(page) => return Ok((**page).clone()),
+        };
         if indexed.is_none()
             && let Some(scope) = &self.scope
         {
             *indexed = query::prepare_indexed_selection(
                 scope,
-                &self.view,
+                view,
                 &self.request,
                 &self.context,
                 &self.cancellation,
             )?;
         }
-        self.view.history_window_observed(
+        let page = view.history_window_observed(
             &self.request,
             &self.context,
             &self.cancellation,
             indexed.as_ref(),
             Some(&self.owner_version),
-        )
+        )?;
+        self.cancellation.checkpoint()?;
+        *preparation = PagePreparation::Prepared(Box::new(page.clone()));
+        Ok(page)
     }
 
     pub fn cancellation(&self) -> HistoryWindowCancellation {
@@ -78,14 +98,16 @@ impl Engine {
         cancellation: HistoryWindowCancellation,
     ) -> Result<HistoryWindowRead> {
         let (context, owner_version) = self.history_window_context(&request, &cancellation)?;
-        let view = self.metadata_view();
-        query::Query::new_with_owner(
+        let view = self.history_window_view();
+        let history_root = query::Query::new_with_owner(
             &view,
             &request,
             &context,
             &cancellation,
             Some(&owner_version),
-        )?;
+        )?
+        .identity
+        .history_root;
         let scope = if matches!(
             request.collection,
             HistoryCollection::Nodes
@@ -102,13 +124,16 @@ impl Engine {
             None
         };
         Ok(HistoryWindowRead {
-            view,
+            preparation: std::sync::Mutex::new(PagePreparation::Pending {
+                view,
+                indexed: None,
+            }),
+            history_root,
             request,
             context,
             cancellation,
             max_entries: self.config.max_entries,
             owner_version,
-            indexed: std::sync::Mutex::new(None),
             scope,
         })
     }
@@ -124,11 +149,9 @@ impl Engine {
         if context != read.context || self.config.max_entries != read.max_entries {
             return Err(query::changed());
         }
-        let view = self.metadata_view();
-        if view.history_root(context.history_tree_id.as_str())?
-            != read
-                .view
-                .history_root(read.context.history_tree_id.as_str())?
+        let view = self.history_window_view();
+        if HistoryRoot::parse(view.history_root(context.history_tree_id.as_str())?)?
+            != read.history_root
         {
             return Err(query::changed());
         }

@@ -76,6 +76,19 @@ class ReleaseAcceptance(unittest.TestCase):
             self.assertLess(workflow.index('name: unaccepted-native-'), workflow.index('name: Retain Debian 13 single-ELF runtime proof'))
             self.assertNotIn('overwrite:', block)
 
+    def test_release_checklist_matches_debian_single_elf_assets(self):
+        checklist = (ROOT / 'docs/validation/release-checklist.md').read_text()
+        for required in ('Debian 13 amd64', '单个 `zxs` ELF 内嵌 Web',
+                         '七文件集合', 'VFS-BUILD.json', '系统 apt 安装的 Samba',
+                         'MODULESDIR/vfs/', 'vfs objects = zxs',
+                         '不传 `--web-dir`', '不是启动依赖',
+                         '准备发行不等于创建标签或公开 Release'):
+            with self.subTest(required=required):
+                self.assertIn(required, checklist)
+        for obsolete in ('两份归档', '两份同版本归档', '不包含预编译 VFS'):
+            with self.subTest(obsolete=obsolete):
+                self.assertNotIn(obsolete, checklist)
+
     def test_installation_recipe_has_one_authoritative_source(self):
         release = (ROOT / 'docs/release.md').read_text()
         install = (ROOT / 'docs/templates/release-install.md').read_text()

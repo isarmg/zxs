@@ -364,9 +364,11 @@ HTTP demand 的同根维护使用窄范围适配器
 consolidation `9a4a44802e8f493dcc1a1546caa723ea774c956de5d18c474076f85fd1280ac4`
 及其精确 layout owner，不把它伪装成新增的 routing terminal。独立仅追加固定列表
 与清单字段 `legacy_proof_maintenance_receipts` 登记同一 `proof-maintenance`
-目录中的 schema 1 收据；当前只支持这一初始维护步骤。
+目录中的 schema 1 收据。首张实际收据记录下述 demand 比较修正；工具也支持
+经显式登记的同所有者连续源码后继，范围和认证链见[维护工具说明](tools/rust-sources.md#http-同所有者源码维护链)。
+后继不支持外置测试内容变更，临时合成后继测试不等于新的实际安全修补收据。
 
-收据绑定完整物理 before/after owner、layout/corrections 标识及唯一允许改变的
+首张收据绑定完整物理 before/after owner、layout/corrections 标识及唯一允许改变的
 `src/common/demand.rs`。before 生产清单必须等于不可变 layout 安装清单，外测
 逆既有 correction 后必须等于原 layout owner。当前完整生产/外测文件清单与
 字节先核验 after，再仅在历史投影中逆维护补丁，随后执行原 layout 严格逆变换。

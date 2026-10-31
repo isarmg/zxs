@@ -102,6 +102,40 @@ def separated_rows():
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_unknown_execution_environment_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "driver.jsonl"
+            for execution in ("unknown", {"local": True}):
+                rows = separated_rows()
+                rows[0]["execution_environment"] = execution
+                write_rows(path, rows)
+                with self.assertRaisesRegex(ValueError, "unsupported execution"):
+                    summarize_driver(path, "build", 8, allow_local_calibration=True)
+
+    def test_github_execution_environment_keeps_formal_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "driver.jsonl"
+            rows = separated_rows()
+            rows[0]["execution_environment"] = "github-actions"
+            write_rows(path, rows)
+            summarize_driver(path, "build", 8)
+
+
+    def test_local_calibration_is_explicit_and_not_formal_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "driver.jsonl"
+            rows = separated_rows()
+            rows[0]["execution_environment"] = "local-calibration"
+            write_rows(path, rows)
+            with self.assertRaisesRegex(ValueError, "not formal GitHub"):
+                summarize_driver(path, "build", 8)
+            result = summarize_driver(path, "build", 8, allow_local_calibration=True)
+            self.assertEqual(result["configuration"]["execution_environment"], "local-calibration")
+            write_rows(path, rows[:-1])
+            with self.assertRaises(ValueError):
+                summarize_driver(path, "build", 8, allow_local_calibration=True)
+
+
     def test_new_fixed_content_protocol_separates_outcome_and_live_health(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "driver.jsonl"

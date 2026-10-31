@@ -35,6 +35,7 @@ struct Arguments {
     phase: String,
     mode: String,
     scale_authorized: bool,
+    local_calibration: bool,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -52,8 +53,14 @@ impl Arguments {
     fn parse() -> BenchResult<Self> {
         let mut flags = std::collections::BTreeMap::new();
         let mut scale_authorized = false;
+        let mut local_calibration = false;
         let mut words = std::env::args().skip(1);
         while let Some(flag) = words.next() {
+            if flag == "--local-calibration" {
+                require(!local_calibration, "duplicate local calibration flag")?;
+                local_calibration = true;
+                continue;
+            }
             if flag == "--scale-authorized" {
                 require(!scale_authorized, "duplicate scale authorization flag")?;
                 scale_authorized = true;
@@ -100,6 +107,7 @@ impl Arguments {
             phase,
             mode,
             scale_authorized,
+            local_calibration,
         })
     }
 }
@@ -328,7 +336,7 @@ fn verify_active_set(engine: &Engine, fixture: &Fixture, operations: usize) -> B
     require(
         current.main_branch_id == repo.main_branch_id
             && current.smb_binding_generation == fixture.binding_generation_at(operations)?
-            && current.smb_enabled == ((operations - SETUP_RECEIPTS) % 2 == 0)
+            && current.smb_enabled == (operations - SETUP_RECEIPTS).is_multiple_of(2)
             && history.generation == fixture.history_generation_at(operations)?,
         "live SMB binding or generation differs from the published workload",
     )
@@ -903,6 +911,7 @@ fn verify_content_retry(
 fn run(arguments: &Arguments, reporter: &mut Reporter) -> BenchResult<()> {
     reporter.emit(json!({
         "phase": "configuration", "stage": arguments.phase, "mode": arguments.mode,
+        "execution_environment": if arguments.local_calibration { "local-calibration" } else { "github-actions" },
         "operations": arguments.operations, "verified": true,
         "payload_operations": arguments.operations - SETUP_RECEIPTS,
         "setup_receipts": SETUP_RECEIPTS, "setup_events": SETUP_RECEIPTS,
@@ -973,12 +982,23 @@ fn run(arguments: &Arguments, reporter: &mut Reporter) -> BenchResult<()> {
     }))
 }
 
-fn main() -> BenchResult<()> {
+fn admit_execution(local_calibration: bool, github_actions: bool) -> BenchResult<()> {
     require(
-        matches!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true")),
-        "history scale driver executes only in GitHub Actions",
-    )?;
+        local_calibration || github_actions,
+        "history scale driver requires GitHub Actions or explicit --local-calibration",
+    )
+}
+
+#[cfg(test)]
+#[path = "../../test/history-scale-bench/local_driver.rs"]
+mod local_driver_tests;
+
+fn main() -> BenchResult<()> {
     let arguments = Arguments::parse()?;
+    admit_execution(
+        arguments.local_calibration,
+        matches!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true")),
+    )?;
     let mut reporter = Reporter::new(&arguments.result)?;
     match run(&arguments, &mut reporter) {
         Ok(()) => Ok(()),

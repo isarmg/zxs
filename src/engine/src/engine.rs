@@ -607,7 +607,14 @@ impl Engine {
     /// Share only business fields, without retaining the authoritative generation.
     /// Field capture is O(number of fields), independent of record counts.
     pub fn metadata_view(&self) -> MetadataView {
-        let state = BusinessMetadataProjection::capture(&self.state);
+        self.view_from_projection(BusinessMetadataProjection::capture(&self.state))
+    }
+    fn history_window_view(&self) -> MetadataView {
+        self.view_from_projection(BusinessMetadataProjection::capture_history_window(
+            &self.state,
+        ))
+    }
+    fn view_from_projection(&self, state: BusinessMetadataProjection) -> MetadataView {
         let history_window_roots = self
             .history_window_roots
             .as_ref()
