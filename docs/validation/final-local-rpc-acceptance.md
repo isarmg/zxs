@@ -50,7 +50,7 @@
 
 ## 实际结果登记
 
-新增机械回归、格式、严格 lint、RPC 语义及成对负载的实际执行状态以最终交付的 run、SHA／tree 和产物为准。模板或任务启动不代表完成。原采用 FAIL 与尖峰未解释状态始终保留。
+首轮 [41166634669](https://github.com/isarmg/zxs/actions/runs/41166634669) 的机械检查、受影响严格 lint、102 项 RPC／50 项协议测试和两臂 release 构建、密封全部通过。四个 pair 都在读取不存在的 `/sys/fs/cgroup/cpu.max` 时、创建任何负载子进程前中止，判定为 incomplete／NOT EVALUATED；没有性能样本。修正后把缺失控制文件明确记录为 `not_present`，不推断无限额度，真实权限／I/O 错误仍失败并保存 pair 错误产物。恢复入口 [reuse-workflow.yml](../../tools/local-rpc-acceptance/reuse-workflow.yml) 固定复用该 run 的产物和 manifest `bc2cc8e53b796d8aa6fb2bd9fb493133b15445e5e764aa5cb166d199b8975700`；核验成功 build job、原控制器／源码身份、前后覆盖层、全部编译 Rust 字节及二进制哈希，只允许本次控制器、回归、文档和恢复模板改动。原 90 分钟截止时间和全部资源／性能门槛不变，不重新编译或重复已完成的测量。新增机械回归、格式、严格 lint、RPC 语义及成对负载的实际执行状态以最终交付的 run、SHA／tree 和产物为准。模板或任务启动不代表完成。原采用 FAIL 与尖峰未解释状态始终保留。
 
 ## 只需人工／物理环境执行的项目
 
