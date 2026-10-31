@@ -7,8 +7,8 @@ fn test_encode_utf8_oob() {
         assert_eq!(len, ch.len_utf8(), "Len of ch={}", ch);
         let ptr = data.as_mut_ptr();
         unsafe {
-            assert!(matches::matches!(encode_utf8(ch, ptr, len - 1), Err(_)));
-            assert!(matches::matches!(encode_utf8(ch, ptr, len), Ok(_)));
+            assert!(matches!(encode_utf8(ch, ptr, len - 1), Err(_)));
+            assert!(matches!(encode_utf8(ch, ptr, len), Ok(_)));
         }
     }
 }

@@ -2,10 +2,9 @@
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::Encoder;
-    use hex_literal::hex;
 
     /// OID `1.2.840.10045.2.1` encoded as ASN.1 BER/DER
-    const EXAMPLE_OID_BER: &[u8] = &hex!("2A8648CE3D0201");
+    const EXAMPLE_OID_BER: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01];
 
     #[test]
     fn base128_byte() {

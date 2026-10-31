@@ -52062,7 +52062,7 @@
   },
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "cf85f72fb40b8d9a90ac77d7a6df9a6d1c649a00bba9f6636901721e6d5c9d98",
-    "compliance/external-tests/foundation.json": "7708c4e638e3720df46ca9e7d871aae0f481e2350e371291b5595226278bec51",
+    "compliance/external-tests/foundation.json": "8752fc1e41aaca2be59621589e7182b2ed3fb050f10ad57b35e6d816923a9057",
     "compliance/external-tests/integrated.json": "128a6f976b999e4f11d112044226942671c45c46a589c1d93753cb39dc2d02f0",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
@@ -52896,7 +52896,7 @@
       ]
     },
     "src/foundation/collections/arrayvec": {
-      "bytes": 24896,
+      "bytes": 24878,
       "directory": "src/foundation/collections/arrayvec",
       "file_count": 5,
       "files": [
@@ -52908,7 +52908,7 @@
         },
         {
           "path": "test/foundation/arrayvec/functions/src/char/test_encode_utf8_oob_78.rs",
-          "sha256": "64e167021acd1cfdc74d02c31985e08b5f9e60118d5392c4bd6c0d30e7be464c",
+          "sha256": "2bcba03ab1fac744e26ee01e6360bf9e02cbe6638a93e8984a76a2cf0f6b7c20",
           "source": "src/foundation/arrayvec/src/char.rs",
           "source_sha256_before": "1de50e1d6045af2b3496426492315ba774986f9bc8301ffa391de861a08cc9cb"
         },
@@ -56792,7 +56792,7 @@
       ]
     },
     "src/foundation/concurrency/lazy_static": {
-      "bytes": 9095,
+      "bytes": 9108,
       "directory": "src/foundation/concurrency/lazy_static",
       "file_count": 9,
       "files": [
@@ -56840,7 +56840,7 @@
         },
         {
           "path": "test/foundation/lazy_static/tests/test.rs",
-          "sha256": "a83dfefa1a3c291af9368cbfd3c252c45919004758496cdaa108b79c58d8ebc3",
+          "sha256": "4cd6decc64feece84aac0b59da60d0f494b819a13f8f3aa6d4c57fdb7890fae7",
           "source": "src/foundation/lazy_static/tests/test.rs",
           "source_sha256_before": "a83dfefa1a3c291af9368cbfd3c252c45919004758496cdaa108b79c58d8ebc3"
         },
@@ -63348,7 +63348,7 @@
       ]
     },
     "src/foundation/cryptography/const-oid": {
-      "bytes": 17357,
+      "bytes": 17351,
       "directory": "src/foundation/cryptography/const-oid",
       "file_count": 7,
       "files": [
@@ -63384,7 +63384,7 @@
         },
         {
           "path": "test/foundation/const-oid/unit/src/encoder/tests_139.rs",
-          "sha256": "488e8cb18f429de47e50a80c7c209d21f09547b53ad9dbf4518ff757b837d233",
+          "sha256": "65278b63bc647153bf5baaac84e59cfe589dc5846e9c9fbad7b5ff6ddbdb2f14",
           "source": "src/foundation/const-oid/src/encoder.rs",
           "source_sha256_before": "6e0fa355f4b3484a0b7b417f027648e5057a565a5b33408b0b6ba274e134e006"
         },
@@ -71684,7 +71684,7 @@
       ]
     },
     "src/foundation/networking/mime": {
-      "bytes": 7347,
+      "bytes": 7335,
       "directory": "src/foundation/networking/mime",
       "file_count": 5,
       "files": [
@@ -71702,7 +71702,7 @@
         },
         {
           "path": "test/foundation/mime/functions/src/parse/test_parse_iterator_all_invalid_449.rs",
-          "sha256": "32c2d78dfeb461c365ab80fab30655209f4a973f9fea6afd2eba0e8953bffa7a",
+          "sha256": "a12c4d93946a86c851311a2cfe7ac9c19d4d10fa61050e45bd857d237825d430",
           "source": "src/foundation/mime/src/parse.rs",
           "source_sha256_before": "3610253295af9780904ae66440f93a9d5d50356392aec839bc71253956b805b9"
         },
@@ -78162,13 +78162,13 @@
       ]
     },
     "src/foundation/web-runtime/wasm-bindgen-shared": {
-      "bytes": 2060,
+      "bytes": 2299,
       "directory": "src/foundation/web-runtime/wasm-bindgen-shared",
       "file_count": 1,
       "files": [
         {
           "path": "test/foundation/wasm-bindgen-shared/modules/src/schema_hash_approval.rs",
-          "sha256": "ec449f87e25c8ac5ef2e77ff69208dbe3df835bde999507e88f74308163721d3",
+          "sha256": "26b6abfaebc677a41b1a4e92dd3b8b54b173a571fa21c11e7054fbbe518e29e2",
           "source": "src/foundation/wasm-bindgen-shared/src/schema_hash_approval.rs",
           "source_sha256_before": "ec449f87e25c8ac5ef2e77ff69208dbe3df835bde999507e88f74308163721d3"
         }
@@ -97402,7 +97402,7 @@
         "benches/cmp.rs": "9deb7c222eb69e7c5160aa82d361d4883792be3b557fbf8f7c807b398ba951a1",
         "benches/fmt.rs": "46ec1e7c7970a3eed84b303309a2395ac16d16534ea691db7f361d0016ef0673",
         "benches/parse.rs": "af2b35fc314e39c7fb3fbe6a77b65e54d0f4bd8956950330700028a98513b7d8",
-        "src/lib.rs": "2be8f186ee81e4158bb2f68db50dc9e86cd674803dfb6ae7c1182cb45628edb7",
+        "src/lib.rs": "6cf0d06839586742756c1ab5ccc2effe488d8176cf7f5fc543c8285947ace288",
         "src/parse.rs": "593f7dc7ed20b0c6e1d1d85443874b1a41d34d8794fa48d024e96361ba3dfcce"
       },
       "license": "MIT OR Apache-2.0",

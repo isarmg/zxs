@@ -708,12 +708,12 @@
     },
     {
       "package": "shell-tokenizer",
-      "kind": "I",
+      "kind": "P",
       "shard": "foundation-platform",
       "scripts": [
         ".github/scripts/check-native-c-toolchain.py"
       ],
-      "detail": "dependency of executed native-c-toolchain binary and cc; own tests NOT run"
+      "detail": "native-c-toolchain.rs directly asserts quoted shell_tokenizer::split output; cc also consumes it; own retained tests belong to the separate behaviour suite"
     },
     {
       "package": "socket2",
@@ -862,6 +862,15 @@
     {
       "package": "tokio",
       "kind": "P",
+      "shard": "foundation-platform",
+      "scripts": [
+        ".github/scripts/check-linux-search-process.py"
+      ],
+      "detail": "fixture linux_process_and_unix_ipc"
+    },
+    {
+      "package": "tokio",
+      "kind": "P",
       "shard": "foundation-async",
       "scripts": [
         ".github/scripts/check-runtime-join-map.py"
@@ -876,15 +885,6 @@
         ".github/scripts/check-runtime-join-map.py"
       ],
       "detail": "fixtures runtime-join-map.rs (5), runtime-adapters.rs (8)"
-    },
-    {
-      "package": "tokio",
-      "kind": "P",
-      "shard": "foundation-platform",
-      "scripts": [
-        ".github/scripts/check-linux-search-process.py"
-      ],
-      "detail": "fixture linux_process_and_unix_ipc"
     },
     {
       "package": "tokio",
@@ -945,6 +945,15 @@
         ".github/scripts/check-tracing-family.py"
       ],
       "detail": "--lib --tests full features incl. primitives/tests/*.rs and log_bridge/{log_tracer,reexport_log_crate}.rs"
+    },
+    {
+      "package": "typed-builder-macro",
+      "kind": "F",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "TypedBuilder expansions in test/foundation/typed-builder/tests/tests.rs; build order, defaults, lifetimes and field ownership are asserted"
     },
     {
       "package": "unicode-display-width",
@@ -1017,6 +1026,15 @@
         ".github/scripts/check-csr-scope.py"
       ],
       "detail": "csr-template.rs fixture lib test (1)"
+    },
+    {
+      "package": "walrus-macro",
+      "kind": "F",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "walrus_instr expansion in walrus::ir; retained walrus lib traversal, builder and emit tests exercise generated instruction types"
     },
     {
       "package": "wasm-bindgen",

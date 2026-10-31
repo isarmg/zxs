@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import tempfile
 import tomllib
 import unittest
 
@@ -25,7 +26,7 @@ class FoundationBehaviourGateTests(unittest.TestCase):
 
     def test_suite_sources_exist_and_unexecuted_material_is_explicit(self):
         executed = set()
-        for suite in GATE.INTEGRATION_SUITES:
+        for suite in (*GATE.INTEGRATION_SUITES, *GATE.STANDALONE_SUITES):
             for path in suite.tests:
                 self.assertTrue((ROOT / path).is_file(), path)
                 executed.add(path)
@@ -44,6 +45,10 @@ class FoundationBehaviourGateTests(unittest.TestCase):
         for suite in GATE.INTEGRATION_SUITES:
             recorded = inventory["suites"]["integration:" + suite.subject]
             self.assertEqual(sorted(recorded["targets"]), sorted(map(GATE.target_name, suite.tests)))
+        for suite in GATE.STANDALONE_SUITES:
+            recorded = inventory["suites"]["standalone:" + suite.subject]
+            expected = list(map(GATE.target_name, suite.tests)) if suite.tests else ["lib"]
+            self.assertEqual(sorted(recorded["targets"]), sorted(expected))
         for key, value in inventory["suites"].items():
             for target, names in value["targets"].items():
                 self.assertTrue(names, f"{key}/{target} would accept an empty binary")
@@ -64,12 +69,35 @@ class FoundationBehaviourGateTests(unittest.TestCase):
         self.assertNotIn("--all-features", source)
 
     def test_suites_do_not_execute_material_of_receipt_bound_owners(self):
-        for suite in GATE.INTEGRATION_SUITES:
+        for suite in (*GATE.INTEGRATION_SUITES, *GATE.STANDALONE_SUITES):
             self.assertNotIn(suite.subject, PROOF_BOUND)
             for path in suite.tests:
                 for owner in PROOF_BOUND:
                     self.assertFalse(path.startswith(f"test/foundation/{owner}/"), path)
         self.assertFalse(set(GATE.UNIT_SUITES) & set(PROOF_BOUND))
+
+    def test_standalone_members_preserve_real_code_build_cfg_and_external_test_bytes(self):
+        suite = next(suite for suite in GATE.STANDALONE_SUITES if suite.subject == "proc-macro2")
+        subject = GATE.foundation_path(ROOT, suite.subject)
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary)
+            manifest = tomllib.loads(GATE.standalone_member(suite, work))
+            copied = work / subject.relative_to(ROOT)
+            for relative in ("src/lib.rs", "build.rs", "src/probe/proc_macro_span.rs"):
+                self.assertEqual((copied / relative).read_bytes(), (subject / relative).read_bytes())
+            self.assertEqual(Path(manifest["dependencies"]["unicode-ident"]["path"]),
+                             GATE.foundation_path(ROOT, "unicode-ident"))
+            self.assertEqual(manifest["features"], tomllib.loads((subject / "Cargo.toml").read_text())["features"])
+            self.assertEqual(len(manifest["test"]), len(suite.tests))
+            for target, relative in zip(manifest["test"], suite.tests):
+                self.assertEqual((copied / target["path"]).resolve(), work / relative)
+                self.assertEqual((work / relative).read_bytes(), (ROOT / relative).read_bytes())
+            self.assertFalse((subject / "Cargo.lock").exists())
+
+    def test_legacy_edition_test_keeps_its_visibility_semantics(self):
+        suite = next(suite for suite in GATE.INTEGRATION_SUITES if suite.subject == "lazy_static")
+        manifest = tomllib.loads(GATE.member_manifest(suite, GATE.production_features()))
+        self.assertEqual(manifest["package"]["edition"], "2015")
 
     def test_comparison_and_date_suites_use_only_retained_functional_targets(self):
         self.assertIn("cmov", GATE.UNIT_SUITES)

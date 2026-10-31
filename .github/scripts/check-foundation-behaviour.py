@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Run retained and project-authored behaviour tests on local foundation sources.
 
-Two kinds of suites run against the locally renamed implementations:
+Three kinds of suites run against the locally renamed implementations:
 
 * unit suites: ``cargo test --lib -p <package>`` in the root workspace, so the
   package compiles with the features the root graph resolves for its real
   consumers;
+* standalone suites: copy the real subject, build script, documentation and
+  external tests at their repository-relative depth into a temporary member;
+  only dependency/target wiring changes, and resolved subject features must
+  equal the root graph. This avoids Cargo's non-member build-dependency test
+  resolver panic without adding a product workspace or lockfile;
 * integration suites: one member package per suite in a temporary workspace.
   The subject package is a path dependency with exactly the features the
   production profiles in ``compliance/rust-sources.json`` resolve for it, and
@@ -28,6 +33,7 @@ import os
 from pathlib import Path
 import re
 import runpy
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -38,6 +44,7 @@ CATALOG = ROOT / 'compliance/rust-sources.json'
 WORKSPACES = ROOT / 'tools/rust-sources/workspaces.json'
 OUTPUT = ROOT / 'target/foundation-behaviour'
 foundation_path = runpy.run_path(str(ROOT / '.github/scripts/foundation_paths.py'))['package_path']
+rebase_dependency_paths = runpy.run_path(str(ROOT / '.github/scripts/foundation_paths.py'))['rebase_dependency_paths']
 
 
 @dataclass(frozen=True)
@@ -48,11 +55,17 @@ class Suite:
     providers: tuple = ()
     # Subject examples a test spawns from target/<profile>/examples; built before the tests run.
     examples: tuple = ()
+    edition: str = '2021'
 
 
 # Root-workspace unit suites: lib-wired tests reached through #[cfg(test)] #[path]/include!.
 UNIT_SUITES = ('bytes', 'cmov', 'flag-set', 'futures-intrusive', 'guardian', 'httpdate', 'once_cell', 'scopeguard',
-               'send_wrapper', 'signal-hook-registry', 'spin', 'thread_local')
+               'send_wrapper', 'signal-hook-registry', 'spin', 'thread_local',
+               'pastey', 'rstml', 'bumpalo', 'erased', 'fallible-iterator', 'iterator-toolkit',
+               'smallvec', 'tinyvec', 'yoke-derive', 'zerofrom-derive', 'zerotrie', 'either',
+               'hybrid-array', 'rustc-hash', 'typenum', 'leb128', 'leb128fmt', 'libsqlite3-sys',
+               'anyhow', 'httparse', 'ipnet', 'matchit', 'errno', 'unicase', 'utf8_iter', 'cfg-if',
+               'view-alternatives', 'walrus', 'wasm-bindgen-shared', 'arrayvec', 'const-oid', 'mime')
 
 FOUNDATION_TESTS = 'test/foundation/'
 INTEGRATION_SUITES = (
@@ -84,6 +97,28 @@ INTEGRATION_SUITES = (
     Suite('cmov', tuple(FOUNDATION_TESTS + 'cmov/tests/' + name + '.rs'
                        for name in ('core_impls', 'regression'))),
     Suite('constant_time_eq', (FOUNDATION_TESTS + 'constant_time_eq/tests/exhaustive.rs',)),
+    Suite('quote', (FOUNDATION_TESTS + 'quote/tests/test.rs',), ('proc-macro2',)),
+    Suite('typed-builder', (FOUNDATION_TESTS + 'typed-builder/tests/tests.rs',)),
+    Suite('lazy_static', (FOUNDATION_TESTS + 'lazy_static/tests/test.rs',), edition='2015'),
+    Suite('fastrand', tuple(FOUNDATION_TESTS + 'fastrand/tests/' + name + '.rs' for name in ('smoke', 'char'))),
+    Suite('itoa', (FOUNDATION_TESTS + 'itoa/tests/test.rs',)),
+    Suite('untrusted', (FOUNDATION_TESTS + 'untrusted/tests/tests.rs',)),
+    Suite('cpu-feature-detect', (FOUNDATION_TESTS + 'cpu-feature-detect/tests/x86.rs',)),
+    Suite('rustversion', tuple(FOUNDATION_TESTS + 'rustversion/tests/' + name + '.rs'
+                               for name in ('test_eval', 'test_parse'))),
+    Suite('semver', tuple(FOUNDATION_TESTS + 'semver/tests/' + name + '.rs'
+                         for name in ('test_identifier', 'test_version', 'test_version_req'))),
+    Suite('zerovec-derive', (FOUNDATION_TESTS + 'zerovec-derive/tests/sparse_enum_test.rs',), ('zerovec',)),
+)
+
+# Cargo 1.99 cannot select some non-member build dependencies for lib tests.
+# A copied member keeps the actual source, build script and external test paths
+# at their original depth. Its selected features still come from the root graph.
+# proc-macro2 also needs its real build script's cfgs in the integration targets.
+STANDALONE_SUITES = tuple(Suite(name, ()) for name in (
+    'synstructure', 'shared-value', 'heck', 'pkg-config', 'shell-tokenizer', 'version_check')) + (
+    Suite('proc-macro2', tuple(FOUNDATION_TESTS + 'proc-macro2/tests/' + name + '.rs'
+                              for name in ('test', 'test_fmt', 'marker'))),
 )
 
 # Retained material that stays unexecuted, with the concrete missing provider.
@@ -198,7 +233,7 @@ def member_manifest(suite, production):
     declared = tomllib.loads((subject / 'Cargo.toml').read_text()).get('features', {})
     enabled = features_for(suite.subject, production)
     mirrored = sorted((set(declared) | set(enabled)) - {'default'})
-    text = (f'[package]\nname = "behaviour-{suite.subject}"\nversion = "0.0.0"\nedition = "2021"\n'
+    text = (f'[package]\nname = "behaviour-{suite.subject}"\nversion = "0.0.0"\nedition = "{suite.edition}"\n'
             'publish = false\nautotests = false\n\n[lib]\npath = "lib.rs"\n\n[features]\n'
             f'default = {json.dumps([name for name in enabled if name != "default"])}\n')
     text += ''.join(f'{json.dumps(name)} = []\n' for name in mirrored)
@@ -216,6 +251,32 @@ def member_manifest(suite, production):
 def target_name(path):
     path = Path(path)
     return path.parent.name if path.name == 'main.rs' else path.stem
+
+
+def standalone_member(suite, work):
+    """Copy real code/tests at the same depth; change only temporary Cargo wiring."""
+    subject = foundation_path(ROOT, suite.subject)
+    relative = subject.relative_to(ROOT)
+    shutil.copytree(subject, work / relative)
+    tests = ROOT / FOUNDATION_TESTS / suite.subject
+    if tests.exists():
+        shutil.copytree(tests, work / tests.relative_to(ROOT))
+    original = (subject / 'Cargo.toml').read_text()
+    readme = tomllib.loads(original)['package'].get('readme')
+    if readme:
+        documentation = (subject / readme).resolve().parent
+        shutil.copytree(documentation, work / documentation.relative_to(ROOT))
+    manifest = rebase_dependency_paths(original, subject)
+    for path in suite.tests:
+        copied = work / path
+        assert copied.is_file(), path
+        manifest += (f'\n[[test]]\nname = {json.dumps(target_name(path))}\n'
+                     f'path = {json.dumps(os.path.relpath(copied, work / relative))}\n')
+    (work / relative / 'Cargo.toml').write_text(manifest)
+    (work / 'Cargo.toml').write_text('[workspace]\nresolver = "2"\nmembers = '
+                                    + json.dumps([relative.as_posix()]) + '\n')
+    (work / 'rust-toolchain.toml').write_bytes((ROOT / 'rust-toolchain.toml').read_bytes())
+    return manifest
 
 
 def source_state():
@@ -243,6 +304,34 @@ def run_suites(selected):
         log.close()
         results[key] = {'subject': name, 'features': resolved[name], 'targets': {'lib': names}}
         print(f'PASS {key}: {len(names)} tests', flush=True)
+    for suite in STANDALONE_SUITES:
+        key = 'standalone:' + suite.subject
+        if selected and key not in selected:
+            continue
+        with tempfile.TemporaryDirectory(prefix='foundation-unit-') as directory:
+            work = Path(directory)
+            manifest = standalone_member(suite, work)
+            log = Log(OUTPUT / 'logs' / (key.replace(':', '-') + '.log'), header + manifest)
+            log.run(['cargo', 'generate-lockfile', '--offline'], work)
+            selection = ['-p', suite.subject, '--no-default-features']
+            if resolved[suite.subject]:
+                selection += ['--features', ','.join(resolved[suite.subject])]
+            metadata = json.loads(log.run(
+                ['cargo', 'metadata', '--locked', '--offline', '--format-version', '1',
+                 '--filter-platform', 'x86_64-unknown-linux-gnu', *selection[2:]], work))
+            member = next(package for package in metadata['packages']
+                          if Path(package['manifest_path']).parent.is_relative_to(work)
+                          and package['name'] == suite.subject)
+            features = next(node['features'] for node in metadata['resolve']['nodes'] if node['id'] == member['id'])
+            assert sorted(features) == resolved[suite.subject], f'{key}: copied member feature drift'
+            targets = {target_name(path): ['--test', target_name(path)] for path in suite.tests}
+            if not targets:
+                targets = {'lib': ['--lib']}
+            names = {target: cargo_test(log, work, [*selection, *target_selection], f'{key}/{target}')
+                     for target, target_selection in targets.items()}
+            log.close()
+            results[key] = {'subject': suite.subject, 'features': resolved[suite.subject], 'targets': names}
+            print(f'PASS {key}: {sum(map(len, names.values()))} tests', flush=True)
     chosen = [suite for suite in INTEGRATION_SUITES if not selected or 'integration:' + suite.subject in selected]
     if chosen:
         with tempfile.TemporaryDirectory(prefix='foundation-behaviour-') as directory:
@@ -289,7 +378,9 @@ def inventory_text(results):
 
 
 def suite_keys():
-    return ['unit:' + name for name in UNIT_SUITES] + ['integration:' + suite.subject for suite in INTEGRATION_SUITES]
+    return (['unit:' + name for name in UNIT_SUITES]
+            + ['standalone:' + suite.subject for suite in STANDALONE_SUITES]
+            + ['integration:' + suite.subject for suite in INTEGRATION_SUITES])
 
 
 def main():

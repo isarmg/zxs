@@ -710,14 +710,14 @@ macro_rules! mime_constant {
 #[cfg(test)]
 macro_rules! mime_constant_test {
     ($id:ident, $src:expr, $slash:expr) => (
-        mime_constant_test!($id, $src, $slash, None);
+        mime_constant_test!($id, $src, $slash, None)
     );
     ($id:ident, $src:expr, $slash:expr, $plus:expr) => (
-        mime_constant_test!(FULL $id, $src, $slash, $plus, ParamSource::None);
+        mime_constant_test!(FULL $id, $src, $slash, $plus, ParamSource::None)
     );
 
     ($id:ident, $src:expr, $slash:expr, $plus:expr, $params:expr) => (
-        mime_constant_test!(FULL $id, $src, $slash, $plus, ParamSource::Utf8($params));
+        mime_constant_test!(FULL $id, $src, $slash, $plus, ParamSource::Utf8($params))
     );
 
     (FULL $id:ident, $src:expr, $slash:expr, $plus:expr, $params:expr) => ({
@@ -787,4 +787,7 @@ mimes! {
 pub const TEXT_JAVSCRIPT: Mime = TEXT_JAVASCRIPT;
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/mime/unit/src/lib/tests_789.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/mime/unit/src/lib/tests_789.rs"
+));
