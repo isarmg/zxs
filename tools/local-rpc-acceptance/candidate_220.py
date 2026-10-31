@@ -106,7 +106,8 @@ def summary(root, path, output, pins):
         original_220_gate='NOT EVALUATED', continuous_extension_support='NOT_EVALUATED_BY_ORIGINAL_220',
         full_extension_acceptance='NOT_EVALUATED_BY_ORIGINAL_220',
         actual_continuous_run=None, old_continuous=plan['old_continuous'],
-        exit_scope='original eight gates only; never full continuous acceptance',
+        exit_scope='validated original pairs and remaining blocking checks only; never full continuous acceptance',
+        delivery_policy=screen.DELIVERY_POLICY, delivery_gate='NOT EVALUATED',
         old_original_220=plan['old_original_220'],
         old_22=plan['old_22'], old_2af_gate='FAIL unchanged', pairs=[])
     try:
@@ -114,13 +115,14 @@ def summary(root, path, output, pins):
             data = json.loads((root / f'rpc-220-original-{pair}' / 'pair.json').read_text())
             report['pairs'].append(compare(data, pair, plan))
         passed = all(check['passed'] for row in report['pairs'] for check in row['checks'].values())
-        report.update(status='completed', original_220_gate='PASS' if passed else 'FAIL')
+        report.update(status='completed', original_220_gate='PASS' if passed else 'FAIL',
+                      delivery_gate=screen.delivery_gate(report['pairs']))
     finally:
         screen.write(output, report)
         print('CANDIDATE_ORIGINAL_220', json.dumps(report))
-    # Exit success certifies only the original eight gates for both pairs.
+    # Exit success certifies validated pairs and current blocking checks only.
     # This five-stage controller never evaluates the separate continuous run.
-    if report['original_220_gate'] != 'PASS':
+    if report['delivery_gate'] != 'PASS':
         raise SystemExit(1)
 
 

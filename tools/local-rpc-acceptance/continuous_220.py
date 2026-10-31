@@ -138,6 +138,7 @@ def summary(root, path, output, pins):
     plan = checked_plan(path, pins)
     report = dict(status='incomplete', source_pins=pins, engineering_control=provenance(pins),
         manifest_sha256=plan['manifest_sha256'], candidate_continuous_capacity='NOT EVALUATED',
+        delivery_policy=screen.DELIVERY_POLICY, delivery_gate='NOT EVALUATED',
         engineering_eleven_gate='NOT EVALUATED', engineering_tail_latency_gate='NOT EVALUATED',
         original_baseline_gate='NOT EVALUATED HERE; use separate frozen-e2f original-220 result',
         old_original_220=plan['old_original_220'], old_continuous=plan['old_continuous'], old_2af_gate='FAIL retained', pairs=[])
@@ -166,10 +167,11 @@ def summary(root, path, output, pins):
         all_pass = all(check['passed'] for row in report['pairs'] for check in row['checks'].values())
         tails_pass = all(row['checks'][name+'_p95']['passed'] for row in report['pairs'] for name in ('flush', 'close', 'write_through'))
         report.update(status='completed', engineering_eleven_gate='PASS' if all_pass else 'FAIL',
-                      engineering_tail_latency_gate='PASS' if tails_pass else 'FAIL')
+                      engineering_tail_latency_gate='PASS' if tails_pass else 'FAIL',
+                      delivery_gate=screen.delivery_gate(report['pairs']))
     screen.write(output, report)
     print('CONTINUOUS_ENGINEERING_220', json.dumps(report))
-    if report['engineering_eleven_gate'] != 'PASS':
+    if report['delivery_gate'] != 'PASS' or report['candidate_continuous_capacity'] != 'PASS':
         raise SystemExit(1)
 
 

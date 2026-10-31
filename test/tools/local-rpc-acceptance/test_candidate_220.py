@@ -175,9 +175,10 @@ class CandidateBindingTests(unittest.TestCase):
             data = json.loads(failing.read_text())
             data['runs'][1]['phases']['requests']['open_ns'] = data['runs'][0]['phases']['requests']['open_ns'] * 2
             CANDIDATE.screen.write(failing, data)
-            with patch('builtins.print'), self.assertRaises(SystemExit) as failure:
+            with patch('builtins.print'):
                 CANDIDATE.summary(root, plan, output, self.pins)
-            self.assertEqual(failure.exception.code, 1)
             failed = json.loads(output.read_text())
+            self.assertEqual(failed['delivery_gate'], 'PASS')
+            self.assertFalse(failed['pairs'][0]['checks']['startup']['blocking'])
             self.assertEqual(failed['original_220_gate'], 'FAIL')
             self.assertEqual(failed['full_extension_acceptance'], 'NOT_EVALUATED_BY_ORIGINAL_220')

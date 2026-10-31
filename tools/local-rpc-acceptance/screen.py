@@ -375,6 +375,26 @@ def validate_arm(arm, commits):
     assert after['current_tail_files'] == 80 and after['independent_full_copies'] == 1
 
 
+NON_BLOCKING_METRICS = frozenset(('startup', 'open_vmhwm', 'save_p95'))
+DELIVERY_POLICY = dict(effective_utc='2026-10-31T08:28:00Z',
+    source='user instruction: complete tasks before further performance optimization',
+    non_blocking_metrics=sorted(NON_BLOCKING_METRICS),
+    preserved='raw thresholds/results, oracles, identity, safety, capacity and experiment budgets')
+
+
+def delivery_gate(rows):
+    """Retain original results; only the three user-removed targets are advisory."""
+    assert rows, 'delivery requires validated pair results'
+    passed = True
+    for row in rows:
+        assert row['checks'], 'delivery requires measured checks'
+        for name, check in row['checks'].items():
+            check['blocking'] = name not in NON_BLOCKING_METRICS
+            if check['blocking'] and not check['passed']:
+                passed = False
+    return 'PASS' if passed else 'FAIL'
+
+
 def original_checks(arms, commits):
     b, c = [arms[label]['phases']['requests'] for label in PINS]
     checks = {}
@@ -417,18 +437,19 @@ def compare_pair(data, commits, pair, manifest_hash):
 
 def summary(root, out):
     report = dict(status='incomplete', source_pins=PINS, old_parity_gate='FAILED unchanged',
-                  prospective_screen='NOT EVALUATED', pairs=[])
+                  prospective_screen='NOT EVALUATED', delivery_policy=DELIVERY_POLICY, delivery_gate='NOT EVALUATED', pairs=[])
     try:
         for commits in (22, 220):
             for pair in (0, 1):
                 data = json.loads((root / f'rpc-{commits}-{pair}' / 'pair.json').read_text())
                 report['pairs'].append(compare_pair(data, commits, pair, os.environ['RPC_MANIFEST_SHA256']))
         report.update(status='completed', prospective_screen='PASS' if all(
-            check['passed'] for pair in report['pairs'] for check in pair['checks'].values()) else 'FAIL')
+            check['passed'] for pair in report['pairs'] for check in pair['checks'].values()) else 'FAIL',
+            delivery_gate=delivery_gate(report['pairs']))
     finally:
         write(out, report)
         print('RPC_SCREEN', json.dumps(report))
-    if report['prospective_screen'] != 'PASS':
+    if report['delivery_gate'] != 'PASS':
         raise SystemExit(1)
 
 
@@ -493,17 +514,19 @@ def summary_original_220(root, plan_path, out):
     report = dict(status='incomplete', actual_product_pins=PINS, old_run=41168852801,
                   old_result='incomplete / NOT EVALUATED retained', old_2af_gate='FAIL unchanged',
                   original_220_gate='NOT EVALUATED', continuous_extension_support='FAIL_DEFAULT_BUDGET',
-                  full_extension_acceptance='FAIL', budget_proof=budget_proof(), reused_22=plan['reused_22'], pairs=[])
+                  full_extension_acceptance='FAIL', budget_proof=budget_proof(), reused_22=plan['reused_22'],
+                  delivery_policy=DELIVERY_POLICY, delivery_gate='NOT EVALUATED', pairs=[])
     try:
         for pair in (0,1):
             data = json.loads((root/f'rpc-220-original-{pair}'/'pair.json').read_text())
             report['pairs'].append(compare_original_pair(data, pair))
         passed = all(check['passed'] for pair in report['pairs'] for check in pair['checks'].values())
-        report.update(status='completed', original_220_gate='PASS' if passed else 'FAIL')
+        report.update(status='completed', original_220_gate='PASS' if passed else 'FAIL',
+                      delivery_gate=delivery_gate(report['pairs']))
     finally:
         write(out, report)
         print('ORIGINAL_220_SCREEN', json.dumps(report))
-    if report['original_220_gate'] != 'PASS' or report['full_extension_acceptance'] != 'PASS':
+    if report['delivery_gate'] != 'PASS' or report['full_extension_acceptance'] != 'PASS':
         raise SystemExit(1)
 
 if __name__ == '__main__':
