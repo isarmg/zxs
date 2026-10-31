@@ -42,6 +42,10 @@ class NativeRelease(unittest.TestCase):
             return self.commit + "\n"
         if command == ["git", "status", "--porcelain", "--untracked-files=normal"]:
             return self.source_status
+        if "target-cpus" in command:
+            return "    x86-64 - This is the default target CPU for the current build target.\n"
+        if "cfg" in command:
+            return 'debug_assertions\ntarget_arch="x86_64"\ntarget_feature="sse2"\ntarget_os="linux"\n'
         if command[-1] == "-vV":
             return "rustc fixture\nhost: x86_64-unknown-linux-gnu\n"
         self.fail(f"unexpected native build query: {command}")
@@ -60,6 +64,11 @@ class NativeRelease(unittest.TestCase):
         self.assertIn("native-zxs-rescue-sha256=" + MODULE.digest(self.output / "zxs-rescue"), content)
         self.assertNotIn("secret", content)
         self.assertNotIn("stale", content)
+        self.assertIn("native-rust-target-default-cpu=x86-64\n", content)
+        self.assertIn('native-rust-flag-overrides-present=false\n', content)
+        self.assertIn('native-c-flag-overrides-present=true\n', content)
+        self.assertIn('native-isa-attestation=not-attested;', content)
+        self.assertNotIn('debug_assertions', content)
 
     def test_failed_build_removes_old_receipt(self):
         with patch.object(MODULE.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "cargo")):
@@ -148,6 +157,41 @@ class NativeRelease(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "clean source checkout"):
                 MODULE.main()
         self.assertFalse(self.receipt.exists())
+
+
+
+
+class NativeTargetDefaults(unittest.TestCase):
+    def test_actual_flags_are_not_claimed_and_override_values_remain_private(self):
+        values = {"CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS": "-Ctarget-cpu=secret-host",
+                  "CFLAGS_x86_64_unknown_linux_gnu": "-DPRIVATE=secret", "CC": "/private/compiler"}
+        result = MODULE.override_presence(values)
+        self.assertTrue(result['native-rust-flag-overrides-present'])
+        self.assertTrue(result['native-c-flag-overrides-present'])
+        self.assertTrue(result['native-build-overrides-present'])
+        self.assertTrue(all(type(value) is bool for value in result.values()))
+        self.assertNotIn('secret', str(result))
+        self.assertNotIn('/private', str(result))
+        self.assertFalse(any(MODULE.override_presence({}).values()))
+
+    def test_probe_rejects_missing_ambiguous_or_private_cpu_without_echoing_values(self):
+        for output in ["no default", " /private/cpu - default target CPU", " x86-64 - default target CPU\n generic - default target CPU"]:
+            with patch.object(MODULE.subprocess, 'check_output', return_value=output):
+                with self.assertRaises(RuntimeError) as failure:
+                    MODULE.target_defaults('rustc')
+                self.assertNotIn('/private', str(failure.exception))
+
+    def test_probe_filters_nontarget_cfg_and_rejects_unsafe_or_wrong_target_values(self):
+        cpu=' x86-64 - default target CPU'
+        for cfg in ['target_arch="aarch64"', 'target_arch="x86_64"\ntarget_feature="private/path"']:
+            with patch.object(MODULE.subprocess,'check_output',side_effect=[cpu,cfg]):
+                with self.assertRaises(RuntimeError) as failure:
+                    MODULE.target_defaults('rustc')
+                self.assertNotIn('private/path',str(failure.exception))
+        with patch.object(MODULE.subprocess,'check_output',side_effect=[cpu,'private_unrelated_cfg="secret"\ntarget_arch="x86_64"\ntarget_feature="sse2"']) as query:
+            actual=MODULE.target_defaults('rustc')
+            self.assertEqual(actual,('x86-64',['target_arch="x86_64"','target_feature="sse2"']))
+            self.assertTrue(all(call.args[0][-2:]==['--target',MODULE.TARGET] for call in query.call_args_list))
 
 
 if __name__ == "__main__":

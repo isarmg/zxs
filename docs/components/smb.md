@@ -143,7 +143,10 @@ socket 已存在时服务端拒绝覆盖，启动时不会删除未知对象。�
 
 启动时重建这些预算；没有可验证所有权的旧文件或孤立文件同时计入总量和唯一主体的准入，超额时保留数据并拒绝新增预留。损坏预算记录使 SMB 暂存拒绝服务，不静默修复或删除，管理 HTTP 仍独立可用。管理员应先停止 Samba 与桥接服务、确认无残留可写 FD，再按原操作号核对权威结果，导出或明确处理保留数据及配套记录，之后重启重新盘点；不要在服务运行时直接删除预算文件来释放额度。此处没有自动过期清理或替用户决定丢弃未确认写入的接口。
 
-预算并发回归在 `test/server/unit/smb_rpc/budget_tests.rs`：测试专用转发器仅暂停真实持久化函数的调用边界，生产仍执行 `create_new` 和临时文件同步、替换、目录同步。独立故障入口 `bash test/server/unit/smb_rpc/budget-io-eio.sh <storage-server-libtest-binary>` 将 `LD_PRELOAD` 仅传给六个子进程，分别检查初始预留／增长的真实 write、文件 fsync、目录 fsync 的 EIO 来源与封闭准入。普通文件系统夹具另覆盖 no-clobber、临时创建与替换失败；这些是进程内调度和 I/O 故障证据，不是实盘掉电、实际 Samba SDK 或客户端性能验收。`write_generation_tests.rs` 用真实核心会话驱动 VFS 实际使用的 `WriteSequence`，覆盖每代一次 `Dirty`、撤权与工作区关闭在修改前拒绝、write-through 每次保存及额度授予复用；按 64 KiB 顺序写 1 GiB 的实测计数与延迟见[验证记录](../validation/smb-write-admission.md)，那是本机进程内测量，不是实际 Samba SDK、客户端或物理盘验收。
+预算并发回归在 `test/server/unit/smb_rpc/budget_tests.rs`：测试专用转发器仅暂停真实持久化函数的调用边界，生产仍执行 `create_new` 和临时文件同步、替换、目录同步。workspace CI 的 `check-smb-budget-io.py` 从当次 Cargo JSON 选取精确 libtest，运行独立故障入口 `bash test/server/unit/smb_rpc/budget-io-eio.sh <storage-server-libtest-binary>` 将 `LD_PRELOAD` 仅传给六个子进程，分别检查初始预留／增长的真实 write、文件 fsync、目录 fsync 的 EIO 来源与封闭准入。普通文件系统夹具另覆盖 no-clobber、临时创建与替换失败；这些是进程内调度和 I/O 故障证据，不是实盘掉电、实际 Samba SDK 或客户端性能验收。`write_generation_tests.rs` 用真实核心会话驱动 VFS 实际使用的 `WriteSequence`，覆盖每代一次 `Dirty`、撤权与工作区关闭在修改前拒绝、write-through 每次保存及额度授予复用；按 64 KiB 顺序写 1 GiB 的实测计数与延迟见[验证记录](../validation/smb-write-admission.md)，那是本机进程内测量，不是实际 Samba SDK、客户端或物理盘验收。
+
+2026-10-31 助手云补验以生产 Rust 源码 `0787d77cf8fa074f6d268bbf05444e54cc07ca52` 的当次 Cargo libtest 执行上述六个 EIO 子场景，均为 1 passed／0 failed／0 ignored；二进制 SHA-256 为 `1b4f56abd64b54fc69fb008e209c9d7754b349eace6183c742dbfee70e7736f9`。注入仅限自建临时目录和测试子进程，未挂载设备或改变权限；不代替物理故障验收。CI 接线另以精确测试列举及单测试成功结果拒绝零执行。
+
 
 ## SDK 与模块构建
 

@@ -221,6 +221,24 @@ FULL、事件序号和仍保留的 359 个工作区额度。新 seed 在实际�
 oracle 样本，并明确 `1/2`，不把未完成成对比较或两个样本要求标为通过。全部阈值不变。
 模板、控制器及编译通过只证明验证接线，不能提前宣称新连续容量或延迟通过。
 
+### 52b590 连续合同的实际部分结果（2026-10-31）
+
+[41180163138](https://github.com/isarmg/zxs/actions/runs/41180163138) 原计划为
+07:45:30–08:30:30 UTC，两个 pair 均在原截止点收到 SIGTERM，未延长预算。
+AB 控制臂完成七阶段，候选在 `rpc-verify` 截止；BA 候选完成七阶段，控制臂在 `requests` 截止。
+原成对比较仍为 incomplete／NOT EVALUATED，候选容量正确性只为 **1/2 verified**。
+唯一已完成候选由正常独立重开验证 360 条操作／事件、359 个 Cold 工作区、
+220 个原收据、718 个原历史正文、20 个 RPC 保存与 120 个尾提交；同一 `bench` 的
+元数据实际为 64,408,145 字节，64 MiB 限额下余 2,700,719 字节，未删历史或重置预算。
+
+已下载并逐字节核对原始 ZIP：[AB 13036632371](https://github.com/isarmg/zxs/actions/runs/41180163138/artifacts/13036632371)
+SHA256 `86ddf3e779c6c7ac693f9eb19bfa63803fdc27bb047ff91eecce3ef42e9cadf6`；
+[BA 13036732231](https://github.com/isarmg/zxs/actions/runs/41180163138/artifacts/13036732231)
+`3f5085a3fcabfa7d5ee3da8d6e3404535579b90d196a08ff1ebb621c741ac054`；
+[summary 13036451726](https://github.com/isarmg/zxs/actions/runs/41180163138/artifacts/13036451726)
+`8a3ecdbdb1a9eab233741e5beb7e9acfff26b74839221ca238b620611160bb24`。
+此处登记冻结运行的原始结果，后续单候选恢复不会改写原 ABBA 或缺失样本状态。
+
 ### 缺失候选容量样本的独立恢复
 
 `capacity_recovery.py`／`candidate-capacity-recovery-workflow.yml` 只恢复第二个候选正确性样本：

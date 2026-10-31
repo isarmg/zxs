@@ -207,7 +207,7 @@ SMB 共享的容量信息只能返回保守可写预算，还受目录一级规�
 | SMB spool 所有者 / 总量 | 独立的 100 GiB / 500 GiB，所在文件系统保留 1 GiB 恢复余量 | 对应 `--smb-spool-*` 参数；计入获准私有副本及断连后留存材料，不与 HTTP 合并为一个池 |
 | SMB 连接 / 已认证会话 / 每会话句柄 | 固定 64 / 8 / 1024；所有共享使用同一已认证会话计数 | `src/server/src/smb_rpc.rs` 的 `MAX_CONNECTIONS` / `MAX_AUTHENTICATED_SESSIONS` / `MAX_HANDLES`；没有另一个 4096 全池句柄上限 |
 | 核心文件 / 每工作区字节 | 初始化草稿各为 1 TiB；还受服务端单文件默认 1 GiB 限制 | 引擎 JSON `max_file_bytes` / `max_workspace_bytes`，服务端 `--max-upload-bytes`；不等于 spool 总量 |
-| 持久工作区证据 | 全池 / 每主体默认 4096 / 1024 条、128 MiB / 64 MiB 逻辑元数据 | 引擎 `max_retained_workspaces` 及其余三维、宿主四项 `--max-retained-*`；仅核验空中止记录退出驻留计数，所有元数据仍计费，具体应用入口见下文 |
+| 持久工作区证据 | 全池 / 每主体默认 4096 / 1024 条、128 MiB / 64 MiB 逻辑元数据 | 引擎 `max_retained_workspaces` 及其余三维、宿主四项 `--max-retained-*`；经准入的空中止记录及精确发布绑定的普通／历史保存终态可退出驻留计数，所有冷热元数据仍计费，具体应用入口见下文 |
 
 HTTP 传输期限与各准入层的准确边界见[服务端组件](components/server.md#http-transfer-limits)，SMB 会话与暂存行为见[SMB 组件](components/smb.md)。两个 spool 分别重建自身账本、计入保守元数据开销，且保留未知归属和失败材料；核心工作区又有独立预算。`per_account` / `per_principal` 是仍需保留的所有者计费维度，不表示存在多个产品账户；唯一管理员的多会话不会获得多份额度。这里没有跨 HTTP、SMB 和核心工作区的统一暂存总账，也没有 128 项待准备/待提交应用队列。
 
