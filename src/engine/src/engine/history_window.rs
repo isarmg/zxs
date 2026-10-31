@@ -1,10 +1,11 @@
 //! Bounded history projection over one admitted immutable metadata observation.
 //!
-//! Request-owned space is O(L + E + F): selected records, preview edges and one
-//! UTF-8 fragment, with each bound taken from the shared policy. State and its
+//! Request-owned space is O(L + B + E + F): selected records, one content batch,
+//! preview edges and one UTF-8 fragment, all bounded by shared policy. State and its
 //! admitted root catalog are shared, not projected or copied for each request.
-//! CPU is deliberately not O(L). With S total nodes, N scoped nodes and C
-//! commits plus commit entries, cold node selection is O(S + N*C), plus bounded
+//! CPU is deliberately not O(L). With S total nodes, N scoped content records,
+//! B the shared maximum node-page budget, H commit headers and C scoped commit
+//! entries, cold node selection is O(S + ceil(N/B)*(H + C*log(B))), plus bounded
 //! selector comparisons. Selected path/tag facts can walk ancestor chains;
 //! path and head lookup scan merge/branch/commit records, and parent/source/input
 //! reads scan their borrowed member arrays. Every such scan has cancellation

@@ -47,7 +47,7 @@ fn body(n: usize, file: &str, history: &str) -> FileVersion {
 
 // This is a query-only scope fixture, deliberately including foreign records.
 // Actual publication and cold-recovery admission have separate real-I/O tests.
-fn fixture() -> MetadataView {
+pub(super) fn fixture() -> MetadataView {
     let mut state = State::default();
     state.histories.insert(
         HISTORY.into(),
@@ -288,7 +288,7 @@ fn fixture() -> MetadataView {
     }
 }
 
-fn oracle_node_keys(state: &State) -> Vec<(u64, String)> {
+pub(super) fn oracle_node_keys(state: &State) -> Vec<(u64, String)> {
     let mut keys = state
         .versions
         .values()
@@ -838,7 +838,7 @@ fn node_scan_observes_cancellation_before_filtering_foreign_records() {
     assert_eq!(error.code(), storage_contract::ErrorCode::OperationAborted);
 }
 
-fn context() -> HistoryResolvedContext {
+pub(super) fn context() -> HistoryResolvedContext {
     HistoryResolvedContext {
         repository_id: id("repo", 0).parse().unwrap(),
         history_tree_id: HISTORY.parse().unwrap(),
@@ -848,7 +848,7 @@ fn context() -> HistoryResolvedContext {
     }
 }
 
-fn request(collection: HistoryCollection, limit: usize) -> HistoryWindowRequest {
+pub(super) fn request(collection: HistoryCollection, limit: usize) -> HistoryWindowRequest {
     let limit = HistoryPageLimit::for_collection(limit, &collection).unwrap();
     HistoryWindowRequest {
         file_id: FILE.parse().unwrap(),

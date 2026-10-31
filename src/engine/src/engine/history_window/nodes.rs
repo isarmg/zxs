@@ -130,6 +130,35 @@ pub(super) fn first_commit<'a>(
     Ok(first)
 }
 
+pub(super) type ContentBatch<'a> = BTreeMap<&'a str, (&'a FileVersion, Option<&'a Commit>)>;
+
+/// Resolve exact first commits together for one finite borrowed content batch.
+/// The canonical commit-ID iteration order breaks equal-sequence ties, exactly
+/// as in `first_commit`; no candidate is selected by version_sequence first.
+pub(super) fn first_commits<'a>(
+    commits: impl Iterator<Item = &'a Commit>,
+    scope: Scope<'_>,
+    batch: &mut ContentBatch<'a>,
+    cancel: &HistoryWindowCancellation,
+) -> Result<()> {
+    for commit in commits {
+        cancel.checkpoint()?;
+        if commit.history_tree_id != scope.history {
+            continue;
+        }
+        for entry in &commit.entries {
+            cancel.checkpoint()?;
+            if entry.file_id == scope.file
+                && let Some((_, first)) = batch.get_mut(entry.version_id.as_str())
+                && first.is_none_or(|first| commit.sequence < first.sequence)
+            {
+                *first = Some(commit);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn first_parent<'a>(state: &'a State, scope: Scope<'_>, id: &str) -> Option<&'a str> {
     base_parents(state, id)
         .first()
