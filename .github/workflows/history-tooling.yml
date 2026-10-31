@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion]
 
 permissions:
   contents: read
@@ -216,6 +216,10 @@ jobs:
               'd3eefd289e53a2803703870fe4250d08cadff9b5', '52d5076189204952dbfaf4d3c2c76b93553d1b3e',
           ):
               raise SystemExit('Historical workspace lifecycle requires the exact combined source and tree')
+          if os.environ['SCOPE'] == 'github-history-completion' and (source, tree) != (
+              'a6cac56acd9a05635cb8037322499c4eb646fc03', '0bb3a30b5d9a2faa20c38f4dcea5f0a114bec1f8',
+          ):
+              raise SystemExit('History completion requires the exact reviewed source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -917,6 +921,18 @@ jobs:
                       'python3 tools/rust-sources/manage.py verify\n'
                       'ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality'),
           ]
+          history_missing_page = 'engine::integrity_scrub::tests::retained_historical_page_missing_is_found_even_when_current_snapshot_is_complete'
+          groups['github-history-completion'] = [dict(id='github-history-engine', cache='storage-engine',
+              package='storage-engine', test_groups=json.dumps([
+                  dict(selector='history_window', features=['fault-injection'], required_suffixes=[
+                      'content_commit_order_cannot_be_replaced_by_version_sequence_candidates',
+                      'legal_split_windows_use_first_commit_order_and_preserve_original_operation_ids',
+                      'history_read_pins_the_whole_metadata_generation_only_until_the_read_drops',
+                      'old_metadata_roots_survive_explicit_body_purge_and_cold_restart',
+                  ]),
+                  dict(selector=history_missing_page, features=['fault-injection'], exact=True,
+                      count=1, required=[history_missing_page]),
+              ]), command='Complete history_window filter plus exact retained old-page scrub witness; fault injection enabled')]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
           matrix = json.dumps(dict(include=selected), separators=(',', ':'))
