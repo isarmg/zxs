@@ -213,7 +213,7 @@ jobs:
           ):
               raise SystemExit('HEAD Range semantics requires the exact source and tree')
           if os.environ['SCOPE'] == 'historical-workspace-lifecycle' and (source, tree) != (
-              '93ad18581d74a88a86cae063be911ad54e8d717d', '36699e5e92e14a0e825bab1eefbd877cfbb80e2b',
+              '849a1c61ac9bfa7b5cbad2469decfb48705ff869', 'b83bf0d0e5eaf5f32cc5dbdfc974b81cecd50509',
           ):
               raise SystemExit('Historical workspace lifecycle requires the exact combined source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
@@ -922,6 +922,7 @@ jobs:
                   command='python3 .github/scripts/check-architecture.py\n'
                       'python3 tools/rust-sources/manage.py verify\n'
                       'ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality'),
+              dict(groups['mature-doc-contracts'][0], id='historical-workspace-doc-contracts'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
