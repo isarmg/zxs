@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
-for tool in cc pkg-config python3 perl yapp flex bison m4 cargo curl tar sha256sum; do
+for tool in cc pkg-config python3 perl yapp flex bison m4 cargo tar sha256sum readelf ldd; do
   command -v "$tool" >/dev/null || {
     printf 'Missing SDK prerequisite: %s (see the smb-sdk CI job packages)\n' "$tool" >&2
     exit 1
@@ -13,17 +13,12 @@ cache="${ZXS_SMB_SDK_CACHE:-$root/target/smb-sdk}"
 mkdir -p "$cache"
 cache="$(cd "$cache" && pwd)"
 version=4.23.0
-archive="$cache/samba-$version.tar.gz"
-source="$cache/samba-$version"
-sha256=b0cb963a63eb1515227f3779a46d3a7f790c1bbfeeb4b31fd43e405eefe7a3af
-if [[ ! -f "$archive" ]]; then
-  curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
-    "https://download.samba.org/pub/samba/stable/samba-$version.tar.gz" -o "$archive.part"
-  mv "$archive.part" "$archive"
-fi
-printf '%s  %s\n' "$sha256" "$archive" | sha256sum --check --strict
-if [[ ! -d "$source" ]]; then
-  tar -xzf "$archive" -C "$cache"
+sha256="$(python3 tools/samba-source/manage.py verify | python3 -c 'import json, sys; print(json.load(sys.stdin)["sha256"])')"
+# Source hash is part of the build directory identity. No source fetch occurs.
+materialized="$cache/$sha256"
+source="$materialized/samba-$version"
+if [[ ! -d "$materialized" ]]; then
+  python3 tools/samba-source/manage.py extract --destination "$materialized"
 fi
 # CI caches the complete configured source, generated NDR headers, and real libs.
 # Reconfigure on script changes (also in the cache key), never reuse a partial build.
@@ -73,3 +68,28 @@ grep -Fq 'ZXS SMB VFS requires panic=unwind to isolate panics at the host bounda
 # cannot pass the expected diagnostic gate or replace this positive check.
 python3 .github/scripts/check-rust-diagnostics.py -- \
   cargo build --locked --offline -p smb-vfs --release --message-format=json
+
+# A unified build produces the real Samba daemon/client and matching Rust VFS.
+# Capture actual dynamic dependencies; do not claim a static/portable release.
+receipt_dir="$cache/product-receipt"
+mkdir -p "$receipt_dir"
+for product in "$source/bin/default/source3/smbd/smbd" \
+  "$source/bin/default/source3/client/smbclient" \
+  "${CARGO_TARGET_DIR:-$root/target/native}/release/libsmb_vfs.so"; do
+  test -f "$product"
+  name="$(basename "$product")"
+  sha256sum "$product" > "$receipt_dir/$name.sha256"
+  readelf -d "$product" > "$receipt_dir/$name.dynamic.txt"
+  ldd "$product" > "$receipt_dir/$name.ldd.txt"
+  if grep -Fq 'not found' "$receipt_dir/$name.ldd.txt"; then
+    cat "$receipt_dir/$name.ldd.txt" >&2
+    exit 1
+  fi
+done
+"$source/bin/default/source3/smbd/smbd" --version > "$receipt_dir/smbd.version.txt"
+"$source/bin/default/source3/client/smbclient" --version > "$receipt_dir/smbclient.version.txt"
+printf '%s\n' "$sha256" > "$receipt_dir/source.sha256"
+# Preserve bin/ symlinks and private shared libraries in a build-tree artifact.
+# This is not an installer and makes no host changes.
+tar -czf "$cache/samba-build-tree.tar.gz" -C "$source" bin
+cp "${CARGO_TARGET_DIR:-$root/target/native}/release/libsmb_vfs.so" "$cache/"

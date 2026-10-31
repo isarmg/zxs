@@ -301,3 +301,27 @@ reader 不延长凭据 OS 锁；owner 被销毁或权威发布被阻断后，后
 Hello 得到的身份不是长期准入证明：repository/binding generation 与每次操作在
 引擎锁内的当前权威验证保持不变。无 socket 快照测试覆盖认证写锁被持有时读取、
 blocked/owner drop 和凭据锁释放；真实 listener 的 owner 生命周期留给 AF_UNIX CI。
+
+## 仓内 Samba 本体与统一构建
+
+Samba/smbd 4.23.0 完整官方源代码现保存在
+[`compliance/sources/samba`](../../compliance/sources/samba/README.md)，不是外部运行时下载或 submodule。
+保留原始压缩布局避免把上游独立测试/文档/构建工程混入第一方 `src/`；源包全部许可与版权原样保留。
+
+`bash .github/scripts/smb-sdk.sh` 一次构建真实 `smbd`、`smbclient` 及匹配的 Rust `libsmb_vfs.so`，
+然后运行真实 SDK ABI/FFI 单测、panic=abort 拒绝检查和受支持 release 正向构建。
+无需预装 Samba。需要 C/C++、Python 3.12、Perl/Yapp、Flex、Bison、M4、Rust、pkg-config、Clang、
+GnuTLS/Kerberos/zlib/popt 开发库及 binutils；Ubuntu 24.04 的完整安装列表见
+[SMB 构建工作流](../../.github/workflows/smb-sdk.yml)。只有源码获取是完全仓内离线，系统依赖准备不是。
+
+默认输出：
+- `target/smb-sdk/<源码SHA>/samba-4.23.0/bin/default/source3/smbd/smbd`
+- `target/smb-sdk/<源码SHA>/samba-4.23.0/bin/default/source3/client/smbclient`
+- `target/native/release/libsmb_vfs.so`
+- `target/smb-sdk/product-receipt/`：实际版本、二进制 SHA-256、ELF 动态标签及 `ldd` 依赖。
+
+CI 同时保存 `samba-build-tree.tar.gz`（保留 `bin/` 内共享/私有库和链接）、VFS、源码及法律材料。
+这是匹配的构建树产物，**不是已安装服务或承诺可重定位的静态发行包**：Samba 配置前缀与
+系统动态库依赖仍存在，使用前须按 receipt 和显式 Samba 配置安排模块/库路径。
+脚本只执行 `--version`，不启动监听、不安装系统服务、不创建用户或更改权限。
+真实 Windows/macOS 客户端、部署认证与网络互操作仍按既有人工验收单执行；编译成功不冒充互操作通过。

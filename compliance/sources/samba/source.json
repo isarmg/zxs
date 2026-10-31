@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "name": "Samba",
+  "version": "4.23.0",
+  "upstream": "https://www.samba.org/",
+  "source_url": "https://download.samba.org/pub/samba/stable/samba-4.23.0.tar.gz",
+  "archive": "samba-4.23.0.tar.gz",
+  "sha256": "b0cb963a63eb1515227f3779a46d3a7f790c1bbfeeb4b31fd43e405eefe7a3af",
+  "archive_bytes": 43320412,
+  "members": 11734,
+  "unpacked_file_bytes": 179796412,
+  "local_modifications": [],
+  "legal_copies": {
+    "compliance/licenses/upstream/samba-4.23.0/COPYING": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "compliance/licenses/upstream/samba-4.23.0/VFS-License-clarification.txt": "be37ee76af8b5270868adb1b464cb593321082f7332226938003288dbd59911f"
+  },
+  "license_scope": "COPYING and VFS clarification are entry points; the complete archive retains all per-file and bundled-component licenses, copyright and public upstream test fixtures (including non-production example keys).",
+  "parts": [
+    {
+      "name": "samba-4.23.0.tar.gz.part-000",
+      "bytes": 4194304,
+      "sha256": "e6f45c2399ce7aa3a288389ef020a6bda70c6a7f6758f9cbf95135e82d8bd798"
+    },
+    {
+      "name": "samba-4.23.0.tar.gz.part-001",
+      "bytes": 4194304,
+      "sha256": "664f40853c24c4d905a767642989a4e08e00828efb260cabcbea390db8b2f2f1"
+    },
+    {
+      "name": "samba-4.23.0.tar.gz.part-002",
+      "bytes": 4194304,
+      "sha256": "a41e4fc35600415ce40bf079b5d5607fc4d66cf8f9bcd5de4471d23ba5380b9f"
+    },
+    {
+      "name": "samba-4.23.0.tar.gz.part-003",
+      "bytes": 4194304,
+      "sha256": "7953f5407d10a40b4abf4d747f52e6b5a53ff4fd2ce63865524555218c8199d4"
+    },
+    {
+      "name": "samba-4.23.0.tar.gz.part-004",
+      "bytes": 4194304,
+      "sha256": "4da2c00b5c8aae6c6b651a09c583dfea17387e8dff70415d44869c31a617a1b5"
+    },
+    {
+      "name": "samba-4.23.0.tar.gz.part-005",
+      "bytes": 4194304,
+      "sha256": "fcf37590d2910b28c5d9156249939d5542fcc30bbb7b72d4ec7c7e4e06838943"
+    },
+    {
+      "name": "samba-4.23.0.tar.gz.part-006",
+      "bytes": 4194304,
+      "sha256": "b79d7be3581767eadbfb6df67c3d57129cfe5c75fc52c7131fbc8f1092e939ef"
+    },
+    {
+      "name": "samba-4.23.0.tar.gz.part-007",
+      "bytes": 4194304,
+      "sha256": "e1f84ba129c26f76645e9d5fca3fbf0ac9812be47567377015a0ace3a77ac3ac"
+    },
+    {
+      "name": "samba-4.23.0.tar.gz.part-008",
+      "bytes": 4194304,
+      "sha256": "31c0b5145d2b2c36b5b30a4a1b61634fa83ec5aa61c755e7773b4b1a32fd4423"
+    },
+    {
+      "name": "samba-4.23.0.tar.gz.part-009",
+      "bytes": 4194304,
+      "sha256": "f76b6a9a062aa319e7fccd2fcc46dcb00ff3762b77ead004214860976cdf5ee9"
+    },
+    {
+      "name": "samba-4.23.0.tar.gz.part-010",
+      "bytes": 1377372,
+      "sha256": "d15d16e055dd6268eecafbad165225e986b5c7c694c3042391ed390d1daf9fe3"
+    }
+  ],
+  "part_bytes": 4194304
+}

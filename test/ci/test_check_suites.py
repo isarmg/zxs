@@ -636,9 +636,23 @@ elif '--message-format=json' in args:
 
     def prepare_sdk(self):
         cache = self.root / "target/smb-sdk"
-        source = cache / "samba-4.23.0"
+        repository = Path(__file__).resolve().parents[2]
+        native_source = self.root / "tools/samba-source"
+        native_source.mkdir(parents=True)
+        shutil.copy2(repository / "tools/samba-source/manage.py", native_source / "manage.py")
+        (self.root / "compliance").symlink_to(repository / "compliance", target_is_directory=True)
+        digest = "b0cb963a63eb1515227f3779a46d3a7f790c1bbfeeb4b31fd43e405eefe7a3af"
+        source = cache / digest / "samba-4.23.0"
         source.mkdir(parents=True)
-        (cache / "samba-4.23.0.tar.gz").write_bytes(b"fixture archive")
+        for relative in ("source3/smbd/smbd", "source3/client/smbclient"):
+            product = source / "bin/default" / relative
+            product.parent.mkdir(parents=True)
+            product.write_text("#!/bin/sh\necho 4.23.0\n")
+            product.chmod(0o700)
+        release = self.root / "target/native/release"
+        release.mkdir(parents=True)
+        (release / "libsmb_vfs.so").write_bytes(b"fixture VFS")
+        self.environment["CARGO_TARGET_DIR"] = str(release.parent)
         recipe = hashlib.sha256((self.root / ".github/scripts/smb-sdk.sh").read_bytes()).hexdigest()
         (source / ".zxs-sdk-ready").write_text(recipe + "\n")
         self.write_tool("sha256sum", f'''#!{sys.executable}
@@ -650,8 +664,9 @@ else:
 ''')
         for name in ("cc", "pkg-config", "perl", "yapp", "flex", "bison", "m4"):
             self.write_tool(name, "#!/bin/sh\nexit 0\n")
-        for name in ("curl", "tar"):
-            self.write_tool(name, "#!/bin/sh\nexit 91\n")
+        self.write_tool("curl", "#!/bin/sh\nexit 91\n")
+        for name in ("tar", "readelf", "ldd"):
+            self.write_tool(name, "#!/bin/sh\nexit 0\n")
 
     def test_sdk_gates_compile_streams_and_then_runs_normal_tests(self):
         self.prepare_sdk()

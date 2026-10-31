@@ -52,3 +52,10 @@
 ## 补充依赖文档
 
 [`dependency-documents.json`](dependency-documents.json)登记从匹配版本官方发布包补齐的原始说明，以及与已保存原文逐字节相同的共享映射。归档摘要须匹配当前来源身份，每份文档保留原路径、当前路径、字节数、摘要与许可指向；不修改已有来源原件。当前阅读入口见[第三方依赖文档](../docs/dependencies/README.md)，校验由 `documentation.py verify` 执行。
+
+## 仓内 Samba 原生源码
+
+完整官方 Samba 4.23.0 源码归档、来源收据和法律材料入口见
+[`sources/samba/README.md`](sources/samba/README.md)。它是明确登记的原生构建输入，
+不是 Rust 包或退役材料；统一 SMB 构建直接使用仓内字节，不下载 Samba 源码。
+原始 GPL 及各组件许可、版权不因纳入仓库而改变。

@@ -1,4 +1,4 @@
-name: Pinned Samba SDK validation
+name: In-repository Samba and VFS build
 
 on:
   workflow_call:
@@ -34,6 +34,17 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/smb-sdk
-          key: samba-4.23.0-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.github/scripts/smb-sdk.sh') }}
-      - name: Build official SDK and validate the Rust VFS
+          key: samba-4.23.0-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.github/scripts/smb-sdk.sh', 'tools/samba-source/manage.py', 'compliance/sources/samba/source.json') }}
+      - name: Build repository Samba daemon/client and validate matching Rust VFS
         run: bash .github/scripts/smb-sdk.sh
+      - name: Preserve matching SMB products and dependency receipts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: samba-4.23.0-and-vfs-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            target/smb-sdk/samba-build-tree.tar.gz
+            target/smb-sdk/libsmb_vfs.so
+            target/smb-sdk/product-receipt/
+            compliance/sources/samba/
+            compliance/licenses/upstream/samba-4.23.0/
