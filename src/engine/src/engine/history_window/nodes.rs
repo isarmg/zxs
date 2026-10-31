@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 #[cfg(test)]
 thread_local! {
+    static PATH_MERGE_HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PARENT_MERGE_HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FIRST_COMMIT_HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -241,12 +242,70 @@ pub(super) fn tags<'a>(
 
 /// The same canonical source-chain path as the full projection. Only the final
 /// bounded path is copied by the page builder; ancestors remain borrowed.
+pub(super) enum PathSource<'a> {
+    Path(&'a FilePathNode),
+    Content(&'a FileVersion, Option<&'a Commit>),
+    CreationName(&'a FileVersion),
+}
+impl<'a> PathSource<'a> {
+    pub(super) fn value(
+        self,
+        scope: Scope<'_>,
+        cancel: &HistoryWindowCancellation,
+    ) -> Result<&'a str> {
+        cancel.checkpoint()?;
+        match self {
+            Self::Path(path) => Ok(&path.path),
+            Self::Content(version, commit) => content_path(scope, version, commit, cancel),
+            Self::CreationName(version) => Ok(&version.creation_name),
+        }
+    }
+}
+#[cfg(test)]
+pub(super) fn take_path_merge_headers() -> usize {
+    PATH_MERGE_HEADERS.with(|count| count.replace(0))
+}
+
 pub(super) fn path<'a>(
     state: &'a State,
     scope: Scope<'_>,
     selected: Node<'a>,
     cancel: &HistoryWindowCancellation,
 ) -> Result<&'a str> {
+    path_source_from(
+        state,
+        scope,
+        selected,
+        cancel,
+        |version| first_commit(state, scope, version, cancel),
+        |metadata| {
+            let mut chosen = None;
+            for merge in state.file_branch_merges.values() {
+                #[cfg(test)]
+                PATH_MERGE_HEADERS.with(|count| count.set(count.get() + 1));
+                cancel.checkpoint()?;
+                if merge.file_id == scope.file
+                    && merge.history_tree_id == scope.history
+                    && !merge.reused_node
+                    && merge.result_node_id == metadata.node_id
+                {
+                    chosen = Some(merge.chosen_node_id.as_str());
+                }
+            }
+            Ok(chosen)
+        },
+    )?
+    .value(scope, cancel)
+}
+
+pub(super) fn path_source_from<'a>(
+    state: &'a State,
+    scope: Scope<'_>,
+    selected: Node<'a>,
+    cancel: &HistoryWindowCancellation,
+    mut first_commit: impl FnMut(&str) -> Result<Option<&'a Commit>>,
+    mut chosen_merge_node: impl FnMut(&FileMetadataNode) -> Result<Option<&'a str>>,
+) -> Result<PathSource<'a>> {
     let mut current = selected;
     let maximum = state
         .versions
@@ -256,31 +315,26 @@ pub(super) fn path<'a>(
     for _ in 0..maximum {
         cancel.checkpoint()?;
         match current {
-            Node::Path(node) => return Ok(&node.path),
+            Node::Path(node) => return Ok(PathSource::Path(node)),
             Node::Content(version) => {
-                let commit = first_commit(state, scope, &version.version_id, cancel)?;
-                return content_path(scope, version, commit, cancel);
+                return Ok(PathSource::Content(
+                    version,
+                    first_commit(&version.version_id)?,
+                ));
             }
             Node::Metadata(metadata) => {
                 let source = if metadata.kind == crate::FileMetadataKind::Merge {
-                    let mut chosen = None;
-                    for merge in state.file_branch_merges.values() {
-                        cancel.checkpoint()?;
-                        if merge.file_id == scope.file
-                            && merge.history_tree_id == scope.history
-                            && !merge.reused_node
-                            && merge.result_node_id == metadata.node_id
-                        {
-                            chosen = Some(merge.chosen_node_id.as_str());
-                        }
-                    }
-                    chosen
+                    chosen_merge_node(metadata)?
                 } else {
                     metadata.parent_node_ids.first().map(String::as_str)
                 };
                 match source.and_then(|source| node(state, scope, source)) {
                     Some(source) => current = source,
-                    None => return Ok(&state.versions[&metadata.version_id].creation_name),
+                    None => {
+                        return Ok(PathSource::CreationName(
+                            &state.versions[&metadata.version_id],
+                        ));
+                    }
                 }
             }
         }

@@ -10,16 +10,32 @@ pub(super) fn matching<'a>(
     repository: &Repository,
     requested_key: Option<&str>,
 ) -> Vec<&'a storage_contract::DirectoryBranch> {
+    matching_tables(
+        &state.branches,
+        &state.commits,
+        &state.directory_branches,
+        repository,
+        requested_key,
+    )
+}
+
+// Shared predicate with explicit table requirements; listing need not retain a
+// general State just to reuse directory identity and ordering semantics.
+pub(super) fn matching_tables<'a>(
+    branches: &'a storage_contract::TrackedMap<storage_contract::Branch>,
+    commits: &'a storage_contract::TrackedRecords<storage_contract::Commit>,
+    directory_branches: &'a storage_contract::TrackedMap<storage_contract::DirectoryBranch>,
+    repository: &Repository,
+    requested_key: Option<&str>,
+) -> Vec<&'a storage_contract::DirectoryBranch> {
     let requested_directory_id = requested_key.and_then(|key| {
         if key.is_empty() {
             return Some(repository.repository_id.as_str());
         }
-        let namespace = state
-            .branches
+        let namespace = branches
             .get(&repository.main_branch_id)
             .expect("invariant: admitted repository references its main branch");
-        let commit = state
-            .commits
+        let commit = commits
             .get(&namespace.head_commit_id)
             .expect("invariant: admitted branch references its head commit");
         commit
@@ -31,8 +47,7 @@ pub(super) fn matching<'a>(
             })
             .map(|entry| entry.entry_id.as_str())
     });
-    let mut branches = state
-        .directory_branches
+    let mut branches = directory_branches
         .values()
         .filter(|branch| {
             branch.repository_id == repository.repository_id

@@ -25,3 +25,7 @@
 未匹配模块应明确拒绝加载。未来版本只有取得其实际源/补丁、生成绑定并通过同样验收后才能新增支持声明。
 
 实际 Debian 4.22 loader 拒绝包含 `/` 的模块名称；配置使用 `vfs objects = zxs`，模块须位于该宿主标准 VFS 目录。隔离 CI 仅只读挂载当前 artifact 到实际 `smbd -b` 的 `MODULESDIR/vfs/zxs.so` 并核对完整 SHA，不修改宿主安装，也不放宽加载器策略。首轮绝对路径配置造成的 `NT_STATUS_INVALID_PARAMETER` 保留为失败证据；不计为模块已经加载。
+
+撤权验收保持撤权前已经认证的同一 SMB tree，在原 authority 已撤销后执行 `ls`，必须返回 `NT_STATUS_ACCESS_DENIED`。客户端就绪 marker 只在初次 tree connect 后的串行本地命令发布，撤权前不执行其它远程命令，避免复用旧拒绝文本。另记录新 tree 的拒绝：该版本 Samba 将所有 connect-hook 失败统一为 `NT_STATUS_UNSUCCESSFUL`，此通用状态本身不当作权限验收。重新启用后仍须真实删除成功及服务端最终状态核验。
+
+隔离测试把两种拒绝明确分开：临时 AuthStore 用新的唯一 authority 替换原 authority，使已认证旧会话返回 Unauthorized/EACCES；同时关闭 repository binding，保证新的 tree 连接被拒绝。两者不是同一种错误，也不修改生产错误映射。任一时点只有一个临时管理员 authority；不创建、更改 OS 账号。随后重新打开原临时 AuthStore 并恢复 binding，验证真实删除和权威结果。

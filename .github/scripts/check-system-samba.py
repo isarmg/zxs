@@ -7,6 +7,7 @@ import os
 import re
 from pathlib import Path
 import secrets
+import shlex
 import signal
 import subprocess
 import tempfile
@@ -163,11 +164,34 @@ follow symlinks = no
                 client(f'put "{payload}" upload.txt; get upload.txt "{received}"; rename upload.txt kept.txt')
                 if received.read_bytes() != payload.read_bytes():
                     raise RuntimeError("SMB download differs from uploaded bytes")
+                # Establish this tree before revocation. smbclient executes its local
+                # shell marker only after authentication/tree connect, and executes
+                # later stdin commands serially on that same connection.
+                session_ready = work / "existing-tree-ready"
+                session = subprocess.Popen(base + ["-A", str(auth)], env=environment,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, start_new_session=True)
+                children.append(session)
+                session.stdin.write("!touch " + shlex.quote(str(session_ready)) + "\n")
+                session.stdin.flush()
+                wait_file(session_ready, session, timeout=30)
                 publish_marker(work, "uploaded")
                 wait_file(work / "revoked", fixture)
-                denial = client("ls", succeeds=False)
+                # No earlier remote command ran on this session, so the only
+                # possible ACCESS_DENIED below belongs to this post-revoke ls.
+                denial, _ = session.communicate("ls\nquit\n", timeout=30)
+                if session.returncode != 0:
+                    raise RuntimeError(f"existing SMB session did not exit cleanly: {session.returncode}: {denial}")
                 if "NT_STATUS_ACCESS_DENIED" not in denial:
-                    raise RuntimeError("revoked binding did not produce ACCESS_DENIED: " + denial)
+                    raise RuntimeError("revoked existing tree did not produce ACCESS_DENIED: " + denial)
+                # Samba itself collapses every connect-hook failure to UNSUCCESSFUL.
+                # Keep that new-tree denial separately; it is not permission proof.
+                new_tree = subprocess.run(base + ["-A", str(auth), "-c", "ls"], env=environment,
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+                if new_tree.returncode == 0 or "NT_STATUS_UNSUCCESSFUL" not in new_tree.stdout:
+                    raise RuntimeError("revoked new tree was not rejected by connect hook: " + new_tree.stdout)
+                result["revoked_existing_tree"] = {"authority_revoked": True, "returncode": session.returncode, "output": denial}
+                result["revoked_new_tree"] = new_tree.stdout
                 publish_marker(work, "denied")
                 wait_file(work / "enabled", fixture)
                 client("del kept.txt")

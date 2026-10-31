@@ -12,12 +12,12 @@ use std::{
 };
 use storage_contract::{CommitRequest, Config, OperationId};
 
-type ScanHook = Box<dyn FnOnce(&MetadataView)>;
+type ScanHook = Box<dyn FnOnce(&ListingMetadata)>;
 thread_local! {
     static BEFORE_SCAN: RefCell<Option<ScanHook>> = const { RefCell::new(None) };
 }
 
-pub(super) fn before_scan(view: &MetadataView) {
+pub(super) fn before_scan(view: &ListingMetadata) {
     let hook = BEFORE_SCAN.with(|hook| hook.borrow_mut().take());
     if let Some(hook) = hook {
         hook(view);
@@ -27,7 +27,7 @@ pub(super) fn before_scan(view: &MetadataView) {
 fn pause(started: mpsc::SyncSender<u64>, release: mpsc::Receiver<()>) {
     BEFORE_SCAN.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(move |view| {
-            started.send(view.business_projection().sequence).unwrap();
+            started.send(view.sequence).unwrap();
             release.recv_timeout(Duration::from_secs(10)).unwrap();
         }));
     });
@@ -435,8 +435,9 @@ fn primary_scan_preserves_virtual_root_recursive_counts_unicode_and_directory_ch
 async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_worker_exits() {
     let (root, backend, auth, _token, identity, _repo) = fixture();
     // This record is outside the resolved namespace. Its lifetime demonstrates
-    // that the whole MetadataView survives, not just the explicit head handle.
-    let old_record = backend.test_with_engine_locked(|engine| {
+    // that the required commits table survives, not just the explicit head handle.
+    // Unused version records, in contrast, must not be pinned by this request.
+    let (old_record, old_version) = backend.test_with_engine_locked(|engine| {
         let other = engine
             .create_repository(
                 &storage_contract::RepositoryName::parse("Other").unwrap(),
@@ -447,7 +448,10 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
             )
             .unwrap();
         let head = &engine.state().branches[&other.main_branch_id].head_commit_id;
-        Arc::downgrade(&engine.state().commits.get_shared(head).unwrap())
+        (
+            Arc::downgrade(&engine.state().commits.get_shared(head).unwrap()),
+            Arc::downgrade(engine.state().versions.shared_values().next().unwrap()),
+        )
     });
     let spare = Engine::initialize(
         &root.path().join("replacement-system"),
@@ -474,6 +478,7 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
     assert!(waiter.await.unwrap_err().is_cancelled());
     backend.test_with_engine_locked(|engine| *engine = spare);
     assert!(old_record.upgrade().is_some());
+    assert!(old_version.upgrade().is_none());
     assert!(auth_owner.upgrade().is_some());
     assert_eq!(slots.available_permits(), 0);
     assert!(slots.clone().try_acquire_owned().is_err());
@@ -487,4 +492,40 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
     .unwrap();
     assert!(old_record.upgrade().is_none());
     assert_eq!(slots.available_permits(), 1);
+}
+
+#[test]
+fn listing_projection_shares_only_its_five_required_tables() {
+    let mut state = storage_contract::State::default();
+    let versions = std::ptr::from_ref(&*state.versions);
+    let placements = std::ptr::from_ref(&*state.placements);
+    let content_states = std::ptr::from_ref(&*state.content_states);
+    let view = ListingMetadata::capture(&state);
+    assert!(std::ptr::eq(&*view.repositories, &*state.repositories));
+    assert!(std::ptr::eq(&*view.branches, &*state.branches));
+    assert!(std::ptr::eq(&*view.commits, &*state.commits));
+    assert!(std::ptr::eq(
+        &*view.directory_branches,
+        &*state.directory_branches
+    ));
+    assert!(std::ptr::eq(
+        &*view.directory_selections,
+        &*state.directory_selections
+    ));
+    // Even while the request lives, unrelated tables remain uniquely owned:
+    // Arc::make_mut does not allocate a replacement table when they are edited.
+    state.versions.extend_shared(&Default::default());
+    state.placements.clear();
+    state.content_states.clear();
+    assert_eq!(versions, std::ptr::from_ref(&*state.versions));
+    assert_eq!(placements, std::ptr::from_ref(&*state.placements));
+    assert_eq!(content_states, std::ptr::from_ref(&*state.content_states));
+    state
+        .directory_selections
+        .insert("directory".into(), "new-selection".into());
+    assert!(view.directory_selections.is_empty());
+    assert!(!std::ptr::eq(
+        &*view.directory_selections,
+        &*state.directory_selections
+    ));
 }

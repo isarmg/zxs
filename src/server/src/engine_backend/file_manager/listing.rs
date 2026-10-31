@@ -3,7 +3,31 @@
 use super::pagination::{Page, PageRequest, PageSelector};
 use super::*;
 use crate::backend_listing::SortKey;
-use storage_engine::MetadataView;
+/// Exactly the tables consumed by primary listing, never an authority or a
+/// general business State. Each clone shares one COW table in constant space.
+struct ListingMetadata {
+    #[cfg(test)]
+    sequence: u64,
+    repositories: storage_contract::TrackedMap<Repository>,
+    branches: storage_contract::TrackedMap<storage_contract::Branch>,
+    commits: storage_contract::TrackedRecords<storage_contract::Commit>,
+    directory_branches: storage_contract::TrackedMap<storage_contract::DirectoryBranch>,
+    directory_selections: storage_contract::TrackedMap<String>,
+}
+
+impl ListingMetadata {
+    fn capture(state: &storage_contract::State) -> Self {
+        Self {
+            #[cfg(test)]
+            sequence: state.sequence,
+            repositories: state.repositories.clone(),
+            branches: state.branches.clone(),
+            commits: state.commits.clone(),
+            directory_branches: state.directory_branches.clone(),
+            directory_selections: state.directory_selections.clone(),
+        }
+    }
+}
 
 #[derive(Clone)]
 enum Candidate {
@@ -24,7 +48,7 @@ struct DirectoryCapture {
 }
 
 struct ListingScope {
-    view: MetadataView,
+    view: ListingMetadata,
     slot_id: String,
     path: String,
     directory: Option<DirectoryCapture>,
@@ -76,7 +100,7 @@ pub(in crate::engine_backend) fn capture(
     };
     Ok(ListingRead::Primary(Box::new(PrimaryListing {
         scope: ListingScope {
-            view: engine.metadata_view(),
+            view: ListingMetadata::capture(engine.state()),
             slot_id,
             path,
             directory,
@@ -122,7 +146,7 @@ impl PrimaryListing {
         #[cfg(test)]
         detached_tests::before_scan(&self.scope.view);
         let Self { scope, request } = self;
-        let state = scope.view.business_projection();
+        let state = &scope.view;
         let mut page = PageSelector::new(request);
         let mut directory_branches_supported = true;
         if scope.path.is_empty() {
@@ -143,8 +167,10 @@ impl PrimaryListing {
         if let Some(directory) = &scope.directory {
             let repo = &directory.repository;
             if directory_branches_supported {
-                directory_branches = super::super::directory_scopes::matching(
-                    state,
+                directory_branches = super::super::directory_scopes::matching_tables(
+                    &state.branches,
+                    &state.commits,
+                    &state.directory_branches,
                     repo,
                     Some(&directory.within_key),
                 )
@@ -245,7 +271,7 @@ impl SelectedListing {
         }
         for candidate in self.page.values.iter().chain(self.page.selected.iter()) {
             if let Candidate::Repository(id) = candidate {
-                let state = self.scope.view.business_projection();
+                let state = &self.scope.view;
                 let repo = &state.repositories[id];
                 unchanged_repository(engine, repo)?;
                 let branch = &state.branches[&repo.main_branch_id];
@@ -267,7 +293,7 @@ impl SelectedListing {
         self.authorize_current(engine)?;
         let project = |candidate: &Candidate| match candidate {
             Candidate::Repository(id) => {
-                let repo = &self.scope.view.business_projection().repositories[id];
+                let repo = &self.scope.view.repositories[id];
                 Ok(directory(&repo.name, &repo.name, &repo.repository_id))
             }
             Candidate::Entry(index) => {

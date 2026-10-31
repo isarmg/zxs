@@ -762,3 +762,433 @@ fn omitted_merge_member_cannot_remove_parent_edges() {
         crate::engine::index::IndexHealth::Unavailable(_)
     ));
 }
+
+const PATH_MERGE_METADATA: &str = "fmeta_00000000000000000000000000000000";
+const PATH_MERGE_WINNER: &str = "fmerge_00000000000000000000000000070001";
+
+fn metadata_merge_path_engine(
+    temp: &tempfile::TempDir,
+    terminal: &str,
+    unrelated: usize,
+) -> Engine {
+    let mut engine = indexed_engine(temp, 0);
+    let state = Arc::make_mut(&mut engine.state);
+    state
+        .file_metadata_nodes
+        .get_mut(PATH_MERGE_METADATA)
+        .unwrap()
+        .kind = crate::FileMetadataKind::Merge;
+    let template = state.file_branch_merges.values().next().unwrap().clone();
+    for (n, chosen, reused) in [
+        (0x70000, "ver_00000000000000000000000000000001", false),
+        (0x70001, terminal, false),
+        (0x70002, "ver_00000000000000000000000000000001", true),
+    ] {
+        let mut merge = template.clone();
+        merge.merge_id = format!("fmerge_{n:032x}");
+        merge.result_node_id = PATH_MERGE_METADATA.into();
+        merge.chosen_node_id = chosen.into();
+        merge.reused_node = reused;
+        merge.parent_node_ids.clear();
+        state
+            .file_branch_merges
+            .insert(merge.merge_id.clone(), merge);
+    }
+    let commit = state.commits["commit_00000000000000000000000000000000"].clone();
+    for (n, path) in [(0x60000, "selected-first.txt"), (0x60001, "wrong-tie.txt")] {
+        let mut copy = commit.clone();
+        copy.commit_id = format!("commit_{n:032x}");
+        copy.sequence = 0;
+        copy.entries[0].relocate(name_policy::PortablePath::parse(path).unwrap());
+        state.commits.insert(copy.commit_id.clone(), copy);
+    }
+    for n in 0..unrelated {
+        let mut merge = template.clone();
+        merge.merge_id = format!("fmerge_{:032x}", n + 0x80000);
+        merge.file_id = format!("file_{:032x}", n + 0x80000);
+        state
+            .file_branch_merges
+            .insert(merge.merge_id.clone(), merge);
+    }
+    engine.bind_recovered_history_roots(BTreeMap::from([(
+        context().history_tree_id.as_str().to_owned(),
+        "a".repeat(64),
+    )]));
+    engine.rebuild_index().unwrap();
+    engine
+}
+
+#[test]
+fn indexed_metadata_merge_paths_keep_last_match_reused_filter_and_terminal_oracle() {
+    for terminal in [
+        "fnode_00000000000000000000000000000000",
+        "ver_00000000000000000000000000000000",
+        "ver_00000000000000000000000000099999",
+    ] {
+        let mut measurements = Vec::new();
+        for unrelated in [0, 257] {
+            let temp = tempfile::tempdir().unwrap();
+            let engine = metadata_merge_path_engine(&temp, terminal, unrelated);
+            let view = engine.metadata_view();
+            let request = request(HistoryCollection::Nodes, 64);
+            let context = context();
+            let cancel = HistoryWindowCancellation::new();
+            crate::engine::index::reset_scope_read_metrics();
+            nodes::take_path_merge_headers();
+            nodes::take_first_commit_headers();
+            let selected = capture_indexed_selection(&engine, &view, &request, &context, &cancel)
+                .unwrap()
+                .unwrap();
+            let actual = view
+                .history_window_selected(&request, &context, &cancel, Some(&selected))
+                .unwrap();
+            assert_eq!(nodes::take_path_merge_headers(), 0);
+            assert_eq!(nodes::take_first_commit_headers(), 0);
+            measurements.push(crate::engine::index::scope_read_metrics());
+            let reference = view.history_window(&request, &context, &cancel).unwrap();
+            assert!(nodes::take_path_merge_headers() > 0);
+            assert_eq!(
+                json_codec::to_value(&actual).unwrap(),
+                json_codec::to_value(reference).unwrap()
+            );
+            let HistoryWindowPage::Nodes {
+                nodes: page_nodes, ..
+            } = actual
+            else {
+                unreachable!()
+            };
+            let metadata = page_nodes
+                .iter()
+                .find(|n| n.node_id.as_str() == PATH_MERGE_METADATA)
+                .unwrap();
+            let expected = if terminal.starts_with("fnode_") {
+                "目录/终稿.txt"
+            } else if terminal.ends_with("99999") {
+                &engine.state.versions["ver_00000000000000000000000000000000"].creation_name
+            } else {
+                "selected-first.txt"
+            };
+            assert_eq!(metadata.path, expected);
+        }
+        assert_eq!(measurements[0], measurements[1], "{terminal}");
+        assert!(measurements[0].0[5] > 0);
+    }
+}
+
+#[test]
+fn omitted_metadata_path_merge_member_falls_back_without_losing_path() {
+    use sqlite_access::Connection;
+    for replacement in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = metadata_merge_path_engine(&temp, "fnode_00000000000000000000000000000000", 1);
+        let view = engine.metadata_view();
+        let request = request(HistoryCollection::Nodes, 64);
+        let context = context();
+        let cancel = HistoryWindowCancellation::new();
+        let expected = view.history_window(&request, &context, &cancel).unwrap();
+        platform_io::sqlite::block_on_sqlite_connection(async {
+            let mut c = platform_io::sqlite::open_index_connection(
+                &engine.root.join("index.sqlite"),
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+            if replacement {
+                let foreign = "fmerge_00000000000000000000000000080000";
+                sqlite_access::query("DELETE FROM history_scope_members WHERE kind=5 AND id=?")
+                    .bind(foreign)
+                    .execute(&mut c)
+                    .await
+                    .unwrap();
+                // Keep the target scope's row count unchanged, but forge a member.
+                sqlite_access::query("UPDATE history_scope_members SET id=? WHERE kind=5 AND id=?")
+                    .bind(foreign)
+                    .bind(PATH_MERGE_WINNER)
+                    .execute(&mut c)
+                    .await
+                    .unwrap();
+            } else {
+                sqlite_access::query("DELETE FROM history_scope_members WHERE kind=5 AND id=?")
+                    .bind(PATH_MERGE_WINNER)
+                    .execute(&mut c)
+                    .await
+                    .unwrap();
+            }
+            c.close().await.unwrap();
+        });
+        let selected =
+            capture_indexed_selection(&engine, &view, &request, &context, &cancel).unwrap();
+        assert!(selected.is_none());
+        let actual = view
+            .history_window_selected(&request, &context, &cancel, selected.as_ref())
+            .unwrap();
+        assert_eq!(
+            json_codec::to_value(actual).unwrap(),
+            json_codec::to_value(expected).unwrap()
+        );
+        assert!(matches!(
+            engine.index_health(),
+            crate::engine::index::IndexHealth::Unavailable(_)
+        ));
+    }
+}
+
+#[test]
+fn metadata_merge_path_cycle_preserves_state_error_without_poisoning_index() {
+    let temp = tempfile::tempdir().unwrap();
+    let engine = metadata_merge_path_engine(&temp, PATH_MERGE_METADATA, 0);
+    let view = engine.metadata_view();
+    let request = request(HistoryCollection::Nodes, 64);
+    let context = context();
+    let cancel = HistoryWindowCancellation::new();
+    let reference = view
+        .history_window(&request, &context, &cancel)
+        .unwrap_err();
+    let actual = match capture_indexed_selection(&engine, &view, &request, &context, &cancel) {
+        Err(error) => error,
+        Ok(selected) => view
+            .history_window_selected(&request, &context, &cancel, selected.as_ref())
+            .unwrap_err(),
+    };
+    assert_eq!(reference.code(), storage_contract::ErrorCode::StateInvalid);
+    assert_eq!(actual.code(), reference.code());
+    assert_eq!(actual.to_string(), reference.to_string());
+    assert!(matches!(
+        engine.index_health(),
+        crate::engine::index::IndexHealth::Ready { .. }
+    ));
+}
+
+#[test]
+fn cancelled_metadata_path_capture_does_not_disable_healthy_index() {
+    let temp = tempfile::tempdir().unwrap();
+    let engine = metadata_merge_path_engine(&temp, "fnode_00000000000000000000000000000000", 0);
+    let view = engine.metadata_view();
+    let request = request(HistoryCollection::Nodes, 64);
+    let context = context();
+    let cancel = HistoryWindowCancellation::new();
+    cancel.cancel();
+    assert!(capture_indexed_selection(&engine, &view, &request, &context, &cancel).is_err());
+    assert!(matches!(
+        engine.index_health(),
+        crate::engine::index::IndexHealth::Ready { .. }
+    ));
+    // A fresh snapshot remains usable after the cancelled transaction closed.
+    equal_page(&engine, &request);
+}
+
+fn auxiliary_collections() -> Vec<HistoryCollection> {
+    vec![
+        HistoryCollection::Branches,
+        HistoryCollection::Merges,
+        HistoryCollection::NodeParents {
+            node_id: "ver_00000000000000000000000000000010".parse().unwrap(),
+        },
+    ]
+}
+#[test]
+fn indexed_auxiliary_record_pages_match_complete_oracle_in_both_directions() {
+    let temp = tempfile::tempdir().unwrap();
+    let engine = indexed_engine(&temp, 31);
+    for collection in auxiliary_collections() {
+        for limit in [1, 3, 128] {
+            let mut req = request(collection.clone(), limit);
+            let mut previous = Vec::new();
+            loop {
+                let page = equal_page(&engine, &req);
+                let cursors = match page {
+                    HistoryWindowPage::Branches { branches, page, .. } => {
+                        assert!(branches.iter().all(|branch| branch.branch_id.as_str()
+                            != "br_00000000000000000000000000000014"));
+                        page
+                    }
+                    HistoryWindowPage::Merges { page, .. }
+                    | HistoryWindowPage::NodeParents { page, .. } => page,
+                    _ => unreachable!(),
+                };
+                previous.extend(cursors.previous_cursor);
+                match cursors.next_cursor {
+                    Some(cursor) => req.cursor = Some(cursor),
+                    None => break,
+                }
+            }
+            for cursor in previous.into_iter().rev() {
+                req.cursor = Some(cursor);
+                equal_page(&engine, &req);
+            }
+        }
+    }
+}
+
+#[test]
+fn indexed_content_field_pages_keep_complete_utf8_and_exact_first_commit() {
+    let temp = tempfile::tempdir().unwrap();
+    let engine = indexed_engine(&temp, 19);
+    let commit = &engine.state.commits["commit_00000000000000000000000000000010"];
+    for (field, expected) in [
+        (HistoryField::Message, &commit.message),
+        (HistoryField::Author, &commit.author),
+    ] {
+        for limit in [4093, 8192] {
+            let mut req = request(
+                HistoryCollection::NodeField {
+                    node_id: "ver_00000000000000000000000000000010".parse().unwrap(),
+                    field,
+                },
+                limit,
+            );
+            let mut text = String::new();
+            loop {
+                let HistoryWindowPage::NodeField {
+                    byte_offset,
+                    total_bytes,
+                    text: fragment,
+                    end_of_field,
+                    next_cursor,
+                    ..
+                } = equal_page(&engine, &req)
+                else {
+                    unreachable!()
+                };
+                assert_eq!(byte_offset, text.len() as u64);
+                assert_eq!(total_bytes, expected.len() as u64);
+                assert!(fragment.len() <= limit);
+                text.push_str(&fragment);
+                if end_of_field {
+                    assert!(next_cursor.is_none());
+                    break;
+                }
+                assert!(!fragment.is_empty());
+                req.cursor = Some(next_cursor.expect("unfinished field has continuation"));
+            }
+            assert_eq!(&text, expected);
+        }
+    }
+}
+
+#[test]
+fn indexed_auxiliary_missing_members_fall_back_and_bad_cursor_keeps_health() {
+    use sqlite_access::Connection;
+    let mut cases = auxiliary_collections()
+        .into_iter()
+        .zip([4, 5, 5])
+        .collect::<Vec<_>>();
+    cases.push((
+        HistoryCollection::NodeField {
+            node_id: "ver_00000000000000000000000000000010".parse().unwrap(),
+            field: HistoryField::Message,
+        },
+        3,
+    ));
+    for (collection, kind) in cases {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = indexed_engine(&temp, 0);
+        let view = engine.metadata_view();
+        let req = request(collection, 3);
+        let ctx = context();
+        let cancel = HistoryWindowCancellation::new();
+        let reference = view.history_window(&req, &ctx, &cancel).unwrap();
+        platform_io::sqlite::block_on_sqlite_connection(async {
+            let mut c = platform_io::sqlite::open_index_connection(
+                &engine.root.join("index.sqlite"),
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+            sqlite_access::query("DELETE FROM history_scope_members WHERE kind=? AND file_id=? AND history_tree_id=?")
+                .bind(kind as i64).bind(req.file_id.as_str()).bind(ctx.history_tree_id.as_str()).execute(&mut c).await.unwrap();
+            c.close().await.unwrap();
+        });
+        let selected = capture_indexed_selection(&engine, &view, &req, &ctx, &cancel).unwrap();
+        assert!(selected.is_none());
+        let actual = view
+            .history_window_selected(&req, &ctx, &cancel, selected.as_ref())
+            .unwrap();
+        assert_eq!(
+            json_codec::to_value(actual).unwrap(),
+            json_codec::to_value(reference).unwrap()
+        );
+        assert!(matches!(
+            engine.index_health(),
+            crate::engine::index::IndexHealth::Unavailable(_)
+        ));
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let engine = indexed_engine(&temp, 0);
+    let HistoryWindowPage::Branches { page, .. } =
+        equal_page(&engine, &request(HistoryCollection::Branches, 1))
+    else {
+        unreachable!()
+    };
+    let mut wrong = request(HistoryCollection::Merges, 1);
+    wrong.cursor = Some(page.next_cursor.unwrap());
+    let view = engine.metadata_view();
+    let ctx = context();
+    let cancel = HistoryWindowCancellation::new();
+    let reference = view.history_window(&wrong, &ctx, &cancel).unwrap_err();
+    let actual = match capture_indexed_selection(&engine, &view, &wrong, &ctx, &cancel) {
+        Err(error) => error,
+        Ok(selected) => view
+            .history_window_selected(&wrong, &ctx, &cancel, selected.as_ref())
+            .unwrap_err(),
+    };
+    assert_eq!(actual.code(), reference.code());
+    assert!(matches!(
+        engine.index_health(),
+        crate::engine::index::IndexHealth::Ready { .. }
+    ));
+}
+
+#[test]
+fn indexed_auxiliary_snapshot_keeps_old_view_after_publication_and_rebuild() {
+    let mut collections = auxiliary_collections();
+    collections.push(HistoryCollection::NodeField {
+        node_id: "ver_00000000000000000000000000000010".parse().unwrap(),
+        field: HistoryField::Message,
+    });
+    for collection in collections {
+        let temp = tempfile::tempdir().unwrap();
+        let mut engine = indexed_engine(&temp, 0);
+        let view = engine.metadata_view();
+        let req = request(collection, 7);
+        let ctx = context();
+        let snapshot = engine
+            .capture_history_scope(req.file_id.as_str(), ctx.history_tree_id.as_str())
+            .unwrap()
+            .unwrap();
+        let previous = Arc::clone(&engine.state);
+        let state = Arc::make_mut(&mut engine.state);
+        state.begin_tracking();
+        state.branches.remove("br_00000000000000000000000000000000");
+        state
+            .file_branch_merges
+            .remove("fmerge_00000000000000000000000000000000");
+        state
+            .commits
+            .get_mut("commit_00000000000000000000000000000010")
+            .unwrap()
+            .message = "later publication".into();
+        state.sequence += 1;
+        engine.update_index(&previous);
+        engine.rebuild_index().unwrap();
+        let cancel = HistoryWindowCancellation::new();
+        let selected = prepare_indexed_selection(&snapshot, &view, &req, &ctx, &cancel)
+            .unwrap()
+            .unwrap();
+        let actual = view
+            .history_window_selected(&req, &ctx, &cancel, Some(&selected))
+            .unwrap();
+        let expected = view.history_window(&req, &ctx, &cancel).unwrap();
+        assert_eq!(
+            json_codec::to_value(actual).unwrap(),
+            json_codec::to_value(expected).unwrap()
+        );
+        engine.record_scope_failure(&snapshot);
+        assert!(matches!(
+            engine.index_health(),
+            crate::engine::index::IndexHealth::Ready { .. }
+        ));
+    }
+}

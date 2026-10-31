@@ -473,3 +473,20 @@ Tracked 字段使用字段级 COW：捕获复杂度是固定字段数，不扫�
 [字段 COW 测试](../../test/contract/unit/tracked.rs) 覆盖共享零值克隆、首次目标表
 分离、所有可变入口与精确写集合；[视图生命周期测试](../../test/engine/unit/engine/history_window_root_tests.rs)
 验证发布后读视图不再保留权威 State，而 scrub 的必要基线继续存活至其释放。
+
+### Primary listing field ownership
+
+Primary listing retains a dedicated private `ListingMetadata`, not `MetadataView`
+(or a partially empty `State`). Its five shared COW tables are repositories,
+branches, commits, directory branches, and directory selections. Capture clones
+only those table handles, in O(1) record-count-independent space; it performs no
+additional table scan or deep copy. The directory predicate takes explicit table
+borrows and remains shared with the existing directory-scope API.
+
+Versions, placements, content states and other unrelated business tables are not
+retained by primary listing. Cancellation still retains admission/authentication
+and the required immutable namespace until its worker exits, with current identity,
+snapshot and exact commit-pointer checks unchanged. This is field-level reduction,
+not target-record-bounded ownership: the complete five tables (including all commit
+records) remain shared. Backup listing, legacy file history and history-window
+views retain their separately documented ownership boundaries.

@@ -51,6 +51,10 @@ class SystemSambaGate(unittest.TestCase):
         script = (ROOT / ".github/scripts/check-system-samba.py").read_text()
         self.assertIn('"NT_STATUS_ACCESS_DENIED" not in denial', script)
         self.assertIn('"--client-protection=encrypt"', script)
+        self.assertIn('wait_file(session_ready, session, timeout=30)', script)
+        self.assertLess(script.index('wait_file(session_ready, session'), script.index('publish_marker(work, "uploaded")'))
+        self.assertIn('session.communicate("ls\\nquit\\n", timeout=30)', script)
+        self.assertIn('result["revoked_new_tree"]', script)
 
 
 if __name__ == "__main__":

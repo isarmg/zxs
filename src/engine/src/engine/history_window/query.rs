@@ -8,6 +8,13 @@ use std::cmp::Reverse;
 mod indexed;
 pub(crate) use indexed::{IndexedSelection, prepare_indexed_selection};
 
+#[cfg(test)]
+thread_local! { static SCOPE_VERSION_HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn take_scope_version_headers() -> usize {
+    SCOPE_VERSION_HEADERS.with(|count| count.replace(0))
+}
+
 type NodeKey<'a> = (Reverse<u64>, &'a str);
 type NodeSelection<'a> = Selection<NodeKey<'a>, (nodes::Node<'a>, Option<&'a crate::Commit>)>;
 type NodeSelector<'a> = Selector<NodeKey<'a>, (nodes::Node<'a>, Option<&'a crate::Commit>)>;
@@ -429,17 +436,21 @@ impl<'a> Query<'a> {
             HistoryPosition::Branch { branch_id } => Ok(branch_id.as_str()),
             _ => Err(invalid("branch cursor position required")),
         })?;
-        let mut selector = Selector::new(position, self.request.limit.get())?;
-        for branch in self.state.branches.values() {
-            self.cancel.checkpoint()?;
-            if branch.file_id.as_deref() == Some(self.scope().file)
-                && branch.history_tree_id == self.scope().history
-                && branch.state != crate::BranchState::Migrated
-            {
-                selector.offer(branch.branch_id.as_str(), branch);
+        let selection = if let Some(selected) = self.indexed_branches() {
+            selected
+        } else {
+            let mut selector = Selector::new(position, self.request.limit.get())?;
+            for branch in self.state.branches.values() {
+                self.cancel.checkpoint()?;
+                if branch.file_id.as_deref() == Some(self.scope().file)
+                    && branch.history_tree_id == self.scope().history
+                    && branch.state != crate::BranchState::Migrated
+                {
+                    selector.offer(branch.branch_id.as_str(), branch);
+                }
             }
-        }
-        let selection = selector.finish()?;
+            selector.finish()?
+        };
         let page = self.page_cursors(&selection, |id| {
             Ok(HistoryPosition::Branch {
                 branch_id: HistoryBranchId::parse(id)?,
@@ -464,14 +475,20 @@ impl<'a> Query<'a> {
             }
             _ => Err(invalid("merge cursor position required")),
         })?;
-        let mut selector = Selector::new(position, self.request.limit.get())?;
-        for merge in self.state.file_branch_merges.values() {
-            self.cancel.checkpoint()?;
-            if merge.file_id == self.scope().file && merge.history_tree_id == self.scope().history {
-                selector.offer((Reverse(merge.sequence), merge.merge_id.as_str()), merge);
+        let selection = if let Some(selected) = self.indexed_merges() {
+            selected
+        } else {
+            let mut selector = Selector::new(position, self.request.limit.get())?;
+            for merge in self.state.file_branch_merges.values() {
+                self.cancel.checkpoint()?;
+                if merge.file_id == self.scope().file
+                    && merge.history_tree_id == self.scope().history
+                {
+                    selector.offer((Reverse(merge.sequence), merge.merge_id.as_str()), merge);
+                }
             }
-        }
-        let selection = selector.finish()?;
+            selector.finish()?
+        };
         let page = self.page_cursors(&selection, |(Reverse(sequence), id)| {
             Ok(HistoryPosition::Merge {
                 sequence: *sequence,
@@ -510,7 +527,10 @@ impl<'a> Query<'a> {
             HistoryPosition::Parent { parent_node_id } => Ok(parent_node_id.as_str()),
             _ => Err(invalid("parent cursor position required")),
         })?;
-        let selection = self.parents(id, position, self.request.limit.get())?;
+        let selection = match self.indexed_parents() {
+            Some(selected) => selected,
+            None => self.parents(id, position, self.request.limit.get())?,
+        };
         let page = self.page_cursors(&selection, |id| {
             Ok(HistoryPosition::Parent {
                 parent_node_id: HistoryNodeId::parse(id)?,
@@ -777,6 +797,8 @@ fn validate_scope(
     });
     if owner_version.is_none() {
         for version in state.versions.values() {
+            #[cfg(test)]
+            SCOPE_VERSION_HEADERS.with(|count| count.set(count.get() + 1));
             cancel.checkpoint()?;
             if version.file_id == request.file_id.as_str() && version.history_tree_id == history {
                 found = true;

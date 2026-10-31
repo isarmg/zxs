@@ -84,3 +84,43 @@ header 访问为零。130 个目标分支另覆盖跨 64 行批次及 tracked �
 的父边候选仍精确输出 256 个 preview 及原 More cursor，与完整页 oracle
 相等。另有 130 条目标 Merge 跨 64 行批次、增量移动删除及错 scope 同数
 替补拒绝测试。
+
+## 后续：Nodes 路径终点的有限证明
+
+Metadata 路径投影也使用同一完整 Merge 范围：仍按原祖先链逐 ID 跟随，
+遇 Merge 时完整耗尽该目标流，以最后一个 merge-ID 匹配且非 `reused_node`
+记录的 `chosen_node_id` 为来源；无可见来源回到原版本 creation name。
+到达 Content 时完整耗尽目标 commit-entry 流，保持最小 sequence、同序号
+首 commit-ID 的裁决。只缓存最终 Path-node ID、Content version/commit ID
+或 creation-name version ID，投影从同一冻结 State 取值，不缓存祖先链。
+原循环上限、取消检查、StateInvalid 错误、损坏索引整页 fallback 均保留。
+
+这消除 Nodes 页路径投影的无关全池 Merge/commit 扫描，但仍可能对每个
+目标 Merge 祖先重新完整验证目标范围，不是 O(page) 或常数时间。其他
+Branches/Merges/NodeParents 独立集合查询仍须分开评估，不因本节宣称闭环。
+
+专项 oracle 覆盖最后匹配/更高 ID reused 排除、Path/Content/creation-name
+三类终点、同序号提交 ID 裁决，以及 0/257 个无关 Merge 的一致成员访问量。
+缺失赢家和保持目标行数不变的异 scope 替补均不能改变路径，必须回退；
+循环仍报原 StateInvalid、取消后新快照仍可用，二者都不错误禁用健康索引。
+
+## 后续：辅助页与捕获 owner witness
+
+Branches、Merges、NodeParents 及 Content 的 Message/Author 字段分页复用
+现有六类完整范围流，不新增索引类型。Branches 保持 Migrated 排除和 ID
+顺序，Merges 保持 sequence 逆序/ID 裁决，NodeParents 保持原 base parents、
+去重、游标与独立页限额；字段只保存单个 first-commit ID，原 UTF-8 字节
+切片及下一游标逻辑不变。以上选择仍在锁外，耗尽认证后只保留有限页事实。
+
+`HistoryWindowRead` 把 capture 已验证的 owner version ID 与同一不可变
+Engine 观察生成的 MetadataView 一起保留。Query 仍逐 ID 核对冻结 State
+中的 file/history 归属及所有 root/location/cursor 条件，当前授权及最终
+recheck 不变。健康索引缺失时，owner 仍来自原 authoritative State 扫描，
+不是凭缺失的索引跳过 scope 验证。直接测试入口无 witness 则保留旧扫描。
+
+VersionSources、MergeInputs、MergeParents、CreatedAt 和非 Content 字段
+不打开无收益 SQLite snapshot；它们原本只读一个记录/数组，现在也不再
+重复全池版本归属扫描。健康分页仍须完整认证目标范围，捕获/recheck 的
+owner 查找仍可能读全部目标版本；损坏/缺失索引仍回到完整原扫描。
+这些变化不证明 O(page)，也不消除 namespace context 解析或单记录内部
+数组与按 ID 祖先链的工作量。

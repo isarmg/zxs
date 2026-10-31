@@ -74,12 +74,15 @@ impl<'a> Query<'a> {
             Node::Content(version) => match field {
                 HistoryField::CreatedAt => Cow::Borrowed(&version.created_at),
                 HistoryField::Message | HistoryField::Author => {
-                    let commit = nodes::first_commit(
-                        self.state,
-                        self.scope(),
-                        &version.version_id,
-                        self.cancel,
-                    )?;
+                    let commit = match self.indexed_field_commit(&version.version_id) {
+                        Some(commit) => commit,
+                        None => nodes::first_commit(
+                            self.state,
+                            self.scope(),
+                            &version.version_id,
+                            self.cancel,
+                        )?,
+                    };
                     Cow::Borrowed(match field {
                         HistoryField::Message => {
                             commit.map_or("", |commit| commit.message.as_str())
@@ -220,9 +223,10 @@ impl<'a> Query<'a> {
                 Node::Content(version) => {
                     nodes::content_path(self.scope(), version, commit, self.cancel)?
                 }
-                Node::Path(_) | Node::Metadata(_) => {
-                    nodes::path(self.state, self.scope(), node, self.cancel)?
-                }
+                Node::Path(_) | Node::Metadata(_) => match self.indexed_path(node.id()) {
+                    Some(path) => path?,
+                    None => nodes::path(self.state, self.scope(), node, self.cancel)?,
+                },
             }
             .into(),
             previous_path,

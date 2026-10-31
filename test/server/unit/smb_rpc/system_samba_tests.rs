@@ -59,6 +59,55 @@ fn verify_body(shared: &Shared, branch: &str, path: &str, expected: &[u8]) {
     assert_eq!(bytes, expected, "authoritative published content differs");
 }
 
+#[test]
+fn established_rpc_authority_revocation_precedes_disabled_binding() {
+    let (temp, shared, _backend, branch) = fixture();
+    binding_tests::rebind(&shared, &branch, true);
+    let (mut client, worker, hello) = binding_tests::wire(shared.clone());
+    assert!(matches!(hello, Response::Ok { .. }));
+    binding_tests::rebind(&shared, &branch, false);
+    crate::lock(&temp.auth).replace_authority(
+        AuthStore::initialize(
+            &temp.path().join("replacement-auth"),
+            "bob",
+            "long-test-password",
+        )
+        .unwrap(),
+    );
+    let (response, fd) = binding_tests::exchange(
+        &mut client,
+        Request::Stat {
+            path: String::new(),
+        },
+    );
+    assert!(fd.is_none());
+    assert!(matches!(
+        response,
+        Response::Error {
+            code: storage_contract::ErrorCode::Unauthorized,
+            ..
+        }
+    ));
+    drop(client);
+    worker.join().unwrap().unwrap();
+    crate::lock(&temp.auth).replace_authority(AuthStore::open(&temp.path().join("auth")).unwrap());
+    binding_tests::rebind(&shared, &branch, true);
+    let (mut client, worker, hello) = binding_tests::wire(shared);
+    assert!(matches!(hello, Response::Ok { .. }));
+    assert!(matches!(
+        binding_tests::exchange(
+            &mut client,
+            Request::Stat {
+                path: String::new()
+            }
+        )
+        .0,
+        Response::Ok { .. }
+    ));
+    drop(client);
+    worker.join().unwrap().unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires isolated Debian system Samba and real smbclient driver"]
 async fn system_samba_real_engine_fixture() {
@@ -106,8 +155,19 @@ async fn system_samba_real_engine_fixture() {
     verify_body(&shared, &branch, "kept.txt", PAYLOAD);
     verify_body(&shared, &branch, "report.txt", b"old");
     binding_tests::rebind(&shared, &branch, false);
+    // Replace only this fixture's sole authority: an already-authenticated Alice
+    // session must now return Unauthorized/EACCES independently of stale binding.
+    crate::lock(&temp.auth).replace_authority(
+        AuthStore::initialize(
+            &temp.path().join("replacement-auth"),
+            "bob",
+            "long-test-password",
+        )
+        .unwrap(),
+    );
     publish_marker(&directory, "revoked");
     marker(&root, "denied", &server).await;
+    crate::lock(&temp.auth).replace_authority(AuthStore::open(&temp.path().join("auth")).unwrap());
     binding_tests::rebind(&shared, &branch, true);
     publish_marker(&directory, "enabled");
     marker(&root, "done", &server).await;
@@ -129,7 +189,7 @@ async fn system_samba_real_engine_fixture() {
     verify_body(&shared, &branch, "report.txt", b"old");
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
-    let receipt = json!({"real_engine":true,"published_upload_and_rename_verified":true,"original_body_preserved":true,"binding_revoked_then_restored":true,"published_delete_verified":true});
+    let receipt = json!({"real_engine":true,"published_upload_and_rename_verified":true,"original_body_preserved":true,"old_tree_authority_revoked_then_restored":true,"new_tree_binding_disabled_then_restored":true,"published_delete_verified":true});
     platform_io::fs_safety::AtomicFile::create(
         &directory,
         &platform_io::fs_safety::EntryName::new("verified.json").unwrap(),

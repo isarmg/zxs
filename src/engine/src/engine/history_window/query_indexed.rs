@@ -3,6 +3,8 @@
 //! the plan is returned; QueryProof, not a database count, proves completeness.
 use super::*;
 use crate::engine::index::{OwnedScopeRead, ScopeNode, ScopeReader};
+#[path = "query_auxiliary.rs"]
+mod auxiliary;
 
 pub(super) struct Captured<T> {
     entries: Vec<T>,
@@ -15,11 +17,42 @@ pub(super) struct NodePick {
     first_commit: Option<String>,
     content_branch: Option<String>,
     parents: Option<Captured<String>>,
+    path: Option<PathPick>,
+}
+
+enum PathPick {
+    Path(String),
+    Content {
+        version: String,
+        commit: Option<String>,
+    },
+    CreationName(String),
+}
+impl PathPick {
+    fn capture(source: nodes::PathSource<'_>) -> Self {
+        match source {
+            nodes::PathSource::Path(path) => Self::Path(path.node_id.clone()),
+            nodes::PathSource::Content(version, commit) => Self::Content {
+                version: version.version_id.clone(),
+                commit: commit.map(|c| c.commit_id.clone()),
+            },
+            nodes::PathSource::CreationName(version) => {
+                Self::CreationName(version.version_id.clone())
+            }
+        }
+    }
 }
 
 pub(super) enum CapturedPage {
     Nodes(Captured<NodePick>),
     Versions(Captured<NodePick>),
+    Branches(Captured<String>),
+    Merges(Captured<String>),
+    Parents(Captured<String>),
+    Field {
+        node: String,
+        first_commit: Option<String>,
+    },
 }
 
 pub(crate) struct IndexedSelection {
@@ -28,6 +61,7 @@ pub(crate) struct IndexedSelection {
 }
 
 impl MetadataView {
+    #[cfg(test)]
     pub(crate) fn history_window_selected(
         &self,
         request: &HistoryWindowRequest,
@@ -35,12 +69,29 @@ impl MetadataView {
         cancellation: &HistoryWindowCancellation,
         selected: Option<&IndexedSelection>,
     ) -> Result<HistoryWindowPage> {
+        self.history_window_observed(
+            request,
+            context,
+            cancellation,
+            selected,
+            selected.map(|selected| selected.owner_version.as_str()),
+        )
+    }
+
+    pub(crate) fn history_window_observed(
+        &self,
+        request: &HistoryWindowRequest,
+        context: &HistoryResolvedContext,
+        cancellation: &HistoryWindowCancellation,
+        selected: Option<&IndexedSelection>,
+        owner: Option<&str>,
+    ) -> Result<HistoryWindowPage> {
         let mut query = Query::new_with_owner(
             self,
             request,
             context,
             cancellation,
-            selected.map(|selected| selected.owner_version.as_str()),
+            selected.map(|s| s.owner_version.as_str()).or(owner),
         )?;
         query.indexed = selected;
         query.page()
@@ -156,6 +207,7 @@ fn select_scope(
                         first_commit: commit.map(|commit| commit.commit_id.clone()),
                         content_branch: None,
                         parents: None,
+                        path: None,
                     })
                     .collect(),
                 has_before: selected.has_before,
@@ -207,12 +259,17 @@ fn select_scope(
                             .map(|commit| commit.commit_id.clone()),
                         content_branch: None,
                         parents: None,
+                        path: None,
                     })
                     .collect(),
                 has_before: selected.has_before,
                 has_after: selected.has_after,
             })
         }
+        HistoryCollection::Branches
+        | HistoryCollection::Merges
+        | HistoryCollection::NodeParents { .. }
+        | HistoryCollection::NodeField { .. } => auxiliary::select(reader, &query)?,
         _ => unreachable!("invariant: indexed collection was matched before reading"),
     };
     if let CapturedPage::Nodes(selected) = &mut page {
@@ -286,6 +343,40 @@ fn select_scope(
                 has_before: parents.has_before,
                 has_after: parents.has_after,
             });
+            let node = query.node(&pick.id)?;
+            if !matches!(node, nodes::Node::Content(_)) {
+                let source = nodes::path_source_from(
+                    query.state,
+                    query.scope(),
+                    node,
+                    cancellation,
+                    |version| {
+                        let mut first = None::<&crate::Commit>;
+                        for entry in reader.commit_entries() {
+                            cancellation.checkpoint()?;
+                            let (commit, entry) = entry?;
+                            if entry.version_id == version
+                                && first.is_none_or(|old| commit.sequence < old.sequence)
+                            {
+                                first = Some(commit);
+                            }
+                        }
+                        Ok(first)
+                    },
+                    |metadata| {
+                        let mut chosen = None;
+                        for merge in reader.merges() {
+                            cancellation.checkpoint()?;
+                            let merge = merge?;
+                            if !merge.reused_node && merge.result_node_id == metadata.node_id {
+                                chosen = Some(merge.chosen_node_id.as_str());
+                            }
+                        }
+                        Ok(chosen)
+                    },
+                )?;
+                pick.path = Some(PathPick::capture(source));
+            }
         }
     }
     Ok(IndexedSelection {
@@ -295,6 +386,35 @@ fn select_scope(
 }
 
 impl<'a> Query<'a> {
+    pub(in crate::engine::history_window) fn indexed_path(
+        &self,
+        id: &str,
+    ) -> Option<Result<&'a str>> {
+        let CapturedPage::Nodes(selected) = &self.indexed?.page else {
+            return None;
+        };
+        let pick = selected
+            .entries
+            .iter()
+            .find(|pick| pick.id == id)
+            .expect("invariant: path belongs to its captured page");
+        let source = match pick
+            .path
+            .as_ref()
+            .expect("invariant: non-content node has a captured terminal path")
+        {
+            PathPick::Path(id) => nodes::PathSource::Path(&self.state.file_path_nodes[id]),
+            PathPick::Content { version, commit } => nodes::PathSource::Content(
+                &self.state.versions[version],
+                commit.as_ref().map(|id| &self.state.commits[id]),
+            ),
+            PathPick::CreationName(version) => {
+                nodes::PathSource::CreationName(&self.state.versions[version])
+            }
+        };
+        Some(source.value(self.scope(), self.cancel))
+    }
+
     pub(in crate::engine::history_window) fn indexed_parent_preview(
         &self,
         id: &str,

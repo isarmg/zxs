@@ -7,6 +7,9 @@ pub struct HistoryWindowRead {
     context: HistoryResolvedContext,
     cancellation: HistoryWindowCancellation,
     max_entries: usize,
+    // Produced with this exact frozen view by one immutable Engine borrow.
+    // Both healthy-index and authoritative-scan capture paths verify the member.
+    owner_version: String,
     indexed: std::sync::Mutex<Option<query::IndexedSelection>>,
     scope: Option<crate::engine::index::OwnedScopeRead>,
 }
@@ -41,11 +44,12 @@ impl HistoryWindowRead {
                 &self.cancellation,
             )?;
         }
-        self.view.history_window_selected(
+        self.view.history_window_observed(
             &self.request,
             &self.context,
             &self.cancellation,
             indexed.as_ref(),
+            Some(&self.owner_version),
         )
     }
 
@@ -84,8 +88,15 @@ impl Engine {
         )?;
         let scope = if matches!(
             request.collection,
-            HistoryCollection::Nodes | HistoryCollection::Versions
-        ) {
+            HistoryCollection::Nodes
+                | HistoryCollection::Versions
+                | HistoryCollection::Branches
+                | HistoryCollection::Merges
+                | HistoryCollection::NodeParents { .. }
+        ) || matches!(&request.collection,
+            HistoryCollection::NodeField { node_id, field }
+                if *field != HistoryField::CreatedAt && self.state.versions.contains_key(node_id.as_str()))
+        {
             self.capture_history_scope(request.file_id.as_str(), context.history_tree_id.as_str())?
         } else {
             None
@@ -96,6 +107,7 @@ impl Engine {
             context,
             cancellation,
             max_entries: self.config.max_entries,
+            owner_version,
             indexed: std::sync::Mutex::new(None),
             scope,
         })
@@ -206,3 +218,7 @@ impl Engine {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/history_window_read_tests.rs"]
+mod tests;
