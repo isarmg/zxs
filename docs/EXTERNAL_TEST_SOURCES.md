@@ -365,7 +365,7 @@ consolidation `9a4a44802e8f493dcc1a1546caa723ea774c956de5d18c474076f85fd1280ac4`
 及其精确 layout owner，不把它伪装成新增的 routing terminal。独立仅追加固定列表
 与清单字段 `legacy_proof_maintenance_receipts` 登记同一 `proof-maintenance`
 目录中的 schema 1 收据。首张实际收据记录下述 demand 比较修正；工具也支持
-经显式登记的同所有者连续源码后继，范围和认证链见[维护工具说明](tools/rust-sources.md#http-同所有者源码维护链)。
+经显式登记的同所有者连续源码后继，范围和认证链见[维护工具说明](tools/rust-sources.md#http-owner-source-maintenance-chain)。
 后继不支持外置测试内容变更，临时合成后继测试不等于新的实际安全修补收据。
 
 首张收据绑定完整物理 before/after owner、layout/corrections 标识及唯一允许改变的
