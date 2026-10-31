@@ -61,3 +61,18 @@ WASM 特性或成功不能充当 Linux ISA 证据。归档内容、启动路径�
 直接 GNU libc 符号版本需求最高是 `GLIBC_2.34`。这是这两个确切产物的静态检查，不是
 “所有 glibc 2.34 系统均受支持”的承诺，也没有执行部署。它们不是完全静态、无运行库依赖的
 单文件。安装候选的 native／Web 归档与 `BUILD.txt`、`INSTALL.md`、`SHA256SUMS` 分开提供。
+
+
+## 新收据字段的实际发行产物（2026-10-31）
+
+[CI 41186409342](https://github.com/isarmg/zxs/actions/runs/41186409342) 完整 17 jobs 成功，
+[安装候选 artifact 13037263126](https://github.com/isarmg/zxs/actions/runs/41186409342/artifacts/13037263126)
+ZIP SHA256 为 `6c15320a9b2f2e942e16affa61928f1776f565ce3bdefcf3894c750b58aa0baf`。
+实际 BUILD 绑定 `805cec7a5143e4966d47fffe66f5433055545454`、Rust 1.99.0、
+`x86_64-unknown-linux-gnu`；默认查询 CPU 为 `x86-64`，feature 为 `fxsr`／`sse`／`sse2`，
+三类 overrides-present 均为 false，并明确保留 `not-attested`／不包含实际 Rust/C/asm flags 的声明。
+已实际读取归档并逐字节核对 native tar
+`36ffe9cba159802f53fdbfb893e0c96e6473676945fc8c70b20dcf9fb0c7fb50`、zxs
+`7992b344779789bb4269ce8c16ee991344127be651519118cbb1d017f9081bc3`、zxs-rescue
+`fd19cbd8c637deed3f7b60e793ec4bbed1ec2750d2d4df68b55373b576a71be1` 与 BUILD 一致。
+这是新字段的真实构建／归档证据，不升级为全 ISA 证明、任意发行版支持或实际部署承诺。

@@ -253,3 +253,49 @@ SHA256 `86ddf3e779c6c7ac693f9eb19bfa63803fdc27bb047ff91eecce3ef42e9cadf6`；
 通过后合计容量正确性 `2/2`。单 job 45 分钟（含准备），新计划最多 45 分钟、单阶段 1200 秒、
 2 CPU、8 GiB 地址空间／可用空间、64 MiB／128 MiB 元数据预算不变。该恢复不是原 ABBA
 成对比较通过，也不构成新增性能门槛；任何 seal、旧样本、身份、预算或完整性不符均拒绝。
+
+### 52b590 第二候选样本实际恢复结果（2026-10-31 09:18 UTC）
+
+[41185724866](https://github.com/isarmg/zxs/actions/runs/41185724866) 在 09:18:23 UTC
+完成七阶段，早于含准备的单 job 45 分钟上限；未重跑控制臂或延长资源预算。
+observer 为 `3a54db975b5aaa1dced6dcced7b99c3b6df3bdab`，tree
+`3898b0b687501aea76fd39dcb8c57aec90f43e81`，carrier 为
+`9169d1ddc12904f90b531f57a38cddc7cb905f30`。产品仍为上述 52b590／ee6725，
+复用原 artifact 13034728252；manifest SHA256 为
+`78027232da8013e4b0a46e88be772900afd4c314df9330e61bd55ffd31efd04b`，原 BA pair.json 为
+`b8f1fef25709270122a6cbb870371782f59f5e59ccd8e94210ba6be9940d4dba`。
+
+原始七阶段 JSON 均为 completed／returncode 0。最终独立正常重开确认 360 个原操作／事件、
+359 个 Cold 工作区、220 个原收据／718 个历史正文、20 个 RPC 保存和 120 个尾提交，
+sequence 360、80 个当前尾文件及 FULL oracle 均成立。新样本同一 bench 的元数据计费
+64,412,435 字节，64 MiB 限额下余 2,696,429 字节；全局 128 MiB 限额仍保留。
+加上原 BA 的完整样本，候选连续容量／正确性现为 **2/2 PASS**，不删除历史、不重置预算。
+原 ABBA 仍 incomplete；本次没有配对性能比较，也不声称后续目录准入／Samba 产品已用此二进制测量。
+[恢复 artifact 13037443036](https://github.com/isarmg/zxs/actions/runs/41185724866/artifacts/13037443036)
+ZIP SHA256 `f4f9e7eae261b4a92ccf04cb3dac12e20d1551942a9665099bef4f505b4bdeb3`，
+已实际下载并核对原始阶段、最终 oracle 和旧／新身份，不只依赖 job 成功状态。
+
+### 新密封 0787d7 原始 220 实测与现行交付政策（2026-10-31）
+
+[41183044548](https://github.com/isarmg/zxs/actions/runs/41183044548) 使用产品
+`0787d77cf8fa074f6d268bbf05444e54cc07ca52`、tree
+`a1819b18ccb1a1362cb4a53ae7b5c4729bd63a8d` 与原 e2f 对照，独立重建密封；manifest 为
+`26434941cf10f751dd25ba9ec73b14584264c6448045011cca3b0226e20b3ca1`。
+冻结旧 summary 原样保留 **12 PASS / 4 FAIL**：两方向仅 startup、open_vmhwm 未过旧门槛。
+按 08:28 UTC 生效的交付政策，这些失败属于非阻断实测；其余五项阻断指标在两方向均通过。
+不能改写旧 summary 为 PASS，也不把本次原始 220 当成连续容量测量。
+
+| 顺序 | 启动时间：e2f→0787d7（秒） | VmHWM：e2f→0787d7（KiB） | 保存 P95 增量（ms） |
+| --- | ---: | ---: | ---: |
+| AB | 84.261818831→132.211542301 | 449708→441764 | -30.557641 |
+| BA | 85.597743713→136.531562656 | 449628→441496 | +12.311889 |
+
+四臂原始 JSON 均完成五阶段：每臂 500 个当前文件、220 个原操作收据／历史命名空间、
+718 个历史正文；真实 RPC 后独立正常重开保留 20 个新收据／正文／命名空间及 sequence 240。
+因此本次原始 220 的正确性及现行剩余阻断指标通过；旧性能缺口仍作为观测保留，不再为其重跑优化。
+
+| 原始 ZIP | artifact ID | SHA256 |
+| --- | --- | --- |
+| AB | [13037371042](https://github.com/isarmg/zxs/actions/runs/41183044548/artifacts/13037371042) | `938f1d24d996c10b6aba578c948a7fb44a7154494d4c73a1fed7e829941241c1` |
+| BA | [13037665019](https://github.com/isarmg/zxs/actions/runs/41183044548/artifacts/13037665019) | `8adf13613ff7086d36202a631785e4ec7b8fd8d48b7084a586eff6c49303d24f` |
+| summary | [13037201535](https://github.com/isarmg/zxs/actions/runs/41183044548/artifacts/13037201535) | `88e071b147bc1009266701095e0bd99e19e84052e5a70f39c122a9c38d369e81` |
