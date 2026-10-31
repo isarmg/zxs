@@ -13,6 +13,8 @@ pub(super) struct Captured<T> {
 pub(super) struct NodePick {
     id: String,
     first_commit: Option<String>,
+    content_branch: Option<String>,
+    parents: Option<Captured<String>>,
 }
 
 pub(super) enum CapturedPage {
@@ -98,7 +100,7 @@ fn select_scope(
         cancellation,
         Some(&owner.version_id),
     )?;
-    let page = match request.collection {
+    let mut page = match request.collection {
         HistoryCollection::Nodes => {
             let position = if let Some(anchor) = request.anchor_node_id.as_ref() {
                 let node = query.node(anchor.as_str())?;
@@ -152,6 +154,8 @@ fn select_scope(
                     .map(|(_, (node, commit))| NodePick {
                         id: node.id().to_owned(),
                         first_commit: commit.map(|commit| commit.commit_id.clone()),
+                        content_branch: None,
+                        parents: None,
                     })
                     .collect(),
                 has_before: selected.has_before,
@@ -201,6 +205,8 @@ fn select_scope(
                         id: version.version_id.clone(),
                         first_commit: first[version.version_id.as_str()]
                             .map(|commit| commit.commit_id.clone()),
+                        content_branch: None,
+                        parents: None,
                     })
                     .collect(),
                 has_before: selected.has_before,
@@ -209,6 +215,79 @@ fn select_scope(
         }
         _ => unreachable!("invariant: indexed collection was matched before reading"),
     };
+    if let CapturedPage::Nodes(selected) = &mut page {
+        // Retain at most the selected content nodes. The entire branch stream
+        // must be authenticated, including when no selected node has a head.
+        let mut branches = selected
+            .entries
+            .iter()
+            .filter(|pick| query.state.versions.contains_key(&pick.id))
+            .map(|pick| (pick.id.as_str(), None::<String>))
+            .collect::<BTreeMap<_, _>>();
+        for branch in reader.branches() {
+            cancellation.checkpoint()?;
+            let branch = branch?;
+            let Some(commit) = query.state.commits.get(&branch.head_commit_id) else {
+                continue;
+            };
+            if branch
+                .pending_file_versions
+                .contains_key(query.scope().file)
+                || commit
+                    .pending_file_versions
+                    .contains_key(query.scope().file)
+            {
+                continue;
+            }
+            for entry in &commit.entries {
+                cancellation.checkpoint()?;
+                if entry.file_id == query.scope().file
+                    && let Some(found) = branches.get_mut(entry.version_id.as_str())
+                    && found.is_none()
+                {
+                    *found = Some(branch.branch_id.clone());
+                }
+            }
+        }
+        let branches = branches
+            .into_iter()
+            .map(|(id, branch)| (id.to_owned(), branch))
+            .collect::<BTreeMap<_, _>>();
+        for pick in &mut selected.entries {
+            pick.content_branch = branches.get(&pick.id).cloned().flatten();
+        }
+        let mut edge_count = 0;
+        let count = selected.entries.len();
+        for (index, pick) in selected.entries.iter_mut().enumerate() {
+            cancellation.checkpoint()?;
+            // Exactly the existing page's sequential preview budget, not 256
+            // per node. Each target merge stream is exhausted before caching.
+            let limit = MAX_HISTORY_PREVIEW_EDGES - edge_count - (count - index - 1);
+            let mut selector = Selector::new(Position::Start, limit)?;
+            nodes::visit_parents_from(
+                query.state,
+                query.scope(),
+                &pick.id,
+                cancellation,
+                reader.merges(),
+                |parent| {
+                    selector.offer(parent, ());
+                    Ok(())
+                },
+            )?;
+            let parents = selector.finish()?;
+            edge_count += parents.entries.len();
+            pick.parents = Some(Captured {
+                entries: parents
+                    .entries
+                    .into_iter()
+                    .map(|(parent, ())| parent.to_owned())
+                    .collect(),
+                has_before: parents.has_before,
+                has_after: parents.has_after,
+            });
+        }
+    }
     Ok(IndexedSelection {
         owner_version: owner.version_id.clone(),
         page,
@@ -216,6 +295,49 @@ fn select_scope(
 }
 
 impl<'a> Query<'a> {
+    pub(in crate::engine::history_window) fn indexed_parent_preview(
+        &self,
+        id: &str,
+        limit: usize,
+    ) -> Option<Selection<&str, ()>> {
+        let CapturedPage::Nodes(selected) = &self.indexed?.page else {
+            return None;
+        };
+        let pick = selected
+            .entries
+            .iter()
+            .find(|pick| pick.id == id)
+            .expect("invariant: node preview belongs to its captured page");
+        let parents = pick
+            .parents
+            .as_ref()
+            .expect("invariant: indexed Nodes completed its parent previews");
+        assert!(
+            parents.entries.len() <= limit,
+            "invariant: restored page shares captured preview budget"
+        );
+        Some(Selection {
+            entries: parents.entries.iter().map(|id| (id.as_str(), ())).collect(),
+            has_before: parents.has_before,
+            has_after: parents.has_after,
+        })
+    }
+
+    pub(in crate::engine::history_window) fn indexed_content_branch(
+        &self,
+        version: &str,
+    ) -> Option<Option<&str>> {
+        let CapturedPage::Nodes(selected) = &self.indexed?.page else {
+            return None;
+        };
+        let pick = selected
+            .entries
+            .iter()
+            .find(|pick| pick.id == version)
+            .expect("invariant: content summary belongs to its captured page");
+        Some(pick.content_branch.as_deref())
+    }
+
     pub(in crate::engine::history_window) fn indexed_version_commit(
         &self,
         version: &str,

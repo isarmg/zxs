@@ -322,7 +322,10 @@ impl<'a> Query<'a> {
             // later node, so More always has a real enumerated boundary key.
             let remaining_nodes = selection.entries.len() - index - 1;
             let preview_limit = MAX_HISTORY_PREVIEW_EDGES - edges.len() - remaining_nodes;
-            let parents = self.parents(node.id(), Position::Start, preview_limit)?;
+            let parents = match self.indexed_parent_preview(node.id(), preview_limit) {
+                Some(parents) => parents,
+                None => self.parents(node.id(), Position::Start, preview_limit)?,
+            };
             let parent_set = if parents.has_after {
                 let last = parents
                     .entries

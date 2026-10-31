@@ -12,13 +12,12 @@ class ReleaseAcceptance(unittest.TestCase):
         release_upload = workflow.rindex('actions/upload-artifact', 0, workflow.index('name: release-linux-web'))
         self.assertLess(workflow.index('release-acceptance.sh'), release_upload)
         script = (ROOT / '.github/scripts/release-acceptance.sh').read_text()
-        self.assertIn('tar -xzf "release-assets/zxs-${RELEASE_VERSION}', script)
-        self.assertIn('tar -xzf "release-assets/web-interface-${RELEASE_VERSION}', script)
-        self.assertIn('--cli-bin "$work/server/zxs" --web-dir "$work/web/public"', script)
+        self.assertIn('cp "release-assets/zxs-${RELEASE_VERSION}-debian13-amd64"', script)
+        self.assertIn('--cli-bin "$work/server/zxs" --embedded-web', script)
         self.assertIn('cargo run --locked --offline --release -p browser-smoke', script)
+        self.assertNotIn('--web-dir', script)
         self.assertNotIn('target/native/debug/zxs', script)
-        self.assertIn('test -f "$work/server/deploy/samba/smb.conf.example"', script)
-        self.assertIn('cmp "$work/server/deploy/samba/smb.conf.example" "$work/web/deploy/samba/smb.conf.example"', script)
+        self.assertIn('wc -l)" = 1', script)
 
     def test_main_ci_accepts_extracted_archives_without_duplicate_browser_suite(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text()

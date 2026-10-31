@@ -15,6 +15,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(crate) mod embedded;
+
 pub(crate) fn fallback(directory: PathBuf) -> Router {
     Router::new()
         .fallback_service(
@@ -120,6 +122,14 @@ pub(crate) fn static_etags(root: &Path) -> Result<BTreeMap<String, String>, ApiE
 
 pub(crate) async fn static_validation(
     State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    validate_with_etags(&state.static_etags, request, next).await
+}
+
+async fn validate_with_etags(
+    etags: &BTreeMap<String, String>,
     mut request: Request,
     next: Next,
 ) -> Response {
@@ -128,7 +138,7 @@ pub(crate) async fn static_validation(
     let etag = if is_api_path(request.uri().path()) {
         None
     } else {
-        state.static_etags.get(request.uri().path()).cloned()
+        etags.get(request.uri().path()).cloned()
     };
     if matches!(*request.method(), Method::GET | Method::HEAD)
         && let Some(etag) = &etag

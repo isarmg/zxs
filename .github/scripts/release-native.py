@@ -7,7 +7,9 @@ compiler trust, or the deployment machine's CPU capabilities.
 import hashlib
 import json
 import os
+import platform
 import re
+import runpy
 from pathlib import Path
 import subprocess
 
@@ -58,6 +60,18 @@ def override_presence(variables):
     }
 
 
+def require_debian13():
+    release = platform.freedesktop_os_release()
+    if (release.get("ID"), release.get("VERSION_ID"), platform.machine()) != ("debian", "13", "x86_64"):
+        raise RuntimeError("final native product must be built in Debian 13 amd64")
+
+
+def runtime_dependencies(root):
+    inspector = runpy.run_path(str(root / ".github/scripts/native-runtime-receipt.py"))
+    return {"schema_version": 1, "distribution": "debian", "release": "13", "architecture": "amd64",
+            "binaries": [inspector["binary_receipt"](name, root / OUTPUT / name) for name in BINARIES]}
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     os.chdir(root)
@@ -67,6 +81,14 @@ def main():
     version = os.environ["RELEASE_VERSION"]
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     require_clean_source()
+    require_debian13()
+    tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip()
+    web_manifest = root / "build/web/build-manifest.json"
+    web_manifest_sha256 = digest(web_manifest)
+    build_environment = dict(os.environ, ZXS_EMBED_WEB="1", ZXS_EMBED_WEB_COMMIT=commit,
+                             ZXS_EMBED_WEB_TREE=tree)
+    # build.rs validates the complete Web input/output inventory and snapshots
+    # exact bytes. A missing or stale Web build is never an external-directory fallback.
     # Do not publish arbitrary environment values: compiler/flag overrides may
     # contain private paths or defines. Fingerprints preserve comparison only.
     variables = {key: value for key, value in os.environ.items()
@@ -84,13 +106,20 @@ def main():
                     "cargo", "build", "--locked", "--offline", "--release",
                     "--target", TARGET, "--target-dir", "target/native",
                     "--package", "storage-server", "--package", "storage-rescue",
-                    "--message-format=json"], check=True)
+                    "--message-format=json"], check=True, env=build_environment)
     if commit != subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip():
         raise RuntimeError("native release source commit changed during build")
     require_clean_source()
     if inputs != {name: digest(root / name) for name in inputs}:
         raise RuntimeError("native release build configuration changed during build")
+    if tree != subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip():
+        raise RuntimeError("native release source tree changed during build")
+    if digest(web_manifest) != web_manifest_sha256:
+        raise RuntimeError("embedded Web manifest changed during build")
     fields = {
+        "native-baseline": "debian13-amd64",
+        "native-web-embedded": "true", "native-web-commit": commit,
+        "native-web-tree": tree, "native-web-manifest-sha256": web_manifest_sha256,
         "version": version, "commit": commit, "native-target": TARGET,
         "native-profile": "release", "native-rustc": json.dumps(rustc),
         "native-rust-target-default-cpu": default_cpu,
@@ -104,6 +133,9 @@ def main():
     }
     for name in BINARIES:
         fields[f"native-{name}-sha256"] = digest(root / OUTPUT / name)
+    dependencies = json.dumps(runtime_dependencies(root), sort_keys=True, separators=(",", ":"))
+    fields["native-runtime-dependencies"] = dependencies
+    fields["native-runtime-dependencies-sha256"] = hashlib.sha256(dependencies.encode()).hexdigest()
     receipt.write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
 
 

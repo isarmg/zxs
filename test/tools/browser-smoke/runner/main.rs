@@ -420,15 +420,25 @@ fn exercise(
     Ok(())
 }
 
+// The reference Web tree belongs to the harness, never to an embedded server.
+fn server_web(command: &mut Command, web: Option<&Path>, cwd: &Path) {
+    command.current_dir(cwd);
+    if let Some(web) = web {
+        command.arg("--web-dir").arg(web);
+    }
+}
+
 fn run() -> Result<()> {
     let mut args = env::args().skip(1);
     let mut cli_binary = PathBuf::from("target/native/debug/zxs");
     let mut web = PathBuf::from("build/web");
+    let mut embedded_web = false;
     let mut screenshot: Option<PathBuf> = None;
     let mut contour_evidence: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cli-bin" => cli_binary = args.next().ok_or("--cli-bin requires a path")?.into(),
+            "--embedded-web" => embedded_web = true,
             "--web-dir" => web = args.next().ok_or("--web-dir requires a path")?.into(),
             "--screenshot" => {
                 screenshot = Some(args.next().ok_or("--screenshot requires a path")?.into());
@@ -442,7 +452,7 @@ fn run() -> Result<()> {
             }
             _ => {
                 return Err(format!(
-                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--screenshot PNG] [--contour-evidence DIR]"
+                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--screenshot PNG] [--contour-evidence DIR]"
                 )
                 .into());
             }
@@ -471,14 +481,14 @@ fn run() -> Result<()> {
     let origin = format!("http://127.0.0.1:{server_port}");
     let server_log = root.join("server.log");
     let driver_log = root.join("driver.log");
-    let _server = spawn(
-        Command::new(&cli_binary)
-            .arg("--root")
-            .arg(&pool)
-            .args(["--listen", &format!("127.0.0.1:{server_port}"), "--web-dir"])
-            .arg(&web),
-        &server_log,
-    )?;
+    let server_assets = (!embedded_web).then_some(web.as_path());
+    let mut command = Command::new(&cli_binary);
+    command
+        .arg("--root")
+        .arg(&pool)
+        .args(["--listen", &format!("127.0.0.1:{server_port}")]);
+    server_web(&mut command, server_assets, root);
+    let _server = spawn(&mut command, &server_log)?;
     let result = (|| -> Result<()> {
         wait_for("persisted fixture authority and storage", || {
             let (status, bytes) = http(server_port, "GET", "/api/management/status", None)?;
@@ -541,8 +551,12 @@ fn run() -> Result<()> {
             contour_evidence::run(&browser, &origin, &web, directory)
         } else {
             exercise(&browser, &origin, &password, screenshot.as_deref())
-                .and_then(|()| management::run(&browser, &cli_binary, &web, &pool, root, &password))
-                .and_then(|()| management::setup(&browser, &cli_binary, &web, root, &password))
+                .and_then(|()| {
+                    management::run(&browser, &cli_binary, server_assets, &pool, root, &password)
+                })
+                .and_then(|()| {
+                    management::setup(&browser, &cli_binary, server_assets, root, &password)
+                })
         };
         if result.is_err() {
             let diagnostics_dir = contour_evidence.as_ref().map_or_else(

@@ -1,11 +1,13 @@
 """Publication checks the whole set, not just whichever hashes were supplied."""
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from web_dist_fixture import write_release_assets, elf_fixture, add_runtime_fields
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("release_assets", ROOT / ".github/scripts/verify-release-assets.py")
@@ -21,15 +23,7 @@ class ReleaseAssets(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.assets = self.root / "release-assets"
         self.assets.mkdir()
-        for name in ("INSTALL.md", "zxs-0.1.0-x86_64-unknown-linux-gnu.tar.gz", "web-interface-0.1.0.tar.gz"):
-            (self.assets / name).write_bytes(b"release asset bytes")
-        fields = {"version": "0.1.0", "commit": COMMIT,
-                  "native-target": "x86_64-unknown-linux-gnu", "native-profile": "release",
-                  "native-rustc": "fixture compiler", "native-environment-sha256": "a" * 64,
-                  "native-inputs-sha256": "b" * 64, "native-zxs-sha256": "c" * 64,
-                  "native-zxs-rescue-sha256": "d" * 64,
-                  "native-archive-sha256": hashlib.sha256(b"release asset bytes").hexdigest()}
-        (self.assets / "BUILD.txt").write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
+        write_release_assets(self.assets, COMMIT)
         self.checksums()
 
     def checksums(self):
@@ -42,9 +36,9 @@ class ReleaseAssets(unittest.TestCase):
 
     def test_complete_source_matched_snapshot_is_independent_of_later_edits(self):
         stage = self.root / "snapshot"
-        self.assertEqual(self.verify(stage), 5)
+        self.assertEqual(self.verify(stage), 7)
         (self.assets / "INSTALL.md").write_text("later modification")
-        self.assertEqual(MODULE.verify(stage, "0.1.0", COMMIT), 5)
+        self.assertEqual(MODULE.verify(stage, "0.1.0", COMMIT), 7)
 
     def test_missing_checksum_entry_is_not_proof_of_a_complete_release(self):
         lines = (self.assets / "SHA256SUMS").read_text().splitlines(True)
@@ -88,12 +82,80 @@ class ReleaseAssets(unittest.TestCase):
         original = path.read_text()
         for old, new in (("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"),
                          ("native-profile=release", "native-profile=debug"),
-                         ("native-archive-sha256=", "unrecognized-archive="),
+                         ("materials-archive-sha256=", "unrecognized-archive="),
                          ("native-zxs-sha256=", "unrecognized-binary=")):
             path.write_text(original.replace(old, new))
             self.checksums()
             with self.assertRaises(ValueError):
                 self.verify()
+
+    def test_vfs_identity_and_bytes_cannot_be_relabelled(self):
+        path = self.assets / "VFS-BUILD.json"
+        original = json.loads(path.read_bytes())
+        for key, value in (("commit", "c" * 40), ("tree", "c" * 40),
+                           ("release", "12"), ("vfs_interface", 51),
+                           ("package_version", "2:4.23.0"),
+                           ("module_sha256", "0" * 64)):
+            with self.subTest(key=key):
+                path.write_text(json.dumps(dict(original, **{key: value})))
+                self.checksums()
+                with self.assertRaises(ValueError):
+                    self.verify()
+
+    def test_native_must_bind_embedded_web_to_same_source(self):
+        path = self.assets / "BUILD.txt"
+        original = path.read_text()
+        for old, new in (("native-baseline=debian13-amd64", "native-baseline=ubuntu24"),
+                         ("native-web-embedded=true", "native-web-embedded=false"),
+                         (f"native-web-commit={COMMIT}", f"native-web-commit={'c' * 40}"),
+                         ("native-web-manifest-sha256=", "missing-manifest=")):
+            with self.subTest(old=old):
+                path.write_text(original.replace(old, new))
+                self.checksums()
+                with self.assertRaises(ValueError):
+                    self.verify()
+
+    def test_elf_type_and_abi_are_required_even_with_consistent_hashes(self):
+        binary = self.assets / "zxs-0.1.0-debian13-amd64"
+        build = self.assets / "BUILD.txt"
+        original = build.read_text()
+        invalid = [b"#!/bin/sh\nexit 0\n", b"not an ELF archive"]
+        for offset, byte in ((4, 1), (5, 2), (16, 1), (18, 183), (52, 0)):
+            header = bytearray(elf_fixture())
+            header[offset] = byte
+            invalid.append(bytes(header))
+        for data in invalid:
+            binary.write_bytes(data)
+            fields = dict(line.split("=", 1) for line in original.splitlines())
+            fields["native-zxs-sha256"] = hashlib.sha256(data).hexdigest()
+            add_runtime_fields(fields)
+            build.write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
+            self.checksums()
+            with self.assertRaisesRegex(ValueError, "ELF64"):
+                self.verify()
+        MODULE.elf_identity(elf_fixture())
+        MODULE.elf_identity(elf_fixture(module=True))  # PIE executable allowed.
+        MODULE.elf_identity(elf_fixture(module=True), module=True)
+        with self.assertRaisesRegex(ValueError, "ELF64"):
+            MODULE.elf_identity(elf_fixture(), module=True)
+
+    def test_runtime_receipt_must_bind_actual_binary_and_debian_target(self):
+        path = self.assets / "BUILD.txt"
+        original = path.read_text()
+        fields = dict(line.split("=", 1) for line in original.splitlines())
+        runtime = json.loads(fields["native-runtime-dependencies"])
+        for field, value in (("release", "12"), ("architecture", "arm64"), ("binaries", [])):
+            changed = json.dumps(dict(runtime, **{field: value}), separators=(",", ":"))
+            updated = dict(fields, **{"native-runtime-dependencies": changed,
+                                     "native-runtime-dependencies-sha256": hashlib.sha256(changed.encode()).hexdigest()})
+            path.write_text("".join(f"{key}={value}\n" for key, value in updated.items()))
+            self.checksums()
+            with self.assertRaises(ValueError):
+                self.verify()
+        path.write_text(original.replace('native-runtime-dependencies-sha256=', 'missing-runtime-sha='))
+        self.checksums()
+        with self.assertRaises(ValueError):
+            self.verify()
 
     def test_missing_build_receipt_is_rejected(self):
         (self.assets / "BUILD.txt").unlink()
@@ -161,7 +223,7 @@ class ReleaseAssets(unittest.TestCase):
                 (self.assets / "INSTALL.md").write_text("redirected asset")
             return data
         with patch.object(MODULE, "read_metadata", side_effect=replace_after_receipt):
-            self.assertEqual(self.verify(self.root / "snapshot"), 5)
+            self.assertEqual(self.verify(self.root / "snapshot"), 7)
         self.assertEqual((self.root / "snapshot/INSTALL.md").read_bytes(), b"release asset bytes")
 
 

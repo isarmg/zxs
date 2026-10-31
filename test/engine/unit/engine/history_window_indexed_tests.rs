@@ -183,7 +183,7 @@ fn snapshot_capture_reads_no_members_and_old_snapshot_is_valid_during_new_public
         .capture_history_scope(request.file_id.as_str(), context.history_tree_id.as_str())
         .unwrap()
         .unwrap();
-    assert_eq!(crate::engine::index::scope_read_metrics(), ([0; 4], 0));
+    assert_eq!(crate::engine::index::scope_read_metrics(), ([0; 6], 0));
     let previous = Arc::clone(&engine.state);
     Arc::make_mut(&mut engine.state).sequence += 1;
     engine.update_index(&previous);
@@ -246,7 +246,7 @@ fn capture_owner_and_lock_free_selection_costs_are_explicit_as_target_history_gr
         let owner_visits = crate::engine::index::scope_read_metrics();
         // Fixture also has one same-file version in another history; owner
         // admission must include it rather than assume one history per file.
-        assert_eq!(owner_visits.0, [18 + extra, 0, 0, 0]);
+        assert_eq!(owner_visits.0, [18 + extra, 0, 0, 0, 0, 0]);
         crate::engine::index::reset_scope_read_metrics();
         let start = std::time::Instant::now();
         let snapshot = engine
@@ -254,7 +254,7 @@ fn capture_owner_and_lock_free_selection_costs_are_explicit_as_target_history_gr
             .unwrap()
             .unwrap();
         let capture_elapsed = start.elapsed();
-        assert_eq!(crate::engine::index::scope_read_metrics(), ([0; 4], 0));
+        assert_eq!(crate::engine::index::scope_read_metrics(), ([0; 6], 0));
         let view = engine.metadata_view();
         let start = std::time::Instant::now();
         prepare_indexed_selection(&snapshot, &view, &request, &context, &cancel)
@@ -475,6 +475,284 @@ fn omitted_commit_entry_cannot_become_empty_version_fields() {
         .unwrap();
     let actual = read.page().unwrap();
     engine.recheck_history_window(&read).unwrap();
+    assert_eq!(
+        json_codec::to_value(actual).unwrap(),
+        json_codec::to_value(expected).unwrap()
+    );
+    assert!(matches!(
+        engine.index_health(),
+        crate::engine::index::IndexHealth::Unavailable(_)
+    ));
+}
+
+#[test]
+fn indexed_content_branches_are_complete_and_ignore_unrelated_pool_growth() {
+    let mut metrics = Vec::new();
+    for unrelated in [0, 257] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut engine = indexed_engine(&temp, unrelated);
+        let state = Arc::make_mut(&mut engine.state);
+        let template = state.branches["br_00000000000000000000000000000000"].clone();
+        for n in 0..unrelated {
+            let mut branch = template.clone();
+            branch.branch_id = format!("br_{:032x}", n + 0x20000);
+            branch.file_id = Some(format!("file_{:032x}", n + 0x20000));
+            state.branches.insert(branch.branch_id.clone(), branch);
+        }
+        // Existing fixture includes equal eligible heads, a pending branch,
+        // migrated/merged states, a directory branch and a different history.
+        engine.bind_recovered_history_roots(BTreeMap::from([(
+            context().history_tree_id.as_str().to_owned(),
+            "a".repeat(64),
+        )]));
+        engine.rebuild_index().unwrap();
+        let view = engine.metadata_view();
+        let request = request(HistoryCollection::Nodes, 64);
+        let context = context();
+        let cancel = HistoryWindowCancellation::new();
+        crate::engine::index::reset_scope_read_metrics();
+        projection::take_branch_headers();
+        let selected = capture_indexed_selection(&engine, &view, &request, &context, &cancel)
+            .unwrap()
+            .unwrap();
+        let actual = view
+            .history_window_selected(&request, &context, &cancel, Some(&selected))
+            .unwrap();
+        assert_eq!(projection::take_branch_headers(), 0);
+        metrics.push(crate::engine::index::scope_read_metrics());
+        let reference = view.history_window(&request, &context, &cancel).unwrap();
+        assert!(projection::take_branch_headers() > 0);
+        assert_eq!(
+            json_codec::to_value(actual).unwrap(),
+            json_codec::to_value(reference).unwrap()
+        );
+    }
+    assert_eq!(metrics[0], metrics[1]);
+    assert_eq!(metrics[0].0[4], 21);
+    eprintln!("content_branch unrelated branches 0/257: {metrics:?}; pool branch headers=0");
+}
+
+#[test]
+fn missing_branch_membership_falls_back_instead_of_losing_content_branch() {
+    use sqlite_access::{Connection, Executor};
+    let (_temp, engine, request) = actual_branch_fixture();
+    let expected = engine
+        .capture_history_window(request.clone(), HistoryWindowCancellation::new())
+        .unwrap()
+        .page()
+        .unwrap();
+    platform_io::sqlite::block_on_sqlite_connection(async {
+        let mut c = platform_io::sqlite::open_index_connection(
+            &engine.root.join("index.sqlite"),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        c.execute("DELETE FROM history_scope_members WHERE kind=4")
+            .await
+            .unwrap();
+        c.close().await.unwrap();
+    });
+    let read = engine
+        .capture_history_window(request, HistoryWindowCancellation::new())
+        .unwrap();
+    let actual = read.page().unwrap();
+    engine.recheck_history_window(&read).unwrap();
+    assert_eq!(
+        json_codec::to_value(actual).unwrap(),
+        json_codec::to_value(expected).unwrap()
+    );
+    assert!(matches!(
+        engine.index_health(),
+        crate::engine::index::IndexHealth::Unavailable(_)
+    ));
+}
+
+fn actual_branch_fixture() -> (tempfile::TempDir, Engine, HistoryWindowRequest) {
+    let (temp, mut engine, request) = actual_read_fixture();
+    let version = engine
+        .state
+        .versions
+        .values()
+        .find(|v| v.file_id == request.file_id.as_str())
+        .unwrap()
+        .version_id
+        .clone();
+    engine
+        .create_file_branch(
+            request.file_id.as_str(),
+            &version,
+            &storage_contract::BranchName::parse("indexed alternate").unwrap(),
+            "admin",
+            crate::OperationId::generate(),
+        )
+        .unwrap();
+    (temp, engine, request)
+}
+
+#[test]
+fn reopening_rebuilds_existing_four_kind_disposable_projection() {
+    use sqlite_access::{Connection, Executor};
+    let (_temp, engine, request) = actual_branch_fixture();
+    let root = engine.root.clone();
+    let history = engine
+        .state
+        .versions
+        .values()
+        .find(|v| v.file_id == request.file_id.as_str())
+        .unwrap()
+        .history_tree_id
+        .clone();
+    let expected = engine
+        .state
+        .branches
+        .values()
+        .filter(|b| {
+            b.file_id.as_deref() == Some(request.file_id.as_str()) && b.history_tree_id == history
+        })
+        .count();
+    assert!(expected > 0);
+    drop(engine);
+    platform_io::sqlite::block_on_sqlite_connection(async {
+        let mut c =
+            platform_io::sqlite::open_index_connection(&root.join("index.sqlite"), false, None)
+                .await
+                .unwrap();
+        // Same schema and sequence marker, but old disposable data lacks kind 4.
+        c.execute("DELETE FROM history_scope_members WHERE kind=4")
+            .await
+            .unwrap();
+        c.close().await.unwrap();
+    });
+    let reopened = Engine::open(&root).unwrap();
+    let count = reopened
+        .with_history_scope(request.file_id.as_str(), &history, |r| {
+            r.branches().try_fold(0, |n, b| b.map(|_| n + 1))
+        })
+        .unwrap();
+    assert_eq!(count, Some(expected));
+    assert!(matches!(
+        reopened.index_health(),
+        crate::engine::index::IndexHealth::Ready { .. }
+    ));
+}
+
+#[test]
+fn indexed_parent_previews_ignore_unrelated_merges_and_match_complete_oracle() {
+    let mut metrics = Vec::new();
+    for unrelated in [0, 257] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut engine = indexed_engine(&temp, 0);
+        let state = Arc::make_mut(&mut engine.state);
+        let template = state.file_branch_merges.values().next().unwrap().clone();
+        for n in 0..unrelated {
+            let mut merge = template.clone();
+            merge.merge_id = format!("fmerge_{:032x}", n + 0x20000);
+            merge.file_id = format!("file_{:032x}", n + 0x20000);
+            state
+                .file_branch_merges
+                .insert(merge.merge_id.clone(), merge);
+        }
+        engine.bind_recovered_history_roots(BTreeMap::from([(
+            context().history_tree_id.as_str().to_owned(),
+            "a".repeat(64),
+        )]));
+        engine.rebuild_index().unwrap();
+        let view = engine.metadata_view();
+        let request = request(HistoryCollection::Nodes, 64);
+        let context = context();
+        let cancel = HistoryWindowCancellation::new();
+        crate::engine::index::reset_scope_read_metrics();
+        nodes::take_parent_merge_headers();
+        let selected = capture_indexed_selection(&engine, &view, &request, &context, &cancel)
+            .unwrap()
+            .unwrap();
+        let actual = view
+            .history_window_selected(&request, &context, &cancel, Some(&selected))
+            .unwrap();
+        assert_eq!(nodes::take_parent_merge_headers(), 0);
+        metrics.push(crate::engine::index::scope_read_metrics());
+        let reference = view.history_window(&request, &context, &cancel).unwrap();
+        assert!(nodes::take_parent_merge_headers() > 0);
+        assert_eq!(
+            json_codec::to_value(actual).unwrap(),
+            json_codec::to_value(reference).unwrap()
+        );
+    }
+    assert_eq!(metrics[0], metrics[1]);
+    assert!(metrics[0].0[5] > 0);
+    eprintln!("parent previews unrelated merges 0/257: {metrics:?}; pool parent-merge headers=0");
+}
+
+#[test]
+fn indexed_parent_preview_keeps_256_budget_more_cursor_and_reused_edges() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = indexed_engine(&temp, 0);
+    let state = Arc::make_mut(&mut engine.state);
+    let source = state.versions["ver_00000000000000000000000000000000"].clone();
+    let template = state.file_branch_merges.values().next().unwrap().clone();
+    for n in 0..300 {
+        let mut version = source.clone();
+        version.version_id = format!("ver_{:032x}", n + 0x40000);
+        version.source_version_ids.clear();
+        let mut merge = template.clone();
+        merge.merge_id = format!("fmerge_{:032x}", n + 0x40000);
+        merge.result_node_id = source.version_id.clone();
+        merge.reused_node = true;
+        // Duplicate input and self edge must keep original dedup/filter rules.
+        merge.parent_node_ids = vec![
+            version.version_id.clone(),
+            version.version_id.clone(),
+            source.version_id.clone(),
+        ];
+        state.versions.insert(version.version_id.clone(), version);
+        state
+            .file_branch_merges
+            .insert(merge.merge_id.clone(), merge);
+    }
+    engine.bind_recovered_history_roots(BTreeMap::from([(
+        context().history_tree_id.as_str().to_owned(),
+        "a".repeat(64),
+    )]));
+    engine.rebuild_index().unwrap();
+    let mut request = request(HistoryCollection::Nodes, 1);
+    request.anchor_node_id = Some(HistoryNodeId::parse(&source.version_id).unwrap());
+    let page = equal_page(&engine, &request);
+    let HistoryWindowPage::Nodes { nodes, edges, .. } = page else {
+        unreachable!()
+    };
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(edges.len(), MAX_HISTORY_PREVIEW_EDGES);
+    assert!(matches!(nodes[0].parents, HistoryParentSet::More { .. }));
+}
+
+#[test]
+fn omitted_merge_member_cannot_remove_parent_edges() {
+    use sqlite_access::{Connection, Executor};
+    let temp = tempfile::tempdir().unwrap();
+    let engine = indexed_engine(&temp, 0);
+    let view = engine.metadata_view();
+    let request = request(HistoryCollection::Nodes, 64);
+    let context = context();
+    let cancel = HistoryWindowCancellation::new();
+    let expected = view.history_window(&request, &context, &cancel).unwrap();
+    platform_io::sqlite::block_on_sqlite_connection(async {
+        let mut c = platform_io::sqlite::open_index_connection(
+            &engine.root.join("index.sqlite"),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        c.execute("DELETE FROM history_scope_members WHERE kind=5 AND id='fmerge_00000000000000000000000000000000'").await.unwrap();
+        c.close().await.unwrap();
+    });
+    let selected = capture_indexed_selection(&engine, &view, &request, &context, &cancel).unwrap();
+    assert!(selected.is_none());
+    let actual = view
+        .history_window_selected(&request, &context, &cancel, selected.as_ref())
+        .unwrap();
     assert_eq!(
         json_codec::to_value(actual).unwrap(),
         json_codec::to_value(expected).unwrap()

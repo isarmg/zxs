@@ -5,11 +5,17 @@ use std::collections::BTreeSet;
 
 #[cfg(test)]
 thread_local! {
+    static PARENT_MERGE_HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FIRST_COMMIT_HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 #[cfg(test)]
 pub(super) fn take_first_commit_headers() -> usize {
     FIRST_COMMIT_HEADERS.with(|count| count.replace(0))
+}
+
+#[cfg(test)]
+pub(super) fn take_parent_merge_headers() -> usize {
+    PARENT_MERGE_HEADERS.with(|count| count.replace(0))
 }
 
 #[derive(Clone, Copy)]
@@ -310,6 +316,28 @@ pub(super) fn visit_parents<'a>(
     scope: Scope<'_>,
     id: &str,
     cancel: &HistoryWindowCancellation,
+    visit: impl FnMut(&'a str) -> Result<()>,
+) -> Result<()> {
+    visit_parents_from(
+        state,
+        scope,
+        id,
+        cancel,
+        state.file_branch_merges.values().map(|merge| {
+            #[cfg(test)]
+            PARENT_MERGE_HEADERS.with(|count| count.set(count.get() + 1));
+            Ok(merge)
+        }),
+        visit,
+    )
+}
+
+pub(super) fn visit_parents_from<'a>(
+    state: &'a State,
+    scope: Scope<'_>,
+    id: &str,
+    cancel: &HistoryWindowCancellation,
+    merges: impl Iterator<Item = Result<&'a crate::FileBranchMerge>>,
     mut visit: impl FnMut(&'a str) -> Result<()>,
 ) -> Result<()> {
     for parent in base_parents(state, id) {
@@ -318,7 +346,8 @@ pub(super) fn visit_parents<'a>(
             visit(parent)?;
         }
     }
-    for merge in state.file_branch_merges.values() {
+    for merge in merges {
+        let merge = merge?;
         cancel.checkpoint()?;
         if merge.file_id == scope.file
             && merge.history_tree_id == scope.history

@@ -15,29 +15,34 @@ fn main() {
 #[cfg(feature = "smb-sdk")]
 fn build_sdk() {
     use std::{env, fs, path::PathBuf};
-    let source =
-        PathBuf::from(env::var_os("ZXS_SMB_SDK_SOURCE").expect(
-            "smb-sdk requires the configured target 4.23.0 source tree in ZXS_SMB_SDK_SOURCE",
-        ));
+    let source = PathBuf::from(env::var_os("ZXS_SMB_SDK_SOURCE").expect(
+        "smb-sdk requires the configured target 4.22.11 source tree in ZXS_SMB_SDK_SOURCE",
+    ));
     let build = PathBuf::from(
         env::var_os("ZXS_SMB_SDK_BUILD")
             .unwrap_or_else(|| source.join("bin/default").into_os_string()),
     );
+    let changelog = fs::read_to_string(source.join("debian/changelog"))
+        .expect("matching Debian source package metadata is required");
+    assert!(
+        changelog.starts_with("samba (2:4.22.11+dfsg-0+deb13u1)"),
+        "this module requires the exact Debian 13 source package and patches"
+    );
     let version = fs::read_to_string(source.join("VERSION")).expect("SDK VERSION file missing");
     for expected in [
         "SAMBA_VERSION_MAJOR=4",
-        "SAMBA_VERSION_MINOR=23",
-        "SAMBA_VERSION_RELEASE=0",
+        "SAMBA_VERSION_MINOR=22",
+        "SAMBA_VERSION_RELEASE=11",
     ] {
         assert!(
             version.lines().any(|line| line.trim() == expected),
-            "this module is pinned to SDK 4.23.0"
+            "this module is pinned to SDK 4.22.11"
         );
     }
     let header = fs::read_to_string(source.join("source3/include/vfs.h"))
         .expect("official VFS header missing");
     assert!(
-        header.contains("#define SMB_VFS_INTERFACE_VERSION 51"),
+        header.contains("#define SMB_VFS_INTERFACE_VERSION 50"),
         "unexpected VFS SDK ABI"
     );
     assert!(
@@ -51,7 +56,7 @@ fn build_sdk() {
         .layout_tests(false)
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .allowlist_type("vfs_.*|files_struct|smb_filename|stat_ex|SMB_STRUCT_STAT|NTSTATUS|TALLOC_CTX|mode_t|off_t|tevent_.*|file_id|auth_session_info|auth_user_info|security_token|dom_sid")
-        .allowlist_function("smb_register_vfs|lp_parm_const_string|talloc_strdup|fsp_get_.*fd|__tevent_req_create|_tevent_req_data|_tevent_req_done|tevent_req_post|tevent_req_received|_tevent_add_fd|tevent_fd_set_auto_close|_talloc_set_destructor|_talloc_free|tevent_context_init|_tevent_loop_once|tevent_req_is_in_progress|security_token_is_anonymous|security_token_has_builtin_guests|security_token_has_nt_authenticated_users|full_timespec_to_nt_time")
+        .allowlist_function("samba_version_string|smb_register_vfs|lp_parm_const_string|talloc_strdup|fsp_get_.*fd|__tevent_req_create|_tevent_req_data|_tevent_req_done|tevent_req_post|tevent_req_received|_tevent_add_fd|tevent_fd_set_auto_close|_talloc_set_destructor|_talloc_free|tevent_context_init|_tevent_loop_once|tevent_req_is_in_progress|security_token_is_anonymous|security_token_has_builtin_guests|security_token_has_nt_authenticated_users|full_timespec_to_nt_time")
         .allowlist_var("SMB_VFS_INTERFACE_VERSION|VFS_OPEN_HOW_.*|VFS_RENAME_HOW_.*|TEVENT_FD_READ|global_sid_Anonymous|global_sid_Authenticated_Users|global_sid_Builtin_Guests|SAMBA_UTIME_OMIT|NTTIME_OMIT")
         .clang_arg("-D_GNU_SOURCE=1")
         .clang_arg("-D_XOPEN_SOURCE_EXTENDED=1")

@@ -2,11 +2,12 @@
 """Verify the complete release set and its source identity before publication."""
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
-import shutil
 import stat
+import struct
 
 
 def open_regular(directory_fd, name):
@@ -50,7 +51,59 @@ def build_identity(build, version, commit=None):
     for key in ("native-environment-sha256", "native-inputs-sha256", "native-zxs-sha256", "native-zxs-rescue-sha256"):
         if not re.fullmatch(r"[0-9a-f]{64}", fields.get(key, "")):
             raise ValueError(f"missing or invalid native build identity: {key}")
+    if fields.get("native-baseline") != "debian13-amd64" or fields.get("native-web-embedded") != "true":
+        raise ValueError("native release requires Debian 13 and embedded Web")
+    if fields.get("native-web-commit") != fields["commit"] or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", fields.get("native-web-tree", "")):
+        raise ValueError("embedded Web source identity mismatch")
+    if not re.fullmatch(r"[0-9a-f]{64}", fields.get("native-web-manifest-sha256", "")):
+        raise ValueError("missing embedded Web manifest identity")
+    runtime_text = fields.get("native-runtime-dependencies", "")
+    if hashlib.sha256(runtime_text.encode()).hexdigest() != fields.get("native-runtime-dependencies-sha256"):
+        raise ValueError("native runtime dependency receipt hash mismatch")
+    runtime = json.loads(runtime_text)
+    if (runtime.get("schema_version") != 1 or runtime.get("distribution") != "debian"
+            or runtime.get("release") != "13" or runtime.get("architecture") != "amd64"):
+        raise ValueError("native runtime dependency receipt target mismatch")
+    binaries = runtime.get("binaries", [])
+    if len(binaries) != 2 or {binary.get("name") for binary in binaries} != {"zxs", "zxs-rescue"}:
+        raise ValueError("native runtime dependency binary inventory mismatch")
+    for binary in binaries:
+        if binary.get("sha256") != fields[f"native-{binary['name']}-sha256"] or not binary.get("libraries"):
+            raise ValueError("native runtime dependency binary identity mismatch")
+        for library in binary["libraries"]:
+            if (not library.get("package") or not library.get("version")
+                    or not library.get("path", "").startswith("/")
+                    or not library.get("resolved_path", "").startswith("/")
+                    or not re.fullmatch(r"[0-9a-f]{64}", library.get("sha256", ""))):
+                raise ValueError("native runtime dependency library identity incomplete")
     return fields
+
+
+def elf_identity(header, module=False):
+    # This identifies the declared ELF ABI/type, not executable correctness.
+    # Runtime HTTP/browser and real Samba loading are separate required gates.
+    if (len(header) < 64 or header[:7] != b"\x7fELF\x02\x01\x01"
+            or struct.unpack_from("<H", header, 16)[0] not in ((3,) if module else (2, 3))
+            or struct.unpack_from("<H", header, 18)[0] != 62
+            or struct.unpack_from("<I", header, 20)[0] != 1
+            or struct.unpack_from("<H", header, 52)[0] != 64):
+        raise ValueError("release product must be an ELF64 little-endian x86_64 executable/shared object")
+
+
+def asset_names(version):
+    return {f"zxs-{version}-debian13-amd64", f"zxs-vfs-{version}-debian13-amd64.so",
+            f"zxs-materials-{version}.tar.gz", "VFS-BUILD.json", "INSTALL.md", "BUILD.txt"}
+
+
+def vfs_identity(data, fields):
+    receipt = json.loads(data)
+    if (receipt.get("commit") != fields["commit"] or receipt.get("tree") != fields["native-web-tree"]
+            or receipt.get("distribution") != "debian" or receipt.get("release") != "13"
+            or receipt.get("architecture") != "amd64" or receipt.get("vfs_interface") != 50
+            or receipt.get("package_version") != "2:4.22.11+dfsg-0+deb13u1"
+            or not re.fullmatch(r"[0-9a-f]{64}", receipt.get("module_sha256", ""))):
+        raise ValueError("VFS build identity differs from the matched Debian source/runtime")
+    return receipt
 
 
 def verify(directory, version, commit, stage=None):
@@ -66,8 +119,7 @@ def verify(directory, version, commit, stage=None):
 
 
 def verify_opened(directory_fd, version, commit, stage):
-    names = {f"zxs-{version}-x86_64-unknown-linux-gnu.tar.gz",
-             f"web-interface-{version}.tar.gz", "INSTALL.md", "BUILD.txt"}
+    names = asset_names(version)
     if set(os.listdir(directory_fd)) != names | {"SHA256SUMS"}:
         raise ValueError("release directory differs from the complete expected asset set")
     receipt = read_metadata(directory_fd, "SHA256SUMS")
@@ -81,8 +133,14 @@ def verify_opened(directory_fd, version, commit, stage):
         raise ValueError("release checksum inventory differs from the expected asset set")
     build = read_metadata(directory_fd, "BUILD.txt")
     fields = build_identity(build, version, commit)
-    if fields.get("native-archive-sha256") != hashes[f"zxs-{version}-x86_64-unknown-linux-gnu.tar.gz"]:
-        raise ValueError("native archive differs from build identity")
+    if fields["native-zxs-sha256"] != hashes[f"zxs-{version}-debian13-amd64"]:
+        raise ValueError("native executable differs from build identity")
+    if fields.get("materials-archive-sha256") != hashes[f"zxs-materials-{version}.tar.gz"]:
+        raise ValueError("materials archive differs from build identity")
+    vfs_bytes = read_metadata(directory_fd, "VFS-BUILD.json")
+    vfs = vfs_identity(vfs_bytes, fields)
+    if vfs["module_sha256"] != hashes[f"zxs-vfs-{version}-debian13-amd64.so"]:
+        raise ValueError("VFS module differs from build identity")
     if stage is not None:
         stage = Path(stage)
         for path in (stage, *stage.absolute().parents):
@@ -93,16 +151,28 @@ def verify_opened(directory_fd, version, commit, stage):
     # edits to release-assets cannot replace bytes after the validation gate.
     for name, expected in hashes.items():
         with open_regular(directory_fd, name) as source:
-            if stage is None:
-                actual = hashlib.file_digest(source, "sha256").hexdigest()
-            else:
-                target = stage / name
-                with target.open("xb") as output:
-                    shutil.copyfileobj(source, output)
-                with target.open("rb") as snapshot:
-                    actual = hashlib.file_digest(snapshot, "sha256").hexdigest()
+            output = (stage / name).open("xb") if stage is not None else None
+            try:
+                first = source.read(1024 * 1024)
+                if name == f"zxs-{version}-debian13-amd64":
+                    elf_identity(first[:64])
+                elif name == f"zxs-vfs-{version}-debian13-amd64.so":
+                    elf_identity(first[:64], module=True)
+                digest = hashlib.sha256()
+                chunk = first
+                while chunk:
+                    digest.update(chunk)
+                    if output is not None:
+                        output.write(chunk)
+                    chunk = source.read(1024 * 1024)
+                actual = digest.hexdigest()
+            finally:
+                if output is not None:
+                    output.close()
             if actual != expected:
                 raise ValueError(f"release checksum mismatch: {name}")
+    if hashlib.sha256(vfs_bytes).hexdigest() != hashes["VFS-BUILD.json"]:
+        raise ValueError("VFS build identity changed during verification")
     if hashlib.sha256(build).hexdigest() != hashes["BUILD.txt"]:
         raise ValueError("release build identity changed during verification")
     if stage is not None:

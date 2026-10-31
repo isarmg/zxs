@@ -33,7 +33,7 @@ fn prepare_offline(source_pool: &Path, offline: &Path) -> Result<()> {
 pub(super) fn run(
     browser: &Browser,
     daemon: &Path,
-    web: &Path,
+    web: Option<&Path>,
     source_pool: &Path,
     root: &Path,
     password: &str,
@@ -44,16 +44,15 @@ pub(super) fn run(
     prepare_offline(source_pool, &offline)?;
     let server_port = port()?;
     let origin = format!("http://127.0.0.1:{server_port}");
-    let _server = spawn(
-        Command::new(daemon)
-            .arg("--root")
-            .arg(&pool)
-            .arg("--management-root")
-            .arg(&management)
-            .args(["--listen", &format!("127.0.0.1:{server_port}"), "--web-dir"])
-            .arg(web),
-        &offline.join("server.log"),
-    )?;
+    let mut command = Command::new(daemon);
+    command
+        .arg("--root")
+        .arg(&pool)
+        .arg("--management-root")
+        .arg(&management)
+        .args(["--listen", &format!("127.0.0.1:{server_port}")]);
+    super::server_web(&mut command, web, &offline);
+    let _server = spawn(&mut command, &offline.join("server.log"))?;
     wait_for("offline management listener", || {
         let (status, bytes) = http(server_port, "GET", "/api/management/status", None)?;
         let value: json_codec::Value = json_codec::from_slice(&bytes)?;
@@ -130,7 +129,7 @@ pub(super) fn run(
 pub(super) fn setup(
     browser: &Browser,
     daemon: &Path,
-    web: &Path,
+    web: Option<&Path>,
     root: &Path,
     password: &str,
 ) -> Result<()> {
@@ -158,9 +157,9 @@ pub(super) fn setup(
         .arg(&pool)
         .arg("--management-root")
         .arg(&management)
-        .args(["--listen", &format!("127.0.0.1:{server_port}"), "--web-dir"])
-        .arg(web)
+        .args(["--listen", &format!("127.0.0.1:{server_port}")])
         .arg("--allow-development-setup");
+    super::server_web(&mut command, web, &fresh);
     let id = "fixture-primary";
     let disk = fresh.join(id);
     fs::DirBuilder::new().mode(0o700).create(&disk)?;
@@ -338,16 +337,21 @@ impl SetupFixture {
             port: port()?,
         })
     }
-    fn launch(&self, daemon: &Path, web: &Path, preset: Option<&Path>) -> Result<super::Process> {
+    fn launch(
+        &self,
+        daemon: &Path,
+        web: Option<&Path>,
+        preset: Option<&Path>,
+    ) -> Result<super::Process> {
         let mut command = Command::new(daemon);
         command
             .arg("--root")
             .arg(&self.pool)
             .arg("--management-root")
             .arg(&self.management)
-            .args(["--listen", &format!("127.0.0.1:{}", self.port), "--web-dir"])
-            .arg(web)
+            .args(["--listen", &format!("127.0.0.1:{}", self.port)])
             .arg("--allow-development-setup");
+        super::server_web(&mut command, web, &self.root);
         for (id, path) in &self.disks {
             command
                 .arg("--setup-disk")
@@ -574,7 +578,7 @@ return true;
 fn lost_initialize_response(
     browser: &Browser,
     daemon: &Path,
-    web: &Path,
+    web: Option<&Path>,
     root: &Path,
     password: &str,
 ) -> Result<()> {
@@ -737,7 +741,7 @@ fn write_preset(fixture: &SetupFixture) -> Result<(storage_engine::Config, std::
 fn preset_setup(
     browser: &Browser,
     daemon: &Path,
-    web: &Path,
+    web: Option<&Path>,
     root: &Path,
     password: &str,
 ) -> Result<()> {
@@ -793,7 +797,7 @@ fn preset_setup(
 fn complete_setup(
     browser: &Browser,
     daemon: &Path,
-    web: &Path,
+    web: Option<&Path>,
     root: &Path,
     password: &str,
 ) -> Result<()> {

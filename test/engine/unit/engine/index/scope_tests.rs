@@ -38,7 +38,7 @@ fn scope_membership_batches_and_nested_streams_match_state() {
         })
         .unwrap();
     assert_eq!(result, Some("v000".into()));
-    assert_eq!(scope_read_metrics(), ([260, 0, 0, 0], 64));
+    assert_eq!(scope_read_metrics(), ([260, 0, 0, 0, 0, 0], 64));
     assert_eq!(scope_count(&engine), Some(130));
 }
 
@@ -250,7 +250,7 @@ fn scope_snapshot_is_send_sync_and_holds_old_wal_view_across_update_and_rebuild(
         .unwrap()
         .unwrap();
     reset_scope_read_metrics();
-    assert_eq!(scope_read_metrics(), ([0; 4], 0));
+    assert_eq!(scope_read_metrics(), ([0; 6], 0));
     let state = Arc::make_mut(&mut engine.state);
     state.begin_tracking();
     state.versions.remove("a");
@@ -331,4 +331,234 @@ fn scope_old_snapshot_failure_does_not_disable_rebuilt_generation() {
     engine.record_scope_failure(&snapshot);
     assert!(index_ready(&engine));
     assert_eq!(scope_count(&engine), Some(5));
+}
+
+fn file_branch(id: &str, file: Option<&str>, history: &str) -> Branch {
+    Branch {
+        branch_id: id.into(),
+        history_tree_id: history.into(),
+        name: id.into(),
+        head_commit_id: "commit".into(),
+        fork_commit_id: "commit".into(),
+        branch_kind: BranchKind::File,
+        file_id: file.map(str::to_owned),
+        file_node_id: Some("a".into()),
+        pending_file_versions: BTreeMap::new(),
+        generation: 1,
+        state: BranchState::Active,
+    }
+}
+fn branch_count(engine: &Engine) -> Option<usize> {
+    engine
+        .with_history_scope("file", "history", |reader| {
+            reader
+                .branches()
+                .try_fold(0, |count, branch| branch.map(|_| count + 1))
+        })
+        .unwrap()
+}
+#[test]
+fn scope_branches_are_complete_scoped_borrowed_and_tracked() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(&temp);
+    let state = Arc::make_mut(&mut engine.state);
+    for n in 0..130 {
+        let id = format!("branch{n:03}");
+        let mut branch = file_branch(&id, Some("file"), "history");
+        // Match allowed_branch: state/kind are not extra membership filters.
+        if n == 1 {
+            branch.state = BranchState::Merged;
+        }
+        if n == 2 {
+            branch.state = BranchState::Migrated;
+        }
+        if n == 3 {
+            branch.branch_kind = BranchKind::Full;
+        }
+        state.branches.insert(id, branch);
+    }
+    for branch in [
+        file_branch("directory", None, "history"),
+        file_branch("otherfile", Some("other"), "history"),
+        file_branch("otherhistory", Some("file"), "elsewhere"),
+    ] {
+        state.branches.insert(branch.branch_id.clone(), branch);
+    }
+    engine.rebuild_index().unwrap();
+    reset_scope_read_metrics();
+    assert_eq!(
+        engine
+            .with_history_scope("file", "history", |reader| {
+                let mut count = 0;
+                for branch in reader.branches() {
+                    let branch = branch?;
+                    assert!(std::ptr::eq(
+                        branch,
+                        &engine.state.branches[&branch.branch_id]
+                    ));
+                    count += 1;
+                }
+                Ok(count)
+            })
+            .unwrap(),
+        Some(130)
+    );
+    assert_eq!(scope_read_metrics(), ([0, 0, 0, 0, 130, 0], 64));
+    let before = Arc::clone(&engine.state);
+    let state = Arc::make_mut(&mut engine.state);
+    state.begin_tracking();
+    state.branches.get_mut("branch000").unwrap().file_id = None;
+    state.branches.get_mut("directory").unwrap().file_id = Some("file".into());
+    state.branches.get_mut("branch001").unwrap().history_tree_id = "elsewhere".into();
+    state.branches.remove("branch002");
+    state.sequence += 1;
+    engine.update_index(&before);
+    assert_eq!(branch_count(&engine), Some(128));
+    engine.rebuild_index().unwrap();
+    assert_eq!(branch_count(&engine), Some(128));
+}
+#[test]
+fn scope_branch_corruption_never_returns_partial_or_foreign_membership() {
+    for statement in [
+        "DELETE FROM history_scope_members WHERE kind=4 AND id='b'",
+        "DELETE FROM history_scope_members WHERE kind=4 AND id='foreign';UPDATE history_scope_members SET id='foreign' WHERE kind=4 AND id='b'",
+        "UPDATE history_scope_members SET id='directory' WHERE kind=4 AND id='b'",
+        "UPDATE history_scope_members SET entry_key='0000000000000000' WHERE kind=4 AND id='b'",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut engine = engine(&temp);
+        for branch in [
+            file_branch("a", Some("file"), "history"),
+            file_branch("b", Some("file"), "history"),
+            file_branch("c", Some("file"), "history"),
+            file_branch("foreign", Some("other"), "history"),
+            file_branch("directory", None, "history"),
+        ] {
+            Arc::make_mut(&mut engine.state)
+                .branches
+                .insert(branch.branch_id.clone(), branch);
+        }
+        engine.rebuild_index().unwrap();
+        sql(&engine.root.join("index.sqlite"), statement);
+        assert_eq!(branch_count(&engine), None, "{statement}");
+        assert!(!index_ready(&engine));
+        engine.rebuild_index().unwrap();
+        assert_eq!(branch_count(&engine), Some(3));
+    }
+}
+
+fn file_merge(id: &str, file: &str, history: &str) -> FileBranchMerge {
+    FileBranchMerge {
+        merge_id: id.into(),
+        history_tree_id: history.into(),
+        file_id: file.into(),
+        input_branch_ids: vec!["branch".into()],
+        input_node_ids: vec!["a".into()],
+        chosen_node_id: "a".into(),
+        result_node_id: "a".into(),
+        surviving_branch_id: "branch".into(),
+        reused_node: true,
+        parent_node_ids: vec![],
+        operation_id: storage_contract::OperationId::generate(),
+        sequence: 1,
+    }
+}
+fn merge_count(engine: &Engine) -> Option<usize> {
+    engine
+        .with_history_scope("file", "history", |reader| {
+            reader
+                .merges()
+                .try_fold(0, |count, merge| merge.map(|_| count + 1))
+        })
+        .unwrap()
+}
+#[test]
+fn scope_merges_are_complete_borrowed_batched_and_track_moves() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = engine(&temp);
+    for n in 0..130 {
+        let id = format!("merge{n:03}");
+        Arc::make_mut(&mut engine.state)
+            .file_branch_merges
+            .insert(id.clone(), file_merge(&id, "file", "history"));
+    }
+    for merge in [
+        file_merge("otherfile", "other", "history"),
+        file_merge("otherhistory", "file", "elsewhere"),
+    ] {
+        Arc::make_mut(&mut engine.state)
+            .file_branch_merges
+            .insert(merge.merge_id.clone(), merge);
+    }
+    engine.rebuild_index().unwrap();
+    reset_scope_read_metrics();
+    assert_eq!(
+        engine
+            .with_history_scope("file", "history", |reader| {
+                let mut count = 0;
+                for merge in reader.merges() {
+                    let merge = merge?;
+                    assert!(std::ptr::eq(
+                        merge,
+                        &engine.state.file_branch_merges[&merge.merge_id]
+                    ));
+                    count += 1;
+                }
+                Ok(count)
+            })
+            .unwrap(),
+        Some(130)
+    );
+    assert_eq!(scope_read_metrics(), ([0, 0, 0, 0, 0, 130], 64));
+    let before = Arc::clone(&engine.state);
+    let state = Arc::make_mut(&mut engine.state);
+    state.begin_tracking();
+    state
+        .file_branch_merges
+        .get_mut("merge000")
+        .unwrap()
+        .file_id = "other".into();
+    state
+        .file_branch_merges
+        .get_mut("merge001")
+        .unwrap()
+        .history_tree_id = "elsewhere".into();
+    state.file_branch_merges.remove("merge002");
+    state
+        .file_branch_merges
+        .insert("new".into(), file_merge("new", "file", "history"));
+    state.sequence += 1;
+    engine.update_index(&before);
+    assert_eq!(merge_count(&engine), Some(128));
+    engine.rebuild_index().unwrap();
+    assert_eq!(merge_count(&engine), Some(128));
+}
+#[test]
+fn scope_merge_corruption_rejects_missing_and_foreign_substitutes() {
+    for statement in [
+        "DELETE FROM history_scope_members WHERE kind=5 AND id='b'",
+        "DELETE FROM history_scope_members WHERE kind=5 AND id='foreign';UPDATE history_scope_members SET id='foreign' WHERE kind=5 AND id='b'",
+        "DELETE FROM history_scope_members WHERE kind=5 AND id='otherhistory';UPDATE history_scope_members SET id='otherhistory' WHERE kind=5 AND id='b'",
+        "UPDATE history_scope_members SET entry_key='0000000000000000' WHERE kind=5 AND id='b'",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut engine = engine(&temp);
+        for merge in [
+            file_merge("a", "file", "history"),
+            file_merge("b", "file", "history"),
+            file_merge("c", "file", "history"),
+            file_merge("foreign", "other", "history"),
+            file_merge("otherhistory", "file", "elsewhere"),
+        ] {
+            Arc::make_mut(&mut engine.state)
+                .file_branch_merges
+                .insert(merge.merge_id.clone(), merge);
+        }
+        engine.rebuild_index().unwrap();
+        sql(&engine.root.join("index.sqlite"), statement);
+        assert_eq!(merge_count(&engine), None, "{statement}");
+        assert!(!index_ready(&engine));
+        engine.rebuild_index().unwrap();
+        assert_eq!(merge_count(&engine), Some(3));
+    }
 }

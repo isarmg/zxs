@@ -41,3 +41,46 @@
 Versions 页在同一个锁外快照中，对已选至多 64 个版本完整读取一次现有提交条目流，保存有限的首提交 ID。按最小 sequence、同序号最小 commit ID 选择；没有提交也是完整计数认证后的事实。`version_summary` 的作者／说明字段长度复用该事实，不再为每个已选版本重新遍历全池提交；其他独立字段和 branch／merge／祖先路径不由此冒领优化。
 
 定向回归添加无提交版本和两个同序号提交，并在无关历史 0／257 下逐字段对照原完整页。生产 `first_commit` 提交头访问计数为 0；参考路径仍实际访问提交。漏掉一个数据库提交成员会使计划作废并完整回退，不能伪装成作者／说明为空。
+
+## Content 分支投影的目标范围
+
+`history_scope_members` 的 Branch 成员按 `file_id=Some(file)` 与
+`history_tree_id` 归属构建；不按 `branch_kind` 或状态额外过滤。可信计数来自
+State，读取仍须严格唯一 ID 顺序、逐项 State 身份/归属验证及完整耗尽。
+Nodes 页在同一锁外快照里完整读取目标分支，只保留已选最多 64 个 Content
+节点的首个有效分支 ID；原 branch-ID 顺序、branch/commit pending 排除和
+head-entry 匹配语义不变。确定没有分支与索引不可用明确区分，损坏或缺项
+走原完整扫描，不生成遗漏分支的页面。
+
+这消除 `content_branch` 对每个已选 Content 节点的无关全池分支扫描；
+仍遍历目标分支及其 head commit 的 entries，不是 O(page)。Merge 投影和
+祖先链处理保持原实现；本项不宣称消除全部投影扫描。连接、取消、旧快照
+及 rebuild epoch 生命周期沿用本文件前述机制，无持久历史格式变化。
+
+`Engine::open_mode` 在恢复后无条件重建 disposable index，重新投影 Branch
+成员及可信计数；旧四类成员表即使 schema/sequence marker 未变化也不会被
+沿用。定向 reopen 回归保留真实池，只删去索引 kind=4 后重开，与原 State
+分支集合计数比较。0/257 个无关分支的整页 oracle 回归实际均访问
+`[34, 1, 1, 17, 21]` 个五类成员，最大批次 21；新页面投影的全池 branch
+header 访问为零。130 个目标分支另覆盖跨 64 行批次及 tracked 更新。
+
+## Nodes 父边预览的 Merge 范围
+
+第六类成员是按 file/history 归属的 `FileBranchMerge`。逐行验证 merge ID、
+归属及空 entry key，按可信计数完整耗尽；`reused_node` 不被过滤，它同样
+可贡献额外父边。捕获后的锁外阶段复用原父边遍历与 Selector，在原节点
+顺序中为后续每个节点保留一个 preview 名额，总共最多保存 256 个父 ID
+及原 `has_after`，不保存所有 merge 或祖先链。投影继续生成相同字典序边、
+窗口内/外端点和 More cursor。
+
+健康路径每个所选节点仍完整读目标 Merge 范围，成本随目标范围增长，
+不随无关池 Merge 增长；损坏成员触发完整旧路径 fallback。Metadata 路径
+追溯和独立 NodeParents 查询此批仍用原实现，不能据父边预览优化声称
+所有 Merge 扫描已消除。旧快照、取消、错误关闭和重建 epoch 机制不变。
+
+父边定向回归在 0/257 个无关 Merge 下均访问
+`[34, 1, 1, 17, 21, 57]` 个六类成员（19 个节点各耗尽 3 个目标 Merge），
+最大批次 21，父边投影全池 Merge header 访问为零；300 个含重复和自指输入
+的父边候选仍精确输出 256 个 preview 及原 More cursor，与完整页 oracle
+相等。另有 130 条目标 Merge 跨 64 行批次、增量移动删除及错 scope 同数
+替补拒绝测试。

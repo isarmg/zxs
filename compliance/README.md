@@ -57,5 +57,5 @@
 
 完整官方 Samba 4.23.0 源码归档、来源收据和法律材料入口见
 [`sources/samba/README.md`](sources/samba/README.md)。它是明确登记的原生构建输入，
-不是 Rust 包或退役材料；统一 SMB 构建直接使用仓内字节，不下载 Samba 源码。
+不是 Rust 包；4.23.0 历史源码与证据保持完整。当前 Debian 13 系统 Samba 的配套 VFS 使用精确匹配的 Debian 源包与补丁，由签名 apt 来源取得并额外校验固定摘要，不把此归档冒充 Debian SDK。
 原始 GPL 及各组件许可、版权不因纳入仓库而改变。

@@ -38,7 +38,7 @@ class ReleaseIntegrity(unittest.TestCase):
         for _ in range(2):
             result = self.package()
             self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(list((self.root / "release-assets").glob("*.tar.gz"))), 2)
+        self.assertEqual(len(list((self.root / "release-assets").glob("*.tar.gz"))), 1)
         for path in (self.root / "release-assets").glob("*.tar.gz"):
             with tarfile.open(path) as archive:
                 for template in ("deploy/systemd/zxs.service", "deploy/samba/smb.conf.example"):

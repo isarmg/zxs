@@ -33,7 +33,7 @@ const HISTORY_INDEX: &str = "CREATE INDEX file_history_lookup ON file_history_ve
 pub(super) struct QueryProof {
     sequence: u64,
     counts: BTreeMap<String, usize>,
-    scope_counts: BTreeMap<(String, String), [usize; 4]>,
+    scope_counts: BTreeMap<(String, String), [usize; 6]>,
     read_generation: Arc<()>,
     availability: IndexAvailability,
     #[cfg(test)]

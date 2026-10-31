@@ -81,21 +81,13 @@ for document in (root / "docs/release.md", root / "docs/components/smb.md"):
         target = (document.parent / relative).resolve()
         assert target.is_relative_to(root.resolve()) and target.is_file(), target
 PY
-  if [[ "$archive" == *-unknown-linux-gnu.tar.gz ]]; then
-    for name in zxs zxs-rescue; do
-      cmp "$fixture/target/native/x86_64-unknown-linux-gnu/release/$name" "$output/$name"
-    done
-  else
-    cmp "$fixture/build/web/pkg/zxs_bg.wasm" "$output/public/pkg/zxs_bg.wasm"
-    cmp "$fixture/build/web/build-manifest.json" "$output/public/build-manifest.json"
-    cmp "$fixture/compliance/NOTICE.md" "$output/public/compliance/NOTICE.md"
-    test ! -e "$output/public/docs"
-    test ! -e "$output/public/compliance/provenance"
-    test "$(find "$output/compliance" -type f | wc -l)" -gt 4096
-    test "$(find "$output/public" -type f | wc -l)" -lt 4096
-  fi
+  cmp "$fixture/target/native/x86_64-unknown-linux-gnu/release/zxs-rescue" "$output/zxs-rescue"
+  test ! -e "$output/zxs"
+  test ! -e "$output/public"
+  test "$(find "$output/compliance" -type f | wc -l)" -gt 4096
+
 done
-# Assemble the same two real archives with a fixed source identity, without
+# Assemble the same standalone products and optional materials with a fixed source identity, without
 # creating a Git repository or contacting a publishing service.
 mkdir "$fixture/bin"
 cat > "$fixture/bin/git" <<'SH'
@@ -118,7 +110,7 @@ import sys
 assets = Path(sys.argv[1])
 commands = re.search(r"```sh\n(.*?)\n```", (assets / "INSTALL.md").read_text(), re.S).group(1)
 server = assets / "server-0.1.0"
-web = assets / "web-0.1.0"
+web = assets / "web-0.1.0" # must never be created by the single-binary installer
 
 def install():
     # No inherited errexit, shell startup file, aliases or exported functions.
@@ -127,7 +119,7 @@ def install():
         env={"PATH": os.defpath, "LC_ALL": "C"}, capture_output=True, timeout=30,
     )
 
-archive = assets / "web-interface-0.1.0.tar.gz"
+archive = assets / "zxs-vfs-0.1.0-debian13-amd64.so"
 original = archive.read_bytes()
 archive.write_bytes(original + b"damaged download\n")
 assert install().returncode != 0
@@ -141,7 +133,7 @@ bad_receipts += [
     "",
     original_receipt + lines[0],
     original_receipt + "0" * 64 + "  unexpected.tar.gz\n",
-    original_receipt.replace("  web-interface-0.1.0.tar.gz", "  ../web-interface-0.1.0.tar.gz"),
+    original_receipt.replace("  zxs-vfs-0.1.0-debian13-amd64.so", "  ../zxs-vfs-0.1.0-debian13-amd64.so"),
     original_receipt.replace("  INSTALL.md", " *INSTALL.md"),
 ]
 for bad in bad_receipts:
@@ -151,8 +143,8 @@ for bad in bad_receipts:
 receipt.write_text(original_receipt)
 # Installation must reject links even when their target has the expected bytes,
 # and must reject FIFOs before any checksum reader can block on opening one.
-for name in ("BUILD.txt", "INSTALL.md", "SHA256SUMS",
-             "web-interface-0.1.0.tar.gz", "zxs-0.1.0-x86_64-unknown-linux-gnu.tar.gz"):
+for name in ("BUILD.txt", "INSTALL.md", "SHA256SUMS", "VFS-BUILD.json", "zxs-0.1.0-debian13-amd64",
+             "zxs-vfs-0.1.0-debian13-amd64.so", "zxs-materials-0.1.0.tar.gz"):
     path = assets / name
     saved = assets / (name + ".fixture-original")
     path.rename(saved)
@@ -179,7 +171,7 @@ build = assets / "BUILD.txt"
 original_build = build.read_text()
 
 def refresh_checksums():
-    names = ["BUILD.txt", "INSTALL.md", *sorted(path.name for path in assets.glob("*.tar.gz"))]
+    names = ["BUILD.txt", "INSTALL.md", "VFS-BUILD.json", *sorted(path.name for path in assets.glob("zxs-*"))]
     receipt.write_text("".join(hashlib.sha256((assets / name).read_bytes()).hexdigest()
                                + "  " + name + "\n" for name in names))
 
@@ -192,8 +184,8 @@ build.write_text(original_build)
 receipt.write_text(original_receipt)
 result = install()
 assert result.returncode == 0, result.stderr.decode()
-assert (server / "docs/components/smb.md").is_file()
-assert (web / "public/pkg/zxs_bg.wasm").read_bytes() == b"wasm fixture\n"
+assert (server / "zxs").is_file() and (server / "zxs.so").is_file()
+assert not web.exists()
 # A second copy-and-paste must stop before extracting over existing files.
 (server / "zxs").write_bytes(b"existing installation\n")
 retry = install()
@@ -201,13 +193,13 @@ assert retry.returncode != 0
 assert (server / "zxs").read_bytes() == b"existing installation\n"
 # Preserve prerelease/build metadata accepted by the release filename grammar.
 version = "0.1.0-rc.1+build.7"
-for path in assets.glob("*.tar.gz"):
+for path in assets.glob("zxs-*"):
     path.rename(path.with_name(path.name.replace("0.1.0", version)))
 build.write_text(original_build.replace("version=0.1.0\n", "version=" + version + "\n"))
 refresh_checksums()
 result = install()
 assert result.returncode == 0, result.stderr.decode()
 assert (assets / ("server-" + version) / "zxs").is_file()
-assert (assets / ("web-" + version) / "public/pkg/zxs_bg.wasm").is_file()
+assert not (assets / ("web-" + version)).exists()
 PY
-echo 'PASS release archives retain complete documentation and assembly emits standalone installation instructions'
+echo 'PASS single ELF and matching VFS retain separate complete documentation and assembly emits standalone installation instructions'

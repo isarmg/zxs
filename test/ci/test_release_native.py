@@ -24,6 +24,11 @@ class NativeRelease(unittest.TestCase):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("fixture input")
+        web_manifest = self.root / "build/web/build-manifest.json"
+        web_manifest.parent.mkdir(parents=True)
+        web_manifest.write_text("fixture Web manifest")
+        self.enterContext(patch.object(MODULE, "require_debian13"))
+        self.enterContext(patch.object(MODULE, "runtime_dependencies", return_value={"fixture": "not runtime evidence"}))
         self.output = self.root / MODULE.OUTPUT
         self.output.mkdir(parents=True)
         for name in MODULE.BINARIES:
@@ -40,6 +45,8 @@ class NativeRelease(unittest.TestCase):
     def query(self, command, **kwargs):
         if command == ["git", "rev-parse", "HEAD"]:
             return self.commit + "\n"
+        if command == ["git", "rev-parse", "HEAD^{tree}"]:
+            return "b" * 40 + "\n"
         if command == ["git", "status", "--porcelain", "--untracked-files=normal"]:
             return self.source_status
         if "target-cpus" in command:
@@ -58,6 +65,9 @@ class NativeRelease(unittest.TestCase):
         self.assertEqual(command[command.index("--target-dir") + 1], "target/native")
         self.assertIn("storage-server", command)
         self.assertIn("storage-rescue", command)
+        self.assertEqual(run.call_args.kwargs["env"]["ZXS_EMBED_WEB"], "1")
+        self.assertEqual(run.call_args.kwargs["env"]["ZXS_EMBED_WEB_COMMIT"], self.commit)
+        self.assertEqual(run.call_args.kwargs["env"]["ZXS_EMBED_WEB_TREE"], "b" * 40)
         content = self.receipt.read_text()
         self.assertIn("native-target=x86_64-unknown-linux-gnu\n", content)
         self.assertIn("native-zxs-sha256=" + MODULE.digest(self.output / "zxs"), content)
@@ -70,6 +80,13 @@ class NativeRelease(unittest.TestCase):
         self.assertIn('native-isa-attestation=not-attested;', content)
         self.assertNotIn('debug_assertions', content)
 
+    def test_web_manifest_change_during_build_rejects_receipt(self):
+        with patch.object(MODULE.subprocess, "run", side_effect=lambda *args, **kwargs:
+                          (self.root / "build/web/build-manifest.json").write_text("different Web")):
+            with self.assertRaisesRegex(RuntimeError, "embedded Web manifest changed"):
+                MODULE.main()
+        self.assertFalse(self.receipt.exists())
+
     def test_failed_build_removes_old_receipt(self):
         with patch.object(MODULE.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "cargo")):
             with self.assertRaises(subprocess.CalledProcessError):
@@ -80,8 +97,8 @@ class NativeRelease(unittest.TestCase):
         with patch.dict(os.environ, {"CARGO_BUILD_RUSTC": "/private/toolchain/rustc"}), \
                 patch.object(MODULE.subprocess, "run"):
             MODULE.main()
-        self.assertEqual(MODULE.subprocess.check_output.call_args_list[2].args[0],
-                         ["/private/toolchain/rustc", "-vV"])
+        self.assertIn(["/private/toolchain/rustc", "-vV"],
+                      [call.args[0] for call in MODULE.subprocess.check_output.call_args_list])
         self.assertNotIn("/private/toolchain", self.receipt.read_text())
 
     def test_dirty_source_never_starts_a_release_build_or_keeps_old_receipt(self):

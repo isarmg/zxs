@@ -33,11 +33,16 @@ date-time = { version = "0.3.55", features = ["formatting", "parsing"], path = "
 url-encoding = { path = "../foundation/networking/url-encoding", default-features = false, features = ["std", "parser"] }
 storage-engine = { path = "../engine", optional = true }
 platform-io.workspace = true
+http-range-header = { version = "0.4.0", path = "../foundation/networking/http-range-header" }
+httpdate = { version = "1.0", path = "../foundation/networking/httpdate" }
+mime_guess = { version = "2", default-features = false, path = "../foundation/networking/mime_guess" }
 storage-contract = { path = "../contract" }
 rustix.workspace = true
 name-policy = { path = "../naming" }
 smb-protocol = { path = "../smb" }
 tempfile.workspace = true
+
+service-stack = { version = "0.5", features = ["util"], path = "../foundation/networking/service-stack"}
 
 [dev-dependencies]
 # Cross-entry publication regressions use the real SQLite fault and native client.
@@ -45,7 +50,6 @@ sqlite-access.workspace = true
 storage-client.workspace = true
 # HTTP and admission recovery tests exercise the same engine failpoints.
 storage-engine = { path = "../engine", features = ["fault-injection"] }
-service-stack = { version = "0.5", features = ["util"], path = "../foundation/networking/service-stack"}
 
 [[test]]
 name = "http_engine"

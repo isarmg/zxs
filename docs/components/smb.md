@@ -1,6 +1,6 @@
 # ZXS SMB 桥接
 
-本目录包含 `smb-protocol` 本机协议与 `smb-vfs` Rust 模块，目标 ABI 固定为官方 Samba 4.23.0 SDK。Samba/smbd 提供网络服务，ZXS 通过受保护的本机 RPC 执行授权和存储操作。编译、单元测试与真实客户端互操作须分别验证。
+本目录包含 `smb-protocol` 本机协议与 `smb-vfs` Rust 模块，当前发行目标为 Debian 13 amd64 的系统 Samba 4.22.11 Debian SDK（VFS interface 50）。Samba/smbd 提供网络服务，ZXS 通过受保护的本机 RPC 执行授权和存储操作。编译、单元测试与真实客户端互操作须分别验证。
 
 ## 目录与职责
 
@@ -10,7 +10,7 @@
 | `src/smb/src/client.rs` | 同步本机 RPC 客户端；同一连接上的请求串行化 |
 | `src/smb-vfs/src/module.rs` | Rust 编写的 Samba VFS 回调，不包含自写 C 桥接 |
 | `src/smb-vfs/src/asynchronous.rs` | 两个 Rust 工作线程、有界队列及 eventfd/tevent 完成与取消处理 |
-| `src/smb-vfs/build.rs` | 校验固定 SDK 版本，使用 bindgen 生成 C ABI 绑定 |
+| `src/smb-vfs/build.rs` | 校验固定 Debian SDK/宿主版本，使用 bindgen 生成 C ABI 绑定 |
 | `src/server/src/smb_rpc.rs` | 唯一身份绑定、句柄、私有工作文件、核心提交和读租约 |
 
 客户端的同一连接在全部 clone 之间串行使用。请求发送、响应接收或帧解析失败后，立即关闭并移除共享连接；后续调用明确返回 `NotConnected`，不会把残留响应当作另一请求的结果。完整远端业务错误保留连接。VFS 打开记录始终持有 `OwnedFd`，宿主只取得借用的描述符编号；从句柄表移除文件会转移所有权，锁失败、保存失败或展开也会关闭本地描述符。异步快照通过 `OwnedFd::try_clone` 持有独立描述符，最终上下文清理消费未关闭记录，显式关闭一次并保留关闭错误诊断；本机关闭策略与协议回归共用 `client::close_descriptor`，不依赖手写 Samba ABI 测试替身。
@@ -75,14 +75,14 @@ write-through Dirty 同步走相同发布确认路径。失败不会推断性地
 Unix epoch 版本仍是秒与纳秒均为零的真实时间。目录时间不在本投影范围内，
 客户端设置时间仍被拒绝。
 
-冻结保证属于 RPC 目录页的元数据。固定 Samba 4.23 在返回枚举属性时还会按名称
+冻结保证属于 RPC 目录页的元数据。此前 Samba 4.23 路径证据表明，在返回枚举属性时还会按名称
 打开 pathref 并查询属性，该新句柄仍遵守当次 Open 的可见版本规则；当前实现不把
 目录页的历史时间套到另一个当前版本句柄。将完整 Samba 枚举属性也冻结到页版本
 需要另行决定目录作用域的属性／打开协议与授权语义。
 
 同步 `pread` 和异步 `pread_send` 的只读分支均调用 `Read {handle, offset, length}`。每个 RPC 最多请求 64 KiB，响应为严格 `ReadResult {bytes}`，使用既有 JSON 帧。客户端连续读取直到填满宿主请求或明确 EOF；段边界的短响应不冒充 EOF。每个 Read（含缓存、零长度与 EOF）在实际执行处重新授权。写句柄继续授权后读取私有工作 FD。sendfile/recvfile 拒绝，其他直接读取占位 FD 的路径不能取得正文。
 
-VFS 显式注册 `lseek`：重新授权后，只读句柄的所有 seek 模式均返回 `ENOTSUP`，不查询占位目录的长度、游标或 data/hole 分配；可写句柄仍对受 I/O 锁保护的工作 FD 执行真实 lseek，并保留内核结果与错误。Samba 4.23 的 SMB2/3 读和文件位置设置使用自己的句柄位置状态；稀疏范围查询的 seek 扩展不由占位 FD 推断。固定 SDK 测试从注册表取出回调，覆盖只读拒绝、可写位置与长度、撤权、重绑定和终结释放。
+VFS 显式注册 `lseek`：重新授权后，只读句柄的所有 seek 模式均返回 `ENOTSUP`，不查询占位目录的长度、游标或 data/hole 分配；可写句柄仍对受 I/O 锁保护的工作 FD 执行真实 lseek，并保留内核结果与错误。此前验证的 Samba 4.23 SMB2/3 读和文件位置设置使用自己的句柄位置状态；稀疏范围查询的 seek 扩展不由占位 FD 推断。固定 SDK 测试从注册表取出回调，覆盖只读拒绝、可写位置与长度、撤权、重绑定和终结释放。
 
 HTTP 与 SMB 共用完整段读取、BLAKE3 校验及同版本副本回退核心。返回字节来自刚校验的同一缓冲区，不先校验再重读磁盘。每个已认证 SMB 会话最多缓存一个完整已验证段，绑定其唯一活跃句柄；不同句柄或段替换缓存，Close/Detach 释放缓存，断连释放全部句柄与租约。支持段最大 4 MiB，既有八会话上限使缓存正文合计至多 32 MiB；每会话串行执行一个至多 64 KiB 的 JSON 字节响应。JSON 编解码和跨进程复制仍有成本，未声称吞吐提高。宿主异步 I/O 的既有 8 MiB 缓冲与两工作线程/八排队槽限制独立计算。
 
@@ -150,24 +150,20 @@ socket 已存在时服务端拒绝覆盖，启动时不会删除未知对象。�
 
 ## SDK 与模块构建
 
-固定目标为 Samba **4.23.0**、VFS 接口 **51**。换版本需要重新生成绑定、编译并运行互操作测试；单独的协议测试不能证明 ABI 兼容。
+固定运行目标为 Debian 13 amd64 的 Samba **2:4.22.11+dfsg-0+deb13u1**、VFS 接口 **50**。换包版本需重新生成绑定、编译并运行真实互操作测试；单独协议测试不能证明 ABI 兼容。
 
-使用官方源码树并完成该目标平台的 Samba configure，保留生成的 `bin/default/include/config.h`、NDR 头文件及所有依赖头。这里不维护手写的 Samba 结构布局。
+使用精确 Debian 原始源码及补丁，通过 `debian/rules configure` 生成配置头和布局，不维护手写 Samba 结构；源 SHA 与包版本见 `.github/samba-debian-target.json`。
 
 ```sh
-export ZXS_SMB_SDK_SOURCE=/absolute/path/to/samba-4.23.0
-export ZXS_SMB_SDK_BUILD=/absolute/path/to/samba-4.23.0/bin/default
-# 按目标 Samba 配置补充 clang 参数；JSON 数组形式，避免 shell 转义歧义。
-export ZXS_SMB_SDK_CLANG_ARGS_JSON='[]'
-CARGO_INCREMENTAL=0 cargo build --locked --offline \
-  --package smb-vfs --features smb-sdk --release --target-dir target/native
+# 在隔离 Debian 13 构建环境中生成精确 SDK 与模块，不安装宿主服务。
+bash .github/scripts/debian13-run.sh bash .github/scripts/smb-sdk.sh
 ```
 
 构建需要 libclang。`build.rs` 检查源码 `VERSION` 和 `source3/include/vfs.h` 的接口版本，然后从 `includes.h`、`smbd/smbd.h`、`smbd/globals.h` 生成实际 ABI。不同 configure 的额外 include/define 参数必须来自对应 SDK；缺失时构建失败，不能换成猜测的类型定义。
 
-VFS 回调和工作线程依赖 `catch_unwind` 隔离 panic，因此模块以编译期 `cfg(panic = "abort")` 拒绝 abort 构建，包括环境变量或 rustc 参数覆盖。SDK CI 在真实配置的 SDK 下先要求 release 的 `-C panic=abort` 构建出现该专用拒绝诊断，再验证正常 release 构建；测试 harness 默认 unwind 不能代替这个证明。此约束只属于 VFS，不更改浏览器 WASM 的 panic 策略。注册时使用同一份生成绑定中的 `SMB_VFS_INTERFACE_VERSION`，仍由构建边界核对固定 4.23.0／51。
+VFS 回调和工作线程依赖 `catch_unwind` 隔离 panic，因此模块以编译期 `cfg(panic = "abort")` 拒绝 abort 构建，包括环境变量或 rustc 参数覆盖。SDK CI 在真实配置的 SDK 下先要求 release 的 `-C panic=abort` 构建出现该专用拒绝诊断，再验证正常 release 构建；测试 harness 默认 unwind 不能代替这个证明。此约束只属于 VFS，不更改浏览器 WASM 的 panic 策略。注册时使用同一份生成绑定中的 `SMB_VFS_INTERFACE_VERSION`，仍由构建边界核对Debian 4.22.11／50 和完整发行包版本。
 
-模块文件生成在 `target/native/release/libsmb_vfs.so`，按目标 SDK 的模块路径提供 `zxs.so`。SDK 测试还需要链接该配置对应的 tevent/talloc 库。
+模块文件生成在 `target/native/release/libsmb_vfs.so`，按运行宿主 `smbd -b` 输出的 `MODULESDIR/vfs/` 提供 `zxs.so`（受信任且认证用户不可写）。配置只写 `vfs objects = zxs`，当前宿主拒绝绝对模块路径。SDK 测试还需要链接该配置对应的 tevent/talloc 库。
 
 共享配置的基本形状如下。模块参数使用独立键，不能用逗号拼进 `vfs objects`：
 
@@ -245,19 +241,17 @@ bash .github/scripts/smb-sdk.sh
 
 两线程、八槽工作池仅缓存成功初始化。初始化失败直接传播本次错误，关闭该次队列让已启动线程退出；同一请求不循环重试，后续新请求可重新尝试。初始化互斥只用于尚未成功的阶段，成功后的入队热路径不新增该锁。不会重放失败或结果未知的文件操作。`free_context` 的清理与诊断位于同一 FFI panic 边界，仍先关闭全部本地描述符再输出诊断，不借异常清理提交工作区。
 
-CI 的独立 `smb-sdk` job 调用 `.github/scripts/smb-sdk.sh`，下载固定官方 Samba 4.23.0 tar（SHA-256 `b0cb963a63eb1515227f3779a46d3a7f790c1bbfeeb4b31fd43e405eefe7a3af`），编译真实 SDK、生成头文件与依赖库，再执行 VFS 全目标 Clippy、SDK 单元测试及 release 模块构建。缓存包含配置后的源码与生成头文件，键包含构建脚本摘要。运行前需要脚本对应的 Ubuntu 开发依赖；脚本不自动安装包、不启动或安装 Samba，也不改宿主服务配置。
+CI 的独立 `smb-sdk` job 在 Debian 13 容器构建实际补丁源 SDK、头文件和匹配模块，执行严格 Clippy、SDK 单元测试、panic 策略负例与 release 构建。第二个无编译器的 Debian 13 runtime 容器只使用系统 apt Samba，通过真实 SMB 客户端和 EngineBackend 验证握手、读写、重命名、删除、错误凭据、guest 拒绝和运行中撤权。容器网络隔离，仅允许内部 loopback；不安装或启动宿主服务。
 
-```sh
-bash .github/scripts/smb-sdk.sh
-```
-
-此 job 验证真实 ABI 的编译和事件/内存库单元测试，不等于运行 `smbd` 或真实客户端互操作测试；`smb-protocol` job 仍只验证本机 RPC 协议。源码 tar 校验固定摘要，不宣称验证了发行签名。
+工作流具备这些门禁不等于已通过；最终支持以精确源码与实际 runtime 收据为准。原 4.23 构建成功证据仍保留为历史，不冒充 Debian 4.22 互操作通过。`smb-protocol` job 仍仅验证本机 RPC。
 
 ## 依赖与许可
 
 协议和服务端桥接是本项目 Rust 代码。ABI 绑定依赖官方 Samba SDK；Samba 是 GPL-3.0-or-later 项目，本目录的 VFS 模块包使用相应许可标识。第三方依赖保留其原包名与许可，不修改其身份。
 
-- 官方目标源码：<https://github.com/samba-team/samba/tree/samba-4.23.0>
+以下 4.23 链接与头摘要仅是已保留的历史来源；当前目标使用上述 Debian 源及补丁收据。
+
+- 历史官方源码：<https://github.com/samba-team/samba/tree/samba-4.23.0>
 - VFS 头：<https://github.com/samba-team/samba/blob/samba-4.23.0/source3/include/vfs.h>
 - 固定目标头 SHA-256：`854fcd3d14cabc918de6aea755d1af8935ab8d2a4cf5a4d4c17a1e9f06744356`。
 - tevent 接口：<https://github.com/samba-team/samba/blob/samba-4.23.0/lib/tevent/tevent.h>
@@ -302,26 +296,22 @@ Hello 得到的身份不是长期准入证明：repository/binding generation �
 引擎锁内的当前权威验证保持不变。无 socket 快照测试覆盖认证写锁被持有时读取、
 blocked/owner drop 和凭据锁释放；真实 listener 的 owner 生命周期留给 AF_UNIX CI。
 
-## 仓内 Samba 本体与统一构建
+## Debian 13 系统 Samba 与配套 VFS
 
-Samba/smbd 4.23.0 完整官方源代码现保存在
-[`compliance/sources/samba`](../../compliance/sources/samba/README.md)，不是外部运行时下载或 submodule。
-保留原始压缩布局避免把上游独立测试/文档/构建工程混入第一方 `src/`；源包全部许可与版权原样保留。
+当前交付约定为 **ZXS 单个可执行文件（内含 Web）＋系统 apt Samba＋独立配套 `zxs.so`**。
+不内嵌或释放 Samba 本体/私有库，不由 ZXS 自动管理系统 smbd，也不把发行 tar 称作单个二进制。
+Debian 提供通用运行库，构建器/开发头仅用于隔离 CI，不要求部署机器安装 Rust 或编译器。
 
-`bash .github/scripts/smb-sdk.sh` 一次构建真实 `smbd`、`smbclient` 及匹配的 Rust `libsmb_vfs.so`，
-然后运行真实 SDK ABI/FFI 单测、panic=abort 拒绝检查和受支持 release 正向构建。
-无需预装 Samba。需要 C/C++、Python 3.12、Perl/Yapp、Flex、Bison、M4、Rust、pkg-config、Clang、
-GnuTLS/Kerberos/zlib/popt 开发库及 binutils；Ubuntu 24.04 的完整安装列表见
-[SMB 构建工作流](../../.github/workflows/smb-sdk.yml)。只有源码获取是完全仓内离线，系统依赖准备不是。
+当前精确构建目标、Debian 源码与补丁摘要见
+[目标收据](../../.github/samba-debian-target.json)，构建入口为
+[Debian SDK 脚本](../../.github/scripts/smb-sdk.sh)。SDK 使用同版本 Debian 源包及
+`debian/rules configure`，不能用仅更改 ABI 常数的上游 4.23 模块冒充系统兼容。
+Debian 的 `samba-dev` 不包含所有 VFS 内部头，因此还需要匹配源码的生成头；这些构建材料不进入用户的运行依赖。
 
-默认输出：
-- `target/smb-sdk/<源码SHA>/samba-4.23.0/bin/default/source3/smbd/smbd`
-- `target/smb-sdk/<源码SHA>/samba-4.23.0/bin/default/source3/client/smbclient`
-- `target/native/release/libsmb_vfs.so`
-- `target/smb-sdk/product-receipt/`：实际版本、二进制 SHA-256、ELF 动态标签及 `ldd` 依赖。
+模块注册前核对完整宿主版本，版本不匹配返回 `NT_STATUS_REVISION_MISMATCH`，不回退到旧布局。
+系统 Samba 安全升级后应重新构建并验证配套模块；不能为了保持旧插件可加载而长期锁住有漏洞的软件包。
+支持声明只覆盖成功完成真实 apt smbd 加载/认证/文件操作验证的精确版本，不能推断所有 4.22.x 均通过。
+实际 gate 与未执行边界见 [Debian 系统 Samba 验收](../validation/debian13-system-samba.md)。
 
-CI 同时保存 `samba-build-tree.tar.gz`（保留 `bin/` 内共享/私有库和链接）、VFS、源码及法律材料。
-这是匹配的构建树产物，**不是已安装服务或承诺可重定位的静态发行包**：Samba 配置前缀与
-系统动态库依赖仍存在，使用前须按 receipt 和显式 Samba 配置安排模块/库路径。
-脚本只执行 `--version`，不启动监听、不安装系统服务、不创建用户或更改权限。
-真实 Windows/macOS 客户端、部署认证与网络互操作仍按既有人工验收单执行；编译成功不冒充互操作通过。
+仓内 [`compliance/sources/samba`](../../compliance/sources/samba/README.md) 的完整官方 4.23.0 源码、
+许可证、分片摘要和此前 SDK 验证证据保持不变，作为历史构建/核对材料；它不再是默认生产宿主版本。

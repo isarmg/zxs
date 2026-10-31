@@ -550,7 +550,7 @@ class DiagnosticGateCommands(unittest.TestCase):
         self.root = Path(self.temporary.name)
         scripts = self.root / ".github/scripts"
         scripts.mkdir(parents=True)
-        for name in ("quality.sh", "smb-sdk.sh", "check-rust-diagnostics.py"):
+        for name in ("quality.sh", "smb-vfs-check.sh", "check-rust-diagnostics.py"):
             shutil.copy2((Path(__file__).resolve().parents[2] / ".github/scripts") / name, scripts)
         self.binary_directory = self.root / "bin"
         self.binary_directory.mkdir()
@@ -635,42 +635,17 @@ elif '--message-format=json' in args:
                 self.assertIn("1 Rust warning(s)", result.stderr)
 
     def prepare_sdk(self):
-        cache = self.root / "target/smb-sdk"
-        repository = Path(__file__).resolve().parents[2]
-        native_source = self.root / "tools/samba-source"
-        native_source.mkdir(parents=True)
-        shutil.copy2(repository / "tools/samba-source/manage.py", native_source / "manage.py")
-        (self.root / "compliance").symlink_to(repository / "compliance", target_is_directory=True)
-        digest = "b0cb963a63eb1515227f3779a46d3a7f790c1bbfeeb4b31fd43e405eefe7a3af"
-        source = cache / digest / "samba-4.23.0"
-        source.mkdir(parents=True)
-        for relative in ("source3/smbd/smbd", "source3/client/smbclient"):
-            product = source / "bin/default" / relative
-            product.parent.mkdir(parents=True)
-            product.write_text("#!/bin/sh\necho 4.23.0\n")
-            product.chmod(0o700)
-        release = self.root / "target/native/release"
-        release.mkdir(parents=True)
-        (release / "libsmb_vfs.so").write_bytes(b"fixture VFS")
-        self.environment["CARGO_TARGET_DIR"] = str(release.parent)
-        recipe = hashlib.sha256((self.root / ".github/scripts/smb-sdk.sh").read_bytes()).hexdigest()
-        (source / ".zxs-sdk-ready").write_text(recipe + "\n")
-        self.write_tool("sha256sum", f'''#!{sys.executable}
-import hashlib, pathlib, sys
-if '--check' in sys.argv:
-    sys.stdin.read()
-else:
-    print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest(), sys.argv[1])
-''')
-        for name in ("cc", "pkg-config", "perl", "yapp", "flex", "bison", "m4"):
-            self.write_tool(name, "#!/bin/sh\nexit 0\n")
-        self.write_tool("curl", "#!/bin/sh\nexit 91\n")
-        for name in ("tar", "readelf", "ldd"):
-            self.write_tool(name, "#!/bin/sh\nexit 0\n")
+        # Only diagnostic command orchestration is mocked here. Exact Debian
+        # source/configuration and live host ABI have their own real CI gate.
+        cache = self.root / "target/smb-debian13"
+        cache.mkdir(parents=True)
+        self.environment["ZXS_SMB_SDK_SOURCE"] = str(cache / "source/sdk")
+        self.environment["ZXS_SMB_SDK_BUILD"] = str(cache / "source/sdk/bin/default")
+        self.environment["ZXS_SMB_SDK_CACHE"] = str(cache)
 
     def test_sdk_gates_compile_streams_and_then_runs_normal_tests(self):
         self.prepare_sdk()
-        result, calls = self.run_script("smb-sdk.sh")
+        result, calls = self.run_script("smb-vfs-check.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         clippy, compile_tests, tests, abort, release = calls
         self.assertEqual(clippy[0], "clippy")
@@ -686,7 +661,7 @@ else:
 
     def test_sdk_abort_gate_rejects_unexpected_success(self):
         self.prepare_sdk()
-        result, calls = self.run_script("smb-sdk.sh", SUITE_ABORT="accepted")
+        result, calls = self.run_script("smb-vfs-check.sh", SUITE_ABORT="accepted")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("SMB VFS unexpectedly accepted panic=abort", result.stderr)
         self.assertEqual(len(calls), 4)
@@ -694,7 +669,7 @@ else:
 
     def test_sdk_abort_gate_rejects_unrelated_compile_failure(self):
         self.prepare_sdk()
-        result, calls = self.run_script("smb-sdk.sh", SUITE_ABORT="unrelated")
+        result, calls = self.run_script("smb-vfs-check.sh", SUITE_ABORT="unrelated")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unrelated compilation failure", result.stdout)
         self.assertEqual(len(calls), 4)
@@ -702,7 +677,7 @@ else:
 
     def test_sdk_rejects_warnings_before_running_test_bodies(self):
         self.prepare_sdk()
-        result, calls = self.run_script("smb-sdk.sh", SUITE_WARNING="test")
+        result, calls = self.run_script("smb-vfs-check.sh", SUITE_WARNING="test")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(calls), 2)
         self.assertIn("--no-run", calls[-1])

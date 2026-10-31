@@ -1345,6 +1345,21 @@ static FUNCTIONS: OnceLock<sdk::vfs_fn_pointers> = OnceLock::new();
 /// The host must honor the module-level callback ownership and lifetime contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn samba_init_module() -> sdk::NTSTATUS {
+    // Reject a different distro build before exposing any layout-dependent
+    // callbacks. An ABI number alone does not attest private struct layouts.
+    // SAFETY: the matching host exports this stable no-argument C function;
+    // its result is a process-lifetime NUL-terminated version string.
+    let version = unsafe { sdk::samba_version_string() };
+    if version.is_null() {
+        return nt_status(0xc000_0059); // NT_STATUS_REVISION_MISMATCH
+    }
+    // SAFETY: the non-null host version result has process lifetime and is
+    // NUL-terminated, as required by the Samba function contract above.
+    let version = unsafe { std::ffi::CStr::from_ptr(version) };
+    if version.to_bytes() != b"4.22.11-Debian-4.22.11+dfsg-0+deb13u1" {
+        return nt_status(0xc000_0059); // NT_STATUS_REVISION_MISMATCH
+    }
+
     let functions = FUNCTIONS.get_or_init(|| sdk::vfs_fn_pointers {
         connect_fn: Some(connect),
         disconnect_fn: Some(disconnect),
@@ -1394,7 +1409,7 @@ pub unsafe extern "C" fn samba_init_module() -> sdk::NTSTATUS {
         offload_write_send_fn: Some(deny_offload_write),
         ..Default::default()
     });
-    // SAFETY: build.rs pins the SDK ABI to 51, which fits the C int argument.
+    // SAFETY: build.rs pins the Debian SDK ABI to 50, which fits the C int argument.
     // The name and callback table have static lifetime and generated signatures.
     unsafe {
         sdk::smb_register_vfs(

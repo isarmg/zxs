@@ -81,13 +81,14 @@ class SambaSourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             SOURCE.validate_members([member], "samba-4.23.0")
 
-    def test_build_does_not_download_source(self):
+    def test_debian_host_is_not_substituted_by_preserved_upstream_archive(self):
         script = (ROOT / ".github/scripts/smb-sdk.sh").read_text()
-        self.assertNotIn("curl ", script)
-        self.assertNotIn("wget ", script)
-        self.assertIn("python3 tools/samba-source/manage.py verify", script)
-        self.assertIn("python3 tools/samba-source/manage.py extract", script)
-        self.assertIn("smbd/smbd,client/smbclient", script)
+        self.assertIn('debian:13', script)
+        self.assertIn('dpkg-query', script)
+        self.assertIn('apt-get source --download-only --only-source', script)
+        self.assertIn('make -f debian/rules configure', script)
+        self.assertIn('smb-vfs-check.sh', script)
+        self.assertNotIn('compliance/sources/samba/samba-4.23', script)
 
 
 if __name__ == "__main__":

@@ -1794,6 +1794,11 @@ fn router_shared(
             }
         }
     });
+    let static_etags = if config.web_dir.is_none() {
+        web_assets::embedded::etags()
+    } else {
+        static_etags
+    };
     let web_assets_available = static_etags.is_some();
     let auth_reader = lock(&auth).reader();
     let state = AppState {
@@ -1961,6 +1966,9 @@ fn router_shared(
         } else {
             web_assets::unavailable_fallback()
         });
+    }
+    if config.web_dir.is_none() && web_assets_available {
+        app = app.fallback_service(web_assets::embedded::fallback());
     }
     Ok(app
         .layer(DefaultBodyLimit::disable())
@@ -2455,8 +2463,8 @@ async fn management_status(State(state): State<AppState>) -> Json<Value> {
         "storage":backend_status::StorageStatusResponse::from(state.backend.management_status()),
         "auxiliary": {
             "http_uploads": state.spool_budget.status(),
-            "web_assets": if state.config.web_dir.is_none() { "not_configured" }
-                else if state.web_assets_available { "ready" } else { "unavailable" }
+            "web_assets": if state.web_assets_available { "ready" }
+                else if state.config.web_dir.is_none() { "not_configured" } else { "unavailable" }
         }}),
     )
 }

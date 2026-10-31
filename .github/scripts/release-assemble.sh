@@ -19,9 +19,10 @@ if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.+-]+)?", version):
 assets = Path("release-assets")
 if not stat.S_ISDIR(assets.lstat().st_mode):
     raise SystemExit("release-assets must be a real directory")
-expected = {f"zxs-{version}-x86_64-unknown-linux-gnu.tar.gz", f"web-interface-{version}.tar.gz", "BUILD.txt"}
+validator = runpy.run_path('.github/scripts/verify-release-assets.py')
+expected = validator['asset_names'](version) - {'INSTALL.md'}
 if {path.name for path in assets.iterdir()} != expected:
-    raise SystemExit("Release directory must contain exactly the two archives and native build receipt")
+    raise SystemExit("Release directory must contain exactly the standalone binary, VFS, materials and build receipts")
 for name in expected:
     info = (assets / name).lstat()
     if not stat.S_ISREG(info.st_mode) or not info.st_size:

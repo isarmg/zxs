@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from web_dist_fixture import write_release_assets
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -20,16 +21,9 @@ class ReleaseAssembly(unittest.TestCase):
         shutil.copy2(ROOT / '.github/scripts/verify-release-assets.py', scripts)
         self.assets = self.root / 'release-assets'
         self.assets.mkdir()
-        for name in ('zxs-0.1.0-x86_64-unknown-linux-gnu.tar.gz', 'web-interface-0.1.0.tar.gz'):
-            (self.assets / name).write_bytes(b'archive fixture')
-        fields = {'version': '0.1.0', 'commit': 'a' * 40,
-                  'native-target': 'x86_64-unknown-linux-gnu', 'native-profile': 'release',
-                  'native-rustc': 'fixture compiler'}
-        for key in ('native-environment-sha256', 'native-inputs-sha256',
-                    'native-zxs-sha256', 'native-zxs-rescue-sha256'):
-            fields[key] = 'b' * 64
-        self.build = ''.join(f'{key}={value}\n' for key, value in fields.items()).encode()
-        (self.assets / 'BUILD.txt').write_bytes(self.build)
+        write_release_assets(self.assets, 'a' * 40)
+        (self.assets / 'INSTALL.md').unlink()
+        self.build = (self.assets / 'BUILD.txt').read_bytes()
         binary = self.root / 'bin'
         binary.mkdir()
         git = binary / 'git'
@@ -50,14 +44,14 @@ class ReleaseAssembly(unittest.TestCase):
 
     def test_unexpected_hidden_entry_is_not_ignored(self):
         (self.assets / '.unreviewed').write_text('not a release asset')
-        self.reject(error='exactly the two archives and native build receipt')
+        self.reject(error='exactly the standalone binary, VFS, materials and build receipts')
 
     def test_unexpected_directory_is_not_ignored(self):
         (self.assets / 'extra').mkdir()
-        self.reject(error='exactly the two archives and native build receipt')
+        self.reject(error='exactly the standalone binary, VFS, materials and build receipts')
 
     def test_archive_symlink_cannot_read_outside_release(self):
-        archive = self.assets / 'web-interface-0.1.0.tar.gz'
+        archive = self.assets / 'zxs-vfs-0.1.0-debian13-amd64.so'
         archive.rename(self.root / 'outside')
         archive.symlink_to(self.root / 'outside')
         self.reject(error='nonempty regular file')
@@ -72,7 +66,7 @@ class ReleaseAssembly(unittest.TestCase):
 
     def test_missing_native_receipt_is_rejected_instead_of_reconstructed(self):
         (self.assets / 'BUILD.txt').unlink()
-        self.reject(error='exactly the two archives and native build receipt')
+        self.reject(error='exactly the standalone binary, VFS, materials and build receipts')
 
     def test_wrong_target_is_rejected_without_overwriting_build_receipt(self):
         self.build = self.build.replace(b'x86_64-unknown-linux-gnu', b'x86_64-unknown-linux-musl')

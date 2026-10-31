@@ -6,20 +6,20 @@ use std::collections::VecDeque;
 
 #[cfg(test)]
 thread_local! {
-    static READ_METRICS: Cell<([usize; 4], usize)> = const { Cell::new(([0;4],0)) };
+    static READ_METRICS: Cell<([usize; 6], usize)> = const { Cell::new(([0;6],0)) };
 }
 #[cfg(test)]
 pub(crate) fn reset_scope_read_metrics() {
-    READ_METRICS.with(|metrics| metrics.set(([0; 4], 0)));
+    READ_METRICS.with(|metrics| metrics.set(([0; 6], 0)));
 }
 #[cfg(test)]
-pub(crate) fn scope_read_metrics() -> ([usize; 4], usize) {
+pub(crate) fn scope_read_metrics() -> ([usize; 6], usize) {
     READ_METRICS.with(Cell::get)
 }
 
 pub(super) const TABLE: &str = "CREATE TABLE history_scope_members(kind INTEGER NOT NULL,id TEXT NOT NULL COLLATE BINARY,entry_key TEXT NOT NULL COLLATE BINARY,file_id TEXT NOT NULL,history_tree_id TEXT NOT NULL,PRIMARY KEY(kind,id,entry_key))";
 pub(super) const LOOKUP: &str = "CREATE INDEX history_scope_lookup ON history_scope_members(file_id,history_tree_id,kind,id,entry_key)";
-type Counts = BTreeMap<(String, String), [usize; 4]>;
+type Counts = BTreeMap<(String, String), [usize; 6]>;
 
 pub(crate) enum ScopeNode<'a> {
     Content(&'a FileVersion),
@@ -28,7 +28,7 @@ pub(crate) enum ScopeNode<'a> {
 }
 
 pub(super) struct Delta {
-    keys: Option<[Vec<String>; 4]>,
+    keys: Option<[Vec<String>; 6]>,
 }
 fn changed<T: PartialEq>(
     before: Option<&TrackedRecords<T>>,
@@ -105,6 +105,8 @@ impl Delta {
                         &after.file_metadata_nodes,
                     ),
                     changed(Some(&before.commits), &after.commits),
+                    changed_map(Some(&before.branches), &after.branches),
+                    changed_map(Some(&before.file_branch_merges), &after.file_branch_merges),
                 ]
             }),
         }
@@ -118,7 +120,9 @@ impl Delta {
             1 => Box::new(state.file_path_nodes.keys().map(String::as_str)),
             2 => Box::new(state.file_metadata_nodes.keys().map(String::as_str)),
             3 => Box::new(state.commits.keys().map(String::as_str)),
-            _ => unreachable!("invariant: four membership kinds"),
+            4 => Box::new(state.branches.keys().map(String::as_str)),
+            5 => Box::new(state.file_branch_merges.keys().map(String::as_str)),
+            _ => unreachable!("invariant: six membership kinds"),
         }
     }
     pub(super) async fn project(
@@ -126,7 +130,7 @@ impl Delta {
         c: &mut sqlite_access::SqliteConnection,
         after: &State,
     ) -> std::result::Result<(), ProjectionFailure> {
-        for kind in 0..4 {
+        for kind in 0..6 {
             for id in self.keys(after, kind) {
                 if self.keys.is_some() {
                     sqlite_access::query("DELETE FROM history_scope_members WHERE kind=? AND id=?")
@@ -150,7 +154,7 @@ impl Delta {
         Ok(())
     }
     pub(super) fn apply_counts(&self, counts: &mut Counts, before: Option<&State>, after: &State) {
-        for kind in 0..4 {
+        for kind in 0..6 {
             for id in self.keys(after, kind) {
                 if let Some(before) = before {
                     for (_, file, history) in members(before, kind, id) {
@@ -159,7 +163,7 @@ impl Delta {
                             .get_mut(&key)
                             .expect("invariant: trusted scope count includes previous member");
                         count[kind] -= 1;
-                        if *count == [0; 4] {
+                        if *count == [0; 6] {
                             counts.remove(&key);
                         }
                     }
@@ -192,7 +196,16 @@ fn members<'a>(
             .get(id)
             .map(|v| (v.file_id.as_str(), v.history_tree_id.as_str())),
         3 => None,
-        _ => unreachable!("invariant: four membership kinds"),
+        4 => state.branches.get(id).and_then(|b| {
+            b.file_id
+                .as_deref()
+                .map(|file| (file, b.history_tree_id.as_str()))
+        }),
+        5 => state
+            .file_branch_merges
+            .get(id)
+            .map(|merge| (merge.file_id.as_str(), merge.history_tree_id.as_str())),
+        _ => unreachable!("invariant: six membership kinds"),
     };
     let commit = if kind == 3 {
         state.commits.get(id)
@@ -217,7 +230,7 @@ pub(crate) struct ScopeReader<'state, 'connection> {
     connection: RefCell<&'connection mut sqlite_access::SqliteConnection>,
     file: &'connection str,
     history: &'connection str,
-    expected: [usize; 4],
+    expected: [usize; 6],
     active: Cell<usize>,
     failure: RefCell<Option<Error>>,
 }
@@ -234,7 +247,25 @@ impl<'state> ScopeReader<'state, '_> {
         Stream::new(self, 0, 2).map(|row| {
             row.map(|value| match value {
                 Member::Node(node) => node,
-                Member::Entry(_, _) => unreachable!("invariant: node stream kind range"),
+                Member::Entry(_, _) | Member::Branch(_) | Member::Merge(_) => {
+                    unreachable!("invariant: node stream kind range")
+                }
+            })
+        })
+    }
+    pub(crate) fn branches(&self) -> impl Iterator<Item = Result<&'state Branch>> + '_ {
+        Stream::new(self, 4, 4).map(|row| {
+            row.map(|member| match member {
+                Member::Branch(branch) => branch,
+                _ => unreachable!("invariant: branch stream kind range"),
+            })
+        })
+    }
+    pub(crate) fn merges(&self) -> impl Iterator<Item = Result<&'state FileBranchMerge>> + '_ {
+        Stream::new(self, 5, 5).map(|row| {
+            row.map(|member| match member {
+                Member::Merge(merge) => merge,
+                _ => unreachable!("invariant: merge stream kind range"),
             })
         })
     }
@@ -244,7 +275,9 @@ impl<'state> ScopeReader<'state, '_> {
         Stream::new(self, 3, 3).map(|row| {
             row.map(|value| match value {
                 Member::Entry(commit, entry) => (commit, entry),
-                Member::Node(_) => unreachable!("invariant: entry stream kind range"),
+                Member::Node(_) | Member::Branch(_) | Member::Merge(_) => {
+                    unreachable!("invariant: entry stream kind range")
+                }
             })
         })
     }
@@ -252,6 +285,8 @@ impl<'state> ScopeReader<'state, '_> {
 enum Member<'a> {
     Node(ScopeNode<'a>),
     Entry(&'a Commit, &'a Entry),
+    Branch(&'a Branch),
+    Merge(&'a FileBranchMerge),
 }
 type Key = (i64, String, String);
 struct Stream<'reader, 'state, 'connection> {
@@ -260,7 +295,7 @@ struct Stream<'reader, 'state, 'connection> {
     high: i64,
     prior: Key,
     rows: VecDeque<Key>,
-    counts: [usize; 4],
+    counts: [usize; 6],
     done: bool,
 }
 impl<'reader, 'state, 'connection> Stream<'reader, 'state, 'connection> {
@@ -272,7 +307,7 @@ impl<'reader, 'state, 'connection> Stream<'reader, 'state, 'connection> {
             high,
             prior: (low - 1, String::new(), String::new()),
             rows: VecDeque::new(),
-            counts: [0; 4],
+            counts: [0; 6],
             done: false,
         }
     }
@@ -363,6 +398,34 @@ impl<'reader, 'state, 'connection> Stream<'reader, 'state, 'connection> {
                     e.file_id.as_str(),
                     c.history_tree_id.as_str(),
                     c.commit_id.as_str(),
+                )
+            }
+            4 => {
+                let branch = state
+                    .branches
+                    .get(&key.1)
+                    .ok_or_else(|| invalid("unknown scope branch"))?;
+                let file = branch
+                    .file_id
+                    .as_deref()
+                    .ok_or_else(|| invalid("non-file scope branch"))?;
+                (
+                    Member::Branch(branch),
+                    file,
+                    branch.history_tree_id.as_str(),
+                    branch.branch_id.as_str(),
+                )
+            }
+            5 => {
+                let merge = state
+                    .file_branch_merges
+                    .get(&key.1)
+                    .ok_or_else(|| invalid("unknown scope merge"))?;
+                (
+                    Member::Merge(merge),
+                    merge.file_id.as_str(),
+                    merge.history_tree_id.as_str(),
+                    merge.merge_id.as_str(),
                 )
             }
             _ => unreachable!("invariant: validated kind range"),
@@ -481,7 +544,7 @@ pub(super) fn execute<'state, T>(
     c: &mut sqlite_access::SqliteConnection,
     file: &str,
     history: &str,
-    expected: [usize; 4],
+    expected: [usize; 6],
     callback: impl FnOnce(&ScopeReader<'state, '_>) -> Result<T>,
 ) -> Result<Result<T>> {
     let reader = ScopeReader {

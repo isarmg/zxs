@@ -144,8 +144,8 @@ jobs:
           retention-days: 7
 
   browser-smoke:
-    name: Extracted release browser smoke (Chrome)
-    needs: web-production
+    name: Standalone embedded-Web release smoke (Debian 13 Chromium)
+    needs: [web-production, smb-sdk]
     runs-on: ubuntu-24.04
     # Compile one release-profile graph for both product and browser harness.
     timeout-minutes: 60
@@ -167,6 +167,11 @@ jobs:
         with:
           name: csr-template-fixture
           path: target/csr-template-check/output
+      - name: Fetch matching Debian 13 VFS from this exact workflow commit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: debian13-vfs-${{ github.sha }}
+          path: target/smb-debian13/product
       - name: Verify runner Chrome and ChromeDriver
         run: |
           chrome="$(command -v google-chrome)"
@@ -188,12 +193,20 @@ jobs:
           ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
         run: |
           export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          python3 .github/scripts/release-native.py
+          bash .github/scripts/debian13-run.sh --native python3 .github/scripts/release-native.py
           cargo test --locked --offline --release -p browser-smoke
           bash .github/scripts/release-package.sh
-          bash .github/scripts/release-acceptance.sh
+          bash .github/scripts/check-debian13-release.sh
+          bash .github/scripts/debian13-run.sh --browser bash .github/scripts/release-acceptance.sh
           python3 .github/scripts/check-csr-browser.py
           bash .github/scripts/release-assemble.sh
+      - name: Retain Debian 13 single-ELF runtime proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debian13-single-binary
+          path: artifacts/debian13-single-binary*
+          if-no-files-found: warn
       - name: Retain verified installation candidate (not a published release)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

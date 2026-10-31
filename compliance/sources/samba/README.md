@@ -14,7 +14,7 @@ GitHub 不逐文件展示压缩内容；可用仓内工具解压浏览或修改�
 - 来源验证：`python3 tools/samba-source/manage.py verify`。
 - 解压浏览：`python3 tools/samba-source/manage.py extract --destination target/samba-source`。
   目标必须不存在；验证源包摘要、路径/链接边界后以临时目录原子发布，保留内部符号链接。
-- 统一构建：`bash .github/scripts/smb-sdk.sh`，详见 [SMB 说明](../../../docs/components/smb.md)。
+- 当前生产目标已改为 Debian 13 apt Samba 的匹配 SDK；本 4.23.0 归档保留作历史源码/核对材料，不是默认运行版本。详见 [SMB 说明](../../../docs/components/smb.md)。
 
 上游发布包含 26 个重复的文档成员（各对字节相同），保留官方原包，不重新打包以改变来源摘要。
 上游测试、文档和子工程只是原始材料，不是 ZXS 根 Cargo 工作区成员；解压及生成物仅进入 `target/`。

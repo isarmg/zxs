@@ -8,6 +8,15 @@ use std::borrow::Cow;
 #[path = "../../../../../test/engine/unit/engine/history_window_projection_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+thread_local! {
+    static BRANCH_HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(super) fn take_branch_headers() -> usize {
+    BRANCH_HEADERS.with(|count| count.replace(0))
+}
+
 impl<'a> Query<'a> {
     pub(super) fn node(&self, id: &str) -> Result<Node<'a>> {
         nodes::node(self.state, self.scope(), id).ok_or_else(|| {
@@ -138,7 +147,12 @@ impl<'a> Query<'a> {
     }
 
     fn content_branch(&self, version: &str) -> Result<Option<HistoryBranchId>> {
+        if let Some(branch) = self.indexed_content_branch(version) {
+            return Ok(branch.map(HistoryBranchId::parse).transpose()?);
+        }
         for branch in self.state.branches.values() {
+            #[cfg(test)]
+            BRANCH_HEADERS.with(|count| count.set(count.get() + 1));
             self.cancel.checkpoint()?;
             if !self.allowed_branch(&branch.branch_id) {
                 continue;

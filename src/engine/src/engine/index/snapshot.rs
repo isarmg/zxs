@@ -10,7 +10,7 @@ pub(crate) struct OwnedScopeRead {
     generation: Arc<()>,
     file: String,
     history: String,
-    expected: [usize; 4],
+    expected: [usize; 6],
     identity: std::fs::File,
     path: std::path::PathBuf,
 }

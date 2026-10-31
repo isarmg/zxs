@@ -123,3 +123,30 @@ fn metadata_only_network_guard_distinguishes_content_and_metadata() {
         origin
     ));
 }
+
+#[test]
+fn embedded_servers_have_no_web_directory_argument_and_use_isolated_cwd() {
+    let mut command = Command::new("/isolated/zxs");
+    command.args(["--root", "/fixture/pool"]);
+    server_web(&mut command, None, Path::new("/fixture"));
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        ["--root", "/fixture/pool"]
+    );
+    assert_eq!(command.get_current_dir(), Some(Path::new("/fixture")));
+}
+
+#[test]
+fn development_servers_keep_explicit_reference_web_directory() {
+    let mut command = Command::new("/isolated/zxs");
+    server_web(
+        &mut command,
+        Some(Path::new("/reference/web")),
+        Path::new("/fixture"),
+    );
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        ["--web-dir", "/reference/web"]
+    );
+    assert_eq!(command.get_current_dir(), Some(Path::new("/fixture")));
+}

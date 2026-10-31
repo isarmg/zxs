@@ -350,3 +350,28 @@ HTTP 一次解析 body、路径绑定和取消字段；为保持原错误优先�
 计划提交也使用独立 typed Backend 方法。其阶段与取消不同：当前身份之后先拒绝缺失／非字符串／空的 operation_id、plan_digest，再拒绝未知字段；随后加载并验证计划、核对 owner、预览 digest（split 保留独立错误码）、历史仓库，最后传播 operation_id 格式错误。HTTP 解析结果只保留原阶段顺序，核心只收到成功 OperationId；没有进程内 JSON 组装后反序列化命令。
 
 Web 在用户明确确认预览后才构建提交请求；服务端以 plan_digest 绑定预览，并不接受 `confirmed` 字段。提交仍进入核心原流程：已发布的 purge／split receipt 不能证明物理清理完成，相同请求必须继续 cleanup；失败保留原收据和可重试的清理依据。重启恢复也执行原清理流程，不因为 typed 接口缓存计划、权限或返回已有收据而跳过磁盘检查。
+
+## 发行版内嵌 Web
+
+正式 `zxs` ELF 可在构建时内嵌已验证的 Web 发行字节，无需运行时释放、
+不依赖当前工作目录或旁置 Web 文件。系统 Samba 与独立配套 VFS 不在此载荷中。
+发行调用设置 `ZXS_EMBED_WEB=1` 及精确 `ZXS_EMBED_WEB_COMMIT` / `ZXS_EMBED_WEB_TREE`；
+[生成器](../../.github/scripts/embed-web-assets.py) 要求干净同一提交，复用 Web
+build-manifest 的完整输入／输出 SHA-256 校验，再将精确字节复制到 Cargo OUT_DIR。
+清单、文件数、单文件和总字节分别限于 4 MiB、4096、64 MiB 和 256 MiB；
+链接／混合来源／构建中变化均拒绝，不把旧 Web 产物重标为新源码。
+
+未设 `--web-dir` 时优先使用编译进来的资产；明确指定该选项仍使用既有目录准入，
+目录不可用不会暗中回退内嵌版本。开发构建未设置嵌入变量时保持原未配置行为。
+内存服务复用原 API 保留、实体标签优先级与安全响应头，并与实际 ServeDir 对照
+GET／HEAD、MIME、gzip、单范围／多范围拒绝、条件日期、重定向和缺失错误。
+Last-Modified 使用绑定源码提交的 UTC 秒，ETag 仍由资产原始字节计算；
+内存响应借用静态字节，不复制整个 WASM。解码后的 API 路径别名也不能命中资产。
+这些源码测试不替代最终单 ELF 的真实浏览器／Debian 13 发行验收。
+
+发行浏览器验收使用 `browser-smoke --cli-bin /isolated/zxs --embedded-web`。
+该模式对主服务、离线管理、首次配置及配置恢复/重启使用相同规则：不传
+`--web-dir`，工作目录为各自私有临时 fixture，而非源码或 Web 输出目录。
+`--web-dir PATH` 在该模式下仅选择验证器的预期资源（默认 `build/web`），
+不会提供给被测服务。未指定 `--embedded-web` 时继续使用显式目录开发验收；
+两种模式保留相同 Chrome、管理和重启场景，不能用开发模式冒充单 ELF 验收。

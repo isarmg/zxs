@@ -272,9 +272,11 @@ impl Engine {
         // schedule/epoch fence has now committed to starting this decision;
         // stop/fault after it cannot cancel publication or release ownership.
         self.blocked = true;
-        let finish = (|| {
-            #[cfg(feature = "fault-injection")]
-            self.failpoint("after_decision_admission")?;
+        #[cfg(feature = "fault-injection")]
+        let admission = self.failpoint("after_decision_admission");
+        #[cfg(not(feature = "fault-injection"))]
+        let admission: Result<()> = Ok(());
+        let finish = admission.and_then(|()| {
             self.complete_candidate_verified(
                 &candidate,
                 &hash,
@@ -285,7 +287,7 @@ impl Engine {
                     names,
                 },
             )
-        })();
+        });
         if let Err(e) = finish {
             self.metadata_integrity.invalidate();
             let message = format!("{e}; query operation {} and recover", result.operation_id);

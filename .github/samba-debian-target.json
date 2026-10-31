@@ -1,0 +1,13 @@
+{
+  "distribution": "debian",
+  "release": "13",
+  "suite": "trixie",
+  "architecture": "amd64",
+  "package_version": "2:4.22.11+dfsg-0+deb13u1",
+  "upstream_version": "4.22.11",
+  "vfs_interface": 50,
+  "source_files": {
+    "samba_4.22.11+dfsg.orig.tar.xz": "4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a",
+    "samba_4.22.11+dfsg-0+deb13u1.debian.tar.xz": "0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03"
+  }
+}
