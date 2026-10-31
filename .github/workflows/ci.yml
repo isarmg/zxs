@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches-ignore: [verify/native-debian-host-browser-20261031]
   pull_request:
   workflow_dispatch:
 

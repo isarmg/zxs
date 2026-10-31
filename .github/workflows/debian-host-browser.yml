@@ -1,0 +1,75 @@
+name: Debian single ELF and host sandboxed browser
+on:
+  push:
+    branches: [verify/native-debian-host-browser-20261031]
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  CARGO_INCREMENTAL: '0'
+jobs:
+  standalone-browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 4332e1595c3f6a70c86bb58b4163d11a1915438b
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository toolchain and WASM target
+        run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - name: Cache existing verified build helpers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: target/rust-build-tools
+          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
+          restore-keys: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
+      - name: Check host sandboxed browser and fonts
+        run: |
+          chrome="$(command -v google-chrome)"
+          driver="$(command -v chromedriver)"
+          "$chrome" --version
+          "$driver" --version
+          test "$("$chrome" --version | grep -oE '[0-9]+' | head -1)" = "$("$driver" --version | grep -oE '[0-9]+' | head -1)"
+          echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
+          echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
+      - name: Build exact source Web and Debian native ELF
+        run: |
+          bash .github/scripts/check.sh web-production
+          export RELEASE_VERSION="$(python3 -c 'import tomllib;print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')"
+          echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+          bash .github/scripts/debian13-run.sh --native python3 .github/scripts/release-native.py
+          mkdir -p release-assets
+          cp target/native/x86_64-unknown-linux-gnu/release/zxs "release-assets/zxs-${RELEASE_VERSION}-debian13-amd64"
+      - name: Verify minimal Debian runtime and embedded bytes
+        run: bash .github/scripts/check-debian13-release.sh
+      - name: Exercise real Debian server with host sandboxed Chrome
+        env:
+          ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
+          ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
+        run: |
+          cargo test --locked --offline --release -p browser-smoke
+          bash .github/scripts/release-acceptance.sh
+          python3 .github/scripts/check-csr-browser.py
+      - name: Retain unaccepted recovery bytes regardless of browser outcome
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: unaccepted-native-4332e1595c3f6a70c86bb58b4163d11a1915438b
+          path: |
+            target/native/x86_64-unknown-linux-gnu/release/zxs
+            target/native/x86_64-unknown-linux-gnu/release/zxs-rescue
+            target/native/x86_64-unknown-linux-gnu/release/BUILD.txt
+            target/native/release/browser-smoke
+            build/web
+            artifacts/
+            target/csr-template-check/output/*json
+          if-no-files-found: warn
+          retention-days: 7
