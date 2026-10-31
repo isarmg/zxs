@@ -105,12 +105,12 @@
     },
     {
       "package": "clang-sys",
-      "kind": "I",
+      "kind": "P",
       "shard": "foundation-data",
       "scripts": [
         ".github/scripts/check-binding-expressions.py"
       ],
-      "detail": "dependency of cexpr clang.rs test; own tests NOT run"
+      "detail": "bindgen/cexpr/tests/clang.rs asserts real clang_parseTranslationUnit2 success and token-derived values in foundation-data --clang; own clang-sys tests NOT run"
     },
     {
       "package": "cmov",
@@ -168,12 +168,12 @@
     },
     {
       "package": "crc32fast",
-      "kind": "I",
+      "kind": "P",
       "shard": "foundation-data",
       "scripts": [
         ".github/scripts/check-compression-family.py"
       ],
-      "detail": "streams dependency of executed compression tests"
+      "detail": "compression streams crc unit known vectors/update/reset/combine and contracts.rs corrupt gzip CRC rejection exercise the real crc32fast::Hasher; own lib properties NOT run"
     },
     {
       "package": "cryptographic-core",
@@ -531,12 +531,21 @@
     },
     {
       "package": "rayon",
-      "kind": "I",
+      "kind": "P",
       "shard": "foundation-async",
       "scripts": [
         ".github/scripts/check-concurrent-collections.py"
       ],
-      "detail": "dependency of integration probe; rayon tests NOT run"
+      "detail": "test/tools/concurrent-collections/semantics.rs::rayon_parallel_consumer asserts a real pool parallel reduction equals the sequential result; retained rayon tests NOT run"
+    },
+    {
+      "package": "rayon-core",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-concurrent-collections.py"
+      ],
+      "detail": "rayon::ThreadPoolBuilder reexports rayon_core::ThreadPoolBuilder; semantics.rs::rayon_parallel_consumer asserts pool.install returns the complete reduction; no scheduler performance/timing claim or retained rayon-core suite"
     },
     {
       "package": "reactive-state",

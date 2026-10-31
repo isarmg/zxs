@@ -63,8 +63,9 @@
 #![deny(missing_docs)]
 #![allow(clippy::while_let_loop)]
 
-#[cfg(test)]
-doc_comment::doctest!("../README.md");
+#[cfg(doctest)]
+#[doc = include_str!("../../../../../docs/upstream/glob-0.3.4/README.md")]
+mod readme_doctests {}
 
 use std::cmp;
 use std::cmp::Ordering;
@@ -1109,4 +1110,7 @@ impl MatchOptions {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/glob/unit/src/lib/test_1111.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/glob/unit/src/lib/test_1111.rs"
+));

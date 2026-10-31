@@ -17,11 +17,13 @@ Three kinds of suites run against the locally renamed implementations:
   the member mirrors the subject's feature names with the same set enabled, so
   retained upstream ``cfg(feature = ...)`` gates keep their meaning.
 
-Every test binary is listed and run; the listed names must equal the generated
+Every behaviour binary is listed and run; names must equal the generated
 inventory and every listed test must report ``ok`` with nothing ignored or
-filtered. ``--write`` regenerates the inventory from a passing run and is used
-only by the final integration. Nothing is skipped on a source digest: Cargo's
-own fingerprints decide what to rebuild.
+filtered. Documentation additionally records runtime, compile-only and ignored
+examples separately. ``--write`` reproduces the complete inventory; ``--append``
+records only newly added suites while retaining prior records as earlier
+evidence, not as a new combined validation. Normal CI always runs every suite;
+nothing is skipped on a source digest.
 """
 if not __debug__:
     raise RuntimeError('Validation requires assertions; do not use Python optimization (-O/-OO or PYTHONOPTIMIZE).')
@@ -56,6 +58,9 @@ class Suite:
     # Subject examples a test spawns from target/<profile>/examples; built before the tests run.
     examples: tuple = ()
     edition: str = '2021'
+    # Documentation runs report ignored examples separately, never as passed.
+    doctests: bool = False
+    documentation: tuple = ()
 
 
 # Root-workspace unit suites: lib-wired tests reached through #[cfg(test)] #[path]/include!.
@@ -119,6 +124,10 @@ STANDALONE_SUITES = tuple(Suite(name, ()) for name in (
     'synstructure', 'shared-value', 'heck', 'pkg-config', 'shell-tokenizer', 'version_check')) + (
     Suite('proc-macro2', tuple(FOUNDATION_TESTS + 'proc-macro2/tests/' + name + '.rs'
                               for name in ('test', 'test_fmt', 'marker'))),
+    Suite('http', (), doctests=True),
+    Suite('glob', (), doctests=True),
+    Suite('nu-ansi-term', (), doctests=True,
+          documentation=('docs/validation/nu-ansi-term-examples.md',)),
 )
 
 # Retained material that stays unexecuted, with the concrete missing provider.
@@ -135,6 +144,7 @@ NOT_EXECUTED = {
 SUMMARY = re.compile(r'^test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored; '
                      r'(\d+) measured; (\d+) filtered out', re.M)
 OUTCOME = re.compile(r'^test (.+?)(?: - should panic)? \.\.\. (\w+)$', re.M)
+DOC_OUTCOME = re.compile(r'^test (.+?)(?: - (compile|compile fail|should panic))? \.\.\. (\w+)$', re.M)
 
 
 def production_features():
@@ -223,6 +233,29 @@ def cargo_test(log, cwd, selection, label):
     return names
 
 
+def cargo_doctests(log, cwd, selection, label):
+    """Keep compile-only and ignored examples outside the runtime test count."""
+    common = ['cargo', '--color', 'never', 'test', '--locked', '--offline', *selection, '--doc']
+    names = listed(log.run([*common, '--', '--list'], cwd))
+    assert names, f'{label}: empty documentation target'
+    output = log.run([*common, '--', '--test-threads=1'], cwd)
+    summaries = SUMMARY.findall(output)
+    assert len(summaries) == 1, output
+    status, passed, failed, ignored, measured, filtered = summaries[0]
+    assert (status, failed, measured, filtered) == ('ok', '0', '0', '0'), output
+    outcomes = {name: (mode, outcome) for name, mode, outcome in DOC_OUTCOME.findall(output)}
+    assert set(outcomes) == set(names) and {v[1] for v in outcomes.values()} <= {'ok', 'ignored'}, output
+    result = {'executed': [], 'compile_only': [], 'ignored': []}
+    for name, (mode, outcome) in outcomes.items():
+        key = 'ignored' if outcome == 'ignored' else 'compile_only' if mode in ('compile', 'compile fail') else 'executed'
+        result[key].append(name)
+    result = {key: sorted(value) for key, value in result.items()}
+    assert len(result['executed']) + len(result['compile_only']) == int(passed), output
+    assert len(result['ignored']) == int(ignored), output
+    assert result['executed'] or result['compile_only'], f'{label}: no documentation example checked'
+    return result
+
+
 def dependency(name, features):
     path = json.dumps(str(foundation_path(ROOT, name)))
     return f'{json.dumps(name)} = {{ path = {path}, default-features = false, features = {json.dumps(features)} }}\n'
@@ -266,6 +299,12 @@ def standalone_member(suite, work):
     if readme:
         documentation = (subject / readme).resolve().parent
         shutil.copytree(documentation, work / documentation.relative_to(ROOT))
+    for documentation_relative in suite.documentation:
+        source = ROOT / documentation_relative
+        source.resolve().relative_to(ROOT / 'docs')
+        destination = work / documentation_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
     manifest = rebase_dependency_paths(original, subject)
     for path in suite.tests:
         copied = work / path
@@ -329,8 +368,14 @@ def run_suites(selected):
                 targets = {'lib': ['--lib']}
             names = {target: cargo_test(log, work, [*selection, *target_selection], f'{key}/{target}')
                      for target, target_selection in targets.items()}
+            documentation = cargo_doctests(log, work, selection, key) if suite.doctests else None
             log.close()
             results[key] = {'subject': suite.subject, 'features': resolved[suite.subject], 'targets': names}
+            if documentation is not None:
+                results[key]['doctests'] = documentation
+                print(f"DOC {key}: {len(documentation['executed'])} executed, "
+                      f"{len(documentation['compile_only'])} compile-only, "
+                      f"{len(documentation['ignored'])} ignored", flush=True)
             print(f'PASS {key}: {sum(map(len, names.values()))} tests', flush=True)
     chosen = [suite for suite in INTEGRATION_SUITES if not selected or 'integration:' + suite.subject in selected]
     if chosen:
@@ -386,14 +431,35 @@ def suite_keys():
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--write', action='store_true', help='regenerate the inventory from a passing run')
+    parser.add_argument('--append', action='store_true',
+                        help='run only newly added suites and retain existing inventory as prior evidence; not CI validation')
     parser.add_argument('--suite', action='append', choices=suite_keys(), help='run only these suites')
     arguments = parser.parse_args()
     assert not (arguments.write and arguments.suite), 'the inventory is written from a complete run only'
+    assert not (arguments.append and (arguments.write or arguments.suite)), '--append selects only missing suites'
     for path in NOT_EXECUTED:
         assert (ROOT / path).is_file(), path
     os.environ.setdefault('CARGO_TARGET_DIR', str(OUTPUT / 'target'))
     os.environ.setdefault('CARGO_INCREMENTAL', '0')
-    results = run_suites(set(arguments.suite or ()))
+    selected = set(arguments.suite or ())
+    previous = None
+    if arguments.append:
+        previous = json.loads(INVENTORY.read_text())
+        assert previous['schema'] == 1
+        recorded = set(previous['suites'])
+        assert recorded < set(suite_keys()), '--append requires only additional suite keys'
+        selected = set(suite_keys()) - recorded
+        print(f'Retaining {len(recorded)} prior suite records without rerunning them; '
+              f'executing {len(selected)} new suites.', flush=True)
+    results = run_suites(selected)
+    if arguments.append:
+        assert set(results) == selected and not set(results) & set(previous['suites'])
+        combined = previous['suites'] | results
+        assert set(combined) == set(suite_keys())
+        INVENTORY.write_text(inventory_text(combined))
+        print(f'Appended {len(results)} executed suites; prior records unchanged. '
+              'Normal CI still executes every suite.', flush=True)
+        return
     if arguments.write:
         INVENTORY.write_text(inventory_text(results))
         print(f'Wrote {INVENTORY.relative_to(ROOT)}', flush=True)

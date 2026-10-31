@@ -52062,7 +52062,7 @@
   },
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "cf85f72fb40b8d9a90ac77d7a6df9a6d1c649a00bba9f6636901721e6d5c9d98",
-    "compliance/external-tests/foundation.json": "8752fc1e41aaca2be59621589e7182b2ed3fb050f10ad57b35e6d816923a9057",
+    "compliance/external-tests/foundation.json": "72757bbadf39660c45ef5e2057af35fccc7124e296e840cf03f8ecfc2af3dcee",
     "compliance/external-tests/integrated.json": "128a6f976b999e4f11d112044226942671c45c46a589c1d93753cb39dc2d02f0",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
@@ -77253,15 +77253,22 @@
       ]
     },
     "src/foundation/tooling/nu-ansi-term": {
-      "bytes": 21389,
+      "bytes": 21468,
       "directory": "src/foundation/tooling/nu-ansi-term",
-      "file_count": 9,
+      "file_count": 10,
       "files": [
         {
           "path": "test/foundation/nu-ansi-term/macros/ansi_test.rs",
           "sha256": "2f9bdd79bc70da0243f5127654afb85535bef57ce3b571bfc197825b9b0f1f76",
           "source": "src/foundation/nu-ansi-term/src/ansi.rs",
           "source_sha256_before": "f571290bb57f4c8afad019a28f1362c19ba316b6771022fd8d5d2bc0bb5d45fb"
+        },
+        {
+          "path": "test/foundation/nu-ansi-term/modules/readme.rs",
+          "sha256": "fbbd7b43ea41768fcd66cef23328ce402a4b8023a03568897754e98fbae81233",
+          "source": "test/foundation/nu-ansi-term/modules/readme.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "fbbd7b43ea41768fcd66cef23328ce402a4b8023a03568897754e98fbae81233"
         },
         {
           "path": "test/foundation/nu-ansi-term/tests/style.rs",
@@ -79526,7 +79533,7 @@
     "src/foundation/networking/http-range-header/Cargo.toml": "f5d385a4172ac0d3eead3153c0090193dc2e6370dc0c22aab5b7f172cf35b79b",
     "src/foundation/networking/http-routing/Cargo.toml": "5664a5cbd7da41c4bd815b34adf7c05b191482a7699169ea2ce22a8a1123cec7",
     "src/foundation/networking/http-transport/Cargo.toml": "0e321eb144c9751445f77a446227e558423ba065166f88d3520706d4338245c5",
-    "src/foundation/networking/http/Cargo.toml": "bc792c3c78570e99e797b0f4b16f382423e2a3cb23a69750b17cd06729488dee",
+    "src/foundation/networking/http/Cargo.toml": "27da38dbe702a7ea37284e0d8cfa6f5b249781244247bf8f28dff266017147c6",
     "src/foundation/networking/httparse/Cargo.toml": "69747fa29559707cc1e4c7d30b7817e0ea1d72945ff587dc9bb22ef6ff6d059f",
     "src/foundation/networking/httpdate/Cargo.toml": "fa0af109f0c06cb9da47a6436b2a3caa95e49380445994b9cda5071734ec420a",
     "src/foundation/networking/hyper-rustls/Cargo.toml": "0230c8df93fc26a4132c4c47703f053495ae3861e3c59062fed33c457e85ade4",
@@ -96838,7 +96845,7 @@
       "description": "A set of types for representing HTTP requests and responses.",
       "directory": "src/foundation/networking/http",
       "files_sha256": {
-        "Cargo.toml": "bc792c3c78570e99e797b0f4b16f382423e2a3cb23a69750b17cd06729488dee",
+        "Cargo.toml": "27da38dbe702a7ea37284e0d8cfa6f5b249781244247bf8f28dff266017147c6",
         "src/byte_str.rs": "267b2525d4ce4c6c2f0779cb924c781bdb4b7febc4c7fe2657c0b1afaa143d7e",
         "src/convert.rs": "648ef74bc21184c960ee21e43033584390d1900d107cdae8c1d9a4a35f9a3fc7",
         "src/error.rs": "1e74a0fed12a12e31e8dc35d251e6ba835d6436ec3c0e7ae07f1288851330a79",
@@ -96846,8 +96853,8 @@
         "src/header/map.rs": "8a1860c01812228735d8d0cf3ac33e6ab47df0ecdbd830024a27beacbd609ab7",
         "src/header/mod.rs": "26109659d73db5fd66bda033daf2b9eebc1eac7af22c48323f808af09da599b5",
         "src/header/name.rs": "5631653e9dacff70fc35f90dac22833ef18dca7b3f8490efafb8430a9c5ef0a0",
-        "src/header/value.rs": "669fee6a65ee146a34321c817adac5dcb355b9e0d769514ad69d0f7055518f0d",
-        "src/lib.rs": "02c32356d5aeba9107555875702cab337fd58e14a77b1d1018138e152d4ec844",
+        "src/header/value.rs": "1764ba9a74906acc0e9527214756c6f65b4c93d99646220dc0f9fc4b574d5163",
+        "src/lib.rs": "3a6de7e75456ba0cc7776883e3db7ebf6ac7bc6c6b5748f4c23c3f03b4a52b10",
         "src/method.rs": "2fc6b37500f364c71c9adb179f4f6b0632d0d480d145d117cf69a409d6b371c5",
         "src/request.rs": "93dd4582bbd49f9fc1ff02a05de760095aaa0ef4613eb6b5a99ca4766fbe9dc6",
         "src/response.rs": "4be3438e2c60e441914e75f5cf1e3f2b3b037e9fb6341363f3dc7fb9d5ba1e02",
@@ -98262,7 +98269,7 @@
       "directory": "src/foundation/platform/glob",
       "files_sha256": {
         "Cargo.toml": "8372b6b7f72cf555c013f20ff9c7c5991ab088ba5cee971d80517c70e16d7b6c",
-        "src/lib.rs": "911256d41c29d0f60841539f77558447afe69d8d109cb787bf6ee5f960f45802",
+        "src/lib.rs": "69b0b3ff8d99465e0cec7a747e74bab1ae4dd7f88a3e15fff11285b70ec56c8d",
         "triagebot.toml": "a135e10c777cd13459559bdf74fb704c1379af7c9b0f70bc49fa6f5a837daa81"
       },
       "license": "MIT OR Apache-2.0",
@@ -100895,7 +100902,7 @@
         "src/difference.rs": "3a058772bbd41b8c49ed5a3cdeec01b51ca1abfb16133ff27a60570a33e00bf2",
         "src/display.rs": "e1970dc0c45770ab82886590ee87f23d815a19622a30e2cd3aba3276ab9c3a7e",
         "src/gradient.rs": "1636e2f6a3f001b3f93dc1f94761323250c2713cb650511a0c8a9a811918528a",
-        "src/lib.rs": "7e864893cd74db35c0c21d98297252478ad26ab6df909f68e5ed2d4c9191af4d",
+        "src/lib.rs": "98216c3000f28c53d46081ccf218f7381e0e7c27619b4f8bc3bff9f148c20c1e",
         "src/rgb.rs": "d8f911aad88b4b3d3e2a4f7fc67079147de9cd7d2791facaacfef5aed2b674e1",
         "src/style.rs": "eea961008c29f82fa52be4998c3506e9683874c8285366c04a0b85c901d997f4",
         "src/util.rs": "930c95b3163fa111eda9a6ffb75476e0bd1e0ef02a638906faa13eac4987fe12",
