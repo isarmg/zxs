@@ -2,7 +2,7 @@
 //! pool configuration, production Web/WASM, and real browser login/retry.
 use super::{
     Browser, Command, OpenOptions, OpenOptionsExt, Path, Result, Write, fs, http, json, port,
-    spawn, wait_for,
+    spawn, wait_for, with_cleanup,
 };
 
 fn prepare_offline(source_pool: &Path, offline: &Path) -> Result<()> {
@@ -288,6 +288,7 @@ pub(super) fn setup(
     println!(
         "PASS protected single-disk Web setup: no backup levels, explicit no-redundancy warning, key + CSRF, hot ready reopen, administrator login, no persisted secrets; missing only disk preserves browser login and monitoring without recreating storage"
     );
+    lost_initialize_response(browser, daemon, web, root, password)?;
     preset_setup(browser, daemon, web, root, password)?;
     complete_setup(browser, daemon, web, root, password)
 }
@@ -449,6 +450,229 @@ fn login_setup(browser: &Browser, username: &str, password: &str, count: usize) 
     browser.css("input[autocomplete='current-password']")?;
     Ok(())
 }
+
+const LOST_INITIALIZE_PROBE: &str = r#"
+const originalFetch = window.fetch;
+const form = document.querySelector('[data-setup-key]')?.closest('form');
+if (!form?.isConnected || window.__zxsLostInitialize)
+  throw new Error('Lost initialization probe requires one live setup form');
+const state = window.__zxsLostInitialize = {
+  form, setupPosts:[], initialization:null, statusReads:[], logins:[],
+  dropped:false, submitStimuli:0, stimuliSettled:true, frame:null,
+  restore:() => {
+    if (state.frame !== null) cancelAnimationFrame(state.frame);
+    window.fetch = originalFetch;
+    delete window.__zxsLostInitialize;
+  }
+};
+window.fetch = async function(...args) {
+  const request = args[0];
+  const url = new URL(typeof request === 'string' ? request : request.url, location.href);
+  const method = (args[1]?.method || request.method || 'GET').toUpperCase();
+  // Count attempted sends, including a duplicate that the real server rejects.
+  if (url.origin === location.origin && url.pathname.startsWith('/api/setup/') && method === 'POST')
+    state.setupPosts.push(url.pathname);
+  const response = await Reflect.apply(originalFetch, this, args);
+  if (url.origin !== location.origin) return response;
+  if (url.pathname === '/api/setup/initialize' && method === 'POST' && !state.dropped) {
+    const body = await response.clone().json();
+    state.initialization = {status:response.status, initialized:body.initialized === true};
+    if (response.ok && body.initialized === true) {
+      state.dropped = true;
+      // Keep the actual successful Response from the production WASM.
+      throw new TypeError('Browser smoke: initialize response lost after successful initialization');
+    }
+  } else if (url.pathname === '/api/setup/status' && method === 'GET') {
+    const body = await response.clone().json();
+    state.statusReads.push({status:response.status,
+      state:typeof body.state === 'string' ? body.state : null,
+      completionAvailable:typeof body.completion_available === 'boolean' ? body.completion_available : null});
+  } else if (url.pathname === '/api/auth/login' && method === 'POST') {
+    const body = await response.clone().json();
+    state.logins.push({status:response.status,
+      principal:typeof body.principal === 'string' ? body.principal : null});
+  }
+  return response;
+};
+return true;
+"#;
+
+fn lost_initialize_state(browser: &Browser) -> Result<json_codec::Value> {
+    browser.script(
+        r#"
+const state = window.__zxsLostInitialize;
+if (!state) throw new Error('Lost initialization probe is missing');
+const key = document.querySelector('[data-setup-key]');
+const form = key?.closest('form');
+const password = form?.querySelector('[data-setup-password]');
+const text = form?.textContent || '';
+return {sameForm:form === state.form && state.form.isConnected,
+  unknown:Array.from(form?.querySelectorAll('p[role="alert"]') || [])
+    .some(alert => /Outcome unknown\. Repeated initialization is disabled|结果未知，已禁用重复初始化/.test(alert.textContent)),
+  transportError:text.includes('TypeError') && text.includes('Browser smoke: initialize response lost after successful initialization'),
+  existing:/An installation already exists; initialization is blocked|已存在安装；禁止初始化/.test(text),
+  keyCleared:!!key && key.value === '', passwordCleared:!password || password.value === '',
+  settled:!!key && !key.disabled,
+  noInitialization:!!form && !form.querySelector('button[type="submit"], [data-setup-disk], [data-setup-completion]'),
+  reloadBlocked:document.querySelector('[data-language-toggle]')?.disabled === true,
+  dropped:state.dropped, initialization:state.initialization, setupPosts:state.setupPosts,
+  statusReads:state.statusReads, logins:state.logins,
+  submitStimuli:state.submitStimuli, stimuliSettled:state.stimuliSettled};
+"#,
+    )
+}
+
+fn unknown_initialize_fence(browser: &Browser) -> Result<json_codec::Value> {
+    let state = lost_initialize_state(browser)?;
+    if state["sameForm"] != true
+        || state["unknown"] != true
+        || state["settled"] != true
+        || state["noInitialization"] != true
+        || state["reloadBlocked"] != true
+        || state["dropped"] != true
+        || state["initialization"] != json!({"status":200,"initialized":true})
+        || state["setupPosts"] != json!(["/api/setup/initialize"])
+    {
+        return Err(format!("lost initialization escaped its unknown form fence: {state}").into());
+    }
+    Ok(state)
+}
+
+fn repeat_unknown_initialize(browser: &Browser, expected_stimuli: u64) -> Result<()> {
+    browser.script(
+        r#"
+const state = window.__zxsLostInitialize;
+const form = document.querySelector('[data-setup-key]')?.closest('form');
+const language = document.querySelector('[data-language-toggle]');
+if (!state || form !== state.form || !form.isConnected || !language?.disabled)
+  throw new Error('Repeated setup submit lost its live unknown form or reload fence');
+for (let index = 0; index < 3; index++) {
+  form.dispatchEvent(new Event('submit', {bubbles:true, cancelable:true}));
+  state.submitStimuli++;
+}
+language.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+state.stimuliSettled = false;
+state.frame = requestAnimationFrame(() => { state.frame = null; state.stimuliSettled = true; });
+return true;
+"#,
+    )?;
+    wait_for(
+        "repeated live unknown setup submissions stay fenced",
+        || {
+            let state = unknown_initialize_fence(browser)?;
+            if state["stimuliSettled"] == true
+                && state["submitStimuli"].as_u64() == Some(expected_stimuli)
+            {
+                Ok(())
+            } else {
+                Err(format!("unknown setup submission stimulus is pending: {state}").into())
+            }
+        },
+    )
+}
+
+fn lost_initialize_response(
+    browser: &Browser,
+    daemon: &Path,
+    web: &Path,
+    root: &Path,
+    password: &str,
+) -> Result<()> {
+    let fixture = SetupFixture::new(root, "lost-initialize-response", 1)?;
+    let _server = fixture.launch(daemon, web, None)?;
+    fixture.open(browser)?;
+    browser.click(&browser.css("[data-setup-disk]")?)?;
+    browser.click(&browser.css("[data-setup-development]")?)?;
+    credentials_and_confirm(browser, "lost-response-admin", password)?;
+    // Initial authorization/status and wizard review precede the probe. This
+    // wizard has no preset-preview; every subsequent setup POST is counted.
+    with_cleanup(
+        || {
+            browser.script(LOST_INITIALIZE_PROBE)?;
+            browser.click(&browser.button("Initialize new installation", "初始化新安装")?)?;
+            wait_for(
+                "real successful initialization response becomes unknown",
+                || {
+                    let state = unknown_initialize_fence(browser)?;
+                    if state["transportError"] == true
+                        && state["keyCleared"] == true
+                        && state["passwordCleared"] == true
+                    {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "lost initialization has not reached its cleared error view: {state}"
+                        )
+                        .into())
+                    }
+                },
+            )?;
+            fixture.ready()?;
+            let config = fs::read(fixture.pool.join("config.json"))?;
+            let authority = fs::read(fixture.pool.join("management-authority.json"))?;
+            repeat_unknown_initialize(browser, 3)?;
+            browser.click(&browser.button("Clear setup inputs", "清除设置输入")?)?;
+            let cleared = unknown_initialize_fence(browser)?;
+            if cleared["keyCleared"] != true || cleared["passwordCleared"] != true {
+                return Err(
+                    format!("clearing unknown setup retained secret inputs: {cleared}").into(),
+                );
+            }
+            fixture.authorize(browser)?;
+            wait_for(
+                "original authorization confirms existing installation without completion",
+                || {
+                    let state = unknown_initialize_fence(browser)?;
+                    if state["statusReads"]
+                        == json!([{"status":200,"state":"existing","completionAvailable":false}])
+                        && state["existing"] == true
+                    {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "unknown setup has not accepted its real existing status: {state}"
+                        )
+                        .into())
+                    }
+                },
+            )?;
+            repeat_unknown_initialize(browser, 6)?;
+            login_setup(browser, "lost-response-admin", password, 1)?;
+            let recovered = lost_initialize_state(browser)?;
+            if recovered["setupPosts"] != json!(["/api/setup/initialize"])
+                || recovered["logins"] != json!([{"status":200,"principal":"lost-response-admin"}])
+                || recovered["unknown"] != true
+                || recovered["reloadBlocked"] != true
+                || recovered["keyCleared"] != true
+                || recovered["passwordCleared"] != true
+            {
+                return Err(format!(
+                    "original setup identity recovery escaped its fence: {recovered}"
+                )
+                .into());
+            }
+            if fs::read(fixture.pool.join("config.json"))? != config
+                || fs::read(fixture.pool.join("management-authority.json"))? != authority
+            {
+                return Err(
+                    "lost-response recovery changed the installed pool or authority".into(),
+                );
+            }
+            Ok(())
+        },
+        || {
+            browser.script(
+                "if(window.__zxsLostInitialize)window.__zxsLostInitialize.restore();return true",
+            )?;
+            Ok(())
+        },
+    )?;
+    println!(
+        "PASS real successful initialization response loss: unknown form and reload fences, one setup POST, existing-status recheck and original administrator recovery"
+    );
+    Ok(())
+}
+
 fn select_preset(browser: &Browser, expected_limit: usize) -> Result<()> {
     browser.click(&browser.button("Use local configuration preset", "使用本地预置方案")?)?;
     // Scrolling the trigger into view can close its popover. Reacquire and

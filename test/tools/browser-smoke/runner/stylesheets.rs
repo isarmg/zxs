@@ -1,4 +1,4 @@
-//! Inspect real CSS events/CSSOM and fault only stylesheet transport.
+//! Inspect real startup resources, transport failures and terminal delivery.
 use super::{Browser, Result, Value, json, wait_for, with_cleanup};
 
 const OBSERVER: &str = r#"
@@ -15,6 +15,69 @@ document.addEventListener('zxs-startup-ready', () => window.__zxsStylesheets.rea
 document.addEventListener('zxs-startup-failed', () =>
   window.__zxsStylesheets.failures.push({elapsed:performance.now(),
     readyState:document.readyState,body:!!document.body}));
+"#;
+
+// Hold delivery of the original successful Response, without reading or
+// replacing its body. Streaming still receives that exact browser Response.
+const WASM_DELIVERY: &str = r#"
+(() => {
+  const nativeFetch = window.fetch, nativeStreaming = WebAssembly.instantiateStreaming;
+  let release, response;
+  const gate = new Promise(resolve => release = resolve);
+  const probe = window.__zxsWasmDelivery = {
+    held:0,delivered:0,streaming:0,completed:0,released:false,errors:[],
+    installedAt:performance.now()
+  };
+  probe.release = () => {
+    if (probe.released) return;
+    probe.released = true;
+    probe.releasedAt = performance.now();
+    release();
+  };
+  probe.restore = () => {
+    probe.release();
+    window.fetch = nativeFetch;
+    WebAssembly.instantiateStreaming = nativeStreaming;
+  };
+  probe.snapshot = () => {
+    const {release,restore,snapshot,...state} = probe;
+    return state;
+  };
+  window.fetch = async function(...args) {
+    const result = await Reflect.apply(nativeFetch, this, args);
+    const request = args[0];
+    const url = new URL(request instanceof Request ? request.url : request, location.href);
+    if (url.origin === location.origin && url.pathname === '/pkg/zxs_bg.wasm' && result.ok) {
+      response = result;
+      probe.held++;
+      probe.status = result.status;
+      probe.mime = result.headers.get('Content-Type');
+      probe.bodyUsedBeforeDelivery = result.bodyUsed;
+      probe.heldAt = performance.now();
+      probe.heldPhase = document.documentElement.dataset.zxsStartup;
+      await gate;
+      probe.delivered++;
+      probe.deliveredPhase = document.documentElement.dataset.zxsStartup;
+    }
+    return result;
+  };
+  WebAssembly.instantiateStreaming = async function(...args) {
+    probe.streaming++;
+    probe.sameResponse = args[0] === response;
+    try {
+      const result = await Reflect.apply(nativeStreaming, this, args);
+      probe.completed++;
+      probe.instance = result.instance instanceof WebAssembly.Instance;
+      probe.module = result.module instanceof WebAssembly.Module;
+      probe.completedAt = performance.now();
+      probe.completedPhase = document.documentElement.dataset.zxsStartup;
+      return result;
+    } catch (error) {
+      probe.errors.push(String(error));
+      throw error;
+    }
+  };
+})();
 "#;
 
 pub(super) fn run(browser: &Browser, origin: &str) -> Result<()> {
@@ -43,6 +106,13 @@ pub(super) fn run(browser: &Browser, origin: &str) -> Result<()> {
             browser.cdp("Network.setCacheDisabled", json!({"cacheDisabled":true}))?;
             blocked_stylesheets(browser, origin, &["/styles/startup.css"])?;
             blocked_stylesheets(browser, origin, &["/styles/startup.css", "/zxs.css"])?;
+            for path in ["/pkg/zxs.js", "/pkg/zxs_bg.wasm"] {
+                blocked_resource(browser, origin, path)?;
+            }
+            for _ in 0..2 {
+                delayed_wasm(browser, origin, CompletionBoundary::PageHide)?;
+            }
+            delayed_wasm(browser, origin, CompletionBoundary::Deadline)?;
             Ok(())
         },
         || {
@@ -101,6 +171,200 @@ fn blocked_stylesheets(browser: &Browser, origin: &str, paths: &[&str]) -> Resul
     Ok(())
 }
 
+fn blocked_resource(browser: &Browser, origin: &str, path: &str) -> Result<()> {
+    browser.cdp(
+        "Network.setBlockedURLs",
+        json!({"urls":[format!("{origin}{path}")]}),
+    )?;
+    browser.command("POST", "/url", Some(json!({"url":origin})))?;
+    wait_for("required JS/WASM browser transport rejection", || {
+        let state = failure_state(browser)?;
+        assert_failure(&state)?;
+        if state["stage"] != "runtime" || state["uncaught"] != json!([]) {
+            return Err(format!("unexpected {path} transport failure: {state}").into());
+        }
+        Ok(())
+    })?;
+    browser.cdp("Network.setBlockedURLs", json!({"urls":[]}))?;
+    browser.click(&browser.css("#zxs-startup-error button")?)?;
+    browser.css("input[autocomplete='current-password']")?;
+    normal_bundle(browser)?;
+    println!("PASS browser-blocked JS/WASM transport {path}, terminal startup and real reload");
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum CompletionBoundary {
+    PageHide,
+    Deadline,
+}
+
+fn delayed_wasm(browser: &Browser, origin: &str, boundary: CompletionBoundary) -> Result<()> {
+    let installed = browser.cdp(
+        "Page.addScriptToEvaluateOnNewDocument",
+        json!({"source":WASM_DELIVERY}),
+    )?;
+    let identifier = installed["identifier"]
+        .as_str()
+        .ok_or("missing WASM delivery observer identifier")?;
+    with_cleanup(
+        || {
+            browser.command("POST", "/url", Some(json!({"url":origin})))?;
+            let pending = wait_for(
+                "original successful WASM Response is held before startup",
+                || {
+                    let state = failure_state(browser)?;
+                    let delivery = &state["delivery"];
+                    if state["phase"] != "pending"
+                        || state["error"] != false
+                        || state["login"] != false
+                        || !state["runtime"].is_null()
+                        || !state["ready"].is_null()
+                        || state["observation"]["ready"] != 0
+                        || state["observation"]["failures"] != json!([])
+                        || state["uncaught"] != json!([])
+                        || delivery["held"] != 1
+                        || delivery["status"] != 200
+                        || delivery["mime"] != "application/wasm"
+                        || delivery["bodyUsedBeforeDelivery"] != false
+                        || delivery["heldPhase"] != "pending"
+                        || delivery["delivered"] != 0
+                        || delivery["streaming"] != 0
+                        || !state["rootHTML"]
+                            .as_str()
+                            .is_some_and(|html| !html.is_empty())
+                    {
+                        return Err(format!(
+                            "WASM response is not held at pending startup: {state}"
+                        )
+                        .into());
+                    }
+                    Ok(state)
+                },
+            )?;
+            let root_before = pending["rootHTML"].clone();
+            match boundary {
+                CompletionBoundary::PageHide => {
+                    browser.script("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:false}));return true")?;
+                }
+                CompletionBoundary::Deadline => {
+                    // The existing 40-second wait covers the unmodified loader's
+                    // natural 30-second deadline; no timer is wrapped or invoked.
+                    wait_for("natural 30-second bootstrap deadline", || {
+                        assert_terminal_wasm(&failure_state(browser)?, boundary, &root_before)
+                    })?;
+                }
+            }
+            assert_terminal_wasm(&failure_state(browser)?, boundary, &root_before)?;
+            browser.script("window.__zxsWasmDelivery.release();return true")?;
+            wait_for(
+                "original late WASM Response completes real streaming instantiation",
+                || {
+                    let state = failure_state(browser)?;
+                    let delivery = &state["delivery"];
+                    if delivery["held"] != 1
+                        || delivery["delivered"] != 1
+                        || delivery["streaming"] != 1
+                        || delivery["completed"] != 1
+                        || delivery["sameResponse"] != true
+                        || delivery["instance"] != true
+                        || delivery["module"] != true
+                        || delivery["errors"] != json!([])
+                        || delivery["deliveredPhase"] != "failed"
+                        || delivery["completedPhase"] != "failed"
+                    {
+                        return Err(format!("missing real late WASM completion: {state}").into());
+                    }
+                    Ok(())
+                },
+            )?;
+            // Let the generated finalize/start continuation and its handled
+            // rejection settle, then observe two native rendering turns.
+            browser.command("POST", "/execute/async", Some(json!({"script":
+                "const done=arguments[0];Promise.resolve().then(()=>requestAnimationFrame(()=>requestAnimationFrame(()=>queueMicrotask(()=>done(true)))));",
+                "args":[]})))?;
+            let state = failure_state(browser)?;
+            assert_terminal_wasm(&state, boundary, &root_before)?;
+            println!(
+                "PASS real held WASM 200/MIME delivery after {}: {}",
+                match boundary {
+                    CompletionBoundary::PageHide => "non-cached pagehide",
+                    CompletionBoundary::Deadline => "natural 30-second deadline",
+                },
+                state["delivery"]
+            );
+            Ok(())
+        },
+        || {
+            let release = browser.script(
+                "if(window.__zxsWasmDelivery)window.__zxsWasmDelivery.restore();return true",
+            );
+            let remove = browser.cdp(
+                "Page.removeScriptToEvaluateOnNewDocument",
+                json!({"identifier":identifier}),
+            );
+            release?;
+            remove?;
+            Ok(())
+        },
+    )?;
+    match boundary {
+        CompletionBoundary::PageHide => {
+            browser.command("POST", "/url", Some(json!({"url":origin})))?;
+        }
+        CompletionBoundary::Deadline => {
+            browser.click(&browser.css("#zxs-startup-error button")?)?;
+        }
+    }
+    browser.css("input[autocomplete='current-password']")?;
+    normal_bundle(browser)?;
+    if browser.script("return window.__zxsSmokeErrors")? != json!([]) {
+        return Err("uncaught error after WASM delivery fixture recovery".into());
+    }
+    Ok(())
+}
+
+fn assert_terminal_wasm(
+    state: &Value,
+    boundary: CompletionBoundary,
+    root_before: &Value,
+) -> Result<()> {
+    if state["phase"] != "failed"
+        || state["observation"]["ready"] != 0
+        || !state["runtime"].is_null()
+        || !state["ready"].is_null()
+        || state["login"] != false
+        || state["uncaught"] != json!([])
+        || state["rootHTML"] != *root_before
+    {
+        return Err(format!("late WASM revived terminal startup: {state}").into());
+    }
+    match boundary {
+        CompletionBoundary::PageHide => {
+            // pagehide settles the bootstrap without rendering an error panel;
+            // the unmounted parser placeholder remains the same real DOM.
+            if state["error"] != false || state["observation"]["failures"] != json!([]) {
+                return Err(
+                    format!("unexpected pending-pagehide failure presentation: {state}").into(),
+                );
+            }
+        }
+        CompletionBoundary::Deadline => {
+            assert_failure(state)?;
+            if state["stage"] != "timeout"
+                || !state["observation"]["failures"][0]["elapsed"]
+                    .as_f64()
+                    .is_some_and(|elapsed| elapsed >= 30_000.0)
+            {
+                return Err(
+                    format!("startup did not reach its real 30-second deadline: {state}").into(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn failure_state(browser: &Browser) -> Result<Value> {
     browser.script(
         r#"
@@ -114,6 +378,8 @@ const state = {error:!!error,phase:document.documentElement.dataset.zxsStartup,
   fonts:document.documentElement.dataset.zxsFonts,mainLoaded:!!main?.sheet,
   startupLoaded:!!startup?.sheet,mainRules:main?.sheet ? main.sheet.cssRules.length : null,
   elapsed:performance.now(),observation:window.__zxsStylesheets,
+  delivery:window.__zxsWasmDelivery?.snapshot(),uncaught:window.__zxsSmokeErrors,
+  rootHTML:root?.innerHTML,
   login:!!document.querySelector('input[autocomplete="current-password"]'),
   rootHidden:!!root && root.hidden && getComputedStyle(root).display==='none'};
 if (!error) return state;
@@ -149,7 +415,7 @@ fn assert_failure(state: &Value) -> Result<()> {
         || state["visible"] != true
         || !state["text"].as_str().is_some_and(|text| !text.is_empty())
     {
-        return Err(format!("required-CSS failure state: {state}").into());
+        return Err(format!("required-resource failure state: {state}").into());
     }
     Ok(())
 }
