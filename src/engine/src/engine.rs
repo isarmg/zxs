@@ -130,6 +130,10 @@ impl MetadataView {
 #[cfg(test)]
 #[path = "../../../test/engine/unit/engine/history_window_root_tests.rs"]
 mod history_window_root_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/engine/history_window_retention_tests.rs"]
+mod history_window_retention_tests;
 #[cfg(feature = "fault-injection")]
 struct FaultInjection {
     point: String,
