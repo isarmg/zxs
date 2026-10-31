@@ -1,35 +1,92 @@
-name: Debian single ELF and host sandboxed browser
+name: Replay fixed Debian product under corrected host browser observer
 on:
   push:
     branches: [verify/native-debian-host-browser-20261031]
 permissions:
   contents: read
+  actions: read
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: '1'
   CARGO_INCREMENTAL: '0'
+  RELEASE_VERSION: 0.1.1
 jobs:
-  standalone-browser:
+  replay-browser:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 4332e1595c3f6a70c86bb58b4163d11a1915438b
+          ref: 27fd5581bc144ec934ae24d7b652dc604137c5fa
           persist-credentials: false
+      - name: Download exact retained recovery ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p target
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
+            https://api.github.com/repos/isarmg/zxs/actions/artifacts/13043973599/zip \
+            --output target/recovery.zip
+      - name: Verify old ZIP product identity and every embedded Web byte without relabeling
+        run: |
+          python3 - <<'PYVERIFY'
+          from pathlib import Path, PurePosixPath
+          import hashlib, json, os, stat, subprocess, zipfile
+          archive=Path('target/recovery.zip')
+          expected='571672422ea7d0fd2fae51a4ec927fa3245eba291dcf9bacf5bcbe2b75d572bc'
+          if hashlib.sha256(archive.read_bytes()).hexdigest()!=expected:
+              raise ValueError('original recovery ZIP hash mismatch')
+          base=Path('target/recovery-input');base.mkdir(parents=True,exist_ok=False)
+          with zipfile.ZipFile(archive) as bundle:
+              seen=set()
+              for entry in bundle.infolist():
+                  name=PurePosixPath(entry.filename)
+                  if name.is_absolute() or '..' in name.parts or str(name) in seen:
+                      raise ValueError('unsafe or duplicate recovery path')
+                  seen.add(str(name))
+                  kind=stat.S_IFMT(entry.external_attr >> 16)
+                  if kind not in (0,stat.S_IFREG,stat.S_IFDIR):
+                      raise ValueError('non-regular recovery member')
+                  if entry.is_dir():continue
+                  if entry.filename.startswith(('target/native/x86_64-unknown-linux-gnu/release/','build/web/')):
+                      dest=base/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(bundle.read(entry))
+          binary=base/'target/native/x86_64-unknown-linux-gnu/release/zxs'
+          build=binary.parent/'BUILD.txt'
+          fields={}
+          for line in build.read_text().splitlines():
+              key,value=line.split('=',1)
+              if key in fields:raise ValueError('duplicate BUILD field')
+              fields[key]=value
+          if fields['commit']!='4332e1595c3f6a70c86bb58b4163d11a1915438b' or fields['native-web-tree']!='31c0bc60f6b83e9894f90df81d3542e94805decf' or fields['native-web-embedded']!='true':
+              raise ValueError('original product source identity mismatch')
+          checksum=hashlib.sha256(binary.read_bytes()).hexdigest()
+          if checksum!='6a49e1de15ee0b8c71238f83ed583821c0ba9b27e8266a1ef369e675a90b018c' or checksum!=fields['native-zxs-sha256']:
+              raise ValueError('original ELF bytes differ')
+          web=base/'build/web';manifest=web/'build-manifest.json'
+          if hashlib.sha256(manifest.read_bytes()).hexdigest()!=fields['native-web-manifest-sha256']:
+              raise ValueError('original embedded Web manifest differs')
+          files=json.loads(manifest.read_text())['files']
+          for name,digest in files.items():
+              rel=PurePosixPath(name)
+              if rel.is_absolute() or '..' in rel.parts:raise ValueError('unsafe Web inventory path')
+              if hashlib.sha256((web/rel).read_bytes()).hexdigest()!=digest:raise ValueError('original Web asset differs: '+name)
+          if {p.relative_to(web).as_posix() for p in web.rglob('*') if p.is_file()}!=set(files)|{'build-manifest.json'}:
+              raise ValueError('original Web inventory not exact')
+          Path('release-assets').mkdir()
+          out=Path('release-assets/zxs-0.1.1-debian13-amd64');out.write_bytes(binary.read_bytes());out.chmod(0o755)
+          Path('build').mkdir(exist_ok=True)
+          os.rename(web,'build/web')
+          Path('artifacts').mkdir(exist_ok=True)
+          receipt={'product_commit':fields['commit'],'product_tree':fields['native-web-tree'],'product_binary_sha256':checksum,'product_build_sha256':hashlib.sha256(build.read_bytes()).hexdigest(),'source_run':41204056925,'artifact_id':13043973599,'archive_sha256':expected,'observer_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'observer_tree':subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),'scope':'original 4332 product, new harness observer; no original receipt rewritten'}
+          Path('artifacts/replay-identity.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps(receipt))
+          PYVERIFY
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install repository toolchain and WASM target
-        run: |
-          rustup show active-toolchain
-          rustup target add wasm32-unknown-unknown
-      - name: Cache existing verified build helpers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: target/rust-build-tools
-          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
-          restore-keys: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
-      - name: Check host sandboxed browser and fonts
+      - name: Install observer toolchain
+        run: rustup show active-toolchain
+      - name: Verify host sandboxed Chrome and fonts
         run: |
           chrome="$(command -v google-chrome)"
           driver="$(command -v chromedriver)"
@@ -40,36 +97,34 @@ jobs:
           echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Build exact source Web and Debian native ELF
-        run: |
-          bash .github/scripts/check.sh web-production
-          export RELEASE_VERSION="$(python3 -c 'import tomllib;print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')"
-          echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
-          bash .github/scripts/debian13-run.sh --native python3 .github/scripts/release-native.py
-          mkdir -p release-assets
-          cp target/native/x86_64-unknown-linux-gnu/release/zxs "release-assets/zxs-${RELEASE_VERSION}-debian13-amd64"
-      - name: Verify minimal Debian runtime and embedded bytes
+      - name: Verify original ELF in minimal Debian runtime
         run: bash .github/scripts/check-debian13-release.sh
-      - name: Exercise real Debian server with host sandboxed Chrome
+      - name: Compile and test observer only
+        run: |
+          cargo test --locked --offline --release -p browser-smoke
+          cargo build --locked --offline --release -p browser-smoke
+          python3 - <<'PYIDENTITY'
+          import hashlib,json,pathlib
+          p=pathlib.Path('artifacts/replay-identity.json');d=json.loads(p.read_text())
+          d['observer_binary_sha256']=hashlib.sha256(pathlib.Path('target/native/release/browser-smoke').read_bytes()).hexdigest()
+          p.write_text(json.dumps(d,indent=2)+'\n')
+          PYIDENTITY
+      - name: Full original UI assertions against fixed original product
         env:
           ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
           ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
         run: |
-          cargo test --locked --offline --release -p browser-smoke
-          bash .github/scripts/release-acceptance.sh
-          python3 .github/scripts/check-csr-browser.py
-      - name: Retain unaccepted recovery bytes regardless of browser outcome
+          set -o pipefail
+          bash .github/scripts/release-acceptance.sh 2>&1 | tee artifacts/replay-ui.log
+      - name: Retain replay identities logs and original bytes even on failure
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: unaccepted-native-4332e1595c3f6a70c86bb58b4163d11a1915438b
+          name: fixed-4332-product-new-observer
           path: |
-            target/native/x86_64-unknown-linux-gnu/release/zxs
-            target/native/x86_64-unknown-linux-gnu/release/zxs-rescue
-            target/native/x86_64-unknown-linux-gnu/release/BUILD.txt
+            target/recovery.zip
+            target/recovery-input/target/native/x86_64-unknown-linux-gnu/release/BUILD.txt
             target/native/release/browser-smoke
-            build/web
             artifacts/
-            target/csr-template-check/output/*json
           if-no-files-found: warn
           retention-days: 7

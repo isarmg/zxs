@@ -145,7 +145,7 @@ jobs:
           retention-days: 7
 
   browser-smoke:
-    name: Standalone ELF: Debian 13 server + host Chrome
+    name: "Standalone ELF: Debian 13 server + host Chrome"
     needs: [web-production, smb-sdk]
     runs-on: ubuntu-24.04
     # Compile one release-profile graph for both product and browser harness.
