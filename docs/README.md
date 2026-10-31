@@ -29,6 +29,7 @@
 - [实现架构](architecture/README.md)、[组件](components/README.md)、[开发工具](tools/README.md)。
 - [第三方依赖文档](dependencies/README.md)：按职能查阅当前用法、匹配版本的本地原文与实际 API。
 - [机器契约](contracts/README.md)：schema、OpenAPI 和固定向量。
+- [最终本地 RPC 成对验收与 SMB 组合语义](validation/final-local-rpc-acceptance.md)。
 - [CI](ci.md)、[质量门禁](quality.md)、[验证方法](validation.md)、[产品验收标准](22-acceptance.md)、[发行检查清单](validation/release-checklist.md)。
 
 ## 来源与许可

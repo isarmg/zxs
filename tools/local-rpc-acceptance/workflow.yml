@@ -1,0 +1,188 @@
+name: Final bounded paired RPC and SMB semantics
+on:
+  workflow_dispatch:
+    inputs:
+      validation_sha:
+        description: Exact normal candidate commit with its original CI contract
+        required: true
+        type: string
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: final-local-rpc-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  CARGO_NET_OFFLINE: 'true'
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: '1'
+  CFLAGS: '-march=x86-64 -mtune=generic'
+  RPC_SOURCE_SHA: ${{ inputs.validation_sha }}
+jobs:
+  validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.validation_sha }}
+      - name: Authenticate normal source and run mechanical checks before Rust
+        env:
+          RPC_SOURCE_SHA: ${{ inputs.validation_sha }}
+        run: |
+          python3 -c 'import os, re, subprocess; sha=os.environ["RPC_SOURCE_SHA"]; assert re.fullmatch("[0-9a-f]{40}", sha); assert subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip() == sha'
+          bash .github/scripts/check.sh static
+      - name: Initialize isolated repository toolchain
+        run: |
+          bash .github/scripts/initialize-cargo-home.sh
+          rustup show active-toolchain
+          rustc --version
+      - name: Affected format and strict diagnostics
+        run: |
+          cargo fmt -p storage-engine -p storage-server -- --check
+          rustfmt --edition 2024 --check --config skip_children=true test/engine/bench/final_rpc_seed.rs test/server/bench/final_rpc_requests.rs test/server/bench/final_rpc_baseline_read.rs test/server/bench/final_rpc_current_read.rs
+          python3 .github/scripts/check-rust-diagnostics.py -- cargo clippy --locked --offline -p storage-engine -p storage-server --all-targets --message-format=json -- -D warnings
+          cargo check --locked --offline -p storage-server --no-default-features --all-targets
+      - name: Actual RPC and protocol consumers including bounded restart lifecycle
+        run: |
+          cargo test --locked --offline -p storage-server --lib smb_rpc::tests -- --test-threads=2
+          cargo test --locked --offline -p smb-protocol
+  build:
+    needs: validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      manifest: ${{ steps.seal.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.validation_sha }}
+          path: harness
+          sparse-checkout: |
+            tools/local-rpc-acceptance
+            test/engine/bench
+            test/server/bench
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: e2f33d9882cf7263412d9370b6a703e0b216357d
+          path: baseline
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: d3eefd289e53a2803703870fe4250d08cadff9b5
+          path: candidate
+      - name: Authenticate source and apply only test adapters
+        run: |
+          python3 harness/tools/local-rpc-acceptance/screen.py prepare "$GITHUB_WORKSPACE" "$RUNNER_TEMP/rpc-evidence"
+          printf 'CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu\n' >> "$GITHUB_ENV"
+          printf 'CARGO_ENCODED_RUSTFLAGS=-C\x1ftarget-cpu=x86-64\n' >> "$GITHUB_ENV"
+          printf 'CARGO_HOME=%s\n' "$(mktemp -d "$RUNNER_TEMP/rpc-cargo.XXXXXX")" >> "$GITHUB_ENV"
+          uname -a > "$RUNNER_TEMP/rpc-evidence/uname.txt"
+          lscpu > "$RUNNER_TEMP/rpc-evidence/lscpu.txt"
+          free -b > "$RUNNER_TEMP/rpc-evidence/memory.txt"
+          df -B1 > "$RUNNER_TEMP/rpc-evidence/disk.txt"
+      - name: Build release seed and actual server RPC test executables
+        timeout-minutes: 75
+        run: |
+          for product in baseline candidate; do
+            (
+              cd "$product"
+              rustc --version | tee "$RUNNER_TEMP/rpc-evidence/$product-rustc.txt"
+              grep -q '^rustc 1\.99\.0 ' "$RUNNER_TEMP/rpc-evidence/$product-rustc.txt"
+              export CARGO_TARGET_DIR="$RUNNER_TEMP/rpc-target-$product"
+              cargo fmt -p storage-engine -p storage-server -- --check
+              python3 .github/scripts/check-rust-diagnostics.py -- cargo clippy --locked --offline --release --target x86_64-unknown-linux-gnu -p storage-engine --bin final_rpc_seed --features fault-injection --message-format=json -- -D warnings
+              python3 .github/scripts/check-rust-diagnostics.py -- cargo clippy --locked --offline --release --target x86_64-unknown-linux-gnu -p storage-server --lib --tests --message-format=json -- -D warnings
+              cargo build --locked --offline --release --target x86_64-unknown-linux-gnu -p storage-engine --bin final_rpc_seed --features fault-injection --message-format=json > "$RUNNER_TEMP/rpc-evidence/$product-seed.jsonl" 2> "$RUNNER_TEMP/rpc-evidence/$product-seed.log" || { cat "$RUNNER_TEMP/rpc-evidence/$product-seed.log"; exit 1; }
+              cargo test --locked --offline --release --target x86_64-unknown-linux-gnu -p storage-server --lib --no-run --message-format=json > "$RUNNER_TEMP/rpc-evidence/$product-server.jsonl" 2> "$RUNNER_TEMP/rpc-evidence/$product-server.log" || { cat "$RUNNER_TEMP/rpc-evidence/$product-server.log"; tail -30 "$RUNNER_TEMP/rpc-evidence/$product-server.jsonl"; exit 1; }
+            )
+          done
+      - name: Seal exact binaries and unchanged source
+        id: seal
+        run: |
+          python3 harness/tools/local-rpc-acceptance/screen.py seal "$GITHUB_WORKSPACE" "$RUNNER_TEMP/rpc-evidence" "$RUNNER_TEMP/rpc-bundle"
+          printf 'manifest=%s\n' "$(sha256sum "$RUNNER_TEMP/rpc-bundle/manifest.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rpc-binaries
+          path: ${{ runner.temp }}/rpc-bundle/*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: rpc-build-evidence
+          path: ${{ runner.temp }}/rpc-evidence/*
+          if-no-files-found: error
+          retention-days: 14
+  pair:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        commits: [22, 220]
+        pair: [0, 1]
+    env:
+      RPC_MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.validation_sha }}
+          sparse-checkout: |
+            tools/local-rpc-acceptance
+            test/engine/bench
+            test/server/bench
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: rpc-binaries
+          path: ${{ runner.temp }}/rpc-bundle
+      - name: Execute bounded paired local requests
+        run: |
+          python3 tools/local-rpc-acceptance/screen.py run "$RUNNER_TEMP/rpc-bundle" "$RUNNER_TEMP/rpc-results" '${{ matrix.commits }}' '${{ matrix.pair }}'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: rpc-${{ matrix.commits }}-${{ matrix.pair }}
+          path: ${{ runner.temp }}/rpc-results/**
+          if-no-files-found: error
+          retention-days: 14
+  summary:
+    if: always()
+    needs: [validation, build, pair]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RPC_MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.validation_sha }}
+          sparse-checkout: |
+            tools/local-rpc-acceptance
+            test/engine/bench
+            test/server/bench
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: rpc-*-*
+          path: ${{ runner.temp }}/rpc-pairs
+      - name: Evaluate prospective criteria without rewriting historical gate
+        run: |
+          python3 tools/local-rpc-acceptance/screen.py summary "$RUNNER_TEMP/rpc-pairs" "$RUNNER_TEMP/rpc-screen.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: rpc-summary
+          path: ${{ runner.temp }}/rpc-screen.json
+          if-no-files-found: error
+          retention-days: 14
