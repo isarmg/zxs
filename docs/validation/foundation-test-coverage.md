@@ -107,6 +107,7 @@ test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-
 | --- | --- |
 | `python3 .github/scripts/check-foundation-behaviour.py` | 全部套件逐名一致并通过，日志含提交 SHA |
 | `python3 tools/rust-sources/foundation_coverage.py --check` | 生成映射与当前仓库一致 |
+| `python3 tools/rust-sources/architecture.py verify` | 每批前置检查消费者索引；manifest 变化须刷新并核对实际边差异 |
 | `python3 -m unittest discover -s test/ci -p 'test_*.py'` | 通过 |
 | `python3 tools/rust-sources/manage.py verify --metadata` | 通过 |
 | `bash .github/scripts/check-foundation.sh foundation-async` | 最终提交在固定工具链、所需 WASM 目标的 GitHub 环境完整通过；缺失工具不能记为通过 |
@@ -138,9 +139,9 @@ TLS 的项目消费者回归另由默认工作区成员 `storage-client` 的 `tl
 - nu-ansi-term 保留原始 README 与许可证，当前 [可执行示例](nu-ansi-term-examples.md) 按已存在 API 把 `RGB` 拼写适配为 `Rgb`，并将两种安装选项分为各自有效的 TOML 块。根 test 中的 Rustdoc wrapper 是项目新作，Markdown 位于 docs。69 lib、原 53 库文档执行和 README 的 12 执行／1 Windows ignored 均保留；没有恢复旧 API 或改测试期望。
 - 四项登记复用已有正常 CI 证据：clang-sys 的真实翻译单元／token 输出断言，rayon／rayon-core 的真实 pool.install 完整归约结果，以及 crc32fast 的流 CRC 已知向量、拼接和坏 gzip CRC 拒绝。它们是 P，不声称执行了这些包自己的保留上游套件，也不作性能或时序证明。
 
-因此原 101 项累计补齐 58 项，当前剩 43 项。剩余 31 个现有本地路线为：`allocator-api2`、`console_error_panic_hook`、`const_str_slice_concat`、`displaydoc`、`equivalent`、`foldhash`、`gloo-events`、`gloo-timers`、`html-escape`、`icu_locale_core`、`icu_provider`、`indexmap`、`js-sys`、`libloading`、`litemap`、`mime_guess`、`next_tuple`、`or_poisoned`、`pin-project-lite`、`proc-macro2-diagnostics`、`rust-source-format`、`stable_deref_trait`、`subtle`、`sync_wrapper`、`throw_error`、`unicode-ident`、`wasm-encoder`、`wasmparser`、`web-sys`、`yoke`、`zerofrom`。浏览器组件须执行真实 WASM／Chrome，宿主零测试不能充数。
+批 2 结束时，原 101 项累计补齐 58 项，剩 43 项。当时 31 个现有本地路线为：`allocator-api2`、`console_error_panic_hook`、`const_str_slice_concat`、`displaydoc`、`equivalent`、`foldhash`、`gloo-events`、`gloo-timers`、`html-escape`、`icu_locale_core`、`icu_provider`、`indexmap`、`js-sys`、`libloading`、`litemap`、`mime_guess`、`next_tuple`、`or_poisoned`、`pin-project-lite`、`proc-macro2-diagnostics`、`rust-source-format`、`stable_deref_trait`、`subtle`、`sync_wrapper`、`throw_error`、`unicode-ident`、`wasm-encoder`、`wasmparser`、`web-sys`、`yoke`、`zerofrom`。浏览器组件须执行真实 WASM／Chrome，宿主零测试不能充数。
 
-以下 12 个包的保留 lib 路线仍缺软件提供者；本地实际消费者测试仍可单独补齐，不属于人工设备阻塞。
+批 2 结束时，以下 12 个包的保留 lib 路线仍缺软件提供者；本地实际消费者测试可单独补齐，不属于人工设备阻塞。
 
 | 包 | 当前保留 lib 路线的具体缺口 |
 | --- | --- |
@@ -155,6 +156,19 @@ TLS 的项目消费者回归另由默认工作区成员 `storage-client` 的 `tl
 | convert_case | rstest |
 
 crabgrind 0.1.9 不属于原 101 项（rustls-pki-types 已有 P）。本地已用官方发行归档和匹配 Build ID 的 Debian 调试符号，在真实 Valgrind 下执行一个精确 codepoint 用例，未走 Native／SKIPPED；这仍是临时来源探针，正式来源导入和 CI 接线未完成，不计入本批覆盖。没有重复 TLS 八项消费者测试。erased 的功能测试与既有版权材料缺口独立，本批不扩充法律结论。
+
+### 原生容器与宿主宏消费者批次
+
+下一批新增五个目标，实际执行 20 项测试：14 项项目新作消费者测试与 6 项保留上游测试，全部 0 failed、0 ignored、0 filtered out。原 76 条清单记录逐项保留，未重跑既有套件；新增项目消费者使用固定 Rust 1.99／edition 2024，各本地依赖保持生产 profile 的真实特性。
+
+- 容器夹具针对 allocator-api2 的容量溢出错误类型及数据／析构保留、Equivalent 借用比较、FoldHash builder 克隆与 map 增长／删除、LiteMap 无 alloc 的借用切片搜索／范围边界、StableDeref 地址、Yoke 借用 cart、ZeroFrom 借用派生作值和所有权断言。
+- SyncWrapper 覆盖独占取值及非 Sync future 的 Pending／Ready 委托；sharded-slab 覆盖单线程 guard 释放前保留值及延迟析构。这两项分别不包含取消／真实 waker 调度和并发交错证明。
+- 宿主宏夹具覆盖 Displaydoc 借用字段／数值上下文、diagnostics 字面量转义及 joined／spanned 子消息、源码格式化的优先级 golden 与重新解析。html-escape 覆盖真实双引号属性转义及实体往返／未知实体保留。
+- IndexMap 的两个借用键集成测试与 pin-project-lite 的四个 drop_order 测试按原字节执行，没有恢复 fnv／static_assertions 等缺失提供者。
+
+上述 15 个组件有原生消费者或宿主 compile 角色，P 登记均指向实际方法／trait 与结果断言，不把仅链接的依赖算执行。没有将仅 Web 运行的组件通过宿主测试记为闭环，也未修改生产源码、Cargo、工作流、来源身份或现有测试期望。新增 diagnostics 夹具曾把不带 span 的 help 误认为独立消息；读取现行稳定 emitter 契约后分别测试合并与带 span 两条路径，没有据此修改产品实现。
+
+原 101 项至此累计补齐 73 项，剩 28 项：17 个现有本地路线与 11 个保留 lib 缺测试软件的路线。精确包名及当前 P／U 范围见[生成映射](foundation-test-coverage-map.md)，这仍是限定行为证据，不表示组件全部 API／目标／性质已经覆盖。Valgrind 的本地负对照也已按预期检测到 tainted branch 并以 97 拒绝；它和先前精确 codepoint 探针尚未完成正式 CI 接线，未混入本批数字。
 
 ### 行为套件的初次集成记录
 

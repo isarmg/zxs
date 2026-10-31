@@ -86,11 +86,18 @@ class FoundationCoverageMapTests(unittest.TestCase):
             self.assertEqual(package["classification"], expected, package["package"])
             self.assertEqual(package["risk"] is None, expected != "needed-not-executed", package["package"])
 
-    def test_behaviour_suites_count_as_executed_retained_tests(self):
+    def test_behaviour_suites_preserve_retained_and_project_authored_classifications(self):
         packages = {package["package"]: package for package in MAP["packages"]}
-        for name in BEHAVIOUR.UNIT_SUITES + tuple(suite.subject for suite in BEHAVIOUR.INTEGRATION_SUITES):
+        for name in BEHAVIOUR.UNIT_SUITES + tuple(suite.subject for suite in BEHAVIOUR.STANDALONE_SUITES):
             self.assertEqual(packages[name]["classification"], "executed", name)
             self.assertIn("U", {gate["kind"] for gate in packages[name]["gates"]}, name)
+        for suite in BEHAVIOUR.INTEGRATION_SUITES:
+            package = packages[suite.subject]
+            self.assertEqual(package["classification"], "executed", suite.subject)
+            expected = {"U" if path.startswith("test/foundation/") else "P" for path in suite.tests}
+            recorded = {gate["kind"] for gate in package["gates"]
+                        if gate["scripts"] == [".github/scripts/check-foundation-behaviour.py"]}
+            self.assertEqual(recorded, expected, suite.subject)
 
     def test_retired_records_are_listed_without_live_packages(self):
         records = {record["record"] for record in MAP["retired"]}

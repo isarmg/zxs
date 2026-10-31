@@ -2,6 +2,25 @@
   "generator": ".github/scripts/check-foundation-behaviour.py --write",
   "schema": 1,
   "suites": {
+    "integration:allocator-api2": {
+      "features": [
+        "alloc"
+      ],
+      "subject": "allocator-api2",
+      "targets": {
+        "foundation-native-collections": [
+          "allocator_reserve_overflow_preserves_values_and_drain_drops_once",
+          "equivalent_borrowed_keys_preserve_equality_and_ordering",
+          "foldhash_cloned_builder_preserves_map_lookup_after_growth_and_removal",
+          "litemap_borrowed_sorted_store_checks_search_and_range_boundaries",
+          "sharded_slab_removal_keeps_an_existing_guard_alive_until_its_release",
+          "stable_deref_bounds_keep_box_moves_and_rc_clones_at_the_same_address",
+          "sync_wrapper_requires_exclusive_access_and_polls_a_non_sync_future",
+          "yoke_borrowed_cart_preserves_its_backing_storage_when_moved",
+          "zerofrom_derive_borrows_text_and_slice_without_copying_the_payload"
+        ]
+      }
+    },
     "integration:bytes": {
       "features": [
         "default",
@@ -1315,6 +1334,17 @@
         ]
       }
     },
+    "integration:displaydoc": {
+      "features": [],
+      "subject": "displaydoc",
+      "targets": {
+        "foundation-codegen-consumers": [
+          "diagnostics_escape_messages_as_literals_and_keep_child_context",
+          "displaydoc_preserves_borrowed_values_and_numeric_error_context",
+          "source_formatter_preserves_expression_precedence_and_reparses_its_output"
+        ]
+      }
+    },
     "integration:fastrand": {
       "features": [
         "alloc",
@@ -1791,6 +1821,33 @@
         ]
       }
     },
+    "integration:html-escape": {
+      "features": [
+        "default",
+        "std"
+      ],
+      "subject": "html-escape",
+      "targets": {
+        "foundation-html-consumer": [
+          "attribute_encoding_keeps_untrusted_quotes_and_markup_inside_the_value",
+          "entity_decoding_handles_named_numeric_and_unrecognized_entities"
+        ]
+      }
+    },
+    "integration:indexmap": {
+      "features": [
+        "default",
+        "serialization",
+        "std"
+      ],
+      "subject": "indexmap",
+      "targets": {
+        "equivalent_trait": [
+          "test_lookup",
+          "test_string_str"
+        ]
+      }
+    },
     "integration:itoa": {
       "features": [],
       "subject": "itoa",
@@ -1925,6 +1982,18 @@
           "same_parker",
           "unpark",
           "waker"
+        ]
+      }
+    },
+    "integration:pin-project-lite": {
+      "features": [],
+      "subject": "pin-project-lite",
+      "targets": {
+        "drop_order": [
+          "enum_struct",
+          "project_replace_panic",
+          "struct_pinned",
+          "struct_unpinned"
         ]
       }
     },

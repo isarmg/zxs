@@ -239,6 +239,15 @@
       "detail": "csr-template.rs fixture lib test (1)"
     },
     {
+      "package": "equivalent",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-native-collections.rs::equivalent_borrowed_keys_preserve_equality_and_ordering; borrowed equality and ordering, not merely linked"
+    },
+    {
       "package": "error-definition",
       "kind": "U",
       "shard": "foundation-language",
@@ -279,6 +288,15 @@
         ".github/scripts/check-serialization-family.py"
       ],
       "detail": "serialization-family.rs only; retained tests NOT run (and modules/src/tests.rs wiring is broken)"
+    },
+    {
+      "package": "foldhash",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-native-collections.rs::foldhash_cloned_builder_preserves_map_lookup_after_growth_and_removal; fixed builder clone and map update/remove semantics, no distribution or security claim"
     },
     {
       "package": "form-codec",
@@ -449,6 +467,15 @@
       "detail": "rustc --test src/lib.rs (std and no_std); all lib-wired unit tests"
     },
     {
+      "package": "litemap",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-native-collections.rs::litemap_borrowed_sorted_store_checks_search_and_range_boundaries; exact no-alloc production features and slice-backed store"
+    },
+    {
       "package": "log",
       "kind": "P",
       "shard": "foundation-language",
@@ -519,6 +546,15 @@
         ".github/scripts/check-foundation.sh"
       ],
       "detail": "cargo test --lib -p password-hash"
+    },
+    {
+      "package": "proc-macro2-diagnostics",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-codegen-consumers.rs::diagnostics_escape_messages_as_literals_and_keep_child_context; stable host emitter literal escaping and both joined/spanned child contracts"
     },
     {
       "package": "random-generator-core",
@@ -600,6 +636,15 @@
         "tools/rust-sources/check_ring_tests.py"
       ],
       "detail": "cargo test -p ring (lib+integration+doc), debug/release x default/std + release std,slow_tests, packaged and localgen"
+    },
+    {
+      "package": "rust-source-format",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-codegen-consumers.rs::source_formatter_preserves_expression_precedence_and_reparses_its_output; exact formatted precedence plus parse/idempotence under host compiler features"
     },
     {
       "package": "rust-syntax",
@@ -716,6 +761,15 @@
       "detail": "crypto-consumers.rs only; retained sha2 tests/data NOT run"
     },
     {
+      "package": "sharded-slab",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-native-collections.rs::sharded_slab_removal_keeps_an_existing_guard_alive_until_its_release; deferred reclamation and drop-once, not a concurrent scheduling proof"
+    },
+    {
       "package": "shell-tokenizer",
       "kind": "P",
       "shard": "foundation-platform",
@@ -779,6 +833,15 @@
       "detail": "--doc types::Type, --lib (sqlite-bundled; +url; --all-features) with minimum counts"
     },
     {
+      "package": "stable_deref_trait",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-native-collections.rs::stable_deref_bounds_keep_box_moves_and_rc_clones_at_the_same_address; positive trait bounds, Box move and Rc clone/drop address identity"
+    },
+    {
       "package": "subtle",
       "kind": "I",
       "shard": "foundation-crypto",
@@ -786,6 +849,15 @@
         ".github/scripts/check-ctutils.py"
       ],
       "detail": "compiled as ctutils dependency only"
+    },
+    {
+      "package": "sync_wrapper",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-native-collections.rs::sync_wrapper_requires_exclusive_access_and_polls_a_non_sync_future; Sync bound and real Pending/Ready polling with actual futures feature"
     },
     {
       "package": "synchronization",
@@ -1107,6 +1179,24 @@
         ".github/scripts/check-foundation-consumers.py"
       ],
       "detail": "foundation-consumers.rs only"
+    },
+    {
+      "package": "yoke",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-native-collections.rs::yoke_borrowed_cart_preserves_its_backing_storage_when_moved; borrowed cart and payload identity under actual derive/zerofrom features, no alloc feature added"
+    },
+    {
+      "package": "zerofrom",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-native-collections.rs::zerofrom_derive_borrows_text_and_slice_without_copying_the_payload; values and borrowed pointer identity"
     },
     {
       "package": "zeroize",
