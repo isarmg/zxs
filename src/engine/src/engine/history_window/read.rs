@@ -90,18 +90,10 @@ impl Engine {
     ) -> Result<HistoryResolvedContext> {
         cancel.checkpoint()?;
         let file = request.file_id.as_str();
-        let mut first = None::<&crate::FileVersion>;
-        for version in self.state.versions.values() {
-            cancel.checkpoint()?;
-            if version.file_id == file
-                && first.is_none_or(|first| version.version_id < first.version_id)
-            {
-                first = Some(version);
-            }
-        }
-        let version = first.ok_or_else(|| {
-            Error::new(storage_contract::ErrorCode::FileNotFound, "file not found")
-        })?;
+        let version = nodes::owner_version(self.state.versions.values(), file, cancel)?
+            .ok_or_else(|| {
+                Error::new(storage_contract::ErrorCode::FileNotFound, "file not found")
+            })?;
         let repository = self
             .planning_context()
             .repository_for_history(&version.history_tree_id)?;
