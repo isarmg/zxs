@@ -3,6 +3,9 @@ use crate::journal::RecordType;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 
+#[path = "lifecycle_tests.rs"]
+mod lifecycle_tests;
+
 fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
