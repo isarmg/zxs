@@ -26,6 +26,8 @@ impl Session {
 mod admission_tests;
 #[path = "binding_tests.rs"]
 mod binding_tests;
+#[path = "bounded_lifecycle_tests.rs"]
+mod bounded_lifecycle_tests;
 #[path = "close_tests.rs"]
 mod close_tests;
 #[path = "directory_tests.rs"]
