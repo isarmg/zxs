@@ -34,6 +34,10 @@ name = "workspace_commit_replay"
 path = "../../test/engine/integration/workspace_commit_replay.rs"
 
 [[test]]
+name = "historical_workspace_lifecycle"
+path = "../../test/engine/integration/historical_workspace_lifecycle.rs"
+
+[[test]]
 name = "workspace_namespace_preconditions"
 path = "../../test/engine/integration/workspace_namespace_preconditions.rs"
 

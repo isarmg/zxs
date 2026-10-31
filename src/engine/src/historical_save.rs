@@ -105,6 +105,105 @@ fn final_entries(
 }
 
 impl Engine {
+    /// Bind a historical workspace to its exact published plan and original
+    /// operation. The derived workspace lookup supplies no authority itself.
+    pub(crate) fn historical_workspace_completion_fence(
+        &self,
+        workspace: &Workspace,
+    ) -> Result<Option<u64>> {
+        let Some(id) = self.historical_workspace_operation(&workspace.workspace_id) else {
+            return Ok(None);
+        };
+        let Some(operation) = self.state.operations.get(&id) else {
+            return Ok(None);
+        };
+        if operation.operation_id != id
+            || operation.kind != "history.historical_save"
+            || !matches!(
+                operation.commit_state,
+                CommitState::Published | CommitState::PublishedDegraded
+            )
+            || self.state.operation_principals.get(&id) != Some(&workspace.principal)
+            || operation.result["workspace_id"].as_str() != Some(workspace.workspace_id.as_str())
+            || operation.result["source_commit_id"].as_str() != Some(workspace.base_head.as_str())
+        {
+            return Ok(None);
+        }
+        let Some(plan_id) = operation.result["plan_id"].as_str() else {
+            return Ok(None);
+        };
+        // Local plan files never prove publication. Only the plan retained in
+        // the same authoritative State may participate in this binding.
+        if !self.state.plans.contains_key(plan_id) {
+            return Ok(None);
+        }
+        let plan = self.plan(plan_id).map_err(|source| {
+            source.context(
+                ErrorCode::RecoveryRequired,
+                "historical workspace plan is not bound",
+            )
+        })?;
+        if plan.kind != "historical_save"
+            || plan.state != PlanState::Completed
+            || plan.principal != workspace.principal
+            || plan.input["workspace_id"].as_str() != Some(workspace.workspace_id.as_str())
+            || plan.input["source_commit_id"].as_str() != Some(workspace.base_head.as_str())
+            || operation.history_tree_id.as_deref() != plan.input["history_tree_id"].as_str()
+            || !self
+                .state
+                .branches
+                .get(&workspace.branch_id)
+                .is_some_and(|branch| {
+                    Some(branch.history_tree_id.as_str()) == operation.history_tree_id.as_deref()
+                })
+            || Self::native_request_digest(
+                "history.historical_save",
+                &workspace.principal,
+                &json!({"plan_id":plan.plan_id,"plan_digest":plan.digest}),
+            )? != operation.request_digest
+        {
+            return Ok(None);
+        }
+        let fence = storage_contract::parse_u64_decimal(
+            plan.input["workspace_fencing_token"]
+                .as_str()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::RecoveryRequired,
+                        "historical workspace plan lacks fencing token",
+                    )
+                })?,
+        )
+        .map_err(|source| {
+            Error::from(source).context(
+                ErrorCode::RecoveryRequired,
+                "invalid historical workspace fencing token",
+            )
+        })?;
+        let fence = std::num::NonZeroU64::new(fence)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "historical workspace fencing token is zero",
+                )
+            })?
+            .get();
+        let completed = fence.checked_add(1).ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "workspace fencing generation exhausted",
+            )
+        })?;
+        let mut frozen = workspace.clone();
+        frozen.fencing_token = fence;
+        if plan.input["sealed_manifest_hash"].as_str()
+            != Some(crate::wire::manifest_hash(&frozen)?.as_str())
+        {
+            return Ok(None);
+        }
+        Ok(Some(completed))
+    }
+
     pub fn create_historical_workspace(
         &mut self,
         branch: &str,
@@ -501,15 +600,26 @@ impl Engine {
         )?;
         if let Some(mut workspace) = workspace {
             workspace.state = WorkspaceState::Committed;
-            workspace.fencing_token = workspace.fencing_token.checked_add(1).ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::ResourceLimit,
-                    "workspace fencing token exhausted",
-                )
-            })?;
-            self.persist_workspace(&workspace)?;
-            self.workspaces
-                .insert(workspace.workspace_id.clone(), workspace);
+            let completion = (|| {
+                workspace.fencing_token =
+                    workspace.fencing_token.checked_add(1).ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::ResourceLimit,
+                            "workspace fencing token exhausted",
+                        )
+                    })?;
+                self.remember_historical_workspace_operation(
+                    &workspace.workspace_id,
+                    result.operation_id,
+                )?;
+                self.persist_terminal_workspace(&workspace)
+            })();
+            if let Err(source) = completion {
+                self.blocked = true;
+                return Err(Error::PublishedWorkspaceReconciliation(Box::new(
+                    PublishedWorkspaceReconciliation::new(result, &workspace, source),
+                )));
+            }
         }
         Ok(result)
     }

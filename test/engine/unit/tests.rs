@@ -4383,3 +4383,6 @@ fn public_envelope(body: json_codec::Value) -> storage_contract::PublicCommitEnv
 
 #[path = "published_workspace_retirement.rs"]
 mod published_workspace_retirement;
+
+#[path = "historical_workspace_lifecycle.rs"]
+mod historical_workspace_lifecycle;

@@ -7,6 +7,7 @@ use crate::journal::RecordType;
 use crate::{disk::*, *};
 use std::{
     borrow::Cow,
+    collections::{BTreeMap, btree_map::Entry},
     fs,
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -223,6 +224,20 @@ impl Engine {
         let locations = self.workspace_locations()?;
         self.workspaces.clear();
         self.reset_workspace_budget();
+        self.historical_workspace_operations.clear();
+        // Build this derived lookup once per admitted State, rather than scan
+        // permanent operations for every manifest or terminal write.
+        for (id, operation) in self.state.operations.iter() {
+            if operation.kind == "history.historical_save"
+                && let Some(workspace) = operation.result["workspace_id"].as_str()
+            {
+                index_historical_operation(
+                    &mut self.historical_workspace_operations,
+                    workspace,
+                    *id,
+                )?;
+            }
+        }
         // The accounting index is bounded by all admitted metadata bytes, not
         // active record count. No decoded cold manifests or complete path list
         // survive this iteration; each ID is reconciled before admitting another.
@@ -404,14 +419,14 @@ impl Engine {
         let kind = if !loaded.consistent {
             None
         } else if self.empty_aborted_workspace(workspace)
-            && workspace_directories_clear(locations, id, false)?
+            && workspace_directories_clear(locations, id, WorkspaceColdKind::EmptyAbort)?
         {
             Some(WorkspaceColdKind::EmptyAbort)
         } else if loaded.terminal
-            && self.published_normal_workspace(workspace)?
-            && workspace_directories_clear(locations, id, true)?
+            && let Some(kind) = self.published_workspace_kind(workspace)?
+            && workspace_directories_clear(locations, id, kind)?
         {
-            Some(WorkspaceColdKind::Published)
+            Some(kind)
         } else {
             None
         };
@@ -427,7 +442,6 @@ impl Engine {
 
     fn empty_aborted_workspace(&self, workspace: &Workspace) -> bool {
         workspace.state == WorkspaceState::Aborted
-            && workspace.purpose == WorkspacePurpose::Normal
             && workspace.files.is_empty()
             && workspace.namespace_operations.is_empty()
     }
@@ -463,7 +477,7 @@ impl Engine {
         if !loaded.consistent
             || workspace_mirrors(&paths) != Some(mirrors)
             || blake3::hash(&loaded.canonical) != fingerprint
-            || !workspace_directories_clear(&locations, id, kind == WorkspaceColdKind::Published)?
+            || !workspace_directories_clear(&locations, id, kind)?
         {
             return Err(recovery_required(
                 "cold workspace evidence changed; reopen for reconciliation",
@@ -495,6 +509,43 @@ impl Engine {
                 .lock()
                 .expect("invariant: upload preparation lock poisoned")
                 .contains(id)
+    }
+
+    pub(crate) fn remember_historical_workspace_operation(
+        &mut self,
+        workspace: &str,
+        operation: OperationId,
+    ) -> Result<()> {
+        index_historical_operation(
+            &mut self.historical_workspace_operations,
+            workspace,
+            operation,
+        )
+    }
+
+    pub(crate) fn historical_workspace_operation(&self, workspace: &str) -> Option<OperationId> {
+        self.historical_workspace_operations.get(workspace).copied()
+    }
+
+    fn published_workspace_kind(&self, workspace: &Workspace) -> Result<Option<WorkspaceColdKind>> {
+        match workspace.purpose {
+            WorkspacePurpose::Normal => Ok(self
+                .published_normal_workspace(workspace)?
+                .then_some(WorkspaceColdKind::Published)),
+            WorkspacePurpose::HistoricalBranch => {
+                let Some(completed) = self.historical_workspace_completion_fence(workspace)? else {
+                    return Ok(None);
+                };
+                let terminal = match workspace.state {
+                    WorkspaceState::Committed => workspace.fencing_token == completed,
+                    WorkspaceState::Aborted => completed
+                        .checked_add(1)
+                        .is_some_and(|closed| workspace.fencing_token >= closed),
+                    WorkspaceState::Open | WorkspaceState::Sealed => false,
+                };
+                Ok(terminal.then_some(WorkspaceColdKind::HistoricalPublished))
+            }
+        }
     }
 
     fn published_normal_workspace(&self, workspace: &Workspace) -> Result<bool> {
@@ -564,10 +615,11 @@ impl Engine {
                 kind,
             }
         } else if !owned {
-            let published = self.published_normal_workspace(workspace)?;
-            if !published && !self.empty_aborted_workspace(workspace) {
-                WorkspaceRetention::Resident
-            } else {
+            let kind = self.published_workspace_kind(workspace)?.or_else(|| {
+                self.empty_aborted_workspace(workspace)
+                    .then_some(WorkspaceColdKind::EmptyAbort)
+            });
+            if let Some(kind) = kind {
                 // Classify before either write. Actual I/O failures cannot turn
                 // a durable terminal result into a later derived-state refusal.
                 let locations = self.workspace_locations()?;
@@ -585,20 +637,18 @@ impl Engine {
                     ));
                 }
                 if workspace_mirrors(&paths) == Some(WorkspaceMirrors::Both)
-                    && workspace_directories_clear(&locations, id, published)?
+                    && workspace_directories_clear(&locations, id, kind)?
                 {
                     WorkspaceRetention::Cold {
                         fingerprint: blake3::hash(&canonical),
                         mirrors: WorkspaceMirrors::Both,
-                        kind: if published {
-                            WorkspaceColdKind::Published
-                        } else {
-                            WorkspaceColdKind::EmptyAbort
-                        },
+                        kind,
                     }
                 } else {
                     WorkspaceRetention::Resident
                 }
+            } else {
+                WorkspaceRetention::Resident
             }
         } else {
             WorkspaceRetention::Resident
@@ -849,53 +899,19 @@ impl Engine {
         }
         if workspace.purpose == WorkspacePurpose::HistoricalBranch
             && workspace.state != WorkspaceState::Aborted
+            && let Some(next) = self.historical_workspace_completion_fence(workspace)?
         {
-            for plan in self.state.plans.values().filter(|plan| {
-                plan.kind == "historical_save"
-                    && plan.state == PlanState::Completed
-                    && plan.principal == workspace.principal
-                    && plan.input["workspace_id"].as_str() == Some(workspace.workspace_id.as_str())
-                    && plan.input["source_commit_id"].as_str() == Some(workspace.base_head.as_str())
-            }) {
-                let fence = std::num::NonZeroU64::new(
-                    storage_contract::parse_u64_decimal(
-                        plan.input["workspace_fencing_token"]
-                            .as_str()
-                            .ok_or_else(|| {
-                                recovery_required("historical workspace plan lacks fencing token")
-                            })?,
-                    )
-                    .map_err(|source| {
-                        Error::from(source).context(
-                            ErrorCode::RecoveryRequired,
-                            "invalid historical workspace fencing token",
-                        )
-                    })?,
-                )
-                .ok_or_else(|| recovery_required("historical workspace fencing token is zero"))?;
-                let fence = fence.get();
-                let next = fence
-                    .checked_add(1)
-                    .ok_or_else(|| recovery_required("workspace fencing generation exhausted"))?;
-                let mut frozen = workspace.clone();
-                frozen.fencing_token = fence;
-                if plan.input["sealed_manifest_hash"].as_str()
-                    != Some(crate::wire::manifest_hash(&frozen)?.as_str())
-                {
-                    continue;
-                }
-                if !matches!(
-                    workspace.state,
-                    WorkspaceState::Sealed | WorkspaceState::Committed
-                ) || !(workspace.fencing_token == fence || workspace.fencing_token == next)
-                    || completion.is_some_and(|other| other != next)
-                {
-                    return Err(recovery_required(
-                        "historical workspace plan conflicts with retained fence or state",
-                    ));
-                }
-                completion = Some(next);
+            if !matches!(
+                workspace.state,
+                WorkspaceState::Sealed | WorkspaceState::Committed
+            ) || !(workspace.fencing_token == next - 1 || workspace.fencing_token == next)
+                || completion.is_some_and(|other| other != next)
+            {
+                return Err(recovery_required(
+                    "historical workspace plan conflicts with retained fence or state",
+                ));
             }
+            completion = Some(next);
         }
         if completion.is_none()
             && let Some(error) = damage
@@ -922,6 +938,25 @@ impl Engine {
         }
         Ok(completion.is_some())
     }
+}
+
+fn index_historical_operation(
+    index: &mut BTreeMap<String, OperationId>,
+    workspace: &str,
+    operation: OperationId,
+) -> Result<()> {
+    match index.entry(workspace.to_owned()) {
+        Entry::Vacant(entry) => {
+            entry.insert(operation);
+        }
+        Entry::Occupied(entry) if *entry.get() == operation => {}
+        Entry::Occupied(_) => {
+            return Err(recovery_required(
+                "historical workspace has conflicting published operations",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn workspace_absent(error: &Error) -> bool {
@@ -985,7 +1020,7 @@ fn workspace_paths<'a>(
 fn workspace_directories_clear(
     locations: &[WorkspaceLocation],
     id: &str,
-    published: bool,
+    kind: WorkspaceColdKind,
 ) -> Result<bool> {
     // Mirror discovery is independent, so an early unknown-material witness
     // cannot hide a third mirror. FULL generations remain on their original paths.
@@ -1004,11 +1039,16 @@ fn workspace_directories_clear(
             if name == "workspace.json" {
                 continue;
             }
-            if !published
-                || !(name == "commit-request.json"
-                    || name == "wire-request.json"
-                    || retained_full_generation(entry.as_path()))
-            {
+            let retained = match kind {
+                WorkspaceColdKind::EmptyAbort => false,
+                WorkspaceColdKind::Published => {
+                    name == "commit-request.json"
+                        || name == "wire-request.json"
+                        || retained_full_generation(entry.as_path())
+                }
+                WorkspaceColdKind::HistoricalPublished => retained_full_generation(entry.as_path()),
+            };
+            if !retained {
                 return Ok(false);
             }
             // A known name cannot hide a directory, symlink or special file.

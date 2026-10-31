@@ -90,6 +90,9 @@ pub struct Engine {
     pub(crate) disk_resources: Arc<DiskResources>,
     pub(crate) state: Arc<State>,
     pub(crate) workspaces: BTreeMap<String, Workspace>,
+    // Derived lookup only: the published State still proves every historical
+    // plan, actor and request binding before a workspace can retire.
+    historical_workspace_operations: BTreeMap<String, OperationId>,
     workspace_budget: workspace_budget::WorkspaceBudget,
     pub(crate) blocked: bool,
     pub(crate) snapshot: Option<String>,
@@ -356,6 +359,7 @@ impl Engine {
             disk_resources,
             state: Arc::new(state),
             workspaces: BTreeMap::new(),
+            historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
             snapshot: None,
@@ -432,6 +436,7 @@ impl Engine {
                 ..State::default()
             }),
             workspaces: BTreeMap::new(),
+            historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
             snapshot: None,
@@ -820,6 +825,17 @@ impl Engine {
             }
         }
     }
+    pub(crate) fn native_request_digest(
+        kind: &str,
+        principal: &str,
+        input: &json_codec::Value,
+    ) -> Result<String> {
+        Ok(object_hash(
+            "request",
+            &json!({"kind":kind,"principal":principal,"body":input}),
+        )?)
+    }
+
     pub(crate) fn plan_mutation_digest<F>(
         &self,
         kind: &str,
@@ -833,12 +849,9 @@ impl Engine {
         F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
     {
         Self::require_actor(principal)?;
-        let digest = digest_override.map(Ok).unwrap_or_else(|| {
-            object_hash(
-                "request",
-                &json!({"kind":kind,"principal":principal,"body":input}),
-            )
-        })?;
+        let digest = digest_override
+            .map(Ok)
+            .unwrap_or_else(|| Self::native_request_digest(kind, principal, &input))?;
         if let Some(result) = self.state.operations.get(&operation_id) {
             if result.request_digest == digest
                 && self.operation_owner(operation_id)?.as_deref() == Some(principal)

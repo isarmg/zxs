@@ -33,6 +33,7 @@ pub(super) enum WorkspaceRetention {
 pub(super) enum WorkspaceColdKind {
     EmptyAbort,
     Published,
+    HistoricalPublished,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

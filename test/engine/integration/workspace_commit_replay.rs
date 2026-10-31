@@ -701,6 +701,10 @@ fn historical_workspace_mirror_recovery_uses_published_plan() {
         drop(engine);
         fs::write(&paths[damaged], b"{truncated").unwrap();
         let mut engine = Engine::open(&root).unwrap();
+        // A healthy surviving mirror permits replay, but damaged evidence is
+        // retained as resident on fresh admission.
+        assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
+        assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 0);
         assert_eq!(
             engine
                 .workspace(&workspace.workspace_id)
