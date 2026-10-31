@@ -199,6 +199,95 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(report['runs'], [])
             self.assertIn('PermissionError', report['error'])
 
+    def original_pair(self, number):
+        data = pair(220, number)
+        data['profile'] = 'original-220'
+        data['manifest_sha256'] = SCREEN.REUSE['manifest_sha256']
+        for item in data['runs']:
+            del item['phases']['tails']
+            del item['phases']['tails-verify']
+        return data
+
+    def test_original_220_retains_all_eight_original_gates(self):
+        for number in (0,1):
+            result = SCREEN.compare_original_pair(self.original_pair(number), number)
+            self.assertEqual(len(result['checks']), 8)
+            self.assertEqual(result['checks']['save_p95']['limit_ns'], 50_000_000)
+            self.assertEqual(result['checks']['open_vmhwm']['ratio_limit'], .8)
+            self.assertEqual(result['checks']['startup']['ratio_limit'], 1.1)
+            self.assertTrue(all(check['passed'] for check in result['checks'].values()))
+
+    def test_original_contract_cannot_be_used_to_accept_a_full_profile(self):
+        data = self.original_pair(0)
+        with self.assertRaises(AssertionError):
+            SCREEN.compare_pair(data, 220, 0, SCREEN.REUSE['manifest_sha256'])
+        data['profile'] = 'full'
+        with self.assertRaises(AssertionError):
+            SCREEN.compare_original_pair(data, 0)
+
+    def test_original_still_rejects_missing_or_failed_data(self):
+        for mutate in (lambda d:d['runs'][0]['phases']['requests']['read_ns'].pop(),
+                       lambda d:d['runs'][0]['phases']['rpc-verify'].update(saved_receipts=19),
+                       lambda d:d['runs'][0].update(status='incomplete')):
+            data = self.original_pair(0)
+            mutate(data)
+            with self.assertRaises(AssertionError):
+                SCREEN.compare_original_pair(data, 0)
+
+    def test_capacity_failure_remains_red_even_if_original_metrics_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            for number in (0,1):
+                directory=root/f'rpc-220-original-{number}'
+                directory.mkdir()
+                (directory/'pair.json').write_text(json.dumps(self.original_pair(number)))
+            plan=root/'plan.json'
+            plan.write_text(json.dumps(dict(reused_22=[],profile='original-220',controller_sha='controller',normal_source_sha='source')))
+            environment=dict(RPC_PLAN_SHA256=SCREEN.sha(plan),GITHUB_SHA='controller',RPC_SOURCE_SHA='source')
+            with patch.dict(os.environ,environment), contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                SCREEN.summary_original_220(root, plan, root/'summary.json')
+            result=json.loads((root/'summary.json').read_text())
+            self.assertEqual(result['status'],'completed')
+            self.assertEqual(result['original_220_gate'],'PASS')
+            self.assertEqual(result['full_extension_acceptance'],'FAIL')
+            self.assertEqual(result['continuous_extension_support'],'FAIL_DEFAULT_BUDGET')
+
+    def test_original_runner_uses_exact_five_phases_and_keeps_ids_on_later_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);bundle=root/'bundle';bundle.mkdir()
+            binaries={}
+            for label in SCREEN.PINS:
+                for kind in ('seed','server'):
+                    path=bundle/f'{label}-{kind}';path.write_bytes(b'never execute')
+                    binaries[path.name]=SCREEN.sha(path)
+            manifest=dict(binaries=binaries,controller=dict(sha='controller',normal_source_sha='source',
+                          normal_source_tree='tree',source_pins={k:list(v) for k,v in SCREEN.PINS.items()}))
+            (bundle/'manifest.json').write_text(json.dumps(manifest))
+            environment=dict(GITHUB_ACTIONS='true',GITHUB_SHA='controller',RPC_SOURCE_SHA='source',
+                             RPC_REUSE_BUILD='',RPC_MANIFEST_SHA256=SCREEN.sha(bundle/'manifest.json'),RUNNER_TEMP=tmp)
+            calls=[]
+            def phase(command,env,directory,name,deadline):
+                calls.append(name)
+                self.assertEqual(deadline,123456)
+                self.assertIn(name,{'build','edit','verify','requests','rpc-verify'})
+                fixture=Path(env['ZXS_RPC_ROOT'])
+                if name in ('build','edit'):
+                    (fixture/'operations').write_text('original-seed-id\n')
+                if name=='requests':
+                    (fixture/'rpc-receipts.json').write_text('["original-rpc-id"]')
+                if name=='rpc-verify':
+                    raise OSError('independent oracle read failed')
+                return dict(phase=name)
+            with patch.dict(os.environ,environment), patch.object(SCREEN,'git',side_effect=['source','tree']), \
+                    patch.object(SCREEN,'host_observation',return_value=dict(child_cpus=[0,1])), \
+                    patch.object(SCREEN,'phase',side_effect=phase), patch.object(SCREEN,'inventory',return_value={}), \
+                    contextlib.redirect_stdout(io.StringIO()), self.assertRaises(OSError):
+                SCREEN.run(bundle,root/'result',220,0,original_only=True,execution_deadline=123456)
+            self.assertEqual(calls,['build','edit','verify','requests','rpc-verify'])
+            self.assertEqual((root/'result/baseline/rpc-receipts.json').read_text(),'["original-rpc-id"]')
+            self.assertEqual((root/'result/baseline/seed-operation-ids.txt').read_text(),'original-seed-id\n')
+            self.assertEqual(json.loads((root/'result/pair.json').read_text())['status'],'incomplete')
+
     def test_pins_exclude_rejected_architecture(self):
         self.assertEqual(SCREEN.PINS['candidate'][0], 'd3eefd289e53a2803703870fe4250d08cadff9b5')
         self.assertEqual(SCREEN.PINS['baseline'][0], 'e2f33d9882cf7263412d9370b6a703e0b216357d')

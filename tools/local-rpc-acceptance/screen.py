@@ -190,7 +190,10 @@ REUSE = dict(run_id=41166634669, carrier_sha='dab1b15d99122a59655a80ad1e2c28b626
 CONTROLLER_PATCHES = {'tools/local-rpc-acceptance/screen.py',
                       'tools/local-rpc-acceptance/reuse-workflow.yml',
                       'test/tools/local-rpc-acceptance/test_screen.py',
-                      'docs/validation/final-local-rpc-acceptance.md'}
+                      'docs/validation/final-local-rpc-acceptance.md',
+                      'tools/local-rpc-acceptance/budget_contract.py',
+                      'tools/local-rpc-acceptance/original-220-workflow.yml',
+                      'test/tools/local-rpc-acceptance/test_budget_contract.py'}
 
 
 def read_observation(path):
@@ -247,9 +250,13 @@ def reuse(evidence):
     print('REUSED_BUILD', json.dumps(dict(**REUSE, controller_sha=os.environ['GITHUB_SHA'],
           normal_source_sha=os.environ['RPC_SOURCE_SHA'], original_deadline_unix=manifest['controller']['deadline_unix'])))
 
-def run(bundle, out, commits, pair):
+def run(bundle, out, commits, pair, *, original_only=False, execution_deadline=None):
     assert os.environ.get('GITHUB_ACTIONS') == 'true', 'workloads require GitHub Actions'
     assert commits in (22,220) and pair in (0,1)
+    if original_only:
+        assert commits == 220 and execution_deadline is not None
+    else:
+        assert execution_deadline is None
     manifest = json.loads((bundle / 'manifest.json').read_text())
     assert sha(bundle / 'manifest.json') == os.environ['RPC_MANIFEST_SHA256']
     if os.environ.get('RPC_REUSE_BUILD') == str(REUSE['run_id']):
@@ -268,6 +275,7 @@ def run(bundle, out, commits, pair):
     out.mkdir(parents=True, exist_ok=False)
     report = dict(commits=commits, pair=pair, order=['baseline','candidate'] if pair == 0 else ['candidate','baseline'],
                   status='incomplete', manifest_sha256=sha(bundle / 'manifest.json'), runs=[],
+                  profile='original-220' if original_only else 'full',
                   host={}, controller_sha=os.environ['GITHUB_SHA'],
                   normal_source_sha=os.environ['RPC_SOURCE_SHA'], reused_build=os.environ.get('RPC_REUSE_BUILD'),
                   checkpoint_selection='not observable via existing public API; warnings recorded',
@@ -283,16 +291,22 @@ def run(bundle, out, commits, pair):
                 root = Path(tmp)
                 env = dict(os.environ, ZXS_RPC_COMMITS=str(commits), ZXS_RPC_ROOT=tmp,
                            RAYON_NUM_THREADS='2', TOKIO_WORKER_THREADS='2')
-                for name in ('build','edit','verify','requests','rpc-verify','tails','tails-verify'):
+                phases = ('build','edit','verify','requests','rpc-verify')
+                if not original_only:
+                    phases += ('tails','tails-verify')
+                for name in phases:
                     command = [str(bundle / f'{label}-server'), '--ignored', '--exact', FILTER if name == 'requests' else TAIL_FILTER, '--nocapture', '--test-threads=1'] if name in ('requests', 'tails') else [str(bundle / f'{label}-seed'), name, '500', tmp]
-                    record['phases'][name] = phase(command, env, arm, name, manifest['controller']['deadline_unix'])
+                    record['phases'][name] = phase(command, env, arm, name, execution_deadline if original_only else manifest['controller']['deadline_unix'])
                     if name in ('verify','rpc-verify','tails-verify'):
                         record.setdefault('inventory', {})[name] = dict(metadata=inventory(root/'d1/metadata'),
                             immutable_objects=inventory(root/'d1/metadata/objects'), state=inventory(root/'state'))
+                    if name in ('build', 'edit'):
+                        shutil.copyfile(root/'operations', arm/'seed-operation-ids.txt')
+                    elif name == 'requests':
+                        shutil.copyfile(root/'rpc-receipts.json', arm/'rpc-receipts.json')
+                    elif name == 'tails':
+                        shutil.copyfile(root/'tails-receipts.json', arm/'tails-receipts.json')
                     write(out / 'pair.json', report)
-                shutil.copyfile(root/'rpc-receipts.json', arm/'rpc-receipts.json')
-                shutil.copyfile(root/'tails-receipts.json', arm/'tails-receipts.json')
-                shutil.copyfile(root/'operations', arm/'seed-operation-ids.txt')
             record['status'] = 'completed'
         report['status'] = 'completed'
     except BaseException:
@@ -320,10 +334,7 @@ def delta_check(baseline, candidate, limit):
                 limit_ns=limit, passed=candidate-baseline <= limit)
 
 
-def validate_arm(arm, commits):
-    assert arm['status'] == 'completed'
-    phases = arm['phases']
-    assert set(phases) == {'build', 'edit', 'verify', 'requests', 'rpc-verify', 'tails', 'tails-verify'}
+def validate_original_phases(phases, commits):
     oracle = phases['verify']
     for key, value in dict(verified_current_files=500, verified_operations=commits,
                           verified_commit_namespaces=commits, verified_bodies=500+commits-2).items():
@@ -337,6 +348,13 @@ def validate_arm(arm, commits):
     for key in ('read_ns', 'read_open_ns', 'list_ns'):
         samples(requests[key], 1000)
     samples(requests['save_ns'], 20)
+
+
+def validate_arm(arm, commits):
+    assert arm['status'] == 'completed'
+    phases = arm['phases']
+    assert set(phases) == {'build', 'edit', 'verify', 'requests', 'rpc-verify', 'tails', 'tails-verify'}
+    validate_original_phases(phases, commits)
     tails = phases['tails']
     assert tails['schema'] == 'final-local-rpc-tails-v1' and tails['commits_before'] == commits+20
     assert tails['samples_per_metric'] == 40 and tails['published_generations'] == 120
@@ -349,15 +367,7 @@ def validate_arm(arm, commits):
     assert after['current_tail_files'] == 80 and after['independent_full_copies'] == 1
 
 
-def compare_pair(data, commits, pair, manifest_hash):
-    assert data['status'] == 'completed' and data['commits'] == commits and data['pair'] == pair
-    assert data['manifest_sha256'] == manifest_hash
-    order = ['baseline', 'candidate'] if pair == 0 else ['candidate', 'baseline']
-    assert data['order'] == order and [arm['label'] for arm in data['runs']] == order
-    assert len(data['host']['child_cpus']) == 2
-    arms = {arm['label']: arm for arm in data['runs']}
-    for arm in arms.values():
-        validate_arm(arm, commits)
+def original_checks(arms, commits):
     b, c = [arms[label]['phases']['requests'] for label in PINS]
     checks = {}
     for kind in ('read', 'list'):
@@ -371,6 +381,19 @@ def compare_pair(data, commits, pair, manifest_hash):
             ratio_limit=.8, passed=c['open_memory']['vmhwm_kib'] <= .8*b['open_memory']['vmhwm_kib'])
         checks['startup'] = dict(baseline_ns=b['open_ns'], candidate_ns=c['open_ns'], ratio_limit=1.1,
             passed=c['open_ns'] <= 1.1*b['open_ns'])
+    return checks
+
+
+def compare_pair(data, commits, pair, manifest_hash):
+    assert data['status'] == 'completed' and data['commits'] == commits and data['pair'] == pair
+    assert data['manifest_sha256'] == manifest_hash
+    order = ['baseline', 'candidate'] if pair == 0 else ['candidate', 'baseline']
+    assert data['order'] == order and [arm['label'] for arm in data['runs']] == order
+    assert len(data['host']['child_cpus']) == 2
+    arms = {arm['label']: arm for arm in data['runs']}
+    for arm in arms.values():
+        validate_arm(arm, commits)
+    checks = original_checks(arms, commits)
     tails = {label: arms[label]['phases']['tails'] for label in PINS}
     for kind in ('flush', 'close', 'write_through'):
         checks[kind+'_p95'] = delta_check(quantile(tails['baseline'][kind+'_ns'], .95),
@@ -401,11 +424,88 @@ def summary(root, out):
         raise SystemExit(1)
 
 
+REUSED_22 = {'rpc-22-0':'74efc7ee593ca4fb4929721353e59597f1af1ea8d6af6aa85683f9d8353f9092',
+             'rpc-22-1':'1f4924a3b5f66e1039b73965c900316a0448815031952eb1a40b07400c149f7c'}
+
+
+def budget_proof():
+    return json.loads(subprocess.check_output([sys.executable, str(HERE/'budget_contract.py')], text=True))
+
+
+def select_original_220(evidence, output):
+    reuse(evidence)
+    prior = []
+    for pair, name in enumerate(REUSED_22):
+        path = evidence/name/'pair.json'
+        assert sha(path) == REUSED_22[name]
+        prior.append(compare_pair(json.loads(path.read_text()), 22, pair, REUSE['manifest_sha256']))
+    now = int(time.time())
+    plan = dict(profile='original-220', controller_sha=os.environ['GITHUB_SHA'],
+                normal_source_sha=os.environ['RPC_SOURCE_SHA'], created_unix=now,
+                deadline_unix=now+45*60, per_pair_budget_seconds=45*60,
+                original_phase_budget_seconds=1200, reused_22=prior, budget_proof=budget_proof(),
+                old_run=41168852801, old_result='incomplete / NOT EVALUATED retained',
+                full_extension='FAIL_DEFAULT_BUDGET; never replaced by the original-profile verdict')
+    write(output, plan)
+    print('ORIGINAL_220_PLAN', json.dumps(plan))
+
+
+def run_original_220(bundle, out, pair, plan_path):
+    assert sha(plan_path) == os.environ['RPC_PLAN_SHA256']
+    plan = json.loads(plan_path.read_text())
+    assert plan['profile'] == 'original-220'
+    assert plan['controller_sha'] == os.environ['GITHUB_SHA']
+    assert plan['normal_source_sha'] == os.environ['RPC_SOURCE_SHA']
+    assert plan['deadline_unix']-plan['created_unix'] == 45*60
+    assert plan['created_unix'] <= time.time() < plan['deadline_unix']
+    run(bundle, out, 220, pair, original_only=True, execution_deadline=plan['deadline_unix'])
+
+
+def compare_original_pair(data, pair):
+    assert data['profile'] == 'original-220' and data['status'] == 'completed'
+    assert data['commits'] == 220 and data['pair'] == pair
+    assert data['manifest_sha256'] == REUSE['manifest_sha256']
+    order = ['baseline','candidate'] if pair == 0 else ['candidate','baseline']
+    assert data['order'] == order and [arm['label'] for arm in data['runs']] == order
+    assert len(data['host']['child_cpus']) == 2
+    arms = {arm['label']:arm for arm in data['runs']}
+    for arm in arms.values():
+        assert arm['status'] == 'completed'
+        assert set(arm['phases']) == {'build','edit','verify','requests','rpc-verify'}
+        validate_original_phases(arm['phases'], 220)
+    return dict(commits=220, pair=pair, checks=original_checks(arms, 220))
+
+
+def summary_original_220(root, plan_path, out):
+    assert sha(plan_path) == os.environ['RPC_PLAN_SHA256']
+    plan = json.loads(plan_path.read_text())
+    assert plan['profile'] == 'original-220'
+    assert plan['controller_sha'] == os.environ['GITHUB_SHA']
+    assert plan['normal_source_sha'] == os.environ['RPC_SOURCE_SHA']
+    report = dict(status='incomplete', actual_product_pins=PINS, old_run=41168852801,
+                  old_result='incomplete / NOT EVALUATED retained', old_2af_gate='FAIL unchanged',
+                  original_220_gate='NOT EVALUATED', continuous_extension_support='FAIL_DEFAULT_BUDGET',
+                  full_extension_acceptance='FAIL', budget_proof=budget_proof(), reused_22=plan['reused_22'], pairs=[])
+    try:
+        for pair in (0,1):
+            data = json.loads((root/f'rpc-220-original-{pair}'/'pair.json').read_text())
+            report['pairs'].append(compare_original_pair(data, pair))
+        passed = all(check['passed'] for pair in report['pairs'] for check in pair['checks'].values())
+        report.update(status='completed', original_220_gate='PASS' if passed else 'FAIL')
+    finally:
+        write(out, report)
+        print('ORIGINAL_220_SCREEN', json.dumps(report))
+    if report['original_220_gate'] != 'PASS' or report['full_extension_acceptance'] != 'PASS':
+        raise SystemExit(1)
+
 if __name__ == '__main__':
     action, *args = sys.argv[1:]
     if action == 'prepare': prepare(*map(Path,args))
     elif action == 'seal': seal(*map(Path,args))
     elif action == 'reuse': reuse(*map(Path,args))
+    elif action == 'select-original': select_original_220(*map(Path,args))
+    elif action == 'run-original': run_original_220(Path(args[0]),Path(args[1]),int(args[2]),Path(args[3]))
+    elif action == 'summary-original': summary_original_220(*map(Path,args))
     elif action == 'run': run(Path(args[0]),Path(args[1]),int(args[2]),int(args[3]))
     elif action == 'summary': summary(*map(Path,args))
     else: raise ValueError('unsupported action')
