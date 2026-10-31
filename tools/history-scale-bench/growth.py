@@ -15,8 +15,8 @@ STAGES = ("build", "reopen", "recovery")
 TIERS = {
     "growth-2048": (2048, "boundaries", 1, 600, 2400),
     "growth-4096": (4096, "growth-2048", 1, 600, 2400),
-    "growth-10000": (10000, "growth-4096", 2, 1800, 3600),
-    "growth-20000": (20000, "growth-10000", 2, 1800, 3600),
+    "growth-5000": (5000, "growth-4096", 2, 3600, 10800),
+    "growth-8192": (8192, "growth-5000", 1, 10800, 19800),
     "growth-counts-2048": (2048, "growth-2048", 0, 3600, 10800),
 }
 RESOURCES = {"rss_mib": 2048, "disk_mib": 4096, "cohort_disk_mib": 8192, "minimum_free_mib": 8192}
@@ -25,6 +25,8 @@ SAFETY = 1.5
 MIN_EXPONENT = {"wall": 1.25, "rss": 1.0, "disk": 1.0}
 EXPONENT_MARGIN = 0.15
 COHORT_FINISH_SECONDS = 60
+# 10k already projects above the hosted six-hour job limit from measured 4k.
+# Larger targets are analysis-only, absent from the executable tier registry.
 
 
 def resources(profile: str) -> dict:
