@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # Compiler diagnostics, real target SDK FFI tests, and the required unwind policy.
 set -euo pipefail
+mode=full
+if [[ $# -eq 1 && "$1" == --build-only ]]; then
+  mode=build-only
+elif [[ $# -ne 0 ]]; then
+  printf 'usage: %s [--build-only]\n' "$0" >&2
+  exit 2
+fi
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 : "${ZXS_SMB_SDK_SOURCE:?}"
 : "${ZXS_SMB_SDK_BUILD:?}"
 cache="${ZXS_SMB_SDK_CACHE:-$PWD/target/smb-debian13}"
 mkdir -p "$cache"
+if [[ "$mode" == full ]]; then
 python3 .github/scripts/check-rust-diagnostics.py -- \
   cargo clippy --locked --offline --message-format=json \
   -p smb-vfs --all-targets -- -D warnings
@@ -24,6 +32,7 @@ if cargo rustc --locked --offline -p smb-vfs --release --lib -- -C panic=abort >
 fi
 cat "$abort_log"
 grep -Fq 'ZXS SMB VFS requires panic=unwind to isolate panics at the host boundary' "$abort_log"
+fi
 # Finish with the supported release build; an unrelated negative build failure
 # cannot pass the expected diagnostic gate or replace this positive check.
 python3 .github/scripts/check-rust-diagnostics.py -- \

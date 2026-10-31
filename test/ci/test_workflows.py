@@ -14,6 +14,13 @@ SPEC.loader.exec_module(checker)
 
 
 class WorkflowContexts(unittest.TestCase):
+    def test_job_display_name_colon_requires_yaml_quotes(self):
+        bad = "jobs:\n  browser-smoke:\n    name: Standalone ELF: Debian 13 server + host Chrome\n"
+        self.assertTrue(any("must be quoted" in error for error in checker.check(bad)))
+        good = bad.replace("name: Standalone ELF: Debian 13 server + host Chrome", 'name: "Standalone ELF: Debian 13 server + host Chrome"')
+        self.assertEqual(checker.check(good), [])
+        self.assertEqual(checker.check("jobs:\n  job:\n    steps:\n      - run: |\n          name: shell: value\n"), [])
+
     def test_repository_workflows_use_available_early_contexts(self):
         for path in (SCRIPTS.parent / "workflows").glob("*.y*ml"):
             with self.subTest(path=path.name):

@@ -65,6 +65,14 @@ def early_env_blocks(source):
 
 def check(source):
     errors = []
+    # Narrow YAML lexical boundary for root/job display names. Full YAML parsing
+    # remains separate; do not interpret shell bodies or pretend this is a parser.
+    for number, row in enumerate(source.splitlines(), 1):
+        match = re.fullmatch(r"(?:name|    name):\s+(.+)", row)
+        if match:
+            value = match[1].split(" #", 1)[0].strip()
+            if value and value[0] not in "\"'|>" and re.search(r":(?:\s|$)", value):
+                errors.append(f"{number}: workflow/job name containing colon-space must be quoted")
     for line, path, block in early_env_blocks(source):
         allowed = WORKFLOW_ENV if path == "env" else JOB_ENV
         # Comments aren't workflow expressions. Values in this repository do
