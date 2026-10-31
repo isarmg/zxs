@@ -91,15 +91,18 @@ def validate_reuse_run(run: dict, run_id: str, carrier_sha: str, *, require_succ
         raise ValueError("binary reuse requires a successfully completed selftest run")
 
 
-def validate_build_jobs(run: dict, jobs: dict, run_id: str, carrier_sha: str) -> None:
+def validate_build_jobs(run: dict, jobs: dict, run_id: str, carrier_sha: str, *, candidate_only: bool = False) -> None:
     validate_reuse_run(run, run_id, carrier_sha, require_success=False)
-    names = {"build (baseline)", "build (candidate)"}
+    names = {"build (candidate)"} if candidate_only else {"build (baseline)", "build (candidate)"}
     selected = [row for row in jobs["jobs"] if row["name"] in names]
-    if len(selected) != 2 or {row["name"] for row in selected} != names or any(row["status"] != "completed" or row["conclusion"] != "success" for row in selected):
-        raise ValueError("both original binary build jobs must have succeeded")
+    if len(selected) != len(names) or {row["name"] for row in selected} != names or any(row["status"] != "completed" or row["conclusion"] != "success" for row in selected):
+        message = "the original candidate binary build job" if candidate_only else "both original binary build jobs"
+        raise ValueError(f"{message} must have succeeded")
 
 
-def validate_reused_selftest(selection: dict, summary: dict, run_id: str, carrier_sha: str, candidate_sha: str) -> None:
+def validate_reused_selftest(selection: dict, summary: dict, run_id: str, carrier_sha: str, candidate_sha: str, *, candidate_only: bool = False) -> None:
+    if selection.get("candidate_only", False) is not candidate_only:
+        raise ValueError("selftest source matrix differs from the selected experiment")
     if selection.get("mode") != "selftest":
         raise ValueError("reuse must reference a successful bounded selftest")
     if selection.get("build_run_id") != run_id or selection.get("build_carrier_sha") != carrier_sha:
@@ -112,13 +115,14 @@ def validate_reused_selftest(selection: dict, summary: dict, run_id: str, carrie
         if summary.get(field) is not True:
             raise ValueError("reused selftest did not fully pass")
     samples = summary.get("samples")
-    expected = {(label, mode) for label in ("baseline", "candidate") for mode in ("timing", "counts")}
-    if not isinstance(samples, list) or len(samples) != 4 or {(row.get("label"), row.get("mode")) for row in samples} != expected:
+    labels = ("candidate",) if candidate_only else ("baseline", "candidate")
+    expected = {(label, mode) for label in labels for mode in ("timing", "counts")}
+    if not isinstance(samples, list) or len(samples) != len(expected) or {(row.get("label"), row.get("mode")) for row in samples} != expected:
         raise ValueError("reused selftest sample matrix mismatch")
     for row in samples:
         stages = row.get("stages", {})
         if row.get("operations") != 8 or row.get("status") != "passed" or set(stages) != {"build", "reopen", "recovery"} or any(value.get("status") != "passed" for value in stages.values()):
-            raise ValueError("reused selftest needs all 12 completed lifecycle stages")
+            raise ValueError("reused selftest needs every selected lifecycle stage completed")
 
 
 def profile_settings(plan: dict, name: str) -> dict:
@@ -144,10 +148,14 @@ def profile_settings(plan: dict, name: str) -> dict:
     }
 
 
-def select(plan: dict, mode: str) -> dict:
+def select(plan: dict, mode: str, *, candidate_only: bool = False) -> dict:
     if mode not in {"selftest", "acceptance", "10000"}:
         raise ValueError(f"unsupported controller mode: {mode}")
     names = {"selftest": ["small-selftest"], "acceptance": ["boundaries", "1000"], "10000": ["10000"]}[mode]
+    if candidate_only:
+        if mode == "10000":
+            raise ValueError("current-only experiment is limited to selftest and boundaries")
+        names = ["small-selftest"] if mode == "selftest" else ["boundaries"]
     settings = {name: profile_settings(plan, name) for name in names}
     candidate = next(iter(settings.values()))["candidate_sha"]
     return {
@@ -155,6 +163,7 @@ def select(plan: dict, mode: str) -> dict:
         "baseline_sha": plan["baseline_sha"],
         "candidate_sha": candidate,
         "candidate_frozen": plan["frozen_candidate_sha"] is not None,
+        "candidate_only": candidate_only,
         "settings": settings,
         "matrix": {"include": [{"profile": name} for name in names]},
     }
@@ -164,13 +173,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--mode", choices=("selftest", "acceptance", "10000"), required=True)
+    parser.add_argument("--candidate-only", action="store_true")
     parser.add_argument("--build-run-id", default="")
     parser.add_argument("--build-carrier-sha", default="")
     parser.add_argument("--selftest-run-id", default="")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
-    selected = select(load_plan(args.plan), args.mode)
+    selected = select(load_plan(args.plan), args.mode, candidate_only=args.candidate_only)
     selected.update(build_source(args.mode, args.build_run_id, args.build_carrier_sha,
                                  os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_SHA"]))
     selected["selftest_run_id"] = positive_id(os.environ["GITHUB_RUN_ID"] if args.mode == "selftest" else (args.selftest_run_id or selected["build_run_id"]))

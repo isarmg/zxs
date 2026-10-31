@@ -451,11 +451,13 @@ def environment(args: argparse.Namespace) -> dict:
         "selected_environment": {key: os.environ[key] for key in allowlist if key in os.environ},
         "sources": sources, "profile": "release", "timing": "untraced; external process/RSS and live filesystem inventory sampling remain enabled",
         "sampling": {"process_seconds": args.process_poll_seconds, "disk_seconds": args.disk_poll_seconds},
+        "process_cpu_affinity": sorted(os.sched_getaffinity(0)),
         "budgets": {"phase_seconds": args.phase_seconds, "cohort_seconds": args.cohort_seconds, "rss_mib": args.rss_mib, "disk_mib_per_sample": args.disk_mib, "cohort_disk_mib": args.cohort_disk_mib, "minimum_free_mib": args.minimum_free_mib},
         "io_scope": "process samples include harness oracle/result I/O; strace counters exclude pool/harness; host diskstats are shared device counters, not exclusively attributable physical I/O",
         "command": sys.argv,
         "acceptance_plan": args.plan_data, "acceptance_plan_sha256": sha256(args.plan),
         "validation_profile": args.profile, "scale_authorized": args.scale_authorized,
+        "source_matrix": list(args.revisions),
         "query_protocol": args.query_protocol,
         "expected_build_identity": {"GITHUB_SHA": args.build_carrier_sha, "GITHUB_RUN_ID": args.build_run_id},
         "observer_identity": {key: os.environ.get(key) for key in ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")},
@@ -470,9 +472,10 @@ def validate_build_identity(identity: dict, expected_run: str, expected_carrier:
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     for label in ("baseline", "candidate"):
-        parser.add_argument(f"--{label}-binary", type=Path, required=True)
-        parser.add_argument(f"--{label}-source", type=Path, required=True)
-        parser.add_argument(f"--{label}-provenance", type=Path, required=True)
+        parser.add_argument(f"--{label}-binary", type=Path)
+        parser.add_argument(f"--{label}-source", type=Path)
+        parser.add_argument(f"--{label}-provenance", type=Path)
+    parser.add_argument("--candidate-only", action="store_true")
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--profile", choices=("small-selftest", "boundaries", "1000", "10000"), required=True)
     parser.add_argument("--build-run-id", required=True)
@@ -485,6 +488,14 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--process-poll-seconds", type=float, default=0.1)
     parser.add_argument("--disk-poll-seconds", type=float, default=2.0)
     args = parser.parse_args()
+    for label in (("candidate",) if args.candidate_only else ("baseline", "candidate")):
+        for suffix in ("binary", "source", "provenance"):
+            if getattr(args, label + "_" + suffix) is None:
+                parser.error(f"--{label}-{suffix} is required for the selected source matrix")
+    if args.candidate_only and any(getattr(args, "baseline_" + suffix) is not None for suffix in ("binary", "source", "provenance")):
+        parser.error("current-only experiment does not accept baseline inputs")
+    if args.candidate_only and args.profile not in {"small-selftest", "boundaries"}:
+        parser.error("current-only experiment is limited to selftest and boundaries")
     if re.fullmatch(r"[1-9][0-9]*", args.build_run_id) is None or re.fullmatch(r"[0-9a-f]{40}", args.build_carrier_sha) is None:
         parser.error("build reuse requires an exact positive run ID and lowercase 40-hex carrier SHA")
     args.plan = args.plan.resolve(strict=True)
@@ -493,6 +504,8 @@ def arguments() -> argparse.Namespace:
     for key in ("sizes", "repeats", "counts_repeats", "counts_sizes", "phase_seconds", "cohort_seconds"):
         setattr(args, key, settings[key])
     args.revisions = {"baseline": settings["baseline_sha"], "candidate": settings["candidate_sha"]}
+    if args.candidate_only:
+        args.revisions.pop("baseline")
     args.scale_authorized = args.profile != "small-selftest"
     args.query_protocol = "separate-outcome-health"
     if args.repeats < 1 or args.counts_repeats < 0 or min(args.phase_seconds, args.cohort_seconds, args.rss_mib, args.disk_mib, args.cohort_disk_mib, args.minimum_free_mib, args.process_poll_seconds, args.disk_poll_seconds) <= 0:

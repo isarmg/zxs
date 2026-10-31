@@ -49,6 +49,44 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             select(plan, "acceptance")
 
+    def test_current_only_keeps_freeze_and_limits_scale_to_boundaries(self):
+        with self.assertRaisesRegex(ValueError, "final frozen SHA"):
+            select(self.plan(), "acceptance", candidate_only=True)
+        frozen = "d3eefd289e53a2803703870fe4250d08cadff9b5"
+        selection = select(self.plan(reviewed_candidate_sha=frozen, frozen_candidate_sha=frozen),
+                           "acceptance", candidate_only=True)
+        self.assertTrue(selection["candidate_only"])
+        self.assertEqual(selection["matrix"], {"include": [{"profile": "boundaries"}]})
+        self.assertEqual(selection["settings"]["boundaries"]["sizes"], [255, 256, 257, 1023, 1024, 1025])
+        with self.assertRaisesRegex(ValueError, "limited"):
+            select(self.plan(), "10000", candidate_only=True)
+        with self.assertRaisesRegex(ValueError, "execution remains disabled"):
+            select(load_plan(TOOLS / "acceptance-plan.json"), "selftest", candidate_only=True)
+
+    def test_current_only_requires_its_own_successful_micro_matrix_and_build(self):
+        run = {"id": 123, "head_sha": "a" * 40, "path": ".github/workflows/history-scale.yml",
+               "event": "workflow_dispatch", "status": "completed", "conclusion": "success"}
+        job = {"name": "build (candidate)", "status": "completed", "conclusion": "success"}
+        validate_build_jobs(run, {"jobs": [job]}, "123", "a" * 40, candidate_only=True)
+        for jobs in ([], [{**job, "conclusion": "failure"}], [job, job]):
+            with self.subTest(jobs=jobs), self.assertRaises(ValueError):
+                validate_build_jobs(run, {"jobs": jobs}, "123", "a" * 40, candidate_only=True)
+        selection = {"mode": "selftest", "candidate_only": True, "build_run_id": "123", "build_carrier_sha": "a" * 40,
+                     "baseline_sha": BASELINE, "candidate_sha": "b" * 40,
+                     "matrix": {"include": [{"profile": "small-selftest"}]}}
+        samples = [{"label": "candidate", "mode": mode, "operations": 8, "status": "passed",
+                    "stages": {stage: {"status": "passed"} for stage in ("build", "reopen", "recovery")}}
+                   for mode in ("timing", "counts")]
+        summary = {"all_requested_samples_passed": True, "cohort_complete": True, "requested_matrix_matches": True, "samples": samples}
+        validate_reused_selftest(selection, summary, "123", "a" * 40, "b" * 40, candidate_only=True)
+        for change in ({"samples": samples[:1]}, {"cohort_complete": False}, {"all_requested_samples_passed": False}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                validate_reused_selftest(selection, {**summary, **change}, "123", "a" * 40, "b" * 40, candidate_only=True)
+        with self.assertRaisesRegex(ValueError, "source matrix"):
+            validate_reused_selftest({**selection, "candidate_only": False}, summary, "123", "a" * 40, "b" * 40, candidate_only=True)
+        with self.assertRaisesRegex(ValueError, "source matrix"):
+            validate_reused_selftest(selection, summary, "123", "a" * 40, "b" * 40)
+
     def test_freeze_has_to_match_source_review(self):
         with self.assertRaisesRegex(ValueError, "source-reviewed"):
             self.plan(frozen_candidate_sha="f" * 40)
