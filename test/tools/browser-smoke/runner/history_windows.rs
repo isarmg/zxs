@@ -17,20 +17,26 @@ fn click(browser: &Browser, english: &str, chinese: &str) -> Result<()> {
     browser.click(&browser.button(english, chinese)?)
 }
 
-fn graph(browser: &Browser) -> Result<()> {
+// A click starts an asynchronous fetch: the old DOM and old fixture expectation
+// remain mutually consistent until that response arrives. Require the requested
+// window as well, before inspecting nodes or advancing another page.
+fn graph(browser: &Browser, expected_index: usize) -> Result<()> {
     check(
         browser,
-        "bounded current graph and retired observer owners",
-        r#"
+        &format!("requested bounded history window {expected_index} and retired observer owners"),
+        &format!(
+            "const expectedIndex={expected_index};{}",
+            r#"
         const p=window.__zxsHistoryWindows,root=document.querySelector('.zxs-version-tree-canvas');
         const ids=Array.from(document.querySelectorAll('.zxs-version-node'),node=>node.dataset.nodeId).sort();
-        if(!root||!p.expected||ids.length!==32||JSON.stringify(ids)!==JSON.stringify([...p.expected].sort()))return false;
+        if(p.index!==expectedIndex||!root||!p.expected||ids.length!==32||JSON.stringify(ids)!==JSON.stringify([...p.expected].sort()))return false;
         if(!p.roots.includes(root))p.roots.push(root);
         const records=window.__zxsTreeFrames.observers;
         return document.querySelectorAll('.zxs-version-tree-canvas').length===1
             &&p.roots.filter(old=>old!==root).every(old=>!old.isConnected&&records.filter(record=>record.root===old).length===2&&records.filter(record=>record.root===old).every(record=>record.disconnected))
             &&records.filter(record=>record.root?.isConnected&&!record.disconnected).length===2;
-    "#,
+    "#
+        ),
     )
 }
 
@@ -191,30 +197,30 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
 
 fn exercise(browser: &Browser) -> Result<()> {
     click(browser, "Refresh", "刷新")?;
-    graph(browser)?;
+    graph(browser, 0)?;
     check(
         browser,
         "independent current is outside the first window",
         "return window.__zxsHistoryWindows.index===0&&document.querySelectorAll('.zxs-version-current').length===0&&Array.from(document.querySelectorAll('button')).some(button=>['Locate current node','定位当前节点'].includes(button.textContent.trim())&&!button.disabled)",
     )?;
     click(browser, "Locate current node", "定位当前节点")?;
-    graph(browser)?;
+    graph(browser, 1)?;
     check(
         browser,
         "real current and explicit unloaded parent",
         "const p=window.__zxsHistoryWindows;return p.index===1&&document.querySelectorAll('.zxs-version-current').length===1&&document.querySelector('[data-parent-endpoint=outside_window][data-parent-node=\"'+p.older+'\"]')!==null",
     )?;
     browser.script("const p=window.__zxsHistoryWindows;document.querySelector('[data-parent-endpoint=outside_window][data-parent-node=\"'+p.older+'\"] button').click();return true")?;
-    graph(browser)?;
+    graph(browser, 2)?;
     for _ in 0..4 {
         click(browser, "Previous history page", "上一页历史")?;
-        graph(browser)?;
+        graph(browser, 1)?;
         click(browser, "Next history page", "下一页历史")?;
-        graph(browser)?;
+        graph(browser, 2)?;
     }
     browser.script("const p=window.__zxsHistoryWindows;document.querySelector('[data-node-id=\"'+p.older+'\"] .zxs-node-checkbox').click();return true")?;
     click(browser, "Previous history page", "上一页历史")?;
-    graph(browser)?;
+    graph(browser, 1)?;
     browser.script("const p=window.__zxsHistoryWindows;document.querySelector('[data-node-id=\"'+p.current+'\"] .zxs-node-checkbox').click();return true")?;
     click(browser, "Edit selected node tags", "编辑所选节点标签")?;
     check(
@@ -280,7 +286,7 @@ fn merge_review(browser: &Browser) -> Result<()> {
     let anchor = browser.css(".zxs-merge-review input[aria-label='Exact history node ID'],.zxs-merge-review input[aria-label='精确历史节点 ID']")?;
     browser.keys(&anchor, &older)?;
     click(browser, "Locate node", "定位节点")?;
-    graph(browser)?;
+    graph(browser, 2)?;
     choose(
         browser,
         "Result node (any node of this file)",
@@ -294,7 +300,7 @@ fn merge_review(browser: &Browser) -> Result<()> {
         Choice::ExactLabel(&branch),
     )?;
     click(browser, "Previous history page", "上一页历史")?;
-    graph(browser)?;
+    graph(browser, 1)?;
     check(
         browser,
         "off-page merge result and selected branch remain captured",
@@ -357,7 +363,7 @@ fn captured_merge_selection(browser: &Browser) -> Result<()> {
 
 fn fields_and_cancellation(browser: &Browser) -> Result<()> {
     click(browser, "Locate current node", "定位当前节点")?;
-    graph(browser)?;
+    graph(browser, 1)?;
     let current = browser
         .script("return window.__zxsHistoryWindows.current")?
         .as_str()
@@ -400,7 +406,7 @@ fn fields_and_cancellation(browser: &Browser) -> Result<()> {
         "return window.__zxsHistoryWindows.pending[0].signal.aborted&&!document.querySelector('.zxs-header-refresh').disabled",
     )?;
     click(browser, "Locate current node", "定位当前节点")?;
-    graph(browser)?;
+    graph(browser, 1)?;
     browser.script("window.__zxsHistoryWindows.holdField=true;return true")?;
     browser.click(&browser.css(&format!(
         "[data-node-id='{current}'] [data-history-field=created_at]"
@@ -430,5 +436,5 @@ fn fields_and_cancellation(browser: &Browser) -> Result<()> {
         "late auxiliary B cannot restore a retired fragment",
         "return window.__zxsHistoryWindows.pending[1].delivered&&!document.querySelector('.zxs-history-field')",
     )?;
-    graph(browser)
+    graph(browser, 0)
 }
