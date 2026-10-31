@@ -6,7 +6,7 @@ on:
     inputs:
       stage:
         type: choice
-        options: ['2048', '4096', '5000', '8192', 'counts-2048']
+        options: ['2048', '4096', '5000', '8192', 'counts-2048', 'collect-counts-2048']
         required: true
       prior_run_id:
         type: string
@@ -30,6 +30,7 @@ env:
 
 jobs:
   checks:
+    if: inputs.stage != 'collect-counts-2048'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -67,6 +68,7 @@ jobs:
           if-no-files-found: error
 
   validation:
+    if: inputs.stage != 'collect-counts-2048'
     needs: checks
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.stage == '8192' && 350 || (inputs.stage == 'counts-2048' || inputs.stage == '5000') && 210 || 75 }}
@@ -239,3 +241,64 @@ jobs:
             !evidence/**/pool/**
           retention-days: 30
           if-no-files-found: error
+
+  collect:
+    if: inputs.stage == 'collect-counts-2048'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Fetch only the completed original evidence archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p parts compact
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/13032706176/zip" > original.zip
+          echo 'fe00d233c19bbda76cbdc4a887bdd43b8895c7ed3b7eebc243eaa2a63eca8d23  original.zip' | sha256sum --check
+          split -b 240M -d -a 3 original.zip parts/original.zip.part-
+          sha256sum parts/* > compact/parts.sha256
+          sha256sum original.zip > compact/original.sha256
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          with zipfile.ZipFile("original.zip") as archive:
+              for name in archive.namelist():
+                  if name.endswith(".strace.txt") or name.endswith("/"):
+                      continue
+                  relative = Path(name)
+                  if relative.is_absolute() or ".." in relative.parts:
+                      raise ValueError("unexpected archive path")
+                  target = Path("compact") / relative
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  with archive.open(name) as source, target.open("wb") as output:
+                      import shutil
+                      shutil.copyfileobj(source, output)
+          PY
+      - name: Upload compact metadata and all non-trace original records
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: counts-2048-compact-${{ github.run_id }}
+          path: compact/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Upload original ZIP part zero
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: counts-2048-part-000-${{ github.run_id }}
+          path: parts/original.zip.part-000
+          compression-level: 0
+          retention-days: 30
+      - name: Upload original ZIP part one
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: counts-2048-part-001-${{ github.run_id }}
+          path: parts/original.zip.part-001
+          compression-level: 0
+          retention-days: 30
+      - name: Upload original ZIP part two
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: counts-2048-part-002-${{ github.run_id }}
+          path: parts/original.zip.part-002
+          compression-level: 0
+          retention-days: 30
