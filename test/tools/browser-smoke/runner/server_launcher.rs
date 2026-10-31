@@ -87,6 +87,7 @@ fn docker_args(
     name: &str,
     uid: u32,
     gid: u32,
+    temporary: &Path,
 ) -> Result<Vec<String>> {
     if uid == 0 {
         return Err("container browser fixture must run as a non-root host UID".into());
@@ -111,6 +112,18 @@ fn docker_args(
     }
     if root.parent().is_none() || root == Path::new("/tmp") || root == Path::new("/work") {
         return Err("server mount must be an individual private fixture".into());
+    }
+    let temporary = temporary.canonicalize()?;
+    let temp_metadata = temporary.metadata()?;
+    if temporary == root
+        || !temporary.starts_with(&root)
+        || !temp_metadata.is_dir()
+        || temp_metadata.uid() != uid
+        || temp_metadata.mode() & 0o077 != 0
+    {
+        return Err(
+            "server TMPDIR must be a private owned directory inside its fixture root".into(),
+        );
     }
     let args: Vec<String> = command
         .get_args()
@@ -137,7 +150,7 @@ fn docker_args(
     if listen.ip() != std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) || listen.port() == 0 {
         return Err("container server listener must be 127.0.0.1 with a nonzero port".into());
     }
-    for path in [&binary, &root] {
+    for path in [&binary, &root, &temporary] {
         if path.to_str().ok_or("non-UTF8 mount")?.contains([',', '\n']) {
             return Err("invalid bind mount path".into());
         }
@@ -159,6 +172,8 @@ fn docker_args(
         &format!("type=bind,src={},dst={}", root.display(), root.display()),
         "--workdir",
         root.to_str().ok_or("non-UTF8 cwd")?,
+        "--env",
+        &format!("TMPDIR={}", temporary.display()),
         "--entrypoint",
         "/opt/zxs",
         image,
@@ -169,7 +184,11 @@ fn docker_args(
 
 enum Backend {
     Native(Option<Process>),
-    Container { name: String, log: PathBuf },
+    Container {
+        name: String,
+        log: PathBuf,
+        temporary: Option<tempfile::TempDir>,
+    },
 }
 pub(super) struct ServerProcess {
     backend: Backend,
@@ -184,7 +203,7 @@ impl ServerProcess {
             Backend::Native(process) => {
                 drop(process.take());
             }
-            Backend::Container { name, log } => {
+            Backend::Container { name, log, .. } => {
                 let logs = output(&strings(&["logs", name]));
                 let cleanup = cleanup_with(name, output);
                 if cleanup.is_ok() {
@@ -213,6 +232,14 @@ impl Drop for ServerProcess {
             eprintln!("server fixture fallback cleanup (explicit finish was not reached)");
             if let Err(error) = self.stop() {
                 eprintln!("server fixture cleanup FAILED: {error}");
+                if let Backend::Container { temporary, .. } = &mut self.backend
+                    && let Some(temporary) = temporary.take()
+                {
+                    eprintln!(
+                        "unconfirmed container cleanup; retaining private TMPDIR for runner teardown: {}",
+                        temporary.keep().display()
+                    );
+                }
             }
         }
     }
@@ -238,21 +265,39 @@ pub(super) fn launch(command: &mut Command, log: &Path) -> Result<ServerProcess>
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
     );
-    let args = docker_args(command, image, &name, id("-u")?, id("-g")?)?;
+    use std::os::unix::fs::PermissionsExt;
+    let temporary = tempfile::Builder::new()
+        .prefix("zxs-private-tmp-")
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(command.get_current_dir().ok_or("missing fixture cwd")?)?;
+    let args = docker_args(
+        command,
+        image,
+        &name,
+        id("-u")?,
+        id("-g")?,
+        temporary.path(),
+    )?;
     fs::File::create(log)?;
     // A successful create returns immutable ownership identity. A failed
     // create (including a name collision) never authorizes deleting that name.
-    let container = output(&args).map_err(|error| {
-        format!("docker create did not provide cleanup authority for diagnostic name {name}: {error}; creation outcome and cleanup are unconfirmed, no name-based deletion attempted; isolated runner teardown is required")
-    })?;
+    let container = match output(&args) {
+        Ok(container) => container,
+        Err(error) => {
+            let path = temporary.keep();
+            return Err(format!("docker create did not provide cleanup authority for diagnostic name {name}: {error}; creation outcome and cleanup are unconfirmed, no name-based deletion attempted; private TMPDIR {} retained for isolated runner teardown", path.display()).into());
+        }
+    };
     let container = container.trim();
     if container.len() != 64 || !container.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(format!("docker create returned no valid complete identity for diagnostic name {name}; cleanup is unconfirmed, no name-based deletion attempted; isolated runner teardown is required").into());
+        let path = temporary.keep();
+        return Err(format!("docker create returned no valid complete identity for diagnostic name {name}; cleanup is unconfirmed, no name-based deletion attempted; private TMPDIR {} retained for isolated runner teardown", path.display()).into());
     }
     let process = ServerProcess {
         backend: Backend::Container {
             name: container.to_owned(),
             log: log.to_owned(),
+            temporary: Some(temporary),
         },
         stopped: false,
     };
@@ -266,11 +311,27 @@ pub(super) fn launch(command: &mut Command, log: &Path) -> Result<ServerProcess>
 mod tests {
     use super::*;
 
+    fn args(command: &Command, image: &str, name: &str, uid: u32, gid: u32) -> Result<Vec<String>> {
+        docker_args(
+            command,
+            image,
+            name,
+            uid,
+            gid,
+            &command.get_current_dir().unwrap().join("tmp"),
+        )
+    }
+
     fn fixture() -> (tempfile::TempDir, Command) {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::Builder::new()
             .permissions(fs::Permissions::from_mode(0o700))
             .tempdir()
+            .unwrap();
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.path().join("tmp"))
             .unwrap();
         let binary = root.path().join("zxs");
         fs::write(&binary, b"not executed: command-construction fixture").unwrap();
@@ -285,8 +346,13 @@ mod tests {
     fn container_is_nonroot_loopback_and_has_only_two_explicit_mounts() {
         let (_root, command) = fixture();
         let uid = _root.path().metadata().unwrap().uid();
-        let args = docker_args(&command, "zxs-debian13-runtime", "unique", uid, 1002).unwrap();
+        let args = args(&command, "zxs-debian13-runtime", "unique", uid, 1002).unwrap();
         assert_eq!(args[0], "create");
+        assert!(
+            args.windows(2)
+                .any(|a| a == ["--env", &format!("TMPDIR={}/tmp", _root.path().display())])
+        );
+        assert!(args.iter().any(|a| a == "--read-only"));
         assert!(
             args.windows(2)
                 .any(|a| a == ["--user", &format!("{uid}:1002")])
@@ -306,19 +372,19 @@ mod tests {
     #[test]
     fn root_external_listen_or_web_mount_are_refused() {
         let (_root, mut command) = fixture();
-        assert!(docker_args(&command, "image", "id", 0, 0).is_err());
+        assert!(args(&command, "image", "id", 0, 0).is_err());
         let mut external = Command::new(command.get_program());
         external
             .current_dir(_root.path())
             .args(["--listen", "0.0.0.0:1234"]);
         command = external;
-        assert!(docker_args(&command, "image", "id", 1000, 1000).is_err());
+        assert!(args(&command, "image", "id", 1000, 1000).is_err());
         let (_root, mut command) = fixture();
         command.arg("--listen=0.0.0.0:1234");
-        assert!(docker_args(&command, "image", "id", 1000, 1000).is_err());
+        assert!(args(&command, "image", "id", 1000, 1000).is_err());
         let (_root, mut command) = fixture();
         command.args(["--web-dir", "/work/build/web"]);
-        assert!(docker_args(&command, "image", "id", 1000, 1000).is_err());
+        assert!(args(&command, "image", "id", 1000, 1000).is_err());
     }
 
     #[test]
@@ -326,9 +392,19 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let (root, command) = fixture();
         let uid = root.path().metadata().unwrap().uid();
-        assert!(docker_args(&command, "image", "id", uid + 1, 1000).is_err());
+        assert!(args(&command, "image", "id", uid + 1, 1000).is_err());
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(docker_args(&command, "image", "id", uid, 1000).is_err());
+        assert!(args(&command, "image", "id", uid, 1000).is_err());
+    }
+
+    #[test]
+    fn tmpdir_cannot_escape_fixture_or_be_shared() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, command) = fixture();
+        let uid = root.path().metadata().unwrap().uid();
+        assert!(docker_args(&command, "image", "id", uid, 1000, Path::new("/tmp")).is_err());
+        fs::set_permissions(root.path().join("tmp"), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(args(&command, "image", "id", uid, 1000).is_err());
     }
 
     #[test]
