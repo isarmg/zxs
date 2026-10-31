@@ -1,6 +1,6 @@
 # ZXS SMB 桥接
 
-本目录包含 `smb-protocol` 本机协议与 `smb-vfs` Rust 模块，目标 ABI 固定为官方 Samba 4.23.0 SDK。Samba/smbd 提供网络服务，ZXS 通过受保护的本机 RPC 执行授权和存储操作。编译、单元测试与真实客户端互操作须分别验证。
+本目录包含 `smb-protocol` 本机协议与 `smb-vfs` Rust 模块，当前发行目标为 Debian 13 amd64 的系统 Samba 4.22.11 Debian SDK（VFS interface 50）。Samba/smbd 提供网络服务，ZXS 通过受保护的本机 RPC 执行授权和存储操作。编译、单元测试与真实客户端互操作须分别验证。
 
 ## 目录与职责
 
@@ -10,7 +10,7 @@
 | `src/smb/src/client.rs` | 同步本机 RPC 客户端；同一连接上的请求串行化 |
 | `src/smb-vfs/src/module.rs` | Rust 编写的 Samba VFS 回调，不包含自写 C 桥接 |
 | `src/smb-vfs/src/asynchronous.rs` | 两个 Rust 工作线程、有界队列及 eventfd/tevent 完成与取消处理 |
-| `src/smb-vfs/build.rs` | 校验固定 SDK 版本，使用 bindgen 生成 C ABI 绑定 |
+| `src/smb-vfs/build.rs` | 校验固定 Debian SDK/宿主版本，使用 bindgen 生成 C ABI 绑定 |
 | `src/server/src/smb_rpc.rs` | 唯一身份绑定、句柄、私有工作文件、核心提交和读租约 |
 
 客户端的同一连接在全部 clone 之间串行使用。请求发送、响应接收或帧解析失败后，立即关闭并移除共享连接；后续调用明确返回 `NotConnected`，不会把残留响应当作另一请求的结果。完整远端业务错误保留连接。VFS 打开记录始终持有 `OwnedFd`，宿主只取得借用的描述符编号；从句柄表移除文件会转移所有权，锁失败、保存失败或展开也会关闭本地描述符。异步快照通过 `OwnedFd::try_clone` 持有独立描述符，最终上下文清理消费未关闭记录，显式关闭一次并保留关闭错误诊断；本机关闭策略与协议回归共用 `client::close_descriptor`，不依赖手写 Samba ABI 测试替身。
@@ -302,26 +302,22 @@ Hello 得到的身份不是长期准入证明：repository/binding generation �
 引擎锁内的当前权威验证保持不变。无 socket 快照测试覆盖认证写锁被持有时读取、
 blocked/owner drop 和凭据锁释放；真实 listener 的 owner 生命周期留给 AF_UNIX CI。
 
-## 仓内 Samba 本体与统一构建
+## Debian 13 系统 Samba 与配套 VFS
 
-Samba/smbd 4.23.0 完整官方源代码现保存在
-[`compliance/sources/samba`](../../compliance/sources/samba/README.md)，不是外部运行时下载或 submodule。
-保留原始压缩布局避免把上游独立测试/文档/构建工程混入第一方 `src/`；源包全部许可与版权原样保留。
+当前交付约定为 **ZXS 单个可执行文件（内含 Web）＋系统 apt Samba＋独立配套 `zxs.so`**。
+不内嵌或释放 Samba 本体/私有库，不由 ZXS 自动管理系统 smbd，也不把发行 tar 称作单个二进制。
+Debian 提供通用运行库，构建器/开发头仅用于隔离 CI，不要求部署机器安装 Rust 或编译器。
 
-`bash .github/scripts/smb-sdk.sh` 一次构建真实 `smbd`、`smbclient` 及匹配的 Rust `libsmb_vfs.so`，
-然后运行真实 SDK ABI/FFI 单测、panic=abort 拒绝检查和受支持 release 正向构建。
-无需预装 Samba。需要 C/C++、Python 3.12、Perl/Yapp、Flex、Bison、M4、Rust、pkg-config、Clang、
-GnuTLS/Kerberos/zlib/popt 开发库及 binutils；Ubuntu 24.04 的完整安装列表见
-[SMB 构建工作流](../../.github/workflows/smb-sdk.yml)。只有源码获取是完全仓内离线，系统依赖准备不是。
+当前精确构建目标、Debian 源码与补丁摘要见
+[目标收据](../../.github/samba-debian-target.json)，构建入口为
+[Debian SDK 脚本](../../.github/scripts/smb-sdk.sh)。SDK 使用同版本 Debian 源包及
+`debian/rules configure`，不能用仅更改 ABI 常数的上游 4.23 模块冒充系统兼容。
+Debian 的 `samba-dev` 不包含所有 VFS 内部头，因此还需要匹配源码的生成头；这些构建材料不进入用户的运行依赖。
 
-默认输出：
-- `target/smb-sdk/<源码SHA>/samba-4.23.0/bin/default/source3/smbd/smbd`
-- `target/smb-sdk/<源码SHA>/samba-4.23.0/bin/default/source3/client/smbclient`
-- `target/native/release/libsmb_vfs.so`
-- `target/smb-sdk/product-receipt/`：实际版本、二进制 SHA-256、ELF 动态标签及 `ldd` 依赖。
+模块注册前核对完整宿主版本，版本不匹配返回 `NT_STATUS_REVISION_MISMATCH`，不回退到旧布局。
+系统 Samba 安全升级后应重新构建并验证配套模块；不能为了保持旧插件可加载而长期锁住有漏洞的软件包。
+支持声明只覆盖成功完成真实 apt smbd 加载/认证/文件操作验证的精确版本，不能推断所有 4.22.x 均通过。
+实际 gate 与未执行边界见 [Debian 系统 Samba 验收](../validation/debian13-system-samba.md)。
 
-CI 同时保存 `samba-build-tree.tar.gz`（保留 `bin/` 内共享/私有库和链接）、VFS、源码及法律材料。
-这是匹配的构建树产物，**不是已安装服务或承诺可重定位的静态发行包**：Samba 配置前缀与
-系统动态库依赖仍存在，使用前须按 receipt 和显式 Samba 配置安排模块/库路径。
-脚本只执行 `--version`，不启动监听、不安装系统服务、不创建用户或更改权限。
-真实 Windows/macOS 客户端、部署认证与网络互操作仍按既有人工验收单执行；编译成功不冒充互操作通过。
+仓内 [`compliance/sources/samba`](../../compliance/sources/samba/README.md) 的完整官方 4.23.0 源码、
+许可证、分片摘要和此前 SDK 验证证据保持不变，作为历史构建/核对材料；它不再是默认生产宿主版本。

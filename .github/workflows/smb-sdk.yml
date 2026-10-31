@@ -1,4 +1,4 @@
-name: In-repository Samba and VFS build
+name: Debian 13 system Samba and matching VFS
 
 on:
   workflow_call:
@@ -13,7 +13,7 @@ env:
 
 jobs:
   smb-sdk:
-    name: Samba 4.23.0 real SDK ABI and FFI tests
+    name: Debian 13 apt Samba exact SDK ABI and real SMB acceptance
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -24,27 +24,23 @@ jobs:
         run: bash .github/scripts/initialize-cargo-home.sh
       - name: Install repository Rust toolchain
         run: rustup show active-toolchain
-      - name: Install official Ubuntu SDK build prerequisites
+      - name: Build exact Debian source SDK and matching VFS
+        run: bash .github/scripts/debian13-run.sh bash .github/scripts/smb-sdk.sh
+      - name: Build minimal Debian system-Samba runtime acceptance image
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            build-essential pkg-config python3 perl libparse-yapp-perl flex bison m4 \
-            clang libclang-dev libgnutls28-dev libkrb5-dev zlib1g-dev libpopt-dev
-      - name: Cache pinned configured Samba source and real libraries
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/smb-sdk
-          key: samba-4.23.0-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('.github/scripts/smb-sdk.sh', 'tools/samba-source/manage.py', 'compliance/sources/samba/source.json') }}
-      - name: Build repository Samba daemon/client and validate matching Rust VFS
-        run: bash .github/scripts/smb-sdk.sh
-      - name: Preserve matching SMB products and dependency receipts
+          version="$(python3 -c 'import json;print(json.load(open(".github/samba-debian-target.json"))["package_version"])')"
+          docker build --build-arg "SAMBA_VERSION=$version" --file .github/containers/debian13-runtime.Dockerfile --tag zxs-debian13-runtime .github/containers
+      - name: Load VFS in apt smbd and exercise real storage engine without compiler or network
+        run: |
+          fixture="$(cat target/smb-debian13/fixture-path.txt)"
+          docker run --rm --init --network none --volume "$PWD:/work" \
+            --env ZXS_ISOLATED_SAMBA_TEST=1 zxs-debian13-runtime \
+            python3 .github/scripts/check-system-samba.py --fixture "$fixture" \
+            --module target/smb-debian13/product/zxs.so --output target/smb-debian13/product/system-samba.json
+      - name: Preserve exact VFS and system-Samba evidence
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: samba-4.23.0-and-vfs-${{ github.sha }}
+          name: debian13-vfs-${{ github.sha }}
           if-no-files-found: error
-          path: |
-            target/smb-sdk/samba-build-tree.tar.gz
-            target/smb-sdk/libsmb_vfs.so
-            target/smb-sdk/product-receipt/
-            compliance/sources/samba/
-            compliance/licenses/upstream/samba-4.23.0/
+          path: target/smb-debian13/product/

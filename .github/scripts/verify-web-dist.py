@@ -118,7 +118,7 @@ def write_snapshot(root, relative, output, expected=None):
     output.chmod(input_path(root, relative).stat().st_mode & 0o777)
 
 
-def verify(root, stage=None):
+def verify_web(root):
     root = Path(root).resolve(strict=True)
     dist = input_path(root, "build/web", directory=True)
     manifest_bytes = read_input(dist, MANIFEST)
@@ -142,6 +142,15 @@ def verify(root, stage=None):
     for relative, expected in outputs.items():
         if digest(read_input(dist, relative)) != expected:
             raise ValueError(f"Web output checksum mismatch: {relative}")
+    return manifest, manifest_bytes
+
+
+def verify(root, stage=None):
+    root = Path(root).resolve(strict=True)
+    manifest, manifest_bytes = verify_web(root)
+    dist = input_path(root, "build/web", directory=True)
+    outputs, inputs = manifest["files"], manifest["inputs"]
+    current_inputs = inputs
     # Validate every archive input, not only the files copied by web-build.
     materials = ["README.md", "deploy/systemd/zxs.service", "deploy/samba/smb.conf.example",
                  *tree_paths(root, "compliance"), *tree_paths(root, "docs")]

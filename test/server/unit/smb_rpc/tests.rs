@@ -2716,3 +2716,6 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
 
 #[path = "snapshot_semantics_tests.rs"]
 mod snapshot_semantics_tests;
+
+#[path = "system_samba_tests.rs"]
+mod system_samba_tests;

@@ -1,95 +1,70 @@
 #!/usr/bin/env bash
-# Real Samba ABI validation. Never substitute hand-written/mock SDK structures.
+# Exact Debian 13 source/configuration and apt runtime, not an upstream lookalike host.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
-for tool in cc pkg-config python3 perl yapp flex bison m4 cargo tar sha256sum readelf ldd; do
-  command -v "$tool" >/dev/null || {
-    printf 'Missing SDK prerequisite: %s (see the smb-sdk CI job packages)\n' "$tool" >&2
-    exit 1
-  }
+[[ "$(. /etc/os-release; printf '%s:%s' "$ID" "$VERSION_ID")" == debian:13 ]]
+[[ "$(dpkg --print-architecture)" == amd64 ]]
+version="$(python3 -c 'import json;print(json.load(open(".github/samba-debian-target.json"))["package_version"])')"
+for package in samba samba-common-bin samba-dev smbclient; do
+  [[ "$(dpkg-query -W -f='${Version}' "$package")" == "$version" ]]
 done
-cache="${ZXS_SMB_SDK_CACHE:-$root/target/smb-sdk}"
-mkdir -p "$cache"
-cache="$(cd "$cache" && pwd)"
-version=4.23.0
-sha256="$(python3 tools/samba-source/manage.py verify | python3 -c 'import json, sys; print(json.load(sys.stdin)["sha256"])')"
-# Source hash is part of the build directory identity. No source fetch occurs.
-materialized="$cache/$sha256"
-source="$materialized/samba-$version"
-if [[ ! -d "$materialized" ]]; then
-  python3 tools/samba-source/manage.py extract --destination "$materialized"
+cache="$root/target/smb-debian13"
+mkdir -p "$cache/source"
+if [[ ! -f "$cache/source/.downloaded" ]]; then
+  (cd "$cache/source"; apt-get source --download-only --only-source "samba=$version")
+  python3 - "$cache/source" <<'PYVERIFY'
+import hashlib, json, pathlib, sys
+base = pathlib.Path(sys.argv[1])
+for name, expected in json.load(open('.github/samba-debian-target.json'))['source_files'].items():
+    with (base / name).open('rb') as source:
+        if hashlib.file_digest(source, 'sha256').hexdigest() != expected:
+            raise ValueError('Debian source checksum mismatch: ' + name)
+PYVERIFY
+  (cd "$cache/source"; dpkg-source -x samba_*.dsc sdk)
+  touch "$cache/source/.downloaded"
 fi
-# CI caches the complete configured source, generated NDR headers, and real libs.
-# Reconfigure on script changes (also in the cache key), never reuse a partial build.
-recipe="$(sha256sum "${BASH_SOURCE[0]}" | cut -d' ' -f1)"
+source="$cache/source/sdk"
+recipe="$(sha256sum .github/scripts/smb-sdk.sh .github/samba-debian-target.json | sha256sum | cut -d' ' -f1)"
 if [[ ! -f "$source/.zxs-sdk-ready" ]] || [[ "$(cat "$source/.zxs-sdk-ready")" != "$recipe" ]]; then
   (
     cd "$source"
-    ./configure --prefix="$cache/install" \
-      --without-ad-dc --without-ads --without-ldap --without-pam \
-      --disable-python --without-systemd --without-systemd-userdb \
-      --without-json --without-libarchive --without-acl-support \
-      --disable-cups --disable-iprint --disable-avahi --disable-glusterfs \
-      --disable-cephfs --disable-spotlight --disable-wsp --without-regedit --without-gpgme \
-      --without-ldb-lmdb --with-system-mitkrb5 \
-      --bundled-libraries=talloc,tevent,tdb,ldb \
-      --with-shared-modules='!vfs_snapper'
-    # Building the real daemon/client generates dependent headers and libraries.
-    # No install, daemon startup, account or host security configuration changes.
-    PYTHONHASHSEED=1 ./buildtools/bin/waf build --targets=smbd/smbd,client/smbclient -j "${ZXS_SMB_SDK_JOBS:-2}"
+    # Run the exact Debian configure recipe (profiling/cluster/layout flags
+    # affect internal structures); only limit the compiled SDK target set.
+    DEB_BUILD_OPTIONS=parallel=2 make -f debian/rules configure
+    PYTHONHASHSEED=1 ./buildtools/bin/waf build --targets=smbd/smbd,client/smbclient -j2
     printf '%s\n' "$recipe" > .zxs-sdk-ready
   )
 fi
 export ZXS_SMB_SDK_SOURCE="$source"
 export ZXS_SMB_SDK_BUILD="$source/bin/default"
-export ZXS_SMB_SDK_CLANG_ARGS_JSON="${ZXS_SMB_SDK_CLANG_ARGS_JSON:-[]}"
-# The SDK's shared libraries use their own sibling shared/private dependencies.
-export LD_LIBRARY_PATH="$source/bin/shared:$source/bin/shared/private${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-python3 .github/scripts/check-rust-diagnostics.py -- \
-  cargo clippy --locked --offline --message-format=json \
-  -p smb-vfs --all-targets -- -D warnings
-# Test harness output is not Cargo JSON. Gate compilation first, then run the
-# already compiled tests without filtering their normal stdout/stderr.
-python3 .github/scripts/check-rust-diagnostics.py -- \
-  cargo test --locked --offline -p smb-vfs --no-run --message-format=json
-cargo test --locked --offline -p smb-vfs
-# Exercise the actual release crate with the configured SDK, not the test
-# harness (which selects unwind independently). Reject only our expected gate.
-abort_log="$cache/vfs-panic-abort.log"
-if cargo rustc --locked --offline -p smb-vfs --release --lib -- -C panic=abort >"$abort_log" 2>&1; then
-  cat "$abort_log"
-  printf 'SMB VFS unexpectedly accepted panic=abort\n' >&2
-  exit 1
-fi
-cat "$abort_log"
-grep -Fq 'ZXS SMB VFS requires panic=unwind to isolate panics at the host boundary' "$abort_log"
-# Finish with the supported release build; an unrelated negative build failure
-# cannot pass the expected diagnostic gate or replace this positive check.
-python3 .github/scripts/check-rust-diagnostics.py -- \
-  cargo build --locked --offline -p smb-vfs --release --message-format=json
-
-# A unified build produces the real Samba daemon/client and matching Rust VFS.
-# Capture actual dynamic dependencies; do not claim a static/portable release.
-receipt_dir="$cache/product-receipt"
-mkdir -p "$receipt_dir"
-for product in "$source/bin/default/source3/smbd/smbd" \
-  "$source/bin/default/source3/client/smbclient" \
-  "${CARGO_TARGET_DIR:-$root/target/native}/release/libsmb_vfs.so"; do
-  test -f "$product"
-  name="$(basename "$product")"
-  sha256sum "$product" > "$receipt_dir/$name.sha256"
-  readelf -d "$product" > "$receipt_dir/$name.dynamic.txt"
-  ldd "$product" > "$receipt_dir/$name.ldd.txt"
-  if grep -Fq 'not found' "$receipt_dir/$name.ldd.txt"; then
-    cat "$receipt_dir/$name.ldd.txt" >&2
-    exit 1
-  fi
-done
-"$source/bin/default/source3/smbd/smbd" --version > "$receipt_dir/smbd.version.txt"
-"$source/bin/default/source3/client/smbclient" --version > "$receipt_dir/smbclient.version.txt"
-printf '%s\n' "$sha256" > "$receipt_dir/source.sha256"
-# Preserve bin/ symlinks and private shared libraries in a build-tree artifact.
-# This is not an installer and makes no host changes.
-tar -czf "$cache/samba-build-tree.tar.gz" -C "$source" bin
-cp "${CARGO_TARGET_DIR:-$root/target/native}/release/libsmb_vfs.so" "$cache/"
+export ZXS_SMB_SDK_CACHE="$cache"
+export LD_LIBRARY_PATH="$source/bin/shared:$source/bin/shared/private"
+bash .github/scripts/smb-vfs-check.sh
+unset LD_LIBRARY_PATH
+mkdir -p "$cache/product"
+cp "${CARGO_TARGET_DIR:-$root/target/native}/release/libsmb_vfs.so" "$cache/product/zxs.so"
+python3 - "$cache/product" <<'PYRECEIPT'
+import hashlib, json, pathlib, subprocess, sys
+p = pathlib.Path(sys.argv[1]); target = json.load(open('.github/samba-debian-target.json'))
+with (p/'zxs.so').open('rb') as source: checksum=hashlib.file_digest(source,'sha256').hexdigest()
+receipt={**target,'commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+ 'tree':subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(), 'module_sha256':checksum,
+ 'host_version':subprocess.check_output(['smbd','--version'],text=True).strip()}
+(p/'VFS-BUILD.json').write_text(json.dumps(receipt,indent=2)+'\n')
+PYRECEIPT
+readelf -d "$cache/product/zxs.so" > "$cache/product/zxs.dynamic.txt"
+ldd "$cache/product/zxs.so" > "$cache/product/zxs.ldd.txt"
+! grep -Fq 'not found' "$cache/product/zxs.ldd.txt"
+# Build the real-engine fixture once; runtime acceptance runs it without Cargo.
+cargo test --locked --offline -p storage-server --lib --no-run --message-format=json > "$cache/fixture-build.jsonl"
+python3 - "$cache" <<'PYFIXTURE'
+import json, pathlib, sys
+cache=pathlib.Path(sys.argv[1]); candidates=[]
+for line in (cache/'fixture-build.jsonl').read_text().splitlines():
+    item=json.loads(line)
+    if item.get('reason')=='compiler-artifact' and item.get('executable') and item['target']['name']=='storage_server':
+        candidates.append(item['executable'])
+if len(candidates)!=1: raise ValueError('expected one real storage-server test binary')
+(cache/'fixture-path.txt').write_text(candidates[0]+'\n')
+PYFIXTURE

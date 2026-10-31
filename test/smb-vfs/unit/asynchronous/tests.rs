@@ -35,8 +35,8 @@ pub(crate) fn event_context() -> *mut sdk::tevent_context {
     // context; the global backend initialization is serialized above.
     unsafe { sdk::tevent_context_init(std::ptr::null_mut()) }
 }
-#[link(name = "tevent-private-samba")]
-#[link(name = "talloc-private-samba")]
+#[link(name = "tevent")]
+#[link(name = "talloc")]
 #[link(name = "smbconf")]
 #[link(name = "samba-security-private-samba")]
 unsafe extern "C" {}
