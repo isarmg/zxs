@@ -520,11 +520,6 @@ impl SetupRecovery {
         if request.mode == Mode::Development && !self.allow_development {
             return Err(ApiError::forbidden());
         }
-        if request.mode == Mode::Production {
-            for path in &paths {
-                require_mountpoint(path)?;
-            }
-        }
         let mut config = Config::development(paths);
         config.mode = request.mode;
         let config = ValidatedConfig::try_from(config).map_err(engine_error)?;
@@ -595,11 +590,6 @@ impl SetupRecovery {
         let config = config.with_disk_roots(roots).map_err(engine_error)?;
         if config.mode == Mode::Development && !self.allow_development {
             return Err(ApiError::forbidden());
-        }
-        if config.mode == Mode::Production {
-            for disk in &config.disks {
-                require_mountpoint(&disk.root)?;
-            }
         }
         Ok((config, ids))
     }
@@ -743,11 +733,6 @@ impl SetupRecovery {
         let paths = self.selected(&intent.disk_ids)?;
         if intent.config.mode == Mode::Development && !self.allow_development {
             return Err(ApiError::forbidden());
-        }
-        if intent.config.mode == Mode::Production {
-            for path in &paths {
-                require_mountpoint(path)?;
-            }
         }
         if intent.config.disks.len() != paths.len()
             || intent
@@ -1051,29 +1036,6 @@ fn directory_identity(path: &Path) -> Result<(u64, u64), ApiError> {
     use std::os::unix::fs::MetadataExt;
     let metadata = fs::symlink_metadata(path).map_err(ApiError::io)?;
     Ok((metadata.dev(), metadata.ino()))
-}
-fn require_mountpoint(path: &Path) -> Result<(), ApiError> {
-    let mounts = fs::read_to_string("/proc/self/mountinfo").map_err(ApiError::io)?;
-    let mounted = mounts.lines().any(|line| {
-        line.split_once(" - ")
-            .and_then(|(left, _)| left.split_whitespace().nth(4))
-            .map(|point| {
-                PathBuf::from(
-                    point
-                        .replace("\\040", " ")
-                        .replace("\\011", "\t")
-                        .replace("\\134", "\\"),
-                )
-            })
-            .is_some_and(|point| point == path)
-    });
-    if !mounted {
-        return Err(ApiError::conflict(
-            storage_contract::ErrorCode::DiskNotMounted,
-            "production setup requires each configured disk root to be an active mountpoint",
-        ));
-    }
-    Ok(())
 }
 
 fn value_digest<T: Serialize>(value: &T) -> Result<String, ApiError> {

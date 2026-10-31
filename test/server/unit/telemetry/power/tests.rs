@@ -77,7 +77,19 @@ fn disk_sensor_requires_drive_ownership_and_does_not_sum_unknown_rails() {
         Some(crate::PowerUnavailable::SensorAmbiguous)
     );
     assert_eq!(
-        disk_power("ignored", true, true).1,
+        disk_power(Some("ignored"), true, true).1,
         Some(crate::PowerUnavailable::SimulatedDisk)
+    );
+}
+
+#[test]
+fn unmanaged_physical_topology_reports_unknown_power_without_a_probe() {
+    assert_eq!(
+        disk_power(None, false, true).1,
+        Some(PowerUnavailable::SensorUnavailable)
+    );
+    assert_eq!(
+        disk_power(None, false, false).1,
+        Some(PowerUnavailable::DiskOffline)
     );
 }

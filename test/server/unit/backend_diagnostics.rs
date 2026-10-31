@@ -10,7 +10,7 @@ fn diagnostics_wire_preserves_disk_fields_decimal_bytes_and_numeric_counts() {
         upstream_slot_id: None,
         online: false,
         metadata_member: true,
-        physical_device: String::new(),
+        physical_device: None,
         available_bytes: u64::MAX,
         used_bytes: 7,
         simulation: true,
@@ -18,7 +18,7 @@ fn diagnostics_wire_preserves_disk_fields_decimal_bytes_and_numeric_counts() {
     let old_disks = json!({"disks":disks});
     let actual = DisksResponse::from(disks);
     assert_eq!(json_codec::to_value(&actual).unwrap(), old_disks);
-    assert_eq!(storage_contract::canonical_json(&actual).unwrap(), br#"{"disks":[{"available_bytes":"18446744073709551615","disk_id":"disk-primary","level":1,"metadata_member":true,"online":false,"physical_device":"","simulation":true,"slot_id":"P01","upstream_slot_id":null,"used_bytes":"7"}]}"#);
+    assert_eq!(storage_contract::canonical_json(&actual).unwrap(), br#"{"disks":[{"available_bytes":"18446744073709551615","disk_id":"disk-primary","level":1,"metadata_member":true,"online":false,"physical_device":null,"simulation":true,"slot_id":"P01","upstream_slot_id":null,"used_bytes":"7"}]}"#);
     let report = storage_contract::CheckReport {
         checked_versions: 17,
         healthy_replicas: 23,
@@ -41,7 +41,7 @@ fn file_manager_disk_wire_is_only_the_existing_seven_field_projection() {
             upstream_slot_id: Some("not-public".into()),
             online: false,
             metadata_member: true,
-            physical_device: "not-public".into(),
+            physical_device: Some("not-public".into()),
             available_bytes: u64::MAX,
             used_bytes: 7,
             simulation: true,

@@ -150,8 +150,6 @@ fn remote_errno(code: ErrorCode) -> i32 {
         | ErrorCode::DiskChanged
         | ErrorCode::DiskIdentityMismatch
         | ErrorCode::DiskNotFound
-        | ErrorCode::DiskNotIndependent
-        | ErrorCode::DiskNotMounted
         | ErrorCode::DiskReadOnly
         | ErrorCode::DiskSampleUnavailable
         | ErrorCode::DiskUnavailable
@@ -159,7 +157,6 @@ fn remote_errno(code: ErrorCode) -> i32 {
         | ErrorCode::Fenced
         | ErrorCode::FencingTokenExpired
         | ErrorCode::FencingTokenInvalid
-        | ErrorCode::FilesystemRequired
         | ErrorCode::FileBranchNotFound
         | ErrorCode::FileBranchRequired
         | ErrorCode::FileBranchScope
@@ -213,7 +210,6 @@ fn remote_errno(code: ErrorCode) -> i32 {
         | ErrorCode::MetadataUnavailable
         | ErrorCode::MethodNotAllowed
         | ErrorCode::MonitorUnavailable
-        | ErrorCode::MultiDeviceFilesystem
         | ErrorCode::NoWindow
         | ErrorCode::ObjectCorrupt
         | ErrorCode::OfflineConfigurationRequired
@@ -275,7 +271,6 @@ fn remote_errno(code: ErrorCode) -> i32 {
         | ErrorCode::TransferTimeout
         | ErrorCode::TransportError
         | ErrorCode::UnsafePath
-        | ErrorCode::UnsupportedDeviceTopology
         | ErrorCode::UnsupportedMediaType
         | ErrorCode::UploadGenerationConflict
         | ErrorCode::UploadIncomplete

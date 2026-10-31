@@ -317,7 +317,7 @@ impl Engine {
             let disk = disk_resources.get(d)?;
             disk.root
                 .write_json(&d.root.join("disk.json"), &disk.seal, false)?;
-            disk.root.write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-rescue offline-check/offline-export before recovery. Development disks are not physical redundancy evidence.\n",false)?;
+            disk.root.write_atomic(&d.root.join("README.txt"),b"ZXS disk format 2. Ordinary full files are stored below histories/. Use zxs-rescue offline-check/offline-export before recovery. Filesystem choice and physical failure-domain independence are the operator responsibility.\n",false)?;
             for p in [
                 "histories",
                 "metadata/application-log",
@@ -511,7 +511,7 @@ impl Engine {
                 .or_insert((config, 1));
             if seals.insert(seal.disk_id, path).is_some() {
                 return Err(Error::new(
-                    storage_contract::ErrorCode::DiskNotIndependent,
+                    storage_contract::ErrorCode::ConfigConflict,
                     "duplicate disk id in recovery input",
                 ));
             }

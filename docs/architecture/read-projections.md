@@ -286,7 +286,7 @@ execute、持久化 Value 和独立初始化协议没有因此删除。
 
 GET `/api/admin/disks` 和 `/api/admin/check` 的真实管理 Web 消费者改走 required `disk_status`/`integrity_check`，删除 Disks/Check action 以及不再有消费者的 list_handler 宏。HTTP 继续解析并忽略原 query，持有 backend_slots；同锁 current 准入之后，Disks 捕获原 DiskObservationPlan 再解锁采样，Check 保持原核心离线完整性检查的锁内 I/O 与逐盘问题聚合语义。不借本次类型迁移改变检查时序、后台缓存或磁盘完整性策略。
 
-Backend 返回既有 Vec<DiskStatus>/CheckReport，HTTP 才做穷尽 wire 投影：磁盘十字段、nullable upstream、字符串 u64 bytes、原始 physical_device 不变；Check 的三个 usize 计数仍是 JSON number、issues 原顺序保留，不机械改成字符串。真实掉盘继续输出观察/检查报告而不是用新的默认状态掩盖错误。MonitorDisks 和 FileManagerDisks 具有不同采样、字段与资源策略，未被这组假称完成；私有监控采样已在下节独立接续，FileManagerDisks 也在后节复用同一已类型化采样方法。
+Backend 返回既有 Vec<DiskStatus>/CheckReport，HTTP 才做穷尽 wire 投影：磁盘十字段、nullable upstream、字符串 u64 bytes、physical_device 为可空观测，当前不探测物理身份时为 null；不得由目录 device/inode 伪造物理设备；Check 的三个 usize 计数仍是 JSON number、issues 原顺序保留，不机械改成字符串。真实掉盘继续输出观察/检查报告而不是用新的默认状态掩盖错误。MonitorDisks 和 FileManagerDisks 具有不同采样、字段与资源策略，未被这组假称完成；私有监控采样已在下节独立接续，FileManagerDisks 也在后节复用同一已类型化采样方法。
 
 测试覆盖原 wire 及固定规范字节、真实核心检查与掉盘报告、当前身份/撤权/排队准入、已准入 owned 响应的锁外序列化与 owner 释放、HTTP 查询及匿名拒绝、真实 panic 和取消预算矩阵。没有新增副本、fsync、权威状态或永久幂等格式。
 

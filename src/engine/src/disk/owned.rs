@@ -1,10 +1,7 @@
 //! Held filesystem resources, separate from serializable configuration and writer locks.
 use super::*;
 use platform_io::fs_safety::linux::DirectoryEntries;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 /// A path is an address below this held root, never a request to reopen the root.
 pub(crate) struct DiskRoot {
@@ -350,18 +347,11 @@ pub(crate) struct DiskResources {
 impl DiskResources {
     pub(crate) fn open(config: &ValidatedConfig, sealed: bool) -> Result<Self> {
         let mut disks = BTreeMap::new();
-        let mut physical = BTreeSet::new();
         for disk in &config.disks {
             if sealed && disk_unavailable(disk)? {
                 continue;
             }
             let handle = DiskHandle::open(config, disk, sealed)?;
-            if !physical.insert(handle.seal.physical_device.clone()) {
-                return Err(Error::new(
-                    ErrorCode::DiskNotIndependent,
-                    "two slots reference one physical disk",
-                ));
-            }
             disks.insert(disk.disk_id.clone(), Arc::new(handle));
         }
         Ok(Self { disks })

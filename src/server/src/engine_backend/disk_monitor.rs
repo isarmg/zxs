@@ -11,8 +11,11 @@ fn disk_sample(observation: DiskObservation) -> DiskSample {
         status: disk,
         capacity,
     } = observation;
-    let (power_watts, power_unavailable_reason) =
-        crate::telemetry::disk_power(&disk.physical_device, disk.simulation, disk.online);
+    let (power_watts, power_unavailable_reason) = crate::telemetry::disk_power(
+        disk.physical_device.as_deref(),
+        disk.simulation,
+        disk.online,
+    );
     let usage_percent = capacity
         .filter(|capacity| capacity.0 > 0)
         .map(|capacity| capacity.2 as f64 / capacity.0 as f64 * 100.0);

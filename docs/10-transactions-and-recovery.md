@@ -38,7 +38,7 @@
 
 ## 10.2 单写者、多数成员决定与全部配置成员确认
 
-**关键应用日志、Commit、Tree、池成员关系和检查点保存在固定配置的 N 个不同物理盘，N ≥ 1。** 令 Q = floor(N/2)+1。决定和恢复至少需要 Q 个可信配置成员，正常业务发布与成功确认必须等待全部 N 个成员；故障后不得按在线盘数量重算 N 或缩小成员集合。N=1 时 Q=1，单成员可正常保存但没有冗余；N=2 时 Q=2，N=3 时 Q=2，N=4 时 Q=3。
+**关键应用日志、Commit、Tree、池成员关系和检查点保存在固定配置的 N 个登记成员（物理故障域由用户保证），N ≥ 1。** 令 Q = floor(N/2)+1。决定和恢复至少需要 Q 个可信配置成员，正常业务发布与成功确认必须等待全部 N 个成员；故障后不得按在线盘数量重算 N 或缩小成员集合。N=1 时 Q=1，单成员可正常保存但没有冗余；N=2 时 Q=2，N=3 时 Q=2，N=4 时 Q=3。
 
 所有新初始化存储盘均保存 `metadata/pool-membership/config.json` 配置锚，包含非元数据成员盘。核验以可信固定配置约束成员身份和门槛，不能从证明中的回执数量反推成员集合。缺失配置锚的旧盘不支持，不提供读取时补锚、兼容回退或自动迁移。
 
@@ -55,7 +55,7 @@
 对涉及版本集合 V 的一次提交，只有以下条件同时成立，才返回 `COMMITTED_AND_PROTECTED`：
 
 ```text
-1. 对每个新增或迁移的保留版本 v，冻结 required_slots 中的每一级指定盘位均有完整文件、校验及本盘证明，物理盘去重后达到r(v)。
+1. 对每个新增或迁移的保留版本 v，冻结 required_slots 中的每一级指定盘位均有完整文件、校验及本盘证明，登记盘位计数达到r(v)，不将该计数等同于已验证的物理独立性。
 2. 对应完整文件、来源证明、逻辑校验清单和目录项已持久化；备份拓扑/盘位/内容状态变更有完整清单。
 3. 新 Commit/Tree、版本及副本清单、FINALIZE 和 PUBLICATION 及其完整依赖在全部当前配置成员持久化。
 4. 每个所需内容副本上的 commit-proof.json 和 publication-proof.json 已持久化。
@@ -165,7 +165,7 @@ sequenceDiagram
 | `decision_slot, previous_final_hash, candidate_hash` | 存储池顺序及已收敛前缀；候选哈希不包括各盘不同的封装字段 |
 | `transaction_id, operation_id, request_digest` | 幂等、审计与超时查询 |
 | `expected_heads, history_generations, commit_id, tree_id, dependencies_hash` | 按操作类型记录输入状态和完整清单；纯元数据操作不要求不存在的 commit_id、tree_id 或 HEAD 条件 |
-| `policy_snapshot, topology_generation, route_slot_ids, binding_generations, authorization_generation, fencing_token` | 最终接纳时的来源/目标与各级副本准入、物理绑定、保护和权限依据 |
+| `policy_snapshot, topology_generation, route_slot_ids, binding_generations, authorization_generation, fencing_token` | 最终接纳时的来源/目标与各级副本准入、目录绑定、保护和权限依据 |
 | `PREPARE` | 对象和元数据已准备，尚未表示决定成立 |
 | `ACCEPT` | 对同一不可变候选的本盘持久记录；Q 个不同成员记录才建立决定 |
 | `FINALIZE` | 全部配置成员的 ACCEPT 回执及传播完成证据，可生成本盘提交证明 |
@@ -243,7 +243,7 @@ sequenceDiagram
 | 4 | 各 required_slot 的 `publication-proof.json` | 保存 PUBLICATION 及本盘核验需要的完整证明材料；只有哈希、却须访问另一盘解析的材料不满足单盘恢复要求 |
 | 5 | 原子发布 State 与快照身份 | 全部权威发布屏障完成后一次安装公开状态、固定操作结果及事件；可以发送最终成功并允许下一决定槽位。随后 SQLite 更新若失败，只停用派生索引并记录独立健康故障，不撤销已发布事实 |
 
-PUBLICATION 至少固定 `pool_id`、成员与写者代际、`decision_slot`、`operation_id`、`request_digest`、`candidate_hash`、FINALIZE 回执清单、逐版本内容证明清单、公开变更摘要和分类型结果。清单使用不可变分页对象，连同依赖保存到全部配置成员；回执包含实际 disk_id、绑定代际、对象哈希及成功同步记录身份。证明图只向前引用：FINALIZE → 本盘提交证明 → PUBLICATION → 本盘发布证明；禁止让候选或 PUBLICATION 哈希包含后来生成的自身发布证明。字段通过不代表回执真实，必须核对可信日志、物理身份、路由集合和对象内容。
+PUBLICATION 至少固定 `pool_id`、成员与写者代际、`decision_slot`、`operation_id`、`request_digest`、`candidate_hash`、FINALIZE 回执清单、逐版本内容证明清单、公开变更摘要和分类型结果。清单使用不可变分页对象，连同依赖保存到全部配置成员；回执包含实际 disk_id、绑定代际、对象哈希及成功同步记录身份。证明图只向前引用：FINALIZE → 本盘提交证明 → PUBLICATION → 本盘发布证明；禁止让候选或 PUBLICATION 哈希包含后来生成的自身发布证明。字段通过不代表回执真实，必须核对可信日志、登记目录身份、路由集合和对象内容。
 
 运行期 SQLite 的写入、身份、模式或读取失败记录首个具体来源、失败阶段和观察到的发布序号，并关闭该索引连接；后续读从 State 扫描，后续发布不再增量访问失效 SQLite。完整重建成功才恢复索引。派生故障不撤销独立完成的配置成员元数据证明；真实成员、seal、epoch 或发布屏障故障按所处阶段保留原拒绝、`PREPARATION_STALE` 或 `IN_DOUBT`／写入围栏语义。初始化、重开和显式恢复仍须完成既有重建准入，失败不自动带病启动或放宽隔离规则。
 

@@ -58,7 +58,7 @@ struct Args {
     /// Locally reviewed private configuration preset, repeated as ID=/absolute/file.
     #[arg(long = "setup-config")]
     setup_configs: Vec<String>,
-    /// Test-only: allow directory-backed development pool setup, never physical disk validation.
+    /// Test-only: allow development-mode pool setup; production also accepts managed directories.
     #[arg(long)]
     allow_development_setup: bool,
 

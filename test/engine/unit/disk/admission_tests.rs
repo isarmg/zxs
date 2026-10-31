@@ -63,7 +63,9 @@ fn cold_seal_identity_uses_the_opened_root_after_named_root_rebinding() {
     let address = temporary.path().join("member");
     private_dir(&address).unwrap();
     fs::write(address.join("object"), b"held bytes").unwrap();
-    let config = ValidatedConfig::try_from(Config::development([address.clone()])).unwrap();
+    let mut config = Config::development([address.clone()]);
+    config.mode = Mode::Production;
+    let config = ValidatedConfig::try_from(config).unwrap();
     let disk = &config.disks[0];
     let root = DiskRoot::open(&address).unwrap();
     let held_directory = root.directory(&address).unwrap();
@@ -153,9 +155,9 @@ fn immutable_existing_bind_leaf_is_rejected_before_read_or_sync() {
 
 #[test]
 #[ignore = "requires non-interactive sudo and util-linux for an isolated mount test child"]
-fn cold_device_admission_does_not_borrow_a_replacement_mount_identity() {
+fn cold_directory_admission_keeps_held_identity_after_mount_replacement() {
     isolated_mount_namespace(
-        "disk::admission_tests::cold_device_admission_does_not_borrow_a_replacement_mount_identity",
+        "disk::admission_tests::cold_directory_admission_keeps_held_identity_after_mount_replacement",
         || {
             let temporary = tempfile::tempdir().unwrap();
             let address = temporary.path().join("member");
@@ -175,7 +177,8 @@ fn cold_device_admission_does_not_borrow_a_replacement_mount_identity() {
             fs::write(address.join("object"), b"held bytes").unwrap();
             let root = DiskRoot::open(&address).unwrap();
             let held_directory = root.directory(&address).unwrap();
-            let held_id = mount_identity(&held_directory).unwrap();
+            let config = ValidatedConfig::try_from(Config::development([address.clone()])).unwrap();
+            let held_seal = identity_at(&config, &config.disks[0], &held_directory).unwrap();
             let status = Command::new("/usr/bin/umount")
                 .arg("--lazy")
                 .arg(&address)
@@ -184,15 +187,21 @@ fn cold_device_admission_does_not_borrow_a_replacement_mount_identity() {
             assert!(status.success(), "lazy unmount failed: {status}");
             mount(&["--bind"], &replacement, &address);
             let named = DiskRoot::open(&address).unwrap();
-            assert_ne!(
-                held_id,
-                mount_identity(&named.directory(&address).unwrap()).unwrap()
+            let named_seal = identity_at(
+                &config,
+                &config.disks[0],
+                &named.directory(&address).unwrap(),
+            )
+            .unwrap();
+            assert_ne!(held_seal.device, named_seal.device);
+            let still_held = identity_at(&config, &config.disks[0], &held_directory).unwrap();
+            validate_stored_seal(&held_seal, &still_held).unwrap();
+            assert_eq!(
+                validate_stored_seal(&held_seal, &named_seal)
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::DiskIdentityMismatch
             );
-
-            // The held mount has left this namespace's table. Cold admission
-            // must fail, not select the replacement's tmpfs and its identity.
-            let error = production_device_at(&held_directory).unwrap_err();
-            assert_eq!(error.code(), ErrorCode::DiskIdentityMismatch);
             assert_eq!(
                 root.read_bytes(&address.join("object"), 64).unwrap(),
                 b"held bytes"

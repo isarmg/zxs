@@ -62,6 +62,8 @@ tar -xzf "web-interface-$VERSION.tar.gz" -C "web-$VERSION"
 
 服务端通过 `zxs` 提供业务 API 和 Web 静态资源；按运维文档配置数据与认证，并将 `--web-dir` 指向 Web 解压目录下 `public/` 的绝对路径（例如 `/opt/zxs/web-VERSION/public`），不要指向包含完整资料的解压根目录。Linux 二进制要求兼容 Ubuntu 24.04 的 GNU libc 及运行库。
 
+存储目录不限定 Btrfs，也不要求独立挂载点或程序验证物理独立性；共享底层故障域由用户保证。Linux 安全目录解析、权限、seal 的 device/inode、完整文件校验及同步恢复要求不变。旧 seal 不兼容或迁移；拒绝时保留数据，不自动重置。
+
 SMB 通过独立的 Samba → 本机桥接访问核心。发布包不包含 Samba VFS 二进制；须按照 `docs/components/smb.md`，使用固定的 Samba 4.23.0 SDK 单独构建、核对 ABI 并完成实际客户端验收。
 
 

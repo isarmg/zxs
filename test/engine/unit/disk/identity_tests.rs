@@ -13,6 +13,19 @@ fn invalid_seals(original: &[u8]) -> Vec<Vec<u8>> {
         changed["binding_generation"] = generation;
         invalid.push(canonical_json(&changed).unwrap());
     }
+    let mut legacy = seal.clone();
+    legacy.as_object_mut().unwrap().remove("format");
+    legacy["physical_device"] = json_codec::json!("/sys/old-device");
+    legacy["filesystem_uuid"] = json_codec::json!("old-filesystem");
+    invalid.push(canonical_json(&legacy).unwrap());
+    let mut wrong_format = seal.clone();
+    wrong_format["format"] = json_codec::json!("unsupported-identity");
+    invalid.push(canonical_json(&wrong_format).unwrap());
+    for field in ["physical_device", "filesystem_uuid"] {
+        let mut old_field = seal.clone();
+        old_field[field] = json_codec::json!("must-not-be-ignored");
+        invalid.push(canonical_json(&old_field).unwrap());
+    }
     let mut unknown = seal;
     unknown["unknown_identity_field"] = json_codec::json!(true);
     invalid.push(canonical_json(&unknown).unwrap());
@@ -176,4 +189,46 @@ fn identity_reads_preserve_open_errors_and_metadata_limits() {
     fs::write(&path, original).unwrap();
     validate_seal(&config, disk).unwrap();
     drop(Engine::open(&system).unwrap());
+}
+
+#[test]
+fn production_directory_seal_rejects_changed_device_inode_and_root_without_rewriting() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut config = Config::development([temporary.path().join("member")]);
+    config.mode = Mode::Production;
+    let system = temporary.path().join("system");
+    drop(Engine::initialize(&system, config.clone()).unwrap());
+    let config = ValidatedConfig::try_from(config).unwrap();
+    let disk = &config.disks[0];
+    let path = disk.root.join("disk.json");
+    let original = fs::read(&path).unwrap();
+    let original_seal = decode_seal(&original).unwrap();
+    for (index, mut changed) in [original_seal.clone(), original_seal.clone()]
+        .into_iter()
+        .enumerate()
+    {
+        if index == 0 {
+            changed.device ^= 1;
+        } else {
+            changed.inode ^= 1;
+        }
+        let bytes = canonical_json(&changed).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            Engine::open(&system).err().unwrap().code(),
+            ErrorCode::DiskIdentityMismatch
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+    fs::write(&path, &original).unwrap();
+    let held = temporary.path().join("original-member");
+    fs::rename(&disk.root, &held).unwrap();
+    private_dir(&disk.root).unwrap();
+    fs::write(&path, &original).unwrap();
+    assert_eq!(
+        Engine::open(&system).err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(fs::read(held.join("disk.json")).unwrap(), original);
 }

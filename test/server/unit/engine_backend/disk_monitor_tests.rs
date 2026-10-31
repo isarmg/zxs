@@ -10,7 +10,7 @@ fn online_observation(capacity: Option<(u64, u64, u64)>) -> DiskObservation {
             upstream_slot_id: None,
             online: true,
             metadata_member: true,
-            physical_device: String::new(),
+            physical_device: None,
             available_bytes: capacity.map(|capacity| capacity.1).unwrap_or(0),
             used_bytes: 99,
             simulation: true,

@@ -88,7 +88,7 @@ read，总 admission burst 小于 128 KiB。只累计实际字节，不在锁内
 出锁先发布已观察到的 open/length/layout 故障，再交付实际 marker 账单。其余
 `on_read` 每次最多 64 KiB；即使读
 过程中被取消，已读字节也先记账。普通读写保持原完整验证与原正文/帧 read 粒度，不把后台64 KiB节流
-拆分强加到普通1 MiB正文块；普通 metadata/proof读取仍使用原非节流读取路径。procfs/sysfs 身份探测和目录枚举不计入 byte counter。
+拆分强加到普通1 MiB正文块；普通 metadata/proof读取仍使用原非节流读取路径。目录身份读取与目录枚举不计入 byte counter；当前准入不做 procfs/sysfs 物理关系探测。
 `on_progress` 在每帧、每副本和首个观察到的故障后发布真实部分计数；其
 `Running` 永不健康，消费者不能在本轮已见故障后仍展示上次成功为 Fresh。
 限速/周期属于管理消费者，core 不建假 scheduler、不缓存好坏标志替代实际校验。

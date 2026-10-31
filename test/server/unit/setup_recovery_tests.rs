@@ -363,9 +363,8 @@ fn bootstrap_expiration_and_directory_replacement_are_fenced() {
 }
 
 #[test]
-fn production_requires_mount_and_simulation_needs_local_opt_in() {
+fn simulation_still_needs_local_opt_in() {
     let mut f = fixture();
-    assert!(require_mountpoint(&f.service.disks["one"]).is_err());
     f.service.allow_development = false;
     assert_eq!(
         f.service
@@ -844,7 +843,7 @@ fn single_disk_setup_is_empty_and_creates_exactly_one_member() {
 }
 
 #[test]
-fn single_disk_setup_retains_selection_and_mount_fences() {
+fn production_setup_accepts_a_managed_directory_and_retains_selection_fences() {
     for ids in [vec![], vec!["one", "one"], vec!["unapproved"]] {
         let f = fixture_with_disks(&["one"]);
         let mut input = request();
@@ -857,16 +856,21 @@ fn single_disk_setup_retains_selection_and_mount_fences() {
         assert!(!f.service.data_root.join("config.json").exists());
         assert!(!f.service.data_root.join("setup-intent.json").exists());
     }
-    let f = fixture_with_disks(&["one"]);
+    let mut f = fixture_with_disks(&["one"]);
+    f.service.allow_development = false;
     let mut input = request();
     input.disk_ids = vec!["one".into()];
     input.mode = Mode::Production;
-    assert!(
-        f.service
-            .initialize(&permit(&f.service), input, |_, _, _| panic!())
-            .is_err()
-    );
-    assert!(!f.service.data_root.join("config.json").exists());
+    f.service
+        .initialize(&permit(&f.service), input, |engine, _, _| {
+            assert_eq!(engine.config().mode, Mode::Production);
+            assert!(engine.disk_status().unwrap()[0].online);
+            Ok(())
+        })
+        .unwrap();
+    assert!(f.service.data_root.join("config.json").exists());
+    assert_eq!(f.service.status().state, InstallationState::Existing);
+    let f = fixture_with_disks(&["one"]);
     fs::remove_dir(&f.service.disks["one"]).unwrap();
     assert_eq!(f.service.status().state, InstallationState::Unavailable);
     assert!(!f.service.disks["one"].exists());
@@ -1355,4 +1359,57 @@ fn system_restore_passes_runtime_workspace_limits_without_rewriting_baseline() {
         json_codec::to_value(restored).unwrap(),
         json_codec::to_value(config).unwrap()
     );
+}
+
+#[test]
+fn production_preset_and_interrupted_completion_accept_shared_filesystem_roots() {
+    let (mut f, mut config, path) = preset_fixture();
+    f.service.allow_development = false;
+    config.mode = Mode::Production;
+    fs::write(&path, json_codec::to_vec(&config).unwrap()).unwrap();
+    let preview = f
+        .service
+        .preview_preset(
+            &permit(&f.service),
+            PresetPreviewRequest {
+                preset_id: "custom".into(),
+            },
+        )
+        .unwrap();
+    let error = f
+        .service
+        .initialize_preset(
+            &permit(&f.service),
+            PresetSetupRequest {
+                preset_id: "custom".into(),
+                config_digest: preview["config_digest"].as_str().unwrap().into(),
+                username: "admin".into(),
+                password: "long-valid-password".into(),
+            },
+            |engine, _, _| {
+                assert_eq!(engine.config().mode, Mode::Production);
+                Err(ApiError::conflict(
+                    storage_contract::ErrorCode::InjectedFailure,
+                    "test interruption",
+                ))
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.code, storage_contract::ErrorCode::InjectedFailure);
+    assert!(f.service.status().completion_available);
+    f.service
+        .complete_initialization(&permit(&f.service), completion(), |engine, _, _| {
+            assert_eq!(engine.config().mode, Mode::Production);
+            assert_eq!(
+                engine
+                    .disk_status()
+                    .unwrap()
+                    .iter()
+                    .filter(|disk| disk.online)
+                    .count(),
+                4
+            );
+            Ok(())
+        })
+        .unwrap();
 }

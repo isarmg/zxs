@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | [core.schema.json](core.schema.json) | UINT64 精确上界、实体 ID、Branch / Commit 待写入映射、泛型 Entry 及文件分支投影、唯一管理员认证请求/响应、版本描述、内容提交请求、操作结果、完整上传状态、内容保存 PUBLICATION 字段、当前有界快照、分页历史根、共享索引/引用/叶页及路径证明形状 | 完整命名规则、父边和来源闭合、授权、实际 I/O、Tree/日志完整格式及所有管理操作 |
 | [openapi.json](openapi.json) | 登录/当前会话/注销/改密、保存、结果查询、版本/校验/内容/上传状态、文件管理（含零正文分支创建、冻结父版本与自有版本分开的继承投影、目录分页与精确选择、目录批量分支准备查询和128字节单行备注）及管理员系统状态、真实功耗和监测历史 | bootstrap 与凭据恢复、工作区创建/上传写接口、事件及其余尚未建模的管理接口 |
-| [config-constraints.schema.json](config-constraints.schema.json) | 第 21 章关键常量、分支冻结引用/首写物化、当前 JSON/CLI 资源额度及明确标注的分页/告警设计目标投影 | 当前进程 JSON Config、完整部署配置、物理身份、拓扑和启动状态验证 |
+| [config-constraints.schema.json](config-constraints.schema.json) | 第 21 章关键常量、分支冻结引用/首写物化、当前 JSON/CLI 资源额度及明确标注的分页/告警设计目标投影 | 当前进程 JSON Config、完整部署配置、目录身份、拓扑和启动状态验证 |
 | [vectors.json](vectors.json) | 正反字段样例、旧账户权限字段拒绝、分支映射键/值和文件作用域拒绝、Branch / Commit 当前稀疏编码、快照35映射与历史根30映射、必需标识、共享引用种类/深度/未知字段及旧格式拒绝、路径证明节点数边界、规范字节与 BLAKE3、空文件和短文件分段清单 | 跨 Rust/Web/离线工具的一致实现及断电恢复 |
 | [contract-check](../tools/contract-check.md) | Rust 实现的 schema/OpenAPI 有效性、两者定义一致性、固定向量、配置投影、文档本地链接和 JSON/TOML 语法校验 | 模型检查、平台测试、网络端点行为和性能 |
 

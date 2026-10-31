@@ -234,15 +234,12 @@ pub(super) fn public_code(internal: ErrorCode) -> ErrorCode {
         | ErrorCode::DiskChanged
         | ErrorCode::DiskIdentityMismatch
         | ErrorCode::DiskNotFound
-        | ErrorCode::DiskNotIndependent
-        | ErrorCode::DiskNotMounted
         | ErrorCode::DiskReadOnly
         | ErrorCode::DiskSampleUnavailable
         | ErrorCode::DiskUnavailable
         | ErrorCode::DurabilityUnknown
         | ErrorCode::EntryNotFound
         | ErrorCode::Fenced
-        | ErrorCode::FilesystemRequired
         | ErrorCode::FileBranchConflict
         | ErrorCode::FileBranchNotFound
         | ErrorCode::FileBranchRequired
@@ -304,7 +301,6 @@ pub(super) fn public_code(internal: ErrorCode) -> ErrorCode {
         | ErrorCode::MetadataUnavailable
         | ErrorCode::MethodNotAllowed
         | ErrorCode::MonitorUnavailable
-        | ErrorCode::MultiDeviceFilesystem
         | ErrorCode::NamespaceConflict
         | ErrorCode::NameCollision
         | ErrorCode::NameConflict
@@ -385,7 +381,6 @@ pub(super) fn public_code(internal: ErrorCode) -> ErrorCode {
         | ErrorCode::TreeMoved
         | ErrorCode::Unauthorized
         | ErrorCode::UnsafePath
-        | ErrorCode::UnsupportedDeviceTopology
         | ErrorCode::UnsupportedMediaType
         | ErrorCode::UnsupportedOperation
         | ErrorCode::UploadGenerationConflict
@@ -435,14 +430,11 @@ pub(super) fn status(code: ErrorCode) -> ::http::StatusCode {
         | ErrorCode::DiskAlreadyEnrolled
         | ErrorCode::DiskChanged
         | ErrorCode::DiskIdentityMismatch
-        | ErrorCode::DiskNotIndependent
-        | ErrorCode::DiskNotMounted
         | ErrorCode::DiskReadOnly
         | ErrorCode::DiskSampleUnavailable
         | ErrorCode::DiskUnavailable
         | ErrorCode::FencingTokenExpired
         | ErrorCode::FencingTokenInvalid
-        | ErrorCode::FilesystemRequired
         | ErrorCode::FileBranchRequired
         | ErrorCode::FileBranchScope
         | ErrorCode::FileBranchSelected
@@ -490,7 +482,6 @@ pub(super) fn status(code: ErrorCode) -> ::http::StatusCode {
         | ErrorCode::MetadataTooLong
         | ErrorCode::MethodNotAllowed
         | ErrorCode::MonitorUnavailable
-        | ErrorCode::MultiDeviceFilesystem
         | ErrorCode::NameConflict
         | ErrorCode::NameInvalidCharacter
         | ErrorCode::NameNotNormalized
@@ -548,7 +539,6 @@ pub(super) fn status(code: ErrorCode) -> ::http::StatusCode {
         | ErrorCode::TransportError
         | ErrorCode::Unauthenticated
         | ErrorCode::UnsafePath
-        | ErrorCode::UnsupportedDeviceTopology
         | ErrorCode::UnsupportedMediaType
         | ErrorCode::UnsupportedOperation
         | ErrorCode::UploadIncomplete

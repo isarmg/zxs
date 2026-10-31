@@ -53,7 +53,7 @@ PYBOOTSTRAP
 
 单盘池只保存一份数据，没有磁盘冗余；该盘损坏可能导致数据永久丢失。新建仓库默认目标份数为 1（包含主盘），不要把“目标已满足”理解为有备份。可选多盘向导按选择顺序建立备份链，高级预置可以指定自定义多盘布局；已有多成员池不会因丢盘自动缩减成员或降低发布证明要求。
 
-`--allow-development-setup` 只用于目录模拟，不证明物理盘独立性。生产必须省略该开关，使用已挂载的独立 Btrfs 数据设备，并核对盘位与物理身份。高级初始配置由本机 `--setup-config ID=/absolute/private-config.json` 预置，再在 Web 选择；浏览器不能传任意路径或配置 JSON。
+`--allow-development-setup` 仍只标记开发模拟；普通生产存储目录不需该开关，也不要求 Btrfs、独立挂载点或物理设备独立性。用户自行保证底层故障域，程序保留目录 device/inode、seal、权限和完整性检查。高级初始配置由本机 `--setup-config ID=/absolute/private-config.json` 预置，再在 Web 选择；浏览器不能传任意路径或配置 JSON。
 
 服务运行时通过 Web 管理、SMB 访问文件。直接启动 `zxs`，不使用 `serve` 子命令。离线救援见[救援说明](components/rescue.md)，需要打开池的救援操作先停服。默认只监听本机，外部访问需要 HTTPS 反向代理和正确 Origin。系统盘管理凭据与数据成员分离，缺失或损坏的数据池不阻止管理 HTTP 启动。
 

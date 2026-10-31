@@ -95,7 +95,7 @@ impl Engine {
     }
 
     /// Filesystem capacity is sampled from the actual managed member mount.
-    /// Development directories may share one physical filesystem.
+    /// Multiple managed directories may share a filesystem; capacity is not an independent pool.
     pub fn disk_capacity(&self, slot: &str) -> Result<(u64, u64, u64)> {
         let disk = self.disk(slot)?;
         let identity = validate_seal(&self.config, disk);
@@ -136,7 +136,7 @@ fn capacity(disk: &DiskConfig, seal: &DiskSeal) -> Result<(u64, u64, u64)> {
 }
 
 impl DiskObservationPlan {
-    /// Observe physical availability using the captured binding configuration.
+    /// Observe managed-directory availability using the captured binding configuration.
     pub fn status(&self) -> Result<Vec<DiskStatus>> {
         Ok(self
             .sample()
@@ -176,7 +176,7 @@ impl DiskObservationPlan {
                     upstream_slot_id: disk.upstream_slot_id.clone(),
                     online: seal.is_some(),
                     metadata_member: disk.metadata_member,
-                    physical_device: seal.map(|seal| seal.physical_device).unwrap_or_default(),
+                    physical_device: None,
                     available_bytes: capacity.map(|capacity| capacity.1).unwrap_or(0),
                     used_bytes: self.used_bytes.get(&disk.slot_id).copied().unwrap_or(0),
                     simulation: self.config.mode == Mode::Development,

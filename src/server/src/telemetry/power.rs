@@ -175,7 +175,7 @@ fn read_u64(path: &Path) -> std::io::Result<u64> {
 /// without a documented total channel we deliberately report no measurement.
 #[cfg(any(feature = "core", test))]
 pub(crate) fn disk_power(
-    physical_device: &str,
+    physical_device: Option<&str>,
     simulation: bool,
     online: bool,
 ) -> (Option<f64>, Option<PowerUnavailable>) {
@@ -183,12 +183,14 @@ pub(crate) fn disk_power(
         PowerReading::unavailable(PowerUnavailable::DiskOffline)
     } else if simulation {
         PowerReading::unavailable(PowerUnavailable::SimulatedDisk)
-    } else {
+    } else if let Some(physical_device) = physical_device {
         read_disk_power(
             Path::new(physical_device),
             Path::new("/sys/class/hwmon"),
             Some(Path::new("/sys/devices")),
         )
+    } else {
+        PowerReading::unavailable(PowerUnavailable::SensorUnavailable)
     };
     (reading.watts, reading.reason)
 }

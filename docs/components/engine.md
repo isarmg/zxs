@@ -35,7 +35,7 @@
 
 `Engine` 的 `Arc<DiskResources>` 保存一次准入后的磁盘根 FD 与实际身份，独立于配置和 `_locks`。Planning、detached publication、内容读计划和 scrub 共用该代资源；盘内遍历、marker、正文/证明、对象图、journal、镜像、修复与 checkpoint 均从同一根执行相对 I/O，容量也读取该 FD。根路径改名或替换不把普通 I/O 转向新盘；缺席成员必须重开后才重新准入。资源 owner 不持 writer lock，内容读计划不会延长写者锁生命周期，写准备仍显式保留原 OS 锁。
 
-初始化、重开和停服重配验证实际设备、seal 与物理独立性；普通操作不轮询 mountinfo/sysfs。真实文件读取、seal/成员证明、正文哈希和文件/目录同步不由身份代替。显式 `check`、成员 probe、操作/版本 health、磁盘状态及容量 observation 仍描述当前命名路径，不作写入准入。公开输入路径不根据前缀猜作盘内来源；内部复制显式携带来源 owner。资源与候选代际、冷准入 `STATX_MNT_ID` 要求、seal 时点、同步预算及外部路径边界见 [ADR 0007](../adr/0007-owned-disk-resources.md)。
+初始化、重开和停服重配验证 held FD 的目录 device/inode 与严格 seal；不探测 mountinfo/sysfs、Btrfs UUID 或物理独立性。共享底层故障域由用户保证。真实文件读取、seal/成员证明、正文哈希和文件/目录同步不由身份代替。显式 `check`、成员 probe、操作/版本 health、磁盘状态及容量 observation 仍描述当前命名路径，不作写入准入。公开输入路径不根据前缀猜作盘内来源；内部复制显式携带来源 owner。资源与候选代际、冷准入目录身份要求、seal 时点、同步预算及外部路径边界见 [ADR 0007](../adr/0007-owned-disk-resources.md)。
 
 持久化 `disk.json` 的 JSON 语法或 identity schema 解码失败携带 `DISK_IDENTITY_MISMATCH` 上下文，保留具体 JSON source。打开、读取和元数据字节上限失败继续保留原错误；此解码上下文不替代已有的实际身份比较或发布阶段错误。
 

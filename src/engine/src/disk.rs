@@ -11,7 +11,6 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-mod mountinfo;
 mod owned;
 pub(crate) use owned::{DiskHandle, DiskResources, DiskRoot};
 
@@ -50,6 +49,7 @@ pub(crate) const MAX_CHECKSUM_MANIFEST: usize = 512 * 1024 * 1024 + CHECKSUM_HEA
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct DiskSeal {
+    pub format: DiskSealFormat,
     pub pool_id: String,
     pub disk_id: String,
     pub slot_id: String,
@@ -59,9 +59,14 @@ pub(crate) struct DiskSeal {
     pub device: u64,
     #[serialization(with = "storage_contract::u64_string")]
     pub inode: u64,
-    pub physical_device: String,
-    pub filesystem_uuid: String,
     pub simulation: bool,
+}
+
+/// The current identity contract binds a managed directory, not its hardware topology.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum DiskSealFormat {
+    #[serialization(rename = "managed-directory")]
+    ManagedDirectory,
 }
 
 /// Add identity context only after bounded file I/O has succeeded.
@@ -930,175 +935,24 @@ pub(crate) fn identity(config: &ValidatedConfig, disk: &DiskConfig) -> Result<Di
             "disk root is not a physical directory",
         ));
     }
-    seal_for_root(config, disk, &m, || production_device(&disk.root))
+    Ok(seal_for_root(config, disk, &m))
 }
 
 fn identity_at(config: &ValidatedConfig, disk: &DiskConfig, root: &File) -> Result<DiskSeal> {
-    seal_for_root(config, disk, &root.metadata()?, || {
-        production_device_at(root)
-    })
+    Ok(seal_for_root(config, disk, &root.metadata()?))
 }
 
-fn seal_for_root(
-    config: &ValidatedConfig,
-    disk: &DiskConfig,
-    metadata: &fs::Metadata,
-    production: impl FnOnce() -> Result<(String, String)>,
-) -> Result<DiskSeal> {
-    let (physical_device, filesystem_uuid) = if config.mode == Mode::Development {
-        (
-            format!("development:{}", disk.slot_id),
-            format!("development:{}", disk.disk_id),
-        )
-    } else {
-        production()?
-    };
-    Ok(DiskSeal {
+fn seal_for_root(config: &ValidatedConfig, disk: &DiskConfig, metadata: &fs::Metadata) -> DiskSeal {
+    DiskSeal {
+        format: DiskSealFormat::ManagedDirectory,
         pool_id: config.pool_id.clone(),
         disk_id: disk.disk_id.clone(),
         slot_id: disk.slot_id.clone(),
         binding_generation: disk.binding_generation,
         device: metadata.dev(),
         inode: metadata.ino(),
-        physical_device,
-        filesystem_uuid,
         simulation: config.mode == Mode::Development,
-    })
-}
-fn production_device(root: &Path) -> Result<(String, String)> {
-    let canonical = root.canonicalize()?;
-    let mountinfo = fs::read_to_string("/proc/self/mountinfo")?;
-    let selected = mountinfo::resolve(&mountinfo, &canonical)?;
-    production_device_on_mount(selected)
-}
-
-fn mount_identity(root: &File) -> Result<u64> {
-    let identity = rustix::fs::statx(
-        root,
-        "",
-        rustix::fs::AtFlags::EMPTY_PATH,
-        rustix::fs::StatxFlags::MNT_ID,
-    )
-    .map_err(std::io::Error::from)?;
-    if identity.stx_mask & rustix::fs::StatxFlags::MNT_ID.bits() == 0 {
-        return Err(Error::new(
-            storage_contract::ErrorCode::DiskIdentityMismatch,
-            "kernel did not report the held disk root mount identity",
-        ));
     }
-    Ok(identity.stx_mnt_id)
-}
-
-fn production_device_at(root: &File) -> Result<(String, String)> {
-    let mount_id = mount_identity(root)?;
-    let mountinfo = fs::read_to_string("/proc/self/mountinfo")?;
-    production_device_on_mount(mountinfo::resolve_id(&mountinfo, mount_id)?)
-}
-
-fn production_device_on_mount(selected: mountinfo::Mount) -> Result<(String, String)> {
-    if selected.kind != "btrfs" {
-        return Err(Error::new(
-            storage_contract::ErrorCode::FilesystemRequired,
-            "production requires an independent Btrfs filesystem for every disk",
-        ));
-    }
-    let device = selected.source.canonicalize()?;
-    let name = device.file_name().ok_or_else(|| {
-        Error::new(
-            storage_contract::ErrorCode::DiskIdentityMismatch,
-            "missing block identity",
-        )
-    })?;
-    let class = Path::new("/sys/class/block").join(name);
-    let hardware = class.canonicalize()?;
-    let mut physical = if class.join("partition").try_exists()? {
-        hardware
-            .parent()
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::DiskIdentityMismatch,
-                    "partition parent missing",
-                )
-            })?
-            .to_path_buf()
-    } else {
-        hardware.clone()
-    };
-    // Device-mapper, loop, md and other virtual block devices cannot establish
-    // independent physical media from this kernel view. Refuse them instead of
-    // counting two mappings of one drive as independent replicas.
-    if physical.starts_with("/sys/devices/virtual")
-        || fs::read_dir(class.join("slaves"))?
-            .next()
-            .transpose()?
-            .is_some()
-    {
-        return Err(Error::new(
-            storage_contract::ErrorCode::UnsupportedDeviceTopology,
-            "production requires directly identifiable independent drives; virtual or aggregated block devices are not supported",
-        ));
-    }
-    // Multiple namespaces of one NVMe controller still share a physical drive.
-    if let Some(name) = physical.file_name().and_then(|n| n.to_str())
-        && name.starts_with("nvme")
-        && name.contains('n')
-    {
-        let suffix = &name[4..];
-        if suffix
-            .split_once('n')
-            .is_some_and(|(controller, namespace)| {
-                !controller.is_empty()
-                    && !namespace.is_empty()
-                    && controller.bytes().all(|b| b.is_ascii_digit())
-                    && namespace.bytes().all(|b| b.is_ascii_digit())
-            })
-        {
-            physical = physical
-                .parent()
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::DiskIdentityMismatch,
-                        "NVMe controller identity is missing",
-                    )
-                })?
-                .to_path_buf();
-        }
-    }
-    let mut fsid = None;
-    for entry in fs::read_dir("/sys/fs/btrfs")? {
-        let entry = entry?;
-        let devices = entry.path().join("devices");
-        if !devices.is_dir() {
-            continue;
-        }
-        let entries = fs::read_dir(&devices)?.collect::<std::io::Result<Vec<_>>>()?;
-        let mut belongs = false;
-        for device in &entries {
-            if device.path().canonicalize()? == hardware {
-                belongs = true;
-                break;
-            }
-        }
-        if belongs {
-            if entries.len() != 1 {
-                return Err(Error::new(
-                    storage_contract::ErrorCode::MultiDeviceFilesystem,
-                    "Btrfs must contain exactly one physical device",
-                ));
-            }
-            fsid = Some(entry.file_name().to_string_lossy().into_owned());
-            break;
-        }
-    }
-    Ok((
-        physical.to_string_lossy().into_owned(),
-        fsid.ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::DiskIdentityMismatch,
-                "cannot verify Btrfs device count and UUID",
-            )
-        })?,
-    ))
 }
 /// An unmounted root is unavailable only when absent or a safe, empty directory.
 /// A missing seal in a nonempty root is corruption, not permission to initialize.
@@ -1136,13 +990,13 @@ pub(crate) fn validate_seal_observed(
 }
 
 pub(crate) fn validate_stored_seal(stored: &DiskSeal, live: &DiskSeal) -> Result<()> {
-    if stored.pool_id != live.pool_id
+    if stored.format != live.format
+        || stored.pool_id != live.pool_id
         || stored.disk_id != live.disk_id
         || stored.slot_id != live.slot_id
         || stored.binding_generation != live.binding_generation
         || stored.inode != live.inode
-        || stored.physical_device != live.physical_device
-        || stored.filesystem_uuid != live.filesystem_uuid
+        || stored.device != live.device
         || stored.simulation != live.simulation
     {
         return Err(Error::new(

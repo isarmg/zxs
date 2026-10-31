@@ -59,8 +59,8 @@ main_branch_id = "br-main"
 share_generation = "1"
 
 [storage]
-filesystem = "btrfs-single-device"
-disk_inventory = "registered-physical-disks"
+filesystem = "user-managed"
+disk_inventory = "registered-directories"
 minimum_disks_for_protected_write = 1
 allow_explicit_disk_enrollment = true
 content_layout = "full-file"
@@ -305,7 +305,7 @@ queue_warning_seconds = 30
 
 `orphan_grace_days=7` 不授权删除历史拓扑、有效内容pin、受保护版本或未决计划。历史目录仍引用的payload可以在显式清除事务完成后回收；仅凭提交可达不能禁止已授权清除，也不能授权绕过墓碑直接删除。时间条件不替代内容状态与引用检查。
 
-`case_sensitive=false` 只影响约定的逻辑命名空间，不要求把底层 Btrfs 变成另一种文件系统。内部对象通过 ID 定位，名称比较由核心负责。
+`case_sensitive=false` 只影响约定的逻辑命名空间，不要求把底层文件系统 变成另一种文件系统。内部对象通过 ID 定位，名称比较由核心负责。
 
 本例配置三个元数据成员，所以恢复/准入多数为2；任意非空配置的多数固定为 floor(N/2)+1，N 为已配置成员数。`decision_members=2` 不能解释为本例两成员即可正常写入。正常保护、发布和确认始终要求全部已配置成员完成；不按可访问数量缩减门槛。单成员池要求该成员，双成员池要求两个成员。`maximum_target="primary-route-depth"`按具体一级来源的连续链深计算；总盘数只给出全局上界。离线、满盘或映射缺失不能擅自降低目标或使用别的来源盘。
 

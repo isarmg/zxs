@@ -140,7 +140,7 @@ class SuiteCoverageTests(unittest.TestCase):
         calls = self.suite("workspace")
         for name in (
             "immutable_existing_bind_leaf_is_rejected_before_read_or_sync",
-            "cold_device_admission_does_not_borrow_a_replacement_mount_identity",
+            "cold_directory_admission_keeps_held_identity_after_mount_replacement",
         ):
             self.assertEqual(calls.count({"tool": "cargo", "args": [
                 "test", "--locked", "--offline", "-p", "storage-engine", "--lib",

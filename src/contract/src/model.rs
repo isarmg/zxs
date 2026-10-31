@@ -1246,7 +1246,8 @@ pub struct DiskStatus {
     pub upstream_slot_id: Option<String>,
     pub online: bool,
     pub metadata_member: bool,
-    pub physical_device: String,
+    /// Optional diagnostic association, never proof of failure-domain independence.
+    pub physical_device: Option<String>,
     #[serialization(with = "crate::u64_string")]
     pub available_bytes: u64,
     #[serialization(with = "crate::u64_string")]

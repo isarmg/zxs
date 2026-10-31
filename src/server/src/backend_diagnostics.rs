@@ -13,7 +13,7 @@ struct DiskRecord {
     upstream_slot_id: Option<String>,
     online: bool,
     metadata_member: bool,
-    physical_device: String,
+    physical_device: Option<String>,
     #[serialization(with = "storage_contract::u64_string")]
     available_bytes: u64,
     #[serialization(with = "storage_contract::u64_string")]

@@ -2281,13 +2281,76 @@ fn partial_publication_is_not_visible_with_two_members_and_receipt_tampering_is_
     }
 }
 #[test]
-fn production_does_not_silently_accept_directory_simulation() {
+fn production_accepts_shared_filesystem_directories_and_preserves_full_copies() {
     let mut f = Fixture::new();
     f.config.mode = Mode::Production;
-    assert_eq!(
-        Engine::initialize(&f.root, f.config).err().unwrap().code(),
-        storage_contract::ErrorCode::FilesystemRequired
+    let mut engine = f.initialize();
+    let repo = repository(&mut engine, 3);
+    save(
+        &mut engine,
+        &repo.main_branch_id,
+        "payload",
+        b"production full bytes",
     );
+    let entries = engine.list_tree(&repo.main_branch_id).unwrap();
+    let version = entries[0].version_id.clone();
+    assert_eq!(bytes(&engine, &version), b"production full bytes");
+    let stored_version = &engine.state().versions[&version];
+    let mut payload_inodes = std::collections::BTreeSet::new();
+    for disk in &f.config.disks {
+        let path = crate::container_storage::content_path(
+            &crate::disk::version_dir(disk, &stored_version.history_tree_id, &version),
+            stored_version,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"production full bytes");
+        let metadata = fs::metadata(&path).unwrap();
+        assert_eq!(metadata.nlink(), 1);
+        assert!(payload_inodes.insert((metadata.dev(), metadata.ino())));
+    }
+    assert_eq!(payload_inodes.len(), 3);
+    let identities = f
+        .config
+        .disks
+        .iter()
+        .map(|disk| {
+            let seal = crate::disk::validate_seal(
+                &ValidatedConfig::try_from(f.config.clone()).unwrap(),
+                disk,
+            )
+            .unwrap();
+            assert!(!seal.simulation);
+            assert_eq!(seal.format, crate::disk::DiskSealFormat::ManagedDirectory);
+            (seal.device, seal.inode)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        identities
+            .iter()
+            .all(|identity| identity.0 == identities[0].0)
+    );
+    assert_ne!(identities[0].1, identities[1].1);
+    assert!(
+        engine
+            .disk_status()
+            .unwrap()
+            .iter()
+            .all(|disk| disk.online && !disk.simulation && disk.physical_device.is_none())
+    );
+    drop(engine);
+    let engine = Engine::open(&f.root).unwrap();
+    assert_eq!(bytes(&engine, &version), b"production full bytes");
+    drop(engine);
+    let restored = Engine::restore_from_disks(
+        &f.temp.path().join("restored"),
+        &f.config
+            .disks
+            .iter()
+            .map(|disk| disk.root.clone())
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    assert_eq!(bytes(&restored, &version), b"production full bytes");
 }
 
 #[test]
