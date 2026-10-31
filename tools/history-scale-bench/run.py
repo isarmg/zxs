@@ -50,7 +50,8 @@ def sha256(path: Path) -> str:
 
 
 def inventory(root: Path, *, exclude_harness: bool = False) -> dict:
-    counts = {"files": 0, "directories": 0, "symlinks": 0, "apparent_bytes": 0, "allocated_bytes": 0, "metadata_object_files": 0}
+    counts = {"files": 0, "directories": 0, "symlinks": 0, "apparent_bytes": 0, "allocated_bytes": 0,
+              "metadata_object_files": 0, "replay_checkpoints": []}
     pending = [root]
     while pending:
         directory = pending.pop()
@@ -76,6 +77,8 @@ def inventory(root: Path, *, exclude_harness: bool = False) -> dict:
                 counts["files"] += 1
                 if "/metadata/objects/" in entry.path:
                     counts["metadata_object_files"] += 1
+                if entry.name == "replay-checkpoint.json" and "/metadata/" in entry.path:
+                    counts["replay_checkpoints"].append({"path": str(Path(entry.path).relative_to(root)), "bytes": info.st_size})
     return counts
 
 

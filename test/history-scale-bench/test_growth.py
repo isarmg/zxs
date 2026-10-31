@@ -177,6 +177,15 @@ class GrowthTests(unittest.TestCase):
             write(root, "basis/boundaries/summary.json", bad)
             self.assertFalse(growth.admit(plan, "growth-2048", p, root, "124", "c" * 40)[1]["admitted"])
 
+    def test_optional_checkpoint_transition_uses_cold_admission_envelope(self):
+        history = [{"size": 1024, "wall": {"build": 20, "reopen": 20, "recovery": 2}, "rss": 1024, "disk": 1024},
+                   {"size": 2048, "wall": {"build": 67, "reopen": 73, "recovery": 72}, "rss": 2048, "disk": 2048}]
+        forecast = growth.project(history, 4096, 1)
+        self.assertEqual(forecast["phase_seconds"]["reopen"], forecast["phase_seconds"]["recovery"])
+        self.assertGreater(forecast["phase_seconds"]["recovery"], 72 * 2 * growth.SAFETY)
+        self.assertLess(forecast["phase_seconds"]["recovery"], 600)
+        self.assertEqual(history[0]["wall"]["recovery"], 2)
+
     def test_requires_exact_immediate_predecessor_and_binds_resource_history(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
