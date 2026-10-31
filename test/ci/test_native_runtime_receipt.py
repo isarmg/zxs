@@ -51,6 +51,49 @@ libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x123)
                 with self.assertRaises(ValueError):
                     M.package_owner(path)
 
+    def test_debian_loader_diversion_metadata_is_not_an_owner(self):
+        path = Path('/lib64/ld-linux-x86-64.so.2')
+        resolved = Path('/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2')
+        # First line is the exact failing Debian 13 CI output. dpkg emits its
+        # paired destination too; only the resolved-path owner determines libc6.
+        output = ('diversion by libc6 from: /lib64/ld-linux-x86-64.so.2\n'
+                  'diversion by libc6 to: /lib64/ld-linux-x86-64.so.2.usr-is-merged\n')
+        queries = [subprocess.CompletedProcess([], 0, output, ''),
+                   subprocess.CompletedProcess([], 0, f'libc6:amd64: {resolved}\n', ''),
+                   subprocess.CompletedProcess([], 1, '', '')]
+        with patch.object(Path, 'resolve', return_value=resolved), \
+                patch.object(M.subprocess, 'run', side_effect=queries), \
+                patch.object(M, 'run', return_value='2.41-fixture'), \
+                patch.object(M, 'sha256', return_value='a' * 64):
+            self.assertEqual(M.package_owner(path)['package'], 'libc6:amd64')
+
+    def test_diversion_does_not_make_an_unowned_file_owned(self):
+        path = Path('/library.so')
+        output = 'diversion by libc6 from: /library.so\ndiversion by libc6 to: /other.so\n'
+        with patch.object(Path, 'resolve', return_value=path), \
+                patch.object(M.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, '')):
+            with self.assertRaisesRegex(ValueError, 'expected one Debian owner'):
+                M.package_owner(path)
+
+    def test_malformed_unrelated_and_ambiguous_diversions_are_rejected(self):
+        path = Path('/library.so')
+        for output in ('diversion by libc6 from: /library.so\n',
+                       'diversion by libc6 from: /unrelated\ndiversion by libc6 to: /other\n',
+                       'diversion by libc6 from: /library.so\ndiversion by libc6 to: /a/../other\n',
+                       'diversion by libc6 sideways: /library.so\n',
+                       'libc6:amd64: /library.so\nother:amd64: /library.so\n'):
+            with self.subTest(output=output), patch.object(Path, 'resolve', return_value=path), \
+                    patch.object(M.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, '')):
+                with self.assertRaises(ValueError):
+                    M.package_owner(path)
+
+    def test_nonexistent_runtime_path_is_rejected_before_dpkg(self):
+        with patch.object(Path, 'resolve', side_effect=FileNotFoundError), \
+                patch.object(M.subprocess, 'run') as query:
+            with self.assertRaises(FileNotFoundError):
+                M.package_owner(Path('/nonexistent.so'))
+            query.assert_not_called()
+
     def test_missing_needed_library_refuses_receipt(self):
         with patch.object(Path, 'resolve', return_value=Path('/binary')), \
                 patch.object(M, 'sha256', return_value='a' * 64), \

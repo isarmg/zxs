@@ -61,11 +61,25 @@ def package_owner(path):
             continue  # This spelling is not in dpkg; try its actual usrmerge identity.
         if query.returncode:
             raise ValueError(f'dpkg ownership query failed for {candidate}: {query.stderr.strip()}')
+        diversions = {}
         for line in query.stdout.splitlines():
+            diversion = re.fullmatch(
+                r'diversion by ([a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?) (from|to): (/[^\n]+)', line)
+            if diversion:
+                package, direction, target = diversion.groups()
+                if ('..' in Path(target).parts or str(Path(target)) != target
+                        or direction in diversions.setdefault(package, {})):
+                    raise ValueError(f'invalid package diversion: {line}')
+                diversions[package][direction] = target
+                continue  # A diversion is metadata, never proof of file ownership.
             package, separator, owned_path = line.partition(': ')
             if not separator or owned_path != candidate or not re.fullmatch(r'[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?', package):
                 raise ValueError(f'ambiguous package ownership: {line}')
             owners.add(package)
+        for package, targets in diversions.items():
+            if (set(targets) != {'from', 'to'} or candidate not in targets.values()
+                    or targets['from'] == targets['to']):
+                raise ValueError(f'unrelated or incomplete package diversion: {package}: {targets}')
     if len(owners) != 1:
         raise ValueError(f'expected one Debian owner for {path}: {sorted(owners)}')
     package = owners.pop()

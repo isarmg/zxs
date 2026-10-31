@@ -11,24 +11,24 @@ use std::{
     time::Duration,
 };
 use storage_contract::{Config, Entry, OperationId, Repository};
-use storage_engine::{CommitRequest, Engine, MetadataView};
+use storage_engine::{CommitRequest, Engine};
 
-type CaptureHook = Box<dyn FnOnce(&MetadataView)>;
+type CaptureHook = Box<dyn FnOnce(u64)>;
 thread_local! {
     static AFTER_CAPTURE: RefCell<Option<CaptureHook>> = const { RefCell::new(None) };
 }
 
-pub(crate) fn after_capture(view: &MetadataView) {
+pub(crate) fn after_capture(sequence: u64) {
     let hook = AFTER_CAPTURE.with(|hook| hook.borrow_mut().take());
     if let Some(hook) = hook {
-        hook(view);
+        hook(sequence);
     }
 }
 
 fn pause(started: mpsc::SyncSender<u64>, release: mpsc::Receiver<()>) {
     AFTER_CAPTURE.with(|hook| {
-        *hook.borrow_mut() = Some(Box::new(move |view| {
-            started.send(view.business_projection().sequence).unwrap();
+        *hook.borrow_mut() = Some(Box::new(move |sequence| {
+            started.send(sequence).unwrap();
             release.recv_timeout(Duration::from_secs(10)).unwrap();
         }));
     });
@@ -465,6 +465,7 @@ async fn canceled_waiters_retain_history_views_auth_and_the_existing_backend_slo
         let record = engine.state().commits.get_shared(old_head).unwrap();
         let old_record = Arc::downgrade(&record);
         drop(record);
+        let old_version = Arc::downgrade(engine.state().versions.shared_values().next().unwrap());
         let (backend, auth, _token, identity) = authenticated(engine, root.path());
         let new_engine = replacement(root.path(), &auth);
         let auth = Arc::new(Mutex::new(auth));
@@ -488,7 +489,12 @@ async fn canceled_waiters_retain_history_views_auth_and_the_existing_backend_slo
         backend.test_with_engine_locked(|engine| *engine = new_engine);
         assert!(
             old_record.upgrade().is_some(),
-            "worker must retain the captured State"
+            "worker must retain the required commit records"
+        );
+        assert_eq!(
+            old_version.upgrade().is_some(),
+            matches!(query, Query::File),
+            "only the file-history consumer requires version records"
         );
         assert!(auth_owner.upgrade().is_some());
         assert_eq!(slots.available_permits(), 0);
@@ -510,4 +516,27 @@ async fn canceled_waiters_retain_history_views_auth_and_the_existing_backend_slo
         );
         assert_eq!(slots.available_permits(), 1);
     }
+}
+
+#[test]
+fn graph_capture_shares_only_five_required_tables_without_copying_records() {
+    let mut state = storage_contract::State::default();
+    let versions = std::ptr::from_ref(&*state.versions);
+    let placements = std::ptr::from_ref(&*state.placements);
+    let content_states = std::ptr::from_ref(&*state.content_states);
+    let graph = super::GraphMetadata::capture(&state);
+    assert!(std::ptr::eq(&*graph.histories, &*state.histories));
+    assert!(std::ptr::eq(&*graph.commits, &*state.commits));
+    assert!(std::ptr::eq(&*graph.branches, &*state.branches));
+    assert!(std::ptr::eq(&*graph.merge_links, &*state.merge_links));
+    assert!(std::ptr::eq(
+        &*graph.history_boundaries,
+        &*state.history_boundaries
+    ));
+    state.versions.extend_shared(&Default::default());
+    state.placements.clear();
+    state.content_states.clear();
+    assert_eq!(versions, std::ptr::from_ref(&*state.versions));
+    assert_eq!(placements, std::ptr::from_ref(&*state.placements));
+    assert_eq!(content_states, std::ptr::from_ref(&*state.content_states));
 }

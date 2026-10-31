@@ -490,3 +490,13 @@ snapshot and exact commit-pointer checks unchanged. This is field-level reductio
 not target-record-bounded ownership: the complete five tables (including all commit
 records) remain shared. Backup listing, legacy file history and history-window
 views retain their separately documented ownership boundaries.
+
+The legacy full history-graph response likewise captures a private `GraphMetadata`
+with only histories, commits, branches, merge links, and history boundaries.
+Capture shares five COW table handles without an added record scan; projection
+retains its existing whole-table filtering and stable response behavior. It no
+longer pins versions, placements, content states or other unused business tables.
+Current authentication, history ownership and split-generation rechecks are
+unchanged. Canceled workers retain required commits and admission until completion,
+but unused versions can be released on engine replacement. The five whole tables
+remain shared; this is not per-history bounded ownership or a new index.

@@ -1385,7 +1385,7 @@ impl Backend for EngineBackend {
             file_manager::FileHistoryRead::capture(&engine, request)?
         };
         #[cfg(test)]
-        graph::tests::after_capture(&read.view);
+        graph::tests::after_capture(read.view.business_projection().sequence);
         let snapshot = read.project();
         let engine = self
             .engine
@@ -1490,11 +1490,11 @@ impl Backend for EngineBackend {
             let engine = self.engine.lock().expect("service state lock poisoned");
             current_protected_identity(&engine, identity)?;
             repo_for_history(&engine, id)?;
-            engine.metadata_view()
+            graph::GraphMetadata::capture(engine.state())
         };
         #[cfg(test)]
-        graph::tests::after_capture(&view);
-        let mut snapshot = graph::capture(view.business_projection(), id);
+        graph::tests::after_capture(view.sequence);
+        let mut snapshot = view.project(id);
         snapshot.commits.sort_by_key(|commit| commit.sequence);
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;

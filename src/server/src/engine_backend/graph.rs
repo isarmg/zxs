@@ -21,34 +21,61 @@ pub(super) fn authorize_current(
     Ok(())
 }
 
-/// Caller has authorized this history and its repository in this same State.
-pub(super) fn capture(state: &State, history: &str) -> HistoryGraphSnapshot {
-    HistoryGraphSnapshot {
-        history: state.histories[history].clone(),
-        commits: state
-            .commits
-            .shared_values()
-            .filter(|commit| commit.history_tree_id == history)
-            .map(Arc::clone)
-            .collect(),
-        branches: state
-            .branches
-            .values()
-            .filter(|branch| branch.history_tree_id == history)
-            .cloned()
-            .collect(),
-        merge_links: state
-            .merge_links
-            .values()
-            .filter(|link| link.history_tree_id == history)
-            .cloned()
-            .collect(),
-        boundary_marks: state
-            .history_boundaries
-            .values()
-            .filter(|mark| mark.history_tree_id == history)
-            .cloned()
-            .collect(),
+/// Only the immutable tables consumed by the graph response. This is not an
+/// authority or a general State; capture does not scan or deep-copy records.
+pub(super) struct GraphMetadata {
+    #[cfg(test)]
+    pub(super) sequence: u64,
+    histories: storage_contract::TrackedMap<storage_contract::HistoryTree>,
+    commits: storage_contract::TrackedRecords<storage_contract::Commit>,
+    branches: storage_contract::TrackedMap<storage_contract::Branch>,
+    merge_links: storage_contract::TrackedMap<storage_contract::MergeLink>,
+    history_boundaries: storage_contract::TrackedMap<storage_contract::HistoryBoundary>,
+}
+
+impl GraphMetadata {
+    /// Caller authorized the history and repository under this same State borrow.
+    pub(super) fn capture(state: &State) -> Self {
+        Self {
+            #[cfg(test)]
+            sequence: state.sequence,
+            histories: state.histories.clone(),
+            commits: state.commits.clone(),
+            branches: state.branches.clone(),
+            merge_links: state.merge_links.clone(),
+            history_boundaries: state.history_boundaries.clone(),
+        }
+    }
+
+    pub(super) fn project(&self, history: &str) -> HistoryGraphSnapshot {
+        let state = self;
+        HistoryGraphSnapshot {
+            history: state.histories[history].clone(),
+            commits: state
+                .commits
+                .shared_values()
+                .filter(|commit| commit.history_tree_id == history)
+                .map(Arc::clone)
+                .collect(),
+            branches: state
+                .branches
+                .values()
+                .filter(|branch| branch.history_tree_id == history)
+                .cloned()
+                .collect(),
+            merge_links: state
+                .merge_links
+                .values()
+                .filter(|link| link.history_tree_id == history)
+                .cloned()
+                .collect(),
+            boundary_marks: state
+                .history_boundaries
+                .values()
+                .filter(|mark| mark.history_tree_id == history)
+                .cloned()
+                .collect(),
+        }
     }
 }
 
