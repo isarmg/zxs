@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion, github-completion-precheck, github-history-batched, github-followup-precheck]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion, github-completion-precheck, github-history-batched, github-followup-precheck, github-third-precheck]
 
 permissions:
   contents: read
@@ -236,6 +236,10 @@ jobs:
               '5f9cbe6fcc198d3e516870d700982c2a81e34cea', '98df1d24a6c2ce4daaf64219c1285fdfcfee3219',
           ):
               raise SystemExit('Followup requires the exact history and foundation merged source and tree')
+          if os.environ['SCOPE'] == 'github-third-precheck' and (source, tree) != (
+              '08c7b6c4ee479ada3cff24d2e523284a146f7b61', '7b6958bad7fcec5a2d97b7c1034df7d81a3c82bd',
+          ):
+              raise SystemExit('Third batch requires the exact provider and RPC tooling merged source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -1003,6 +1007,29 @@ jobs:
                       'ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality'),
               dict(groups['mature-static'][0], id='github-followup-static'),
               dict(groups['mature-doc-contracts'][0], id='github-followup-docs',
+                  command=groups['mature-doc-contracts'][0]['command'].replace(
+                      'cargo test --locked --offline -p contract-check --',
+                      'cargo test --locked --offline -p contract-check --test source_export --')),
+          ]
+          range_unit = 'tests::authenticated_range_download_returns_exact_immutable_bytes'
+          range_http = 'optional_identities::contextual_content_uses_typed_lookup_and_preserves_ranges_and_error_order'
+          groups['github-third-precheck'] = [
+              dict(id='github-third-providers', cache='foundation-behaviour',
+                  command='python3 .github/scripts/check-foundation-behaviour.py '
+                      '--suite standalone:glob --suite standalone:http --suite standalone:nu-ansi-term'),
+              dict(id='github-third-http-consumers', cache='server', package='storage-server',
+                  test_groups=json.dumps([
+                      dict(selector=range_unit, exact=True, count=1, required=[range_unit]),
+                      dict(selector=range_http, test_target='http_engine', exact=True, count=1, required=[range_http]),
+                  ]), command='Exact unit and real HTTP range/auth consumers of the active HTTP implementation'),
+              dict(groups['payload-quality'][0], id='github-third-quality-coverage',
+                  command='python3 tools/rust-sources/manage.py verify --metadata\n'
+                      'python3 tools/rust-sources/foundation_coverage.py --check\n'
+                      'ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality'),
+              dict(groups['mature-static'][0], id='github-third-static',
+                  command='python3 .github/scripts/check-workflows.py tools/local-rpc-acceptance/reuse-workflow.yml\n'
+                      'bash .github/scripts/check.sh static'),
+              dict(groups['mature-doc-contracts'][0], id='github-third-docs',
                   command=groups['mature-doc-contracts'][0]['command'].replace(
                       'cargo test --locked --offline -p contract-check --',
                       'cargo test --locked --offline -p contract-check --test source_export --')),
