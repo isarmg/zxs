@@ -1,130 +1,205 @@
-name: Replay fixed Debian product under corrected host browser observer
+name: Final exact-source Debian assets and host browser acceptance
 on:
   push:
     branches: [verify/native-debian-host-browser-20261031]
 permissions:
   contents: read
-  actions: read
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: '1'
   CARGO_INCREMENTAL: '0'
-  RELEASE_VERSION: 0.1.1
 jobs:
-  replay-browser:
+  web-production:
+    name: Production WASM build
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 27fd5581bc144ec934ae24d7b652dc604137c5fa
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain and WASM target
+        run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+          rustc --version
+      - name: Cache locally compiled Rust build helpers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/rust-build-tools
+          key: rust-build-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'compliance/rust-sources.json') }}
+          restore-keys: |
+            rust-build-tools-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build production Web distribution
+        run: bash .github/scripts/check.sh web-production
+      - name: Retain production assets for checks in this run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-dist
+          path: build/web/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Retain browser template contract fixture
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: csr-template-fixture
+          path: target/csr-template-check/output/
+          if-no-files-found: error
+          retention-days: 7
+
+  smb-sdk:
+    name: Produce same-source Debian VFS (build only, prior acceptance retained)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: 27fd5581bc144ec934ae24d7b652dc604137c5fa
           persist-credentials: false
-      - name: Download exact retained recovery ZIP
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p target
-          curl --fail --silent --show-error --location \
-            --header "Authorization: Bearer $GH_TOKEN" --header 'Accept: application/vnd.github+json' \
-            https://api.github.com/repos/isarmg/zxs/actions/artifacts/13043973599/zip \
-            --output target/recovery.zip
-      - name: Verify old ZIP product identity and every embedded Web byte without relabeling
-        run: |
-          python3 - <<'PYVERIFY'
-          from pathlib import Path, PurePosixPath
-          import hashlib, json, os, stat, subprocess, zipfile
-          archive=Path('target/recovery.zip')
-          expected='571672422ea7d0fd2fae51a4ec927fa3245eba291dcf9bacf5bcbe2b75d572bc'
-          if hashlib.sha256(archive.read_bytes()).hexdigest()!=expected:
-              raise ValueError('original recovery ZIP hash mismatch')
-          base=Path('target/recovery-input');base.mkdir(parents=True,exist_ok=False)
-          with zipfile.ZipFile(archive) as bundle:
-              seen=set()
-              for entry in bundle.infolist():
-                  name=PurePosixPath(entry.filename)
-                  if name.is_absolute() or '..' in name.parts or str(name) in seen:
-                      raise ValueError('unsafe or duplicate recovery path')
-                  seen.add(str(name))
-                  kind=stat.S_IFMT(entry.external_attr >> 16)
-                  if kind not in (0,stat.S_IFREG,stat.S_IFDIR):
-                      raise ValueError('non-regular recovery member')
-                  if entry.is_dir():continue
-                  if entry.filename.startswith(('target/native/x86_64-unknown-linux-gnu/release/','build/web/')):
-                      dest=base/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(bundle.read(entry))
-          binary=base/'target/native/x86_64-unknown-linux-gnu/release/zxs'
-          build=binary.parent/'BUILD.txt'
-          fields={}
-          for line in build.read_text().splitlines():
-              key,value=line.split('=',1)
-              if key in fields:raise ValueError('duplicate BUILD field')
-              fields[key]=value
-          if fields['commit']!='4332e1595c3f6a70c86bb58b4163d11a1915438b' or fields['native-web-tree']!='31c0bc60f6b83e9894f90df81d3542e94805decf' or fields['native-web-embedded']!='true':
-              raise ValueError('original product source identity mismatch')
-          checksum=hashlib.sha256(binary.read_bytes()).hexdigest()
-          if checksum!='6a49e1de15ee0b8c71238f83ed583821c0ba9b27e8266a1ef369e675a90b018c' or checksum!=fields['native-zxs-sha256']:
-              raise ValueError('original ELF bytes differ')
-          web=base/'build/web';manifest=web/'build-manifest.json'
-          if hashlib.sha256(manifest.read_bytes()).hexdigest()!=fields['native-web-manifest-sha256']:
-              raise ValueError('original embedded Web manifest differs')
-          files=json.loads(manifest.read_text())['files']
-          for name,digest in files.items():
-              rel=PurePosixPath(name)
-              if rel.is_absolute() or '..' in rel.parts:raise ValueError('unsafe Web inventory path')
-              if hashlib.sha256((web/rel).read_bytes()).hexdigest()!=digest:raise ValueError('original Web asset differs: '+name)
-          if {p.relative_to(web).as_posix() for p in web.rglob('*') if p.is_file()}!=set(files)|{'build-manifest.json'}:
-              raise ValueError('original Web inventory not exact')
-          Path('release-assets').mkdir()
-          out=Path('release-assets/zxs-0.1.1-debian13-amd64');out.write_bytes(binary.read_bytes());out.chmod(0o755)
-          Path('build').mkdir(exist_ok=True)
-          os.rename(web,'build/web')
-          Path('artifacts').mkdir(exist_ok=True)
-          receipt={'product_commit':fields['commit'],'product_tree':fields['native-web-tree'],'product_binary_sha256':checksum,'product_build_sha256':hashlib.sha256(build.read_bytes()).hexdigest(),'source_run':41204056925,'artifact_id':13043973599,'archive_sha256':expected,'observer_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'observer_tree':subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),'scope':'original 4332 product, new harness observer; no original receipt rewritten'}
-          Path('artifacts/replay-identity.json').write_text(json.dumps(receipt,indent=2)+'\n')
-          print(json.dumps(receipt))
-          PYVERIFY
       - name: Initialize isolated Cargo home
         run: bash .github/scripts/initialize-cargo-home.sh
-      - name: Install observer toolchain
+      - name: Install repository Rust toolchain
         run: rustup show active-toolchain
-      - name: Verify host sandboxed Chrome and fonts
+      - name: Produce exact Debian SDK and release VFS without repeating acceptance load
+        run: bash .github/scripts/debian13-run.sh bash .github/scripts/smb-sdk.sh --build-only
+      - name: Preserve exact same-source VFS production receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: debian13-vfs-27fd5581bc144ec934ae24d7b652dc604137c5fa
+          path: target/smb-debian13/product/
+          if-no-files-found: error
+          retention-days: 7
+  browser-smoke:
+    name: "Standalone ELF: Debian 13 server + host Chrome"
+    needs: [web-production, smb-sdk]
+    runs-on: ubuntu-24.04
+    # Compile one release-profile graph for both product and browser harness.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 27fd5581bc144ec934ae24d7b652dc604137c5fa
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Fetch production Web assets from this workflow run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: web-dist
+          path: build/web
+      - name: Fetch browser template contract fixture from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: csr-template-fixture
+          path: target/csr-template-check/output
+      - name: Fetch matching Debian 13 VFS from this exact workflow commit
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: debian13-vfs-27fd5581bc144ec934ae24d7b652dc604137c5fa
+          path: target/smb-debian13/product
+      - name: Verify runner Chrome and ChromeDriver
         run: |
           chrome="$(command -v google-chrome)"
           driver="$(command -v chromedriver)"
           "$chrome" --version
           "$driver" --version
-          test "$("$chrome" --version | grep -oE '[0-9]+' | head -1)" = "$("$driver" --version | grep -oE '[0-9]+' | head -1)"
+          chrome_major=$("$chrome" --version | grep -oE '[0-9]+' | head -1)
+          driver_major=$("$driver" --version | grep -oE '[0-9]+' | head -1)
+          test "$chrome_major" = "$driver_major"
           echo "CHROME_BIN=$chrome" >> "$GITHUB_ENV"
           echo "CHROMEDRIVER=$driver" >> "$GITHUB_ENV"
+      - name: Install CJK fonts for the Chinese screenshot
+        run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-      - name: Verify original ELF in minimal Debian runtime
-        run: bash .github/scripts/check-debian13-release.sh
-      - name: Compile and test observer only
-        run: |
-          cargo test --locked --offline --release -p browser-smoke
-          cargo build --locked --offline --release -p browser-smoke
-          python3 - <<'PYIDENTITY'
-          import hashlib,json,pathlib
-          p=pathlib.Path('artifacts/replay-identity.json');d=json.loads(p.read_text())
-          d['observer_binary_sha256']=hashlib.sha256(pathlib.Path('target/native/release/browser-smoke').read_bytes()).hexdigest()
-          p.write_text(json.dumps(d,indent=2)+'\n')
-          PYIDENTITY
-      - name: Full original UI assertions against fixed original product
+      - name: Build and exercise extracted release packages
         env:
           ZXS_SMOKE_SCREENSHOT: artifacts/web-file-manager.png
           ZXS_VIEWPORT_PREVIEWS: artifacts/viewport-previews
         run: |
-          set -o pipefail
-          bash .github/scripts/release-acceptance.sh 2>&1 | tee artifacts/replay-ui.log
-      - name: Retain replay identities logs and original bytes even on failure
+          export RELEASE_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          bash .github/scripts/debian13-run.sh --native python3 .github/scripts/release-native.py
+          cargo test --locked --offline --release -p browser-smoke
+          bash .github/scripts/release-package.sh
+          bash .github/scripts/check-debian13-release.sh
+          bash .github/scripts/release-acceptance.sh
+          python3 .github/scripts/check-csr-browser.py
+          bash .github/scripts/release-assemble.sh
+      - name: Record unaccepted native diagnostic inventory
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        run: |
+          printf 'Unaccepted diagnostic bytes for source %s; not a validated release.\n' '27fd5581bc144ec934ae24d7b652dc604137c5fa'
+          for path in \
+            target/native/x86_64-unknown-linux-gnu/release/zxs \
+            target/native/x86_64-unknown-linux-gnu/release/zxs-rescue \
+            target/native/x86_64-unknown-linux-gnu/release/BUILD.txt \
+            target/smb-debian13/product/zxs.so \
+            target/smb-debian13/product/VFS-BUILD.json \
+            build/web \
+            target/debian13-native/release/browser-smoke \
+            target/native/release/browser-smoke; do
+            if [[ -e "$path" ]]; then
+              printf 'PRESENT %s\n' "$path"
+            else
+              printf 'MISSING %s\n' "$path"
+            fi
+          done
+      - name: Retain unaccepted native diagnostic bytes (not final assets)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: fixed-4332-product-new-observer
+          name: unaccepted-native-27fd5581bc144ec934ae24d7b652dc604137c5fa
           path: |
-            target/recovery.zip
-            target/recovery-input/target/native/x86_64-unknown-linux-gnu/release/BUILD.txt
+            target/native/x86_64-unknown-linux-gnu/release/zxs
+            target/native/x86_64-unknown-linux-gnu/release/zxs-rescue
+            target/native/x86_64-unknown-linux-gnu/release/BUILD.txt
+            target/smb-debian13/product/zxs.so
+            target/smb-debian13/product/VFS-BUILD.json
+            build/web
+            target/debian13-native/release/browser-smoke
             target/native/release/browser-smoke
-            artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Retain Debian 13 single-ELF runtime proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debian13-single-binary
+          path: artifacts/debian13-single-binary*
+          if-no-files-found: warn
+      - name: Retain verified installation candidate (not a published release)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installation-candidate-linux-web
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain template browser result and exact input identity
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: csr-template-browser
+          path: target/csr-template-check/output/*json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain real Web file manager screenshot
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-screenshot
+          path: artifacts/web-file-manager.png
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Retain responsive Web viewport previews
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: viewport-previews
+          path: artifacts/viewport-previews/
           if-no-files-found: warn
           retention-days: 7
