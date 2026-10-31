@@ -449,3 +449,53 @@ fn backup_pages_preserve_directory_order_cursors_and_filtered_selection() {
     assert!(filtered["next_cursor"].is_null());
     assert_eq!(filtered["directory_file_count"], "5");
 }
+
+#[test]
+fn selected_backup_page_releases_scan_tables_and_head_records_before_recheck() {
+    let (root, mut engine) = initialize(100);
+    let repo = repository(&mut engine, "Retention");
+    let old = save(&mut engine, &repo, "alpha.txt", b"old alpha");
+    let other = save(&mut engine, &repo, "beta.txt", b"beta");
+    let newest = save(&mut engine, &repo, "alpha.txt", b"new alpha");
+    let weak_version = |id: &str| Arc::downgrade(&engine.state().versions.get_shared(id).unwrap());
+    let old_version = weak_version(&old.version_id);
+    let other_version = weak_version(&other.version_id);
+    let selected_version = weak_version(&newest.version_id);
+    let head = &engine.state().branches[&repo.main_branch_id].head_commit_id;
+    let old_head = Arc::downgrade(&engine.state().commits.get_shared(head).unwrap());
+    let input = crate::ReadListing::parse(
+        "B01".into(),
+        BTreeMap::from([
+            ("path".into(), "P01/Retention".into()),
+            ("limit".into(), "1".into()),
+        ]),
+    )
+    .unwrap();
+    let request = PageRequest::parse(&engine, input).unwrap();
+    let selected = BackupListingRead::capture(&engine, "B01", "P01/Retention", request)
+        .unwrap()
+        .select()
+        .unwrap();
+    assert_eq!(selected.scope.versions.len(), 1);
+    assert!(selected.scope.versions.contains_key(&newest.version_id));
+    let projected = selected.project(&engine).unwrap();
+    assert_eq!(projected.entries.len(), 1);
+    assert_eq!(projected.entries[0].name, "alpha.txt");
+    drop(projected);
+    drop(engine);
+    assert!(old_version.upgrade().is_none());
+    assert!(other_version.upgrade().is_none());
+    assert!(
+        old_head.upgrade().is_none(),
+        "only a weak head identity remains"
+    );
+    assert!(selected_version.upgrade().is_some());
+
+    // The same persisted token and IDs do not admit indices against replacement
+    // allocations, even after the former head's strong references are gone.
+    let reopened = AdmissionEngine::new(Engine::open(&root.path().join("system")).unwrap());
+    let error = selected.project(&reopened).err().unwrap();
+    assert_eq!(error.code, ErrorCode::ListingChanged);
+    drop(selected);
+    assert!(selected_version.upgrade().is_none());
+}

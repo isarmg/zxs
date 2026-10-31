@@ -2,7 +2,8 @@
 use super::Engine;
 use crate::journal::RecordType;
 use crate::publication_evidence::{
-    repair_object_copies_at, verified_object_at, verified_publication_seal_at, verified_snapshot_at,
+    repair_object_copies_at, verified_object_at, verified_publication_seal_at,
+    verified_recovery_snapshot_at,
 };
 use crate::{disk::*, journal::*, *};
 use std::collections::{BTreeMap, BTreeSet};
@@ -357,7 +358,7 @@ impl Engine {
                     }
                     Some(match admitted {
                         Some(admitted) => admitted,
-                        None => verified_snapshot_at(
+                        None => verified_recovery_snapshot_at(
                             &self.disk_resources,
                             &online,
                             &candidate.snapshot_hash,
@@ -369,19 +370,24 @@ impl Engine {
                 // Checkpoint coverage never substitutes for candidate-bound graph
                 // verification. At the boundary, retain the original State proof
                 // for history-set and projected-manifest comparisons as well.
+                let original = admitted
+                    .as_ref()
+                    .map(|snapshot| snapshot.for_candidate(&candidate))
+                    .transpose()?;
                 let (_, roots) = crate::history_package::bound_history_objects_with_roots_at(
                     &self.disk_resources,
                     &online,
                     &candidate,
-                    admitted.as_ref(),
+                    original,
                 )?;
                 if let Some(admitted) = admitted {
-                    let mut next = admitted.into_state();
-                    if publication.recovery.is_some() {
-                        next.operations
-                            .insert(candidate.operation_id, publication.result.clone());
-                    }
-                    self.state = std::sync::Arc::new(next);
+                    let recovered_result = publication
+                        .recovery
+                        .as_ref()
+                        .map(|_| publication.result.clone());
+                    self.state = std::sync::Arc::new(
+                        admitted.into_visible_state(candidate.operation_id, recovered_result),
+                    );
                     self.bind_recovered_history_roots(roots);
                 }
                 self.snapshot = Some(candidate.snapshot_hash);
@@ -389,18 +395,21 @@ impl Engine {
             }
             let admitted = match admitted {
                 Some(admitted) => admitted,
-                None => {
-                    verified_snapshot_at(&self.disk_resources, &online, &candidate.snapshot_hash)?
-                }
+                None => verified_recovery_snapshot_at(
+                    &self.disk_resources,
+                    &online,
+                    &candidate.snapshot_hash,
+                )?,
             };
+            let original = admitted.for_candidate(&candidate)?;
             let (history_objects, roots) =
                 crate::history_package::bound_history_objects_with_roots_at(
                     &self.disk_resources,
                     &online,
                     &candidate,
-                    Some(&admitted),
+                    Some(original),
                 )?;
-            let mut next = admitted.into_state();
+            let next = original.state();
             if publication.is_none() && mode == RecoveryMode::PreservePending {
                 self.blocked = true;
                 break;
@@ -422,7 +431,7 @@ impl Engine {
                     self,
                     &candidate,
                     result,
-                    &next,
+                    next,
                     None,
                     MAX_METADATA,
                 )?;
@@ -472,7 +481,7 @@ impl Engine {
                     self.complete_published_candidate(
                         &candidate,
                         &hash,
-                        &next,
+                        next,
                         publication,
                         |engine, d, pub_hash| {
                             if let Some(receipt) = rs.iter().find(|receipt| {
@@ -504,12 +513,11 @@ impl Engine {
                         },
                     )?;
                 } else {
-                    self.complete_candidate(&candidate, &hash, &next, None)?;
+                    self.complete_candidate(&candidate, &hash, next, None)?;
                 }
-                if let Some(result) = recovered_result {
-                    next.operations.insert(candidate.operation_id, result);
-                }
-                self.state = std::sync::Arc::new(next);
+                self.state = std::sync::Arc::new(
+                    admitted.into_visible_state(candidate.operation_id, recovered_result),
+                );
                 self.bind_recovered_history_roots(roots);
                 self.snapshot = Some(candidate.snapshot_hash);
             } else if let Some(p) = publication {
@@ -540,11 +548,10 @@ impl Engine {
                     self.blocked = true;
                     break;
                 }
-                if p.recovery.is_some() {
-                    next.operations
-                        .insert(candidate.operation_id, p.result.clone());
-                }
-                self.state = std::sync::Arc::new(next);
+                let recovered_result = p.recovery.as_ref().map(|_| p.result.clone());
+                self.state = std::sync::Arc::new(
+                    admitted.into_visible_state(candidate.operation_id, recovered_result),
+                );
                 self.bind_recovered_history_roots(roots);
                 self.snapshot = Some(candidate.snapshot_hash);
                 self.blocked = true;
@@ -665,3 +672,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/recovery/diagnostics_tests.rs"]
 mod diagnostics_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/recovery/snapshot_proof_tests.rs"]
+mod snapshot_proof_tests;

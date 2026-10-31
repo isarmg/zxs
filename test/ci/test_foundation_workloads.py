@@ -1,5 +1,6 @@
 """CI/release must fan out the complete foundation inventory exactly once."""
 import json
+import importlib.util
 from pathlib import Path
 import re
 import unittest
@@ -26,9 +27,25 @@ class FoundationWorkloads(unittest.TestCase):
         for workflow, name in [('ci.yml', 'tests'), ('release.yml', 'verify')]:
             with self.subTest(workflow=workflow):
                 body = job((ROOT / '.github/workflows' / workflow).read_text(), name)
-                match = re.search(r'^\s+suite: \[([^\]]+)\]$', body, re.MULTILINE)
-                self.assertIsNotNone(match)
-                suites = [item.strip() for item in match[1].split(',')]
+                if workflow == 'ci.yml':
+                    self.assertIn('suite: ${{ fromJSON(needs.static.outputs.suites) }}', body)
+                    self.assertIn('needs: static', body)
+                    source = (ROOT / '.github/workflows' / workflow).read_text()
+                    static = job(source, 'static')
+                    self.assertIn('suites: ${{ steps.suites.outputs.suites }}', static)
+                    self.assertIn('id: suites\n        run: python3 .github/scripts/select-ci-suites.py', static)
+                    spec = importlib.util.spec_from_file_location(
+                        'ci_suite_inventory', ROOT / '.github/scripts/select-ci-suites.py')
+                    selector = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(selector)
+                    suites = list(selector.ALL)
+                    fallback = selector.select(ROOT, 'workflow_dispatch', {}, '', '')
+                    self.assertEqual(fallback['suites'], suites)
+                    self.assertEqual(fallback['reused'], [])
+                else:
+                    match = re.search(r'^\s+suite: \[([^\]]+)\]$', body, re.MULTILINE)
+                    self.assertIsNotNone(match)
+                    suites = [item.strip() for item in match[1].split(',')]
                 self.assertEqual(set(suites), SHARDS | PORTABLE)
                 self.assertEqual(len(suites), len(set(suites)))
                 self.assertNotIn('foundation', suites, 'aggregate would duplicate every shard')

@@ -8,7 +8,7 @@ pub(super) struct PreparedCandidate {
     pub barrier_failure: Option<Error>,
     // Only this exact candidate.snapshot_hash, consumed once under the same
     // admitted roots/locks. Never an all-history State cache.
-    pub snapshot: Option<crate::history_package::SharedAdmittedState>,
+    pub snapshot: Option<crate::publication_evidence::SharedAdmittedSnapshot>,
 }
 
 impl Engine {
@@ -78,12 +78,12 @@ impl Engine {
                 .candidates
                 .get_mut(&sequence)
                 .expect("invariant: preflight retains its latest published candidate");
-            let admitted = verified_snapshot_at(
+            let admitted = verified_recovery_snapshot_at(
                 &self.disk_resources,
                 &prepared.online,
                 &bound.candidate.snapshot_hash,
             )?;
-            let state = admitted.state();
+            let state = admitted.for_candidate(&bound.candidate)?.state();
             let result = state
                 .operations
                 .get(&bound.candidate.operation_id)

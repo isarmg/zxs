@@ -155,3 +155,25 @@ SHA256 已匹配 `17c50d2540b60fe374e10a5d27fef534acbbcb59822225d0d64b4220496846
 及三个分片逐一匹配，compact 的 45 个原文件逐字节一致。原池未上传，所以不能独立重建
 file／directory／unknown 分类，只核各类之和。追踪耗时不用于延迟结论；旧 environment
 里的 untraced 文案错误保留原样，工具修正只影响未来输出，不重写证据。
+
+## 真实 FULL 版本增长工作负载
+
+显式 `--workload full-versions` 选择独立的 `full-version-history-v1` 协议，
+仅支持 current adapter；未给该参数仍执行原固定正文／SMB 绑定工作负载。
+`--operations` 是总发表操作数：一次仓库创建加 N 次同一逻辑文件的真实内容提交，
+因此 16／32 个版本对应 17／33 次操作。每次通过正式 workspace/stage/commit API
+发布不同的 4 KiB 正文，旧版本及其原操作 ID 永久保留，不以绑定次数或合成树代替。
+
+每个 build、reopen、recovery 阶段都流式读取原始请求／结果／版本描述账本，
+逐版本核对 `file_history` 的原 ID 与顺序、AVAILABLE 状态、全部 4 KiB 字节，
+并重试每个原请求检查相同结果、错误请求复用原 ID 的拒绝，以及事件和总发表数不变。
+`created_as_full_checkpoint` 是来源检查点语义，不是 FULL 普通文件的判据；
+正文证明使用正式 `open_content` 的内容完整性验证及独立完整字节比较。
+账本 oracle 一次保留一个记录和正文；`file_history` 仍使用现有全版本 API 响应，
+本工具不把这个查询宣称为按页有界或改变产品资源限制。
+
+该协议必须由 `summarize_full_versions` 独立汇总；旧 `summarize_driver` 不接纳它。
+本地校准仍须显式 `--local-calibration`，并在解析端显式允许本地证据。
+所有原资源预算和超过 16 次操作的显式授权条件不变。恢复在 reopen 之后执行时
+可能利用已生成的 checkpoint，不得把这个阶段记作独立冷恢复，也不能把小样本
+通过写成 1 万／10 万历史版本、实际磁盘或 scrub 吞吐验收。

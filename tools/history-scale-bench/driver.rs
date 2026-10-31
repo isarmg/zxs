@@ -28,6 +28,25 @@ compile_error!("history scale driver revision adapters are mutually exclusive");
 #[cfg(not(any(feature = "history-scale-baseline", feature = "history-scale-current")))]
 compile_error!("select an explicit history scale driver revision adapter");
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Workload {
+    FixedBodyBindings,
+    FullVersions,
+}
+
+impl Workload {
+    fn parse(value: Option<&str>) -> BenchResult<Self> {
+        match value {
+            None | Some("fixed-body-bindings") => Ok(Self::FixedBodyBindings),
+            Some("full-versions") => Ok(Self::FullVersions),
+            _ => Err(invalid("unsupported workload").into()),
+        }
+    }
+}
+
+#[cfg(feature = "history-scale-current")]
+mod full_versions;
+
 struct Arguments {
     pool: PathBuf,
     result: PathBuf,
@@ -36,6 +55,7 @@ struct Arguments {
     mode: String,
     scale_authorized: bool,
     local_calibration: bool,
+    workload: Workload,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -69,13 +89,23 @@ impl Arguments {
             require(
                 matches!(
                     flag.as_str(),
-                    "--pool-root" | "--result" | "--operations" | "--phase" | "--mode"
+                    "--pool-root"
+                        | "--result"
+                        | "--operations"
+                        | "--phase"
+                        | "--mode"
+                        | "--workload"
                 ),
                 "unknown driver argument",
             )?;
             let value = words.next().ok_or_else(|| invalid("missing flag value"))?;
             require(flags.insert(flag, value).is_none(), "duplicate argument")?;
         }
+        let workload = Workload::parse(flags.remove("--workload").as_deref())?;
+        require(
+            workload != Workload::FullVersions || cfg!(feature = "history-scale-current"),
+            "full-versions requires the current revision adapter",
+        )?;
         let mut take = |name: &str| {
             flags
                 .remove(name)
@@ -108,6 +138,7 @@ impl Arguments {
             mode,
             scale_authorized,
             local_calibration,
+            workload,
         })
     }
 }
@@ -909,6 +940,12 @@ fn verify_content_retry(
 }
 
 fn run(arguments: &Arguments, reporter: &mut Reporter) -> BenchResult<()> {
+    if arguments.workload == Workload::FullVersions {
+        #[cfg(feature = "history-scale-current")]
+        return full_versions::run(arguments, reporter);
+        #[cfg(feature = "history-scale-baseline")]
+        return Err(invalid("full-versions requires the current revision adapter").into());
+    }
     reporter.emit(json!({
         "phase": "configuration", "stage": arguments.phase, "mode": arguments.mode,
         "execution_environment": if arguments.local_calibration { "local-calibration" } else { "github-actions" },

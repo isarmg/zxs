@@ -68,7 +68,30 @@ class BrowserFuturesRetirement(unittest.TestCase):
                 self.assertIn("    env:\n      ZXS_REQUIRE_BROWSER: '1'", job_source)
                 self.assertIn("if: matrix.suite == 'foundation-language'\n"
                               "        run: bash .github/scripts/prepare-browser-contract.sh", job_source)
-                self.assertIn('foundation-language', job_source.split('    steps:', 1)[0])
+                if filename == 'ci.yml':
+                    self.assertIn('suite: ${{ fromJSON(needs.static.outputs.suites) }}',
+                                  job_source.split('    steps:', 1)[0])
+                    spec = importlib.util.spec_from_file_location(
+                        'browser_ci_selector', ROOT / '.github/scripts/select-ci-suites.py')
+                    selector = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(selector)
+                    self.assertIn('foundation-language', selector.ALL)
+                    self.assertIn('security', selector.ALL)
+                    self.assertNotIn('security', selector.FOUNDATION)
+                    for path in ('src/engine/src/lib.rs', 'src/server/src/main.rs',
+                                 'tools/history-scale-bench/src/main.rs'):
+                        self.assertIn('foundation-language', selector.affected(path), path)
+                    # Actual browser/runtime input changes must force the full matrix,
+                    # not merely preserve a similarly named unrelated suite.
+                    for path in ('src/foundation/web-runtime/js-sys/src/lib.rs',
+                                 'test/wasm-binding-macros/browser-runtime.html',
+                                 '.github/scripts/prepare-browser-contract.sh'):
+                        self.assertIsNone(selector.affected(path), path)
+                    fallback = selector.select(ROOT, 'workflow_dispatch', {}, '', '')
+                    self.assertIn('foundation-language', fallback['suites'])
+                    self.assertIn('security', fallback['suites'])
+                else:
+                    self.assertIn('foundation-language', job_source.split('    steps:', 1)[0])
                 self.assertLess(job_source.index('prepare-browser-contract.sh'),
                                 job_source.index('bash .github/scripts/check.sh'))
         setup = (ROOT / '.github/scripts/prepare-browser-contract.sh').read_text()

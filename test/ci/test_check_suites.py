@@ -267,7 +267,7 @@ class SuiteCoverageTests(unittest.TestCase):
             )
 
     def test_workflows_schedule_source_shard_once_after_preflight(self):
-        # Deliberately target our block-mapping / inline-list workflow format;
+        # Deliberately target the fixed release matrix and explicit CI selector contract;
         # no PyYAML, compiler, network or runner is needed for this regression.
         root = Path(__file__).resolve().parents[2]
         for filename, matrix_job, predecessor in (
@@ -282,8 +282,14 @@ class SuiteCoverageTests(unittest.TestCase):
                 self.assertIn("bash .github/scripts/check.sh static", jobs["static"])
                 body = jobs[matrix_job]
                 matrix = re.findall(r"^        suite: \[(.+)\]$", body, re.MULTILINE)
-                self.assertEqual(len(matrix), 1)
-                suites = [suite.strip() for suite in matrix[0].split(",")]
+                if filename == "ci.yml":
+                    self.assertEqual(matrix, [])
+                    self.assertIn("suite: ${{ fromJSON(needs.static.outputs.suites) }}", body)
+                    import runpy
+                    suites = runpy.run_path(str(root / ".github/scripts/select-ci-suites.py"))["ALL"]
+                else:
+                    self.assertEqual(len(matrix), 1)
+                    suites = [suite.strip() for suite in matrix[0].split(",")]
                 self.assertEqual(suites.count("rust-sources"), 1)
                 self.assertNotIn("static", suites)
                 self.assertNotRegex(body, r"(?m)^        (?:exclude|include):")
@@ -293,7 +299,7 @@ class SuiteCoverageTests(unittest.TestCase):
                 invocation = '        run: bash .github/scripts/check.sh "${{ matrix.suite }}"'
                 self.assertEqual(body.count(invocation), 1)
                 self.assertRegex(body, r"- name: [^\n]+\n" + re.escape(invocation))
-                self.assertEqual(workflow.count("suite: ["), 1)
+                self.assertEqual(workflow.count("suite: ["), 0 if filename == "ci.yml" else 1)
                 self.assertNotIn("check.sh rust-sources", workflow)
                 self.assertNotIn("test/tools/rust-sources", workflow)
                 if predecessor != "static":

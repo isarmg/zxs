@@ -278,3 +278,73 @@ def aggregate(output: Path) -> dict:
             "Only untraced timing samples contribute to timing variation; counts samples are not latency evidence.",
         ],
     }
+
+
+def summarize_full_versions(path: Path, stage: str, operations: int, mode: str = "timing", *, allow_local_calibration: bool = False) -> dict:
+    """Validate the independent real FULL-version protocol, never receipt-growth evidence."""
+    if stage not in ("build", "reopen", "recovery") or mode not in ("timing", "counts"):
+        raise ValueError("unsupported full-version stage or mode")
+    if operations < 4:
+        raise ValueError("full-version workload requires at least four operations")
+    with path.open(encoding="utf-8") as lines:
+        reader = ResultReader(lines)
+        configuration = reader.take("configuration", stage=stage, operations=operations, mode=mode,
+            metadata_members=1, content_bytes=4096, content_versions=operations - 1,
+            fixture_mode="full-versions", query_protocol="full-version-history-v1",
+            history_scale_current=True, history_scale_baseline=False)
+        execution = configuration.get("execution_environment")
+        if execution not in ("github-actions", "local-calibration"):
+            raise ValueError("unsupported execution environment")
+        if execution == "local-calibration" and not allow_local_calibration:
+            raise ValueError("local calibration is not formal GitHub scale evidence")
+        reader.telemetry_at("process_start")
+        published = set()
+        if stage == "build":
+            reader.take("history_setup", operation_id=operation_id(0), total_receipts=1)
+            for index in range(1, operations):
+                row = reader.take("history_append", index=index, operation_id=operation_id(index),
+                                  total_receipts=index + 1, history_versions=index)
+                identity = row.get("version_id")
+                if not isinstance(identity, str) or not identity or identity in published:
+                    raise ValueError("missing or duplicated real version identity")
+                if not isinstance(row.get("file_id"), str) or not row["file_id"]:
+                    raise ValueError("missing real file identity")
+                published.add(identity)
+                if "latency_ns" not in row:
+                    raise ValueError("missing real version publication latency")
+        else:
+            reader.telemetry_at("after_admission_before_oracle")
+            reader.take(stage)
+        verified_versions = set()
+        file_id = None
+        for index in range(operations):
+            row = reader.take("history_verify", index=index, operation_id=operation_id(index),
+                        body_verified=index > 0, original_retry_verified=True,
+                        mismatched_retry_rejected=index > 0)
+            if index == 0:
+                if row.get("version_id") is not None or row.get("file_id") is not None:
+                    raise ValueError("repository creation cannot count as a content version")
+                continue
+            identity = row.get("version_id")
+            if not isinstance(identity, str) or not identity or identity in verified_versions:
+                raise ValueError("missing or repeated verified version identity")
+            current_file = row.get("file_id")
+            if not isinstance(current_file, str) or not current_file or (file_id is not None and current_file != file_id):
+                raise ValueError("original logical file identity changed")
+            file_id = current_file
+            verified_versions.add(identity)
+        if stage == "build" and verified_versions != published:
+            raise ValueError("verified version identities differ from actual publications")
+        reader.take("history_oracle", records=operations, history_versions=operations - 1,
+                    full_bodies_verified=operations - 1, events=operations, no_new_publication=True)
+        reader.telemetry_at("after_verification")
+        reader.take("close")
+        reader.telemetry_at("after_close")
+        complete = reader.take("complete", stage=stage, operations=operations,
+                               actual_total_receipts=operations, actual_total_events=operations,
+                               actual_history_versions=operations - 1)
+        if next(reader.lines, None) is not None:
+            raise ValueError("unexpected row after completion")
+    return {"rows": reader.rows, "configuration": configuration, "completion": complete,
+            "telemetry": reader.telemetry,
+            "latencies": {phase: distribution(values) for phase, values in sorted(reader.latencies.items())}}

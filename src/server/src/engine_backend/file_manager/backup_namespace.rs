@@ -4,9 +4,9 @@ use super::pagination::{Page, PageRequest, PageSelector};
 use super::*;
 use crate::backend_listing::SortKey;
 use storage_contract::{Commit, State};
-use storage_engine::{Entry, FileVersion, MetadataView};
+use storage_engine::{Entry, FileVersion};
 
-fn available_on(state: &State, slot: &str, version: &str) -> bool {
+fn available_on(state: &BackupListingMetadata, slot: &str, version: &str) -> bool {
     state
         .content_states
         .get(version)
@@ -154,7 +154,7 @@ fn default_backup_path(
     repo: &Repository,
     entry: Option<&Entry>,
     version: &FileVersion,
-    state: &State,
+    state: &BackupListingMetadata,
 ) -> String {
     let relative = entry
         .map(|entry| entry.path.as_str())
@@ -173,7 +173,7 @@ fn default_backup_path(
 }
 fn project(
     engine: &Engine,
-    scope: &ListingScope,
+    scope: &SelectedScope,
     node: &Candidate,
 ) -> Result<crate::ListingEntry, ApiError> {
     let display = node.display();
@@ -191,12 +191,15 @@ fn project(
             version_id,
             ..
         } => {
-            let state = scope.view.business_projection();
+            let state = scope;
             let repo = &state.repositories[repository_id];
             let version = &state.versions[version_id];
             let current = current.map(|index| {
                 let namespace = &scope.namespaces[&repo.history_tree_id];
-                (index, &namespace.commit.entries[index])
+                (
+                    index,
+                    &engine.state().commits[&namespace.commit_id].entries[index],
+                )
             });
             // Resolve against the current entry before overlaying historical content.
             let mut value = if let Some((index, _)) = current {
@@ -270,8 +273,37 @@ struct NamespaceCapture {
     commit: Arc<Commit>,
 }
 
+/// Exactly the tables used by backup namespace validation and page selection.
+/// Current namespace heads are held separately; unrelated historical commits,
+/// directory trees and authority records are never captured here.
+struct BackupListingMetadata {
+    #[cfg(test)]
+    sequence: u64,
+    repositories: storage_contract::TrackedMap<Repository>,
+    versions: storage_contract::TrackedRecords<FileVersion>,
+    placements: storage_contract::TrackedMap<storage_contract::Placement>,
+    content_states: storage_contract::TrackedMap<storage_contract::ContentState>,
+    file_locations: storage_contract::TrackedMap<String>,
+    file_backup_paths: storage_contract::TrackedMap<BTreeMap<String, String>>,
+}
+
+impl BackupListingMetadata {
+    fn capture(state: &State) -> Self {
+        Self {
+            #[cfg(test)]
+            sequence: state.sequence,
+            repositories: state.repositories.clone(),
+            versions: state.versions.clone(),
+            placements: state.placements.clone(),
+            content_states: state.content_states.clone(),
+            file_locations: state.file_locations.clone(),
+            file_backup_paths: state.file_backup_paths.clone(),
+        }
+    }
+}
+
 struct ListingScope {
-    view: MetadataView,
+    metadata: BackupListingMetadata,
     slot_id: String,
     path: String,
     maximum: usize,
@@ -283,8 +315,24 @@ pub(in crate::engine_backend) struct BackupListingRead {
     request: PageRequest,
 }
 
+struct NamespaceWitness {
+    repository_id: String,
+    commit_id: String,
+    commit: std::sync::Weak<Commit>,
+}
+
+// Global identity evidence stays small per repository; only selected versions
+// remain strongly owned after the full namespace conflict scan has completed.
+struct SelectedScope {
+    repositories: storage_contract::TrackedMap<Repository>,
+    versions: BTreeMap<String, Arc<FileVersion>>,
+    namespaces: BTreeMap<String, NamespaceWitness>,
+    slot_id: String,
+    path: String,
+}
+
 pub(in crate::engine_backend) struct SelectedListing {
-    scope: ListingScope,
+    scope: SelectedScope,
     page: Page<Candidate>,
     directory_file_count: usize,
 }
@@ -327,7 +375,7 @@ impl BackupListingRead {
         }
         Ok(Self {
             scope: ListingScope {
-                view: engine.metadata_view(),
+                metadata: BackupListingMetadata::capture(engine.state()),
                 slot_id: slot.into(),
                 path: path.into(),
                 maximum: engine.config().max_entries,
@@ -339,7 +387,7 @@ impl BackupListingRead {
 
     pub(in crate::engine_backend) fn select(self) -> Result<SelectedListing, ApiError> {
         #[cfg(test)]
-        lifecycle_tests::before_scan(&self.scope.view);
+        lifecycle_tests::before_scan(&self.scope.metadata);
         let Self { scope, request } = self;
         let nodes = scope.nodes()?;
         let key = name_policy::path_key(&scope.path);
@@ -388,8 +436,10 @@ impl BackupListingRead {
             next: page.next,
         };
         // The bounded page owns only identities, indices and display paths.
-        // Release the global graph before returning the retained metadata view.
+        // Release the global graph and all scan-only tables before reacquiring
+        // Engine for current identity and namespace-pointer checks.
         drop(nodes);
+        let scope = scope.retain_selected(&page);
         Ok(SelectedListing {
             scope,
             page,
@@ -399,8 +449,47 @@ impl BackupListingRead {
 }
 
 impl ListingScope {
+    fn retain_selected(self, page: &Page<Candidate>) -> SelectedScope {
+        let versions = page
+            .values
+            .iter()
+            .chain(page.selected.iter())
+            .filter_map(|candidate| match candidate {
+                Candidate::Directory { .. } => None,
+                Candidate::File { version_id, .. } => Some((
+                    version_id.clone(),
+                    self.metadata
+                        .versions
+                        .get_shared(version_id)
+                        .expect("invariant: selected backup version was validated"),
+                )),
+            })
+            .collect();
+        let namespaces = self
+            .namespaces
+            .into_iter()
+            .map(|(history, namespace)| {
+                (
+                    history,
+                    NamespaceWitness {
+                        repository_id: namespace.repository_id,
+                        commit_id: namespace.commit.commit_id.clone(),
+                        commit: Arc::downgrade(&namespace.commit),
+                    },
+                )
+            })
+            .collect();
+        SelectedScope {
+            repositories: self.metadata.repositories,
+            versions,
+            namespaces,
+            slot_id: self.slot_id,
+            path: self.path,
+        }
+    }
+
     fn latest(&self) -> BTreeMap<&str, (&Repository, &FileVersion)> {
-        let state = self.view.business_projection();
+        let state = &self.metadata;
         let mut latest = BTreeMap::<&str, (&Repository, &FileVersion)>::new();
         for version in state
             .versions
@@ -427,7 +516,7 @@ impl ListingScope {
         &'a self,
         latest: &BTreeMap<&str, (&Repository, &FileVersion)>,
     ) -> BTreeMap<&'a str, (usize, &'a Entry)> {
-        let state = self.view.business_projection();
+        let state = &self.metadata;
         let mut canonical = BTreeMap::new();
         for namespace in self.namespaces.values() {
             for (index, entry) in namespace.commit.entries.iter().enumerate() {
@@ -449,7 +538,7 @@ impl ListingScope {
     }
 
     fn nodes(&self) -> Result<BTreeMap<String, Node<'_>>, ApiError> {
-        let state = self.view.business_projection();
+        let state = &self.metadata;
         let latest = self.latest();
         let canonical = self.canonical(&latest);
         let mut nodes = BTreeMap::new();
@@ -493,7 +582,7 @@ fn changed() -> ApiError {
 
 impl SelectedListing {
     fn authorize_current(&self, engine: &AdmissionEngine) -> Result<(), ApiError> {
-        let captured = self.scope.view.business_projection();
+        let captured = &self.scope;
         let current = engine.state();
         if engine.listing_snapshot() != self.page.snapshot
             || current.repositories.len() != captured.repositories.len()
@@ -512,7 +601,7 @@ impl SelectedListing {
                 .get(&repo.main_branch_id)
                 .filter(|branch| {
                     branch.history_tree_id == repo.history_tree_id
-                        && branch.head_commit_id == namespace.commit.commit_id
+                        && branch.head_commit_id == namespace.commit_id
                 })
                 .ok_or_else(changed)?;
             let commit = current
@@ -521,7 +610,7 @@ impl SelectedListing {
                 .ok_or_else(changed)?;
             // The token can coincide after replacement. Never apply an old
             // numeric entry index to a newly allocated namespace with that ID.
-            if !Arc::ptr_eq(&commit, &namespace.commit) {
+            if !namespace.commit.ptr_eq(&Arc::downgrade(&commit)) {
                 return Err(changed());
             }
         }
@@ -552,7 +641,7 @@ impl SelectedListing {
         })
     }
 
-    /// Consume the page and release its retained generation after unlocking.
+    /// Consume the page and release selected records and identity evidence after unlocking.
     pub(in crate::engine_backend) fn finish(
         self,
         page: ProjectedEntries,

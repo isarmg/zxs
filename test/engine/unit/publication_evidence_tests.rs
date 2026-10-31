@@ -377,3 +377,102 @@ fn repair_rejects_unsafe_unreadable_entry_instead_of_replacing_it() {
     assert!(repair_object_copies(&members, "repository", &hash, &repo).is_err());
     assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
 }
+
+fn latest_candidate(engine: &Engine) -> Candidate {
+    let member = &engine.members()[0];
+    let scanned = scan(member).unwrap();
+    let (record, _) = scanned.records.last().unwrap();
+    load_object(member, "candidate", &record.candidate_hash).unwrap()
+}
+
+#[test]
+fn recovery_snapshot_hash_binding_survives_the_workspace_loan() {
+    let (_temp, engine, _repository) = fixture();
+    let candidate = latest_candidate(&engine);
+    let admitted = verified_recovery_snapshot_at(
+        &engine.disk_resources,
+        &engine.members(),
+        &candidate.snapshot_hash,
+    )
+    .unwrap();
+    let expected = canonical_json(admitted.for_candidate(&candidate).unwrap().state()).unwrap();
+    let mut other = candidate.clone();
+    other.snapshot_hash = "0".repeat(64);
+    assert_eq!(
+        admitted.for_candidate(&other).err().unwrap().code(),
+        ErrorCode::ObjectCorrupt
+    );
+    let shared = admitted.into_shared();
+    let loan = shared.share_state();
+    assert_eq!(canonical_json(loan.as_ref()).unwrap(), expected);
+    drop(loan);
+    let admitted = shared.into_admitted();
+    assert_eq!(
+        canonical_json(admitted.for_candidate(&candidate).unwrap().state()).unwrap(),
+        expected
+    );
+    assert_eq!(
+        admitted.for_candidate(&other).err().unwrap().code(),
+        ErrorCode::ObjectCorrupt
+    );
+}
+
+#[test]
+fn recovery_overlay_consumes_original_proof_without_changing_disk_snapshot() {
+    let (_temp, engine, _repository) = fixture();
+    let candidate = latest_candidate(&engine);
+    let admitted = verified_recovery_snapshot_at(
+        &engine.disk_resources,
+        &engine.members(),
+        &candidate.snapshot_hash,
+    )
+    .unwrap();
+    let original = admitted.for_candidate(&candidate).unwrap().state();
+    let original_bytes = canonical_json(original).unwrap();
+    let mut recovery_result = original.operations[&candidate.operation_id].clone();
+    recovery_result.result = json_codec::json!({"recovery_fixture": true});
+    // The consuming transition deliberately returns plain visible State, not an
+    // AdmittedSnapshot that could attest this synthetic outcome as disk bytes.
+    let visible: State =
+        admitted.into_visible_state(candidate.operation_id, Some(recovery_result.clone()));
+    assert_eq!(visible.operations[&candidate.operation_id], recovery_result);
+    assert_ne!(canonical_json(&visible).unwrap(), original_bytes);
+    let reread = verified_recovery_snapshot_at(
+        &engine.disk_resources,
+        &engine.members(),
+        &candidate.snapshot_hash,
+    )
+    .unwrap();
+    assert_eq!(
+        canonical_json(reread.for_candidate(&candidate).unwrap().state()).unwrap(),
+        original_bytes
+    );
+}
+
+#[test]
+fn recovery_snapshot_proof_does_not_cache_later_disk_health() {
+    let (_temp, engine, _repository) = fixture();
+    let candidate = latest_candidate(&engine);
+    let admitted = verified_recovery_snapshot_at(
+        &engine.disk_resources,
+        &engine.members(),
+        &candidate.snapshot_hash,
+    )
+    .unwrap();
+    for member in engine.members() {
+        fs::write(
+            object_path(&member, "snapshot", &candidate.snapshot_hash),
+            b"damaged after admission",
+        )
+        .unwrap();
+    }
+    assert!(admitted.for_candidate(&candidate).is_ok());
+    assert!(
+        verified_recovery_snapshot_at(
+            &engine.disk_resources,
+            &engine.members(),
+            &candidate.snapshot_hash,
+        )
+        .is_err()
+    );
+}

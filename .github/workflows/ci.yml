@@ -22,12 +22,19 @@ jobs:
     name: Static workflow and tooling regressions (no Rust)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      suites: ${{ steps.suites.outputs.suites }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # Missing older push bases safely select the full matrix.
+          fetch-depth: 2
       - name: Check workflows, source governance and script regressions
         run: bash .github/scripts/check.sh static
+      - name: Select evidenced CI suites
+        id: suites
+        run: python3 .github/scripts/select-ci-suites.py
 
   tests:
     name: Tests (${{ matrix.suite }})
@@ -40,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [rust-sources, quality, security, workspace, foundation-platform, foundation-crypto, foundation-data, foundation-language, foundation-async, web, contracts, build-tools, smb-protocol]
+        suite: ${{ fromJSON(needs.static.outputs.suites) }}
     env:
       ZXS_REQUIRE_BROWSER: '1'
     steps:

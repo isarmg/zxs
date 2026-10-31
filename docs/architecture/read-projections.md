@@ -534,3 +534,27 @@ Current authentication, history ownership and split-generation rechecks are
 unchanged. Canceled workers retain required commits and admission until completion,
 but unused versions can be released on engine replacement. The five whole tables
 remain shared; this is not per-history bounded ownership or a new index.
+
+### 备份列表字段所有权
+
+备份列表捕获私有 `BackupListingMetadata`，仅共享 `repositories`、`versions`、
+`placements`、`content_states`、`file_locations`、`file_backup_paths` 六张 COW 表。
+它不是 `MetadataView` 或以空字段伪装的 `State`；捕获只克隆表句柄，不增加记录扫描。
+各仓库当前命名空间的 `Arc<Commit>` 仍单独保留，供全局冲突验证与同一提交指针复查。
+无关的历史提交、目录整树、分支、操作收据及其它业务表不会因备份列表而驻留。
+
+全局备份路径冲突检查、可用副本选择、数量上限、独立选中行和分页行为保持不变。
+投影前仍刷新当前身份并核对 listing token、全部仓库身份及当前命名空间提交指针；
+取消等待者不提前释放仍运行工作线程的认证对象、准入槽和所需版本记录。
+生命周期回归以弱引用证明替换引擎后无关旧提交立即释放，而所需版本保留到工作结束。
+
+扫描期间仍共享六张完整表和当前命名空间，不宣称全局冲突扫描已消失。
+成功选出页面后，消费式 `SelectedScope` 仅保留全部仓库的一致性记录、每仓库当前
+提交的弱引用与 ID，以及页面和独立选中行实际引用的版本强引用（至多页行数加一）。
+完整版本表、其它扫描表和命名空间提交的强引用均在等待回锁前释放。弱引用保留原
+分配身份，因此即使旧提交已释放、重开后 token 与 ID 相同，指针检查仍拒绝替代对象。
+同锁验证全部身份之后，条目索引才用于当前引擎中的对应提交。
+
+现有 HTTP 后端原本已在返回最终页面前销毁读状态，发送并不持这些表；此次收益是
+全局选择完成至回锁复查之间的提前释放。仓库身份记录仍随仓库数增长，扫描本身仍
+依赖全部可用历史版本。本次不宣称权威 State 冷热分离或已测得整体 RSS／吞吐改善。

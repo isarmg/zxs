@@ -13,12 +13,12 @@ use std::{
 use storage_contract::{Config, OperationId};
 use storage_engine::{BackupConfigurationRequest, CommitRequest};
 
-type ScanHook = Box<dyn FnOnce(&MetadataView)>;
+type ScanHook = Box<dyn FnOnce(&BackupListingMetadata)>;
 thread_local! {
     static BEFORE_SCAN: RefCell<Option<ScanHook>> = const { RefCell::new(None) };
 }
 
-pub(super) fn before_scan(view: &MetadataView) {
+pub(super) fn before_scan(view: &BackupListingMetadata) {
     let hook = BEFORE_SCAN.with(|hook| hook.borrow_mut().take());
     if let Some(hook) = hook {
         hook(view);
@@ -28,7 +28,7 @@ pub(super) fn before_scan(view: &MetadataView) {
 fn pause(started: mpsc::SyncSender<u64>, release: mpsc::Receiver<()>) {
     BEFORE_SCAN.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(move |view| {
-            started.send(view.business_projection().sequence).unwrap();
+            started.send(view.sequence).unwrap();
             release.recv_timeout(Duration::from_secs(10)).unwrap();
         }));
     });
@@ -432,7 +432,7 @@ fn same_token_engine_reopen_rejects_backup_file_and_directory_pages_before_proje
                 (result, LISTED_ENTRY_PROJECTIONS.get())
             });
             observed.recv_timeout(Duration::from_secs(10)).unwrap();
-            // A retained MetadataView holds no Engine or disk lock, so this
+            // A retained backup projection holds no Engine or disk lock, so this
             // exact committed generation can reopen with new Commit objects.
             reopen(&backend, root.path());
             {
@@ -454,10 +454,9 @@ fn same_token_engine_reopen_rejects_backup_file_and_directory_pages_before_proje
 }
 
 #[tokio::test]
-async fn canceled_backup_listing_retains_historical_view_auth_and_existing_slot_until_worker_exits()
-{
+async fn canceled_backup_listing_retains_only_required_records_auth_and_slot_until_worker_exits() {
     let (root, backend, auth, _token, identity, repo) = fixture();
-    let old_record = {
+    let (old_record, required_version) = {
         let engine = backend.engine.lock().unwrap();
         let head = &engine.state().branches[&repo.main_branch_id].head_commit_id;
         let historical = engine
@@ -471,13 +470,23 @@ async fn canceled_backup_listing_retains_historical_view_auth_and_existing_slot_
             })
             .unwrap();
         // The current namespace Arc does not own this historical record. Its
-        // lifetime after replacement demonstrates ownership of the whole view.
-        Arc::downgrade(
-            &engine
-                .state()
-                .commits
-                .get_shared(&historical.commit_id)
-                .unwrap(),
+        // lifetime after replacement detects accidental capture of all commits.
+        let version = engine.state().versions.values().next().unwrap();
+        (
+            Arc::downgrade(
+                &engine
+                    .state()
+                    .commits
+                    .get_shared(&historical.commit_id)
+                    .unwrap(),
+            ),
+            Arc::downgrade(
+                &engine
+                    .state()
+                    .versions
+                    .get_shared(&version.version_id)
+                    .unwrap(),
+            ),
         )
     };
     let spare = Engine::initialize(
@@ -509,8 +518,12 @@ async fn canceled_backup_listing_retains_historical_view_auth_and_existing_slot_
     assert!(waiter.await.unwrap_err().is_cancelled());
     backend.test_with_engine_locked(|engine| *engine = spare);
     assert!(
-        old_record.upgrade().is_some(),
-        "worker must retain the whole captured view"
+        old_record.upgrade().is_none(),
+        "backup worker must not retain unrelated historical commits"
+    );
+    assert!(
+        required_version.upgrade().is_some(),
+        "paused worker still owns required version records for global validation"
     );
     assert!(auth_owner.upgrade().is_some());
     assert_eq!(slots.available_permits(), 0);
@@ -527,5 +540,6 @@ async fn canceled_backup_listing_retains_historical_view_auth_and_existing_slot_
         old_record.upgrade().is_none(),
         "completed jobs retain no view cache"
     );
+    assert!(required_version.upgrade().is_none());
     assert_eq!(slots.available_permits(), 1);
 }
