@@ -51,6 +51,8 @@ def sample(size, mode="timing", repeat=1):
             "driver": {"configuration": {"fixture_mode": "fixed-body", "query_protocol": "separate-outcome-health"},
                        "telemetry": [{"vmrss_kib": 4000}],
                        "completion": {"verified": True, "operations": size, "actual_total_receipts": size, "actual_total_events": size}}}
+        if mode == "counts":
+            stages[name]["trace"] = {"complete": True}
     return {"label": "candidate", "operations": size, "mode": mode, "repeat": repeat, "status": "passed", "stages": stages}
 
 
@@ -185,6 +187,62 @@ class GrowthTests(unittest.TestCase):
         self.assertGreater(forecast["phase_seconds"]["recovery"], 72 * 2 * growth.SAFETY)
         self.assertLess(forecast["phase_seconds"]["recovery"], 600)
         self.assertEqual(history[0]["wall"]["recovery"], 2)
+
+    def test_counts_projection_binds_native_predecessor_and_uses_cold_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan, p, basis = self.fixture(root)
+            _, first = growth.admit(plan, "growth-2048", p, root, "124", "c" * 40)
+            write(root, "prior-run.json", metadata("125", "f" * 40))
+            env = environment("growth-2048", "125", "f" * 40)
+            env["growth_review"] = first
+            write(root, "prior/growth-2048/environment.json", env)
+            native = self.raw(root / "prior", "growth-2048", summary([sample(2048)]))
+            write(root, "prior/growth-2048/summary.json", native)
+            # Budget admission uses the same strict raw reader as timing;
+            # isolate only syscall sampling/trace-length observations here.
+            for stage in growth.STAGES:
+                path = root / f"basis/boundaries/samples/001025-counts-01-candidate/{stage}.strace.txt"
+                path.write_text("fixture syscall\n")
+            with patch("growth.io_observation", return_value={"sampled_syscr_peak": 100, "rchar": 1000}):
+                settings, review = growth.admit(plan, "growth-counts-2048", p, root, "125", "f" * 40)
+            self.assertTrue(review["admitted"])
+            self.assertEqual(settings["repeats"], 0)
+            self.assertEqual(settings["counts_repeats"], 1)
+            self.assertEqual(review["coverage"]["timing_counterpart_run_id"], "125")
+            self.assertFalse(review["coverage"]["timing"])
+            self.assertEqual(review["forecast"]["io_projection"]["recovery"]["cold_reference_stage"], "reopen")
+            self.assertEqual(review["budgets"]["disk_mib"], 12288)
+
+    def test_complete_stages_do_not_hide_late_trace_parse_or_copy(self):
+        args = SimpleNamespace(output_root=Path("/unused"), cohort_started=0, cohort_deadline=10,
+                               disk_mib=64, cohort_disk_mib=128, minimum_free_mib=1,
+                               growth_review={"coverage": {"counts": True}, "admitted": True})
+        with patch("run.aggregate", return_value={"all_requested_samples_passed": True, "samples": []}), \
+             patch("run.inventory", return_value={"allocated_bytes": 0}), \
+             patch("run.shutil.disk_usage", return_value=SimpleNamespace(free=1024**3)), \
+             patch("run.time.monotonic", return_value=11):
+            result = run.growth_summary(args)
+        self.assertFalse(result["all_requested_samples_passed"])
+        self.assertTrue(result["growth_cohort_budget_exceeded"])
+
+    def test_complete_stages_do_not_hide_disk_or_free_after_oracle_copy(self):
+        args = SimpleNamespace(output_root=Path("/unused"), cohort_started=0, cohort_deadline=10,
+                               disk_mib=64, cohort_disk_mib=128, minimum_free_mib=1,
+                               growth_review={"coverage": {"counts": True}, "admitted": True})
+        for sample_bytes, cohort_bytes, free_bytes, reason in (
+            (65 * 1048576, 1048576, 1024**3, "final_complete_sample_disk_budget"),
+            (1048576, 129 * 1048576, 1024**3, "final_complete_cohort_disk_budget"),
+            (1048576, 1048576, 0, "final_free_space_guard"),
+        ):
+            with self.subTest(reason=reason), patch("run.aggregate", return_value={"all_requested_samples_passed": True,
+                 "samples": [{"total_sample_inventory": {"allocated_bytes": sample_bytes}}]}), \
+                 patch("run.inventory", return_value={"allocated_bytes": cohort_bytes}), \
+                 patch("run.shutil.disk_usage", return_value=SimpleNamespace(free=free_bytes)), \
+                 patch("run.time.monotonic", return_value=5):
+                result = run.growth_summary(args)
+                self.assertFalse(result["all_requested_samples_passed"])
+                self.assertIn(reason, result["growth_final_budget_reasons"])
 
     def test_requires_exact_immediate_predecessor_and_binds_resource_history(self):
         with tempfile.TemporaryDirectory() as directory:

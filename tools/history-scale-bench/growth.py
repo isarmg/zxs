@@ -17,12 +17,18 @@ TIERS = {
     "growth-4096": (4096, "growth-2048", 1, 600, 2400),
     "growth-10000": (10000, "growth-4096", 2, 1800, 3600),
     "growth-20000": (20000, "growth-10000", 2, 1800, 3600),
+    "growth-counts-2048": (2048, "growth-2048", 0, 3600, 10800),
 }
 RESOURCES = {"rss_mib": 2048, "disk_mib": 4096, "cohort_disk_mib": 8192, "minimum_free_mib": 8192}
+COUNTS_RESOURCES = {"rss_mib": 2048, "disk_mib": 12288, "cohort_disk_mib": 24576, "minimum_free_mib": 16384}
 SAFETY = 1.5
 MIN_EXPONENT = {"wall": 1.25, "rss": 1.0, "disk": 1.0}
 EXPONENT_MARGIN = 0.15
 COHORT_FINISH_SECONDS = 60
+
+
+def resources(profile: str) -> dict:
+    return COUNTS_RESOURCES if profile == "growth-counts-2048" else RESOURCES
 
 
 def load_policy(path: Path) -> dict:
@@ -55,7 +61,7 @@ def checked_summary(summary: dict, environment: dict, profile: str, policy: dict
         expected = {(size, "timing", 1) for size in (255, 256, 257, 1023, 1024, 1025)} | {(1025, "counts", 1)}
     else:
         size, _, repeats, _, _ = TIERS[profile]
-        expected = {(size, "timing", repeat) for repeat in range(1, repeats + 1)}
+        expected = {(size, "counts", 1)} if profile == "growth-counts-2048" else {(size, "timing", repeat) for repeat in range(1, repeats + 1)}
     samples = summary["samples"]
     if len(samples) != len(expected) or {(row["operations"], row["mode"], row["repeat"]) for row in samples} != expected:
         raise ValueError("predecessor sample matrix is incomplete or duplicated")
@@ -80,6 +86,8 @@ def checked_summary(summary: dict, environment: dict, profile: str, policy: dict
             actual = summarize_driver(raw, name, row["operations"], row["mode"], baseline=False, required_protocol="separate-outcome-health")
             if actual != driver:
                 raise ValueError("predecessor summary differs from the complete raw driver protocol")
+            if row["mode"] == "counts" and stage["trace"]["complete"] is not True:
+                raise ValueError("predecessor syscall accounting is incomplete")
     return samples
 
 
@@ -127,6 +135,50 @@ def project(history: list[dict], target: int, repeats: int) -> dict:
             "exponents": {**{stage: exponent(history, "wall", stage) for stage in STAGES}, "rss": exponent(history, "rss"), "disk": exponent(history, "disk")}}
 
 
+def io_observation(root: Path, sample: dict, stage: str) -> dict:
+    directory = root / "samples" / f"{sample['operations']:06d}-{sample['mode']}-{sample['repeat']:02d}-candidate"
+    syscr = 0
+    with (directory / f"{stage}.process-samples.jsonl").open(encoding="utf-8") as rows:
+        for raw in rows:
+            for process in read_json(raw)["processes"]:
+                if process["io"]:
+                    syscr = max(syscr, process["io"]["syscr"])
+    rchar = sample["stages"][stage]["driver"]["telemetry"][-1]["rchar"]
+    if syscr <= 0 or rchar <= 0:
+        raise ValueError("positive sampled syscall and driver logical-read evidence is required")
+    return {"sampled_syscr_peak": syscr, "rchar": rchar}
+
+
+def counts_projection(basis: list[dict], target: list[dict], basis_root: Path, target_root: Path) -> dict:
+    native = next(row for row in basis if row["operations"] == 1025 and row["mode"] == "timing")
+    traced = next(row for row in basis if row["operations"] == 1025 and row["mode"] == "counts")
+    current = next(row for row in target if row["mode"] == "timing")
+    wall, evidence = {}, {}
+    trace_bytes = 0
+    for stage in STAGES:
+        reference = "build" if stage == "build" else "reopen"  # Cold replay, never the old checkpoint restore.
+        old_io = io_observation(basis_root, native, reference)
+        new_io = io_observation(target_root, current, stage)
+        ratio = max(current["operations"] / 1025, new_io["sampled_syscr_peak"] / old_io["sampled_syscr_peak"], new_io["rchar"] / old_io["rchar"])
+        trace = basis_root / "samples/001025-counts-01-candidate" / f"{reference}.strace.txt"
+        original_bytes = trace.stat().st_size
+        if original_bytes <= 0:
+            raise ValueError("positive complete baseline trace is required")
+        trace_bytes += original_bytes * ratio * SAFETY
+        native_wall = native["stages"][reference]["supervisor"]["wall_seconds"]
+        trace_wall = traced["stages"][reference]["supervisor"]["wall_seconds"]
+        wall[stage] = current["stages"][stage]["supervisor"]["wall_seconds"] + max(0.0, trace_wall - native_wall) * ratio * SAFETY
+        evidence[stage] = {"cold_reference_stage": reference, "basis": old_io, "target": new_io,
+                           "io_growth_factor": ratio, "basis_trace_bytes": original_bytes}
+    measured = observed(target, current["operations"])
+    # Include one whole native pool/oracle plus raw trace and three hours of
+    # observer logs. Parse/compression is streamed and receives 10 minutes.
+    disk = math.ceil(trace_bytes + measured["disk"] + 512 * 1048576)
+    return {"phase_seconds": wall, "cohort_seconds": sum(wall.values()) + 600,
+            "rss_bytes": math.ceil(measured["rss"] * SAFETY), "sample_bytes": disk, "cohort_bytes": disk,
+            "io_projection": evidence, "trace_bytes": math.ceil(trace_bytes), "finish_seconds": 600}
+
+
 def admit(plan: dict, profile: str, policy: dict, root: Path, prior_run: str, prior_sha: str) -> tuple[dict, dict]:
     if plan["reviewed_candidate_sha"] != policy["source_sha"] or plan["frozen_candidate_sha"] != policy["source_sha"]:
         raise ValueError("growth requires an explicitly reviewed frozen product source")
@@ -156,12 +208,14 @@ def admit(plan: dict, profile: str, policy: dict, root: Path, prior_run: str, pr
         history = previous_review["resource_history"] + [observed(samples, TIERS[predecessor][0])]
         if history[:2] != [observed(basis, 257), observed(basis, 1025)]:
             raise ValueError("resource history no longer binds the boundary measurements")
-        expected = [257, 1025] + [tier[0] for tier in TIERS.values() if tier[0] < size]
+        expected = [257, 1025] + [tier[0] for key, tier in TIERS.items() if key != "growth-counts-2048" and (tier[0] < size or (profile == "growth-counts-2048" and tier[0] == size))]
         if [row["size"] for row in history] != expected:
             raise ValueError("resource history must contain every immediate predecessor")
-    forecast = project(history, size, repeats)
-    limits = {"rss_bytes": RESOURCES["rss_mib"] * 1048576, "sample_bytes": RESOURCES["disk_mib"] * 1048576,
-              "cohort_bytes": RESOURCES["cohort_disk_mib"] * 1048576}
+    count_only = profile == "growth-counts-2048"
+    forecast = counts_projection(basis, samples, root / "basis/boundaries", root / f"prior/{predecessor}") if count_only else project(history, size, repeats)
+    budget = resources(profile)
+    limits = {"rss_bytes": budget["rss_mib"] * 1048576, "sample_bytes": budget["disk_mib"] * 1048576,
+              "cohort_bytes": budget["cohort_disk_mib"] * 1048576}
     reasons = [f"forecast {name} exceeds its finite budget" for name, maximum in limits.items() if forecast[name] > maximum]
     if max(forecast["phase_seconds"].values()) > phase_seconds:
         reasons.append("forecast phase time exceeds its finite budget")
@@ -175,11 +229,14 @@ def admit(plan: dict, profile: str, policy: dict, root: Path, prior_run: str, pr
               "forecast_kind": "empirical conservative projection, not a proven resource bound", "safety_factor": SAFETY,
               "admission_time_envelope": "max(reopen, recovery); raw observations remain unchanged; optional checkpoint eligibility can change",
               "admitted": not reasons, "denial_reasons": reasons,
-              "coverage": {"timing": True, "full_oracle": True, "counts": False,
-                           "counts_not_executed_reason": "higher-tier syscall tracing is outside this bounded timing experiment; retained measured trace coverage ends at N1025"},
+              "budgets": {**budget, "phase_seconds": phase_seconds, "cohort_seconds": cohort_seconds},
+              "coverage": ({"timing": False, "full_oracle": True, "counts": True, "timing_counterpart_run_id": prior_run}
+                           if count_only else {"timing": True, "full_oracle": True, "counts": False,
+                           "counts_not_executed_reason": "this run is explicitly untraced; higher-tier count coverage requires its separate admitted run"}),
               "evidence_sha256": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in ("basis-run.json", "prior-run.json", "basis/boundaries/summary.json", "basis/boundaries/environment.json")}}
     settings = {"baseline_sha": plan["baseline_sha"], "candidate_sha": policy["source_sha"], "sizes": [size], "repeats": repeats,
-                "counts_repeats": 0, "counts_sizes": [], "phase_seconds": phase_seconds, "cohort_seconds": cohort_seconds}
+                "counts_repeats": 1 if count_only else 0, "counts_sizes": [size] if count_only else [],
+                "phase_seconds": phase_seconds, "cohort_seconds": cohort_seconds}
     if predecessor != "boundaries":
         for name in (f"prior/{predecessor}/summary.json", f"prior/{predecessor}/environment.json"):
             review["evidence_sha256"][name] = hashlib.sha256((root / name).read_bytes()).hexdigest()

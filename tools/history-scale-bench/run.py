@@ -23,7 +23,7 @@ from summarize import aggregate, summarize_driver
 from tracing import parse_trace
 from controller import load_plan, profile_settings
 from verify_build import validate_precompiled
-from growth import TIERS, RESOURCES, admit, load_policy
+from growth import TIERS, admit, load_policy, resources
 
 
 STAGES = ("build", "reopen", "recovery")
@@ -455,6 +455,8 @@ def environment(args: argparse.Namespace) -> dict:
         raise ValueError("growth product tree differs from the reviewed source")
     return {
         "rustc": rustc, "cargo": command_output(["cargo", "+1.99.0", "--version"]),
+        "observer_tools": {"python": sys.version, "strace": command_output(["strace", "--version"]).splitlines()[0],
+                           "gnu_time": command_output(["/usr/bin/time", "--version"]).splitlines()[0]},
         "platform": platform.platform(), "cpu": command_output(["lscpu", "--json"]),
         "filesystem": command_output(["findmnt", "--json", "--target", str(args.output_root)]),
         "selected_environment": {key: os.environ[key] for key in allowlist if key in os.environ},
@@ -523,7 +525,7 @@ def arguments() -> argparse.Namespace:
             parser.error("growth must reuse the original reviewed binary build")
         settings, args.growth_review = admit(args.plan_data, args.profile, args.growth_policy_data,
                                            args.growth_evidence_root.resolve(strict=True), args.prior_run_id, args.prior_carrier_sha)
-        for name, value in RESOURCES.items():
+        for name, value in resources(args.profile).items():
             if getattr(args, name) != value:
                 parser.error(f"growth requires its reviewed {name} budget: {value}")
     else:
@@ -537,7 +539,7 @@ def arguments() -> argparse.Namespace:
         args.revisions.pop("baseline")
     args.scale_authorized = args.profile != "small-selftest"
     args.query_protocol = "separate-outcome-health"
-    if args.repeats < 1 or args.counts_repeats < 0 or min(args.phase_seconds, args.cohort_seconds, args.rss_mib, args.disk_mib, args.cohort_disk_mib, args.minimum_free_mib, args.process_poll_seconds, args.disk_poll_seconds) <= 0:
+    if args.repeats < 0 or args.counts_repeats < 0 or args.repeats + args.counts_repeats < 1 or min(args.phase_seconds, args.cohort_seconds, args.rss_mib, args.disk_mib, args.cohort_disk_mib, args.minimum_free_mib, args.process_poll_seconds, args.disk_poll_seconds) <= 0:
         parser.error("positive budgets and timing repeats are required")
     for label in args.revisions:
         for suffix in ("binary", "source", "provenance"):
@@ -581,7 +583,8 @@ def main() -> int:
             return 2
     for label, proof in args.provenances.items():
         write_json(args.output_root / f"{label}-precompiled-provenance.json", proof)
-    deadline = time.monotonic() + args.cohort_seconds
+    args.cohort_started = time.monotonic()
+    deadline = args.cohort_deadline = args.cohort_started + args.cohort_seconds
     halted = {}
     for mode, repeats in (("timing", args.repeats), ("counts", args.counts_repeats)):
         for repeat in range(1, repeats + 1):
@@ -592,7 +595,11 @@ def main() -> int:
                     sample = run_sample(label, getattr(args, label + "_source"), getattr(args, label + "_binary"), operations, repeat, mode, args, deadline, halted.get(key))
                     if sample["status"] in {"failed", "incomplete"}:
                         halted[key] = "earlier_sample_failed_or_incomplete_under_same_budget"
-                    write_json(args.output_root / "summary.json", growth_summary(args))
+                    complete = growth_summary(args)
+                    write_json(args.output_root / "summary.json", complete)
+                    if args.growth_review is not None:
+                        if complete.get("growth_final_budget_reasons") or complete.get("growth_cohort_budget_exceeded"):
+                            halted[key] = "growth_final_cohort_budget"
     requested["cohort_complete"] = True
     write_json(args.output_root / "requested.json", requested)
     summary = growth_summary(args)
@@ -606,8 +613,28 @@ def growth_summary(args: argparse.Namespace) -> dict:
     summary = aggregate(args.output_root)
     if args.growth_review is not None:
         summary["coverage"] = args.growth_review["coverage"]
-        summary["all_growth_capacity_metrics_passed"] = False  # Higher-tier syscall counts remain unexecuted.
+        summary["all_growth_capacity_metrics_passed"] = False  # One run never certifies the entire growth/capacity scope.
         summary["growth_admitted"] = args.growth_review["admitted"]
+        if getattr(args, "cohort_deadline", None) is not None:
+            reserve = 16 * 1048576  # Room for final manifests/summary; never a fabricated observed byte count.
+            sample_bytes = max((row["total_sample_inventory"]["allocated_bytes"] for row in summary["samples"]), default=0)
+            cohort_bytes = inventory(args.output_root)["allocated_bytes"]
+            free_bytes = shutil.disk_usage(args.output_root).free
+            reasons = []
+            if sample_bytes + reserve > args.disk_mib * 1048576:
+                reasons.append("final_complete_sample_disk_budget")
+            if cohort_bytes + reserve > args.cohort_disk_mib * 1048576:
+                reasons.append("final_complete_cohort_disk_budget")
+            if free_bytes < args.minimum_free_mib * 1048576 + reserve:
+                reasons.append("final_free_space_guard")
+            summary["growth_final_resource_observation"] = {"maximum_complete_sample_bytes": sample_bytes,
+                "complete_cohort_bytes": cohort_bytes, "filesystem_free_bytes": free_bytes, "final_metadata_reserve_bytes": reserve}
+            summary["growth_final_budget_reasons"] = reasons
+            now = time.monotonic()
+            summary["cohort_wall_seconds"] = now - args.cohort_started
+            summary["growth_cohort_budget_exceeded"] = now > args.cohort_deadline
+            if summary["growth_cohort_budget_exceeded"] or reasons:
+                summary["all_requested_samples_passed"] = False
     return summary
 
 

@@ -31,6 +31,14 @@
 `all_growth_capacity_metrics_passed` 保持false；不能将1025的计数外推成更高档实测。
 实际准入预测、来源及UTC审阅时间写入 `growth-review.json`，人工物理盘验收仍独立。
 
+独立 `growth-counts-2048` 必须引用已完成的2k timing；本run不重跑timing。它用1k实测
+trace大小及同范围syscr/rchar增幅估计2k完整三阶段，恢复按冷open参照，避免假设检查点命中；
+再加1.5倍余量、完整池／oracle、512 MiB观察日志和600秒解析收尾。准入及运行预算为
+2 GiB RSS、12 GiB单样本、24 GiB cohort、16 GiB空闲保留、阶段3600秒／cohort10800秒；
+外层job限210分钟。该独立计数预算沿用工具已有磁盘上限，不修改旧运行结果或无追踪预算。
+所有trace逐行解析，文件／目录／unknown同步分类保留；不把计数运行耗时当无追踪延迟。
+完整cohort截止检查还覆盖最后一次trace解析和oracle复制，晚于截止的结果不能变绿。
+
 固定历史对照为 `e2f33d9882cf7263412d9370b6a703e0b216357d`。旧实验候选
 `209f31a4122174129bcf40b56c0598ac61e66352` 与旧工具
 [f84505df](https://github.com/isarmg/zxs/tree/f84505df39b0bcdad1c38d26c82db8377400073f)
