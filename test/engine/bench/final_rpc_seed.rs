@@ -163,11 +163,29 @@ fn progress(milestone: &str, completed: usize) -> Result<()> {
     output.flush()?;
     Ok(())
 }
-fn verify(engine: &Engine, branch: &str, files: usize, root: &Path) -> Result<()> {
+fn verify(engine: &Engine, branch: &str, files: usize, root: &Path, retained: bool) -> Result<()> {
     use std::collections::BTreeMap;
     use storage_contract::{CommitState, NamespaceEntryKind, ProtectionAtPublish};
     progress("namespace_start", 0)?;
-    let entries = all_entries(&engine.namespace_tree(branch)?)?;
+    let retained_commit = if retained {
+        let raw = std::fs::read_to_string(root.join("operations"))?;
+        let id: OperationId = raw.lines().last().unwrap().parse()?;
+        Some(
+            engine
+                .operation_record(id)?
+                .result()
+                .commit_id
+                .clone()
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+    let tree = match &retained_commit {
+        Some(commit) => engine.namespace_tree_at(branch, commit)?,
+        None => engine.namespace_tree(branch)?,
+    };
+    let entries = all_entries(&tree)?;
     let mut expected_paths: Vec<_> = (0..files).map(path_for).collect();
     expected_paths.extend((0..97).map(|index| format!("dir-{index:03}")));
     expected_paths.sort();
@@ -188,8 +206,9 @@ fn verify(engine: &Engine, branch: &str, files: usize, root: &Path) -> Result<()
         commits()
     );
     let events = all_events(engine)?;
-    assert_eq!(events.len(), commits());
-    assert_eq!(engine.state().sequence, commits() as u64);
+    let expected_sequence = commits() + if retained { 140 } else { 0 };
+    assert_eq!(events.len(), expected_sequence);
+    assert_eq!(engine.state().sequence, expected_sequence as u64);
     let branch_record = &engine.state().branches[branch];
     let mut verified_commits = std::collections::BTreeSet::new();
     let mut previous_commit: Option<String> = None;
@@ -294,13 +313,16 @@ fn verify(engine: &Engine, branch: &str, files: usize, root: &Path) -> Result<()
         progress("receipt_and_namespace", index + 1)?;
         previous_commit = Some(commit_id.clone());
     }
-    assert_eq!(
-        previous_commit.as_deref(),
-        Some(branch_record.head_commit_id.as_str())
-    );
+    if !retained {
+        assert_eq!(
+            previous_commit.as_deref(),
+            Some(branch_record.head_commit_id.as_str())
+        );
+    }
     assert_eq!(versions.len(), files + edits());
-    assert_eq!(engine.state().versions.len(), versions.len());
-    assert_eq!(engine.state().placements.len(), versions.len());
+    let expected_versions = versions.len() + if retained { 140 } else { 0 };
+    assert_eq!(engine.state().versions.len(), expected_versions);
+    assert_eq!(engine.state().placements.len(), expected_versions);
     assert_eq!(
         entries
             .iter()
@@ -335,23 +357,48 @@ fn verify(engine: &Engine, branch: &str, files: usize, root: &Path) -> Result<()
             progress("unique_bodies_verified", index + 1)?;
         }
     }
-    println!(
-        "{}",
-        json_codec::json!({"phase":"verify","files":files,
+    if !retained {
+        println!(
+            "{}",
+            json_codec::json!({"phase":"verify","files":files,
         "verified_current_files":files,"verified_bodies":versions.len(),
         "verified_operations":ids.len(),"verified_commit_namespaces":commits(),
         "receipt_api":"operation_record","full_health_api_calls":0})
-    );
+        );
+    }
     Ok(())
 }
 
-fn verify_rpc(engine: &Engine, branch: &str, root: &Path) -> Result<()> {
+fn verify_rpc(engine: &Engine, branch: &str, root: &Path, retained: bool) -> Result<()> {
     use storage_contract::{CommitState, ProtectionAtPublish};
     let receipts: Vec<json_codec::Value> =
         json_codec::from_slice(&std::fs::read(root.join("rpc-receipts.json"))?)?;
     assert_eq!(receipts.len(), 20);
-    assert_eq!(engine.state().sequence, (commits() + 20) as u64);
-    let tree = engine.namespace_tree(branch)?;
+    assert_eq!(
+        engine.state().sequence,
+        (commits() + if retained { 140 } else { 20 }) as u64
+    );
+    let retained_commit = if retained {
+        let id: OperationId = receipts.last().unwrap()["operation_id"]
+            .as_str()
+            .unwrap()
+            .parse()?;
+        Some(
+            engine
+                .operation_record(id)?
+                .result()
+                .commit_id
+                .clone()
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+    let tree = match &retained_commit {
+        Some(commit) => engine.namespace_tree_at(branch, commit)?,
+        None => engine.namespace_tree(branch)?,
+    };
+    let events = all_events(engine)?;
     let entries = all_entries(&tree)?;
     assert_eq!(entries.len(), 597);
     let mut operations = std::collections::BTreeSet::new();
@@ -367,6 +414,8 @@ fn verify_rpc(engine: &Engine, branch: &str, root: &Path) -> Result<()> {
             ProtectionAtPublish::TargetMet
         );
         assert_eq!(receipt.sequence, (commits() + round + 1) as u64);
+        assert_eq!(events[commits() + round].operation_id, id);
+        assert_eq!(events[commits() + round].sequence, receipt.sequence);
         assert_eq!(receipt.kind, "workspace.commit");
         let commit = receipt.commit_id.as_ref().unwrap();
         let history = engine.namespace_tree_at(branch, commit)?;
@@ -374,6 +423,9 @@ fn verify_rpc(engine: &Engine, branch: &str, root: &Path) -> Result<()> {
         let index = (round * 37) % 500;
         let entry = lookup(&history, &path_for(index))?;
         let expected = format!("RPC saved body {index} round {round}");
+        let placement = &engine.state().placements[&entry.version_id];
+        assert_eq!(placement.target_copies, 1);
+        assert_eq!(placement.route_slot_ids, ["P01"]);
         let mut actual = Vec::new();
         engine
             .open_content(&entry.version_id)?
@@ -403,17 +455,36 @@ fn verify_rpc(engine: &Engine, branch: &str, root: &Path) -> Result<()> {
             .read_to_end(&mut actual)?;
         assert_eq!(actual, expected.as_bytes());
     }
-    println!(
-        "{}",
-        json_codec::json!({"phase":"rpc-verify","current_files":500,
+    if !retained {
+        println!(
+            "{}",
+            json_codec::json!({"phase":"rpc-verify","current_files":500,
         "saved_receipts":20,"saved_commit_namespaces":20,"saved_historical_bodies":20,
         "sequence":engine.state().sequence,"reopen":"normal independent Engine::open"})
-    );
+        );
+    }
     Ok(())
 }
 
 fn verify_tails(engine: &Engine, branch: &str, root: &Path) -> Result<()> {
     use storage_contract::{CommitState, ProtectionAtPublish};
+    verify(engine, branch, 500, root, true)?;
+    verify_rpc(engine, branch, root, true)?;
+    let events = all_events(engine)?;
+    assert_eq!(events.len(), commits() + 140);
+    assert_eq!(engine.state().operations.len(), commits() + 140);
+    let capacity = engine.workspace_capacity("bench");
+    assert_eq!(capacity.principal.metadata_bytes.limit, 64 * 1024 * 1024);
+    assert_eq!(capacity.global.metadata_bytes.limit, 128 * 1024 * 1024);
+    let retained_workspaces = capacity.principal.records.used + capacity.principal.cold_records;
+    assert_eq!(retained_workspaces, (commits() + 139) as u64);
+    assert_eq!(
+        capacity.global.records.used + capacity.global.cold_records,
+        retained_workspaces
+    );
+    assert!(capacity.principal.metadata_bytes.used > 0);
+    assert!(capacity.principal.metadata_bytes.used <= capacity.principal.metadata_bytes.limit);
+    assert!(capacity.global.metadata_bytes.used <= capacity.global.metadata_bytes.limit);
     let operations: Vec<(u64, OperationId)> =
         json_codec::from_slice(&std::fs::read(root.join("tails-receipts.json"))?)?;
     assert_eq!(operations.len(), 120);
@@ -426,6 +497,8 @@ fn verify_tails(engine: &Engine, branch: &str, root: &Path) -> Result<()> {
         let receipt = record.result();
         assert_eq!(record.owner(), Some("bench"));
         assert_eq!(receipt.sequence, *sequence);
+        assert_eq!(events[commits() + 20 + index].operation_id, *id);
+        assert_eq!(events[commits() + 20 + index].sequence, *sequence);
         assert_eq!(receipt.commit_state, CommitState::Published);
         assert_eq!(
             receipt.protection_at_publish,
@@ -464,6 +537,11 @@ fn verify_tails(engine: &Engine, branch: &str, root: &Path) -> Result<()> {
         "{}",
         json_codec::json!({"phase":"tails-verify", "saved_receipts":120,
         "saved_historical_bodies":120,"current_tail_files":80,"independent_full_copies":1,
+        "retained_seed_receipts":commits(),"retained_seed_bodies":500+edits(),
+        "retained_rpc_receipts":20,"retained_rpc_bodies":20,
+        "retained_total_operations":engine.state().operations.len(),
+        "retained_total_events":events.len(),"principal":"bench",
+        "retained_workspaces":retained_workspaces,"capacity":capacity,
         "sequence":engine.state().sequence,"reopen":"normal independent Engine::open"})
     );
     Ok(())
@@ -566,7 +644,7 @@ fn main() -> Result<()> {
             let engine = Engine::open(&state)?;
             progress("engine_open_complete", 0)?;
             let branch = std::fs::read_to_string(root.join("branch"))?;
-            verify(&engine, &branch, files, root)?;
+            verify(&engine, &branch, files, root, false)?;
         }
         "tails-verify" => {
             let engine = Engine::open(&state)?;
@@ -576,7 +654,7 @@ fn main() -> Result<()> {
         "rpc-verify" => {
             let engine = Engine::open(&state)?;
             let branch = std::fs::read_to_string(root.join("branch"))?;
-            verify_rpc(&engine, &branch, root)?;
+            verify_rpc(&engine, &branch, root, false)?;
         }
         _ => return Err("unknown phase".into()),
     }

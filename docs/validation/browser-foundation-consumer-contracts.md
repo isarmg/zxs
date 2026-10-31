@@ -55,7 +55,33 @@ The browser did **not** execute in this local run. Chromium 155.0.8059.79 with
 its matching driver exited because the execution sandbox denied its required
 Unix socket. A standard escalated launch also failed in the environment
 wrapper before the browser started. Browser sandboxing was not disabled.
-Consequently these ten WASM consumer entries remain pending until the existing
+At that local-preparation stage, these ten WASM consumer entries remained pending until the existing
 GitHub browser-smoke job emits a successful complete browser result for the
 integrated candidate. Compilation and native results must not be counted as
 browser execution.
+
+## Executed GitHub browser evidence (2026-10-31 07:06 UTC)
+
+[Run 41177750713, browser job 124470829698](https://github.com/isarmg/zxs/actions/runs/41177750713/job/124470829698)
+executed the existing sandboxed browser gate on clean head
+`f40f7d26a799acc6207817b2f5116e8de15f926e`, tree
+`340dd2f91355b205118eb31f91e619b681afe522`. The
+[artifact 13034077670](https://github.com/isarmg/zxs/actions/runs/41177750713/artifacts/13034077670)
+contains `browser-result.json` and `validation.json`; its downloaded ZIP SHA-256 is
+`1c29a65d37863230d084741b3a1c511d85c97e479784f5d1b073049b8daf09e3`.
+
+The actual result reports `status: passed`, Chrome `156.0.8078.47`,
+`sandbox_disabled: false`, and all 30 checks (the existing 20 plus the ten
+contracts listed above). Its nested validation equals the standalone receipt,
+reports `worktree_has_changes: false`, and binds the head/tree, source receipt,
+Cargo.lock, generated JS/WASM and fixture digests. The foundation fixture
+SHA-256 is `36eaeb6e962c83c7e2ac7f82959a9610f4ccd36eafc58c58751f2c0033023540`,
+matching the source registered here.
+
+This actual browser execution, rather than local compilation, supports the ten
+new P registrations. The generated active-foundation map is now **204 executed,
+0 required-but-unexecuted, 18 reference**. This closes the named coverage-inventory
+gap only: P remains targeted project-authored consumer coverage, not all upstream
+tests, all platforms, every API, a real-device result, or proof that all ZXS
+project acceptance topics are complete. The cited browser job is the evidence;
+this statement does not infer that every other job in its run succeeded.

@@ -257,10 +257,11 @@ def reuse(evidence):
     print('REUSED_BUILD', json.dumps(dict(**REUSE, controller_sha=os.environ['GITHUB_SHA'],
           normal_source_sha=os.environ['RPC_SOURCE_SHA'], original_deadline_unix=manifest['controller']['deadline_unix'])))
 
-def run(bundle, out, commits, pair, *, original_only=False, execution_deadline=None):
+def run(bundle, out, commits, pair, *, original_only=False, continuous_only=False, execution_deadline=None):
     assert os.environ.get('GITHUB_ACTIONS') == 'true', 'workloads require GitHub Actions'
     assert commits in (22,220) and pair in (0,1)
-    if original_only:
+    assert not (original_only and continuous_only)
+    if original_only or continuous_only:
         assert commits == 220 and execution_deadline is not None
     else:
         assert execution_deadline is None
@@ -282,7 +283,7 @@ def run(bundle, out, commits, pair, *, original_only=False, execution_deadline=N
     out.mkdir(parents=True, exist_ok=False)
     report = dict(commits=commits, pair=pair, order=['baseline','candidate'] if pair == 0 else ['candidate','baseline'],
                   status='incomplete', manifest_sha256=sha(bundle / 'manifest.json'), runs=[],
-                  profile='original-220' if original_only else 'full',
+                  profile='original-220' if original_only else 'continuous-220' if continuous_only else 'full',
                   host={}, controller_sha=os.environ['GITHUB_SHA'],
                   normal_source_sha=os.environ['RPC_SOURCE_SHA'], reused_build=os.environ.get('RPC_REUSE_BUILD'),
                   checkpoint_selection='not observable via existing public API; warnings recorded',
@@ -303,7 +304,7 @@ def run(bundle, out, commits, pair, *, original_only=False, execution_deadline=N
                     phases += ('tails','tails-verify')
                 for name in phases:
                     command = [str(bundle / f'{label}-server'), '--ignored', '--exact', FILTER if name == 'requests' else TAIL_FILTER, '--nocapture', '--test-threads=1'] if name in ('requests', 'tails') else [str(bundle / f'{label}-seed'), name, '500', tmp]
-                    record['phases'][name] = phase(command, env, arm, name, execution_deadline if original_only else manifest['controller']['deadline_unix'])
+                    record['phases'][name] = phase(command, env, arm, name, execution_deadline if original_only or continuous_only else manifest['controller']['deadline_unix'])
                     if name in ('verify','rpc-verify','tails-verify'):
                         record.setdefault('inventory', {})[name] = dict(metadata=inventory(root/'d1/metadata'),
                             immutable_objects=inventory(root/'d1/metadata/objects'), state=inventory(root/'state'))

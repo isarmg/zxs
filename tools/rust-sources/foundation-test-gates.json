@@ -167,6 +167,26 @@
       "detail": "--lib, --doc, and 6 retained integrations (atomic_cell, cache_padded, parker, thread, wait_group, steal)"
     },
     {
+      "package": "console_error_panic_hook",
+      "kind": "P",
+      "shard": "browser-smoke",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py",
+        ".github/scripts/check-csr-browser.py"
+      ],
+      "detail": "test/tools/web-bindings/fixtures/foundation-browser.rs; real sandboxed browser WASM targeted consumer contract only, not complete upstream tests"
+    },
+    {
+      "package": "const_str_slice_concat",
+      "kind": "P",
+      "shard": "browser-smoke",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py",
+        ".github/scripts/check-csr-browser.py"
+      ],
+      "detail": "test/tools/web-bindings/fixtures/foundation-browser.rs; real sandboxed browser WASM targeted consumer contract only, not complete upstream tests"
+    },
+    {
       "package": "convert_case",
       "kind": "P",
       "shard": "foundation-async",
@@ -359,6 +379,26 @@
       "detail": "test/ci/fixtures/foundation-codec-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
     },
     {
+      "package": "gloo-events",
+      "kind": "P",
+      "shard": "browser-smoke",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py",
+        ".github/scripts/check-csr-browser.py"
+      ],
+      "detail": "test/tools/web-bindings/fixtures/foundation-browser.rs; real sandboxed browser WASM targeted consumer contract only, not complete upstream tests"
+    },
+    {
+      "package": "gloo-timers",
+      "kind": "P",
+      "shard": "browser-smoke",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py",
+        ".github/scripts/check-csr-browser.py"
+      ],
+      "detail": "test/tools/web-bindings/fixtures/foundation-browser.rs; real sandboxed browser WASM targeted consumer contract only, not complete upstream tests"
+    },
+    {
       "package": "hash-table",
       "kind": "P",
       "shard": "foundation-data",
@@ -467,6 +507,16 @@
       "detail": "cargo test --lib -p id-arena"
     },
     {
+      "package": "js-sys",
+      "kind": "P",
+      "shard": "browser-smoke",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py",
+        ".github/scripts/check-csr-browser.py"
+      ],
+      "detail": "test/tools/web-bindings/fixtures/foundation-browser.rs; real sandboxed browser WASM targeted consumer contract only, not complete upstream tests"
+    },
+    {
       "package": "json-codec",
       "kind": "P",
       "shard": "foundation-language",
@@ -566,6 +616,16 @@
       "detail": "cargo test --lib -p mio"
     },
     {
+      "package": "next_tuple",
+      "kind": "P",
+      "shard": "browser-smoke",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py",
+        ".github/scripts/check-csr-browser.py"
+      ],
+      "detail": "test/tools/web-bindings/fixtures/foundation-browser.rs; real sandboxed browser WASM targeted consumer contract only, not complete upstream tests"
+    },
+    {
       "package": "numeric",
       "kind": "U",
       "shard": "foundation-data",
@@ -582,6 +642,16 @@
         ".github/scripts/check-synchronization.py"
       ],
       "detail": "consumers.rs fixture only"
+    },
+    {
+      "package": "or_poisoned",
+      "kind": "P",
+      "shard": "browser-smoke",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py",
+        ".github/scripts/check-csr-browser.py"
+      ],
+      "detail": "test/tools/web-bindings/fixtures/foundation-browser.rs; real sandboxed browser WASM targeted consumer contract only, not complete upstream tests"
     },
     {
       "package": "password-hash",
@@ -833,6 +903,16 @@
       "detail": "native-c-toolchain.rs directly asserts quoted shell_tokenizer::split output; cc also consumes it; own retained tests belong to the separate behaviour suite"
     },
     {
+      "package": "slotmap",
+      "kind": "P",
+      "shard": "browser-smoke",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py",
+        ".github/scripts/check-csr-browser.py"
+      ],
+      "detail": "test/tools/web-bindings/fixtures/foundation-browser.rs; real sandboxed browser WASM targeted consumer contract only, not complete upstream tests"
+    },
+    {
       "package": "socket2",
       "kind": "P",
       "shard": "foundation-platform",
@@ -1002,6 +1082,16 @@
         ".github/scripts/check-terminal-style.py"
       ],
       "detail": "--lib (count-checked utf8 module) + cargo test x7 feature sets"
+    },
+    {
+      "package": "throw_error",
+      "kind": "P",
+      "shard": "browser-smoke",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py",
+        ".github/scripts/check-csr-browser.py"
+      ],
+      "detail": "test/tools/web-bindings/fixtures/foundation-browser.rs; real sandboxed browser WASM targeted consumer contract only, not complete upstream tests"
     },
     {
       "package": "tokio",
@@ -1269,6 +1359,16 @@
         ".github/scripts/check-foundation-behaviour.py"
       ],
       "detail": "test/ci/fixtures/foundation-codec-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
+    },
+    {
+      "package": "web-sys",
+      "kind": "P",
+      "shard": "browser-smoke",
+      "scripts": [
+        ".github/scripts/check-csr-scope.py",
+        ".github/scripts/check-csr-browser.py"
+      ],
+      "detail": "test/tools/web-bindings/fixtures/foundation-browser.rs; real sandboxed browser WASM targeted consumer contract only, not complete upstream tests"
     },
     {
       "package": "webpki-roots",

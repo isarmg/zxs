@@ -70,3 +70,92 @@ fn lifecycle_reservation_cannot_mask_the_durable_manifest_boundary() {
             >= config.max_retained_workspace_metadata_bytes_per_principal
     );
 }
+
+#[test]
+fn context_reservation_bounds_follow_closed_id_families() {
+    for (prefix, bound) in [
+        ("ver", CONTEXT_NODE_BYTES),
+        ("fnode", CONTEXT_NODE_BYTES),
+        ("fmeta", CONTEXT_NODE_BYTES),
+        ("br", CONTEXT_BRANCH_BYTES),
+        ("dbr", CONTEXT_ORIGIN_BYTES),
+    ] {
+        let maximum = format!("{prefix}_{}", "f".repeat(32));
+        validate_id(&maximum, prefix).unwrap();
+        assert!(maximum.len() <= bound);
+        assert!(validate_id(&format!("{maximum}f"), prefix).is_err());
+        assert!(validate_id(&format!("{prefix}_{}", "g".repeat(32)), prefix).is_err());
+    }
+    assert_eq!(CONTEXT_NODE_BYTES, 38);
+    assert_eq!(CONTEXT_BRANCH_BYTES, 35);
+    assert_eq!(CONTEXT_ORIGIN_BYTES, 36);
+}
+
+#[test]
+fn exact_context_widths_reserve_every_state_and_maximum_future_fence() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &temp.path().join("state"),
+        Config::development([temp.path().join("disk")]),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("reservation").unwrap(),
+            "P01",
+            1,
+            "bench",
+            OperationId::generate(),
+        )
+        .unwrap();
+    let mut workspace = engine
+        .create_workspace(&repo.main_branch_id, "bench")
+        .unwrap();
+    let key = format!("{}/file", repo.repository_id);
+    workspace.selected_file_contexts.insert(
+        key.clone(),
+        FileContext {
+            node_id: None,
+            selection_generation: 0,
+            branch_id: format!("br_{}", "f".repeat(32)),
+            inherited_from: None,
+        },
+    );
+    let initial = engine
+        .workspace_metadata_charge(&workspace, canonical_json(&workspace).unwrap().len())
+        .unwrap();
+    for prefix in ["ver", "fnode", "fmeta"] {
+        for state in [
+            WorkspaceState::Open,
+            WorkspaceState::Sealed,
+            WorkspaceState::Committed,
+            WorkspaceState::Aborted,
+        ] {
+            let mut future = workspace.clone();
+            future.state = state;
+            future.fencing_token = u64::MAX;
+            let context = future.selected_file_contexts.get_mut(&key).unwrap();
+            context.node_id = Some(format!("{prefix}_{}", "f".repeat(32)));
+            context.selection_generation = u64::MAX;
+            context.inherited_from = Some(format!("dbr_{}", "f".repeat(32)));
+            let actual = canonical_json(&future).unwrap().len();
+            let charge = engine.workspace_metadata_charge(&future, actual).unwrap();
+            assert_eq!(charge, initial);
+            assert!(charge >= actual as u64);
+        }
+    }
+    // Invalid oversized retained material cannot gain a smaller charge merely
+    // because valid future IDs have narrower bounds. Boundary validators reject
+    // these IDs; accounting must still never hide their actual bytes.
+    let context = workspace.selected_file_contexts.get_mut(&key).unwrap();
+    context.node_id = Some("x".repeat(80));
+    context.branch_id = "y".repeat(80);
+    context.inherited_from = Some("z".repeat(80));
+    let actual = canonical_json(&workspace).unwrap().len();
+    assert!(
+        engine
+            .workspace_metadata_charge(&workspace, actual)
+            .unwrap()
+            >= actual as u64
+    );
+}

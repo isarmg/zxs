@@ -180,6 +180,12 @@ crabgrind 0.1.9 不属于原 101 项（rustls-pki-types 已有 P）。本地已�
 
 助手云使用真实 Valgrind C SDK，通过本地 cc/bindgen 构建薄封装，保留精确 codepoint 测试主体和来源身份，不恢复 Rust crabgrind 依赖。实际正例 1 项通过、Memcheck 0 errors；同一测试在 Native 模式必须失败退出 101；故意污点分支负例必须产生 Memcheck error 并退出 97。普通 pki lib 在无 SDK 环境仍可编译。CI/release 的 foundation-crypto 已接入 SDK 安装和门禁并保留日志；GitHub 组合结果仍须对应候选实际运行。这只是该 codepoint 的秘密输入探针，不是全库常数时间证明。
 
+### 真实浏览器追加执行与清单收敛
+
+[GitHub 第五组合的 browser-smoke](https://github.com/isarmg/zxs/actions/runs/41177750713/job/124470829698) 在干净 `f40f7d26`／tree `340dd2f9` 实际执行 Chrome 156.0.8078.47，沙箱未禁用，30 项检查（既有 20＋新增 10）全部通过。回执逐项、来源与夹具哈希见[浏览器消费者实证](browser-foundation-consumer-contracts.md)。因此为剩余 10 个组件登记限定 P 消费者证据，当前清单为 **204 已执行／0 需要但未执行／18 仅参考**。此前 194／10 是本机准备阶段记录，不再是当前余量。
+
+这只关闭本覆盖清单原 101 项的缺执行记录，不等于组件全部上游测试已通过、真实设备验收通过或 ZXS 所有主题全部完成；下文保留测试提供者和性质覆盖限制仍成立，也不将单个 browser job 成功推断为整条 CI 全部通过。
+
 ### 行为套件的初次集成记录
 
 初次集成时，`check-foundation-behaviour.py` 生成的清单共 20 个套件、1,837 个逐名测试，全部在本地实现上通过；`--list` 名称与清单逐一相等，`ignored`、`filtered out` 均为 0。下表保留该次历史记录，不含后续三包新增接线；当前完整套件、名称与特性以 `test/ci/fixtures/foundation-behaviour-tests.json` 为准，通过状态须对应实际提交的 CI 日志。

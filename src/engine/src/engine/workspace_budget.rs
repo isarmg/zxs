@@ -61,6 +61,13 @@ pub(super) struct WorkspaceAdmission {
     charge: WorkspaceCharge,
 }
 
+// FileContext references only admitted ver/fnode/fmeta, br and dbr IDs.
+// validate_id requires exactly prefix + '_' + 32 hexadecimal bytes. Preserve
+// larger existing values below; these bounds concern newly installed receipts.
+const CONTEXT_NODE_BYTES: usize = "fnode_".len() + 32;
+const CONTEXT_BRANCH_BYTES: usize = "br_".len() + 32;
+const CONTEXT_ORIGIN_BYTES: usize = "dbr_".len() + 32;
+
 /// A reservation cannot hide an impossible post-publication receipt. This
 /// limit is the same canonical-byte bound used by the durable writer/reader.
 fn checked_metadata_charge(actual: usize, reserved: usize) -> Result<u64> {
@@ -164,9 +171,10 @@ impl Engine {
     }
 
     /// Reserve lifecycle changes before publication, including the file-context
-    /// receipt installed by a first inherited save. IDs are fixed-width; 64
-    /// bytes covers every node/branch ID, including its prefix. Preserve larger
-    /// existing values defensively rather than undercharging recovered records.
+    /// receipt installed by a first inherited save. The closed FileContext ID
+    /// families have exact upper widths; all states keep the same full lifecycle
+    /// reservation. Preserve larger existing values rather than undercharging
+    /// recovered records; no terminal metadata or future fence is released.
     fn workspace_metadata_charge(&self, workspace: &Workspace, actual: usize) -> Result<u64> {
         let mut reserved = workspace.clone();
         reserved.state = WorkspaceState::Committed;
@@ -197,16 +205,24 @@ impl Engine {
             reserved.selected_file_contexts.insert(key, context);
         }
         for context in reserved.selected_file_contexts.values_mut() {
-            context.node_id =
-                Some("x".repeat(context.node_id.as_ref().map_or(64, |id| id.len().max(64))));
+            context.node_id = Some(
+                "x".repeat(
+                    context
+                        .node_id
+                        .as_ref()
+                        .map_or(CONTEXT_NODE_BYTES, |id| id.len().max(CONTEXT_NODE_BYTES)),
+                ),
+            );
             context.selection_generation = u64::MAX;
-            context.branch_id = "x".repeat(context.branch_id.len().max(64));
+            context.branch_id = "x".repeat(context.branch_id.len().max(CONTEXT_BRANCH_BYTES));
             context.inherited_from = Some(
                 "x".repeat(
                     context
                         .inherited_from
                         .as_ref()
-                        .map_or(64, |id| id.len().max(64)),
+                        .map_or(CONTEXT_ORIGIN_BYTES, |id| {
+                            id.len().max(CONTEXT_ORIGIN_BYTES)
+                        }),
                 ),
             );
         }
