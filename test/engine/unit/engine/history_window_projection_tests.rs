@@ -22,7 +22,7 @@ fn first_commit_oracle<'a>(state: &'a State, version: &FileVersion) -> Option<&'
 
 fn projection_fixture() -> MetadataView {
     let mut view = fixture();
-    let state = Arc::make_mut(&mut view.state);
+    let state = Arc::make_mut(&mut view.state.0);
     let mut tied = state.commits["commit_00000000000000000000000000000002"].clone();
     tied.commit_id = "commit_000000000000000000000000000003e8".into();
     tied.author = "a later equal-sequence commit must not win".into();
@@ -41,7 +41,7 @@ fn projection_fixture() -> MetadataView {
     pending.creation_name = "待提交.txt".into();
     state.versions.insert(pending.version_id.clone(), pending);
     view.history_window_roots = Some(HistoryRootBindings::recovered(
-        &view.state,
+        &view.state.0,
         BTreeMap::from([(
             HISTORY.into(),
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
@@ -53,7 +53,7 @@ fn projection_fixture() -> MetadataView {
 #[test]
 fn resolved_content_summary_facts_match_complete_commit_and_path_oracles() {
     let view = projection_fixture();
-    let state = view.state();
+    let state = view.business_projection();
     let context = context();
     let request = request(HistoryCollection::Nodes, 64);
     let cancel = HistoryWindowCancellation::new();
@@ -105,7 +105,7 @@ fn resolved_content_summary_facts_match_complete_commit_and_path_oracles() {
 #[test]
 fn owner_prefix_visits_only_through_the_exact_minimum_file_version() {
     let view = fixture();
-    let state = view.state();
+    let state = view.business_projection();
     assert!(
         state
             .versions
@@ -167,7 +167,7 @@ fn borrowed_owner_and_resolved_content_facts_observe_cancellation() {
         let cancel = HistoryWindowCancellation::new();
         let visits = Cell::new(0);
         let error = nodes::owner_version(
-            view.state().versions.values().inspect(|_| {
+            view.business_projection().versions.values().inspect(|_| {
                 visits.set(visits.get() + 1);
                 if visits.get() == cancel_at {
                     cancel.cancel();
@@ -182,8 +182,8 @@ fn borrowed_owner_and_resolved_content_facts_observe_cancellation() {
     }
     let cancel = HistoryWindowCancellation::new();
     cancel.cancel();
-    let version = &view.state().versions["ver_00000000000000000000000000000000"];
-    let commit = first_commit_oracle(view.state(), version);
+    let version = &view.business_projection().versions["ver_00000000000000000000000000000000"];
+    let commit = first_commit_oracle(view.business_projection(), version);
     let scope = nodes::Scope {
         file: FILE,
         history: HISTORY,

@@ -102,7 +102,7 @@ pub(super) fn unified_history(
     first_commits: &BTreeMap<&str, &storage_contract::Commit>,
     current_node: Option<&str>,
 ) -> Result<Vec<HistoryNode>, ApiError> {
-    let state = view.state();
+    let state = view.business_projection();
     let mut paths = NodePaths {
         state,
         commits: first_commits,

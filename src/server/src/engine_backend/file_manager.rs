@@ -426,7 +426,7 @@ impl FileHistoryRead {
     pub(super) fn authorize_current(&self, engine: &Engine) -> Result<(), ApiError> {
         super::graph::authorize_current(
             engine.state(),
-            &self.view.state().histories[&self.history_tree_id],
+            &self.view.business_projection().histories[&self.history_tree_id],
         )?;
         // A historical file may legitimately have no current path. An explicit
         // logical-path request must still identify this file at final admission.
@@ -449,7 +449,7 @@ impl FileHistoryRead {
 
     pub(super) fn project(&self) -> Result<crate::FileHistorySnapshot, ApiError> {
         use crate::backend_file_history::{HistoryBranch, HistoryVersion, HistoryVersionData};
-        let state = self.view.state();
+        let state = self.view.business_projection();
         let file = self.request.file_id();
         let current = self.current.as_ref();
         let current_node = &self.current_node;

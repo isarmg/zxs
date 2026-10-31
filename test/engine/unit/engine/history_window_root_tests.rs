@@ -283,9 +283,18 @@ fn a_durable_local_plan_preserves_exact_roots_across_state_detachment_and_restar
         )
         .unwrap();
     let new_view = engine.metadata_view();
-    assert!(!std::ptr::eq(old_view.state(), new_view.state()));
-    assert!(!old_view.state().plans.contains_key(&plan.plan_id));
-    assert_eq!(new_view.state().plans[&plan.plan_id], plan);
+    assert!(!std::ptr::eq(
+        old_view.business_projection(),
+        new_view.business_projection()
+    ));
+    assert!(
+        !old_view
+            .business_projection()
+            .plans
+            .contains_key(&plan.plan_id)
+    );
+    assert!(new_view.business_projection().plans.is_empty());
+    assert_eq!(engine.state().plans[&plan.plan_id], plan);
     assert_eq!(engine.state().sequence, sequence);
     assert_eq!(old_view.history_root(history).unwrap(), root);
     assert_eq!(new_view.history_root(history).unwrap(), root);
@@ -636,4 +645,61 @@ fn indeterminate_publication_keeps_the_old_root_until_verified_cold_recovery() {
     assert!(engine.state().sequence > before);
     assert_ne!(observed_root(&engine, &repository.history_tree_id), old);
     assert_catalog_matches(&engine);
+}
+
+#[test]
+fn business_view_outlives_publication_without_retaining_receipts_or_scrub_baseline() {
+    let (_temp, mut engine, repository, file) = fixture();
+    let baseline = Arc::downgrade(&engine.state);
+    assert!(!engine.state().operations.is_empty());
+    assert!(!engine.state().operation_principals.is_empty());
+    assert!(!engine.state().events.is_empty());
+    let view = engine.metadata_view();
+    let captured = view.business_projection();
+    assert!(captured.operations.is_empty());
+    assert!(captured.operation_principals.is_empty());
+    assert!(captured.events.is_empty());
+    assert!(captured.plans.is_empty());
+    assert!(captured.control_auth.is_none());
+    assert_eq!(baseline.strong_count(), 1);
+    let root = view
+        .history_root(&repository.history_tree_id)
+        .unwrap()
+        .to_owned();
+    let scrub = engine.prepare_integrity_scrub().unwrap();
+    assert_eq!(
+        baseline.strong_count(),
+        2,
+        "scrub deliberately retains its complete baseline"
+    );
+    save(&mut engine, &repository, b"new publication");
+    assert_eq!(
+        baseline.strong_count(),
+        1,
+        "only the in-flight scrub pins the old State"
+    );
+    assert_eq!(
+        view.history_root(&repository.history_tree_id).unwrap(),
+        root
+    );
+    assert!(
+        view.business_projection()
+            .versions
+            .contains_key(&file.version_id)
+    );
+    drop(scrub);
+    assert!(
+        baseline.upgrade().is_none(),
+        "business view does not pin the scrub baseline"
+    );
+    drop(engine);
+    assert_eq!(
+        view.history_root(&repository.history_tree_id).unwrap(),
+        root
+    );
+    assert!(
+        view.business_projection()
+            .versions
+            .contains_key(&file.version_id)
+    );
 }

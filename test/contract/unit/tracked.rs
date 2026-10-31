@@ -190,3 +190,80 @@ fn tracked_shared_extension_keeps_record_handles_and_precise_key_union() {
     assert_eq!(retained.0, 1);
     assert_eq!(next["a"].0, 2);
 }
+
+#[test]
+fn field_snapshots_share_without_cloning_and_detach_only_on_mutation() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Debug)]
+    struct Counted(Arc<AtomicUsize>);
+    impl Clone for Counted {
+        fn clone(&self) -> Self {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Self(Arc::clone(&self.0))
+        }
+    }
+    let clones = Arc::new(AtomicUsize::new(0));
+    let before: TrackedMap<Counted> = (0..1024)
+        .map(|n| (n.to_string(), Counted(Arc::clone(&clones))))
+        .collect();
+    let mut next = before.clone();
+    next.begin_tracking();
+    assert!(Arc::ptr_eq(&before.value, &next.value));
+    assert_eq!(clones.load(Ordering::Relaxed), 0);
+    assert!(next.get_mut("absent").is_none());
+    assert!(next.remove("absent").is_none());
+    next.retain_keys(|_, _| true);
+    assert!(Arc::ptr_eq(&before.value, &next.value));
+    next.get_mut("0").unwrap();
+    assert!(!Arc::ptr_eq(&before.value, &next.value));
+    assert_eq!(clones.load(Ordering::Relaxed), 1024);
+    next.get_mut("1").unwrap();
+    assert_eq!(clones.load(Ordering::Relaxed), 1024);
+    assert_eq!(keys(next.changes_since(&before)), ["0", "1"]);
+}
+
+#[test]
+fn every_mutable_map_escape_detaches_and_preserves_retained_snapshot() {
+    let before = base();
+    for change in [
+        |map: &mut TrackedMap<String>| {
+            map.entry("a".into()).and_modify(|v| v.push('!'));
+        },
+        |map: &mut TrackedMap<String>| {
+            map.insert("a".into(), "changed".into());
+        },
+        |map: &mut TrackedMap<String>| {
+            map.remove("a");
+        },
+        |map: &mut TrackedMap<String>| {
+            map.retain(|_, value| {
+                value.push('!');
+                true
+            });
+        },
+        |map: &mut TrackedMap<String>| {
+            map.retain_keys(|key, _| key != "a");
+        },
+        |map: &mut TrackedMap<String>| {
+            map.clear();
+        },
+        |map: &mut TrackedMap<String>| {
+            for (_, value) in map {
+                value.push('!');
+            }
+        },
+        |map: &mut TrackedMap<String>| {
+            map.extend([("a".into(), "changed".into())]);
+        },
+    ] {
+        let mut next = before.clone();
+        next.begin_tracking();
+        change(&mut next);
+        assert!(!Arc::ptr_eq(&before.value, &next.value));
+        assert!(!next.changes_since(&before).is_empty());
+        assert_eq!(before, base());
+        assert_ne!(next, before);
+    }
+    let owned: BTreeMap<_, _> = before.clone().into_iter().collect();
+    assert_eq!(&owned, &*before);
+}

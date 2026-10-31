@@ -27,7 +27,7 @@ pub(super) fn before_scan(view: &MetadataView) {
 fn pause(started: mpsc::SyncSender<u64>, release: mpsc::Receiver<()>) {
     BEFORE_SCAN.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(move |view| {
-            started.send(view.state().sequence).unwrap();
+            started.send(view.business_projection().sequence).unwrap();
             release.recv_timeout(Duration::from_secs(10)).unwrap();
         }));
     });

@@ -28,7 +28,7 @@ pub(crate) fn after_capture(view: &MetadataView) {
 fn pause(started: mpsc::SyncSender<u64>, release: mpsc::Receiver<()>) {
     AFTER_CAPTURE.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(move |view| {
-            started.send(view.state().sequence).unwrap();
+            started.send(view.business_projection().sequence).unwrap();
             release.recv_timeout(Duration::from_secs(10)).unwrap();
         }));
     });

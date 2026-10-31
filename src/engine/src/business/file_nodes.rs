@@ -274,7 +274,7 @@ impl MetadataView {
         &self,
         request: FileNodeProjectionRequest<'_>,
     ) -> BTreeMap<String, Result<FileNodeSummary>> {
-        NodeProjection::new(self.state()).summaries(request)
+        NodeProjection::new(self.business_projection()).summaries(request)
     }
 }
 

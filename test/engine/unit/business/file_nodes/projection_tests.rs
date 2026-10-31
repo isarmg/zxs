@@ -94,7 +94,7 @@ fn engine_with_state(state: State) -> (tempfile::TempDir, Engine) {
 }
 
 #[test]
-fn metadata_view_shares_one_generation_and_releases_it_without_a_cache() {
+fn metadata_view_releases_authoritative_generation_and_shares_only_business_fields() {
     let mut state = State::default();
     body(&mut state, "body", "file");
     metadata(&mut state, "tags", &[], &["original"]);
@@ -103,8 +103,13 @@ fn metadata_view_shares_one_generation_and_releases_it_without_a_cache() {
     let original = std::sync::Arc::downgrade(&engine.state);
     assert_eq!(original.strong_count(), 1);
     let view = engine.metadata_view();
-    assert_eq!(original.strong_count(), 2);
-    assert!(std::ptr::eq(view.state(), engine.state()));
+    assert_eq!(original.strong_count(), 1);
+    assert!(!std::ptr::eq(view.business_projection(), engine.state()));
+    assert!(
+        view.business_projection()
+            .versions
+            .shares_storage_with(&engine.state().versions)
+    );
     let request = || FileNodeProjectionRequest {
         file_id: "file",
         node_ids: &["child", "tags"],
@@ -112,8 +117,8 @@ fn metadata_view_shares_one_generation_and_releases_it_without_a_cache() {
     let before = view.project_file_nodes(request());
     assert_eq!(
         original.strong_count(),
-        2,
-        "projection retains no extra view"
+        1,
+        "projection never retains the authoritative State"
     );
     std::sync::Arc::make_mut(&mut engine.state)
         .file_metadata_nodes
@@ -121,7 +126,7 @@ fn metadata_view_shares_one_generation_and_releases_it_without_a_cache() {
         .unwrap()
         .tags
         .insert("later".into());
-    assert_eq!(original.strong_count(), 1);
+    assert_eq!(original.strong_count(), 0);
     for (node, summary) in view.project_file_nodes(request()) {
         assert_eq!(summary.unwrap(), *before[&node].as_ref().unwrap());
     }
@@ -133,7 +138,7 @@ fn metadata_view_shares_one_generation_and_releases_it_without_a_cache() {
             .contains("later")
     );
     drop(engine);
-    assert_eq!(original.strong_count(), 1);
+    assert_eq!(original.strong_count(), 0);
     drop(view);
     assert!(original.upgrade().is_none());
 }

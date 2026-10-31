@@ -368,7 +368,7 @@ fn legal_split_windows_use_first_commit_order_and_preserve_original_operation_id
 }
 
 #[test]
-fn history_read_pins_the_whole_metadata_generation_only_until_the_read_drops() {
+fn history_read_retains_business_observation_without_pinning_authoritative_generation() {
     let (_temporary, mut engine, repository) = fixture();
     let target = save(&mut engine, &repository, b"target");
     let unrelated = create_repository(&mut engine, "unrelated");
@@ -381,7 +381,7 @@ fn history_read_pins_the_whole_metadata_generation_only_until_the_read_drops() {
             HistoryWindowCancellation::new(),
         )
         .unwrap();
-    assert_eq!(Arc::strong_count(&engine.state), handles + 1);
+    assert_eq!(Arc::strong_count(&engine.state), handles);
     let before = read.page().unwrap();
     engine
         .set_file_note(
@@ -393,11 +393,10 @@ fn history_read_pins_the_whole_metadata_generation_only_until_the_read_drops() {
         )
         .unwrap();
     assert!(!generation.ptr_eq(&Arc::downgrade(&engine.state)));
-    {
-        let retained = generation.upgrade().unwrap();
-        assert!(retained.versions.contains_key(&other.entry.version_id));
-        assert!(!Arc::ptr_eq(&retained, &engine.state));
-    }
+    assert!(
+        generation.upgrade().is_none(),
+        "unrelated publication releases the old authoritative generation even while the read lives"
+    );
     engine.recheck_history_window(&read).unwrap();
     assert_eq!(read.page().unwrap(), before);
     drop(read);

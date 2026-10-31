@@ -75,6 +75,20 @@ impl HistoryRootBindings {
         })
     }
 
+    /// Transfer exact root evidence only from its admitted source generation.
+    pub(super) fn projected_for(
+        &self,
+        source: &Arc<State>,
+        projection: &Arc<State>,
+    ) -> Option<Arc<Self>> {
+        self.state.ptr_eq(&Arc::downgrade(source)).then(|| {
+            Arc::new(Self {
+                state: Arc::downgrade(projection),
+                roots: self.roots.clone(),
+            })
+        })
+    }
+
     fn get<'a>(&'a self, state: &Arc<State>, history: &str) -> Result<&'a str> {
         if !self.state.ptr_eq(&Arc::downgrade(state)) {
             return Err(missing_binding());
@@ -102,7 +116,7 @@ impl MetadataView {
     /// grants no disk-health authority, retained-root service or read lease.
     /// Missing publication/recovery evidence returns `RecoveryRequired`.
     pub fn history_root(&self, history: &str) -> Result<&str> {
-        if !self.state.histories.contains_key(history) {
+        if !self.state.0.histories.contains_key(history) {
             return Err(Error::new(
                 storage_contract::ErrorCode::HistoryNotFound,
                 "history is absent from metadata observation",
@@ -111,7 +125,7 @@ impl MetadataView {
         self.history_window_roots
             .as_ref()
             .ok_or_else(missing_binding)?
-            .get(&self.state, history)
+            .get(&self.state.0, history)
     }
 }
 

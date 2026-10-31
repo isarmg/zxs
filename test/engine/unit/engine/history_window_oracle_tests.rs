@@ -282,7 +282,7 @@ pub(super) fn fixture() -> MetadataView {
         BTreeMap::from([(HISTORY.into(), ROOT.into())]),
     ));
     MetadataView {
-        state,
+        state: super::super::BusinessMetadataProjection(state),
         history_window_roots,
         history_action_max_entries: 123,
     }
@@ -434,7 +434,7 @@ pub(super) fn oracle_path<'a>(state: &'a State, node: &'a str) -> &'a str {
 #[test]
 fn borrowed_node_facts_match_independent_complete_state_oracle() {
     let view = fixture();
-    let state = view.state();
+    let state = view.business_projection();
     let scope = nodes::Scope {
         file: FILE,
         history: HISTORY,
@@ -495,7 +495,7 @@ fn borrowed_node_facts_match_independent_complete_state_oracle() {
 #[test]
 fn merge_path_uses_the_chosen_source_and_keeps_the_referenced_real_body() {
     let mut view = fixture();
-    let state = Arc::make_mut(&mut view.state);
+    let state = Arc::make_mut(&mut view.state.0);
     let mut metadata = state.file_metadata_nodes[&id("fmeta", 0)].clone();
     metadata.node_id = id("fmeta", 1);
     metadata.kind = FileMetadataKind::Merge;
@@ -530,7 +530,7 @@ fn merge_path_uses_the_chosen_source_and_keeps_the_referenced_real_body() {
 #[test]
 fn cold_projection_helpers_observe_cancellation_before_visiting_results() {
     let view = fixture();
-    let state = view.state();
+    let state = view.business_projection();
     let scope = nodes::Scope {
         file: FILE,
         history: HISTORY,
@@ -595,7 +595,7 @@ fn select_nodes(
 #[test]
 fn stable_node_windows_exhaust_the_complete_oracle_in_both_directions() {
     let view = fixture();
-    let state = view.state();
+    let state = view.business_projection();
     let expected = oracle_node_keys(state)
         .into_iter()
         .map(|(sequence, id)| (std::cmp::Reverse(sequence), id))
@@ -658,7 +658,7 @@ fn stable_node_windows_exhaust_the_complete_oracle_in_both_directions() {
 #[test]
 fn exact_anchor_tail_empty_and_invalid_boundaries_make_unambiguous_progress() {
     let view = fixture();
-    let state = view.state();
+    let state = view.business_projection();
     let expected = oracle_node_keys(state)
         .into_iter()
         .map(|(sequence, id)| (std::cmp::Reverse(sequence), id))
@@ -740,7 +740,7 @@ fn select_parents(
 #[test]
 fn parent_windows_enumerate_high_indegree_and_reused_merge_parents_without_scope_leaks() {
     let view = fixture();
-    let state = view.state();
+    let state = view.business_projection();
     for node in [
         id("ver", 0),
         id("ver", 7),
@@ -793,13 +793,19 @@ fn parent_scan_observes_cancellation_inside_one_large_relation() {
     let cancel = HistoryWindowCancellation::new();
     let owner = cancel.clone();
     let mut visits = 0;
-    let error = nodes::visit_parents(view.state(), scope, &id("ver", 16), &cancel, |_| {
-        visits += 1;
-        if visits == 2 {
-            owner.cancel();
-        }
-        Ok(())
-    })
+    let error = nodes::visit_parents(
+        view.business_projection(),
+        scope,
+        &id("ver", 16),
+        &cancel,
+        |_| {
+            visits += 1;
+            if visits == 2 {
+                owner.cancel();
+            }
+            Ok(())
+        },
+    )
     .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::OperationAborted);
     assert_eq!(visits, 2);
@@ -825,12 +831,12 @@ fn node_scan_observes_cancellation_before_filtering_foreign_records() {
     };
     let cancel = HistoryWindowCancellation::new();
     assert!(
-        nodes::all_nodes(view.state(), scope, &cancel)
+        nodes::all_nodes(view.business_projection(), scope, &cancel)
             .next()
             .is_none()
     );
     cancel.cancel();
-    let error = nodes::all_nodes(view.state(), scope, &cancel)
+    let error = nodes::all_nodes(view.business_projection(), scope, &cancel)
         .next()
         .expect("a rejected candidate still observes cancellation")
         .err()
@@ -1070,7 +1076,7 @@ fn content_commit_order_cannot_be_replaced_by_version_sequence_candidates() {
         .iter()
         .map(|node| node.node_id.to_string())
         .collect::<Vec<_>>();
-    let expected = oracle_node_keys(view.state())
+    let expected = oracle_node_keys(view.business_projection())
         .into_iter()
         .take(2)
         .map(|(_, id)| id)
@@ -1078,7 +1084,7 @@ fn content_commit_order_cannot_be_replaced_by_version_sequence_candidates() {
     assert_eq!(actual, expected);
     assert_eq!(actual, [id("ver", 16), id("ver", 14)]);
     let mut body_order = view
-        .state()
+        .business_projection()
         .versions
         .values()
         .filter(|version| version.file_id == FILE && version.history_tree_id == HISTORY)
@@ -1102,7 +1108,7 @@ fn content_commit_order_cannot_be_replaced_by_version_sequence_candidates() {
 #[test]
 fn every_public_record_collection_matches_its_independent_complete_oracle() {
     let view = fixture();
-    let state = view.state();
+    let state = view.business_projection();
     let node_ids = oracle_node_keys(state)
         .into_iter()
         .map(|(_, id)| id)
@@ -1214,7 +1220,7 @@ fn every_public_record_collection_matches_its_independent_complete_oracle() {
 #[test]
 fn public_node_anchors_preserve_current_identity_and_page_local_graph_meaning() {
     let view = fixture();
-    let state = view.state();
+    let state = view.business_projection();
     let expected = oracle_node_keys(state)
         .into_iter()
         .map(|(_, id)| id)
@@ -1304,7 +1310,7 @@ fn public_node_anchors_preserve_current_identity_and_page_local_graph_meaning() 
 
 fn high_indegree_fixture() -> MetadataView {
     let mut view = fixture();
-    let state = Arc::make_mut(&mut view.state);
+    let state = Arc::make_mut(&mut view.state.0);
     let mut parents = state.file_node_parents[&id("ver", 16)].clone();
     for index in 200..200 + history_contract::MAX_HISTORY_PREVIEW_EDGES + 11 {
         let mut version = body(index, FILE, HISTORY);
@@ -1315,7 +1321,7 @@ fn high_indegree_fixture() -> MetadataView {
     parents.extend([id("ver", 100), id("ver", 101)]);
     state.file_node_parents.insert(id("ver", 16), parents);
     view.history_window_roots = Some(HistoryRootBindings::recovered(
-        &view.state,
+        &view.state.0,
         BTreeMap::from([(HISTORY.into(), ROOT.into())]),
     ));
     view
@@ -1324,7 +1330,7 @@ fn high_indegree_fixture() -> MetadataView {
 #[test]
 fn node_preview_budget_keeps_every_parent_reachable_with_explicit_unloaded_endpoints() {
     let view = high_indegree_fixture();
-    let expected = oracle_parents(view.state(), &id("ver", 16));
+    let expected = oracle_parents(view.business_projection(), &id("ver", 16));
     assert!(expected.len() > history_contract::MAX_HISTORY_PREVIEW_EDGES);
     let HistoryWindowPage::Nodes { nodes, edges, .. } =
         public_page(&view, &request(HistoryCollection::Nodes, 1))
@@ -1424,7 +1430,7 @@ fn branch_summaries_keep_pending_real_body_aliases_and_sparse_content_facts() {
 #[test]
 fn pending_empty_sources_remain_node_less_inherited_branches() {
     let mut view = fixture();
-    let state = Arc::make_mut(&mut view.state);
+    let state = Arc::make_mut(&mut view.state.0);
     let mut commit = state.commits[&id("commit", 0)].clone();
     commit.commit_id = id("commit", 2000);
     commit.entries.clear();
@@ -1438,7 +1444,7 @@ fn pending_empty_sources_remain_node_less_inherited_branches() {
     branch.pending_file_versions = BTreeMap::from([(FILE.into(), String::new())]);
     state.branches.insert(branch.branch_id.clone(), branch);
     view.history_window_roots = Some(HistoryRootBindings::recovered(
-        &view.state,
+        &view.state.0,
         BTreeMap::from([(HISTORY.into(), ROOT.into())]),
     ));
     let HistoryWindowPage::Branches { branches, .. } =
@@ -1483,14 +1489,14 @@ fn explicit_parent_start_cursor_preserves_the_first_member_and_ordinary_navigati
     assert_public_walk(
         &view,
         request,
-        &oracle_parents(view.state(), &id("ver", 16)),
+        &oracle_parents(view.business_projection(), &id("ver", 16)),
     );
 }
 
 #[test]
 fn summaries_keep_original_source_counts_merge_provenance_and_external_field_lengths() {
     let view = fixture();
-    let state = view.state();
+    let state = view.business_projection();
     let HistoryWindowPage::Versions { versions, .. } =
         public_page(&view, &request(HistoryCollection::Versions, 128))
     else {
@@ -1632,7 +1638,7 @@ fn assert_field_fragments(
 #[test]
 fn every_unbounded_field_is_completely_reachable_in_utf8_fragments_without_truncation() {
     let view = fixture();
-    let state = view.state();
+    let state = view.business_projection();
     let cases = [
         (
             id("ver", 16),

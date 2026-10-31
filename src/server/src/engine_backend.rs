@@ -1494,7 +1494,7 @@ impl Backend for EngineBackend {
         };
         #[cfg(test)]
         graph::tests::after_capture(&view);
-        let mut snapshot = graph::capture(view.state(), id);
+        let mut snapshot = graph::capture(view.business_projection(), id);
         snapshot.commits.sort_by_key(|commit| commit.sequence);
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;

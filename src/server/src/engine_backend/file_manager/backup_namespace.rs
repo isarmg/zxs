@@ -191,7 +191,7 @@ fn project(
             version_id,
             ..
         } => {
-            let state = scope.view.state();
+            let state = scope.view.business_projection();
             let repo = &state.repositories[repository_id];
             let version = &state.versions[version_id];
             let current = current.map(|index| {
@@ -400,7 +400,7 @@ impl BackupListingRead {
 
 impl ListingScope {
     fn latest(&self) -> BTreeMap<&str, (&Repository, &FileVersion)> {
-        let state = self.view.state();
+        let state = self.view.business_projection();
         let mut latest = BTreeMap::<&str, (&Repository, &FileVersion)>::new();
         for version in state
             .versions
@@ -427,7 +427,7 @@ impl ListingScope {
         &'a self,
         latest: &BTreeMap<&str, (&Repository, &FileVersion)>,
     ) -> BTreeMap<&'a str, (usize, &'a Entry)> {
-        let state = self.view.state();
+        let state = self.view.business_projection();
         let mut canonical = BTreeMap::new();
         for namespace in self.namespaces.values() {
             for (index, entry) in namespace.commit.entries.iter().enumerate() {
@@ -449,7 +449,7 @@ impl ListingScope {
     }
 
     fn nodes(&self) -> Result<BTreeMap<String, Node<'_>>, ApiError> {
-        let state = self.view.state();
+        let state = self.view.business_projection();
         let latest = self.latest();
         let canonical = self.canonical(&latest);
         let mut nodes = BTreeMap::new();
@@ -493,7 +493,7 @@ fn changed() -> ApiError {
 
 impl SelectedListing {
     fn authorize_current(&self, engine: &AdmissionEngine) -> Result<(), ApiError> {
-        let captured = self.scope.view.state();
+        let captured = self.scope.view.business_projection();
         let current = engine.state();
         if engine.listing_snapshot() != self.page.snapshot
             || current.repositories.len() != captured.repositories.len()

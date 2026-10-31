@@ -52,7 +52,7 @@ fn keys(selection: &Selected<'_>) -> Vec<(u64, String)> {
 
 fn expanded_fixture() -> MetadataView {
     let mut view = fixture();
-    let state = Arc::make_mut(&mut view.state);
+    let state = Arc::make_mut(&mut view.state.0);
     let original = "ver_00000000000000000000000000000000";
     let body = state.versions[original].clone();
     let commit = state.commits["commit_00000000000000000000000000000000"].clone();
@@ -73,7 +73,7 @@ fn expanded_fixture() -> MetadataView {
         "history_00000000000000000000000000000001".into(),
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
     )]);
-    view.history_window_roots = Some(HistoryRootBindings::recovered(&view.state, roots));
+    view.history_window_roots = Some(HistoryRootBindings::recovered(&view.state.0, roots));
     view
 }
 
@@ -84,7 +84,7 @@ fn per_candidate_reference_counts_commit_traversals_and_matches_complete_oracle(
         (expanded_fixture(), 69, 4692, 4623),
     ] {
         let context = context();
-        let expected = oracle_node_keys(view.state());
+        let expected = oracle_node_keys(view.business_projection());
         assert_eq!(expected.len(), node_count);
         for limit in [1, 2, 7, 64] {
             let request = request(HistoryCollection::Nodes, limit);
@@ -122,7 +122,7 @@ fn batched_selection_reduces_actual_commit_header_visits_at_every_page_budget() 
         [(fixture(), 342, 18), (expanded_fixture(), 4692, 136)]
     {
         let context = context();
-        let expected = oracle_node_keys(view.state());
+        let expected = oracle_node_keys(view.business_projection());
         for limit in [1, 2, 7, 64] {
             let request = request(HistoryCollection::Nodes, limit);
             let cancel = HistoryWindowCancellation::new();
@@ -185,7 +185,7 @@ fn public_nodes(
 #[test]
 fn batched_public_pages_exhaust_oracle_with_forward_backward_and_every_anchor() {
     let view = expanded_fixture();
-    let expected = oracle_node_keys(view.state());
+    let expected = oracle_node_keys(view.business_projection());
     for limit in [1, 2, 7, 64] {
         let mut request = request(HistoryCollection::Nodes, limit);
         let mut page = public_nodes(&view, &request);
@@ -225,7 +225,7 @@ fn batched_public_pages_exhaust_oracle_with_forward_backward_and_every_anchor() 
 #[test]
 fn batched_selection_keeps_commit_id_ties_fallback_and_boundary_errors() {
     let mut view = fixture();
-    let state = Arc::make_mut(&mut view.state);
+    let state = Arc::make_mut(&mut view.state.0);
     let version = "ver_00000000000000000000000000000002";
     let earlier = "commit_00000000000000000000000000000002";
     let later = "commit_000000000000000000000000000003e8";
@@ -248,13 +248,13 @@ fn batched_selection_keeps_commit_id_ties_fallback_and_boundary_errors() {
         "history_00000000000000000000000000000001".into(),
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
     )]);
-    view.history_window_roots = Some(HistoryRootBindings::recovered(&view.state, roots));
+    view.history_window_roots = Some(HistoryRootBindings::recovered(&view.state.0, roots));
     let context = context();
     let request = request(HistoryCollection::Nodes, 64);
     let cancel = HistoryWindowCancellation::new();
     let query = Query::new(&view, &request, &context, &cancel).unwrap();
     let actual = actual_selection(&query, Position::Start, &Cell::new(0)).unwrap();
-    assert_eq!(keys(&actual), oracle_node_keys(view.state()));
+    assert_eq!(keys(&actual), oracle_node_keys(view.business_projection()));
     let (_, (_, first)) = actual
         .entries
         .iter()
@@ -312,7 +312,7 @@ fn batched_selection_cancels_inside_a_commit_scan_before_returning_a_page() {
     let error = query
         .select_nodes(
             || {
-                view.state().commits.values().inspect(|_| {
+                view.business_projection().commits.values().inspect(|_| {
                     headers.set(headers.get() + 1);
                     if headers.get() == 3 {
                         cancel.cancel();

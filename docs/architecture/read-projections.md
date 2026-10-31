@@ -448,3 +448,28 @@ SelectFileBranch真实命令用Option<FileSelectionLocation>区分无位置选�
 两个file.branch.select摘要仍分别为file/branch与repository/path/file/branch，缺省位置不编码成null。永久receipt先于当前path、活动branch与正文使用检查，HTTP current身份和file/repository准入仍先于receipt；改名、merge、重启后原请求仍重放，但新请求仍检查当前规则。非pending分支继续valid_replica，pending分支继续冻结来源例外，不因为本次typing增加正文读取；原目录/上下文发布、世代、预算与同步顺序不变。
 
 新增真实pending回归先移除旧source的全部实际副本，分别执行带位置和无位置选择，再重启重放，证明冻结pending来源未被强行要求新副本；既有非pending不可读正文测试同时验证两入口失败且State不变。HTTP覆盖成对字段、格式/身份失败不改历史、独立两种摘要及形状冲突、merge/rename/reopen后的重放和新请求只读拒绝；授权、两个位置形状的排队撤权、取消容量与panic隔离走新方法。没有改变正文丢失后的读取失败事实，也不宣称pending引用本身提供可读正文。
+
+
+## 业务读视图的字段级所有权
+
+`MetadataView` 不再保持权威整代 `Arc<State>`。捕获时穷尽分类 State 字段，
+只分享业务字段容器；认证控制、永久操作收据／主体、事件和本地计划不进入读投影。
+旧 `state()` 已删除，跨 engine/server 的只读消费者必须显式使用
+`business_projection()`；其返回值仅用于业务投影，不能作为权威 State、鉴权、
+恢复或发布输入。当前为复用既有纯投影函数，私有包装内部仍使用 State；
+这不是完全独立的领域类型，未来误用仍须在 API 审阅中阻止。
+
+精确历史根先核对当前绑定的源 State 身份，再绑定到独立业务投影；缺失或旧绑定
+不能因复制字段获得根证明。后续当前身份、路径、历史归属及根的复查不变。
+读视图没有磁盘读租约，scrub 和在途提交仍各自持有必要的完整基线／正文租约；
+本变更不启用删除型 GC，不削弱永久历史、原 ID 或独立 FULL 文件。
+
+Tracked 字段使用字段级 COW：捕获复杂度是固定字段数，不扫描／深拷贝记录；
+第一次修改共享的普通 map 仍会复制该 map，后续独占修改不再复制。写集合谱系、
+序列化与规范字节保持原样。commits/versions/directory_trees 继续共享不可变记录。
+读视图仍分享完整业务图与目录根；本次只解除无关控制／收据／计划整代驻留，
+不声称单页只驻留页内业务记录、全池 State 已有界，或已获得 RSS/延迟百分比提升。
+
+[字段 COW 测试](../../test/contract/unit/tracked.rs) 覆盖共享零值克隆、首次目标表
+分离、所有可变入口与精确写集合；[视图生命周期测试](../../test/engine/unit/engine/history_window_root_tests.rs)
+验证发布后读视图不再保留权威 State，而 scrub 的必要基线继续存活至其释放。

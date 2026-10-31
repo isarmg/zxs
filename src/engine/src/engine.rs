@@ -112,20 +112,30 @@ pub struct Engine {
     fault: Option<FaultInjection>,
 }
 
-/// An engine-created immutable metadata generation. This owns no disk resources,
-/// read lease or authorization; callers must recheck their current read scope.
-/// Keeping it alive can make a later mutation copy State's shared fields.
+/// An immutable business-metadata projection, not an authoritative State.
+/// This owns no disk resources, read lease, authentication or operation receipts.
+/// Callers must recheck current scope; only retained business fields share storage.
+struct BusinessMetadataProjection(Arc<State>);
+
 pub struct MetadataView {
-    state: Arc<State>,
+    state: BusinessMetadataProjection,
     history_window_roots: Option<Arc<history_window::HistoryRootBindings>>,
     history_action_max_entries: usize,
 }
 
 impl MetadataView {
-    pub fn state(&self) -> &State {
-        self.state.as_ref()
+    /// Read-only business fields for listing and history projection only.
+    ///
+    /// This is not the authoritative State: authentication, operation receipts,
+    /// operation principals, events and local plans are deliberately absent.
+    /// Never use it for authorization, mutation, persistence or recovery.
+    /// Current authorization must be checked against the owning Engine.
+    pub fn business_projection(&self) -> &State {
+        self.state.0.as_ref()
     }
 }
+
+mod metadata_projection;
 
 #[cfg(test)]
 #[path = "../../../test/engine/unit/engine/history_window_root_tests.rs"]
@@ -594,11 +604,17 @@ impl Engine {
     pub fn state(&self) -> &State {
         self.state.as_ref()
     }
-    /// Retain the current metadata without cloning State or opening payloads.
+    /// Share only business fields, without retaining the authoritative generation.
+    /// Field capture is O(number of fields), independent of record counts.
     pub fn metadata_view(&self) -> MetadataView {
+        let state = BusinessMetadataProjection::capture(&self.state);
+        let history_window_roots = self
+            .history_window_roots
+            .as_ref()
+            .and_then(|roots| roots.projected_for(&self.state, &state.0));
         MetadataView {
-            state: Arc::clone(&self.state),
-            history_window_roots: self.history_window_roots.clone(),
+            state,
+            history_window_roots,
             history_action_max_entries: self.config.max_entries,
         }
     }

@@ -122,7 +122,7 @@ impl PrimaryListing {
         #[cfg(test)]
         detached_tests::before_scan(&self.scope.view);
         let Self { scope, request } = self;
-        let state = scope.view.state();
+        let state = scope.view.business_projection();
         let mut page = PageSelector::new(request);
         let mut directory_branches_supported = true;
         if scope.path.is_empty() {
@@ -245,7 +245,7 @@ impl SelectedListing {
         }
         for candidate in self.page.values.iter().chain(self.page.selected.iter()) {
             if let Candidate::Repository(id) = candidate {
-                let state = self.scope.view.state();
+                let state = self.scope.view.business_projection();
                 let repo = &state.repositories[id];
                 unchanged_repository(engine, repo)?;
                 let branch = &state.branches[&repo.main_branch_id];
@@ -267,7 +267,7 @@ impl SelectedListing {
         self.authorize_current(engine)?;
         let project = |candidate: &Candidate| match candidate {
             Candidate::Repository(id) => {
-                let repo = &self.scope.view.state().repositories[id];
+                let repo = &self.scope.view.business_projection().repositories[id];
                 Ok(directory(&repo.name, &repo.name, &repo.repository_id))
             }
             Candidate::Entry(index) => {

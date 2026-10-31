@@ -1,7 +1,7 @@
 //! Non-serialized, transaction-local mutation provenance for metadata maps.
 //!
-//! This deliberately retains the existing containers. It is a write-set, not
-//! a persistent map: cloning a plain BTreeMap still copies its records.
+//! Each field shares its container until mutation. Cloning is constant-space;
+//! the first write to a shared plain map copies that map, not unrelated fields.
 //! Provenance is valid only for values without interior mutability, as with
 //! State business records: mutation through a shared reference cannot be tracked.
 use crate::SharedRecords;
@@ -30,7 +30,7 @@ impl<K> MapChanges<K> {
 
 #[derive(Debug)]
 pub struct Tracked<T, K = String> {
-    value: T,
+    value: Arc<T>,
     identity: Arc<()>,
     base: Option<Arc<()>>,
     changes: MapChanges<K>,
@@ -43,7 +43,7 @@ pub type TrackedOperations<T> = Tracked<BTreeMap<crate::OperationId, T>, crate::
 impl<T, K: Clone + Ord> Tracked<T, K> {
     pub fn new(value: T) -> Self {
         Self {
-            value,
+            value: Arc::new(value),
             identity: Arc::new(()),
             base: None,
             changes: MapChanges::All,
@@ -90,10 +90,10 @@ impl<T, K: Clone + Ord> Tracked<T, K> {
         self.changes = MapChanges::All;
     }
 }
-impl<T: Clone, K: Clone> Clone for Tracked<T, K> {
+impl<T, K: Clone> Clone for Tracked<T, K> {
     fn clone(&self) -> Self {
         Self {
-            value: self.value.clone(),
+            value: Arc::clone(&self.value),
             identity: Arc::clone(&self.identity),
             base: self.base.clone(),
             changes: self.changes.clone(),
@@ -114,7 +114,7 @@ impl<T: PartialEq, K> PartialEq for Tracked<T, K> {
 impl<T: Eq, K> Eq for Tracked<T, K> {}
 impl<T: PartialEq, K> PartialEq<T> for Tracked<T, K> {
     fn eq(&self, other: &T) -> bool {
-        &self.value == other
+        self.value.as_ref() == other
     }
 }
 impl<T, K> Deref for Tracked<T, K> {
@@ -125,10 +125,10 @@ impl<T, K> Deref for Tracked<T, K> {
 }
 // Compatibility escape hatch: every unknown mutable operation invalidates the
 // whole field before yielding its reference. It cannot silently bypass tracking.
-impl<T, K: Clone + Ord> DerefMut for Tracked<T, K> {
+impl<T: Clone, K: Clone + Ord> DerefMut for Tracked<T, K> {
     fn deref_mut(&mut self) -> &mut T {
         self.all_changed();
-        &mut self.value
+        Arc::make_mut(&mut self.value)
     }
 }
 impl<T: Serialize, K> Serialize for Tracked<T, K> {
@@ -161,14 +161,14 @@ impl<V, const N: usize> From<[(String, V); N]> for TrackedMap<V> {
         values.into_iter().collect()
     }
 }
-impl<V> TrackedMap<V> {
+impl<V: Clone> TrackedMap<V> {
     pub fn entry(&mut self, key: String) -> std::collections::btree_map::Entry<'_, String, V> {
         self.key_changed(&key, key.len());
-        self.value.entry(key)
+        Arc::make_mut(&mut self.value).entry(key)
     }
     pub fn insert(&mut self, key: String, value: V) -> Option<V> {
         self.key_changed(&key, key.len());
-        self.value.insert(key, value)
+        Arc::make_mut(&mut self.value).insert(key, value)
     }
     pub fn get_mut<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<&mut V>
     where
@@ -177,7 +177,7 @@ impl<V> TrackedMap<V> {
         let owned = self.value.get_key_value(key)?.0.clone();
         let bytes = owned.len();
         self.key_changed(&owned, bytes);
-        self.value.get_mut(key)
+        Arc::make_mut(&mut self.value).get_mut(key)
     }
     pub fn remove<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<V>
     where
@@ -186,7 +186,7 @@ impl<V> TrackedMap<V> {
         let owned = self.value.get_key_value(key)?.0.clone();
         let bytes = owned.len();
         self.key_changed(&owned, bytes);
-        self.value.remove(key)
+        Arc::make_mut(&mut self.value).remove(key)
     }
     /// Remove selected keys without granting mutable access to retained values.
     /// The predicate scans the map; only removed keys enter the exact write set.
@@ -204,13 +204,13 @@ impl<V> TrackedMap<V> {
     pub fn retain(&mut self, mut keep: impl FnMut(&String, &mut V) -> bool) {
         // The predicate receives mutable values, so even retained keys are dirty.
         self.all_changed();
-        self.value.retain(|key, value| keep(key, value));
+        Arc::make_mut(&mut self.value).retain(|key, value| keep(key, value));
     }
 }
 impl<V: Clone> TrackedRecords<V> {
     pub fn insert(&mut self, key: String, value: V) -> Option<V> {
         self.key_changed(&key, key.len());
-        self.value.insert(key, value)
+        Arc::make_mut(&mut self.value).insert(key, value)
     }
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
@@ -223,7 +223,7 @@ impl<V: Clone> TrackedRecords<V> {
         let owned = key.to_owned();
         let bytes = owned.len();
         self.key_changed(&owned, bytes);
-        self.value.get_mut(key)
+        Arc::make_mut(&mut self.value).get_mut(key)
     }
     pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
@@ -236,7 +236,7 @@ impl<V: Clone> TrackedRecords<V> {
         let owned = key.to_owned();
         let bytes = owned.len();
         self.key_changed(&owned, bytes);
-        self.value.remove(key)
+        Arc::make_mut(&mut self.value).remove(key)
     }
 }
 impl<V> TrackedRecords<V> {
@@ -245,7 +245,7 @@ impl<V> TrackedRecords<V> {
         for key in source.keys() {
             self.key_changed(key, key.len());
         }
-        self.value.extend_shared(source);
+        Arc::make_mut(&mut self.value).extend_shared(source);
     }
 
     pub fn remove_discard<Q>(&mut self, key: &Q) -> bool
@@ -259,10 +259,10 @@ impl<V> TrackedRecords<V> {
         let owned = key.to_owned();
         let bytes = owned.len();
         self.key_changed(&owned, bytes);
-        self.value.remove_discard(key)
+        Arc::make_mut(&mut self.value).remove_discard(key)
     }
 }
-impl<V> Extend<(String, V)> for TrackedMap<V> {
+impl<V: Clone> Extend<(String, V)> for TrackedMap<V> {
     fn extend<I: IntoIterator<Item = (String, V)>>(&mut self, values: I) {
         for (key, value) in values {
             self.insert(key, value);
@@ -273,7 +273,7 @@ impl<V> Extend<(String, V)> for TrackedRecords<V> {
     fn extend<I: IntoIterator<Item = (String, V)>>(&mut self, values: I) {
         for (key, value) in values {
             self.key_changed(&key, key.len());
-            self.value.extend(std::iter::once((key, value)));
+            Arc::make_mut(&mut self.value).extend(std::iter::once((key, value)));
         }
     }
 }
@@ -284,19 +284,19 @@ impl<'a, V> IntoIterator for &'a TrackedMap<V> {
         self.value.iter()
     }
 }
-impl<'a, V> IntoIterator for &'a mut TrackedMap<V> {
+impl<'a, V: Clone> IntoIterator for &'a mut TrackedMap<V> {
     type Item = (&'a String, &'a mut V);
     type IntoIter = std::collections::btree_map::IterMut<'a, String, V>;
     fn into_iter(self) -> Self::IntoIter {
         self.all_changed();
-        self.value.iter_mut()
+        Arc::make_mut(&mut self.value).iter_mut()
     }
 }
-impl<V> IntoIterator for TrackedMap<V> {
+impl<V: Clone> IntoIterator for TrackedMap<V> {
     type Item = (String, V);
     type IntoIter = std::collections::btree_map::IntoIter<String, V>;
     fn into_iter(self) -> Self::IntoIter {
-        self.value.into_iter()
+        Arc::unwrap_or_clone(self.value).into_iter()
     }
 }
 
@@ -304,10 +304,10 @@ impl<V> IntoIterator for TrackedMap<V> {
 #[path = "../../../test/contract/unit/tracked.rs"]
 mod tests;
 
-impl<V> TrackedOperations<V> {
+impl<V: Clone> TrackedOperations<V> {
     pub fn insert(&mut self, key: crate::OperationId, value: V) -> Option<V> {
         self.key_changed(&key, std::mem::size_of::<crate::OperationId>());
-        self.value.insert(key, value)
+        Arc::make_mut(&mut self.value).insert(key, value)
     }
 }
 impl<V> FromIterator<(crate::OperationId, V)> for TrackedOperations<V> {

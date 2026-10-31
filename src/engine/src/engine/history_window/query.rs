@@ -59,7 +59,7 @@ impl<'a> Query<'a> {
     ) -> Result<Self> {
         cancel.checkpoint()?;
         validate_request(request)?;
-        let state = view.state();
+        let state = view.business_projection();
         validate_scope(state, request, context, cancel)?;
         let root = HistoryRoot::parse(view.history_root(context.history_tree_id.as_str())?)?;
         let (anchor, query_hash) = validate_cursor(state, request, context, root)?;
