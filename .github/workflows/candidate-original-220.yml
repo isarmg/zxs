@@ -1,0 +1,228 @@
+name: Exact new-candidate original 220 paired acceptance
+on:
+  push:
+    branches: ["verify/perf-original-220-ninth-carrier-20261031"]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: candidate-original-220-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  CARGO_NET_OFFLINE: 'true'
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: '1'
+  CFLAGS: '-march=x86-64 -mtune=generic'
+  RPC_SOURCE_SHA: 0787d77cf8fa074f6d268bbf05444e54cc07ca52
+  PRODUCT_SHA: 0787d77cf8fa074f6d268bbf05444e54cc07ca52
+  PRODUCT_TREE: a1819b18ccb1a1362cb4a53ae7b5c4729bd63a8d
+jobs:
+  validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: 0787d77cf8fa074f6d268bbf05444e54cc07ca52
+      - name: Authenticate normal source and run mechanical checks before Rust
+        env:
+          RPC_SOURCE_SHA: 0787d77cf8fa074f6d268bbf05444e54cc07ca52
+        run: |
+          python3 -c 'import os, re, subprocess; sha=os.environ["RPC_SOURCE_SHA"]; assert re.fullmatch("[0-9a-f]{40}", sha); assert subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip() == sha'
+          bash .github/scripts/check.sh static
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: 0787d77cf8fa074f6d268bbf05444e54cc07ca52
+          path: product-validation
+      - name: Authenticate exact product SHA and tree before its checks
+        working-directory: product-validation
+        run: |
+          python3 -c 'import os,re,subprocess; sha=os.environ["PRODUCT_SHA"]; tree=os.environ["PRODUCT_TREE"]; assert re.fullmatch("[0-9a-f]{40}",sha) and re.fullmatch("[0-9a-f]{40}",tree); assert subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip()==sha; assert subprocess.check_output(["git","rev-parse","HEAD^{tree}"],text=True).strip()==tree; assert not subprocess.check_output(["git","status","--porcelain"],text=True).strip()'
+          bash .github/scripts/check.sh static
+      - name: Initialize isolated repository toolchain
+        working-directory: product-validation
+        run: |
+          bash .github/scripts/initialize-cargo-home.sh
+          rustup show active-toolchain
+          rustc --version
+      - name: Affected format and strict diagnostics
+        working-directory: product-validation
+        run: |
+          cargo fmt -p storage-engine -p storage-server -- --check
+          rustfmt --edition 2024 --check --config skip_children=true test/engine/bench/final_rpc_seed.rs test/server/bench/final_rpc_requests.rs test/server/bench/final_rpc_baseline_read.rs test/server/bench/final_rpc_current_read.rs
+          python3 .github/scripts/check-rust-diagnostics.py -- cargo clippy --locked --offline -p storage-engine -p storage-server --all-targets --message-format=json -- -D warnings
+          cargo check --locked --offline -p storage-server --no-default-features --all-targets
+      - name: Actual RPC and protocol consumers including bounded restart lifecycle
+        working-directory: product-validation
+        run: |
+          cargo test --locked --offline -p storage-server --lib smb_rpc::tests -- --test-threads=2
+          cargo test --locked --offline -p smb-protocol
+  build:
+    needs: validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      manifest: ${{ steps.seal.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: 0787d77cf8fa074f6d268bbf05444e54cc07ca52
+          path: harness
+          sparse-checkout: |
+            tools/local-rpc-acceptance
+            test/engine/bench
+            test/server/bench
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: e2f33d9882cf7263412d9370b6a703e0b216357d
+          path: baseline
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: 0787d77cf8fa074f6d268bbf05444e54cc07ca52
+          path: candidate
+      - name: Authenticate source and apply only test adapters
+        run: |
+          python3 harness/tools/local-rpc-acceptance/candidate_220.py prepare "$GITHUB_WORKSPACE" "$RUNNER_TEMP/rpc-evidence" "$PRODUCT_SHA" "$PRODUCT_TREE"
+          printf 'CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu\n' >> "$GITHUB_ENV"
+          printf 'CARGO_ENCODED_RUSTFLAGS=-C\x1ftarget-cpu=x86-64\n' >> "$GITHUB_ENV"
+          printf 'CARGO_HOME=%s\n' "$(mktemp -d "$RUNNER_TEMP/rpc-cargo.XXXXXX")" >> "$GITHUB_ENV"
+          uname -a > "$RUNNER_TEMP/rpc-evidence/uname.txt"
+          lscpu > "$RUNNER_TEMP/rpc-evidence/lscpu.txt"
+          free -b > "$RUNNER_TEMP/rpc-evidence/memory.txt"
+          df -B1 > "$RUNNER_TEMP/rpc-evidence/disk.txt"
+      - name: Build release seed and actual server RPC test executables
+        timeout-minutes: 75
+        run: |
+          for product in baseline candidate; do
+            (
+              cd "$product"
+              rustc --version | tee "$RUNNER_TEMP/rpc-evidence/$product-rustc.txt"
+              grep -q '^rustc 1\.99\.0 ' "$RUNNER_TEMP/rpc-evidence/$product-rustc.txt"
+              export CARGO_TARGET_DIR="$RUNNER_TEMP/rpc-target-$product"
+              cargo fmt -p storage-engine -p storage-server -- --check
+              python3 .github/scripts/check-rust-diagnostics.py -- cargo clippy --locked --offline --release --target x86_64-unknown-linux-gnu -p storage-engine --bin final_rpc_seed --features fault-injection --message-format=json -- -D warnings
+              python3 .github/scripts/check-rust-diagnostics.py -- cargo clippy --locked --offline --release --target x86_64-unknown-linux-gnu -p storage-server --lib --tests --message-format=json -- -D warnings
+              cargo build --locked --offline --release --target x86_64-unknown-linux-gnu -p storage-engine --bin final_rpc_seed --features fault-injection --message-format=json > "$RUNNER_TEMP/rpc-evidence/$product-seed.jsonl" 2> "$RUNNER_TEMP/rpc-evidence/$product-seed.log" || { cat "$RUNNER_TEMP/rpc-evidence/$product-seed.log"; exit 1; }
+              cargo test --locked --offline --release --target x86_64-unknown-linux-gnu -p storage-server --lib --no-run --message-format=json > "$RUNNER_TEMP/rpc-evidence/$product-server.jsonl" 2> "$RUNNER_TEMP/rpc-evidence/$product-server.log" || { cat "$RUNNER_TEMP/rpc-evidence/$product-server.log"; tail -30 "$RUNNER_TEMP/rpc-evidence/$product-server.jsonl"; exit 1; }
+            )
+          done
+      - name: Seal exact binaries and unchanged source
+        id: seal
+        run: |
+          python3 harness/tools/local-rpc-acceptance/candidate_220.py seal "$GITHUB_WORKSPACE" "$RUNNER_TEMP/rpc-evidence" "$RUNNER_TEMP/rpc-bundle" "$PRODUCT_SHA" "$PRODUCT_TREE"
+          printf 'manifest=%s\n' "$(sha256sum "$RUNNER_TEMP/rpc-bundle/manifest.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rpc-binaries
+          path: ${{ runner.temp }}/rpc-bundle/*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: rpc-build-evidence
+          path: ${{ runner.temp }}/rpc-evidence/*
+          if-no-files-found: error
+          retention-days: 14
+  selection:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RPC_MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
+    outputs:
+      plan: ${{ steps.plan.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: 0787d77cf8fa074f6d268bbf05444e54cc07ca52
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: rpc-binaries
+          path: ${{ runner.temp }}/rpc-bundle
+      - name: Authenticate new seal and declare original 45-minute window
+        id: plan
+        run: |
+          mkdir "$RUNNER_TEMP/selection"
+          python3 tools/local-rpc-acceptance/candidate_220.py select "$RUNNER_TEMP/rpc-bundle" "$RUNNER_TEMP/selection/plan.json" "$PRODUCT_SHA" "$PRODUCT_TREE"
+          printf 'sha256=%s\n' "$(sha256sum "$RUNNER_TEMP/selection/plan.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: candidate-220-selection
+          path: ${{ runner.temp }}/selection/**
+          if-no-files-found: error
+          retention-days: 14
+  pair:
+    needs: [build, selection]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        pair: [0, 1]
+    env:
+      RPC_MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
+      RPC_PLAN_SHA256: ${{ needs.selection.outputs.plan }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: 0787d77cf8fa074f6d268bbf05444e54cc07ca52
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: candidate-220-selection
+          path: ${{ runner.temp }}/selection
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: rpc-binaries
+          path: ${{ runner.temp }}/rpc-bundle
+      - name: Execute original 220 five-stage AB or BA with unchanged gates
+        run: python3 tools/local-rpc-acceptance/candidate_220.py run "$RUNNER_TEMP/rpc-bundle" "$RUNNER_TEMP/rpc-results" '${{ matrix.pair }}' "$RUNNER_TEMP/selection/plan.json" "$PRODUCT_SHA" "$PRODUCT_TREE"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: rpc-220-original-${{ matrix.pair }}
+          path: ${{ runner.temp }}/rpc-results/**
+          if-no-files-found: error
+          retention-days: 14
+  summary:
+    if: always()
+    needs: [validation, build, selection, pair]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RPC_MANIFEST_SHA256: ${{ needs.build.outputs.manifest }}
+      RPC_PLAN_SHA256: ${{ needs.selection.outputs.plan }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: 0787d77cf8fa074f6d268bbf05444e54cc07ca52
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: candidate-220-selection
+          path: ${{ runner.temp }}/selection
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: rpc-220-original-*
+          path: ${{ runner.temp }}/pairs
+      - name: Evaluate all original gates and retain separate default-capacity failure
+        run: python3 tools/local-rpc-acceptance/candidate_220.py summary "$RUNNER_TEMP/pairs" "$RUNNER_TEMP/selection/plan.json" "$RUNNER_TEMP/summary.json" "$PRODUCT_SHA" "$PRODUCT_TREE"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: candidate-220-summary
+          path: ${{ runner.temp }}/summary.json
+          if-no-files-found: error
+          retention-days: 14
