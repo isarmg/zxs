@@ -247,17 +247,25 @@ impl<'a> Query<'a> {
         selector.finish()
     }
 
+    fn anchor_position(
+        &self,
+        anchor: &str,
+        commits: impl Iterator<Item = &'a crate::Commit>,
+    ) -> Result<Position<NodeKey<'a>>> {
+        let node = self.node(anchor)?;
+        let commit = match node {
+            nodes::Node::Content(version) => {
+                nodes::first_commit_in(commits, self.scope(), &version.version_id, self.cancel)?
+            }
+            // Revisions own their sequence; first publication cannot affect the anchor.
+            nodes::Node::Path(_) | nodes::Node::Metadata(_) => None,
+        };
+        Ok(Position::At((Reverse(node.sequence(commit)), node.id())))
+    }
+
     fn node_page(&self) -> Result<HistoryWindowPage> {
-        let scope = self.scope();
         let position = if let Some(anchor) = self.request.anchor_node_id.as_ref() {
-            let node = self.node(anchor.as_str())?;
-            let commit = nodes::first_commit(
-                self.state,
-                scope,
-                &node.version(self.state).version_id,
-                self.cancel,
-            )?;
-            Position::At((Reverse(node.sequence(commit)), node.id()))
+            self.anchor_position(anchor.as_str(), self.state.commits.values())?
         } else {
             self.position(|position| match position {
                 HistoryPosition::Node { sequence, node_id } => {

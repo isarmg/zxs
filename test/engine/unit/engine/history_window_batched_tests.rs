@@ -327,3 +327,51 @@ fn batched_selection_cancels_inside_a_commit_scan_before_returning_a_page() {
     assert_eq!(headers.get(), 3);
     assert!(cancel.is_cancelled());
 }
+
+#[test]
+fn revision_anchors_visit_zero_commit_headers_and_content_keeps_first_commit_order() {
+    let view = fixture();
+    let context = context();
+    let request = request(HistoryCollection::Nodes, 7);
+    let cancel = HistoryWindowCancellation::new();
+    let query = Query::new(&view, &request, &context, &cancel).unwrap();
+    let mut kinds = [0; 3];
+    for candidate in nodes::all_nodes(query.state, query.scope(), &cancel) {
+        let node = candidate.unwrap();
+        let headers = Cell::new(0);
+        let actual = query
+            .anchor_position(
+                node.id(),
+                query.state.commits.values().inspect(|_| {
+                    headers.set(headers.get() + 1);
+                }),
+            )
+            .unwrap();
+        let prior = nodes::first_commit(
+            query.state,
+            query.scope(),
+            &node.version(query.state).version_id,
+            &cancel,
+        )
+        .unwrap();
+        let Position::At(key) = actual else {
+            panic!("anchor must be exact");
+        };
+        assert_eq!(key, (Reverse(node.sequence(prior)), node.id()));
+        match node {
+            nodes::Node::Content(_) => {
+                kinds[0] += 1;
+                assert_eq!(headers.get(), query.state.commits.len());
+            }
+            nodes::Node::Path(_) => {
+                kinds[1] += 1;
+                assert_eq!(headers.get(), 0);
+            }
+            nodes::Node::Metadata(_) => {
+                kinds[2] += 1;
+                assert_eq!(headers.get(), 0);
+            }
+        }
+    }
+    assert!(kinds.into_iter().all(|count| count > 0));
+}

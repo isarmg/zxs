@@ -127,8 +127,17 @@ pub(super) fn first_commit<'a>(
     version: &str,
     cancel: &HistoryWindowCancellation,
 ) -> Result<Option<&'a Commit>> {
+    first_commit_in(state.commits.values(), scope, version, cancel)
+}
+
+pub(super) fn first_commit_in<'a>(
+    commits: impl Iterator<Item = &'a Commit>,
+    scope: Scope<'_>,
+    version: &str,
+    cancel: &HistoryWindowCancellation,
+) -> Result<Option<&'a Commit>> {
     let mut first = None::<&Commit>;
-    for commit in state.commits.values() {
+    for commit in commits {
         cancel.checkpoint()?;
         if commit.history_tree_id != scope.history {
             continue;
