@@ -209,7 +209,7 @@ jobs:
           ):
               raise SystemExit('Static asset regression requires the exact source and tree')
           if os.environ['SCOPE'] == 'head-range-semantics' and (source, tree) != (
-              'a19521357ffc14845a7eaaff80a87e9e3d036a9c', '831b591b9d61811b657dab43e5475b17c541e42b',
+              'e8ee4a4c8466f5dfe88ed1f05a529b84731c230e', 'cca16b8516547acb29285c4fe0222b39ebeb88a5',
           ):
               raise SystemExit('HEAD Range semantics requires the exact source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
@@ -894,26 +894,16 @@ jobs:
                       'python3 .github/scripts/check-architecture.py\n'
                       'python3 tools/rust-sources/manage.py verify'),
           ]
-          head_range_tests = [
-              'transfer::tests::malformed_duplicate_and_unsatisfiable_ranges_include_size_and_head_is_empty',
-              'transfer::tests::stale_if_range_returns_complete_content_and_head_retains_length',
-              'transfer::tests::ranges_obey_boundaries_and_reject_non_decimal_syntax',
-              'transfer::tests::download_lease_survives_until_body_consumption_or_cancellation',
-              'tests::authenticated_range_download_returns_exact_immutable_bytes',
-          ]
+          contextual_head = 'optional_identities::contextual_content_uses_typed_lookup_and_preserves_ranges_and_error_order'
           groups['head-range-semantics'] = [
-              dict(id='head-range-regression', cache='server', package='storage-server',
-                  test_groups=json.dumps([dict(selector=name, exact=True, count=1, required=[name])
-                      for name in head_range_tests] + [dict(selector='transfer_limits::tests::', count=7)]),
-                  command='Five exact existing HEAD/GET/If-Range/auth/lease consumers plus seven transfer-limit tests'),
-              dict(id='head-range-server-checks', cache='server',
+              dict(id='head-range-context-integration', cache='server', package='storage-server',
+                  test_groups=json.dumps([dict(selector=contextual_head, test_target='http_engine',
+                      exact=True, count=1, required=[contextual_head])]),
+                  command='Exact contextual download integration with preserved GET and corrected HEAD metadata'),
+              dict(id='head-range-context-checks', cache='server',
                   command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check '
-                      'src/server/src/transfer.rs test/server/unit/tests.rs test/server/unit/transfer/tests.rs\n'
-                      "cargo tree --locked --offline -p storage-server -e normal,build,dev -i http --format '{p} features={f}' | tee .diagnostics/http-features.txt\n"
-                      'cargo metadata --locked --offline --no-deps --format-version 1 > .diagnostics/cargo-metadata.json\n'
-                      'cargo clippy --locked --offline -p storage-server --lib --tests -- -D warnings\n'
-                      'python3 .github/scripts/check-architecture.py\n'
-                      'python3 tools/rust-sources/manage.py verify'),
+                      'test/server/integration/http_engine/optional_identities.rs\n'
+                      'cargo clippy --locked --offline -p storage-server --test http_engine -- -D warnings'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
