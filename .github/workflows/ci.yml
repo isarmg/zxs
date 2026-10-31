@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches-ignore: ["verify/perf-original-220-carrier-20261031"]
   pull_request:
   workflow_dispatch:
 
