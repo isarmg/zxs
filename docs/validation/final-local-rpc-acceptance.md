@@ -115,9 +115,43 @@
 流程为 validation→新两臂 build/seal→selection 冻结 45 分钟计划→原 220 AB/BA→summary。
 每阶段 1200 秒、每 pair 45 分钟、两 CPU、8GiB 地址空间／可用空间下限与原八项门槛不变。
 SHA、tree、manifest／binary／plan hash 不符、顺序或 oracle／样本不完整均拒绝。
-只复测五阶段，不重复已证明超默认容量的连续尾合同；旧 22 仅作为历史 d3 证据引用，
-不计作新产品通过。即使新 220 数值通过，连续容量 FAIL 仍单列且 summary 非零。
+只复测五阶段；旧 22 仅作为历史 d3 证据引用，不计作新产品通过。初版 controller 对当时
+64 字节预留版本固定保留连续容量 FAIL 并令 summary 非零，这一旧 run 结论不改写。
+当前 controller 不把旧预算失败套到新产品：连续项与总合同均标记
+`NOT_EVALUATED_BY_ORIGINAL_220`，`old_continuous` 单独保留原失败与旧预算证明，
+`actual_continuous_run` 为 null，必须另取独立连续 run 的实际结果。summary 退出 0 仅表示
+两对原八项门槛全部通过；任何原八项失败仍非零，退出成功不代表连续容量或完整合同通过。
 模板提交不代表已启动或通过；实际 run、产品 SHA/tree 和新密封摘要必须另行记录。
+
+### 新密封 2198fc 的原始 220 实测结果（2026-10-31）
+
+[41178276427](https://github.com/isarmg/zxs/actions/runs/41178276427) 使用新产品
+`2198fc1866ba68b1d7d517ca57a2360f9c66a0a6`、tree
+`1b5ba2aa0bf77b080a172207c1fc014cf8aebed5` 与原 e2f 对照，重新构建四个二进制；
+seal manifest SHA256 为 `39239baeb64700ef52af364ddedf16b218e1feef8e6add55cf8de8aa95871b22`。
+AB／BA 四臂均完成五阶段，但原十六项条件仍为 **12 PASS / 4 FAIL**：两方向的
+启动时间和打开 VmHWM 未达到原 1.1 倍／0.8 倍限制，原始 220 判定 **FAIL**。
+
+| 顺序 | 启动时间：e2f→2198fc（秒） | VmHWM：e2f→2198fc（KiB） | 保存 P95 增量（ms） |
+| --- | ---: | ---: | ---: |
+| AB | 85.910712100→133.152066959 | 449720→441496 | +3.926584 |
+| BA | 88.243269944→144.725878655 | 449648→441200 | +2.346905 |
+
+新候选 VmHWM 相对本次原对照降低约 1.8%，不是要求的 20%；相较旧 d3 543156／543024 KiB明显减少，但不同 run 的观测不能代替原门槛。
+读／目录 P95、P99、20 次保存总时长与保存 P95 均通过原限制；启动缺口仍在。
+每臂原始 JSON 的独立 oracle 均核验 220 个原操作／历史命名空间、718 个历史正文、
+500 个当前文件；RPC 后正常独立重开核验 20 个新增收据／历史正文／命名空间和 sequence 240。
+
+| 原始 ZIP | artifact ID | SHA256 |
+| --- | --- | --- |
+| AB | [13035007774](https://github.com/isarmg/zxs/actions/runs/41178276427/artifacts/13035007774) | `364e864c9909a08f28f882dda0332e8e1fa2ff16eecc86b39e43fb090d0056bf` |
+| BA | [13035252490](https://github.com/isarmg/zxs/actions/runs/41178276427/artifacts/13035252490) | `1a9ffaf8bfaf39ba2167077443be42348387e7f626f07aa37914b8336a9de044` |
+| summary | [13034843323](https://github.com/isarmg/zxs/actions/runs/41178276427/artifacts/13034843323) | `d60ea4ac5e983689b7d27cf58fa6411ee958a28a45a1117b63199741c32f9c82` |
+
+三个 ZIP 下载后均逐字节核对 SHA256，另核对四臂原始 JSON，不只依赖汇总。
+本次产品不含后续 ID-width 修复；summary 的 `FAIL_DEFAULT_BUDGET` 只沿用旧预算边界，
+不能评价后续 52b590 新产品。后续共同修复工程对照／连续容量验证是另一合同，不得替换
+本次原 e2f 门槛或抹去旧 2af、d3 的失败；本结果也不声称测量后来主线二进制。
 
 ### 后续候选：严格 ID 宽度的完整生命周期预留
 

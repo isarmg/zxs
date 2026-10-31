@@ -341,3 +341,65 @@ fn workspace_recovery_does_not_adopt_a_mirror_on_an_unadmitted_replacement() {
         "missing members do not shrink the write barrier"
     );
 }
+
+#[test]
+fn readonly_healthy_mirrors_reuse_exact_unmodified_canonical_evidence() {
+    let (_temp, engine, workspace) = workspace_fixture(1);
+    let locations = engine.workspace_locations().unwrap();
+    let paths = workspace_paths(&locations, &workspace.workspace_id).unwrap();
+    assert_eq!(paths.len(), 2);
+    let before: Vec<_> = paths
+        .iter()
+        .map(|source| fs::read(source.path()).unwrap())
+        .collect();
+    let loaded = engine
+        .read_workspace_mirrors(&workspace.workspace_id, &paths, false)
+        .unwrap();
+    assert!(loaded.consistent);
+    assert!(!loaded.terminal);
+    assert_eq!(loaded.canonical, canonical_json(&workspace).unwrap());
+    assert_eq!(loaded.canonical, canonical_json(&loaded.workspace).unwrap());
+    for (source, bytes) in paths.iter().zip(before) {
+        assert_eq!(fs::read(source.path()).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn readonly_mirror_reuse_does_not_hide_conflicting_owner_or_unproven_completion() {
+    let (_temp, engine, workspace) = workspace_fixture(1);
+    let locations = engine.workspace_locations().unwrap();
+    let paths = workspace_paths(&locations, &workspace.workspace_id).unwrap();
+    assert_eq!(paths.len(), 2);
+    let mut conflicting = workspace.clone();
+    conflicting.principal = "different-owner".into();
+    write_json(paths[1].path(), &conflicting, true).unwrap();
+    let before = fs::read(paths[1].path()).unwrap();
+    let error = engine
+        .read_workspace_mirrors(&workspace.workspace_id, &paths, false)
+        .err()
+        .unwrap();
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert_eq!(fs::read(paths[1].path()).unwrap(), before);
+
+    let mut completed = workspace.clone();
+    completed.state = WorkspaceState::Committed;
+    completed.fencing_token += 1;
+    write_json(paths[1].path(), &completed, true).unwrap();
+    let loaded = engine
+        .read_workspace_mirrors(&workspace.workspace_id, &paths, false)
+        .unwrap();
+    assert!(!loaded.consistent);
+    assert_eq!(loaded.canonical, canonical_json(&workspace).unwrap());
+    assert_eq!(loaded.workspace.state, WorkspaceState::Open);
+    // Read-only preflight may defer this possible transition; reconciliation
+    // still rejects it without the exact publication receipt.
+    let error = engine
+        .read_workspace_mirrors(&workspace.workspace_id, &paths, true)
+        .err()
+        .unwrap();
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert_eq!(
+        fs::read(paths[1].path()).unwrap(),
+        canonical_json(&completed).unwrap()
+    );
+}

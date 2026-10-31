@@ -333,8 +333,17 @@ impl Engine {
             }
         }
         let selected = healthy.remove(0);
-        let canonical = canonical_json(&selected)?;
+        // Read-only admission has not changed either decoded mirror. Reuse its
+        // exact canonical bytes; authoritative reconciliation must encode anew.
+        let canonical = if authoritative {
+            canonical_json(&selected)?
+        } else {
+            first
+        };
         for other in &healthy {
+            if !authoritative && consistent {
+                continue;
+            }
             if authoritative
                 || (selected.state == other.state && selected.fencing_token == other.fencing_token)
             {

@@ -143,7 +143,7 @@ class CandidateBindingTests(unittest.TestCase):
                     (root / 'unexpected').write_text('not an adapter')
                     with self.assertRaises(AssertionError): CANDIDATE.screen.identity(root)
 
-    def test_summary_retains_old_and_capacity_failure_even_when_original_gates_pass(self):
+    def test_summary_scopes_new_product_and_retains_old_capacity_failure(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(CANDIDATE.screen, 'git', self.git_identity):
             root = Path(tmp)
             self.bundle(root)
@@ -160,10 +160,24 @@ class CandidateBindingTests(unittest.TestCase):
                 directory.mkdir()
                 CANDIDATE.screen.write(directory / 'pair.json', data)
             output = root / 'summary.json'
+            with patch('builtins.print'):
+                CANDIDATE.summary(root, plan, output, self.pins)
+            report = json.loads(output.read_text())
+            self.assertEqual(report['original_220_gate'], 'PASS')
+            self.assertEqual(report['continuous_extension_support'], 'NOT_EVALUATED_BY_ORIGINAL_220')
+            self.assertEqual(report['full_extension_acceptance'], 'NOT_EVALUATED_BY_ORIGINAL_220')
+            self.assertIsNone(report['actual_continuous_run'])
+            self.assertTrue(report['old_continuous']['status'].startswith('FAIL_DEFAULT_BUDGET retained'))
+            self.assertIn('old 64-byte reservation', report['old_continuous']['status'])
+            self.assertEqual(report['old_original_220']['status'], 'FAIL retained')
+
+            failing = root / 'rpc-220-original-0' / 'pair.json'
+            data = json.loads(failing.read_text())
+            data['runs'][1]['phases']['requests']['open_ns'] = data['runs'][0]['phases']['requests']['open_ns'] * 2
+            CANDIDATE.screen.write(failing, data)
             with patch('builtins.print'), self.assertRaises(SystemExit) as failure:
                 CANDIDATE.summary(root, plan, output, self.pins)
             self.assertEqual(failure.exception.code, 1)
-            report = json.loads(output.read_text())
-            self.assertEqual(report['original_220_gate'], 'PASS')
-            self.assertEqual(report['continuous_extension_support'], 'FAIL_DEFAULT_BUDGET')
-            self.assertEqual(report['old_original_220']['status'], 'FAIL retained')
+            failed = json.loads(output.read_text())
+            self.assertEqual(failed['original_220_gate'], 'FAIL')
+            self.assertEqual(failed['full_extension_acceptance'], 'NOT_EVALUATED_BY_ORIGINAL_220')

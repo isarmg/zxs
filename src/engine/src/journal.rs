@@ -674,6 +674,10 @@ impl AuthenticatedMetadataObject {
     pub(crate) fn value(&self) -> &json_codec::Value {
         &self.value
     }
+    /// Consume the already authenticated decoded value without copying its tree.
+    pub(crate) fn into_value(self) -> json_codec::Value {
+        self.value
+    }
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.prepared.bytes
     }

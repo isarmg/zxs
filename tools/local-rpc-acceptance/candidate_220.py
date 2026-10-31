@@ -53,7 +53,9 @@ def select(bundle, output, pins):
         minimum_free_bytes=8*screen.GIB, cpus=2,
         old_original_220=dict(run_id=41174023827, status='FAIL retained'),
         old_22=dict(run_id=41168852801, scope='historical frozen d3 only; not new-product coverage'),
-        budget_proof=screen.budget_proof(), continuous_extension_support='FAIL_DEFAULT_BUDGET'))
+        old_continuous=dict(run_id=41168852801, status='FAIL_DEFAULT_BUDGET retained; old 64-byte reservation',
+                            budget_proof=screen.budget_proof()),
+        actual_continuous_run=None, continuous_extension_support='NOT_EVALUATED_BY_ORIGINAL_220'))
 
 
 def checked_plan(path, pins):
@@ -66,8 +68,10 @@ def checked_plan(path, pins):
     assert plan['deadline_unix'] - plan['created_unix'] == plan['pair_seconds'] == 45*60
     assert plan['phase_seconds'] == 1200 and plan['cpus'] == 2
     assert plan['address_space_bytes'] == plan['minimum_free_bytes'] == 8*screen.GIB
-    assert plan['continuous_extension_support'] == 'FAIL_DEFAULT_BUDGET'
-    assert plan['budget_proof'] == screen.budget_proof()
+    assert plan['continuous_extension_support'] == 'NOT_EVALUATED_BY_ORIGINAL_220'
+    assert plan['actual_continuous_run'] is None
+    assert plan['old_continuous'] == dict(run_id=41168852801,
+        status='FAIL_DEFAULT_BUDGET retained; old 64-byte reservation', budget_proof=screen.budget_proof())
     return plan
 
 
@@ -99,8 +103,11 @@ def compare(data, pair, plan):
 def summary(root, path, output, pins):
     plan = checked_plan(path, pins)
     report = dict(status='incomplete', source_pins=pins, manifest_sha256=plan['manifest_sha256'],
-        original_220_gate='NOT EVALUATED', continuous_extension_support='FAIL_DEFAULT_BUDGET',
-        full_extension_acceptance='FAIL', old_original_220=plan['old_original_220'],
+        original_220_gate='NOT EVALUATED', continuous_extension_support='NOT_EVALUATED_BY_ORIGINAL_220',
+        full_extension_acceptance='NOT_EVALUATED_BY_ORIGINAL_220',
+        actual_continuous_run=None, old_continuous=plan['old_continuous'],
+        exit_scope='original eight gates only; never full continuous acceptance',
+        old_original_220=plan['old_original_220'],
         old_22=plan['old_22'], old_2af_gate='FAIL unchanged', pairs=[])
     try:
         for pair in (0, 1):
@@ -111,8 +118,10 @@ def summary(root, path, output, pins):
     finally:
         screen.write(output, report)
         print('CANDIDATE_ORIGINAL_220', json.dumps(report))
-    # Completing the narrower five stages never erases the continuous-tail fail.
-    raise SystemExit(1)
+    # Exit success certifies only the original eight gates for both pairs.
+    # This five-stage controller never evaluates the separate continuous run.
+    if report['original_220_gate'] != 'PASS':
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':
