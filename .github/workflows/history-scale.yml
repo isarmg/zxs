@@ -6,7 +6,7 @@ on:
     inputs:
       stage:
         type: choice
-        options: ['2048', '4096', '10000', '20000', 'counts-2048']
+        options: ['2048', '4096', '5000', '8192', 'counts-2048']
         required: true
       prior_run_id:
         type: string
@@ -69,7 +69,7 @@ jobs:
   validation:
     needs: checks
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.stage == 'counts-2048' && 210 || 75 }}
+    timeout-minutes: ${{ inputs.stage == '8192' && 350 || (inputs.stage == 'counts-2048' || inputs.stage == '5000') && 210 || 75 }}
     env:
       PROFILE: growth-${{ inputs.stage }}
       PRIOR_RUN_ID: ${{ inputs.prior_run_id }}
@@ -118,7 +118,7 @@ jobs:
         if: inputs.stage != '2048'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: history-growth-${{ (inputs.stage == '4096' || inputs.stage == 'counts-2048') && 'growth-2048' || inputs.stage == '10000' && 'growth-4096' || 'growth-10000' }}-${{ inputs.prior_run_id }}
+          name: history-growth-${{ (inputs.stage == '4096' || inputs.stage == 'counts-2048') && 'growth-2048' || inputs.stage == '5000' && 'growth-4096' || 'growth-5000' }}-${{ inputs.prior_run_id }}
           run-id: ${{ inputs.prior_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: prerequisites/prior
