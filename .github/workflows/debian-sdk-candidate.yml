@@ -1,0 +1,9 @@
+name: Debian 13 SDK candidate validation
+on:
+  push:
+    branches: [verify/native-debian-sdk-loader-20261031]
+permissions:
+  contents: read
+jobs:
+  sdk:
+    uses: ./.github/workflows/smb-sdk.yml
