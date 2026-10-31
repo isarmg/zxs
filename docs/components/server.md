@@ -32,14 +32,14 @@ spool、管理及初始化恢复直接使用 Unix 权限与链接检查，不保
 
 ```sh
 target/native/debug/zxs --root /srv/zxs/system \
-  --listen 127.0.0.1:7400 --web-dir /srv/zxs/web/dist
+  --listen 0.0.0.0:7400 --web-dir /srv/zxs/web/dist
 ```
 
 `RUST_LOG` 仅在环境变量缺失时默认 `warn`；已配置值交给当前本地 `EnvFilter` 严格解析，空值保留其显式关闭日志的语义，不当作缺失。无效 directive（包括合法项与无效项混合）或非 Unicode 值以退出码 1 拒绝启动，发生在创建 Tokio 运行时、状态目录及监听服务之前。stderr 分别报告 `zxs: RUST_LOG contains an invalid filter directive` 或 `zxs: RUST_LOG must contain valid Unicode`；具名错误保留原始解析／环境读取 source，但进程诊断不输出可能含凭据的环境值或 source 内容。`--help`、`--version` 和 CLI 语法检查仍先于日志配置，不受无效 `RUST_LOG` 影响。
 
-HTTP 监听地址必须是回环地址。对外部署由同机反向代理终止 TLS；同时指定公开 HTTPS Origin，例如 `--external-origin https://storage.example.org`。服务只信任显式配置的 Origin，不根据任意转发头改变安全策略。`--web-dir` 可省略；省略时仅提供 API。
+HTTP 默认监听 `0.0.0.0:7400`，可通过 `--listen` 指定其他 IPv4 或 IPv6 地址，不禁止非回环监听。浏览器使用服务器的实际 IP 或主机名访问，`0.0.0.0` 是绑定地址，不是客户端目标。网络可达范围、防火墙与传输保护由部署者管理；明文 HTTP 不保护传输中的凭据和数据。需要 HTTPS 时由反向代理终止 TLS，并指定公开 HTTPS Origin，例如 `--external-origin https://storage.example.org`。直接 HTTP 访问时不设置 `--external-origin`；设置该参数后仅接受声明的 HTTPS Origin。服务不根据任意转发头改变 Origin 或 Cookie 策略。`--web-dir` 可省略；省略时仅提供 API。
 
-公开 `router` / `serve_with_shutdown` 入口（CLI 经 `serve` 转入）消费原始 `ServerConfig`，失败返回错误；准入后以私有不可变配置及 `Arc` 共享，不在请求提取或中间件克隆中复制路径、代理列表。静态 HTTPS Origin 在准入时解析一次，缓存浏览器规范化表示；同源比较和 Secure Cookie 使用同一证明。每个请求的 Origin 仍逐次检查数量、文本及精确同源值，未配置外部 Origin 时仍逐次解析并限制请求 Host 为回环；CSRF、Sec-Fetch-Site、真实代理对端与转发头校验不缓存、不省略。配置修改需重新准入，不提供运行中可变出口。
+公开 `router` / `serve_with_shutdown` 入口（CLI 经 `serve` 转入）消费原始 `ServerConfig`，失败返回错误；准入后以私有不可变配置及 `Arc` 共享，不在请求提取或中间件克隆中复制路径、代理列表。静态 HTTPS Origin 在准入时解析一次，缓存浏览器规范化表示；同源比较和 Secure Cookie 使用同一证明。每个请求的 Origin 仍逐次检查数量、文本及精确同源值，未配置外部 Origin 时仍逐次解析请求 Host，并要求 Origin 与该 HTTP 来源精确同源，不限制 Host 为回环；CSRF、Sec-Fetch-Site、真实代理对端与转发头校验不缓存、不省略。配置修改需重新准入，不提供运行中可变出口。
 
 `--max-upload-bytes` 设置单次完整上传上限，默认 1073741824 字节；实际公开上限取它与存储池 `max_file_bytes` 的较小值。HTTP 上传和读取各自默认最多 2 个活动操作，唯一管理员的全部会话共享对应池，支持显式配置，见[传输准入与期限](#http-transfer-limits)；密码验证最多并发 4 个。引擎工作区数量、字节数、过期时间等限制来自初始化 JSON 配置。发布仍经互斥锁串行执行，上传、读取及工作区提交的部分准备在锁外完成，详见[写入流程](../architecture/write-flow.md)；未提供吞吐量保证。
 
@@ -242,9 +242,9 @@ Unix socket 测试需要运行环境允许本机 socket。[集成回归](../../t
 
 ### 反向代理登录限流
 
-默认忽略 `X-Forwarded-For`，按实际 TCP 对端限流。若使用同机 TLS 反向代理，可显式增加 `--trusted-proxy-ip 127.0.0.1`（IPv6 代理则为 `--trusted-proxy-ip ::1`；可重复）。必须同时设置 `--external-origin https://storage.example.org`。仅接受指定的精确回环代理地址，不接受网段或非回环代理；监听地址仍必须是回环地址。这是可选部署配置，升级不会自动启用信任。
+默认忽略 `X-Forwarded-For`，按实际 TCP 对端限流。若使用 TLS 反向代理，可显式增加 `--trusted-proxy-ip 127.0.0.1`（IPv6 代理则为 `--trusted-proxy-ip ::1`；可重复）。必须同时设置 `--external-origin https://storage.example.org`。仅接受指定的精确代理 IP，不接受网段；代理 IP 和监听地址均不要求回环。这是可选部署配置，升级不会自动启用信任。
 
-代理必须**覆盖**客户端传入的 `X-Forwarded-For`，仅写入它实际看到的客户端 IP，例如 nginx：`proxy_set_header X-Forwarded-For $remote_addr;`。禁止使用 `$proxy_add_x_forwarded_for` 或转发客户端原始头。来自受信代理的缺失、重复、列表、带端口或其他非单一 IP 值会被拒绝；未受信 TCP 对端的该头被忽略。`Forwarded`、`X-Real-IP` 和其他转发头不参与身份、安全 Origin 或 Cookie 策略。不要将来自不可信本地进程的请求混入受信代理来源；本机进程可使用同一回环源地址，信任本机是此部署模型的前提。多层代理需要在最后一跳安全解析上游来源后覆盖此头，不能直接传递头链。
+代理必须**覆盖**客户端传入的 `X-Forwarded-For`，仅写入它实际看到的客户端 IP，例如 nginx：`proxy_set_header X-Forwarded-For $remote_addr;`。禁止使用 `$proxy_add_x_forwarded_for` 或转发客户端原始头。来自受信代理的缺失、重复、列表、带端口或其他非单一 IP 值会被拒绝；未受信 TCP 对端的该头被忽略。`Forwarded`、`X-Real-IP` 和其他转发头不参与身份、安全 Origin 或 Cookie 策略。部署者须保证受信代理地址不会被不可信来源冒用；使用回环代理时，本机进程可使用同一源地址，须信任本机。多层代理需要在最后一跳安全解析上游来源后覆盖此头，不能直接传递头链。
 
 登录保留每来源 IP 每 60 秒 10 次的上限；共享 NAT 的客户端仍共享来源限额。来源 IP + 用户名组合不再另建计数，因为同一来源的总上限已覆盖该组合。跨 IP 针对同一规范化用户名的尝试超过 10 次后，验证前逐步增加 250ms、500ms、1s、2s、4s 至最多 6s 的等待，而不是耗尽用户名额度后整分钟拒绝。账号压力在连续 60 秒无获准尝试后消退，持续攻击不能借固定窗口边界反复取得免费突发额度。
 

@@ -295,7 +295,6 @@ async fn rejected_asset_links_and_special_files_never_enable_the_static_file_ser
 #[test]
 fn invalid_server_security_and_admission_configuration_still_fails_closed() {
     for invalid in [
-        "listen",
         "origin",
         "proxy",
         "spool_limits",
@@ -307,7 +306,6 @@ fn invalid_server_security_and_admission_configuration_still_fails_closed() {
         config.web_dir = Some(root.path().join("missing-web"));
         std::fs::write(&config.spool_dir, "unavailable").unwrap();
         match invalid {
-            "listen" => config.listen = "0.0.0.0:7400".parse().unwrap(),
             "origin" => config.external_origin = Some("http://example.invalid".into()),
             "proxy" => config.trusted_proxy_ips.push("192.0.2.1".parse().unwrap()),
             "spool_limits" => config.http_spool_limits.bytes_total = 0,

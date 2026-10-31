@@ -1560,7 +1560,7 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     /// Required when TLS terminates upstream. Origin comparison never uses forwarded headers.
     pub external_origin: Option<String>,
-    /// Exact loopback proxy peers allowed to supply a single, overwritten X-Forwarded-For IP.
+    /// Exact proxy peers allowed to supply a single, overwritten X-Forwarded-For IP.
     pub trusted_proxy_ips: Vec<std::net::IpAddr>,
     pub spool_dir: PathBuf,
     pub web_dir: Option<PathBuf>,
@@ -1571,9 +1571,10 @@ pub struct ServerConfig {
     pub smb: Option<SmbConfig>,
 }
 impl ServerConfig {
-    pub fn loopback(root: &Path) -> Self {
+    /// Default HTTP configuration listening on all IPv4 interfaces, port 7400.
+    pub fn new(root: &Path) -> Self {
         Self {
-            listen: "127.0.0.1:7400".parse().unwrap(),
+            listen: SocketAddr::from(([0, 0, 0, 0], 7400)),
             external_origin: None,
             trusted_proxy_ips: Vec::new(),
             spool_dir: root.join("api-spool"),
@@ -1582,6 +1583,13 @@ impl ServerConfig {
             http_spool_limits: SpoolLimits::default(),
             http_transfer_limits: TransferLimits::default(),
             smb: None,
+        }
+    }
+    /// Explicit local-only configuration for callers that need loopback isolation.
+    pub fn loopback(root: &Path) -> Self {
+        Self {
+            listen: SocketAddr::from(([127, 0, 0, 1], 7400)),
+            ..Self::new(root)
         }
     }
     fn prepare_spool(&self) -> Result<(), ApiError> {
@@ -1603,17 +1611,9 @@ impl ServerConfig {
         }
     }
     fn admit(self) -> Result<Arc<AdmittedServerConfig>, ApiError> {
-        if !self.listen.ip().is_loopback() {
+        if !self.trusted_proxy_ips.is_empty() && self.external_origin.is_none() {
             return Err(ApiError::invalid(
-                "API must listen on loopback; publish through a TLS terminator",
-            ));
-        }
-        if !self.trusted_proxy_ips.is_empty()
-            && (self.external_origin.is_none()
-                || self.trusted_proxy_ips.iter().any(|ip| !ip.is_loopback()))
-        {
-            return Err(ApiError::invalid(
-                "trusted proxies must be exact loopback IPs and require an HTTPS external origin",
+                "trusted proxies require an HTTPS external origin",
             ));
         }
         self.http_spool_limits.validate()?;

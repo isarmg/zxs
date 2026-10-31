@@ -30,6 +30,21 @@ class MaintainedDocs(unittest.TestCase):
                 self.assertFalse(private.is_relative_to(export))
                 self.assertEqual(service[f'{setting}Mode'], '0700')
 
+    def test_public_listen_default_is_consistent_in_deployment_docs(self):
+        unit = configparser.ConfigParser(interpolation=None, delimiters=('=',))
+        unit.read(ROOT / 'deploy/systemd/zxs.service')
+        self.assertIn('--listen 0.0.0.0:7400', unit['Service']['ExecStart'])
+        for relative in ('docs/components/server.md', 'docs/getting-started.md',
+                         'docs/operations/deploy/systemd.md', 'docs/21-configuration.md'):
+            with self.subTest(document=relative):
+                text = (ROOT / relative).read_text()
+                self.assertIn('0.0.0.0:7400', text)
+                self.assertNotIn('HTTP 监听地址必须是回环地址', text)
+                self.assertNotIn('默认只监听本机', text)
+        client = (ROOT / 'docs/components/client.md').read_text()
+        self.assertIn('不限制 HTTP 主机为回环', client)
+        self.assertIn('HTTPS 仍验证服务器证书', client)
+
     def test_engineering_entrypoints_and_test_layout(self):
         text = (ROOT / 'docs/20-engineering.md').read_text()
         self.assertNotRegex(text, r'\bzxs offline-(?:check|export)\b')

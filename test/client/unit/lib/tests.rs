@@ -1,24 +1,56 @@
 use super::*;
 #[test]
-fn plaintext_remote_and_credential_urls_are_rejected() {
-    assert!(Client::connect("http://example.org").is_err());
-    assert!(Client::connect("https://name:secret@example.org").is_err());
-    assert!(Client::connect("http://127.0.0.1:7400").is_ok());
-    assert!(Client::connect("https://example.org").is_ok());
+fn http_and_https_origins_accept_remote_and_loopback_hosts() {
+    for address in [
+        "http://example.org",
+        "http://192.0.2.10:7400",
+        "http://[2001:db8::10]:7400",
+        "http://127.0.0.1:7400",
+        "http://localhost:7400",
+        "http://[::1]:7400",
+        "https://example.org",
+        "https://192.0.2.10:7400",
+        "https://[2001:db8::10]:7400",
+    ] {
+        assert!(Client::connect(address).is_ok(), "rejected {address}");
+    }
+}
+
+#[test]
+fn non_origin_and_credential_urls_are_rejected() {
+    for address in [
+        "ftp://example.org",
+        "file:///tmp/server",
+        "https://name:secret@example.org",
+        "http://name:secret@example.org",
+        "http://name@example.org",
+        "http://example.org/api/",
+        "http://example.org?key=value",
+        "http://example.org#fragment",
+    ] {
+        assert!(Client::connect(address).is_err(), "accepted {address}");
+    }
 }
 #[test]
 fn route_segments_cannot_escape_scope() {
     assert_eq!(segment("a/b?x=1"), "a%2Fb%3Fx%3D1");
-    let client = Client::connect("https://example.org").unwrap();
-    for route in [
-        "/api/%2e%2e/private",
-        "/api/.%2E/private",
-        "/api/a\t/../private",
-        "/api/a%2fb",
-    ] {
-        assert!(client.url(route).is_err(), "accepted {route:?}");
+    for address in ["http://example.org", "https://example.org"] {
+        let client = Client::connect(address).unwrap();
+        for route in [
+            "/api/%2e%2e/private",
+            "/api/.%2E/private",
+            "/api/a\t/../private",
+            "/api/a%2fb",
+            "http://other.example/api/files",
+            "//other.example/api/files",
+        ] {
+            assert!(
+                client.url(route).is_err(),
+                "accepted {route:?} for {address}"
+            );
+        }
+        assert!(client.url("/api/files?path=a/../b").is_ok());
     }
-    assert!(client.url("/api/files?path=a/../b").is_ok());
 }
 
 #[test]

@@ -220,3 +220,24 @@ fn scrub_host_policy_flags_are_positive_and_daemon_defaults_are_periodic() {
         assert!(Args::try_parse_from(["zxs", flag, "0"]).is_err());
     }
 }
+
+#[test]
+fn listen_defaults_to_all_ipv4_interfaces_and_accepts_explicit_addresses() {
+    assert_eq!(
+        Args::try_parse_from(["zxs"]).unwrap().listen,
+        "0.0.0.0:7400".parse().unwrap()
+    );
+    for listen in [
+        "127.0.0.1:7400",
+        "192.0.2.1:7400",
+        "[::]:7400",
+        "[2001:db8::1]:7400",
+    ] {
+        assert_eq!(
+            Args::try_parse_from(["zxs", "--listen", listen])
+                .unwrap()
+                .listen,
+            listen.parse().unwrap()
+        );
+    }
+}

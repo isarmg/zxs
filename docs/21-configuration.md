@@ -19,6 +19,8 @@
 
 以下 TOML 定义完整目标配置，不是现有进程直接读取的配置或可直接部署的 smb.conf。当前引擎读取严格 JSON `Config`；产品首次初始化通过 Web 受保护引导，操作员先在守护进程 `--setup-disk ID=/absolute/path` 白名单中配置本机可信盘位。此流程不挂载、分区或格式化设备。下述目标配置字段不表示 Web 已提供任意 Config 编辑器。实际接受的字段和限制见[服务端说明](components/server.md)、[救援配置草稿](components/rescue.md#uninitialized-configuration-drafts)及[当前限制](23-delivery-and-decisions.md#s23-03)。
 
+当前守护进程的 `--listen` 默认值为 `0.0.0.0:7400`，允许非回环 IPv4/IPv6 地址；网络可达范围与传输保护由部署者管理。直接 HTTP 与 HTTPS 反向代理的 Origin 配置见[服务端启动说明](components/server.md)。下方 `remote_transport` 是 HTTPS 部署目标示例，不是禁止非回环 HTTP 的进程准入规则。
+
 Samba 配置由经版本验收的部署模板另行生成。设备清单通过登记工具产生，不在示例中填写真实设备路径。
 
 除系统盘外最低只需一块存储盘，二级及后续备份层均为可选。单盘配置只有一级盘、一个元数据成员和一份业务内容；没有磁盘冗余，也不承诺唯一盘丢失后的恢复。下列多层、三元数据成员示例展示可选扩展，不是最小部署要求。

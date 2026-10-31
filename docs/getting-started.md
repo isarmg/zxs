@@ -10,7 +10,7 @@
 ```sh
 cargo build --locked --offline --target-dir target/native -p storage-server -p storage-rescue
 target/native/debug/zxs --root "$PWD/runtime/pool" \
-  --management-root "$PWD/runtime/management" --listen 127.0.0.1:7400 \
+  --management-root "$PWD/runtime/management" --listen 0.0.0.0:7400 \
   --web-dir /absolute/path/to/verified-web-output \
   --setup-disk "P01=$PWD/runtime/disks/P01" --allow-development-setup
 ```
@@ -55,7 +55,7 @@ PYBOOTSTRAP
 
 `--allow-development-setup` 仍只标记开发模拟；普通生产存储目录不需该开关，也不要求 Btrfs、独立挂载点或物理设备独立性。用户自行保证底层故障域，程序保留目录 device/inode、seal、权限和完整性检查。高级初始配置由本机 `--setup-config ID=/absolute/private-config.json` 预置，再在 Web 选择；浏览器不能传任意路径或配置 JSON。
 
-服务运行时通过 Web 管理、SMB 访问文件。直接启动 `zxs`，不使用 `serve` 子命令。离线救援见[救援说明](components/rescue.md)，需要打开池的救援操作先停服。默认只监听本机，外部访问需要 HTTPS 反向代理和正确 Origin。系统盘管理凭据与数据成员分离，缺失或损坏的数据池不阻止管理 HTTP 启动。
+服务运行时通过 Web 管理、SMB 访问文件。直接启动 `zxs`，不使用 `serve` 子命令。离线救援见[救援说明](components/rescue.md)，需要打开池的救援操作先停服。默认监听 `0.0.0.0:7400`，不禁止非回环地址；浏览器以服务器实际 IP 或主机名访问。网络可达范围和传输保护由部署者保证，HTTP 会明文传输凭据与数据；需要 HTTPS 时配置反向代理和正确的 `--external-origin`。仅供本机开发时可显式指定 `--listen 127.0.0.1:7400`。系统盘管理凭据与数据成员分离，缺失或损坏的数据池不阻止管理 HTTP 启动。
 
 Web UI 不提供文件上传、下载或正文预览；文件正文由 SMB 或受控 HTTP API 读写。HTTP API 仍是可测试的协议边界，不因 UI 缺少按钮而删除，也不等同于额外的原生用户 App。页面范围以[Web 组件说明](components/web.md)为准，协议以[API 规范](15-api-and-errors.md)为准。
 

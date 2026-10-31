@@ -1,4 +1,4 @@
-//! Shared native client. Redirects are disabled and plain HTTP is restricted to loopback.
+//! Shared native HTTP/HTTPS client. Redirects are disabled.
 use data_serialization::{Deserialize, Serialize};
 use json_codec::{Value, json};
 use std::time::Duration;
@@ -95,11 +95,7 @@ pub struct Client {
 impl Client {
     pub fn connect(address: &str) -> Result<Self, Error> {
         let base = url_encoding::address::Url::parse(address)?;
-        let loopback = base.host_str().is_some_and(|host| {
-            host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1"
-        });
         if !matches!(base.scheme(), "https" | "http")
-            || (base.scheme() == "http" && !loopback)
             || base.host_str().is_none()
             || !base.username().is_empty()
             || base.password().is_some()
@@ -107,7 +103,7 @@ impl Client {
             || base.fragment().is_some()
             || base.path() != "/"
         {
-            return Err(Error::Address("use an HTTPS origin, or HTTP on loopback; paths, credentials and query strings are prohibited".into()));
+            return Err(Error::Address("use an HTTP or HTTPS origin; paths, credentials, query strings and fragments are prohibited".into()));
         }
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())

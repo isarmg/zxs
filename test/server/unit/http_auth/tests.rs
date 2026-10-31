@@ -253,7 +253,7 @@ fn proxy_clients_have_separate_budgets_but_cannot_rotate_guesses_to_bypass_sourc
 }
 
 #[test]
-fn proxy_configuration_requires_loopback_peer_and_valid_https_origin() {
+fn proxy_configuration_accepts_remote_peer_with_valid_https_origin() {
     let mut config = proxy_config();
     config.clone().admit().unwrap();
     config.external_origin = None;
@@ -262,7 +262,7 @@ fn proxy_configuration_requires_loopback_peer_and_valid_https_origin() {
     assert!(config.clone().admit().is_err());
     config.external_origin = Some("https://storage.example.org".into());
     config.trusted_proxy_ips = vec![address(1)];
-    assert!(config.clone().admit().is_err());
+    assert!(config.clone().admit().is_ok());
 }
 
 #[test]
@@ -1919,4 +1919,109 @@ fn request_origin_admission_still_rejects_missing_duplicate_and_cross_site_heade
         HeaderValue::from_static("https://storage.example.org"),
     );
     assert!(same_origin(&headers, &config, true).is_err());
+}
+
+#[test]
+fn public_listener_configuration_preserves_explicit_loopback_choice() {
+    let root = tempfile::tempdir().unwrap();
+    let config = ServerConfig::new(root.path());
+    assert_eq!(config.listen, "0.0.0.0:7400".parse().unwrap());
+    assert!(
+        ServerConfig::loopback(root.path())
+            .listen
+            .ip()
+            .is_loopback()
+    );
+    for listen in [
+        "0.0.0.0:7400",
+        "192.0.2.1:7400",
+        "[::]:7400",
+        "[2001:db8::1]:7400",
+    ] {
+        let mut config = config.clone();
+        config.listen = listen.parse().unwrap();
+        assert!(config.admit().is_ok(), "{listen}");
+    }
+}
+
+#[test]
+fn direct_remote_http_requires_same_origin_without_forwarded_header_trust() {
+    let root = tempfile::tempdir().unwrap();
+    let config = ServerConfig::new(root.path()).admit().unwrap();
+    assert!(!config.secure_cookie());
+    for host in [
+        "192.0.2.20:7400",
+        "storage.example.org:7400",
+        "[2001:db8::20]:7400",
+        "127.0.0.1:7400",
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_str(host).unwrap());
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_str(&format!("http://{host}")).unwrap(),
+        );
+        headers.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.insert("x-forwarded-host", HeaderValue::from_static("evil.example"));
+        assert!(same_origin(&headers, &config, true).is_ok(), "{host}");
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://evil.example"),
+        );
+        assert!(same_origin(&headers, &config, true).is_err());
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_str(&format!("https://{host}")).unwrap(),
+        );
+        assert!(same_origin(&headers, &config, true).is_err());
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_str(&format!("http://{host}")).unwrap(),
+        );
+        headers.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert!(same_origin(&headers, &config, true).is_err());
+        headers.remove("sec-fetch-site");
+        headers.append(header::HOST, HeaderValue::from_static("evil.example"));
+        assert!(same_origin(&headers, &config, true).is_err());
+    }
+    for host in [
+        "user@storage.example.org",
+        "storage.example.org/path",
+        "storage.example.org/",
+        "storage.example.org?query",
+        "storage.example.org#fragment",
+        "storage.example.org\\path",
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_str(host).unwrap());
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_str(&format!("http://{host}")).unwrap(),
+        );
+        assert!(same_origin(&headers, &config, true).is_err(), "{host}");
+    }
+}
+
+#[test]
+fn remote_trusted_proxy_still_requires_exact_transport_peer() {
+    let mut config = proxy_config();
+    config.trusted_proxy_ips = vec![address(1)];
+    config.clone().admit().unwrap();
+    assert_eq!(
+        client_ip(&request_from("192.0.2.1:1234", Some("192.0.2.20")), &config).unwrap(),
+        address(20)
+    );
+    assert_eq!(
+        client_ip(&request_from("192.0.2.2:1234", Some("192.0.2.20")), &config).unwrap(),
+        address(2)
+    );
+    assert!(client_ip(&request_from("192.0.2.1:1234", None), &config).is_err());
+    assert!(
+        client_ip(
+            &request_from("192.0.2.1:1234", Some("192.0.2.20, 192.0.2.21")),
+            &config
+        )
+        .is_err()
+    );
 }

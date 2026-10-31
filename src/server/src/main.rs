@@ -62,11 +62,11 @@ struct Args {
     #[arg(long)]
     allow_development_setup: bool,
 
-    #[arg(long, default_value = "127.0.0.1:7400")]
+    #[arg(long, default_value = "0.0.0.0:7400")]
     pub(crate) listen: SocketAddr,
     #[arg(long)]
     pub(crate) external_origin: Option<String>,
-    /// Trust this exact loopback proxy peer; it must overwrite X-Forwarded-For with one IP.
+    /// Trust this exact proxy peer; it must overwrite X-Forwarded-For with one IP.
     #[arg(long = "trusted-proxy-ip", requires = "external_origin")]
     pub(crate) trusted_proxy_ips: Vec<std::net::IpAddr>,
     #[arg(long)]
@@ -215,7 +215,7 @@ async fn run(args: Args, shutdown: storage_server::ShutdownSignal) -> Result<()>
     } else {
         current.join(management_root)
     };
-    let mut config = ServerConfig::loopback(&management_root);
+    let mut config = ServerConfig::new(&management_root);
     config.listen = listen;
     config.external_origin = external_origin;
     config.trusted_proxy_ips = trusted_proxy_ips;

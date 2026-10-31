@@ -1,6 +1,6 @@
 # Linux 服务部署审阅样例
 
-[zxs.service](../../../deploy/systemd/zxs.service) 是供部署前修改和审阅的 systemd 单元，没有安装、启用或启动。它默认只监听回环 HTTP，提供 API 和显式指定的 Web 静态目录；通过配置正确的 HTTPS 反向代理开放浏览器接入；远程运维 CLI 已移除。`zxs.example.com`、程序路径和存储盘位路径必须换成实际配置。
+[zxs.service](../../../deploy/systemd/zxs.service) 是供部署前修改和审阅的 systemd 单元，没有安装、启用或启动。它默认监听 `0.0.0.0:7400` 的 HTTP，提供 API 和显式指定的 Web 静态目录，不限制非回环监听；网络可达范围由部署者管理。此样例配置 HTTPS 外部来源，使用时须配置对应的 TLS 反向代理；远程运维 CLI 已移除。`zxs.example.com`、程序路径和存储盘位路径必须换成实际配置。若直接通过 HTTP 访问服务器，应从样例 `ExecStart` 移除 `--external-origin https://zxs.example.com`，服务按实际请求 Host 校验同源；不要保留一个不使用的 HTTPS 来源。默认全接口监听不等于信任任意代理或关闭认证。
 
 ## 部署前条件
 
@@ -20,7 +20,7 @@
 ```ini
 [Service]
 ExecStart=
-ExecStart=/opt/zxs/bin/zxs --root /var/lib/zxs/state --management-root /var/lib/zxs/management --listen 127.0.0.1:7400 --external-origin https://zxs.example.com --web-dir /opt/zxs/web --setup-disk P01=/srv/zxs/disks/P01 --smb-socket /run/zxs/smb.sock --smb-peer-uid 0 --smb-user zxs-owner
+ExecStart=/opt/zxs/bin/zxs --root /var/lib/zxs/state --management-root /var/lib/zxs/management --listen 0.0.0.0:7400 --external-origin https://zxs.example.com --web-dir /opt/zxs/web --setup-disk P01=/srv/zxs/disks/P01 --smb-socket /run/zxs/smb.sock --smb-peer-uid 0 --smb-user zxs-owner
 ```
 
 示例的 `0` 只适用于确认桥接在 Samba 可信 root 进程身份下连接的部署。该连接时机必须在目标 Samba 验证，不能放宽 socket 权限来适应未认证的进程。`/run/zxs` 及 socket 分别维持 `0700`、`0600`，`zxs-owner` 通过 Samba 独立凭据认证后绑定到唯一 ZXS 管理员；不接受 `Samba=ZXS` 映射、重复账户配置、匿名、guest 或 force-user 会话。Samba 配置须同时限制 `valid users` 并关闭所有 guest 路径，见[共享样例](../../../deploy/samba/smb.conf.example)。共享仓库拆分、恢复后必须显式重新绑定，不能自动接入迁移后的历史域。

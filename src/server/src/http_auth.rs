@@ -319,7 +319,7 @@ pub(crate) fn same_origin(
     let origin = origin
         .to_str()
         .map_err(|source| ApiError::forbidden().with_source(source))?;
-    let loopback_origin;
+    let direct_origin;
     let expected = match &config.external_origin {
         Some(origin) => origin.0.as_str(),
         None => {
@@ -329,14 +329,20 @@ pub(crate) fn same_origin(
                 .ok_or_else(ApiError::forbidden)?;
             let parsed = url_encoding::address::Url::parse(&format!("http://{host}"))
                 .map_err(|source| ApiError::forbidden().with_source(source))?;
-            if !matches!(
-                parsed.host_str(),
-                Some("localhost") | Some("127.0.0.1") | Some("[::1]") | Some("::1")
-            ) {
+            if headers.get_all(header::HOST).iter().count() != 1
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.path() != "/"
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+                || host.contains('/')
+                || host.contains('\\')
+            {
                 return Err(ApiError::forbidden());
             }
-            loopback_origin = format!("http://{host}");
-            loopback_origin.as_str()
+            direct_origin = parsed.origin().ascii_serialization();
+            direct_origin.as_str()
         }
     };
     if origin != expected {

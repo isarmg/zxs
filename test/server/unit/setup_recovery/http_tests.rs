@@ -648,7 +648,7 @@ fn configured_app(failed: bool, proxy: bool) -> (tempfile::TempDir, Router, Arc<
     });
     let auth_root = temp.path().join("http-auth");
     let auth = AuthStore::initialize(&auth_root, "admin", "long-test-password").unwrap();
-    let mut config = ServerConfig::loopback(&auth_root);
+    let mut config = ServerConfig::new(&auth_root);
     if proxy {
         config.external_origin = Some("https://storage.example.org".into());
         config.trusted_proxy_ips = vec!["127.0.0.1".parse().unwrap()];
@@ -1056,4 +1056,77 @@ async fn auxiliary_failure_preserves_bootstrap_authorization_and_setup_routes() 
         );
     }
     assert_eq!(probe.mutations.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn direct_remote_http_setup_and_login_preserve_credentials_and_csrf() {
+    let (_temp, app, probe) = app();
+    let remote_request = |method: &str, path: &str| {
+        HttpRequest::builder()
+            .method(method)
+            .uri(path)
+            .extension(http_routing::extract::ConnectInfo(
+                "192.0.2.20:12345".parse::<std::net::SocketAddr>().unwrap(),
+            ))
+            .header("host", "192.0.2.10:7400")
+            .header("origin", "http://192.0.2.10:7400")
+            .header("content-type", "application/json")
+    };
+    let missing = app
+        .clone()
+        .oneshot(
+            remote_request("GET", "/api/setup/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+    let status = app
+        .clone()
+        .oneshot(
+            remote_request("GET", "/api/setup/status")
+                .header("x-zxs-bootstrap", TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let value: Value =
+        json_codec::from_slice(&to_bytes(status.into_body(), 65536).await.unwrap()).unwrap();
+    assert_eq!(value["csrf_token"], csrf(TOKEN));
+    let missing_csrf = app
+        .clone()
+        .oneshot(
+            remote_request("POST", "/api/setup/initialize")
+                .header("x-zxs-bootstrap", TOKEN)
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_csrf.status(), StatusCode::UNAUTHORIZED);
+    let login = app
+        .clone()
+        .oneshot(
+            remote_request("POST", "/api/auth/login")
+                .body(Body::from(
+                    json!({"username":"admin", "password":"long-test-password"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let unauthenticated = app
+        .oneshot(
+            remote_request("GET", "/api/auth/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(probe.mutations.load(Ordering::SeqCst), 0);
 }
