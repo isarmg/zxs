@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion, github-completion-precheck, github-history-batched]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion, github-completion-precheck, github-history-batched, github-followup-precheck]
 
 permissions:
   contents: read
@@ -232,6 +232,10 @@ jobs:
               '1f1904ad35b0cc3214e42e495907c95ce714e367', '0d7fa468a9826ab89cdcbb5d156a128572577255',
           ):
               raise SystemExit('Batched history requires the exact frozen merged source and tree')
+          if os.environ['SCOPE'] == 'github-followup-precheck' and (source, tree) != (
+              '5f9cbe6fcc198d3e516870d700982c2a81e34cea', '98df1d24a6c2ce4daaf64219c1285fdfcfee3219',
+          ):
+              raise SystemExit('Followup requires the exact history and foundation merged source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -981,6 +985,27 @@ jobs:
                           'history_query_rejects_unknown_fields_and_preserves_paired_context',
                           'history_window_roots_change_with_metadata_but_not_authentication']),
                   ]), command='Complete matching server window/auth consumers and both real HTTP history-query tests'),
+          ]
+          reused_history = json.loads(groups['github-history-batched'][0]['test_groups'])
+          reused_history[0]['required_suffixes'].extend([
+              'resolved_content_summary_facts_match_complete_commit_and_path_oracles',
+              'owner_prefix_visits_only_through_the_exact_minimum_file_version',
+              'borrowed_owner_and_resolved_content_facts_observe_cancellation',
+          ])
+          groups['github-followup-precheck'] = [
+              dict(groups['github-history-batched'][0], id='github-followup-engine',
+                  test_groups=json.dumps(reused_history), command='Complete history window FI inventory with resolved-fact and owner-prefix witnesses'),
+              dict(groups['github-history-batched'][1], id='github-followup-server'),
+              dict(groups['payload-quality'][0], id='github-followup-quality-coverage',
+                  command='rustfmt +1.99.0 --edition 2015 --config skip_children=true --check src/foundation/networking/mime/src/lib.rs\n'
+                      'python3 tools/rust-sources/manage.py verify --metadata\n'
+                      'python3 tools/rust-sources/foundation_coverage.py --check\n'
+                      'ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality'),
+              dict(groups['mature-static'][0], id='github-followup-static'),
+              dict(groups['mature-doc-contracts'][0], id='github-followup-docs',
+                  command=groups['mature-doc-contracts'][0]['command'].replace(
+                      'cargo test --locked --offline -p contract-check --',
+                      'cargo test --locked --offline -p contract-check --test source_export --')),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
