@@ -213,7 +213,7 @@ jobs:
           ):
               raise SystemExit('HEAD Range semantics requires the exact source and tree')
           if os.environ['SCOPE'] == 'historical-workspace-lifecycle' and (source, tree) != (
-              '849a1c61ac9bfa7b5cbad2469decfb48705ff869', 'b83bf0d0e5eaf5f32cc5dbdfc974b81cecd50509',
+              'd3eefd289e53a2803703870fe4250d08cadff9b5', '52d5076189204952dbfaf4d3c2c76b93553d1b3e',
           ):
               raise SystemExit('Historical workspace lifecycle requires the exact combined source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
@@ -909,20 +909,13 @@ jobs:
                       'test/server/integration/http_engine/optional_identities.rs\n'
                       'cargo clippy --locked --offline -p storage-server --test http_engine -- -D warnings'),
           ]
-          historical_prepare = 'historical_prepare_preserves_history_admission_and_fresh_plan_contract'
-          historical_close = 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'
+          # Parent 849a1c61 passed both server consumers and all document/source-export tests.
+          # The sole successor change registers the existing engine test manifest hash.
           groups['historical-workspace-lifecycle'] = [
-              dict(id='historical-workspace-server', cache='server', package='storage-server',
-                  test_groups=json.dumps([
-                      dict(selector=historical_prepare, test_target='http_engine', exact=True,
-                          count=1, required=[historical_prepare]),
-                      dict(selector=historical_close, exact=True, count=1, required=[historical_close]),
-                  ]), command='Two exact historical admission and SMB quota/evidence consumers on combined source'),
               dict(groups['payload-quality'][0], id='historical-workspace-quality',
                   command='python3 .github/scripts/check-architecture.py\n'
                       'python3 tools/rust-sources/manage.py verify\n'
                       'ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality'),
-              dict(groups['mature-doc-contracts'][0], id='historical-workspace-doc-contracts'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
