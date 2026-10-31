@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle]
 
 permissions:
   contents: read
@@ -212,6 +212,10 @@ jobs:
               'e8ee4a4c8466f5dfe88ed1f05a529b84731c230e', 'cca16b8516547acb29285c4fe0222b39ebeb88a5',
           ):
               raise SystemExit('HEAD Range semantics requires the exact source and tree')
+          if os.environ['SCOPE'] == 'historical-workspace-lifecycle' and (source, tree) != (
+              '93ad18581d74a88a86cae063be911ad54e8d717d', '36699e5e92e14a0e825bab1eefbd877cfbb80e2b',
+          ):
+              raise SystemExit('Historical workspace lifecycle requires the exact combined source and tree')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -904,6 +908,20 @@ jobs:
                   command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check '
                       'test/server/integration/http_engine/optional_identities.rs\n'
                       'cargo clippy --locked --offline -p storage-server --test http_engine -- -D warnings'),
+          ]
+          historical_prepare = 'historical_prepare_preserves_history_admission_and_fresh_plan_contract'
+          historical_close = 'smb_rpc::tests::unchanged_smb_closes_reuse_resident_quota_but_disconnect_keeps_evidence'
+          groups['historical-workspace-lifecycle'] = [
+              dict(id='historical-workspace-server', cache='server', package='storage-server',
+                  test_groups=json.dumps([
+                      dict(selector=historical_prepare, test_target='http_engine', exact=True,
+                          count=1, required=[historical_prepare]),
+                      dict(selector=historical_close, exact=True, count=1, required=[historical_close]),
+                  ]), command='Two exact historical admission and SMB quota/evidence consumers on combined source'),
+              dict(groups['payload-quality'][0], id='historical-workspace-quality',
+                  command='python3 .github/scripts/check-architecture.py\n'
+                      'python3 tools/rust-sources/manage.py verify\n'
+                      'ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
