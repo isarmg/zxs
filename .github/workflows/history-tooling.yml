@@ -19,7 +19,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion, github-completion-precheck, github-history-batched, github-followup-precheck, github-third-precheck, github-third-index-repair]
+        options: [all, smb-close, workspace-admission, auth-owner, server, server-unit, packages, namespace-borrow, namespace-format, spool-retirement, file-path-records, file-path-format, snapshot-write-sets, retirement-critical, retirement-preservation, retirement-negative, retirement-repair, retirement-overlap, native-release-fixtures, native-release-acceptance, namespace-stage-b, namespace-stage-b-repair, smb-stream, smb-stream-repair, smb-stream-sdk, native-smb-overlap, detached-history, detached-history-additions, detached-history-overlap, payload-proof-budget, payload-proof-format, payload-quality, detached-listing, scrub-planning, scrub-format, web-history-native, web-history-format, web-history-browser, detached-backup-listing, mature-static, mature-listing-repair, history-window, history-window-repair, history-window-web, scrub-terminal-diagnostics, cold-web-scrub, mature-doc-contracts, history-window-web-browser, history-main-precheck, history-main-overlap, history-model-static, history-contract-repair, history-tool-adoption-quality, scrub-periodic-scheduling, recovery-record-transfer, static-asset-conditionals, head-range-semantics, historical-workspace-lifecycle, github-history-completion, github-ui-completion, github-completion-precheck, github-history-batched, github-followup-precheck, github-third-precheck, github-third-index-repair, github-fourth-precheck]
 
 permissions:
   contents: read
@@ -244,6 +244,10 @@ jobs:
               '61158cbe89543bdad3609310c4fc0af0bf8a8338', 'bee91b2788b607a637dcd1502944c37d979ec1a7',
           ):
               raise SystemExit('Third batch index repair requires its exact source and tree')
+          if os.environ['SCOPE'] == 'github-fourth-precheck' and (source, tree) != (
+              '8d5f92b7da443f1665cbee4e6f444dd4b5aeefb7', 'c78314b46b4cd10cfc6e65bd129e646ee679a324',
+          ):
+              raise SystemExit('Fourth batch requires the exact reviewed native and macro consumer merge')
           if os.environ['SCOPE'] == 'detached-backup-listing' and (source, tree) != (
               'afb719b0d4a17c2ca55e36ff5fd4fa7ff2f99d42', '26d75be5861b431c55ce46749c007c6678e36469',
           ):
@@ -1041,6 +1045,21 @@ jobs:
           groups['github-third-index-repair'] = [
               dict(groups['github-third-precheck'][3], id='github-third-index-static'),
               dict(groups['github-third-precheck'][4], id='github-third-index-docs'),
+          ]
+          groups['github-fourth-precheck'] = [
+              dict(id='github-fourth-consumers', cache='foundation-behaviour',
+                  command='python3 .github/scripts/check-foundation-behaviour.py '
+                      '--suite integration:allocator-api2 --suite integration:displaydoc '
+                      '--suite integration:html-escape --suite integration:indexmap --suite integration:pin-project-lite'),
+              dict(groups['payload-quality'][0], id='github-fourth-quality-coverage',
+                  command='rustfmt +1.99.0 --edition 2024 --config skip_children=true --check '
+                      'test/ci/fixtures/foundation-codegen-consumers.rs test/ci/fixtures/foundation-html-consumer.rs '
+                      'test/ci/fixtures/foundation-native-collections.rs\n'
+                      'python3 tools/rust-sources/manage.py verify --metadata\n'
+                      'python3 tools/rust-sources/foundation_coverage.py --check\n'
+                      'ZXS_REQUIRE_BROWSER=1 bash .github/scripts/check.sh quality'),
+              dict(groups['github-third-precheck'][3], id='github-fourth-static'),
+              dict(groups['github-third-precheck'][4], id='github-fourth-docs'),
           ]
           scope = os.environ['SCOPE']
           selected = aggregate if scope == 'all' else groups[scope]
