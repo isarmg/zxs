@@ -74,11 +74,20 @@ def check():
             'reactive-state={path="' + str(ROOT / 'src/foundation/web-runtime/reactive-state') + '",features=["effects"]}',
             'wasm-bindgen={path="' + str(ROOT / 'src/foundation/web-runtime/wasm-bindgen') + '"}',
             'js-sys={path="' + str(ROOT / 'src/foundation/web-runtime/js-sys') + '"}',
+            'next_tuple={path="' + str(ROOT / 'src/foundation/collections/next_tuple') + '"}',
+            'slotmap={path="' + str(ROOT / 'src/foundation/collections/slotmap') + '"}',
+            'or_poisoned={path="' + str(ROOT / 'src/foundation/concurrency/or_poisoned') + '"}',
+            'const_str_slice_concat={path="' + str(ROOT / 'src/foundation/text-unicode/const_str_slice_concat') + '"}',
+            'throw_error={path="' + str(ROOT / 'src/foundation/diagnostics/throw_error') + '"}',
+            'console_error_panic_hook={path="' + str(ROOT / 'src/foundation/diagnostics/console_error_panic_hook') + '"}',
+            'gloo-events={path="' + str(ROOT / 'src/foundation/web-runtime/gloo-events') + '"}',
+            'gloo-timers={path="' + str(ROOT / 'src/foundation/web-runtime/gloo-timers') + '"}',
 
             'web-sys={path="' + str(ROOT / 'src/foundation/web-runtime/web-sys') + '",features=["Window","Document","HtmlInputElement","Event"]}',
         ]) + '\n')
         source = work / 'src/lib.rs'
-        source.write_text((ROOT / 'test/tools/web-bindings/fixtures/csr-template.rs').read_text())
+        source.write_text((ROOT / 'test/tools/web-bindings/fixtures/csr-template.rs').read_text() + '\nmod foundation_browser;\n')
+        shutil.copyfile(ROOT / 'test/tools/web-bindings/fixtures/foundation-browser.rs', work / 'src/foundation_browser.rs')
         cargo('generate-lockfile', '--offline', '--manifest-path', str(manifest))
         command = ['check', '--locked', '--offline', '--manifest-path', str(manifest), '--target-dir', str(TARGET)]
         cargo(*command)
@@ -95,7 +104,20 @@ def check():
         else:
             cargo('run', '--locked', '--offline', '-p', 'web-bindings', '--', *arguments)
         (output / 'index.html').write_text('''<!doctype html><meta charset="utf-8"><body>pending<script type="module">
-try { const api=await import('./fixture.js'); await api.default(); document.body.textContent=await api.run_template_probe(); }
+try {
+ const api=await import('./fixture.js'); await api.default();
+ const foundation=JSON.parse(await api.run_foundation_probe());
+ const template=JSON.parse(await api.run_template_probe());
+ const errors=[]; const original=console.error; let trapped=false;
+ console.error=(...args)=>{errors.push(args.map(String).join(' '));};
+ try {api.run_foundation_panic_probe();} catch(error) {trapped=error instanceof WebAssembly.RuntimeError;}
+ finally {console.error=original;}
+ if(!trapped || errors.filter(value=>value.includes('foundation-console-panic-witness')).length!==1)
+   throw new Error('panic hook did not produce exactly one message and a WASM trap');
+ if(foundation.status!=='passed' || template.status!=='passed') throw new Error('probe failed');
+ template.checks.push(...foundation.checks, 'console panic hook message and trap');
+ document.body.textContent=JSON.stringify(template);
+}
 catch(error) { document.body.textContent=JSON.stringify({status:'failed',message:String(error),stack:error?.stack}); }
 </script>''')
         # Compile exported tracing macros from an alias, without web-interface in scope.
@@ -172,6 +194,7 @@ catch(error) { document.body.textContent=JSON.stringify({status:'failed',message
             'retired_api_checks': len(retired),
             'retired_feature_checks': feature_checks,
             'cargo_lock_sha256': hashlib.sha256((ROOT / 'Cargo.lock').read_bytes()).hexdigest(),
+            'foundation_fixture_sha256': hashlib.sha256((ROOT / 'test/tools/web-bindings/fixtures/foundation-browser.rs').read_bytes()).hexdigest(),
             'fixture_source_sha256': hashlib.sha256((ROOT / 'test/tools/web-bindings/fixtures/csr-template.rs').read_bytes()).hexdigest(),
             'outputs_sha256': {name: hashlib.sha256((output / name).read_bytes()).hexdigest()
                                for name in ['fixture.js', 'fixture_bg.wasm']},

@@ -9,7 +9,8 @@ class ReleaseAcceptance(unittest.TestCase):
     def test_release_checks_extracted_archives_before_upload(self):
         workflow = (ROOT / '.github/workflows/release.yml').read_text()
         self.assertLess(workflow.index('release-package.sh'), workflow.index('release-acceptance.sh'))
-        self.assertLess(workflow.index('release-acceptance.sh'), workflow.index('actions/upload-artifact'))
+        release_upload = workflow.rindex('actions/upload-artifact', 0, workflow.index('name: release-linux-web'))
+        self.assertLess(workflow.index('release-acceptance.sh'), release_upload)
         script = (ROOT / '.github/scripts/release-acceptance.sh').read_text()
         self.assertIn('tar -xzf "release-assets/zxs-${RELEASE_VERSION}', script)
         self.assertIn('tar -xzf "release-assets/web-interface-${RELEASE_VERSION}', script)

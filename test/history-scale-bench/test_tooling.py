@@ -17,7 +17,7 @@ TOOLS = ROOT / "tools" / "history-scale-bench"
 sys.path.insert(0, str(TOOLS))
 from summarize import aggregate, operation_id, read_json, summarize_driver  # noqa: E402
 from tracing import parse_trace  # noqa: E402
-from run import arguments, final_budget_reason, process_snapshot, validate_build_identity  # noqa: E402
+from run import environment, arguments, final_budget_reason, process_snapshot, validate_build_identity  # noqa: E402
 
 
 def valid_rows(operations=4):
@@ -177,6 +177,13 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(parsed.sizes, [8])
             self.assertFalse(parsed.scale_authorized)
             self.assertEqual(parsed.phase_seconds, 60)
+            parsed.revisions = {}
+            with patch("run.command_output", return_value="rustc 1.99.0 (test)"):
+                parsed.repeats = 0
+                self.assertEqual(environment(parsed)["timing"],
+                                 "not measured; counts-only samples include strace and resource sampling overhead")
+                parsed.repeats = 1
+                self.assertTrue(environment(parsed)["timing"].startswith("untraced timing samples;"))
             for option, value in (("--build-run-id", "0"), ("--build-run-id", "123x"), ("--build-carrier-sha", "main")):
                 malformed = command.copy()
                 malformed[malformed.index(option) + 1] = value

@@ -21,6 +21,24 @@
         ]
       }
     },
+    "integration:base64": {
+      "features": [
+        "alloc",
+        "default",
+        "simd-unsafe",
+        "std"
+      ],
+      "subject": "base64",
+      "targets": {
+        "foundation-codec-boundaries": [
+          "base64_known_vectors_and_rejected_padding",
+          "dwarf_reader_decodes_leb_and_reports_truncation",
+          "subtle_equality_and_selection_preserve_each_branch_value",
+          "wasm_encoder_output_is_valid_and_exports_the_expected_function",
+          "wasm_parser_rejects_bad_magic_and_version"
+        ]
+      }
+    },
     "integration:bytes": {
       "features": [
         "default",
@@ -1834,6 +1852,19 @@
         ]
       }
     },
+    "integration:http-range-header": {
+      "features": [],
+      "subject": "http-range-header",
+      "targets": {
+        "foundation-http-boundaries": [
+          "mime_guess_handles_extensions_case_and_unknown",
+          "ranges_clip_to_size_but_reject_overlap_and_out_of_bounds",
+          "ranges_reject_empty_resources_without_fabricating_byte_zero",
+          "serve_dir_empty_range_is_416_and_head_is_empty_200",
+          "serve_dir_range_delivers_exact_bytes_and_preserves_head_length"
+        ]
+      }
+    },
     "integration:indexmap": {
       "features": [
         "default",
@@ -1881,6 +1912,16 @@
           "test_repeat",
           "test_visibility",
           "visibility::sub_test"
+        ]
+      }
+    },
+    "integration:libloading": {
+      "features": [],
+      "subject": "libloading",
+      "targets": {
+        "foundation-dynamic-library": [
+          "dynamic_library_reports_missing_symbol_without_calling_it",
+          "dynamic_library_symbol_borrow_calls_real_c_abi"
         ]
       }
     },
@@ -2255,6 +2296,25 @@
           "test_basic",
           "test_cleanup",
           "test_pathological_cleaner"
+        ]
+      }
+    },
+    "integration:tinystr": {
+      "features": [
+        "zerovec"
+      ],
+      "subject": "tinystr",
+      "targets": {
+        "foundation-text-boundaries": [
+          "case_conversion_preserves_word_boundaries",
+          "grapheme_iteration_keeps_combining_marks_and_emoji_clusters",
+          "locale_parse_preserves_canonical_subtags_and_rejects_invalid_input",
+          "potential_utf_preserves_bytes_and_rejects_invalid_scalar",
+          "provider_request_borrows_locale_and_keeps_error_context",
+          "tiny_ascii_rejects_non_ascii_null_and_overflow",
+          "unicode_identifier_boundary_classifies_start_and_continue",
+          "writeable_reports_exact_length_and_sink_failure",
+          "zerovec_reads_unaligned_little_endian_and_rejects_partial_element"
         ]
       }
     },

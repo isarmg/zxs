@@ -52062,8 +52062,8 @@
   },
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "cf85f72fb40b8d9a90ac77d7a6df9a6d1c649a00bba9f6636901721e6d5c9d98",
-    "compliance/external-tests/foundation.json": "72757bbadf39660c45ef5e2057af35fccc7124e296e840cf03f8ecfc2af3dcee",
-    "compliance/external-tests/integrated.json": "128a6f976b999e4f11d112044226942671c45c46a589c1d93753cb39dc2d02f0",
+    "compliance/external-tests/foundation.json": "a4f53e9155bef82562af92319b06cdd9fd7009b05912ca4a947873ee2b8a0f0a",
+    "compliance/external-tests/integrated.json": "03b27ca3f1e893ad9a4af429572c8d57691257a7498a3cc16cd90cd9134cf0e8",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -72352,13 +72352,13 @@
       ]
     },
     "src/foundation/networking/rustls-pki-types": {
-      "bytes": 22839,
+      "bytes": 23215,
       "directory": "src/foundation/networking/rustls-pki-types",
       "file_count": 3,
       "files": [
         {
           "path": "test/foundation/rustls-pki-types/unit/src/base64/all_tests_533.rs",
-          "sha256": "577cbf6dc2fa09265f1501d6f00451767ba99051a416d42e3cf97cde3169107f",
+          "sha256": "16afe5e361c449d523c684d9f40148e0a925d593eb1391ed6292a2a56779db58",
           "source": "src/foundation/rustls-pki-types/src/base64.rs",
           "source_sha256_before": "b72362a35405bde9709ff31e6e96689d19f2bc593c0ee08f5e9f452d8d647479"
         },
@@ -79336,9 +79336,9 @@
       ]
     },
     "tools/web-bindings": {
-      "bytes": 19075,
+      "bytes": 26228,
       "directory": "tools/web-bindings",
-      "file_count": 5,
+      "file_count": 6,
       "files": [
         {
           "path": "test/tools/web-bindings/fixtures/contract.rs",
@@ -79351,6 +79351,13 @@
           "sha256": "6bcd4d63ef20fd46d8fdbd9a7f7048f7ff60035a2f177f3c8a14b788370b230d",
           "source": "tools/web-bindings/tests/fixtures/csr-template.rs",
           "source_sha256_before": "422436b26afc21cfbb9fc30b3544ea18f965f8680555131a1c38808c5e6bb281"
+        },
+        {
+          "path": "test/tools/web-bindings/fixtures/foundation-browser.rs",
+          "sha256": "36eaeb6e962c83c7e2ac7f82959a9610f4ccd36eafc58c58751f2c0033023540",
+          "source": "test/tools/web-bindings/fixtures/foundation-browser.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "36eaeb6e962c83c7e2ac7f82959a9610f4ccd36eafc58c58751f2c0033023540"
         },
         {
           "path": "test/tools/web-bindings/runtime/modern-loader.mjs",
@@ -79516,7 +79523,7 @@
     "src/foundation/data-storage/sqlite-access/Cargo.toml": "f6f4f257e5c645f7f0b15f87d8c9e7b0f9e664ea96a37ec660f3ab02549cfbea",
     "src/foundation/data-storage/toml/Cargo.toml": "143abd83039d84b93bc64bc4e73b770228f900ebf33256fa8c5f1befdcc2e30e",
     "src/foundation/diagnostics/anyhow/Cargo.toml": "95a1a32da1e601b3c34c339bc425b52f269ba3559274a0a54d8bb2178009bb9e",
-    "src/foundation/diagnostics/console_error_panic_hook/Cargo.toml": "ed5c60b3d2bb1927cae813d6361b790bbf634c8d6485db659e7b70979dd7d220",
+    "src/foundation/diagnostics/console_error_panic_hook/Cargo.toml": "0303b55fc441e7bc1487d98521d6eb45bba98f00168be199a8d38f4932d16cb5",
     "src/foundation/diagnostics/error-definition-macros/Cargo.toml": "13d58870fa265de6a2323385ce55dcfe5f5c86e5853ab7dce9b4315e58adbc47",
     "src/foundation/diagnostics/error-definition/Cargo.toml": "e77a348cdf54a6a396d3f112f49755f00c8c748f0b8c6e5305c3a5153c1e6111",
     "src/foundation/diagnostics/gimli/Cargo.toml": "a8607a500e68b8215117123da37b07bb9ddd9c464a46e762a6888394d09a0805",
@@ -96195,7 +96202,7 @@
       "description": "A panic hook for `wasm32-unknown-unknown` that logs panics to `console.error`",
       "directory": "src/foundation/diagnostics/console_error_panic_hook",
       "files_sha256": {
-        "Cargo.toml": "ed5c60b3d2bb1927cae813d6361b790bbf634c8d6485db659e7b70979dd7d220",
+        "Cargo.toml": "0303b55fc441e7bc1487d98521d6eb45bba98f00168be199a8d38f4932d16cb5",
         "src/lib.rs": "5492a570135fe61b7952ee3495a109d3543ac99267e8fc5b973cb09973d5177f",
         "with_panic_hook.png": "3be4319b00a57bdc4f9a31892cc723570f80b3ee516af8fe781fbbb6e7780319",
         "with_panic_hook_node.png": "ac7d652dbb39067f15e108dd097278aa1b8010089ee6a212a274a2e490f8a757",
@@ -96952,7 +96959,7 @@
       "files_sha256": {
         "Cargo.toml": "f5d385a4172ac0d3eead3153c0090193dc2e6370dc0c22aab5b7f172cf35b79b",
         "benches/benchmark.rs": "e550b14a8f3931c8f05d17a76df19e9d93aae8c408cac58b83d81aa719cbc107",
-        "src/lib.rs": "5030f21d0231592302e44e8fb3123193ddad513aaf47eced6828408bf255ae1e"
+        "src/lib.rs": "cd0ff5bce30863e848d26fbeec18ef3b46e28af229a29757d3789211e88413e6"
       },
       "license": "MIT",
       "license_materials": [
@@ -98059,7 +98066,7 @@
         "src/services/fs/mod.rs": "1507149a3dbd31bad92c4ea086925f7fbc60f20991a879b77c5fdd158f3421e1",
         "src/services/fs/serve_dir/future.rs": "6e9b08d7b7b313a483050034bdffbe8514e80570148bfca36f84def21ac4c8f8",
         "src/services/fs/serve_dir/headers.rs": "d48fb514ca575e5e380f80eb84521a5fcab0560e57a995f1fef5ca35590400e8",
-        "src/services/fs/serve_dir/mod.rs": "6ee417c42006db9971790f6098954d72f2845a2766dd95d278e5484cb9c2b2bd",
+        "src/services/fs/serve_dir/mod.rs": "3f9a2accd44d83488d65f5faeaef78e4f8c2acbd7a1960da2db53f3903e4fe7c",
         "src/services/fs/serve_dir/open_file.rs": "f114c4c1eab105c71db2f546e6852ce25054cb6f8d3da2d83669c561b9930f0b",
         "src/services/fs/serve_file.rs": "dcc09bb36371aa045bc3eb7cdc3a6cddebdf8fb14fcf523ed0cb2e4d99ea60be",
         "src/services/mod.rs": "177bf1406c13c0386c82b247e6d1556c55c7a2f6704de7e50dbc987400713b96",
@@ -99070,7 +99077,7 @@
       "directory": "src/foundation/text-unicode/const_str_slice_concat",
       "files_sha256": {
         "Cargo.toml": "678df6f6d48b07df0e3c7078b831510f9d382aca91a7e5c465eff73d6026f8ad",
-        "src/lib.rs": "c21a5a8dc03c717c13c9e766b1bfeede8cb0cb1db6e7753754446f5f8400bb68"
+        "src/lib.rs": "9db814bc3a0f802d5fb5fae8071b90ed96e33b4c9026bf7cfdd4413d202d2f42"
       },
       "license": "MIT",
       "license_materials": [

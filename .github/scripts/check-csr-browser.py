@@ -9,10 +9,32 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / 'target/csr-template-check/output'
+
+FOUNDATION_CHECKS = {
+    'next_tuple values and ownership',
+    'or_poisoned real lock guards',
+    'slotmap stale key generation',
+    'const concatenation and class separators',
+    'throw_error nested hook restoration',
+    'js-sys values and identity',
+    'web-sys DOM text and event target',
+    'gloo-events once and drop cleanup',
+    'gloo-timers fire and cancel cleanup',
+    'console panic hook message and trap',
+}
+
+
+def validate_result(result):
+    if result.get('status') != 'passed':
+        raise AssertionError(result)
+    missing = FOUNDATION_CHECKS - set(result['checks'])
+    if missing:
+        raise AssertionError(f'missing foundation browser contracts: {sorted(missing)}')
 
 
 def check():
@@ -41,8 +63,11 @@ def check():
         call = urllib.request.Request(f'http://127.0.0.1:{port}{path}',
                                      data=None if body is None else json.dumps(body).encode(),
                                      headers={'Content-Type': 'application/json'}, method=method)
-        with urllib.request.urlopen(call, timeout=30) as response:
-            return json.load(response)['value']
+        try:
+            with urllib.request.urlopen(call, timeout=30) as response:
+                return json.load(response)['value']
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(error.read().decode()) from error
 
     try:
         for _ in range(100):
@@ -72,8 +97,7 @@ def check():
         else:
             raise RuntimeError('CSR browser probe did not settle')
         result = json.loads(content)
-        if result.get('status') != 'passed':
-            raise AssertionError(result)
+        validate_result(result)
         result.update(browser=value['capabilities']['browserVersion'], sandbox_disabled=False,
                       validation=json.loads((FIXTURE / 'validation.json').read_text()))
         (FIXTURE / 'browser-result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')

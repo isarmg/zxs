@@ -226,6 +226,9 @@ impl ParsedRanges {
         &self,
         file_size_bytes: u64,
     ) -> Result<Vec<RangeInclusive<u64>>, RangeUnsatisfiableError> {
+        if file_size_bytes == 0 {
+            return Err(RangeUnsatisfiableError::EmptyResource);
+        }
         let len = self.ranges.len();
         let mut validated = Vec::with_capacity(len);
         for parsed in &self.ranges {
@@ -258,6 +261,7 @@ impl ParsedRanges {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum RangeUnsatisfiableError {
+    EmptyResource,
     OverlappingRanges,
     RangeReversed,
     FileSuffixOutOfBounds,
@@ -274,6 +278,9 @@ pub enum RangeUnsatisfiableError {
 impl Display for RangeUnsatisfiableError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
+            RangeUnsatisfiableError::EmptyResource => {
+                f.write_str("RangeUnsatisfiable: Empty resource has no byte ranges")
+            }
             RangeUnsatisfiableError::OverlappingRanges => {
                 f.write_str("RangeUnsatisfiable: Ranges overlap")
             }
@@ -366,4 +373,7 @@ pub enum EndPosition {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/http-range-header/unit/src/lib/tests_368.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/http-range-header/unit/src/lib/tests_368.rs"
+));

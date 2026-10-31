@@ -95,6 +95,23 @@ class ReactiveCsrScope(unittest.TestCase):
         self.assertNotIn('--features', tests[0])
         self.assertEqual(tests[1][-2:], ('--features', 'effects'))
 
+    def test_browser_requires_every_foundation_contract(self):
+        spec = importlib.util.spec_from_file_location('csr_browser', ROOT / '.github/scripts/check-csr-browser.py')
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        self.assertEqual(len(gate.FOUNDATION_CHECKS), 10)
+        gate.validate_result({'status': 'passed', 'checks': sorted(gate.FOUNDATION_CHECKS)})
+        for missing in gate.FOUNDATION_CHECKS:
+            with self.subTest(missing=missing), self.assertRaises(AssertionError):
+                gate.validate_result({'status': 'passed', 'checks': sorted(gate.FOUNDATION_CHECKS - {missing})})
+        with self.assertRaises(AssertionError):
+            gate.validate_result({'status': 'failed', 'checks': sorted(gate.FOUNDATION_CHECKS)})
+        scope = (ROOT / '.github/scripts/check-csr-scope.py').read_text()
+        self.assertIn('test/tools/web-bindings/fixtures/foundation-browser.rs', scope)
+        self.assertIn('await api.run_foundation_probe()', scope)
+        self.assertIn('api.run_foundation_panic_probe()', scope)
+        self.assertIn('foundation_fixture_sha256', scope)
+
     def test_scope_gate_exercises_retired_modes_and_keeps_template_probe(self):
         source = (ROOT / '.github/scripts/check-csr-scope.py').read_text()
         tree = ast.parse(source)

@@ -167,6 +167,15 @@
       "detail": "--lib, --doc, and 6 retained integrations (atomic_cell, cache_padded, parker, thread, wait_group, steal)"
     },
     {
+      "package": "convert_case",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-text-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
+    },
+    {
       "package": "crc32fast",
       "kind": "P",
       "shard": "foundation-data",
@@ -341,6 +350,15 @@
       "detail": "async-await-macro enabled by --all-features in executed futures tests"
     },
     {
+      "package": "gimli",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-codec-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
+    },
+    {
       "package": "hash-table",
       "kind": "P",
       "shard": "foundation-data",
@@ -420,6 +438,24 @@
         ".github/scripts/check-serialization-family.py"
       ],
       "detail": "serialization-family.rs only"
+    },
+    {
+      "package": "icu_locale_core",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-text-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
+    },
+    {
+      "package": "icu_provider",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-text-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
     },
     {
       "package": "id-arena",
@@ -503,6 +539,15 @@
       "detail": "fixture byte_and_substring_boundaries; memchr lib unit tests NOT run"
     },
     {
+      "package": "mime_guess",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-http-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
+    },
+    {
       "package": "mio",
       "kind": "P",
       "shard": "foundation-platform",
@@ -546,6 +591,15 @@
         ".github/scripts/check-foundation.sh"
       ],
       "detail": "cargo test --lib -p password-hash"
+    },
+    {
+      "package": "potential_utf",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-text-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
     },
     {
       "package": "proc-macro2-diagnostics",
@@ -851,6 +905,15 @@
       "detail": "compiled as ctutils dependency only"
     },
     {
+      "package": "subtle",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-codec-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
+    },
+    {
       "package": "sync_wrapper",
       "kind": "P",
       "shard": "foundation-async",
@@ -1010,6 +1073,15 @@
       "detail": "--lib + --test capabilities (project test/tools/toml/capabilities.rs) + --doc"
     },
     {
+      "package": "tower-http",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-http-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
+    },
+    {
       "package": "tracing",
       "kind": "P",
       "shard": "foundation-async",
@@ -1046,6 +1118,15 @@
       "detail": "cargo test -p unicode-display-width"
     },
     {
+      "package": "unicode-ident",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-text-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
+    },
+    {
       "package": "unicode-normalizer",
       "kind": "P",
       "shard": "foundation-language",
@@ -1080,6 +1161,15 @@
         ".github/scripts/check-unicode-data-family.py"
       ],
       "detail": "--lib -p unicode-properties + --doc"
+    },
+    {
+      "package": "unicode-segmentation",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-text-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
     },
     {
       "package": "url-encoding",
@@ -1145,6 +1235,15 @@
       "detail": "--lib default and --all-features, asserts '38 passed'"
     },
     {
+      "package": "wasm-encoder",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-codec-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
+    },
+    {
       "package": "wasm-text-parser",
       "kind": "U",
       "shard": "foundation-language",
@@ -1163,6 +1262,15 @@
       "detail": "cargo test -p wasm-text-printer"
     },
     {
+      "package": "wasmparser",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-codec-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
+    },
+    {
       "package": "webpki-roots",
       "kind": "P",
       "shard": "workspace",
@@ -1179,6 +1287,15 @@
         ".github/scripts/check-foundation-consumers.py"
       ],
       "detail": "foundation-consumers.rs only"
+    },
+    {
+      "package": "writeable",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-text-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
     },
     {
       "package": "yoke",
@@ -1206,6 +1323,15 @@
         "test/ci/crypto_core_checks.py"
       ],
       "detail": "crypto-core-zeroize.rs via cryptographic_core::zeroize re-export; zeroize retained tests NOT run"
+    },
+    {
+      "package": "zerovec",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-foundation-behaviour.py"
+      ],
+      "detail": "test/ci/fixtures/foundation-text-boundaries.rs; project consumer boundary assertions only, not complete retained upstream tests"
     },
     {
       "package": "zmij",

@@ -69,6 +69,11 @@ jobs:
       - run: |
           rustup show active-toolchain
           rustup target add wasm32-unknown-unknown
+      - name: Install Valgrind SDK and loader debug symbols
+        if: matrix.suite == 'foundation-crypto'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y valgrind libc6-dbg clang libclang-dev
       - name: Install system SQLite SDK for unbundled validation
         if: matrix.suite == 'foundation-data'
         run: |
@@ -87,6 +92,14 @@ jobs:
           key: security-audit-ubuntu24.04-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.github/scripts/install-security-audit.py', '.github/security-tools/cargo-audit.json', '.github/security-tools/cargo-audit-0.22.2.lock') }}
       - name: Run portable test suite and contract checks
         run: bash .github/scripts/check.sh "${{ matrix.suite }}"
+      - name: Retain PKI Valgrind positive and negative evidence
+        if: always() && matrix.suite == 'foundation-crypto'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pki-valgrind-evidence
+          path: target/pki-valgrind/logs/
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify isolated system SQLite consumer
         if: matrix.suite == 'foundation-data'
         run: python3 .github/scripts/check-sqlite-system.py

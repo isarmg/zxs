@@ -1,12 +1,12 @@
 # 最终本地 RPC 成对性能与 SMB 组合语义验收
 
-本验收只覆盖固定源码、GitHub Linux runner 上的开发池和真实 Unix RPC 实现。主线基线为 `d3eefd289e53a2803703870fe4250d08cadff9b5`，对照为 `e2f33d9882cf7263412d9370b6a703e0b216357d`。控制器固定 SHA 与 tree，不随 main 漂移，不采用被拒绝的 `2af128b5` 架构。
+本验收只覆盖固定源码、GitHub Linux runner 上的开发池和真实 Unix RPC 实现。冻结 candidate（当时 main）为 `d3eefd289e53a2803703870fe4250d08cadff9b5`，对照为 `e2f33d9882cf7263412d9370b6a703e0b216357d`。控制器固定 SHA 与 tree，不随 main 漂移，不采用被拒绝的 `2af128b5` 架构。
 
 已有完整 CI [41154826502](https://github.com/isarmg/zxs/actions/runs/41154826502) 的 17 个任务，以及边界验收 [41158008645](https://github.com/isarmg/zxs/actions/runs/41158008645) 的 7 样本／21 阶段是本轮前置证据，不重复执行。规模后续由原增长验收作者负责；这里的 22／220 历史夹具仅复用原 RPC 工作负载。
 
 ## 不可改写的历史结果
 
-原工程 screen [41062775195](https://github.com/isarmg/zxs/actions/runs/41062775195) 在 220 历史 BA 的第二次保存出现 1320.77 ms；总体 save P95 比对照增加 384.6 ms，超过 +50 ms，因此采用仍为 **FAIL**。诊断 [41071838794](https://github.com/isarmg/zxs/actions/runs/41071838794) 未复现孤立尖峰，不能解释异常或取消失败。本轮是当前 main 的独立验收，不把另一次通过当作原结果的修复。
+原工程 screen [41062775195](https://github.com/isarmg/zxs/actions/runs/41062775195) 在 220 历史 BA 的第二次保存出现 1320.77 ms；总体 save P95 比对照增加 384.6 ms，超过 +50 ms，因此采用仍为 **FAIL**。诊断 [41071838794](https://github.com/isarmg/zxs/actions/runs/41071838794) 未复现孤立尖峰，不能解释异常或取消失败。本轮是冻结 candidate 的独立验收，不把另一次通过当作原结果的修复。
 
 ## 有限且可复现的执行合同
 
@@ -28,7 +28,7 @@
 
 四对分别判定，任何一对失败即最终 FAIL；缺臂、缺阶段、错误 manifest、错误顺序或样本不全不能通过。原阈值保持：
 
-| 指标 | 当前 main 相对对照的限制 |
+| 指标 | 冻结 candidate 相对对照的限制 |
 | --- | --- |
 | 完整读／目录 P95 | 增量 ≤ 2ms |
 | 完整读／目录 P99 | 增量 ≤ 5ms |
@@ -69,7 +69,38 @@
 
 主线后来采用 `1f1904ad35b0cc3214e42e495907c95ce714e367`，本轮没有实测该 SHA。与冻结 candidate 的生产差异只有历史窗口 Nodes 查询的有界批量首发布查找；`engine.rs` 另加测试模块接线。该查询入口来自 HTTP 历史窗口，不在本轮 Unix RPC 的 Open／Read／ReadDirectory／PrepareWrite／Dirty／Flush／Close、提交、恢复及工作区预算路径；这些路径和配置、Cargo 锁／工具链均未改变。因此本轮可作为相同 RPC／资源准入路径的已有证据，无需仅因 head 不同重跑无关负载，但不能宣称量过新 main 二进制，亦不能据此证明新历史窗口查询性能。主线 [41168353374](https://github.com/isarmg/zxs/actions/runs/41168353374) 的功能 CI 成功不能补足这里的 220 性能缺口。
 
-下一项软件验收缺口是先设计在既定元数据准入内可完成的 220 成对扩展负载，并保留原始保存与新增尾测试的独立完成状态；当前证据不支持修改产品限额或削弱证据保留合同。本轮不继续尝试刷绿，旧 `2af` 采用 FAIL 与孤立尖峰未解释状态不变。
+该历史阶段的下一项软件验收缺口是先设计在既定元数据准入内可完成的 220 成对扩展负载，并保留原始保存与新增尾测试的独立完成状态；当前证据不支持修改产品限额或削弱证据保留合同。本轮不继续尝试刷绿，旧 `2af` 采用 FAIL 与孤立尖峰未解释状态不变。
+
+### 220 合同闭环与容量支持边界
+
+`220` 的准确含义是 500 个文件、97 个目录、一个分支下的初始已发布 sequence／历史规模；它不是测量迭代数。原工程合同的五阶段为 build、edit、完整 verify、1000 次读／目录及 20 次完整保存、独立 rpc-verify；结束 sequence 为240。新增尾合同是在同一个池继续40轮 Flush／续写Close／write-through，共120次发布，要求到360。二者的结论必须分别报告。
+
+默认预算下连续240→360有源码可证的支持边界：每个已含500文件的工作区，生命周期预留将所有文件context的三个ID扩至至少64字节，generation/fence扩至u64最大值；另保留至少500个selected_file_branches映射，每个生成ID至少含32位UUID。仅这两张JSON映射就至少211,002字节，不计外层字段名、其他字段、新增文件和ID前缀。排除仓库创建和首次整批上传工作区，原220+20保存至少保留238个这种工作区，贡献至少50,218,476字节；新增120个贡献至少25,320,240字节。合计至少75,538,716字节，比主体64MiB上限67,108,864多至少8,429,852字节。因此原连续扩展合同结为 **FAIL_DEFAULT_BUDGET**；Cold retirement只减resident计数，不减这些metadata字节，Abort和重开也不能释放它们。没有找到保留所有原证据却缩减该计费的公开API。[确定性下界工具](../../tools/local-rpc-acceptance/budget_contract.py)只证明下界，不重写Engine准入算法，也不把磁盘inventory当逻辑charge。
+
+拆分独立尾池可以形成“每池至少220历史”的另一种测量，但会改变连续历史增长与冷首发布次数，不能代替原连续留存压力合同。因此不以拆池PASS覆盖失败。闭环工作只补尚缺的原始220 AB／BA五阶段：仍使用原sealed seed/server、原500文件／初始220、全部原ID/FULL/历史oracle、相同请求、同runner两臂对称和原八项阈值。22历史的完整两组以原pair.json SHA256固定复用，不再执行。新增[续测模板](../../tools/local-rpc-acceptance/original-220-workflow.yml)与旧冻结CI独立；原运行41168852801及其NOT EVALUATED不改写。新授权续测声明新的45分钟pair窗口，保持原每阶段1200秒、两CPU、8GiB地址空间／磁盘下限，不延长已结束的旧run。
+
+输出会同时给出原始220性能PASS／FAIL及连续尾容量FAIL；即使原始性能通过，完整扩展准入仍为FAIL，summary保持非零。此次控制器还改为逐阶段归档已生成seed／RPC操作ID，避免后续尾阶段失败使已有ID文件只留在被清理的临时池。没有修改任何生产源码、默认限额或既有冻结CI。
+
+### 原始 220 五阶段终态（2026-10-31）
+
+续测 [41174023827](https://github.com/isarmg/zxs/actions/runs/41174023827) 的同 runner AB／BA 两臂均完成全部五阶段。原始八项条件每方向六项通过、两项失败，合计 **12 PASS / 4 FAIL**；原始 220 性能判定 **FAIL**，不是 NOT EVALUATED。失败均为打开时间和打开 VmHWM；保存 P95 没有越过 +50ms 门槛。
+
+| 顺序 | 打开时间：对照→candidate（秒） | VmHWM：对照→candidate（KiB） | 保存 P95 增量（ms） |
+| --- | ---: | ---: | ---: |
+| AB | 88.476854918→133.567525121 | 449912→543156 | -8.950064 |
+| BA | 85.754738331→131.735542338 | 449516→543024 | +8.854133 |
+
+打开时间原限制为对照的 1.1 倍；VmHWM 原限制为 0.8 倍，即要求降低 20%，不是允许增长 20%。实际 VmHWM 约为对照的 1.208 倍，既未达到改进目标，也有实际增长。读／目录 P95、P99 和 20 次保存总时长均通过原限制。两臂独立 oracle 分别验证 220 个原操作／历史命名空间、718 个历史正文及 500 个当前文件；RPC 后独立重开核对 20 个新增收据／历史正文／命名空间，sequence 为 240。seed 与 RPC 都使用原 `bench` 主体，未切换主体、重置预算或释放永久证据。
+
+冻结产品源码与 sealed 二进制仍为前述 e2f33d／d3eefd；该结果不声称测量了后来 main。连续尾合同的 **FAIL_DEFAULT_BUDGET** 是另外一项失败，不因五阶段完整而消失；22 历史通过亦不能覆盖 220 失败。旧 NOT EVALUATED 和 2af 的失败仍保留。
+
+原始 ZIP 已下载并逐字节 SHA256 核对：
+
+| 产物 | artifact ID | SHA256 |
+| --- | --- | --- |
+| 220 AB | [13033401704](https://github.com/isarmg/zxs/actions/runs/41174023827/artifacts/13033401704) | `3260c7a1d4c55306f7d12f0957158e9e6cf02b2e3262a12630a769d6392503d1` |
+| 220 BA | [13033565753](https://github.com/isarmg/zxs/actions/runs/41174023827/artifacts/13033565753) | `14f45e7c44d2c7ef89ab07bcfd2a2b171d74ea2ff7cf5dc8e5cc68d45219a5f9` |
+| summary | [13033191203](https://github.com/isarmg/zxs/actions/runs/41174023827/artifacts/13033191203) | `ea60d366863367e3895a877a399496e310f9c3054fe7d7cc335ea5c9547c8b1a` |
 
 ## 只需人工／物理环境执行的项目
 

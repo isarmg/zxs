@@ -449,7 +449,9 @@ def environment(args: argparse.Namespace) -> dict:
         "platform": platform.platform(), "cpu": command_output(["lscpu", "--json"]),
         "filesystem": command_output(["findmnt", "--json", "--target", str(args.output_root)]),
         "selected_environment": {key: os.environ[key] for key in allowlist if key in os.environ},
-        "sources": sources, "profile": "release", "timing": "untraced; external process/RSS and live filesystem inventory sampling remain enabled",
+        "sources": sources, "profile": "release",
+        "timing": ("untraced timing samples; external process/RSS and live filesystem inventory sampling remain enabled"
+                   if args.repeats else "not measured; counts-only samples include strace and resource sampling overhead"),
         "sampling": {"process_seconds": args.process_poll_seconds, "disk_seconds": args.disk_poll_seconds},
         "budgets": {"phase_seconds": args.phase_seconds, "cohort_seconds": args.cohort_seconds, "rss_mib": args.rss_mib, "disk_mib_per_sample": args.disk_mib, "cohort_disk_mib": args.cohort_disk_mib, "minimum_free_mib": args.minimum_free_mib},
         "io_scope": "process samples include harness oracle/result I/O; strace counters exclude pool/harness; host diskstats are shared device counters, not exclusively attributable physical I/O",

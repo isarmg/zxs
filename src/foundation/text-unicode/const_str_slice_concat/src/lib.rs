@@ -102,7 +102,7 @@ pub const fn const_concat_with_prefix(
     }
 }
 
-/// Converts any number of strings into a UTF-8 string, separated by the given string.
+/// Concatenates nonempty strings, inserting the separator only between them.
 pub const fn const_concat_with_separator(
     strs: &[&str],
     separator: &'static str,
@@ -112,26 +112,24 @@ pub const fn const_concat_with_separator(
     let mut remaining = strs;
 
     while let [current, tail @ ..] = remaining {
-        let x = current.as_bytes();
-        let mut i = 0;
-
-        // have it iterate over bytes manually, because, again,
-        // no mutable refernces in const fns
-        while i < x.len() {
-            buffer[position] = x[i];
-            position += 1;
-            i += 1;
-        }
-        if !x.is_empty() {
-            let mut position = 0;
-            let separator = separator.as_bytes();
-            while i < separator.len() {
-                buffer[position] = separator[i];
+        let bytes = current.as_bytes();
+        if !bytes.is_empty() {
+            if position > 0 {
+                let separator = separator.as_bytes();
+                let mut i = 0;
+                while i < separator.len() {
+                    buffer[position] = separator[i];
+                    position += 1;
+                    i += 1;
+                }
+            }
+            let mut i = 0;
+            while i < bytes.len() {
+                buffer[position] = bytes[i];
                 position += 1;
                 i += 1;
             }
         }
-
         remaining = tail;
     }
 

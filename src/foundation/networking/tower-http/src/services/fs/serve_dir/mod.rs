@@ -1,21 +1,21 @@
 use self::future::ResponseFuture;
 use crate::{
     body::UnsyncBoxBody,
-    content_encoding::{encodings, SupportedEncodings},
+    content_encoding::{SupportedEncodings, encodings},
     set_status::SetStatus,
 };
 use bytes::Bytes;
 use futures::FutureExt;
-use http::{header, HeaderValue, Method, Request, Response, StatusCode};
+use http::{HeaderValue, Method, Request, Response, StatusCode, header};
 use http_body::{BodyExt, Empty};
-use url_encoding::percent::percent_decode;
+use service_stack::Service;
 use std::{
     convert::Infallible,
     io,
     path::{Component, Path, PathBuf},
     task::{Context, Poll},
 };
-use service_stack::Service;
+use url_encoding::percent::percent_decode;
 
 pub(crate) mod future;
 mod headers;
@@ -361,11 +361,15 @@ impl<F> ServeDir<F> {
         };
 
         let buf_chunk_size = self.buf_chunk_size;
-        let range_header = req
-            .headers()
-            .get(header::RANGE)
-            .and_then(|value| value.to_str().ok())
-            .map(|s| s.to_owned());
+        // Range applies only to GET; HEAD describes the full selected representation.
+        let range_header = if req.method() == Method::GET {
+            req.headers()
+                .get(header::RANGE)
+                .and_then(|value| value.to_str().ok())
+                .map(|s| s.to_owned())
+        } else {
+            None
+        };
 
         let negotiated_encodings: Vec<_> = encodings(
             req.headers(),

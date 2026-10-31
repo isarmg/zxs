@@ -1,6 +1,7 @@
 # Internal source component. Original manifest and origin: compliance/provenance.
 
 [package]
+edition = "2015"
 name = "console_error_panic_hook"
 version = "0.1.7"
 authors = ["Nick Fitzgerald <fitzgen@gmail.com>"]

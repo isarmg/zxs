@@ -176,22 +176,23 @@ mod tests {
     #[test]
     fn codepoint_decode_secret_does_not_branch_or_index_on_secret_input() {
         // this is using the same theory as <https://github.com/agl/ctgrind>
-        use crabgrind as cg;
-
-        if matches!(cg::run_mode(), cg::RunMode::Native) {
-            std::println!("SKIPPED: must be run under valgrind");
-            return;
+        mod sdk {
+            include!(env!("ZXS_PKI_VALGRIND_BINDINGS"));
         }
 
-        let input = [b'a'];
-        cg::monitor_command(format!(
-            "make_memory undefined {:p} {}",
-            input.as_ptr(),
-            input.len()
-        ))
-        .unwrap();
-
+        // SAFETY: this queries the real Valgrind SDK without memory arguments.
+        assert_ne!(
+            unsafe { sdk::zxs_valgrind_running() },
+            0,
+            "Valgrind is required"
+        );
+        let mut input = [b'a'];
+        // SAFETY: input is a live initialized array; only the SDK's definedness
+        // shadow is changed, not Rust's initialized bytes or their lifetime.
+        unsafe { sdk::zxs_valgrind_make_undefined(input.as_mut_ptr().cast(), input.len()) };
         core::hint::black_box(CodePoint::decode_secret(input[0]));
+        // SAFETY: restore the same live array after the secret-dependent probe.
+        unsafe { sdk::zxs_valgrind_make_defined(input.as_mut_ptr().cast(), input.len()) };
     }
 
     #[track_caller]

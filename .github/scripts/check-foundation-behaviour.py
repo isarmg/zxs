@@ -122,6 +122,14 @@ INTEGRATION_SUITES = (
     Suite('html-escape', ('test/ci/fixtures/foundation-html-consumer.rs',), edition='2024'),
     Suite('indexmap', (FOUNDATION_TESTS + 'indexmap/tests/equivalent_trait.rs',)),
     Suite('pin-project-lite', (FOUNDATION_TESTS + 'pin-project-lite/tests/drop_order.rs',)),
+    Suite('tinystr', ('test/ci/fixtures/foundation-text-boundaries.rs',),
+          ('icu_locale_core', 'icu_provider', 'writeable', 'zerovec', 'potential_utf',
+           'unicode-ident', 'unicode-segmentation', 'convert_case'), edition='2024'),
+    Suite('base64', ('test/ci/fixtures/foundation-codec-boundaries.rs',),
+          ('subtle', 'wasm-encoder', 'wasmparser', 'gimli'), edition='2024'),
+    Suite('http-range-header', ('test/ci/fixtures/foundation-http-boundaries.rs',),
+          ('mime_guess', 'tower-http', 'tokio', 'http', 'http-body', 'bytes', 'service-stack', 'tempfile'), edition='2024'),
+    Suite('libloading', ('test/ci/fixtures/foundation-dynamic-library.rs',), edition='2024'),
 )
 
 # Cargo 1.99 cannot select some non-member build dependencies for lib tests.

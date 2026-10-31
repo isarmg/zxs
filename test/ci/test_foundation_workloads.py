@@ -51,6 +51,21 @@ class FoundationWorkloads(unittest.TestCase):
                 self.assertLess(setup.start(), body.index('bash .github/scripts/check.sh'))
                 self.assertLess(body.index('bash .github/scripts/check.sh'), probe.start())
 
+    def test_valgrind_sdk_and_gate_are_required_in_crypto_cells(self):
+        inventory = json.loads((ROOT / 'test/ci/foundation-commands.json').read_text())
+        gate = {'tool': 'python3', 'args': ['.github/scripts/check-valgrind-pki.py']}
+        self.assertEqual(inventory['foundation-crypto'].count(gate), 1)
+        for workflow, name in [('ci.yml', 'tests'), ('release.yml', 'verify')]:
+            body = job((ROOT / '.github/workflows' / workflow).read_text(), name)
+            setup = body.split('- name: Install Valgrind SDK and loader debug symbols\n', 1)[1].split('- name:', 1)[0]
+            self.assertIn("if: matrix.suite == 'foundation-crypto'", setup)
+            self.assertIn('valgrind libc6-dbg clang libclang-dev', setup)
+            self.assertLess(body.index('Install Valgrind SDK'), body.index('bash .github/scripts/check.sh'))
+            evidence = body.split('- name: Retain PKI Valgrind positive and negative evidence\n', 1)[1].split('- name:', 1)[0]
+            self.assertIn("always() && matrix.suite == 'foundation-crypto'", evidence)
+            self.assertIn('target/pki-valgrind/logs/', evidence)
+            self.assertIn('if-no-files-found: error', evidence)
+
     def test_release_still_waits_for_all_verification_cells(self):
         source = (ROOT / '.github/workflows/release.yml').read_text()
         self.assertRegex(job(source, 'assemble'), r'needs: \[[^\]]*\bverify\b[^\]]*\]')

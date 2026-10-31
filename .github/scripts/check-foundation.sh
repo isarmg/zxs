@@ -22,6 +22,7 @@ case "${1:-}" in
     cargo test --locked --offline --lib -p bit-set -p bit-vec -p id-arena -p rustc-demangle
     ;;
   foundation-crypto)
+    python3 .github/scripts/check-valgrind-pki.py
     python3 .github/scripts/check-ctutils.py
     python3 .github/scripts/check-crypto-consolidation.py
     python3 .github/scripts/check-linux-random-backends.py

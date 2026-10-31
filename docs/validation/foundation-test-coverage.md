@@ -170,6 +170,16 @@ crabgrind 0.1.9 不属于原 101 项（rustls-pki-types 已有 P）。本地已�
 
 原 101 项至此累计补齐 73 项，剩 28 项：17 个现有本地路线与 11 个保留 lib 缺测试软件的路线。精确包名及当前 P／U 范围见[生成映射](foundation-test-coverage-map.md)，这仍是限定行为证据，不表示组件全部 API／目标／性质已经覆盖。Valgrind 的本地负对照也已按预期检测到 tainted branch 并以 97 拒绝；它和先前精确 codepoint 探针尚未完成正式 CI 接线，未混入本批数字。
 
+### 助手云迁移后的本地边界追加
+
+在 `38dd6cdd` 上独立重建四份项目新作消费者（不是旧云未提交文件的原字节迁移），固定 Rust 1.99.0 实际执行 4 套件、21 项测试：文本 9、编解码 5、HTTP 5、动态库 2。追加执行复用 81 份既有套件记录，不声称本轮重新执行这些记录；正常 CI 仍执行全部套件。新增 18 个组件的限定 P 证据，映射为 194 已执行／10 待执行／18 参考；不是这些组件的完整上游测试覆盖。
+
+消费者先复现空资源 Range 错误接受和静态 ServeDir 的 HEAD 错误处理 Range，随后最小修复：空资源无可满足字节范围，Range 仅对 GET 生效。后者与已有 `server/transfer.rs` 内容传输入口不同，真实静态资源入口 `web_assets::fallback` 直接消费 ServeDir；新增服务器静态入口回归覆盖普通、有效、越界、畸形 HEAD Range，以及 GET 的 206 和空资源 416。完整组合 CI 状态另以实际候选提交运行核验。
+
+### PKI Valgrind 正式门禁接线
+
+助手云使用真实 Valgrind C SDK，通过本地 cc/bindgen 构建薄封装，保留精确 codepoint 测试主体和来源身份，不恢复 Rust crabgrind 依赖。实际正例 1 项通过、Memcheck 0 errors；同一测试在 Native 模式必须失败退出 101；故意污点分支负例必须产生 Memcheck error 并退出 97。普通 pki lib 在无 SDK 环境仍可编译。CI/release 的 foundation-crypto 已接入 SDK 安装和门禁并保留日志；GitHub 组合结果仍须对应候选实际运行。这只是该 codepoint 的秘密输入探针，不是全库常数时间证明。
+
 ### 行为套件的初次集成记录
 
 初次集成时，`check-foundation-behaviour.py` 生成的清单共 20 个套件、1,837 个逐名测试，全部在本地实现上通过；`--list` 名称与清单逐一相等，`ignored`、`filtered out` 均为 0。下表保留该次历史记录，不含后续三包新增接线；当前完整套件、名称与特性以 `test/ci/fixtures/foundation-behaviour-tests.json` 为准，通过状态须对应实际提交的 CI 日志。
