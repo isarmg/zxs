@@ -50,7 +50,26 @@
 
 ## 实际结果登记
 
-新增机械回归、格式、严格 lint、RPC 语义及成对负载的实际执行状态以最终交付的 run、SHA／tree 和产物为准。模板或任务启动不代表完成。原采用 FAIL 与尖峰未解释状态始终保留。
+首轮 [41166634669](https://github.com/isarmg/zxs/actions/runs/41166634669) 的机械检查、受影响严格 lint、102 项 RPC／50 项协议测试和两臂 release 构建、密封全部通过。四个 pair 都在读取不存在的 `/sys/fs/cgroup/cpu.max` 时、创建任何负载子进程前中止，判定为 incomplete／NOT EVALUATED；没有性能样本。修正后把缺失控制文件明确记录为 `not_present`，不推断无限额度，真实权限／I/O 错误仍失败并保存 pair 错误产物。恢复入口 [reuse-workflow.yml](../../tools/local-rpc-acceptance/reuse-workflow.yml) 固定复用该 run 的产物和 manifest `bc2cc8e53b796d8aa6fb2bd9fb493133b15445e5e764aa5cb166d199b8975700`；核验成功 build job、原控制器／源码身份、前后覆盖层、全部编译 Rust 字节及二进制哈希，只允许本次控制器、回归、文档和恢复模板改动。原 90 分钟截止时间和全部资源／性能门槛不变，不重新编译或重复已完成的测量。新增机械回归、格式、严格 lint、RPC 语义及成对负载的实际执行状态以最终交付的 run、SHA／tree 和产物为准。模板或任务启动不代表完成。原采用 FAIL 与尖峰未解释状态始终保留。
+
+### 2026-10-31 有限执行结果
+
+恢复 run [41168852801](https://github.com/isarmg/zxs/actions/runs/41168852801) 已结束，最终 summary 为 **incomplete / NOT EVALUATED**，不是完整性能通过，也不是已经证明的延迟门槛失败。四对均尝试执行，22 历史 AB、BA 完整结束；220 历史两对分别在首臂对照、首臂 candidate 的 `tails` 阶段中止，第二臂没有启动。没有拼接不同 runner 的数据，没有提高限额、清理恢复证据或重跑已有效的测量。
+
+22 历史两对均满足其全部九项条件，共 18 项；下表均为冻结 candidate 相对对照的 P95 增量，单位 ms。读／目录 P95、P99 和 20 次保存总时长也均在原门槛内。
+
+| 顺序 | 完整保存 | 8MiB Flush | 8MiB+64KiB Close | 8MiB write-through |
+| --- | ---: | ---: | ---: | ---: |
+| AB | +3.40 | +3.33 | +2.28 | +4.98 |
+| BA | +20.36 | +5.35 | +5.61 | +20.44 |
+
+220 历史失败均为 `bounded_write_tails` 中打开新的 `tail-through-*` 文件：客户端收到 `WouldBlock / ResourceLimitExceeded / errno 11`，消息为主体工作区证据元数据字节预算耗尽，全部元数据及恢复证据继续保留。默认主体限额是 64MiB，全局是 128MiB；这是核心应用资源准入，不是 runner 的 8GiB 地址空间／磁盘下限，也不是性能数值越线。两个首臂都已完成 seed、完整旧历史 oracle、1000 次读／目录、20 次原始保存及独立重开 RPC oracle；新增 40 组尾样本未齐全，且没有同 runner 的另一臂，不能判定 220 的读写、启动或 VmHWM 相对门槛。原始错误和部分有效数据保存在 [220 AB](https://github.com/isarmg/zxs/actions/runs/41168852801/artifacts/13030213191)、[220 BA](https://github.com/isarmg/zxs/actions/runs/41168852801/artifacts/13031156286)；[summary](https://github.com/isarmg/zxs/actions/runs/41168852801/artifacts/13030599992) 明确拒绝不完整样本。
+
+本轮实际产品源仍为对照 `e2f33d9882cf7263412d9370b6a703e0b216357d` 与 candidate `d3eefd289e53a2803703870fe4250d08cadff9b5`；控制器恢复源码为 `e6729bd934beae2b22de90b48bed3cb4116fc536`，carrier 为 `52bea22bf564ae8054c067e859507af8ae263d7a`。首轮成功完成 102 项 RPC、50 项协议测试；恢复机械检查包含 15 项控制器回归，独立审阅修正后无剩余阻塞。40 个尾样本的 P99 是最大值；这些结果不是物理盘、网络 SMB 或办公客户端证明。
+
+主线后来采用 `1f1904ad35b0cc3214e42e495907c95ce714e367`，本轮没有实测该 SHA。与冻结 candidate 的生产差异只有历史窗口 Nodes 查询的有界批量首发布查找；`engine.rs` 另加测试模块接线。该查询入口来自 HTTP 历史窗口，不在本轮 Unix RPC 的 Open／Read／ReadDirectory／PrepareWrite／Dirty／Flush／Close、提交、恢复及工作区预算路径；这些路径和配置、Cargo 锁／工具链均未改变。因此本轮可作为相同 RPC／资源准入路径的已有证据，无需仅因 head 不同重跑无关负载，但不能宣称量过新 main 二进制，亦不能据此证明新历史窗口查询性能。主线 [41168353374](https://github.com/isarmg/zxs/actions/runs/41168353374) 的功能 CI 成功不能补足这里的 220 性能缺口。
+
+下一项软件验收缺口是先设计在既定元数据准入内可完成的 220 成对扩展负载，并保留原始保存与新增尾测试的独立完成状态；当前证据不支持修改产品限额或削弱证据保留合同。本轮不继续尝试刷绿，旧 `2af` 采用 FAIL 与孤立尖峰未解释状态不变。
 
 ## 只需人工／物理环境执行的项目
 

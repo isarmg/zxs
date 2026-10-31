@@ -122,6 +122,83 @@ class ControllerTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 SCREEN.run(Path('missing'), Path('never-created'), 22, 0)
 
+    def test_observation_records_present_and_absent_without_inventing_a_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'cpu.max'
+            absent = SCREEN.read_observation(path)
+            self.assertEqual(absent['status'], 'not_present')
+            self.assertNotIn('raw', absent)
+            path.write_text('200000 100000\n')
+            self.assertEqual(SCREEN.read_observation(path)['raw'], '200000 100000\n')
+
+    def test_observation_preserves_real_io_errors(self):
+        for error in (PermissionError('denied'), OSError('I/O failure')):
+            with self.subTest(error=error), patch.object(Path, 'read_text', side_effect=error):
+                with self.assertRaises(type(error)):
+                    SCREEN.read_observation('/sys/fs/cgroup/cpu.max')
+
+    def reuse_manifest(self):
+        headers = dict(sha=SCREEN.REUSE['carrier_sha'], run_id=str(SCREEN.REUSE['run_id']),
+                       normal_source_sha=SCREEN.REUSE['source_sha'], normal_source_tree=SCREEN.REUSE['source_tree'],
+                       source_pins={key:list(value) for key,value in SCREEN.PINS.items()})
+        source = {}
+        for label in SCREEN.PINS:
+            overlay = {path:dict(after_sha256=SCREEN.sha(ROOT/path)) for path in SCREEN.ADDED[:2]}
+            adapter = 'baseline' if label == 'baseline' else 'current'
+            overlay[SCREEN.ADDED[2]] = dict(after_sha256=SCREEN.sha(ROOT/f'test/server/bench/final_rpc_{adapter}_read.rs'))
+            source[label] = dict(overlay=overlay)
+        return dict(controller=headers, source=source)
+
+    def test_reuse_accepts_only_the_reviewed_controller_patch_and_same_rust(self):
+        with patch.dict(os.environ, RPC_SOURCE_SHA='patched-source'), patch.object(
+                SCREEN, 'git', side_effect=['patched-source', 'tools/local-rpc-acceptance/screen.py']):
+            SCREEN.validate_reuse(self.reuse_manifest())
+
+    def test_reuse_rejects_changed_product_and_compiled_harness(self):
+        for changed in ('src/engine/src/lib.rs', 'test/server/bench/final_rpc_requests.rs'):
+            with self.subTest(changed=changed), patch.dict(os.environ, RPC_SOURCE_SHA='patched-source'), patch.object(
+                    SCREEN, 'git', side_effect=['patched-source', changed]):
+                with self.assertRaises(AssertionError):
+                    SCREEN.validate_reuse(self.reuse_manifest())
+        manifest = self.reuse_manifest()
+        manifest['source']['baseline']['overlay'][SCREEN.ADDED[0]]['after_sha256'] = 'wrong'
+        with patch.dict(os.environ, RPC_SOURCE_SHA='patched-source'), patch.object(
+                SCREEN, 'git', side_effect=['patched-source', 'tools/local-rpc-acceptance/screen.py']):
+            with self.assertRaises(AssertionError):
+                SCREEN.validate_reuse(manifest)
+
+    def test_reuse_rejects_another_build_identity(self):
+        manifest = self.reuse_manifest()
+        manifest['controller']['sha'] = 'wrong'
+        with self.assertRaises(AssertionError):
+            SCREEN.validate_reuse(manifest)
+
+    def test_host_failure_keeps_an_incomplete_pair_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root/'bundle'
+            bundle.mkdir()
+            binaries = {}
+            for label in SCREEN.PINS:
+                for kind in ('seed', 'server'):
+                    path = bundle/f'{label}-{kind}'
+                    path.write_bytes(b'never executed')
+                    binaries[path.name] = SCREEN.sha(path)
+            manifest = dict(binaries=binaries, controller=dict(sha='controller', normal_source_sha='source',
+                            normal_source_tree='tree', source_pins={k:list(v) for k,v in SCREEN.PINS.items()}))
+            (bundle/'manifest.json').write_text(json.dumps(manifest))
+            environment = dict(GITHUB_ACTIONS='true', GITHUB_SHA='controller', RPC_SOURCE_SHA='source',
+                               RPC_REUSE_BUILD='', RPC_MANIFEST_SHA256=SCREEN.sha(bundle/'manifest.json'))
+            with patch.dict(os.environ, environment), patch.object(SCREEN, 'git', side_effect=['source', 'tree']), \
+                    patch.object(SCREEN, 'host_observation', side_effect=PermissionError('host denied')), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(PermissionError):
+                    SCREEN.run(bundle, root/'result', 22, 0)
+            report = json.loads((root/'result/pair.json').read_text())
+            self.assertEqual(report['status'], 'incomplete')
+            self.assertEqual(report['runs'], [])
+            self.assertIn('PermissionError', report['error'])
+
     def test_pins_exclude_rejected_architecture(self):
         self.assertEqual(SCREEN.PINS['candidate'][0], 'd3eefd289e53a2803703870fe4250d08cadff9b5')
         self.assertEqual(SCREEN.PINS['baseline'][0], 'e2f33d9882cf7263412d9370b6a703e0b216357d')
