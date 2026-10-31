@@ -17,4 +17,4 @@ fi
 # The actual extracted/copied executable must serve all browser flows from
 # embedded bytes, not a --help stub or a beside-the-binary public directory.
 cargo run --locked --offline --release -p browser-smoke -- \
-  --cli-bin "$work/server/zxs" --embedded-web "${screenshot_args[@]}"
+  --cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-runtime "${screenshot_args[@]}"

@@ -2,7 +2,7 @@
 //! pool configuration, production Web/WASM, and real browser login/retry.
 use super::{
     Browser, Command, OpenOptions, OpenOptionsExt, Path, Result, Write, fs, http, json, port,
-    spawn, wait_for, with_cleanup,
+    wait_for, with_cleanup,
 };
 
 fn prepare_offline(source_pool: &Path, offline: &Path) -> Result<()> {
@@ -52,7 +52,8 @@ pub(super) fn run(
         .arg(&management)
         .args(["--listen", &format!("127.0.0.1:{server_port}")]);
     super::server_web(&mut command, web, &offline);
-    let _server = spawn(&mut command, &offline.join("server.log"))?;
+    let server = super::server_launcher::launch(&mut command, &offline.join("server.log"))?;
+    server.finish(|| {
     wait_for("offline management listener", || {
         let (status, bytes) = http(server_port, "GET", "/api/management/status", None)?;
         let value: json_codec::Value = json_codec::from_slice(&bytes)?;
@@ -124,6 +125,7 @@ pub(super) fn run(
         "PASS real corrupt-pool daemon: existing administrator login, health, CPU/memory, retry and logout without initialization"
     );
     Ok(())
+    })
 }
 
 pub(super) fn setup(
@@ -136,7 +138,7 @@ pub(super) fn setup(
     use std::io::Read;
     use std::os::unix::fs::DirBuilderExt;
     let fresh = root.join("fresh-web-setup");
-    fs::create_dir_all(&fresh)?;
+    fs::DirBuilder::new().mode(0o700).create(&fresh)?;
     let pool = fresh.join("pool");
     let management = fresh.join("management");
     fs::DirBuilder::new().mode(0o700).create(&management)?;
@@ -166,7 +168,8 @@ pub(super) fn setup(
     command
         .arg("--setup-disk")
         .arg(format!("{id}={}", disk.display()));
-    let server = spawn(&mut command, &fresh.join("server.log"))?;
+    let server = super::server_launcher::launch(&mut command, &fresh.join("server.log"))?;
+    server.finish(|| {
     wait_for("fresh setup listener", || {
         if http(server_port, "GET", "/", None)?.0 == 200 {
             Ok(())
@@ -245,10 +248,13 @@ pub(super) fn setup(
     {
         return Err("single-disk wizard invented backup levels".into());
     }
-    drop(server);
+    Ok(())
+    })?;
     let disk = fresh.join("fixture-primary");
     fs::rename(&disk, fresh.join("fixture-primary-offline"))?;
-    let _restarted = spawn(&mut command, &fresh.join("missing-disk-server.log"))?;
+    let restarted =
+        super::server_launcher::launch(&mut command, &fresh.join("missing-disk-server.log"))?;
+    restarted.finish(|| {
     wait_for("single missing disk leaves management online", || {
         let (status, bytes) = http(server_port, "GET", "/api/management/status", None)?;
         let value: json_codec::Value = json_codec::from_slice(&bytes)?;
@@ -290,6 +296,7 @@ pub(super) fn setup(
     lost_initialize_response(browser, daemon, web, root, password)?;
     preset_setup(browser, daemon, web, root, password)?;
     complete_setup(browser, daemon, web, root, password)
+    })
 }
 
 struct SetupFixture {
@@ -342,7 +349,7 @@ impl SetupFixture {
         daemon: &Path,
         web: Option<&Path>,
         preset: Option<&Path>,
-    ) -> Result<super::Process> {
+    ) -> Result<super::server_launcher::ServerProcess> {
         let mut command = Command::new(daemon);
         command
             .arg("--root")
@@ -362,14 +369,17 @@ impl SetupFixture {
                 .arg("--setup-config")
                 .arg(format!("four-disk-preset={}", preset.display()));
         }
-        let server = spawn(&mut command, &self.root.join("server.log"))?;
-        wait_for("protected setup fixture listener", || {
+        let server = super::server_launcher::launch(&mut command, &self.root.join("server.log"))?;
+        let ready = wait_for("protected setup fixture listener", || {
             if http(self.port, "GET", "/", None)?.0 == 200 {
                 Ok(())
             } else {
                 Err("fixture listener not ready".into())
             }
-        })?;
+        });
+        if let Err(error) = ready {
+            return server.finish(|| Err(error)).map(|()| unreachable!());
+        }
         Ok(server)
     }
     fn open(&self, browser: &Browser) -> Result<()> {
@@ -583,7 +593,8 @@ fn lost_initialize_response(
     password: &str,
 ) -> Result<()> {
     let fixture = SetupFixture::new(root, "lost-initialize-response", 1)?;
-    let _server = fixture.launch(daemon, web, None)?;
+    let server = fixture.launch(daemon, web, None)?;
+    server.finish(|| {
     fixture.open(browser)?;
     browser.click(&browser.css("[data-setup-disk]")?)?;
     browser.click(&browser.css("[data-setup-development]")?)?;
@@ -675,6 +686,7 @@ fn lost_initialize_response(
         "PASS real successful initialization response loss: unknown form and reload fences, one setup POST, existing-status recheck and original administrator recovery"
     );
     Ok(())
+    })
 }
 
 fn select_preset(browser: &Browser, expected_limit: usize) -> Result<()> {
@@ -747,7 +759,8 @@ fn preset_setup(
 ) -> Result<()> {
     let fixture = SetupFixture::new(root, "preset-web-setup", 4)?;
     let (mut config, preset) = write_preset(&fixture)?;
-    let _server = fixture.launch(daemon, web, Some(&preset))?;
+    let server = fixture.launch(daemon, web, Some(&preset))?;
+    server.finish(|| {
     fixture.open(browser)?;
     select_preset(browser, 17)?;
     // Modify a local preset only after the real preview response. The browser
@@ -793,6 +806,7 @@ fn preset_setup(
         "PASS real four-disk preset preview, changed-digest HTTP409 rejection, explicit re-review, exact configuration preservation and administrator login"
     );
     Ok(())
+    })
 }
 fn complete_setup(
     browser: &Browser,
@@ -804,7 +818,8 @@ fn complete_setup(
     let fixture = SetupFixture::new(root, "interrupted-web-setup", 3)?;
     prepare_interruption(&fixture, password)?;
     let original_config = fs::read(fixture.pool.join("config.json"))?;
-    let _server = fixture.launch(daemon, web, None)?;
+    let server = fixture.launch(daemon, web, None)?;
+    server.finish(|| {
     fixture.open(browser)?;
     browser.click(&browser.button("Complete interrupted initialization", "完成中断的初始化")?)?;
     browser.keys(&browser.css("[data-setup-user]")?, "completion-admin")?;
@@ -822,6 +837,7 @@ fn complete_setup(
         "PASS real durable pre-authority interruption fixture, explicit protected Web completion, unchanged pool and administrator login; no product debug endpoint"
     );
     Ok(())
+    })
 }
 
 // The only injected failure is a test-owned service callback, before any

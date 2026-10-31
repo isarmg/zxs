@@ -13,7 +13,7 @@ class ReleaseAcceptance(unittest.TestCase):
         self.assertLess(workflow.index('release-acceptance.sh'), release_upload)
         script = (ROOT / '.github/scripts/release-acceptance.sh').read_text()
         self.assertIn('cp "release-assets/zxs-${RELEASE_VERSION}-debian13-amd64"', script)
-        self.assertIn('--cli-bin "$work/server/zxs" --embedded-web', script)
+        self.assertIn('--cli-bin "$work/server/zxs" --embedded-web --server-container-image zxs-debian13-runtime', script)
         self.assertIn('cargo run --locked --offline --release -p browser-smoke', script)
         self.assertNotIn('--web-dir', script)
         self.assertNotIn('target/native/debug/zxs', script)
@@ -52,6 +52,29 @@ class ReleaseAcceptance(unittest.TestCase):
         documentation = (ROOT / 'docs/release.md').read_text()
         self.assertIn('不保证完全可重现', documentation)
         self.assertIn('修改源码后不能沿用旧', documentation)
+
+    def test_unaccepted_diagnostic_bytes_survive_failed_acceptance(self):
+        expected = {'target/native/x86_64-unknown-linux-gnu/release/zxs',
+                    'target/native/x86_64-unknown-linux-gnu/release/zxs-rescue',
+                    'target/native/x86_64-unknown-linux-gnu/release/BUILD.txt',
+                    'target/smb-debian13/product/zxs.so',
+                    'target/smb-debian13/product/VFS-BUILD.json', 'build/web',
+                    'target/debian13-native/release/browser-smoke', 'target/native/release/browser-smoke'}
+        for name in ('ci.yml', 'release.yml'):
+            workflow = (ROOT / '.github/workflows' / name).read_text()
+            block = workflow.split('      - name: Retain unaccepted native diagnostic bytes (not final assets)\n', 1)[1].split('      - name:', 1)[0]
+            self.assertIn('if: always()', block)
+            self.assertIn('name: unaccepted-native-${{ github.sha }}', block)
+            self.assertIn('if-no-files-found: warn', block)
+            paths = block.split('          path: |\n', 1)[1].split('          if-no-files-found:', 1)[0]
+            self.assertEqual(set(paths.split()), expected)
+            inventory = workflow.split('      - name: Record unaccepted native diagnostic inventory\n', 1)[1].split('      - name:', 1)[0]
+            self.assertIn('if: always()', inventory)
+            self.assertIn('PRESENT %s', inventory)
+            self.assertIn('MISSING %s', inventory)
+            self.assertLess(workflow.index('release-acceptance.sh'), workflow.index('name: unaccepted-native-'))
+            self.assertLess(workflow.index('name: unaccepted-native-'), workflow.index('name: Retain Debian 13 single-ELF runtime proof'))
+            self.assertNotIn('overwrite:', block)
 
     def test_installation_recipe_has_one_authoritative_source(self):
         release = (ROOT / 'docs/release.md').read_text()

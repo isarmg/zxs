@@ -136,11 +136,46 @@ jobs:
           bash .github/scripts/debian13-run.sh --native python3 .github/scripts/release-native.py
           bash .github/scripts/release-package.sh
           bash .github/scripts/check-debian13-release.sh
-      - name: Accept standalone ELF with Debian 13 Chromium
+      - name: Accept Debian 13 standalone ELF with host sandboxed Chrome
         run: |
           export CHROME_BIN="$(command -v google-chrome)"
           export CHROMEDRIVER="$(command -v chromedriver)"
-          bash .github/scripts/debian13-run.sh --browser bash .github/scripts/release-acceptance.sh
+          bash .github/scripts/release-acceptance.sh
+      - name: Record unaccepted native diagnostic inventory
+        if: always()
+        run: |
+          printf 'Unaccepted diagnostic bytes for source %s; not a validated release.\n' '${{ github.sha }}'
+          for path in \
+            target/native/x86_64-unknown-linux-gnu/release/zxs \
+            target/native/x86_64-unknown-linux-gnu/release/zxs-rescue \
+            target/native/x86_64-unknown-linux-gnu/release/BUILD.txt \
+            target/smb-debian13/product/zxs.so \
+            target/smb-debian13/product/VFS-BUILD.json \
+            build/web \
+            target/debian13-native/release/browser-smoke \
+            target/native/release/browser-smoke; do
+            if [[ -e "$path" ]]; then
+              printf 'PRESENT %s\n' "$path"
+            else
+              printf 'MISSING %s\n' "$path"
+            fi
+          done
+      - name: Retain unaccepted native diagnostic bytes (not final assets)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unaccepted-native-${{ github.sha }}
+          path: |
+            target/native/x86_64-unknown-linux-gnu/release/zxs
+            target/native/x86_64-unknown-linux-gnu/release/zxs-rescue
+            target/native/x86_64-unknown-linux-gnu/release/BUILD.txt
+            target/smb-debian13/product/zxs.so
+            target/smb-debian13/product/VFS-BUILD.json
+            build/web
+            target/debian13-native/release/browser-smoke
+            target/native/release/browser-smoke
+          if-no-files-found: warn
+          retention-days: 7
       - name: Retain Debian 13 single-ELF runtime proof
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

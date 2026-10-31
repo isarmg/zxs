@@ -8,7 +8,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    os::unix::{fs::OpenOptionsExt, process::CommandExt},
+    os::unix::{
+        fs::{OpenOptionsExt, PermissionsExt},
+        process::CommandExt,
+    },
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
@@ -34,6 +37,7 @@ mod integrity_scrub;
 mod lifecycle;
 mod management;
 mod metadata;
+mod server_launcher;
 mod session_delivery;
 use metadata::{assert_metadata_only, metadata_edit, open_fixture_directory};
 mod file_viewports;
@@ -433,12 +437,19 @@ fn run() -> Result<()> {
     let mut cli_binary = PathBuf::from("target/native/debug/zxs");
     let mut web = PathBuf::from("build/web");
     let mut embedded_web = false;
+    let mut server_container_image = None;
     let mut screenshot: Option<PathBuf> = None;
     let mut contour_evidence: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cli-bin" => cli_binary = args.next().ok_or("--cli-bin requires a path")?.into(),
             "--embedded-web" => embedded_web = true,
+            "--server-container-image" => {
+                server_container_image = Some(
+                    args.next()
+                        .ok_or("--server-container-image requires an image")?,
+                )
+            }
             "--web-dir" => web = args.next().ok_or("--web-dir requires a path")?.into(),
             "--screenshot" => {
                 screenshot = Some(args.next().ok_or("--screenshot requires a path")?.into());
@@ -452,7 +463,7 @@ fn run() -> Result<()> {
             }
             _ => {
                 return Err(format!(
-                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--screenshot PNG] [--contour-evidence DIR]"
+                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--server-container-image IMAGE] [--screenshot PNG] [--contour-evidence DIR]"
                 )
                 .into());
             }
@@ -461,6 +472,7 @@ fn run() -> Result<()> {
     if contour_evidence.is_some() && screenshot.is_some() {
         return Err("--contour-evidence and --screenshot are separate validation modes".into());
     }
+    server_launcher::configure(server_container_image, embedded_web)?;
     let cli_binary = cli_binary.canonicalize()?;
     let web = web.canonicalize()?;
     if !web.join("index.html").is_file() {
@@ -468,6 +480,7 @@ fn run() -> Result<()> {
     }
     let temp = tempfile::Builder::new()
         .prefix("browser-smoke-")
+        .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()?;
     let root = temp.path();
     let pool = root.join("pool");
@@ -488,8 +501,8 @@ fn run() -> Result<()> {
         .arg(&pool)
         .args(["--listen", &format!("127.0.0.1:{server_port}")]);
     server_web(&mut command, server_assets, root);
-    let _server = spawn(&mut command, &server_log)?;
-    let result = (|| -> Result<()> {
+    let server = server_launcher::launch(&mut command, &server_log)?;
+    let result = server.finish(|| -> Result<()> {
         wait_for("persisted fixture authority and storage", || {
             let (status, bytes) = http(server_port, "GET", "/api/management/status", None)?;
             let value: Value = json_codec::from_slice(&bytes)?;
@@ -566,7 +579,7 @@ fn run() -> Result<()> {
             diagnostics::failure(&browser, &diagnostics_dir, &password);
         }
         result
-    })();
+    });
     if result.is_err() {
         for (name, path) in [("ZXS", server_log), ("ChromeDriver", driver_log)] {
             if let Ok(log) = fs::read_to_string(path) {

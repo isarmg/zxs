@@ -12,6 +12,10 @@
 
 普通 CI 的 `browser-smoke` 也在归档验收与模板浏览器检查成功后组装安装材料，上传保留 7 天的 `installation-candidate-linux-web` artifact，包含下述七文件集合。这是安装演练候选，不创建标签或公开 Release；该 artifact 的存在不代表其他并行 CI 门禁通过，也不等同于上面的完整 Release `workflow_dispatch` 演练。候选使用同次 CI 的检出提交和产物，部署前仍须核对 `BUILD.txt`、校验摘要并审阅整次 CI 结果。
 
+发行 UI 门禁使用宿主正常沙箱的 Google Chrome 作为远端客户端，被测单 ELF 则运行在 Debian 13 容器。测试 launcher 只映射该 ELF 和私有夹具目录、非 root、无新增 capability，服务强制只监听 `127.0.0.1`；容器句柄负责退出和清理。另有无编译器 Debian 13 最小运行环境逐资源 SHA 门禁。此组合不能宣称“容器内 Chromium 已通过”：该尝试的 namespace `EPERM` 诊断保留，未通过关闭 sandbox 或更改宿主安全策略绕过。
+
+若后续验收失败，`unaccepted-native-提交` 仅保留带原始源码收据的诊断字节；它不是最终发行资产，不能重新标记成其他提交或当作 UI 验收通过。
+
 预发布标签标为 prerelease 且不更新 Latest；正式版由 GitHub 默认规则决定 Latest。
 
 ## 发布文件
