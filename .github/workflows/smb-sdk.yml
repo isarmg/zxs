@@ -33,7 +33,10 @@ jobs:
       - name: Load VFS in apt smbd and exercise real storage engine without compiler or network
         run: |
           fixture="$(cat target/smb-debian13/fixture-path.txt)"
+          modules="$(docker run --rm --network none zxs-debian13-runtime smbd -b | sed -n 's/^[[:space:]]*MODULESDIR: //p')"
+          [[ "$modules" =~ ^/[a-zA-Z0-9_./-]+$ ]] || exit 1
           docker run --rm --init --network none --volume "$PWD:/work" \
+            --volume "$PWD/target/smb-debian13/product/zxs.so:$modules/vfs/zxs.so:ro" \
             --env ZXS_ISOLATED_SAMBA_TEST=1 zxs-debian13-runtime \
             python3 .github/scripts/check-system-samba.py --fixture "$fixture" \
             --module target/smb-debian13/product/zxs.so --output target/smb-debian13/product/system-samba.json

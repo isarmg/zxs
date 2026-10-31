@@ -167,7 +167,7 @@ CARGO_INCREMENTAL=0 cargo build --locked --offline \
 
 VFS 回调和工作线程依赖 `catch_unwind` 隔离 panic，因此模块以编译期 `cfg(panic = "abort")` 拒绝 abort 构建，包括环境变量或 rustc 参数覆盖。SDK CI 在真实配置的 SDK 下先要求 release 的 `-C panic=abort` 构建出现该专用拒绝诊断，再验证正常 release 构建；测试 harness 默认 unwind 不能代替这个证明。此约束只属于 VFS，不更改浏览器 WASM 的 panic 策略。注册时使用同一份生成绑定中的 `SMB_VFS_INTERFACE_VERSION`，仍由构建边界核对固定 4.23.0／51。
 
-模块文件生成在 `target/native/release/libsmb_vfs.so`，按目标 SDK 的模块路径提供 `zxs.so`。SDK 测试还需要链接该配置对应的 tevent/talloc 库。
+模块文件生成在 `target/native/release/libsmb_vfs.so`，按运行宿主 `smbd -b` 输出的 `MODULESDIR/vfs/` 提供 `zxs.so`（受信任且认证用户不可写）。配置只写 `vfs objects = zxs`，当前宿主拒绝绝对模块路径。SDK 测试还需要链接该配置对应的 tevent/talloc 库。
 
 共享配置的基本形状如下。模块参数使用独立键，不能用逗号拼进 `vfs objects`：
 

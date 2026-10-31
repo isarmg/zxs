@@ -23,3 +23,5 @@
 
 版本固定用于识别本次验证，不是要求用户停止安全升级。apt 更新 Samba 后必须重建匹配模块并重跑上述 gate；
 未匹配模块应明确拒绝加载。未来版本只有取得其实际源/补丁、生成绑定并通过同样验收后才能新增支持声明。
+
+实际 Debian 4.22 loader 拒绝包含 `/` 的模块名称；配置使用 `vfs objects = zxs`，模块须位于该宿主标准 VFS 目录。隔离 CI 仅只读挂载当前 artifact 到实际 `smbd -b` 的 `MODULESDIR/vfs/zxs.so` 并核对完整 SHA，不修改宿主安装，也不放宽加载器策略。首轮绝对路径配置造成的 `NT_STATUS_INVALID_PARAMETER` 保留为失败证据；不计为模块已经加载。

@@ -40,6 +40,8 @@ class SystemSambaGate(unittest.TestCase):
     def test_runtime_is_network_isolated_and_no_service_autostart(self):
         workflow = (ROOT / ".github/workflows/smb-sdk.yml").read_text()
         self.assertIn("--network none", workflow)
+        self.assertIn("$modules/vfs/zxs.so:ro", workflow)
+        self.assertIn("vfs objects = zxs", (ROOT / ".github/scripts/check-system-samba.py").read_text())
         self.assertIn("ZXS_ISOLATED_SAMBA_TEST=1", workflow)
         image = (ROOT / ".github/containers/debian13-runtime.Dockerfile").read_text()
         self.assertIn("policy-rc.d", image)

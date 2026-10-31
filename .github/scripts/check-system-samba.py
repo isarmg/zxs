@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Real apt smbd + loadable VFS + real engine, isolated loopback fixture only."""
 import argparse
+import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import signal
@@ -44,7 +46,17 @@ def run(args):
             raise RuntimeError(f"wrong system Samba package: {package}: {actual}")
     if subprocess.run(["sh", "-c", "command -v cc || command -v cargo"], capture_output=True).returncode == 0:
         raise RuntimeError("runtime acceptance image must not contain compiler or Cargo")
-    result = {"package_version": target["package_version"], "vfs_interface": target["vfs_interface"],
+    # Samba's supported loader accepts a module name, never an arbitrary path.
+    # CI mounts this exact artifact read-only into the isolated distro module directory.
+    build_options = subprocess.check_output(["smbd", "-b"], text=True)
+    module_dirs = re.findall(r"^\s*MODULESDIR:\s+(/[^\s]+)$", build_options, re.MULTILINE)
+    if len(module_dirs) != 1:
+        raise RuntimeError("apt smbd must identify exactly one absolute module directory")
+    installed = Path(module_dirs[0]) / "vfs/zxs.so"
+    module_sha = hashlib.sha256(args.module.read_bytes()).hexdigest()
+    if hashlib.sha256(installed.read_bytes()).hexdigest() != module_sha:
+        raise RuntimeError("isolated installed VFS differs from the candidate artifact")
+    result = {"module_sha256": module_sha, "package_version": target["package_version"], "vfs_interface": target["vfs_interface"],
               "host": subprocess.check_output(["smbd", "--version"], text=True).strip(), "checks": []}
     with tempfile.TemporaryDirectory(prefix="zxs-apt-samba-") as temp:
         work = Path(temp)
@@ -93,7 +105,7 @@ disable spoolss = yes
 printcap name = /dev/null
 [zxs]
 path = {work}/empty
-vfs objects = {args.module.resolve()}
+vfs objects = zxs
 zxs:socket = {ready['socket']}
 zxs:repository = {ready['repository_id']}
 valid users = root
