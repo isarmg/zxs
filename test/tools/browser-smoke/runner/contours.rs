@@ -34,6 +34,8 @@ const done=arguments[arguments.length-1];
   const originalConsoleError=console.error;
   const originalScreenCtm=SVGGraphicsElement.prototype.getScreenCTM, originalSetProperty=CSSStyleDeclaration.prototype.setProperty;
   let failAfterInsert=null, insertedBeforeFailure=null;
+  let removalFault=null;
+  const removalFailures=[], removalWitnesses=[];
   const expectedHostFailures=[];
   const hostFailureMarker='synthetic insert-then-error probe';
   const measuredHandles=new WeakSet(), handleOwners=new WeakMap();
@@ -122,10 +124,22 @@ const done=arguments[arguments.length-1];
     return result;
   };
   console.error=function(...args){
-    if(args.some(value=>String(value).includes(hostFailureMarker)))expectedHostFailures.push(args.map(String));
+    const fault=removalFailures.find(fault=>args.includes(fault.error));
+    if(fault)fault.diagnostics++;
+    else if(args.some(value=>String(value).includes(hostFailureMarker)))expectedHostFailures.push(args.map(String));
     else Reflect.apply(originalConsoleError,this,args);
   };
-  Node.prototype.removeChild=function(node){if(outputNode(node)){outputCalls.remove++;journalTrace.push('remove');}return Reflect.apply(originalRemove,this,[node]);};
+  Node.prototype.removeChild=function(node){
+    if(outputNode(node)){outputCalls.remove++;journalTrace.push('remove');}
+    const fault=removalFault;
+    if(fault && this===fault.parent && node===fault.child){
+      removalFault=null;fault.calls++;
+      if(fault.after)Reflect.apply(originalRemove,this,[node]);
+      fault.removedAtFailure=node.parentNode!==this;
+      throw fault.error;
+    }
+    return Reflect.apply(originalRemove,this,[node]);
+  };
   Element.prototype.querySelectorAll=function(selector){const nodes=Reflect.apply(originalElementQuery,this,[selector]);if(selector==='*'){subtreeQueries++;subtreeEntries+=nodes.length;}return nodes;};
   Document.prototype.querySelectorAll=function(selector){if(selector==='*')scans++;return Reflect.apply(originalQuery,this,[selector]);};
   try {
@@ -535,6 +549,41 @@ const done=arguments[arguments.length-1];
     check(faulted.dataset.zxsContourState==='paint' && insertedBeforeFailure.parentNode===faulted,
       'post-error author reconciliation recovers paint with actual inserted output');
     const failedWriteJournal=journalCounts();
+    // Explicit synthetic host failures, not a claim that standard removeChild
+    // throws for a valid parent/child pair. Cover both record-retention passes
+    // and preserve the exact Error object through the production boundary.
+    for(const departure of ['unqualified','detached'])for(const after of [false,true]){
+      const target=document.createElement('div'), witness=document.createElement('div');
+      for(const node of [target,witness]){shape(node);node.style.setProperty('--zxs-contour-extent','16px');}
+      target.style.backgroundImage='linear-gradient(rgb(50,70,90),rgb(110,130,150))';
+      const targetOriginal=originalPaint(target), witnessOriginal=originalPaint(witness);
+      host.append(target,witness);await frames(6);
+      const child=target.querySelector(':scope > [data-zxs-contour-decoration]');
+      check(!!child && witness.dataset.zxsContourState==='paint','removal fault fixtures start painted');
+      const witnessImage=Reflect.apply(originalStyle,window,[witness]).borderImageSource;
+      const fault={parent:target,child,after,calls:0,diagnostics:0,
+        error:new Error(`synthetic ${departure} remove-${after?'after':'before'}-error probe`)};
+      removalFailures.push(fault);removalFault=fault;
+      const errors=window.__zxsSmokeErrors.length;
+      if(departure==='detached')target.remove();
+      else target.style.setProperty('--zxs-contour-extent','0px');
+      await frames(4);
+      check(removalFault===null && fault.calls===1 && fault.diagnostics===1
+        && fault.removedAtFailure===after,
+        'one targeted removal failure preserves exact source identity and mutation outcome');
+      // Supply an ordinary refresh stimulus after the one-shot fault. The
+      // failed record and records on both sides must still have valid owners.
+      witness.style.setProperty('--zxs-contour-extent','24px');
+      stable.dispatchEvent(new Event('pointerover',{bubbles:true}));await frames(6);
+      check(window.__zxsSmokeErrors.length===errors && stable.dataset.zxsContourState==='paint'
+        && witness.dataset.zxsContourState==='paint'
+        && Reflect.apply(originalStyle,window,[witness]).borderImageSource!==witnessImage,
+        'other records keep working and publish changed geometry after removal failure');
+      check(!child.parentNode && !target.querySelector(':scope > [data-zxs-contour-decoration]'),
+        'failed output remains owned until later cleanup succeeds');
+      restoredPaint(target,targetOriginal,'removal failure recovery restores author state',false);
+      removalWitnesses.push([witness,witnessOriginal]);
+    }
     stable.remove();await frames(4);
     // Computed styles depend on document attachment; only authored inline
     // values/priorities and original markers are comparable after detachment.
@@ -550,10 +599,16 @@ const done=arguments[arguments.length-1];
     check(totalHandleAcquisitions===stoppedHandles && totalPropertyReads===stoppedReads && !late.hasAttribute('data-zxs-contour-state'),
       'closed controller ignores queued discovery and paints no late candidate in four-frame window');
     restoredPaint(adopted,adoptedOriginal,'pagehide restores connected author paint and markers',false);
+    for(const [node,original] of removalWitnesses){
+      restoredPaint(node,original,'pagehide retains cleanup ownership after host failure',false);
+      check(!node.querySelector('[data-zxs-contour-decoration]'),'pagehide releases post-failure witness output');
+    }
     check(window.__zxsSmokeErrors.length===errorsBefore,'pagehide late observation window has no new uncaught errors');
     return {passed:true,decoys:decoys.size,animation,textUpdate,reparentReads,reparentDiscovery,hiddenState,scrollTrace,insertions,authorRemovals,
       scrollCorrectionTrace,authorOutputRepair,stableRefreshJournal,decorationCreationJournal,decorationRemovalJournal,
-      afterDecoration,afterDecorationRemoval,expectedHostFailures,failedWriteJournal,stoppedHandles,lateObservationFrames:4,finalCounters:counts()};
+      afterDecoration,afterDecorationRemoval,expectedHostFailures,failedWriteJournal,
+      removalFailures:removalFailures.map(({after,calls,diagnostics,removedAtFailure,error})=>({after,calls,diagnostics,removedAtFailure,error:String(error)})),
+      stoppedHandles,lateObservationFrames:4,finalCounters:counts()};
   } finally {
     window.getComputedStyle=originalStyle;Document.prototype.querySelectorAll=originalQuery;
     SVGGraphicsElement.prototype.getScreenCTM=originalScreenCtm;CSSStyleDeclaration.prototype.setProperty=originalSetProperty;

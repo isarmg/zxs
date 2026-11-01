@@ -199,7 +199,7 @@ Snapshot、历史目录及历史投影共用同一 radix 算法；引用 `kind` 
 
 导出选择与当前逻辑历史匹配的原发布证据并复制其准确对象图。根的必需语义 marker 不是项目发行版本字段；读取采用严格固定形状，拒绝 markerless/flat 根、旧目录字段及旧索引引用，不升级证明、不兼容双读、不迁移或删除已有数据。拒绝后保留原材料，不以重置运行池解决格式差异；实现格式变更不授权真实部署。当前格式生成的保留历史仍按准确绑定证据恢复。
 
-有界根移除全页 hash 列表和全部 history 根映射随总量增长的根瓶颈，但单个大型实体（例如 `Commit.entries`、完整控制认证对象）、本次 Candidate.versions、成员集合及组合证明仍受实际字节与元数据上限约束。Snapshot/catalog 编码按可信写集更新路径，预算使用驻留精确摘要；完整旧依赖读验、碰撞比较和全部成员同步仍保留，history 投影仅稳定归属分支值更新使用窄增量。一般 owner closure、冷准入/故障重建及其他全量成本仍在，不得宣称端到端 O(delta) 或性能已经提高。
+有界根移除全页 hash 列表和全部 history 根映射随总量增长的根瓶颈，但单个大型实体（例如 `Commit.entries`、完整控制认证对象）、本次 Candidate.versions、成员集合及组合证明仍受实际字节与元数据上限约束。Snapshot/catalog 编码按可信写集更新路径，预算使用驻留精确摘要；一般 history owner closure 已从权威 State 派生成员关系并按前后写集更新，不再仅限稳定归属分支值。无有效发布谱系／巡检复用资格时仍完整读验安装旧依赖；有资格时可省略未变旧依赖，但本次新编码对象仍执行真实碰撞比较和全部必需成员同步。冷准入、未知谱系／All、故障重建、State 首写复制及其他全量成本仍在。源码接线不等于阶段门禁通过，不得宣称端到端 O(delta) 或性能已经提高。
 
 [S10]: https://btrfs.readthedocs.io/en/latest/btrfs-scrub.html
 [S16]: https://btrfs.readthedocs.io/en/latest/Reflink.html

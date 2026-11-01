@@ -51,7 +51,11 @@ impl CpuPowerSampler {
 
     fn sample_at(&mut self, now: Instant) -> PowerReading {
         let mut zones = BTreeSet::new();
-        discover_packages(&self.root, 0, &mut zones, &mut BTreeSet::new());
+        if let Err(error) = discover_packages(&self.root, 0, &mut zones, &mut BTreeSet::new()) {
+            tracing::debug!(error = ?error, "CPU energy sensor discovery incomplete");
+            self.previous = None;
+            return PowerReading::unavailable(PowerUnavailable::SensorUnreadable);
+        }
         if zones.is_empty() {
             self.previous = None;
             return PowerReading::unavailable(PowerUnavailable::SensorUnavailable);
@@ -130,36 +134,48 @@ fn discover_packages(
     depth: usize,
     result: &mut BTreeSet<PathBuf>,
     seen: &mut BTreeSet<PathBuf>,
-) {
-    if depth > 4 || seen.len() >= 256 {
-        return;
-    }
-    let Some(canonical) = sensor_value(root.canonicalize()) else {
-        return;
+) -> std::io::Result<()> {
+    let canonical = match root.canonicalize() {
+        Ok(path) => path,
+        Err(error) if depth == 0 && error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
     };
-    if !seen.insert(canonical.clone()) {
-        return;
+    if seen.contains(&canonical) {
+        return Ok(());
     }
-    if sensor_value(fs::read_to_string(canonical.join("name"))).is_some_and(|name| {
+    if depth > 4 || seen.len() >= 256 {
+        return Err(std::io::Error::other(
+            "CPU sensor discovery exceeds admission",
+        ));
+    }
+    seen.insert(canonical.clone());
+    let name = match fs::read_to_string(canonical.join("name")) {
+        Ok(name) => Some(name),
+        // The powercap root and intermediate namespaces have no zone name.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    if name.is_some_and(|name| {
         name.trim()
             .strip_prefix("package-")
             .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|c| c.is_ascii_digit()))
     }) {
         result.insert(canonical);
         // A package already contains its core/uncore domains: do not add them twice.
-        return;
+        return Ok(());
     }
-    let Some(entries) = sensor_value(fs::read_dir(root)) else {
-        return;
-    };
-    for entry in entries.take(256) {
-        let Some(entry) = sensor_value(entry) else {
-            continue;
-        };
-        if entry.path().is_dir() {
-            discover_packages(&entry.path(), depth + 1, result, seen);
+    for (index, entry) in fs::read_dir(root)?.enumerate() {
+        if index == 256 {
+            return Err(std::io::Error::other(
+                "CPU sensor discovery exceeds admission",
+            ));
+        }
+        let entry = entry?;
+        if entry.path().metadata()?.is_dir() {
+            discover_packages(&entry.path(), depth + 1, result, seen)?;
         }
     }
+    Ok(())
 }
 
 fn read_u64(path: &Path) -> std::io::Result<u64> {
@@ -215,9 +231,12 @@ fn read_disk_power(
         return PowerReading::unavailable(PowerUnavailable::SensorUnavailable);
     };
     let mut channels = BTreeMap::<(PathBuf, String), PathBuf>::new();
-    for entry in entries.take(256) {
+    for (index, entry) in entries.enumerate() {
+        if index == 256 {
+            return PowerReading::unavailable(PowerUnavailable::SensorUnreadable);
+        }
         let Some(entry) = sensor_value(entry) else {
-            continue;
+            return PowerReading::unavailable(PowerUnavailable::SensorUnreadable);
         };
         let path = entry.path();
         let owner = sensor_value(path.join("device").canonicalize()).or_else(|| {
@@ -234,11 +253,14 @@ fn read_disk_power(
             continue;
         }
         let Some(files) = sensor_value(fs::read_dir(&path)) else {
-            continue;
+            return PowerReading::unavailable(PowerUnavailable::SensorUnreadable);
         };
-        for file in files.take(512) {
+        for (index, file) in files.enumerate() {
+            if index == 512 {
+                return PowerReading::unavailable(PowerUnavailable::SensorUnreadable);
+            }
             let Some(file) = sensor_value(file) else {
-                continue;
+                return PowerReading::unavailable(PowerUnavailable::SensorUnreadable);
             };
             let name = file.file_name().to_string_lossy().into_owned();
             let Some((stem, kind)) = name.rsplit_once('_') else {

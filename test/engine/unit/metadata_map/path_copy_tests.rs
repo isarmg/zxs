@@ -358,3 +358,93 @@ fn text_entry_encoding_does_not_own_a_second_copy_of_resident_key_text() {
     let entries = encode_entries(map(128), &|key: &String| Cow::Borrowed(key.as_str())).unwrap();
     assert!(entries.iter().all(|entry| entry.text.is_none()));
 }
+
+#[test]
+fn full_digest_depth_proof_and_loaded_summary_keep_the_exact_bound_path() {
+    // A legal stored graph can retain one-child indexes. Do not replace its
+    // authenticated path with the encoder's shorter singleton representation.
+    let key = "deep-version";
+    let route = key_route(key);
+    let page = json_codec::json!({key: "PURGED"});
+    let mut encoder = Encoder::new(MAX_METADATA);
+    let mut reference = Reference {
+        kind: ReferenceKind::Page,
+        hash: encoder.object("state-page", &page).unwrap(),
+    };
+    for depth in (0..RADIX_DEPTH).rev() {
+        let index = MetadataIndex {
+            prefix: route[..depth].into(),
+            children: BTreeMap::from([(route[depth..depth + 1].into(), reference)]),
+        };
+        reference = Reference {
+            kind: ReferenceKind::Index,
+            hash: encoder.object("metadata-index", &index).unwrap(),
+        };
+    }
+    let objects = authenticated(encoder.finish());
+    let load = |kind: &'static str, hash: &str| {
+        AuthenticatedMetadataObject::authenticate(
+            kind,
+            hash,
+            objects[&(kind.into(), hash.into())].value().clone(),
+        )
+    };
+    let root = MapRoot::load(&reference, ProofMeasure::ContentStates, load).unwrap();
+    let (value, path) = read_proof(&reference, key, load).unwrap();
+    assert_eq!(value, Some(Value::String("PURGED".into())));
+    assert_eq!(path.verify(&reference, key).unwrap(), value);
+    let raw = json_codec::to_value(&path).unwrap();
+    assert_eq!(raw["nodes"].as_array().unwrap().len(), RADIX_DEPTH + 1);
+    let bytes = canonical_json_value(&raw["nodes"]).unwrap().len();
+    assert_eq!(root.maximum_inclusion_proof_bytes(), Some(bytes));
+    assert_eq!(
+        root.maximum_tombstone_tail(),
+        Some(
+            bytes - 2
+                + canonical_json(key).unwrap().len()
+                + canonical_json("PURGED").unwrap().len()
+        )
+    );
+    assert_eq!(
+        read_map(&reference, load).unwrap(),
+        page.as_object().unwrap().clone()
+    );
+    assert_eq!(root.reference(), &reference);
+}
+
+#[test]
+fn missing_proof_leaf_keeps_io_failure_instead_of_claiming_absence() {
+    let mut encoder = Encoder::new(MAX_METADATA);
+    let root = encoder.map_root(map(500), ProofMeasure::Plain).unwrap();
+    assert_eq!(root.reference().kind(), ReferenceKind::Index);
+    let objects = authenticated(encoder.finish());
+    let load = |kind: &'static str, hash: &str| {
+        if kind == "state-page" {
+            return Err(Error::from(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "missing authenticated leaf witness",
+            )));
+        }
+        AuthenticatedMetadataObject::authenticate(
+            kind,
+            hash,
+            objects[&(kind.into(), hash.into())].value().clone(),
+        )
+    };
+    let errors = [
+        lookup(root.reference(), "key-00000000", load).unwrap_err(),
+        read_proof(root.reference(), "key-00000000", load).unwrap_err(),
+        read_map(root.reference(), load).unwrap_err(),
+        MapRoot::load(root.reference(), ProofMeasure::Plain, load).unwrap_err(),
+    ];
+    for error in errors {
+        assert_eq!(error.code(), storage_contract::ErrorCode::IoError);
+        let mut source: &dyn std::error::Error = &error;
+        while let Some(next) = source.source() {
+            source = next;
+        }
+        let io = source.downcast_ref::<std::io::Error>().unwrap();
+        assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(io.to_string(), "missing authenticated leaf witness");
+    }
+}

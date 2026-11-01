@@ -79,14 +79,14 @@ pub(crate) struct PropOptions<const COMPONENT: bool> {
     pub(crate) default: Option<Expr>,
     pub(crate) into: bool,
     pub(crate) attrs: bool,
-    pub(crate) name: Option<String>,
+    pub(crate) name: Option<Ident>,
     pub(crate) marker: bool,
 }
 
 enum Value {
     Flag(bool),
     Default(Box<Expr>),
-    Name(String),
+    Name(Ident),
 }
 
 struct Field {
@@ -98,6 +98,10 @@ struct Field {
 type Fields = [Option<Field>; FIELDS.len()];
 
 impl<const COMPONENT: bool> PropOptions<COMPONENT> {
+    pub(crate) fn is_optional(&self) -> bool {
+        self.optional || self.optional_no_strip || self.attrs || self.default.is_some()
+    }
+
     pub(crate) fn from_attributes(attributes: &[Attribute]) -> Result<Self> {
         let mut fields: Fields = Default::default();
         for attribute in attributes
@@ -194,7 +198,16 @@ impl<const COMPONENT: bool> PropOptions<COMPONENT> {
                 Name => {
                     let (value, span) = parse_value::<LitStr>(input)
                         .map_err(|error| value_error(error, "name", "..."))?;
-                    (Value::Name(value.value()), span)
+                    let ident: Ident = value.parse()?;
+                    // A name is one identifier, not a Rust token stream with
+                    // surrounding whitespace or comments to discard.
+                    if ident != value.value() {
+                        return Err(Error::new_spanned(
+                            value,
+                            "expected a Rust identifier without whitespace or comments",
+                        ));
+                    }
+                    (Value::Name(ident), span)
                 }
                 _ => {
                     if input.peek(Token![=]) || input.peek(rust_syntax::token::Paren) {

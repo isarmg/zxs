@@ -379,6 +379,13 @@ history_window 契约、授权转发／撤权矩阵及真实 HTTP 窗口消费�
 快照保留数值 sequence/UTC 秒和明确的行详情类型；响应边界再将 sequence 编为十进制文本、时间编为 UTC。开放的持久 `kind`/action 仍是字符串，不按当前观察值封闭。提交删除事件仍以 commit ID、删除 ordinal 区分重复路径；同序号按 event ID 排序，最多 200 行，不增加跨事务缓存。
 
 `OperationResult.result` 仍是持久化开放 JSON：活动投影只解析所消费的可选 timestamp、ID、复制数字段；缺失/null 保持缺失，格式错误返回保留来源的 `STATE_INVALID`，不使用默认值或 panic。此项明确收紧了畸形持久 receipt 字段的响应行为，正常 wire 不变；被最新 200 行淘汰的候选不因其字段错误使查询失败。备份 receipt 缺失必要 history identity 同样作为持久状态错误。现有合法缺省（未找到当前路径、备注/名称缺失、无操作所有者、已不存在目录分支等）保持原投影规则。快照只复制实际响应所需数据；正文状态复用已有 typed content 投影，最终 JSON 只在 HTTP 序列化发生。
+文件元数据活动通过 `list_tree_ref` 在同一准入锁内借用当前命名空间，只复制匹配行的路径，
+不为每条操作复制整棵目录。该借用入口与原 `list_tree` 共用分支／历史检查和条目顺序；
+路径节点优先、当前路径其次、无当前条目时使用创建名称的规则不变。根测试
+`file_operation_paths_follow_current_namespace_and_keep_deleted_file_fallback` 覆盖存在无关条目时
+的文件选择、改名后当前路径和删除后的历史名称。仍逐候选扫描命名空间，未增加索引或权限缓存，
+没有声称整个活动查询为 O(page)、移出锁或获得实测吞吐提升；实际执行结果由统一验证记录提供。
+
 ### 计划查询与取消的类型边界
 
 `GET /api/plans/{plan}` 与 `POST /api/plans/{plan}/cancel` 使用独立 typed Backend 方法，不经过通用 JSON action。GET 仍接收但不消费 query；输出保持 Plan 的 `expected_sequence` 十进制文本、原始 input 和状态。取消返回原始 `OperationResult` 永久收据，不转换为文件管理接口的 `operation_kind`／实时健康度信封。

@@ -143,7 +143,7 @@ struct TypedBuilderOpts<'a> {
 impl<'a> TypedBuilderOpts<'a> {
     pub fn from_opts(opts: &PropOpt, ty: &'a Type) -> Self {
         Self {
-            default: opts.optional || opts.optional_no_strip || opts.attrs,
+            default: opts.is_optional(),
             default_with_value: opts.default.clone(),
             strip_option: opts.strip_option || opts.optional && is_option(ty),
             into: opts.into,
@@ -234,13 +234,13 @@ fn prop_builder_fields(vis: &Visibility, props: &[Prop]) -> rust_syntax::Result<
 fn generate_prop_docs(props: &[Prop]) -> rust_syntax::Result<TokenStream> {
     let required_prop_docs = props
         .iter()
-        .filter(|Prop { prop_opts, .. }| !(prop_opts.optional || prop_opts.optional_no_strip))
+        .filter(|Prop { prop_opts, .. }| !prop_opts.is_optional())
         .map(|p| prop_to_doc(p, PropDocStyle::List))
         .collect::<rust_syntax::Result<TokenStream>>()?;
 
     let optional_prop_docs = props
         .iter()
-        .filter(|Prop { prop_opts, .. }| prop_opts.optional || prop_opts.optional_no_strip)
+        .filter(|Prop { prop_opts, .. }| prop_opts.is_optional())
         .map(|p| prop_to_doc(p, PropDocStyle::List))
         .collect::<rust_syntax::Result<TokenStream>>()?;
 
@@ -348,3 +348,7 @@ fn prop_to_doc(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../test/macros/unit/slot/prop_doc_tests.rs"]
+mod prop_doc_tests;

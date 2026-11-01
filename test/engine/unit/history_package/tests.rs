@@ -3601,3 +3601,98 @@ fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() 
         );
     }
 }
+
+#[test]
+fn file_branch_kind_requires_a_stable_file_binding_at_external_admission() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let mut engine = initialize(&temp.path().join("source"));
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("branch binding").unwrap(),
+            "P01",
+            1,
+            "alice",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    save(&mut engine, &repo.main_branch_id, b"retained body");
+    let entry = engine
+        .list_tree(&repo.main_branch_id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    engine
+        .create_file_branch(
+            &entry.file_id,
+            &entry.version_id,
+            &storage_contract::BranchName::parse("pending branch").unwrap(),
+            "alice",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let package = temp.path().join("package");
+    engine
+        .export_history_package(&repo.history_tree_id, &package)
+        .unwrap();
+    let (mut manifest, proof, _) = load_package(&package).unwrap();
+    assert_eq!(
+        manifest.branches[&repo.main_branch_id].branch_kind,
+        BranchKind::Full
+    );
+    assert!(
+        manifest
+            .branches
+            .values()
+            .any(|branch| { branch.branch_kind == BranchKind::File && branch.file_id.is_some() })
+    );
+
+    // This changes no hashes or references except the declared branch kind.
+    // Previously the optional file_id gated all stable-file binding checks.
+    manifest
+        .branches
+        .get_mut(&repo.main_branch_id)
+        .unwrap()
+        .branch_kind = BranchKind::File;
+    let expected = "branch kind differs from its stable file binding";
+    assert_eq!(manifest.validate().unwrap_err().message(), expected);
+    let mut snapshot = engine.state().clone();
+    snapshot
+        .branches
+        .get_mut(&repo.main_branch_id)
+        .unwrap()
+        .branch_kind = BranchKind::File;
+    let raw: RawState = json_codec::from_slice(&canonical_json(&snapshot).unwrap()).unwrap();
+    let error = match AdmittedState::try_from(raw) {
+        Ok(_) => panic!("invalid file branch was admitted"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), ErrorCode::StateInvalid);
+
+    // Rebind the complete graph and publication proof so the external package
+    // reaches semantic admission rather than failing an incidental hash check.
+    rebind_test_package(
+        &package,
+        &temp.path().join("proof"),
+        &manifest,
+        proof,
+        &engine.members(),
+    );
+    let error = offline_check_history_package(&package).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
+    assert_eq!(error.message(), expected);
+    let mut destination = initialize(&temp.path().join("destination"));
+    let before = canonical_json(destination.state()).unwrap();
+    let error = destination
+        .restore_history_package(
+            &package,
+            "P01",
+            1,
+            "alice",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::HistoryPackageInvalid);
+    assert_eq!(error.message(), expected);
+    assert_eq!(canonical_json(destination.state()).unwrap(), before);
+}

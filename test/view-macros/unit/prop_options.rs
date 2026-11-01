@@ -21,7 +21,7 @@ fn snapshot<const COMPONENT: bool>(options: PropOptions<COMPONENT>) -> String {
             .unwrap_or_default(),
         options.into,
         options.attrs,
-        options.name,
+        options.name.map(|name| name.to_string()),
         options.marker
     )
 }
@@ -84,4 +84,66 @@ fn errors_point_to_the_relevant_input() {
             "{source}"
         );
     }
+}
+
+#[test]
+fn renamed_props_are_identifiers_with_the_literal_span() {
+    for name in ["renamed", "r#type", "école", "e\u{301}cole", "中文"] {
+        let literal = format!("{name:?}");
+        let source = format!("#[prop(name = {literal})]");
+        let options = PropOptions::<true>::from_attributes(&attributes(&source)).unwrap();
+        let ident = options.name.unwrap();
+        assert_eq!(ident.to_string(), name);
+        assert_eq!(
+            ident.span().source_text().as_deref(),
+            Some(literal.as_str())
+        );
+    }
+}
+
+#[test]
+fn invalid_renamed_props_report_the_literal_instead_of_panicking() {
+    for name in [
+        "",
+        "two names",
+        "not-a-name",
+        "123",
+        "type",
+        "_",
+        "r#self",
+        " renamed",
+        "renamed ",
+        "/* comment */renamed",
+        "renamed// comment",
+    ] {
+        let literal = format!("{name:?}");
+        let source = format!("#[prop(name = {literal})]");
+        let error = PropOptions::<true>::from_attributes(&attributes(&source)).unwrap_err();
+        assert_eq!(
+            error.span().source_text().as_deref(),
+            Some(literal.as_str())
+        );
+        assert!(!error.to_string().is_empty());
+    }
+}
+
+#[test]
+fn typed_names_keep_duplicate_and_conflict_diagnostics() {
+    for source in [
+        "#[prop(name = \"r#type\", name = \"école\")]",
+        "#[prop(name(\"r#type\"))] #[prop(name = \"école\")]",
+    ] {
+        let error = PropOptions::<true>::from_attributes(&attributes(source)).unwrap_err();
+        assert_eq!(error.to_string(), "`name` is specified multiple times");
+        let source = error.span().source_text().unwrap();
+        assert!(source.contains("r#type"));
+        assert!(source.contains("école"));
+    }
+    let error =
+        PropOptions::<true>::from_attributes(&attributes("#[prop(name = \"r#type\", marker)]"))
+            .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "`marker` conflicts with mutually exclusive `name`"
+    );
 }

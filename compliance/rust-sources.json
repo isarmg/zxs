@@ -52063,7 +52063,7 @@
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "cf85f72fb40b8d9a90ac77d7a6df9a6d1c649a00bba9f6636901721e6d5c9d98",
     "compliance/external-tests/foundation.json": "a4f53e9155bef82562af92319b06cdd9fd7009b05912ca4a947873ee2b8a0f0a",
-    "compliance/external-tests/integrated.json": "dea8c0d3ae9b85a70985b4278f586836c450f7261f03829338025c564e872737",
+    "compliance/external-tests/integrated.json": "a8a8939e3e57d98191c7b0e000adc742fa895b39ae858934d669d43523e0cca8",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -79215,15 +79215,29 @@
       ]
     },
     "src/macros": {
-      "bytes": 13969,
+      "bytes": 18128,
       "directory": "src/macros",
-      "file_count": 9,
+      "file_count": 12,
       "files": [
         {
           "path": "test/macros/unit/component/case_normalization_tests.rs",
           "sha256": "26c5b668504d508b532b4bcf9cf2b0170991ea61b1e862b3b5781ab01336530c",
           "source": "src/macros/src/component.rs",
           "source_sha256_before": "6ef126dd2fd3001ddcfbfbc60778d33e1a5bdf5237ac93429921a6e1a319fbc1"
+        },
+        {
+          "path": "test/macros/unit/component/prop_doc_tests.rs",
+          "sha256": "a9cc209efb79b1768c5a276e847661ecadc4098311e782a52d2ebb68553366fc",
+          "source": "test/macros/unit/component/prop_doc_tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "a9cc209efb79b1768c5a276e847661ecadc4098311e782a52d2ebb68553366fc"
+        },
+        {
+          "path": "test/macros/unit/component/prop_name_tests.rs",
+          "sha256": "1dcd05852e261022579d31126b2822e45c8260753966820ff7f29858c08b1350",
+          "source": "test/macros/unit/component/prop_name_tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "1dcd05852e261022579d31126b2822e45c8260753966820ff7f29858c08b1350"
         },
         {
           "path": "test/macros/unit/lib/documentation_diagnostics.rs",
@@ -79244,6 +79258,13 @@
           "source": "test/macros/unit/slice/tests.rs",
           "source_kind": "project-authored",
           "source_sha256_before": "47cc8a71cb42ecf43d1f9367236dbcbb796b5f3932050a46f3118bd12a962171"
+        },
+        {
+          "path": "test/macros/unit/slot/prop_doc_tests.rs",
+          "sha256": "e5b50a8618d0703efd15f5511b4079dede2dc9cd0c2f4b35a8120c7f4780ee7e",
+          "source": "test/macros/unit/slot/prop_doc_tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "e5b50a8618d0703efd15f5511b4079dede2dc9cd0c2f4b35a8120c7f4780ee7e"
         },
         {
           "path": "test/macros/unit/view/attribute_order_tests.rs",
@@ -79731,7 +79752,7 @@
         "src/components/select.rs": "4145ddf4328e117ebd977bcf76ff8da7855d374eff864a47e50b2638a271b4a6",
         "src/components/shell.rs": "c4a43e99798a17d58043ddb4762bb07cb6badf4a5580018637d6c1c98cdf4324",
         "src/components/state.rs": "5a9a5324005dd4d9072b0eb5965e373ae99814f75e386925307fcfe943f342ab",
-        "src/contours/controller.rs": "ba05c527e812ac2ef0f06bcbf26b4ba8c934c1e2a2e59b20dcf915c8fd515326",
+        "src/contours/controller.rs": "65c884bbb06fb0fb19f725c0a5420619d33d279f6d43789c9960fa58fee4a2e9",
         "src/contours/frame.rs": "9d789a4509f518f1d7060fe91f774c0fcf2a09c28dde6ea0aa82a84691a93241",
         "src/contours/geometry.rs": "88025d1e2cfc38aff75a80b5622d1e3568dac1bfd383d4e26a15bbd4c6d199d0",
         "src/contours/membership.rs": "a9fe0a42485cb6edc84631066c06c685b46abc500394bcea930743d776e0f03c",
@@ -79782,13 +79803,13 @@
       "directory": "src/macros",
       "files_sha256": {
         "Cargo.toml": "abdb767c05856f890b63b18f86b16f4487a30bd8d2832f5caeeeb6d668e44c0c",
-        "src/component.rs": "7eb8cac336f8d2dc87a0392d5a4c2b35316fd8d5a42bbe6607f05f1a44aae7df",
+        "src/component.rs": "fb75e07c61f0984ce96c4f00da7bdf1fe21cee94fafbd6793e501f16f786affa",
         "src/diagnostics.rs": "b501d80659ee3202adc4f60e6eec000389fe34eeb19cc0fb60e02c15aaabd03e",
         "src/lib.rs": "4a322e327c0ca689cd978fbae9561873f23796ea2f27e14043fd910852d1501c",
         "src/memo.rs": "c2893396e20c04248b2672b602fd395d74f999af85799a100cec3c8ceab8609e",
-        "src/prop_options.rs": "436813de316b1d79bf6de933aba6a6d0f990410fbb2899763c9267f148f74046",
+        "src/prop_options.rs": "91f6a3ad2fb81a49c2dde7c18f7558002172ba10523aac04c822559034d70a12",
         "src/slice.rs": "5e4e2cae6a4ae88c9893666ac93bb2479cc591f41bd202e6a8a1f639dd11d61c",
-        "src/slot.rs": "fcf5b8d2495f6866ef7b278b8fa8a3fce78cbdf3e5cb3d9005e07f6a3a0e7200",
+        "src/slot.rs": "4076a184ef89238a681d4923c31eaff51150cd80667b8d7a4a9beef1fabc6f83",
         "src/view/component_builder.rs": "01d324df7244163a5f2a2c87dc38e8e296213129fc3228bcb28119fb6eaa358b",
         "src/view/mod.rs": "ed0eb96dfa88fcc1e16e4adc91e3ad31e9c265eddc5f50826540d12689a84b43",
         "src/view/slot_helper.rs": "f5dc7ff103b83fad59f61f6fa0e4e5bbe0e280f89beba63d10bf47c8c6d45caa",
@@ -102233,13 +102254,13 @@
       "directory": "src/macros",
       "files_sha256": {
         "Cargo.toml": "abdb767c05856f890b63b18f86b16f4487a30bd8d2832f5caeeeb6d668e44c0c",
-        "src/component.rs": "7eb8cac336f8d2dc87a0392d5a4c2b35316fd8d5a42bbe6607f05f1a44aae7df",
+        "src/component.rs": "fb75e07c61f0984ce96c4f00da7bdf1fe21cee94fafbd6793e501f16f786affa",
         "src/diagnostics.rs": "b501d80659ee3202adc4f60e6eec000389fe34eeb19cc0fb60e02c15aaabd03e",
         "src/lib.rs": "4a322e327c0ca689cd978fbae9561873f23796ea2f27e14043fd910852d1501c",
         "src/memo.rs": "c2893396e20c04248b2672b602fd395d74f999af85799a100cec3c8ceab8609e",
-        "src/prop_options.rs": "436813de316b1d79bf6de933aba6a6d0f990410fbb2899763c9267f148f74046",
+        "src/prop_options.rs": "91f6a3ad2fb81a49c2dde7c18f7558002172ba10523aac04c822559034d70a12",
         "src/slice.rs": "5e4e2cae6a4ae88c9893666ac93bb2479cc591f41bd202e6a8a1f639dd11d61c",
-        "src/slot.rs": "fcf5b8d2495f6866ef7b278b8fa8a3fce78cbdf3e5cb3d9005e07f6a3a0e7200",
+        "src/slot.rs": "4076a184ef89238a681d4923c31eaff51150cd80667b8d7a4a9beef1fabc6f83",
         "src/view/component_builder.rs": "01d324df7244163a5f2a2c87dc38e8e296213129fc3228bcb28119fb6eaa358b",
         "src/view/mod.rs": "ed0eb96dfa88fcc1e16e4adc91e3ad31e9c265eddc5f50826540d12689a84b43",
         "src/view/slot_helper.rs": "f5dc7ff103b83fad59f61f6fa0e4e5bbe0e280f89beba63d10bf47c8c6d45caa",

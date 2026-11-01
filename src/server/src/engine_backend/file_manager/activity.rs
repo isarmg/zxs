@@ -346,13 +346,13 @@ fn file_operation_events<'a>(
             .and_then(Value::as_str)
             .and_then(|id| engine.state().file_metadata_nodes.get(id));
         let current = engine
-            .list_tree(&repo.main_branch_id)
+            .list_tree_ref(&repo.main_branch_id)
             .map_err(crate::engine_backend::error)?
-            .into_iter()
+            .iter()
             .find(|entry| entry.file_id == file);
         let relative = path_node
             .map(|node| node.path.clone())
-            .or_else(|| current.map(|entry| entry.path.into_string()))
+            .or_else(|| current.map(|entry| entry.path().to_owned()))
             .or_else(|| {
                 engine
                     .state()

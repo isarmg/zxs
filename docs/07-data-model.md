@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | Repository | repository_id, name, name_policy, unicode_version | 命名与配额容器不等于单一历史域；不保存用户 ACL |
 | HistoryTree | history_tree_id, repository_id, root_commit_id, main_branch_id, generation, state, quota_id | 提交谱系、公共文件混合节点 DAG 与独立关系标记；独立内容账本和恢复包；仅保留历史且无活动分支时 main_branch_id 可为空 |
-| Branch | branch_id, history_tree_id, head_commit_id, fork_commit_id, branch_kind, generation, state；可选 file_id、pending_file_versions | file 分支绑定单文件，full 为兼容目录快照；pending 映射记录未写文件及来源，创建不复制正文 |
+| Branch | branch_id, history_tree_id, head_commit_id, fork_commit_id, branch_kind, generation, state；可选 file_id、pending_file_versions | file 分支必须以 file_id 绑定单文件，full 目录快照分支不带 file_id；历史包与快照准入同时核对类型和绑定；pending 映射记录未写文件及来源，创建不复制正文 |
 | Commit | commit_id, history_tree_id, kind, parent_commit_ids, tree_id, sequence, operation_id, provenance；可选 pending_file_versions、namespace_deletions | 快照固定当时待写文件及来源，不随Branch首写清空；根和 split_root 零父，其他版本提交一父；合并连线不改父列表 |
 | MergeLink | merge_link_id, history_tree_id, source_branch_id, source_commit_id, target_branch_id, target_commit_id, author, created_at, operation_id | 两端为选定的已有版本；无结果版本、目录快照或内容依赖 |
 | FileMetadataNode | node_id, file_id, version_id, parent_node_ids, branch_id, kind, tags, sequence | 标签或合并子节点复用真实正文；标签快照不可变，不制造 FULL |

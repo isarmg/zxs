@@ -958,15 +958,17 @@ impl HistoryManifest {
             {
                 return Err(invalid("branch has an external live commit reference"));
             }
+            if (branch.branch_kind == BranchKind::File) != branch.file_id.is_some() {
+                return Err(invalid("branch kind differs from its stable file binding"));
+            }
             if let Some(file) = branch.file_id.as_deref() {
                 let head = &self.commits[&branch.head_commit_id];
-                if branch.branch_kind != BranchKind::File
-                    || head
-                        .entries
-                        .iter()
-                        .filter(|e| e.kind == NamespaceEntryKind::File)
-                        .count()
-                        != 1
+                if head
+                    .entries
+                    .iter()
+                    .filter(|e| e.kind == NamespaceEntryKind::File)
+                    .count()
+                    != 1
                     || !head
                         .entries
                         .iter()

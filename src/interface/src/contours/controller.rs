@@ -764,11 +764,13 @@ fn restore(
             .set_property_with_priority("display", "none", "important")?;
     }
     if final_restore {
-        if let Some(child) = record.decoration.take() {
-            writes.remove(&child)?;
+        if let Some(child) = &record.decoration {
+            writes.remove(child)?;
+            record.decoration = None;
         }
-        if let Some(child) = record.foreground.take() {
-            writes.remove(&child)?;
+        if let Some(child) = &record.foreground {
+            writes.remove(child)?;
+            record.foreground = None;
         }
         for (name, value) in [
             ("data-zxs-contour-state", &record.original_state),
@@ -946,19 +948,22 @@ impl State {
                     }
                 }
                 Step::PaintRestore => {
-                    let mut keep = Vec::new();
-                    for mut record in self.records.drain(..) {
+                    let mut result = Ok(());
+                    // An error must not drop the failed or unvisited owners.
+                    // Keep processing order, then publish the matching index.
+                    self.records.retain_mut(|record| {
+                        if result.is_err() {
+                            return true;
+                        }
                         let detached = !record.node.is_connected();
                         if detached && let Some(setup) = inner.setup.get() {
                             setup.resize.unobserve(&record.node);
                         }
-                        restore(&mut record, &inner.draft, detached, writes)?;
-                        if !detached {
-                            keep.push(record);
-                        }
-                    }
-                    self.records = keep;
+                        result = restore(record, &inner.draft, detached, writes);
+                        result.is_err() || !detached
+                    });
                     self.reindex();
+                    result?;
                 }
                 Step::Qualify => self.qualify(inner, &mut candidates)?,
                 Step::Paint => {
@@ -966,20 +971,25 @@ impl State {
                     for candidate in candidates.drain(..) {
                         self.paint_candidate(inner, candidate, &selected, writes)?;
                     }
-                    let mut keep = Vec::new();
-                    for mut record in self.records.drain(..) {
-                        if selected.has(record.node.as_ref()) {
-                            record.commit_pending(&inner.draft)?;
-                            keep.push(record);
-                        } else {
-                            restore(&mut record, &inner.draft, true, writes)?;
-                            if let Some(setup) = inner.setup.get() {
-                                setup.resize.unobserve(&record.node);
-                            }
+                    let mut result = Ok(());
+                    self.records.retain_mut(|record| {
+                        if result.is_err() {
+                            return true;
                         }
-                    }
-                    self.records = keep;
+                        let retained = selected.has(record.node.as_ref());
+                        result = if retained {
+                            record.commit_pending(&inner.draft)
+                        } else {
+                            restore(record, &inner.draft, true, writes).map(|()| {
+                                if let Some(setup) = inner.setup.get() {
+                                    setup.resize.unobserve(&record.node);
+                                }
+                            })
+                        };
+                        result.is_err() || retained
+                    });
                     self.reindex();
+                    result?;
                 }
                 Step::ForegroundRead => {
                     for record in &self.records {

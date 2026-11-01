@@ -131,9 +131,9 @@
 
 [ADR 0006](adr/0006-bounded-metadata-roots.md)使 Snapshot 固定字段和 Candidate 的历史目录各持单根，新增编码按准确写集复制触及路径。路径摘要精确计算对象最大值、包路径证明和墓碑外壳预算，避免预算自身全扫 content_states 或逐个构造所有证明；恢复则必须从准确绑定图完整认证后重建摘要。
 
-驻留描述保留键及节点，空间为 O(keys + nodes)，根 clone 为 O(1)，不缓存全部 JSON。新对象准备字节和现有完整依赖读验/安装仍占实际内存及 I/O；冷载入、`All` 写集和缺源后的精确字段重建可为 O(field)。稳定归属分支改名之外的一般 history owner closure 尚待实现。单实体、认证记录、本次 versions、成员列表和组合证明仍受实际大小上限约束。
+驻留描述保留键及节点，空间为 O(keys + nodes)，根 clone 为 O(1)，不缓存全部 JSON。新对象准备字节和无复用资格路径的完整依赖读验／安装仍占实际内存及 I/O；冷载入、`All` 写集和缺源后的精确字段重建可为 O(field)。一般 history owner closure 已消费前后可信写集；冷成员索引构建、未知谱系／All 及 SharedRecords 首次共享写仍有全量成本。单实体、认证记录、本次 versions、成员列表和组合证明仍受实际大小上限约束。
 
-本次没有 PublishedGraphEpoch 旧依赖免读，也没有删除 compare/fsync 屏障。应分别测新编码数、旧对象读验/安装数、峰值内存、同步次数和延迟；不得把 bounded roots、schema 通过或路径复制等同于整体 O(delta)、性能提升或物理盘验收。
+当前源码的 `PublishedDependencyReuse` 仅在成功发布谱系与真实周期 owner 的有效巡检覆盖共同成立时省略未变旧依赖读验／安装；准备结束和首次 ACCEPT 前仍核验原许可。本次新编码对象的 compare/fsync 屏障保留。应分别测有资格命中、descriptor 未命中、无资格、冷路径的新编码数、旧对象读验／安装数、峰值内存、同步次数和延迟；不得把源码接线、bounded roots、schema 通过或路径复制等同于阶段门禁通过、整体 O(delta)、性能提升或物理盘验收。
 
 ### 发布元数据编码复用的局部边界
 

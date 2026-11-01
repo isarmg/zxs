@@ -365,7 +365,7 @@ impl Prop {
                         attrs: vec![],
                         by_ref: None,
                         mutability: None,
-                        ident: Ident::new(name, i.span()),
+                        ident: name.clone(),
                         subpat: None,
                     }
                 } else {
@@ -373,7 +373,7 @@ impl Prop {
                 }
             }
             pat @ (Pat::Struct(_) | Pat::Tuple(_) | Pat::TupleStruct(_)) => {
-                let Some(name) = prop_opts.name.as_deref() else {
+                let Some(name) = prop_opts.name.as_ref() else {
                     return Err(rust_syntax::Error::new_spanned(
                         pat,
                         "destructured props must be given a name e.g. \
@@ -384,7 +384,7 @@ impl Prop {
                     attrs: vec![],
                     by_ref: None,
                     mutability: None,
-                    ident: Ident::new(name, pat.span()),
+                    ident: name.clone(),
                     subpat: None,
                 }
             }
@@ -605,7 +605,7 @@ impl<'a> TypedBuilderOpts<'a> {
     fn from_opts(opts: &PropOpt, ty: &'a Type) -> Self {
         Self {
             marker: opts.marker,
-            default: opts.optional || opts.optional_no_strip || opts.attrs,
+            default: opts.is_optional(),
             default_with_value: opts.default.clone(),
             strip_option: opts.strip_option || opts.optional && is_option(ty),
             into: opts.into,
@@ -685,7 +685,7 @@ fn prop_builder_fields(vis: &Visibility, props: &[Prop]) -> rust_syntax::Result<
                 ty,
             } = prop;
 
-            let PatIdent { ident, by_ref, .. } = &name;
+            let ident = &name.ident;
 
             let builder_attrs = TypedBuilderOpts::from_opts(prop_opts, ty).expand()?;
 
@@ -702,7 +702,7 @@ fn prop_builder_fields(vis: &Visibility, props: &[Prop]) -> rust_syntax::Result<
                 #builder_docs
                 #builder_attrs
                 #allow_missing_docs
-                #vis #by_ref #ident: #ty,
+                #vis #ident: #ty,
             })
         })
         .collect()
@@ -723,18 +723,14 @@ fn prop_names(props: &[Prop]) -> TokenStream {
 fn generate_component_fn_prop_docs(props: &[Prop]) -> rust_syntax::Result<TokenStream> {
     let required_prop_docs = props
         .iter()
-        .filter(|Prop { prop_opts, .. }| {
-            !(prop_opts.optional || prop_opts.optional_no_strip || prop_opts.default.is_some())
-        })
+        .filter(|Prop { prop_opts, .. }| !prop_opts.is_optional())
         .filter(|prop| !prop.prop_opts.marker)
         .map(|p| prop_to_doc(p, PropDocStyle::List))
         .collect::<rust_syntax::Result<TokenStream>>()?;
 
     let optional_prop_docs = props
         .iter()
-        .filter(|Prop { prop_opts, .. }| {
-            prop_opts.optional || prop_opts.optional_no_strip || prop_opts.default.is_some()
-        })
+        .filter(|Prop { prop_opts, .. }| prop_opts.is_optional())
         .filter(|prop| !prop.prop_opts.marker)
         .map(|p| prop_to_doc(p, PropDocStyle::List))
         .collect::<rust_syntax::Result<TokenStream>>()?;
@@ -955,3 +951,11 @@ fn convert_impl_trait_to_generic(sig: &mut Signature) {
 #[cfg(test)]
 #[path = "../../../test/macros/unit/component/case_normalization_tests.rs"]
 mod case_normalization_tests;
+
+#[cfg(test)]
+#[path = "../../../test/macros/unit/component/prop_name_tests.rs"]
+mod prop_name_tests;
+
+#[cfg(test)]
+#[path = "../../../test/macros/unit/component/prop_doc_tests.rs"]
+mod prop_doc_tests;

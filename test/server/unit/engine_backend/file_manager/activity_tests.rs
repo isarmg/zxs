@@ -310,3 +310,88 @@ fn malformed_receipt_fields_are_errors_only_for_retained_rows() {
         Some(3)
     );
 }
+
+#[test]
+fn file_operation_paths_follow_current_namespace_and_keep_deleted_file_fallback() {
+    use storage_contract::{CommitRequest, Config, NamespaceOperation, OperationId};
+    use storage_engine::Engine;
+
+    let root = crate::tests::private_tempdir();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
+    let repo = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("Audit").unwrap(),
+            "P01",
+            1,
+            "owner",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "owner")
+        .unwrap();
+    for path in ["a-unrelated.txt", "before.txt", "z-unrelated.txt"] {
+        engine
+            .stage_bytes(&workspace.workspace_id, path, b"body")
+            .unwrap();
+    }
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: OperationId::generate().unwrap(),
+            principal: "owner".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: String::new(),
+            request_digest: None,
+        })
+        .unwrap();
+    let entry = engine
+        .list_tree_ref(&repo.main_branch_id)
+        .unwrap()
+        .iter()
+        .find(|entry| entry.path() == "before.txt")
+        .unwrap()
+        .clone();
+    let operation_id = OperationId::generate().unwrap();
+    engine
+        .set_file_note(
+            &entry.file_id,
+            None,
+            &storage_contract::Note::parse("audit note".into()).unwrap(),
+            "owner",
+            operation_id,
+        )
+        .unwrap();
+    let event_path = |engine: &Engine| {
+        let mut events = BTreeMap::new();
+        super::file_operation_events(engine, &mut events).unwrap();
+        let event = events
+            .into_iter()
+            .find(|((_, id), _)| *id == operation_id.to_string())
+            .unwrap()
+            .1;
+        assert_eq!(event.file_id, entry.file_id);
+        assert_eq!(event.action, "file.metadata");
+        event.path
+    };
+    assert_eq!(event_path(&engine), "Audit/before.txt");
+    for (kind, path, destination, expected) in [
+        ("rename", "before.txt", Some("after.txt"), "Audit/after.txt"),
+        ("delete", "after.txt", None, "Audit/before.txt"),
+    ] {
+        engine
+            .file_namespace(
+                &repo.repository_id,
+                NamespaceOperation::parse(kind.parse().unwrap(), path, destination).unwrap(),
+                "owner",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(event_path(&engine), expected);
+    }
+}
