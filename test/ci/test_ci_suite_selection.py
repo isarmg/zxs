@@ -104,6 +104,8 @@ class Selector(unittest.TestCase):
         self.write("Cargo.toml", "fixed\n")
         self.write(".github/scripts/check-foundation.sh", "reviewed\n")
         self.write("src/engine/src/engine.rs", "old\n")
+        self.write("src/smb-vfs/src/ffi.rs", "old\n")
+        self.write("src/smb-vfs/src/lib.rs", "old\n")
         self.git("add", "."); self.git("commit", "-qm", "base")
         self.base = self.git("rev-parse", "HEAD").strip()
         self.reviewed = selection.input_fingerprint(selection.tree(self.root, self.base))
@@ -138,6 +140,52 @@ class Selector(unittest.TestCase):
             self.assertIn(suite, result["suites"])
         self.assertEqual(result["base"], self.base)
         self.assertIn("evidence", result)
+
+    def test_smb_sources_keep_language_and_all_non_foundation_suites(self):
+        result = self.run_selection(["src/smb-vfs/src/ffi.rs", "test/smb-vfs/unit/ffi.rs",
+                                     "docs/components/smb.md"])
+        self.assertEqual(result["reused"], [s for s in selection.FOUNDATION
+                                            if s != "foundation-language"])
+        self.assertEqual(result["suites"], [s for s in selection.ALL if s not in result["reused"]])
+        self.assertIn("foundation-language", result["suites"])
+
+    def test_smb_tests_and_exact_docs_have_no_foundation_consumers(self):
+        result = self.run_selection(["test/smb-vfs/unit/ffi.rs",
+                                     "docs/validation/debian13-system-samba.md"])
+        self.assertEqual(result["reused"], list(selection.FOUNDATION))
+        self.assertEqual(result["suites"], [s for s in selection.ALL if s not in selection.FOUNDATION])
+
+    def test_smb_manifest_sdk_build_protocol_and_unreviewed_docs_are_not_allowed(self):
+        for path in ("src/smb-vfs/Cargo.toml", "src/smb-vfs/build.rs", "src/smb-vfs/src/data.json",
+                     "src/smb/src/client.rs", "test/smb-vfs/fixture.json",
+                     ".github/scripts/smb-sdk.sh", ".github/samba-debian-target.json",
+                     "docs/components/system-entropy.md", "docs/components/smb-other.md",
+                     "docs/validation/typed-smb-baseline.md", "test/ci/test_ci_suite_selection.py"):
+            with self.subTest(path=path):
+                self.assertIsNone(selection.affected(path))
+        self.assert_full(self.run_selection(["src/smb-vfs/src/ffi.rs", "src/smb-vfs/build.rs"]))
+
+    def test_ring_material_path_rejections_cannot_reuse_crypto(self):
+        for prefix in ("src/smb-vfs/src/", "test/smb-vfs/", "src/engine/src/", "test/server/"):
+            for name in ("bad:name.rs", "bad\\name.rs", "../escape.rs", "./alias.rs", "/alias.rs"):
+                with self.subTest(path=prefix + name):
+                    self.assertIsNone(selection.affected(prefix + name))
+        self.assert_full(self.run_selection(["src/smb-vfs/src/bad:name.rs"]))
+
+    def test_smb_changes_cannot_reuse_missing_or_failed_base_evidence(self):
+        failed = evidence(self.base)
+        failed[1]["jobs"][1]["conclusion"] = "failure"
+        self.assert_full(self.run_selection(["src/smb-vfs/src/ffi.rs"], fetch=fetcher(failed)))
+
+    def test_source_inventory_changes_cannot_reuse_workspace_manifest_consumers(self):
+        self.assert_full(self.run_selection(["src/smb-vfs/src/main.rs"]))
+
+    def test_deleted_smb_default_library_cannot_reuse_foundation(self):
+        self.git("rm", "-q", "src/smb-vfs/src/lib.rs")
+        self.assert_full(self.run_selection(["src/smb-vfs/src/ffi.rs"]))
+
+    def test_selector_and_its_regressions_always_require_initial_full_run(self):
+        self.assert_full(self.run_selection([selection.SELF, "test/ci/test_ci_suite_selection.py"]))
 
     def test_known_docs_only_can_reuse_all_five(self):
         result = self.run_selection(["docs/validation/release-checklist.md"])

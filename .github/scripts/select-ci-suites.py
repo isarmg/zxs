@@ -4,7 +4,7 @@ import hashlib
 import http.client
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import urllib.request
@@ -17,12 +17,13 @@ ALL = ("rust-sources", "quality", "security", "workspace", *FOUNDATION,
        "web", "contracts", "build-tools", "smb-protocol")
 # Review the actual foundation consumers before updating this fingerprint.
 # A mismatch is only a full-CI fallback, never a product/admission restriction.
-REVIEWED_INPUTS = "36906cbe6a2fdd9f0661b0b6d01cf893a63cd1b61bc91b2144e9b0434cb53fca"
+REVIEWED_INPUTS = "adaf9d05bca009e91a40f16c33ef80aa1e9a289670380e217f9329464534599a"
 SELF = ".github/scripts/select-ci-suites.py"
 SHA = re.compile(r"[0-9a-f]{40}")
 DOCS = frozenset(("docs/EXTERNAL_TEST_SOURCES.md", "docs/architecture/read-projections.md",
                   "docs/validation/release-checklist.md", "docs/release.md",
-                  "docs/validation/history-growth-benchmark.md"))
+                  "docs/validation/history-growth-benchmark.md",
+                  "docs/components/smb.md", "docs/validation/debian13-system-samba.md"))
 
 
 
@@ -32,11 +33,23 @@ class FullRun(Exception):
 
 def affected(path):
     """None means unknown. Returned suites have real consumers of this path."""
+    # Crypto's ring localgen copies tracked paths through checked_path().
+    # Even otherwise unrelated source names must satisfy that real consumer.
+    parsed = PurePosixPath(path)
+    if (parsed.is_absolute() or ".." in parsed.parts or str(parsed) != path
+            or "\\" in path or ":" in path):
+        return None
     if path in DOCS:
         return set()
     if path.startswith(("tools/history-scale-bench/", "test/history-scale-bench/")) and path.endswith((".rs", ".py")):
         # The language shard scans all src/tools Rust source for retired paths.
         return {"foundation-language"} if path.startswith("tools/") and path.endswith(".rs") else set()
+    if path.endswith(".rs") and path.startswith("src/smb-vfs/src/"):
+        # Serialization's retired-path scan includes all src Rust, including VFS.
+        return {"foundation-language"}
+    if path.endswith(".rs") and path.startswith("test/smb-vfs/"):
+        # Only the dedicated SDK target consumes these tests, not the five shards.
+        return set()
     if path.endswith(".rs") and path.startswith(("src/engine/src/", "src/server/src/")):
         # Async checks the actual server's all-target consumer, including engine.
         return {"foundation-language", "foundation-async"}
@@ -157,6 +170,11 @@ def select(root, event_name, event, head, ref, *, fetch=get_json, reviewed=REVIE
             consumers = affected(path)
             if consumers is None:
                 raise FullRun(f"unreviewed input changed: {path}")
+            # Cargo loads every workspace member manifest even for selected -p
+            # jobs. Source additions/deletions can change auto-target discovery
+            # or remove a default lib.rs/main.rs entry point in an unbuilt member.
+            if path.startswith("src/") and path.endswith(".rs") and (path not in before or path not in after):
+                raise FullRun(f"source inventory changed: {path}")
             for entries in (before, after):
                 if path in entries and entries[path][:2] != ("100644", "blob"):
                     raise FullRun(f"non-regular input changed: {path}")

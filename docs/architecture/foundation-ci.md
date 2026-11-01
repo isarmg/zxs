@@ -58,3 +58,66 @@ Release verification 依赖屏障。新增命令应同时更新脚本和库存�
 绑定工具的 language 接线现在包含 `wasm-bindgen-cli-support --lib` 全测试及三个实际
 文本工具的默认测试。工具已收为单一当前能力，不保留无人消费的 feature 矩阵。原逻辑
 库存、19份固定WAT/golden及Emscripten退役替代见[专项说明](../validation/wasm-binding-test-tools.md)。
+
+## 准确基线证据复用（仅 main push）
+
+[选择器](../../.github/scripts/select-ci-suites.py) 只在事件的准确 `before` 提交上，
+找到最新一次 main push CI、最新 attempt 的五个准确 Foundation job 全部成功时，
+复用输入未变的分片；其它 job 失败不等同于 Foundation 失败。既不搜索祖先或旧 attempt，
+也不把 skipped、缺页、网络失败、运行中或缺少 job 当作成功。PR、手动运行、非 main、
+未知路径及缺失浅克隆基线均全跑。Release verification 不使用该选择器。
+
+允许的路径不是“不重要文件”：既有 `src/smb-vfs/src/**/*.rs` 内容修改仍运行 language，
+`test/smb-vfs/**/*.rs` 只由独立 SDK 目标消费。SMB 文档仅精确允许
+`docs/components/smb.md` 与 `docs/validation/debian13-system-samba.md`；既有准确文档
+名单不变。构建脚本、manifest、协议包 `src/smb/`、SDK 合同、SDK 脚本、非 Rust fixture
+和其它文档均不新增豁免。每次仍运行全部非 Foundation 矩阵、static、SDK、生产 WASM
+及真实浏览器/发行候选检查；这不是减少 SMB 验收。
+
+### 消费链依据
+
+审阅入口是 `check-foundation.sh` 的五个 case 及其全部 Python 子命令，不以目录名称
+猜测影响。当前源码图（含 runtime/build/dev、目标条件和 optional 边）没有任何包反向
+依赖 `smb-vfs`。以下边界绑定到选择器的输入指纹，后续消费者变化必须重新审阅：
+
+| 分片 | 实际消费者及 SMB 边界 |
+| --- | --- |
+| platform | native-C、UAPI/libc ABI、syscalls、system-backends、parking、synchronization、search-process 各门禁，以及 socket2/mio/synchronization/bit-set/bit-vec/id-arena/rustc-demangle 库测试；唯一第一方编译消费者是 syscalls 的 platform-io，不包含 VFS。临时消费者的真实 Foundation 依赖和根 test fixture 仍在指纹内。 |
+| crypto | valgrind-pki、ctutils、crypto-consolidation、linux-random-backends、entropy-consumers、test/entropy/check.py、ring 保留测试及 password-hash；crypto_vectors/crypto_core_checks、backend_environment、foundation_paths 和 ring source-layout/proof-routing 均不读取 VFS 内容。熵文档为 `docs/components/system-entropy.md`，cc 文档为 upstream cc/shlex，不是 SMB 文档。ring localgen 复制全仓 tracked 文件后只运行 ring，因此字节复制不是 VFS 编译；但其 checked_path 拒绝冒号和反斜线，选择器也必须将这些名字判为未知全跑（包括既有 engine/server 路径）。 |
+| data | binding-expressions（含 clang）、sqlite-scope/sqlite-access/sqlite-family、numeric-consolidation/precision/numeric、compression-family/date-time-family；真实第一方消费者是 platform-io SQLite 测试及 web-build 测试，不是 VFS。`test/engine/integration/hash_table_compatibility.rs` 是 SQLite 直接输入，继续全跑。CI 额外的 sqlite-system 使用独立 libsqlite3-sys/sqlite-access 消费者，不读取 SMB 源或文档。 |
+| language | uuid、form-floats、binding-expressions、foundation-consumers、serialization-family/consolidation、error-definition、command-line、toml、pattern-matching、schema-validation、wasm 文本/绑定工具、unicode-data、url-encoding（含 url-http-consumers）、terminal-style。serialization-family 的 `check_source_paths` 扫描全部 src/tools Rust，所以 VFS 源变动必须保留本片。command-line 实际构建 server/rescue/web-build，URL 检查 client/web，TOML 检查 release-tools/contract-check；这些不反向依赖 VFS。根 VFS 测试不在 src/tools 扫描，也没有被这些消费者包含。 |
+| async | task-dispatch、async-notification、tracing、runtime-join-map/features、futures、http-body、concurrent-collections、service-stack、http-routing/transport、foundation-behaviour。futures 的真实 server/client/platform all-targets 编译包含 engine 和 smb-protocol，不包含独立 smb-vfs；所以既有 engine/server 改动仍保留 async。HTTP routing 来源验证的 source-layout/provenance 图不认证活动 VFS 源/测试；不可变来源与 upstream 文档仍在指纹内。 |
+
+以上仅证明允许路径不影响被复用分片，不代表功能、安全或完整 CI 已通过。新的共享测试
+引用、依赖边、构建输入或扫描器都需要重新核对；不能只重新生成摘要以消除全跑提示。
+
+Cargo 会解析所有 workspace 成员，即使某个包未被 `-p` 选择。为避免默认 lib/main
+入口缺失或自动 target 发现变化，所有已允许的 `src/` Rust 文件新增/删除均全跑，
+包括既有 engine/server；只证明内容修改可复用，不假设源文件结构变化无影响。
+
+### 指纹生成与首次全跑
+
+指纹取 Git 树中所有未允许路径的 `[path, mode, kind, blob]`，按路径排序、紧凑 JSON
+和换行做 SHA-256；仅排除选择器自身以避免摘要自引用。测试、此说明、workflow、工具链、
+锁、manifest、Foundation 和全部未知文件都参与摘要。基线和当前树必须同时匹配同一个
+审阅值，任何失配只回退完整 CI。
+
+完成消费者审阅并暂存最终代码、测试和文档后，使用实际最终树生成，而不是猜测值：
+
+```sh
+git add .github/scripts/select-ci-suites.py test/ci/test_ci_suite_selection.py docs/architecture/foundation-ci.md
+python3 - <<'PY'
+import runpy
+from pathlib import Path
+s = runpy.run_path('.github/scripts/select-ci-suites.py')
+root = Path.cwd()
+tree = s['git'](root, 'write-tree').decode().strip()
+print(s['input_fingerprint'](s['tree'](root, tree)))
+PY
+```
+
+把输出写入 `REVIEWED_INPUTS` 后再次暂存并重复计算，值应不变。合并其它提交之后须
+先审阅新增的非允许输入，再对合并后树重复这一过程；不能从分支直接照抄摘要。
+选择器自身或其测试变化都不在允许名单，故引入/调整本机制的 push 必须完整运行，
+不能借新摘要复用旧结果。后续合格的小修才可复用准确基线的真实成功证据；连续两次
+复用若使准确基线缺少五个实际成功 job，下一次仍全跑，不递归传递成功声明。

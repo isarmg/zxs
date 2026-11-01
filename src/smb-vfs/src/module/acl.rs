@@ -91,8 +91,16 @@ unsafe fn descriptor(
             }
         }
         // SAFETY: Constructors copy the three live ACEs into SDK-owned memory.
-        acl =
-            unsafe { sdk::make_sec_acl(mem_ctx, sdk::NT4_ACL_REVISION, aces.len(), aces.as_ptr()) };
+        // Samba 4.22.11 security.idl defines NT4_ACL_REVISION as this
+        // enum member; bindgen emits the enum, not its macro alias.
+        acl = unsafe {
+            sdk::make_sec_acl(
+                mem_ctx,
+                sdk::security_acl_revision_SECURITY_ACL_REVISION_NT4,
+                aces.len(),
+                aces.as_ptr(),
+            )
+        };
         if acl.is_null() {
             return Err(io::Error::from_raw_os_error(libc::ENOMEM));
         }
