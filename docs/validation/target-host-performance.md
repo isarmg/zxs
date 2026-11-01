@@ -31,6 +31,7 @@ CPU 已由 [Intel 官方规格](https://www.intel.com/content/www/us/en/products
 核实为 8 核 8 线程（4P+4 低功耗 E）、支持 AVX2；云 CPU 的 AVX-512 不作为目标要求。
 盘型号、控制器/交换/上行拓扑、耐久、尾延迟、系统盘类型和网络速率未知。
 不按盘数或核数外推本次结果，也不引入额外文件系统或物理设备准入限制。
+整机内存、spool、共享链路和巡检的变量预算见[目标资源模型](../operations/ultra-288v-resource-model.md)。
 
 ## 集中构建与原始材料
 
