@@ -308,10 +308,12 @@ def standalone_member(suite, work):
     """Copy real code/tests at the same depth; change only temporary Cargo wiring."""
     subject = foundation_path(ROOT, suite.subject)
     relative = subject.relative_to(ROOT)
-    shutil.copytree(subject, work / relative)
+    # Fresh source mtimes prevent a newer binary from another snapshot being
+    # reused when Cargo shares the target directory. Preserve file modes.
+    shutil.copytree(subject, work / relative, copy_function=shutil.copy)
     tests = ROOT / FOUNDATION_TESTS / suite.subject
     if tests.exists():
-        shutil.copytree(tests, work / tests.relative_to(ROOT))
+        shutil.copytree(tests, work / tests.relative_to(ROOT), copy_function=shutil.copy)
     original = (subject / 'Cargo.toml').read_text()
     readme = tomllib.loads(original)['package'].get('readme')
     if readme:

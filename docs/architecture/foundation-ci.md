@@ -23,6 +23,8 @@ TOML/正则门禁归入 language，futures/并发集合门禁归入 async。新�
 各 runner 保留独立 Cargo home；原 action 固定提交、只读权限和发布流程不变。
 当前五组均需要 WASM 标准库，包括 platform 中的 libc 空 Web 接口编译检查。
 
+复制到临时工作区的源码与测试保留字节和文件权限，并使用新文件时间戳。共享 Cargo target 时，不能沿用原文件的旧时间戳而误命中较新副本的测试二进制；只重编译受影响的副本，保留其真实依赖缓存。
+
 `foundation-async` 另执行 `check-erased-boundaries.py`：两个可变擦除引用的编译失败用例，以及默认和 `erase_components` 模式下的类型拒绝与析构回归。日期门禁在默认及无默认特性的 `parsing` 配置中实际执行固定小数秒和 Period 大小写单元回归。
 
 真实系统 SQLite SDK 仅在 data 矩阵单元安装。其独立 unbundled 消费者在该组后

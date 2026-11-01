@@ -50,9 +50,10 @@ def prepare_package(root, work):
     """Only the maintained package/tests are copied; dependencies remain real providers."""
     original = root / "src/foundation/data-storage/sqlite-access"
     package = work / "src/foundation/data-storage/sqlite-access"
-    shutil.copytree(original, package, ignore=shutil.ignore_patterns("Cargo.lock", "target", "__pycache__"))
+    shutil.copytree(original, package, copy_function=shutil.copy,
+                    ignore=shutil.ignore_patterns("Cargo.lock", "target", "__pycache__"))
     for tests in FAMILY_TEST_ROOTS:
-        shutil.copytree(root / tests, work / tests)
+        shutil.copytree(root / tests, work / tests, copy_function=shutil.copy)
     manifest = package / "Cargo.toml"
     text = manifest.read_text()
     parsed = tomllib.loads(text)

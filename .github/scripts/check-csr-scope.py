@@ -43,6 +43,7 @@ def check_reactive_units():
         shutil.copyfile(ROOT / 'rust-toolchain.toml', snapshot / 'rust-toolchain.toml')
         for relative in ('src/foundation/web-runtime/reactive-state', 'test/foundation/reactive-state/unit'):
             shutil.copytree(ROOT / relative, snapshot / relative,
+                            copy_function=shutil.copy,
                             ignore=shutil.ignore_patterns('Cargo.lock', 'target'))
         manifest = snapshot / 'src/foundation/web-runtime/reactive-state/Cargo.toml'
         source_package = ROOT / 'src/foundation/web-runtime/reactive-state'
