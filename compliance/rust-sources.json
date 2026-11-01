@@ -84392,7 +84392,7 @@
         "src/extract/multipart.rs": "f9e4971252f336b6c70516f31837dfd8745095089b80c7f0c0440e1719d9d831",
         "src/extract/nested_path.rs": "7656e5381114bc3948d5908e36ccff5b9bb1a9561e1379fa0e7da62a370ad090",
         "src/extract/original_uri.rs": "a019d8197e558efa340665165432313f3d1db2e1f116a38803ba5ac771b89d2e",
-        "src/extract/path/de.rs": "5793334435b864d6b6ef0680d26f7679b97f7ec3d81f7e2c581bd11ec793d9a2",
+        "src/extract/path/de.rs": "a5c27c0f9d799433f99c7697d1f166060a0b90cdb8b035c10540e6c6996d2656",
         "src/extract/path/mod.rs": "91daa9cc66cb5197638fa31bf3ba5614d039e24e13f9cae92e357a4dd7d6232c",
         "src/extract/query.rs": "3560c0c66a832b53d34488306cfc4b587218991bd670cdd60c53426cfc39501e",
         "src/extract/raw_form.rs": "08b99dffdcffe604129d2cfd396f26626f359c6f7a77064282ab10437a50f64a",
@@ -97027,7 +97027,7 @@
       "version": "0.4.2"
     },
     "src/foundation/networking/http-routing": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。；Path 嵌套元组遇到无键值反序列化器时返回既有 UnsupportedType 具名拒绝，移除可由公开输入触达的 unreachable 分支，保留普通元组/键值对语义和原有错误状态。",
       "description": "HTTP routing and request handling library that focuses on ergonomics and modularity",
       "directory": "src/foundation/networking/http-routing",
       "files_sha256": {
@@ -97043,7 +97043,7 @@
         "src/extract/multipart.rs": "f9e4971252f336b6c70516f31837dfd8745095089b80c7f0c0440e1719d9d831",
         "src/extract/nested_path.rs": "7656e5381114bc3948d5908e36ccff5b9bb1a9561e1379fa0e7da62a370ad090",
         "src/extract/original_uri.rs": "a019d8197e558efa340665165432313f3d1db2e1f116a38803ba5ac771b89d2e",
-        "src/extract/path/de.rs": "5793334435b864d6b6ef0680d26f7679b97f7ec3d81f7e2c581bd11ec793d9a2",
+        "src/extract/path/de.rs": "a5c27c0f9d799433f99c7697d1f166060a0b90cdb8b035c10540e6c6996d2656",
         "src/extract/path/mod.rs": "91daa9cc66cb5197638fa31bf3ba5614d039e24e13f9cae92e357a4dd7d6232c",
         "src/extract/query.rs": "3560c0c66a832b53d34488306cfc4b587218991bd670cdd60c53426cfc39501e",
         "src/extract/raw_form.rs": "08b99dffdcffe604129d2cfd396f26626f359c6f7a77064282ab10437a50f64a",

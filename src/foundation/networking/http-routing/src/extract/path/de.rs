@@ -475,9 +475,10 @@ impl<'de> Deserializer<'de> for ValueDeserializer<'de> {
                     key: Some(key),
                     value: Some(self.value),
                 }),
-                // `self.key` is only `None` when deserializing maps so `deserialize_seq`
-                // wouldn't be called for that
-                None => unreachable!(),
+                None => Err(PathDeserializationError::unsupported_type(type_name::<
+                    V::Value,
+                >(
+                ))),
             }
         } else {
             Err(PathDeserializationError::unsupported_type(type_name::<
@@ -646,4 +647,7 @@ impl<'de> KeyOrIdx<'de> {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/http-routing/unit/src/extract/path/de/tests_648.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/http-routing/unit/src/extract/path/de/tests_648.rs"
+));

@@ -107,8 +107,8 @@ def main():
             run(work,'check','--locked');count += 1
             if features == ('json', 'form', 'query', 'macros'):
                 result=run(work,'test','--locked','--test','behavior')
-                assert re.search(r'test result: ok\. 5 passed; 0 failed',result), result
+                assert re.search(r'test result: ok\. 8 passed; 0 failed',result), result
         for feature in UNSUPPORTED_FEATURES:
             run(work, 'check', '--locked', '--features', f'http-routing/{feature}', rejected_feature=feature)
-        print(f'http-routing: {count} native/WASM feature checks (including all declared features), 5 routing/body/status/macro tests and 5 unsupported-feature rejections and 4 exact inactive-source checks passed')
+        print(f'http-routing: {count} native/WASM feature checks (including all declared features), 8 routing/body/status/macro/path tests and 5 unsupported-feature rejections and 4 exact inactive-source checks passed')
 if __name__=='__main__': main()

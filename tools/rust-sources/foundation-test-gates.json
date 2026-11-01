@@ -454,7 +454,7 @@
       "scripts": [
         ".github/scripts/check-http-routing.py"
       ],
-      "detail": "test/architecture/http-routing/behavior.rs (exactly 5)"
+      "detail": "test/architecture/http-routing/behavior.rs (exactly 8)"
     },
     {
       "package": "http-transport",
