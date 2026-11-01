@@ -46,18 +46,7 @@ impl<'de> data_serialization::Deserialize<'de> for PowerUnavailable {
     }
 }
 
-/// Safe telemetry classification, never paths or source messages.
-#[derive(Clone, Debug, data_serialization::Serialize, data_serialization::Deserialize)]
-#[serialization(
-    tag = "stage",
-    content = "code",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-pub enum DiskObservationIssue {
-    Seal(storage_contract::ErrorCode),
-    Capacity(storage_contract::ErrorCode),
-}
+pub use storage_contract::DiskObservationIssue;
 
 /// Application boundary for a backend's concrete observation failure.
 /// The safe classification is independent of the optional storage engine.
@@ -83,6 +72,6 @@ impl DiskObservationFailure {
 
 impl From<&DiskObservationFailure> for DiskObservationIssue {
     fn from(error: &DiskObservationFailure) -> Self {
-        error.issue.clone()
+        error.issue
     }
 }

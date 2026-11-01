@@ -2,6 +2,7 @@ use super::{
     history::{FileBranch, FileHistory},
     page::{DirectoryBranch, Entry},
 };
+use data_serialization::{Deserialize, Deserializer};
 use json_codec::Value;
 use std::{collections::BTreeSet, sync::Arc};
 use web_interface::i18n::t;
@@ -12,37 +13,63 @@ pub(crate) struct Disk {
     pub slot_id: String,
     pub online: bool,
     pub writable: bool,
-    pub available_bytes: u64,
+    pub available_bytes: Option<u64>,
+    pub observation_failure: Option<storage_contract::DiskObservationIssue>,
+}
+
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct DiskList {
+    disks: Vec<DiskRecord>,
+}
+#[derive(Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct DiskRecord {
+    slot_id: String,
+    #[serialization(rename = "level")]
+    _level: u32,
+    online: bool,
+    writable: bool,
+    #[serialization(with = "storage_contract::optional_u64_string")]
+    available_bytes: Option<u64>,
+    #[serialization(with = "storage_contract::u64_string", rename = "used_bytes")]
+    _used_bytes: u64,
+    #[serialization(rename = "simulation")]
+    _simulation: bool,
+    #[serialization(deserialize_with = "nullable_issue")]
+    observation_failure: Option<storage_contract::DiskObservationIssue>,
+}
+fn nullable_issue<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<storage_contract::DiskObservationIssue>, D::Error> {
+    Option::deserialize(deserializer)
 }
 
 pub(crate) fn parse_disks(value: &Value) -> Result<Vec<Disk>, crate::api::Error> {
-    let parsed = value
-        .get("disks")
-        .and_then(Value::as_array)
-        .and_then(|disks| {
-            disks
-                .iter()
-                .map(|disk| {
-                    Some(Disk {
-                        slot_id: disk
-                            .get("slot_id")?
-                            .as_str()
-                            .filter(|id| !id.is_empty())?
-                            .to_owned(),
-                        online: disk.get("online")?.as_bool()?,
-                        writable: disk.get("writable")?.as_bool()?,
-                        available_bytes: crate::format::parse_u64(disk.get("available_bytes")?)?,
-                    })
+    let parsed = DiskList::deserialize(value).and_then(|list| {
+        list.disks
+            .into_iter()
+            .map(|disk| {
+                if disk.slot_id.is_empty() {
+                    return Err(data_serialization::de::Error::custom("empty disk slot id"));
+                }
+                Ok(Disk {
+                    slot_id: disk.slot_id,
+                    online: disk.online,
+                    writable: disk.writable,
+                    available_bytes: disk.available_bytes,
+                    observation_failure: disk.observation_failure,
                 })
-                .collect::<Option<Vec<_>>>()
-        });
-    parsed.ok_or_else(|| crate::api::Error {
+            })
+            .collect()
+    });
+    parsed.map_err(|source| crate::api::Error {
         status: 200,
         code: storage_contract::ErrorCode::InvalidDiskList,
         message: "The disk listing did not match the server contract.".into(),
         retryable: false,
         request_id: None,
-        source: None,
+        source: Some(Arc::new(crate::api::ErrorSource::DiskList(source))),
     })
 }
 

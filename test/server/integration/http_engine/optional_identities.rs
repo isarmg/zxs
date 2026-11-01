@@ -1489,7 +1489,7 @@ async fn typed_administrator_diagnostics_keep_wire_queries_and_offline_reports()
     let disks = success(&app, &token, "GET", "/api/admin/disks?unused=yes", None).await;
     assert_eq!(disks.as_object().unwrap().len(), 1);
     let disk = &disks["disks"][0];
-    assert_eq!(disk.as_object().unwrap().len(), 10);
+    assert_eq!(disk.as_object().unwrap().len(), 11);
     assert_eq!(disk["slot_id"], "P01");
     assert_eq!(disk["online"], true);
     assert_eq!(disk["simulation"], true);
@@ -1512,6 +1512,13 @@ async fn typed_administrator_diagnostics_keep_wire_queries_and_offline_reports()
     std::fs::rename(root.path().join("disk"), root.path().join("removed-disk")).unwrap();
     let disks = success(&app, &token, "GET", "/api/admin/disks", None).await;
     assert_eq!(disks["disks"][0]["online"], false);
+    assert!(disks["disks"][0]["available_bytes"].is_null());
+    assert_eq!(
+        disks["disks"][0]["observation_failure"],
+        json!({"stage":"seal","code":"IO_ERROR"})
+    );
+    assert!(!disks.to_string().contains("removed-disk"));
+    assert!(!root.path().join("disk").exists());
     let report = success(&app, &token, "GET", "/api/admin/check", None).await;
     assert!(!report["issues"].as_array().unwrap().is_empty());
     for route in ["/api/admin/disks", "/api/admin/check"] {
@@ -1587,7 +1594,7 @@ async fn typed_file_manager_disks_keep_projection_without_creating_roots() {
     assert_eq!(disks.as_object().unwrap().len(), 1);
     assert_eq!(disks["disks"].as_array().unwrap().len(), 1);
     let disk = &disks["disks"][0];
-    assert_eq!(disk.as_object().unwrap().len(), 7);
+    assert_eq!(disk.as_object().unwrap().len(), 8);
     assert_eq!(disk["slot_id"], "P01");
     assert_eq!(disk["level"], 1);
     assert_eq!(disk["online"], true);
@@ -1612,6 +1619,13 @@ async fn typed_file_manager_disks_keep_projection_without_creating_roots() {
     std::fs::rename(root.path().join("disk"), root.path().join("offline-disk")).unwrap();
     let disks = success(&app, &token, "GET", "/api/file-manager/disks", None).await;
     assert_eq!(disks["disks"][0]["online"], false);
+    assert!(disks["disks"][0]["available_bytes"].is_null());
+    assert_eq!(
+        disks["disks"][0]["observation_failure"],
+        json!({"stage":"seal","code":"IO_ERROR"})
+    );
+    assert!(!disks.to_string().contains("offline-disk"));
+    assert!(!root.path().join("disk").exists());
     assert_eq!(
         disks["disks"][0]["writable"], true,
         "writable is the primary-level policy, not sampled availability"

@@ -21,12 +21,9 @@ fn typed_diagnostics_keep_observation_reports_and_current_admission() {
     let disks = DisksResponse::from(disks);
     let report = CheckResponse::from(report);
     std::fs::rename(root.path().join("d1"), root.path().join("removed-primary")).unwrap();
-    let failure = backend.disk_status(&identity).unwrap_err();
-    assert_eq!(failure.code, storage_contract::ErrorCode::IoError);
-    assert!(!failure.message.contains("removed-primary"));
-    let changed = backend
-        .observe_disks(&crate::InternalDiskObservation(()))
-        .unwrap();
+    let changed = backend.disk_status(&identity).unwrap();
+    assert!(changed[0].available_bytes.is_none());
+    assert!(changed[0].observation_failure.is_some());
     assert!(
         !changed
             .iter()

@@ -52,6 +52,34 @@ fn disk(slot: &str, online: bool, writable: bool, available_bytes: u64) -> Disk 
         slot_id: slot.into(),
         online,
         writable,
-        available_bytes,
+        available_bytes: Some(available_bytes),
+        observation_failure: None,
     }
+}
+
+#[test]
+fn disk_capacity_unknown_is_not_zero_and_failure_has_a_safe_explanation() {
+    assert_eq!(disk_available_space(None), t("不可用", "Unavailable"));
+    assert_eq!(disk_available_space(Some(0)), format::bytes(0));
+    assert!(disk_observation_message(None).is_none());
+    assert_eq!(
+        disk_observation_message(Some(storage_contract::DiskObservationIssue::Seal(
+            storage_contract::ErrorCode::IoError
+        ))),
+        Some(t("磁盘身份观测失败", "Disk identity observation failed"))
+    );
+    let mut unavailable = disk("P01", false, true, 0);
+    unavailable.available_bytes = None;
+    unavailable.observation_failure = Some(storage_contract::DiskObservationIssue::Seal(
+        storage_contract::ErrorCode::IoError,
+    ));
+    let model = Model {
+        disks: vec![unavailable.clone()],
+        disks_loaded: true,
+        ..Model::default()
+    };
+    assert_eq!(
+        disk_roots_projection(&model),
+        DiskRoots::Disks(vec![unavailable])
+    );
 }

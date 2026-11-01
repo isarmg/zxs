@@ -1237,6 +1237,25 @@ pub struct HistoryGraph {
     #[serialization(default)]
     pub boundary_marks: Vec<HistoryBoundary>,
 }
+/// Safe classification of a non-authoritative disk observation failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serialization(
+    tag = "stage",
+    content = "code",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum DiskObservationIssue {
+    Seal(crate::ErrorCode),
+    Capacity(crate::ErrorCode),
+}
+
+fn nullable_disk_issue<'de, D: data_serialization::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<DiskObservationIssue>, D::Error> {
+    Option::deserialize(deserializer)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct DiskStatus {
@@ -1248,8 +1267,10 @@ pub struct DiskStatus {
     pub metadata_member: bool,
     /// Optional diagnostic association, never proof of failure-domain independence.
     pub physical_device: Option<String>,
-    #[serialization(with = "crate::u64_string")]
-    pub available_bytes: u64,
+    #[serialization(with = "crate::optional_u64_string")]
+    pub available_bytes: Option<u64>,
+    #[serialization(deserialize_with = "nullable_disk_issue")]
+    pub observation_failure: Option<DiskObservationIssue>,
     #[serialization(with = "crate::u64_string")]
     pub used_bytes: u64,
     pub simulation: bool,

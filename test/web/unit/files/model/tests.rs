@@ -42,7 +42,8 @@ fn navigation_resets_only_location_owned_state() {
             slot_id: "P01".into(),
             online: true,
             writable: true,
-            available_bytes: 4096,
+            available_bytes: Some(4096),
+            observation_failure: None,
         }];
         let mut degraded: Value = json_codec::from_str(DEGRADED).unwrap();
         // Derive a synthetic outcome from the captured diagnostic; navigation
@@ -577,10 +578,10 @@ fn a_removed_entry_discards_metadata() {
 
 #[test]
 fn disk_list_accepts_current_contract_and_rejects_legacy_or_partial_records() {
-    let disk = json!({"slot_id":"P01", "online":true, "writable":false, "available_bytes":"18446744073709551615"});
+    let disk = json!({"slot_id":"P01", "level":2, "online":true, "writable":false, "available_bytes":"18446744073709551615", "used_bytes":"0", "simulation":true, "observation_failure":null});
     let parsed = parse_disks(&json!({"disks":[disk.clone()]})).unwrap();
     assert_eq!(parsed[0].slot_id, "P01");
-    assert_eq!(parsed[0].available_bytes, u64::MAX);
+    assert_eq!(parsed[0].available_bytes, Some(u64::MAX));
     assert!(!parsed[0].writable);
     assert!(parse_disks(&json!({"disks":[]})).unwrap().is_empty());
     for invalid in [
@@ -645,4 +646,82 @@ fn targeted_refresh_preserves_details_outside_the_loaded_page() {
     assert_eq!(model.selected, Some(selected));
     model.reconcile_selection(None);
     assert!(model.selected.is_none());
+}
+
+#[test]
+fn disk_list_offline_unknown_capacity_and_zero_are_distinct_current_records() {
+    let offline = json!({"slot_id":"P01", "level":1, "online":false, "writable":true, "available_bytes":null, "used_bytes":"9", "simulation":true, "observation_failure":{"stage":"seal","code":"IO_ERROR"}});
+    let parsed = parse_disks(&json!({"disks":[offline.clone()]})).unwrap();
+    assert!(!parsed[0].online);
+    assert!(parsed[0].writable);
+    assert_eq!(parsed[0].available_bytes, None);
+    assert_eq!(
+        parsed[0].observation_failure,
+        Some(storage_contract::DiskObservationIssue::Seal(
+            storage_contract::ErrorCode::IoError
+        ))
+    );
+    let mut zero = offline.clone();
+    zero["online"] = true.into();
+    zero["available_bytes"] = "0".into();
+    zero["observation_failure"] = Value::Null;
+    assert_eq!(
+        parse_disks(&json!({"disks":[zero.clone()]})).unwrap()[0].available_bytes,
+        Some(0)
+    );
+    for field in [
+        "slot_id",
+        "level",
+        "online",
+        "writable",
+        "available_bytes",
+        "used_bytes",
+        "simulation",
+        "observation_failure",
+    ] {
+        let mut partial = zero.clone();
+        partial.as_object_mut().unwrap().remove(field);
+        let error = parse_disks(&json!({"disks":[partial]})).unwrap_err();
+        assert!(error.source.is_some(), "missing {field}");
+    }
+    for issue in [
+        json!({"stage":"unknown","code":"IO_ERROR"}),
+        json!({"stage":"seal","code":"UNKNOWN_CODE"}),
+        json!({"stage":"seal","code":"IO_ERROR","source":"private"}),
+    ] {
+        let mut invalid = offline.clone();
+        invalid["observation_failure"] = issue;
+        assert!(
+            parse_disks(&json!({"disks":[invalid]}))
+                .unwrap_err()
+                .source
+                .is_some()
+        );
+    }
+    let mut extra = zero;
+    extra["root"] = "/private".into();
+    assert!(parse_disks(&json!({"disks":[extra]})).is_err());
+}
+
+#[test]
+fn server_offline_disk_vector_preserves_known_zero_and_unavailable_rows() {
+    let value: Value = json_codec::from_str(include_str!(
+        "../../../../../test/server/fixtures/offline-file-manager-disks.json"
+    ))
+    .unwrap();
+    let disks = parse_disks(&value).unwrap();
+    assert_eq!(disks.len(), 2);
+    assert_eq!(disks[0].slot_id, "P01");
+    assert!(disks[0].online);
+    assert_eq!(disks[0].available_bytes, Some(0));
+    assert_eq!(disks[0].observation_failure, None);
+    assert_eq!(disks[1].slot_id, "B01");
+    assert!(!disks[1].online);
+    assert_eq!(disks[1].available_bytes, None);
+    assert_eq!(
+        disks[1].observation_failure,
+        Some(storage_contract::DiskObservationIssue::Seal(
+            storage_contract::ErrorCode::IoError
+        ))
+    );
 }

@@ -14,14 +14,7 @@ fn disk_sample(observation: DiskObservation) -> DiskSample {
     let (capacity, observation_failure) = match capacity {
         Ok(capacity) => (Some(capacity), None),
         Err(error) => {
-            let issue = match error.stage {
-                storage_engine::DiskObservationStage::Seal => {
-                    crate::DiskObservationIssue::Seal(error.source.code())
-                }
-                storage_engine::DiskObservationStage::Capacity => {
-                    crate::DiskObservationIssue::Capacity(error.source.code())
-                }
-            };
+            let issue = observation_issue(&error);
             (
                 None,
                 Some(std::sync::Arc::new(crate::DiskObservationFailure::new(
@@ -50,6 +43,50 @@ fn disk_sample(observation: DiskObservation) -> DiskSample {
         usage_percent,
         power_watts,
         power_unavailable_reason,
+    }
+}
+
+fn observation_issue(
+    error: &storage_engine::DiskObservationFailure,
+) -> crate::DiskObservationIssue {
+    match error.stage {
+        storage_engine::DiskObservationStage::Seal => {
+            crate::DiskObservationIssue::Seal(error.source.code())
+        }
+        storage_engine::DiskObservationStage::Capacity => {
+            crate::DiskObservationIssue::Capacity(error.source.code())
+        }
+    }
+}
+
+/// Public listing projection: offline members remain rows, with unknown capacity.
+/// The concrete cause reaches this application boundary, not the wire response.
+pub(super) fn diagnostics(plan: DiskObservationPlan) -> Vec<storage_contract::DiskStatus> {
+    plan.sample().into_iter().map(diagnostic_disk).collect()
+}
+
+fn diagnostic_disk(observation: DiskObservation) -> storage_contract::DiskStatus {
+    let disk = observation.status;
+    let (available_bytes, observation_failure) = match observation.capacity {
+        Ok(capacity) => (Some(capacity.1), None),
+        Err(error) => {
+            tracing::debug!(slot_id = %error.slot_id, stage = ?error.stage,
+                error = ?error, "disk listing observation unavailable");
+            (None, Some(observation_issue(&error)))
+        }
+    };
+    storage_contract::DiskStatus {
+        slot_id: disk.slot_id,
+        disk_id: disk.disk_id,
+        level: disk.level,
+        upstream_slot_id: disk.upstream_slot_id,
+        online: disk.online,
+        metadata_member: disk.metadata_member,
+        physical_device: disk.physical_device,
+        available_bytes,
+        observation_failure,
+        used_bytes: disk.used_bytes,
+        simulation: disk.simulation,
     }
 }
 

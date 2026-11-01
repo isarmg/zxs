@@ -528,3 +528,30 @@ fn entry_value_equality_matches_canonical_bytes_for_every_field() {
         canonical_json(&reversed).unwrap()
     );
 }
+
+#[test]
+fn disk_observation_issue_and_nullable_status_are_strict_current_wire() {
+    let fixture: json_codec::Value = json_codec::from_str(include_str!(
+        "../../../server/fixtures/offline-admin-disks.json"
+    ))
+    .unwrap();
+    let status = fixture["disks"][1].clone();
+    let parsed: DiskStatus = json_codec::from_value(status.clone()).unwrap();
+    assert_eq!(parsed.available_bytes, None);
+    assert_eq!(
+        parsed.observation_failure,
+        Some(DiskObservationIssue::Seal(ErrorCode::IoError))
+    );
+    for field in ["available_bytes", "observation_failure"] {
+        let mut invalid = status.clone();
+        invalid.as_object_mut().unwrap().remove(field);
+        assert!(json_codec::from_value::<DiskStatus>(invalid).is_err());
+    }
+    for issue in [
+        json_codec::json!({"stage":"unknown","code":"IO_ERROR"}),
+        json_codec::json!({"stage":"seal","code":"UNKNOWN_CODE"}),
+        json_codec::json!({"stage":"seal","code":"IO_ERROR","source":"private"}),
+    ] {
+        assert!(json_codec::from_value::<DiskObservationIssue>(issue).is_err());
+    }
+}

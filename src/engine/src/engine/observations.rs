@@ -99,7 +99,8 @@ impl DiskObservation {
             online,
             metadata_member,
             physical_device,
-            available_bytes: capacity.1,
+            available_bytes: Some(capacity.1),
+            observation_failure: None,
             used_bytes,
             simulation,
         })

@@ -104,3 +104,22 @@ fn zero_capacity_remains_known_and_failure_retains_internal_source() {
     assert_eq!(engine_failure.slot_id, "P01");
     assert!(std::error::Error::source(engine_failure).is_some());
 }
+
+#[test]
+fn diagnostic_rows_keep_online_identity_when_capacity_is_unknown() {
+    let zero = diagnostic_disk(online_observation(Some((100, 0, 100))));
+    assert_eq!(zero.available_bytes, Some(0));
+    assert!(zero.observation_failure.is_none());
+    let unknown = diagnostic_disk(online_observation(None));
+    assert!(unknown.online);
+    assert_eq!(unknown.available_bytes, None);
+    assert_eq!(unknown.used_bytes, 99);
+    assert!(matches!(
+        unknown.observation_failure,
+        Some(crate::DiskObservationIssue::Capacity(
+            storage_contract::ErrorCode::IoError
+        ))
+    ));
+    let wire = json_codec::to_string(&unknown).unwrap();
+    assert!(!wire.contains("private path sentinel"));
+}

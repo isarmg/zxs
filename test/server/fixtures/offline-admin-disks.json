@@ -1,0 +1,33 @@
+{
+  "disks": [
+    {
+      "slot_id": "P01",
+      "disk_id": "disk_11111111111111111111111111111111",
+      "level": 1,
+      "upstream_slot_id": null,
+      "online": true,
+      "metadata_member": true,
+      "physical_device": null,
+      "available_bytes": "0",
+      "observation_failure": null,
+      "used_bytes": "7",
+      "simulation": true
+    },
+    {
+      "slot_id": "B01",
+      "disk_id": "disk_22222222222222222222222222222222",
+      "level": 2,
+      "upstream_slot_id": "P01",
+      "online": false,
+      "metadata_member": true,
+      "physical_device": null,
+      "available_bytes": null,
+      "observation_failure": {
+        "stage": "seal",
+        "code": "IO_ERROR"
+      },
+      "used_bytes": "7",
+      "simulation": true
+    }
+  ]
+}

@@ -946,7 +946,7 @@ fn monitoring_contracts_share_snapshots_and_preserve_unavailable_values_and_auth
     assert!(!snapshot_schema.is_valid(&missing));
     for failure in [
         json!({"stage":"unknown","code":"IO_ERROR"}),
-        json!({"stage":"capacity","code":"invalid code"}),
+        json!({"stage":"capacity","code":"UNKNOWN_CODE"}),
         json!({"stage":"capacity"}),
         json!({"code":"IO_ERROR"}),
         json!({"stage":"capacity","code":"IO_ERROR","source":"/private/path"}),
@@ -1372,4 +1372,48 @@ fn configuration_context_preserves_schema_error_source() {
             .downcast_ref::<schema_validation::ValidationError<'static>>()
             .is_some()
     );
+}
+
+#[test]
+fn offline_disk_list_contracts_accept_unknown_and_zero_but_reject_bad_classifications() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let api = read(&root.join("docs/contracts/openapi.json")).unwrap();
+    assert_eq!(
+        api["components"]["schemas"]["DiskObservationIssue"]["properties"]["code"]["enum"],
+        json!(
+            storage_contract::ErrorCode::ALL
+                .iter()
+                .map(|code| code.as_str())
+                .collect::<Vec<_>>()
+        )
+    );
+    for (route, fixture) in [
+        ("/api/admin/disks", "offline-admin-disks.json"),
+        ("/api/file-manager/disks", "offline-file-manager-disks.json"),
+    ] {
+        let mut schema = api.clone();
+        schema["allOf"] = json!([
+            api["paths"][route]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+        ]);
+        let check = validator(&schema).unwrap();
+        let wire = read(&root.join("test/server/fixtures").join(fixture)).unwrap();
+        assert!(check.is_valid(&wire));
+        for field in ["available_bytes", "observation_failure"] {
+            let mut invalid = wire.clone();
+            invalid["disks"][1].as_object_mut().unwrap().remove(field);
+            assert!(!check.is_valid(&invalid));
+        }
+        for issue in [
+            json!({"stage":"unknown","code":"IO_ERROR"}),
+            json!({"stage":"seal","code":"UNKNOWN_CODE"}),
+            json!({"stage":"seal","code":"IO_ERROR","source":"/private/path"}),
+        ] {
+            let mut invalid = wire.clone();
+            invalid["disks"][1]["observation_failure"] = issue;
+            assert!(!check.is_valid(&invalid));
+        }
+        let mut invalid = wire.clone();
+        invalid["disks"][0]["available_bytes"] = json!(0);
+        assert!(!check.is_valid(&invalid));
+    }
 }

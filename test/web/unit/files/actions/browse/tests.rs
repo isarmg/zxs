@@ -263,7 +263,8 @@ fn a_failed_disk_refresh_invalidates_readiness_without_discarding_cached_rows() 
                 slot_id: "P01".into(),
                 online: true,
                 writable: true,
-                available_bytes: 4096,
+                available_bytes: Some(4096),
+                observation_failure: None,
             }],
         ] {
             let state = RwSignal::new(State {
@@ -309,7 +310,8 @@ fn disk_snapshot(online: bool, available_bytes: u64) -> Vec<Disk> {
         slot_id: "B01".into(),
         online,
         writable: false,
-        available_bytes,
+        available_bytes: Some(available_bytes),
+        observation_failure: None,
     }]
 }
 

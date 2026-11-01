@@ -102,6 +102,8 @@ server libtest，并拒绝编译诊断、不完整产物、缺测试、零测试
 
 后台主机采样使用服务内部只读观测能力，在引擎锁内捕获 `DiskObservationPlan`、锁外查询磁盘，不伪造管理员或发布业务状态。监控容量来自身份校验后的真实采样；未知值保持空值，成功的零容量保留为 0。内部 `DiskSample` 用服务自身的分类和应用层错误链持有观测失败，不在无 `core` 构建中引用可选 engine 类型；仅 `engine_backend` 把完整 engine 失败转换为服务边界并保留具体 source。telemetry 边界只输出 `observation_failure: {stage: seal|capacity, code}`，不输出本机路径或消息；成功时该字段为 null。Web 当前响应入口仅将新增磁盘观测分类解析为有限枚举，拒绝未知 stage/code/额外字段及重复 disk id；格式错误清空旧当前样本并保留解码原因，不把未知阶段静默当作正常容量。当前卡片消费该分类以区分身份与容量失败，历史严格解析并保留同一分类；这不是整个实时状态页面已完成类型化。没有新增每轮错误日志，避免轮询刷屏。此能力不能从 HTTP/SMB 请求构造，系统状态及历史响应仍需当前有效管理员会话。
 
+`GET /api/admin/disks` 与 `GET /api/file-manager/disks` 是逐成员列表：离线成员仍返回 200 和绑定信息，容量观测失败返回 `available_bytes: null` 与安全 `observation_failure`，成功零容量为字符串 `"0"`。逻辑 `used_bytes` 不因容量未知清零；`writable` 仍只描述一级盘策略，不是当前在线或写入准入。HTTP 不调用要求整批完整容量的严格 engine `disk_status()`，而在既有授权之后消费 detached sample；每请求每失败成员只在应用边界记一次 debug 具体原因，不声称跨请求去重，不把路径或原始 source 放进响应，也不创建缺失根目录。后台 monitor 的采样/日志语义不变。安全 issue 由 contract 单一定义并被 server/Web复用；文件管理器严格解析当前八字段列表，未知容量显示不可用、离线行不允许打开；管理员 Inspect 仍以原 JSON 诊断展示。
+
 目录分页的 `snapshot` 摘要由持有 Engine 的 `AdmissionEngine` 惰性保存一份；配置与已发布业务代数不能通过共享 Engine 引用修改，任何 `DerefMut` 在交出可变引用前清空摘要，包括失败操作、认证发布和整个 Engine 替换。后续首读按原 JSON 字节重新散列；仅认证发布仍得到相同摘要，不把有效游标误报为业务变化。每次请求仍先复核当前管理员，再校验游标的查询、快照与排序字段；该摘要不是授权凭据，也不缓存页面、配置权威或磁盘健康。请求摘要和游标编码保持原格式，不增加过期时间或旧格式分支。
 
 主盘条目的排序键直接借用已准入 `PortablePath` 的末级规范化键再复制到页候选；路径按组件独立规范化，因此与 `lookup_key(entry.name())` 一致。Unicode 小写字段仍单独计算，不能用完整 case folding 代替小写排序／搜索；仓库显示名和备份逻辑路径仍沿用原计算。外来游标继续重新计算并核对其排序字段，不能因内部路径已准入而跳过输入校验。资源和剩余扫描成本见[目录分页预算](../19-capacity-and-performance.md#s19-04)。

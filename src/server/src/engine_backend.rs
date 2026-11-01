@@ -781,7 +781,7 @@ impl Backend for EngineBackend {
         current_protected_identity(&engine, identity)?;
         let observation = engine.prepare_disk_observation();
         drop(engine);
-        observation.status().map_err(error)
+        Ok(disk_monitor::diagnostics(observation))
     }
     fn integrity_check(
         &self,

@@ -14,8 +14,9 @@ struct DiskRecord {
     online: bool,
     metadata_member: bool,
     physical_device: Option<String>,
-    #[serialization(with = "storage_contract::u64_string")]
-    available_bytes: u64,
+    #[serialization(with = "storage_contract::optional_u64_string")]
+    available_bytes: Option<u64>,
+    observation_failure: Option<storage_contract::DiskObservationIssue>,
     #[serialization(with = "storage_contract::u64_string")]
     used_bytes: u64,
     simulation: bool,
@@ -31,6 +32,7 @@ impl From<storage_contract::DiskStatus> for DiskRecord {
             metadata_member,
             physical_device,
             available_bytes,
+            observation_failure,
             used_bytes,
             simulation,
         } = disk;
@@ -43,6 +45,7 @@ impl From<storage_contract::DiskStatus> for DiskRecord {
             metadata_member,
             physical_device,
             available_bytes,
+            observation_failure,
             used_bytes,
             simulation,
         }
@@ -92,8 +95,9 @@ struct FileManagerDiskRecord {
     level: u32,
     online: bool,
     writable: bool,
-    #[serialization(with = "storage_contract::u64_string")]
-    available_bytes: u64,
+    #[serialization(with = "storage_contract::optional_u64_string")]
+    available_bytes: Option<u64>,
+    observation_failure: Option<storage_contract::DiskObservationIssue>,
     #[serialization(with = "storage_contract::u64_string")]
     used_bytes: u64,
     simulation: bool,
@@ -105,6 +109,7 @@ impl From<storage_contract::DiskStatus> for FileManagerDiskRecord {
             level,
             online,
             available_bytes,
+            observation_failure,
             used_bytes,
             simulation,
             disk_id: _,
@@ -118,6 +123,7 @@ impl From<storage_contract::DiskStatus> for FileManagerDiskRecord {
             online,
             writable: level == 1,
             available_bytes,
+            observation_failure,
             used_bytes,
             simulation,
         }

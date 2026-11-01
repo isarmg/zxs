@@ -670,7 +670,7 @@
     "/api/file-manager/disks": {
       "get": {
         "operationId": "listFileManagerDisks",
-        "description": "向已认证的唯一管理员返回受控磁盘目录入口。writable表示存在可写命名空间；根创建仍受盘位与业务状态约束。used_bytes为托管版本逻辑占用，真实文件系统容量由/api/system/status采样。",
+        "description": "向已认证的唯一管理员逐成员返回受控磁盘目录入口，包括离线成员。writable表示一级盘写策略，不是实时写入准入；观测失败的available_bytes为null，成功零容量为\"0\"，observation_failure只含安全阶段和错误码。used_bytes为托管版本逻辑占用；不创建缺失根目录。",
         "parameters": [],
         "responses": {
           "200": {
@@ -700,13 +700,30 @@
                             "type": "boolean"
                           },
                           "available_bytes": {
-                            "$ref": "#/components/schemas/UInt64"
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "$ref": "#/components/schemas/UInt64"
+                              }
+                            ]
                           },
                           "used_bytes": {
                             "$ref": "#/components/schemas/UInt64"
                           },
                           "simulation": {
                             "type": "boolean"
+                          },
+                          "observation_failure": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "$ref": "#/components/schemas/DiskObservationIssue"
+                              }
+                            ]
                           }
                         },
                         "additionalProperties": false,
@@ -717,7 +734,8 @@
                           "writable",
                           "available_bytes",
                           "used_bytes",
-                          "simulation"
+                          "simulation",
+                          "observation_failure"
                         ]
                       }
                     }
@@ -3331,27 +3349,9 @@
                                 "type": "null"
                               },
                               {
-                                "type": "object",
-                                "properties": {
-                                  "stage": {
-                                    "type": "string",
-                                    "enum": [
-                                      "seal",
-                                      "capacity"
-                                    ]
-                                  },
-                                  "code": {
-                                    "$ref": "#/components/schemas/Error/properties/code"
-                                  }
-                                },
-                                "required": [
-                                  "stage",
-                                  "code"
-                                ],
-                                "additionalProperties": false
+                                "$ref": "#/components/schemas/DiskObservationIssue"
                               }
-                            ],
-                            "description": "成员封印或容量观测失败的安全分类；成功为null，不输出系统路径或原始错误消息。"
+                            ]
                           }
                         },
                         "required": [
@@ -6890,6 +6890,122 @@
           },
           "default": {
             "description": "结构化具体错误；不返回成功空集合或旧根回退。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/disks": {
+      "get": {
+        "operationId": "listAdministratorDisks",
+        "description": "管理员逐成员磁盘诊断列表。离线成员仍返回200并保留绑定信息；未知容量为null，失败分类不输出本机路径或具体错误消息。此观测不是写入准入。",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "请求成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "disks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "slot_id": {
+                            "$ref": "#/components/schemas/SlotId"
+                          },
+                          "disk_id": {
+                            "$ref": "#/components/schemas/DiskId"
+                          },
+                          "level": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3
+                          },
+                          "upstream_slot_id": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "$ref": "#/components/schemas/SlotId"
+                              }
+                            ]
+                          },
+                          "online": {
+                            "type": "boolean"
+                          },
+                          "metadata_member": {
+                            "type": "boolean"
+                          },
+                          "physical_device": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "available_bytes": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "$ref": "#/components/schemas/UInt64"
+                              }
+                            ]
+                          },
+                          "observation_failure": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "$ref": "#/components/schemas/DiskObservationIssue"
+                              }
+                            ]
+                          },
+                          "used_bytes": {
+                            "$ref": "#/components/schemas/UInt64"
+                          },
+                          "simulation": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "slot_id",
+                          "disk_id",
+                          "level",
+                          "upstream_slot_id",
+                          "online",
+                          "metadata_member",
+                          "physical_device",
+                          "available_bytes",
+                          "observation_failure",
+                          "used_bytes",
+                          "simulation"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "disks"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；写操作结果不确定时按原operation_id查询，不能改key盲目重试。",
             "content": {
               "application/json": {
                 "schema": {
@@ -12428,6 +12544,251 @@
         ],
         "x-maxEncodedBytes": 8388608,
         "description": "单个当前根上的可替换窗口；包括外壳、转义、游标与边预览的完整JSON编码不超过既有8MiB。不是无限加载更多或整包兼容出口。"
+      },
+      "DiskObservationIssue": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "seal",
+              "capacity"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "ALREADY_INITIALIZED",
+              "AUTHORITY_RECOVERY_REQUIRED",
+              "AUTH_ALREADY_INITIALIZED",
+              "AUTH_RECOVERY_REQUIRED",
+              "AUTH_STATE_INVALID",
+              "AUTH_STORE_BUSY",
+              "BACKUP_CONFIGURATION_REQUIRED",
+              "BACKUP_PATH_CONFLICT",
+              "BACKUP_PREFIX_REQUIRED",
+              "BACKUP_ROUTE_INCOMPLETE",
+              "BASE_HEAD_MISMATCH",
+              "BATCH_MAPPING_CONFLICT",
+              "BATCH_SCOPE_CONFLICT",
+              "BOOTSTRAP_EXPIRED",
+              "BRANCH_ARCHIVED",
+              "BRANCH_NOT_ACTIVE",
+              "BRANCH_NOT_FOUND",
+              "BRANCH_WRITE_BUSY",
+              "CHECKPOINT_INVALID",
+              "CHECKSUM_FORMAT_INVALID",
+              "CHECKSUM_MISMATCH",
+              "COMMIT_IN_DOUBT",
+              "COMMIT_NOT_FOUND",
+              "COMMIT_PREPARATION_BUSY",
+              "COMMIT_PREPARATION_STALE",
+              "CONFIG_CONFLICT",
+              "CONFIG_INVALID",
+              "CONTAINER_AMBIGUOUS",
+              "CONTAINER_LAYOUT_INVALID",
+              "CONTENT_CORRUPT",
+              "CONTENT_MISSING",
+              "CONTENT_PINNED",
+              "CONTENT_PURGED",
+              "CONTENT_UNAVAILABLE",
+              "CURRENT_PASSWORD_INVALID",
+              "DESTINATION_EXISTS",
+              "DIRECTORY_ALIAS_CONFLICT",
+              "DIRECTORY_BRANCH_CONFLICT",
+              "DIRECTORY_BRANCH_INCOMPLETE",
+              "DIRECTORY_BRANCH_NOT_FOUND",
+              "DIRECTORY_BRANCH_SCOPE",
+              "DIRECTORY_HISTORY_SPLIT_UNSUPPORTED",
+              "DIRECTORY_NOT_EMPTY",
+              "DIRECTORY_NOT_FOUND",
+              "DIRECTORY_SCOPE_REQUIRED",
+              "DISK_ALREADY_ENROLLED",
+              "DISK_CHANGED",
+              "DISK_IDENTITY_MISMATCH",
+              "DISK_NOT_FOUND",
+              "DISK_READ_ONLY",
+              "DISK_SAMPLE_UNAVAILABLE",
+              "DISK_UNAVAILABLE",
+              "DURABILITY_UNKNOWN",
+              "ENTRY_NOT_FOUND",
+              "FENCED",
+              "FENCING_TOKEN_EXPIRED",
+              "FENCING_TOKEN_INVALID",
+              "FILE_BRANCH_CONFLICT",
+              "FILE_BRANCH_NOT_FOUND",
+              "FILE_BRANCH_REQUIRED",
+              "FILE_BRANCH_SCOPE",
+              "FILE_BRANCH_SELECTED",
+              "FILE_BUSY",
+              "FILE_CONFLICT",
+              "FILE_HISTORY_SPLIT_UNSUPPORTED",
+              "FILE_NODE_HISTORY_SPLIT_UNSUPPORTED",
+              "FILE_NODE_NOT_FOUND",
+              "FILE_NOT_FOUND",
+              "FILE_TOO_LARGE",
+              "FILE_VERSION_CONFLICT",
+              "FILE_WRITE_BUSY",
+              "FORBIDDEN",
+              "FORMAT_UNSUPPORTED",
+              "GENERATION_MISMATCH",
+              "HEAD_CONFLICT",
+              "HISTORICAL_SAVE_REQUIRES_BRANCH",
+              "HISTORY_CHANGED",
+              "HISTORY_MISMATCH",
+              "HISTORY_NODE_NOT_FOUND",
+              "HISTORY_NOT_FOUND",
+              "HISTORY_PACKAGE_INVALID",
+              "HTTP_ERROR",
+              "HTTP_UPLOADS_PENDING",
+              "HTTP_UPLOADS_UNAVAILABLE",
+              "IDEMPOTENCY_KEY_REUSED",
+              "INDEX_REBUILD_FAILED",
+              "INJECTED_FAILURE",
+              "INTERNAL_ERROR",
+              "INVALID_ADMIN_RESPONSE",
+              "INVALID_API_PATH",
+              "INVALID_BACKUP_PREFIX",
+              "INVALID_CURSOR",
+              "INVALID_DIRECTORY_PAGE",
+              "INVALID_DISK_LIST",
+              "INVALID_ID",
+              "INVALID_INTEGER",
+              "INVALID_JSON",
+              "INVALID_MOVE",
+              "INVALID_OBJECT_TYPE",
+              "INVALID_REQUEST",
+              "INVALID_RESPONSE",
+              "INVALID_SESSION",
+              "INVALID_SETUP_REQUEST",
+              "INVALID_SLOT_ID",
+              "INVALID_TAG",
+              "IN_DOUBT",
+              "IO_ERROR",
+              "IS_DIRECTORY",
+              "ITEM_NOT_FOUND",
+              "ITEM_PATH_MISMATCH",
+              "LEASE_EXPIRED",
+              "LISTING_CHANGED",
+              "LOG_CORRUPT",
+              "LOG_FORK",
+              "LOG_FORMAT_UNSUPPORTED",
+              "MAIN_BRANCH_REQUIRED",
+              "MERGE_ENDPOINT_MISMATCH",
+              "METADATA_QUORUM_UNAVAILABLE",
+              "METADATA_TOO_LONG",
+              "METADATA_UNAVAILABLE",
+              "METHOD_NOT_ALLOWED",
+              "MONITOR_UNAVAILABLE",
+              "NAMESPACE_CONFLICT",
+              "NAME_COLLISION",
+              "NAME_CONFLICT",
+              "NAME_INVALID_CHARACTER",
+              "NAME_NOT_NORMALIZED",
+              "NAME_RESERVED",
+              "NAME_TOO_LONG",
+              "NOT_DIRECTORY",
+              "NOT_FOUND",
+              "NO_SPACE",
+              "NO_WINDOW",
+              "OBJECT_COLLISION",
+              "OBJECT_CORRUPT",
+              "OFFLINE_CONFIGURATION_REQUIRED",
+              "OPERATION_ABORTED",
+              "OPERATION_ID_CONFLICT",
+              "OPERATION_NOT_FOUND",
+              "OPERATION_UNSUPPORTED",
+              "PARENT_NOT_DIRECTORY",
+              "PATH_INVALID",
+              "PATH_TOO_DEEP",
+              "PAYLOAD_TOO_LARGE",
+              "PERMANENT_LOSS_NOT_ACKNOWLEDGED",
+              "PERMISSION_DENIED",
+              "PLACEMENT_INVALID",
+              "PLACEMENT_NOT_FOUND",
+              "PLAN_CLOSED",
+              "PLAN_INVALID",
+              "PLAN_NOT_FOUND",
+              "PLAN_STALE",
+              "PLAN_UNSUPPORTED",
+              "PREPARATION_STALE",
+              "PUBLICATION_INVALID",
+              "PURGE_BLOCKED_BY_REFERENCE",
+              "QUOTA_EXCEEDED",
+              "RANGE_NOT_SATISFIABLE",
+              "RECOVERY_PLAN_NOT_FOUND",
+              "RECOVERY_REQUIRED",
+              "RECOVERY_WORKER_FAILED",
+              "REPLICA_TARGET_UNAVAILABLE",
+              "REPOSITORY_NOT_FOUND",
+              "REQUEST_BINDING_MISMATCH",
+              "REQUEST_DIGEST_MISMATCH",
+              "REQUEST_TIMEOUT",
+              "RESOURCE_LIMIT",
+              "RESOURCE_LIMIT_EXCEEDED",
+              "RESPONSE_TOO_LARGE",
+              "RESTORE_BACKUP_CONFLICT",
+              "ROUTE_INCOMPLETE",
+              "ROUTE_TARGET_UNAVAILABLE",
+              "SAVE_MODE_UNSUPPORTED",
+              "SCOPE_CHANGED",
+              "SEALED_MANIFEST_MISMATCH",
+              "SERVICE_STOPPING",
+              "SESSION_CHANGED",
+              "SETUP_BUSY",
+              "SETUP_CONTENT_CHANGED",
+              "SETUP_PRESET_CHANGED",
+              "SETUP_PROOF_INVALID",
+              "SLOT_NOT_FOUND",
+              "SMB_REBIND_REQUIRED",
+              "SMB_SPOOL_UNAVAILABLE",
+              "SMB_UNAVAILABLE",
+              "SOURCE_CHANGED",
+              "SPLIT_INVALID",
+              "SPLIT_PLAN_STALE",
+              "SPLIT_ROOT_FORBIDDEN",
+              "STALE_UPLOAD_GENERATION",
+              "STATE_INVALID",
+              "STORAGE_ACTIVE",
+              "STORAGE_DRAINING",
+              "STORAGE_RETRY_RUNNING",
+              "STORAGE_UNAVAILABLE",
+              "SYSTEM_AUTH_REQUIRED",
+              "SYSTEM_ROOT_CHANGED",
+              "TAG_LIMIT_EXCEEDED",
+              "TOMBSTONE_INVALID",
+              "TOPOLOGY_GENERATION_MISMATCH",
+              "TOPOLOGY_INVALID",
+              "TRANSFER_TIMEOUT",
+              "TRANSPORT_ERROR",
+              "TREE_MOVED",
+              "UNAUTHENTICATED",
+              "UNAUTHORIZED",
+              "UNSAFE_PATH",
+              "UNSUPPORTED_MEDIA_TYPE",
+              "UNSUPPORTED_OPERATION",
+              "UPLOAD_GENERATION_CONFLICT",
+              "UPLOAD_INCOMPLETE",
+              "UPLOAD_RANGE_CONFLICT",
+              "UPLOAD_STATE_INVALID",
+              "VERSION_NOT_FOUND",
+              "WEB_ASSETS_UNAVAILABLE",
+              "WORKSPACE_BUSY",
+              "WORKSPACE_CHANGED",
+              "WORKSPACE_CLOSED",
+              "WORKSPACE_DEPENDENCY_BUSY",
+              "WORKSPACE_NOT_FOUND",
+              "WORKSPACE_NOT_SEALED",
+              "WORKSPACE_REBASE_REQUIRED",
+              "WRITER_ALREADY_ACTIVE"
+            ]
+          }
+        },
+        "required": [
+          "stage",
+          "code"
+        ],
+        "additionalProperties": false
       }
     }
   }

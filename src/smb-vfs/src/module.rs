@@ -49,6 +49,7 @@ mod sdk {
     )]
     include!(concat!(env!("OUT_DIR"), "/sdk.rs"));
 }
+mod acl;
 #[path = "asynchronous.rs"]
 mod asynchronous;
 mod authentication;
@@ -806,42 +807,54 @@ unsafe extern "C" fn fstat(
     stat: *mut sdk::SMB_STRUCT_STAT,
 ) -> i32 {
     guarded(|| {
-        // SAFETY: The owning host callback supplies a live handle; Context access stays on this
-        // event-loop thread and does not escape the callback.
-        let context = unsafe { context(handle) }?;
-        let opened = context.files.get(&(fsp as usize)).ok_or_else(bad)?;
-        let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
-        let metadata = context.client.call(Request::AuthorizeRead {
-            handle: opened.info.handle,
-        })?;
-        let metadata: AuthorizedMetadata =
-            json_codec::from_value(metadata).map_err(std::io::Error::other)?;
-        // SAFETY: libc::stat is a C POD output structure whose integer and pointer fields admit
-        // zero initialization.
-        let mut physical: libc::stat = unsafe { std::mem::zeroed() };
-        // SAFETY: The descriptor is owned and the output points to a live, exclusively borrowed
-        // stat structure.
-        if unsafe { libc::fstat(opened.fd.as_raw_fd(), &mut physical) } < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let size = if opened.info.kind == NamespaceEntryKind::Directory {
-            0
-        } else if opened.writable {
-            physical.st_size
-        } else {
-            i64::try_from(opened.info.size)
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?
-        };
-        let mtime = if opened.writable {
-            metadata.mtime
-        } else {
-            opened.info.mtime
-        };
-        // SAFETY: The host provides exclusive writable stat output for this callback, as required
-        // by fill_stat_fields.
-        unsafe { fill_stat_fields(opened.info.kind, &opened.info.entry_id, size, mtime, stat) }?;
+        // SAFETY: This callback forwards its live host arguments unchanged.
+        unsafe { authorized_fstat(handle, fsp, stat) }?;
         Ok(0)
     })
+}
+
+/// # Safety
+/// The handle/fsp obey the callback contract and stat is exclusive output.
+unsafe fn authorized_fstat(
+    handle: *mut sdk::vfs_handle_struct,
+    fsp: *mut sdk::files_struct,
+    stat: *mut sdk::SMB_STRUCT_STAT,
+) -> std::io::Result<()> {
+    // SAFETY: The owning host callback supplies a live handle; Context access stays on this
+    // event-loop thread and does not escape the callback.
+    let context = unsafe { context(handle) }?;
+    let opened = context.files.get(&(fsp as usize)).ok_or_else(bad)?;
+    let _guard = opened.io.lock().expect("SMB descriptor I/O lock poisoned");
+    let metadata = context.client.call(Request::AuthorizeRead {
+        handle: opened.info.handle,
+    })?;
+    let metadata: AuthorizedMetadata =
+        json_codec::from_value(metadata).map_err(std::io::Error::other)?;
+    // SAFETY: libc::stat is a C POD output structure whose integer and pointer fields admit
+    // zero initialization.
+    let mut physical: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: The descriptor is owned and the output points to a live, exclusively borrowed
+    // stat structure.
+    if unsafe { libc::fstat(opened.fd.as_raw_fd(), &mut physical) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let size = if opened.info.kind == NamespaceEntryKind::Directory {
+        0
+    } else if opened.writable {
+        physical.st_size
+    } else {
+        i64::try_from(opened.info.size)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?
+    };
+    let mtime = if opened.writable {
+        metadata.mtime
+    } else {
+        opened.info.mtime
+    };
+    // SAFETY: The host provides exclusive writable stat output for this callback, as required
+    // by fill_stat_fields.
+    unsafe { fill_stat_fields(opened.info.kind, &opened.info.entry_id, size, mtime, stat) }?;
+    Ok(())
 }
 unsafe extern "C" fn fstatat(
     handle: *mut sdk::vfs_handle_struct,
@@ -1414,6 +1427,7 @@ pub unsafe extern "C" fn samba_init_module() -> sdk::NTSTATUS {
         fremovexattr_fn: Some(deny_removexattr),
         sys_acl_set_fd_fn: Some(deny_acl),
         sys_acl_delete_def_fd_fn: Some(deny_delete_acl),
+        fget_nt_acl_fn: Some(acl::get),
         fset_nt_acl_fn: Some(deny_nt_acl),
         fset_dos_attributes_fn: Some(deny_dos),
         set_compression_fn: Some(deny_compression),

@@ -1,0 +1,27 @@
+{
+  "disks": [
+    {
+      "slot_id": "P01",
+      "level": 1,
+      "online": true,
+      "available_bytes": "0",
+      "observation_failure": null,
+      "used_bytes": "7",
+      "simulation": true,
+      "writable": true
+    },
+    {
+      "slot_id": "B01",
+      "level": 2,
+      "online": false,
+      "available_bytes": null,
+      "observation_failure": {
+        "stage": "seal",
+        "code": "IO_ERROR"
+      },
+      "used_bytes": "7",
+      "simulation": true,
+      "writable": false
+    }
+  ]
+}

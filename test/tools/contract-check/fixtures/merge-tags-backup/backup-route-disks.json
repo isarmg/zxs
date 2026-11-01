@@ -7,7 +7,8 @@
       "simulation": true,
       "slot_id": "P01",
       "used_bytes": "25",
-      "writable": true
+      "writable": true,
+      "observation_failure": null
     },
     {
       "available_bytes": "4145922048",
@@ -16,7 +17,8 @@
       "simulation": true,
       "slot_id": "B01",
       "used_bytes": "25",
-      "writable": false
+      "writable": false,
+      "observation_failure": null
     },
     {
       "available_bytes": "4145917952",
@@ -25,7 +27,8 @@
       "simulation": true,
       "slot_id": "C01",
       "used_bytes": "12",
-      "writable": false
+      "writable": false,
+      "observation_failure": null
     },
     {
       "available_bytes": "4145889280",
@@ -34,7 +37,8 @@
       "simulation": true,
       "slot_id": "P02",
       "used_bytes": "14",
-      "writable": true
+      "writable": true,
+      "observation_failure": null
     },
     {
       "available_bytes": "4145889280",
@@ -43,7 +47,8 @@
       "simulation": true,
       "slot_id": "B02",
       "used_bytes": "14",
-      "writable": false
+      "writable": false,
+      "observation_failure": null
     }
   ]
 }

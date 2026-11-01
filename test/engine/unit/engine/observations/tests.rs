@@ -272,7 +272,7 @@ fn zero_capacity_is_a_successful_sample_not_an_unavailable_status() {
     assert_eq!(observed.capacity.as_ref().unwrap(), &(0, 0, 0));
     let status = observed.into_status().unwrap();
     assert!(status.online);
-    assert_eq!(status.available_bytes, 0);
+    assert_eq!(status.available_bytes, Some(0));
 }
 
 #[test]

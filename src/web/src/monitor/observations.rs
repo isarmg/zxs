@@ -3,17 +3,7 @@ use data_serialization::{Deserialize, Deserializer};
 use json_codec::Value;
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serialization(
-    tag = "stage",
-    content = "code",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-pub(super) enum DiskObservationIssue {
-    Seal(storage_contract::ErrorCode),
-    Capacity(storage_contract::ErrorCode),
-}
+pub(super) use storage_contract::DiskObservationIssue;
 
 pub(super) type DiskIssues = BTreeMap<String, Option<DiskObservationIssue>>;
 

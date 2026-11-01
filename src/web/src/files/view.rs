@@ -36,6 +36,25 @@ fn disk_roots_projection(model: &super::model::Model) -> DiskRoots {
     }
 }
 
+fn disk_available_space(available: Option<u64>) -> String {
+    available
+        .map(format::bytes)
+        .unwrap_or_else(|| t("不可用", "Unavailable"))
+}
+
+fn disk_observation_message(
+    issue: Option<storage_contract::DiskObservationIssue>,
+) -> Option<String> {
+    issue.map(|issue| match issue {
+        storage_contract::DiskObservationIssue::Seal(_) => {
+            t("磁盘身份观测失败", "Disk identity observation failed")
+        }
+        storage_contract::DiskObservationIssue::Capacity(_) => {
+            t("容量观测失败", "Capacity observation failed")
+        }
+    })
+}
+
 fn disk_roots(state: RwSignal<State>) -> impl IntoView {
     view! {
         <p class="zxs-row">{t("选择一个硬盘目录查看文件。","Choose a disk directory to browse its files.")}</p>
@@ -51,11 +70,12 @@ fn disk_roots(state: RwSignal<State>) -> impl IntoView {
                     <tbody>{disks.into_iter().map(move |disk|{
                         let id=disk.slot_id;let data_slot=id.clone();let row_slot=id.clone();let name_slot=id.clone();let action_slot=id.clone();
                         let online=disk.online;let writable=disk.writable;
-                        let available=format::bytes(disk.available_bytes);
+                        let available=disk_available_space(disk.available_bytes);
+                        let observation=disk_observation_message(disk.observation_failure);
                         view!{<tr data-online=online.to_string() on:click=move |_|{if online{actions::open_disk(state,row_slot.clone());}}>
                             <td><button class="zxs-button zxs-file-name zxs-disk-entry" data-slot=data_slot disabled=!online on:click=move |event|{event.stop_propagation();actions::open_disk(state,name_slot.clone());}><FileIcon name="folder"/><span>{id}</span></button></td>
                             <td>{if online{if writable{t("可读写","Read and write")}else{t("只读","Read only")}}else{t("离线","Offline")}}</td>
-                            <td>{available}</td>
+                            <td title=observation>{available}</td>
                             <td><div class="zxs-entry-actions zxs-flow"><button class="zxs-button" disabled=!online on:click=move |event|{event.stop_propagation();actions::open_disk(state,action_slot.clone());}>{t("打开","Open")}</button></div></td>
                         </tr>}
                     }).collect_view()}</tbody>
