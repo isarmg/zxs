@@ -196,7 +196,26 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 if browser.script("const p=window.__zxsNaming.writes;return p.length===5&&p[4].body.items.length===1&&p[4].body.items[0].source.path==='browser-smoke.txt'&&p[4].body.items[0].target.path==='é'&&!document.querySelector('.zxs-batch-entry input').disabled")? == true { Ok(()) } else { Err("batch confirmation request missing".into()) }
             })?;
             browser.click(&browser.button("Cancel", "取消")?)?;
-            browser.click(&checkbox)?;
+            // Registering the source refreshes the listing and clears its
+            // selection. Cleanup must set a postcondition, not invert it.
+            let checkbox = browser.css(".zxs-entry-checkbox")?;
+            let checked = browser
+                .command("GET", &format!("/element/{checkbox}/selected"), None)?
+                .as_bool()
+                .ok_or("WebDriver selected response must be a boolean")?;
+            println!("INFO naming handoff before cleanup: checked={checked}");
+            if checked {
+                browser.click(&checkbox)?;
+            }
+            wait_for("naming hands off an unchecked row and closed batch", || {
+                let snapshot = browser.script("const check=document.querySelector('.zxs-entry-checkbox');return {checked:check?.checked,batchOpen:!!document.querySelector('.zxs-batch-editor')}")?;
+                if snapshot["checked"] == false && snapshot["batchOpen"] == false {
+                    println!("PASS naming handoff: {snapshot}");
+                    Ok(())
+                } else {
+                    Err(format!("naming handoff is not clean: {snapshot}").into())
+                }
+            })?;
             Ok(())
         },
         || {

@@ -8,17 +8,40 @@ impl Drop for Probe<'_> {
     }
 }
 
+fn assert_retained_row(snapshot: Value) -> Result<()> {
+    if [
+        "rowConnected",
+        "buttonSame",
+        "checkboxSame",
+        "checked",
+        "focused",
+    ]
+    .iter()
+    .all(|key| snapshot[key] == true)
+    {
+        Ok(())
+    } else {
+        Err(format!("checked row conditions failed: {snapshot}").into())
+    }
+}
+
 pub(super) fn run(browser: &Browser) -> Result<()> {
+    let initial = browser.script("const check=document.querySelector('.zxs-entry-checkbox');return {checked:check?.checked,disabled:check?.disabled,batchOpen:!!document.querySelector('.zxs-batch-editor')}")?;
+    println!("INFO file_rows entry: {initial}");
+    if initial["checked"] != false || initial["disabled"] != false || initial["batchOpen"] != false
+    {
+        return Err(format!(
+            "file_rows requires an unchecked, enabled row without a batch: {initial}"
+        )
+        .into());
+    }
     browser.script("const button=Array.from(document.querySelectorAll('.zxs-file-name')).find(e=>e.textContent.trim()==='browser-smoke.txt');const row=button.closest('tr');window.__zxsFileRow={row,button,check:row.querySelector('.zxs-entry-checkbox')};return true")?;
     let _probe = Probe(browser);
     let checkbox = browser.element("xpath", "//tr[.//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']]//input[@type='checkbox']")?;
     browser.click(&checkbox)?;
     wait_for("checked file row retains its DOM and focus", || {
-        if browser.script("const s=window.__zxsFileRow;return s.row.isConnected&&s.row.querySelector('.zxs-file-name')===s.button&&s.row.querySelector('.zxs-entry-checkbox')===s.check&&s.check.checked&&document.activeElement===s.check")? == true {
-            Ok(())
-        } else {
-            Err("checking a file replaced row DOM or lost keyboard focus".into())
-        }
+        let snapshot = browser.script("const s=window.__zxsFileRow;return {rowConnected:s.row.isConnected,buttonSame:s.row.querySelector('.zxs-file-name')===s.button,checkboxSame:s.row.querySelector('.zxs-entry-checkbox')===s.check,checked:s.check.checked,focused:document.activeElement===s.check}")?;
+        assert_retained_row(snapshot)
     })?;
     let search = browser.css(".zxs-file-search input")?;
     browser.keys(&search, "browser-smoke")?;
@@ -45,3 +68,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../unit/file_rows_tests.rs"]
+mod tests;
