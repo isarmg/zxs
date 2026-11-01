@@ -331,3 +331,91 @@ fn build_lock_unwind_fallback_releases_lock() {
     drop(test_lock(&fixture));
     assert!(!fixture.0.join(".web-build-lock").exists());
 }
+
+#[test]
+fn publication_failure_restores_previous_distribution_and_retains_source() {
+    let fixture = Fixture::new();
+    let backup = fixture.0.join("backup");
+    let dist = fixture.0.join("web");
+    fs::create_dir(&backup).unwrap();
+    fs::write(backup.join("old"), "previous distribution").unwrap();
+    let error =
+        publish_staging(&fixture.0.join("missing-staging"), &dist, Some(&backup)).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(
+        fs::read_to_string(dist.join("old")).unwrap(),
+        "previous distribution"
+    );
+    assert!(!backup.exists());
+}
+
+#[test]
+fn publication_and_restore_failures_retain_both_io_errors_and_backup() {
+    let fixture = Fixture::new();
+    let backup = fixture.0.join("backup");
+    let dist = fixture.0.join("web");
+    fs::create_dir(&backup).unwrap();
+    fs::create_dir(&dist).unwrap();
+    fs::write(backup.join("old"), "previous distribution").unwrap();
+    fs::write(dist.join("occupied"), "preserve this directory").unwrap();
+    let error =
+        publish_staging(&fixture.0.join("missing-staging"), &dist, Some(&backup)).unwrap_err();
+    let failure = error.downcast_ref::<PublicationAndRestoreError>().unwrap();
+    assert_eq!(failure.publication.kind(), std::io::ErrorKind::NotFound);
+    assert!(failure.restore.raw_os_error().is_some());
+    assert_ne!(failure.restore.kind(), std::io::ErrorKind::NotFound);
+    let source = std::error::Error::source(failure).unwrap();
+    assert!(std::ptr::eq(
+        source.downcast_ref::<std::io::Error>().unwrap(),
+        &failure.publication,
+    ));
+    assert!(failure.to_string().contains(&failure.restore.to_string()));
+    assert_eq!(
+        fs::read_to_string(backup.join("old")).unwrap(),
+        "previous distribution"
+    );
+    assert_eq!(
+        fs::read_to_string(dist.join("occupied")).unwrap(),
+        "preserve this directory"
+    );
+}
+
+#[test]
+fn publication_without_previous_distribution_retains_io_source() {
+    let fixture = Fixture::new();
+    let error = publish_staging(
+        &fixture.0.join("missing-staging"),
+        &fixture.0.join("web"),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::NotFound
+    );
+}
+
+#[test]
+fn publication_success_moves_staging_without_restoring_backup() {
+    let fixture = Fixture::new();
+    let staging = fixture.0.join("staging");
+    let backup = fixture.0.join("backup");
+    let dist = fixture.0.join("web");
+    fs::create_dir(&staging).unwrap();
+    fs::create_dir(&backup).unwrap();
+    fs::write(staging.join("new"), "new distribution").unwrap();
+    fs::write(backup.join("old"), "previous distribution").unwrap();
+    publish_staging(&staging, &dist, Some(&backup)).unwrap();
+    assert_eq!(
+        fs::read_to_string(dist.join("new")).unwrap(),
+        "new distribution"
+    );
+    assert_eq!(
+        fs::read_to_string(backup.join("old")).unwrap(),
+        "previous distribution"
+    );
+    assert!(!staging.exists());
+}

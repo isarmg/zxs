@@ -303,8 +303,13 @@ fn run(args: Args) -> Result<()> {
             version,
             output,
         } => {
+            // The receipt represents this path as JSON text. Reject an
+            // unrepresentable destination before exporting any verified bytes.
+            let output_text = output
+                .to_str()
+                .ok_or("offline export output path must be valid UTF-8 for JSON output")?;
             storage_engine::offline_export(&disk, &version, &output)?;
-            print(json!({"version_id":version,"exported":output,"mode":"offline-isolated"}))
+            print(json!({"version_id":version,"exported":output_text,"mode":"offline-isolated"}))
         }
     }
 }

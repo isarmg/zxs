@@ -365,7 +365,7 @@ impl PasswordChangeChallenge {
             )
         })?;
         let password_hash =
-            primitives::hash_password(new_password).map_err(ApiError::invalid_source)?;
+            primitives::hash_password(new_password).map_err(ApiError::authentication_operation)?;
         Ok(PreparedPasswordChange {
             identity: self.identity,
             previous: self.previous,
@@ -580,7 +580,8 @@ impl AuthStore {
         let auth_lock = Self::acquire_lock(&directory)?;
         let username = primitives::normalize_administrator_username(username)
             .map_err(ApiError::invalid_source)?;
-        let hash = primitives::hash_password(password).map_err(ApiError::invalid_source)?;
+        let hash =
+            primitives::hash_password(password).map_err(ApiError::authentication_operation)?;
         let db = Database {
             administrator: Administrator {
                 username,
@@ -837,7 +838,7 @@ impl AuthStore {
         {
             return Err(ApiError::unauthorized());
         }
-        let token = primitives::random_token().map_err(ApiError::invalid_source)?;
+        let token = primitives::random_token().map_err(ApiError::authentication_operation)?;
         let csrf_token = primitives::derive_csrf_token(&token).map_err(ApiError::invalid_source)?;
         let expires_at = now()? + SESSION_TTL_SECONDS;
         let result = LoginResult {

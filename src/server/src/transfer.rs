@@ -333,7 +333,7 @@ async fn upload_inner(
         None => (
             format!(
                 "upload-{}.data",
-                authentication::random_token().map_err(ApiError::invalid_source)?
+                authentication::random_token().map_err(ApiError::authentication_operation)?
             ),
             PayloadOpenMode::CreateNew,
         ),

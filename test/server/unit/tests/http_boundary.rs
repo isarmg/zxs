@@ -1865,7 +1865,46 @@ async fn identifier_entropy_failure_is_server_error_with_independent_diagnostic_
 async fn entropy_fault_error_response_does_not_request_entropy() {
     let marker = std::env::var_os("ZXS_TEST_ENTROPY_FAIL_FILE").expect("fault driver marker");
     storage_contract::new_id("entry").unwrap();
+    let root = super::private_tempdir();
+    let fresh_root = super::private_tempdir();
+    let mut auth =
+        crate::auth::AuthStore::initialize(root.path(), "admin", "original-test-password").unwrap();
+    let login = auth.login("admin", "original-test-password").unwrap();
+    let before = std::fs::read(root.path().join("auth.json")).unwrap();
     std::fs::write(&marker, b"fail").unwrap();
+    let failures = [
+        auth.login("admin", "original-test-password").err().unwrap(),
+        auth.change_password(
+            &login.token,
+            "original-test-password",
+            "replacement-test-password",
+        )
+        .unwrap_err(),
+        crate::auth::AuthStore::initialize(fresh_root.path(), "admin", "original-test-password")
+            .err()
+            .unwrap(),
+        authentication::random_token()
+            .map_err(ApiError::authentication_operation)
+            .unwrap_err(),
+    ];
+    for error in failures {
+        assert!(matches!(error.source.as_deref(),
+            Some(crate::http_boundary::ApiErrorSource::Authentication(
+                authentication::Error::Random(source))) if source.raw_os_error() == Some(5)));
+        assert_error(
+            error.into_response(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            true,
+        )
+        .await;
+    }
+    assert_eq!(
+        std::fs::read(root.path().join("auth.json")).unwrap(),
+        before
+    );
+    assert!(auth.authenticate(&login.token).is_ok());
+    assert!(!fresh_root.path().join("auth.json").try_exists().unwrap());
     let source = storage_contract::new_id("entry").unwrap_err();
     assert!(
         matches!(source, storage_contract::Error::IdentifierGeneration { source, .. } if source.raw_os_error() == Some(5))
@@ -1890,5 +1929,26 @@ async fn entropy_fault_error_response_does_not_request_entropy() {
     )
     .await;
     std::fs::remove_file(marker).unwrap();
+    assert!(auth.login("admin", "original-test-password").is_ok());
+    assert!(auth.login("admin", "replacement-test-password").is_err());
     println!("\nZXS_ENTROPY_FAULT_COMPLETE");
+}
+
+#[tokio::test]
+async fn authentication_operation_rejects_invalid_password_as_client_input() {
+    let source = authentication::hash_password("short").unwrap_err();
+    let error = ApiError::authentication_operation(source);
+    assert!(matches!(
+        error.source.as_deref(),
+        Some(crate::http_boundary::ApiErrorSource::Authentication(
+            authentication::Error::InvalidPassword
+        ))
+    ));
+    assert_error(
+        error.into_response(),
+        StatusCode::BAD_REQUEST,
+        "INVALID_REQUEST",
+        false,
+    )
+    .await;
 }

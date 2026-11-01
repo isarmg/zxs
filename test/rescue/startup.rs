@@ -588,3 +588,116 @@ fn scrub_help_describes_offline_scan_without_opening_pool() {
     assert!(help.contains("Usage: zxs-rescue scrub [OPTIONS]"));
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn offline_export_rejects_non_utf8_receipt_paths_before_io() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory
+        .path()
+        .join(OsString::from_vec(b"export-\xff".to_vec()));
+    let output = Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+        .arg("offline-export")
+        .arg(directory.path().join("missing-disk"))
+        .arg("ver_00000000000000000000000000000000")
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("output path must be valid UTF-8"), "{error}");
+    assert!(!error.contains("panicked"), "{error}");
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn offline_export_receipt_paths_are_admitted_before_publishing_verified_bytes() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    use storage_engine::{CommitRequest, Config, Engine, OperationId, RepositoryName};
+
+    let directory = tempfile::tempdir().unwrap();
+    let disk = directory.path().join("disk");
+    let mut engine = Engine::initialize(
+        &directory.path().join("system"),
+        Config::development(vec![disk.clone()]).unwrap(),
+    )
+    .unwrap();
+    let repository = engine
+        .create_repository(
+            &RepositoryName::parse("export-fixture").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let workspace = engine
+        .create_workspace(&repository.main_branch_id, "admin")
+        .unwrap();
+    engine
+        .stage_bytes(
+            &workspace.workspace_id,
+            "file.txt",
+            b"verified export bytes",
+        )
+        .unwrap();
+    engine
+        .commit_workspace(CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: OperationId::generate().unwrap(),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: String::new(),
+            request_digest: None,
+        })
+        .unwrap();
+    let version = engine
+        .list_tree(&repository.main_branch_id)
+        .unwrap()
+        .remove(0)
+        .version_id;
+    drop(engine);
+    let invoke = |destination: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_zxs-rescue"))
+            .arg("offline-export")
+            .arg(&disk)
+            .arg(&version)
+            .arg(destination)
+            .output()
+            .unwrap()
+    };
+    let exports = directory.path().join("exports");
+    let invalid = exports.join(OsString::from_vec(b"export-\xff".to_vec()));
+    let output = invoke(&invalid);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("output path must be valid UTF-8")
+    );
+    assert!(
+        !exports.exists(),
+        "invalid receipt paths must not create output directories"
+    );
+
+    let valid = exports.join("导出.txt");
+    let output = invoke(&valid);
+    assert!(output.status.success(), "{output:?}");
+    let receipt: json_codec::Value = json_codec::from_slice(&output.stdout).unwrap();
+    assert_eq!(receipt["version_id"], version);
+    assert_eq!(receipt["exported"], valid.to_str().unwrap());
+    assert_eq!(receipt["mode"], "offline-isolated");
+    assert_eq!(std::fs::read(&valid).unwrap(), b"verified export bytes");
+    let refused = invoke(&valid);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        String::from_utf8(refused.stderr)
+            .unwrap()
+            .contains("DESTINATION_EXISTS")
+    );
+    assert_eq!(std::fs::read(&valid).unwrap(), b"verified export bytes");
+}

@@ -314,7 +314,16 @@ mod browser {
                         && APPLICATION.with(|slot| slot.borrow().is_mounted())
                         && let Some(html) = font_document.document_element()
                     {
-                        let state = if result.is_ok() { "ready" } else { "failed" };
+                        let state = match result {
+                            Ok(()) => "ready",
+                            Err(error) => {
+                                web_sys::console::warn_2(
+                                    &"Could not load application fonts".into(),
+                                    &error,
+                                );
+                                "failed"
+                            }
+                        };
                         if let Err(error) = html.set_attribute("data-zxs-fonts", state) {
                             web_sys::console::warn_2(
                                 &"Could not publish font readiness".into(),

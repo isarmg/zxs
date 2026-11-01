@@ -495,3 +495,48 @@ async fn live_reader_makes_truncate_checkpoint_report_busy()
     checkpoint(&pool).await?;
     Ok(())
 }
+
+#[test]
+fn connection_error_mapping_preserves_raw_io_errno() {
+    for errno in [libc::EIO, libc::ENOSPC, libc::EACCES] {
+        let error = connect_error(sqlite_access::Error::Io(io::Error::from_raw_os_error(
+            errno,
+        )));
+        let Error::Sqlx(sqlite_access::Error::Io(source)) = error else {
+            panic!("expected original SQLx I/O error");
+        };
+        assert_eq!(source.raw_os_error(), Some(errno));
+    }
+}
+
+#[test]
+fn connection_error_mapping_retains_unrelated_inner_source() {
+    let error = connect_error(sqlite_access::Error::Io(io::Error::other(
+        crate::sqlite::ConnectionSecurityError::DefensiveModeRejected,
+    )));
+    let Error::Sqlx(sqlite_access::Error::Io(source)) = error else {
+        panic!("expected original SQLx I/O error");
+    };
+    assert!(matches!(
+        source
+            .get_ref()
+            .unwrap()
+            .downcast_ref::<crate::sqlite::ConnectionSecurityError>(),
+        Some(crate::sqlite::ConnectionSecurityError::DefensiveModeRejected)
+    ));
+}
+
+#[test]
+fn connection_error_mapping_extracts_typed_limits_only() {
+    let error = connect_error(sqlite_access::Error::Io(io::Error::other(
+        crate::sqlite::ConnectionLimitError::NotApplied,
+    )));
+    assert!(matches!(
+        error,
+        Error::ConnectionLimits(crate::sqlite::ConnectionLimitError::NotApplied)
+    ));
+    assert!(matches!(
+        connect_error(sqlite_access::Error::RowNotFound),
+        Error::Sqlx(sqlite_access::Error::RowNotFound)
+    ));
+}

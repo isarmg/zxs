@@ -1,6 +1,6 @@
 # ADR 0005：增量发布与完整性责任分离
 
-状态：**目标及分阶段实施方向已批准，尚未启用增量发布的旧依赖免读路径。** 本决策接受未触及旧数据的故障发现时点后移，不降低新写入持久化、读取验证或恢复证据要求；不是性能、巡检能力或故障验收已经完成的声明。
+状态：**目标及分阶段实施方向已批准；有条件的旧依赖免读路径已接入当前源码，分阶段门禁与验收要求仍保留。** 本决策接受未触及旧数据的故障发现时点后移，不降低新写入持久化、读取验证或恢复证据要求；不是性能、巡检能力或故障验收已经完成的声明。
 
 ## 决策与代价
 
@@ -8,22 +8,22 @@
 
 由真实读取、启动/恢复、导入导出及定期完整巡检承担相应完整性检查。必须先实现并验证完整巡检、状态与调度，再删除普通写入对未触及旧依赖的重新读验和补齐；只写文档、增加定时器或缓存一次成功结果都不满足门禁。
 
-相对当前行为，下一次不相关的小写不再保证发现或补齐被删除的旧页，也可能直到读取、巡检或恢复才发现静默损坏。检测窗口由实际巡检覆盖和调度决定，不能承诺“下一次写必定发现”。若仍要求每次写前发现所有旧依赖的任意损坏，就保留全依赖 I/O，不能同时宣称端到端按写集增长。
+相对完整依赖路径，具备有效复用资格的下一次不相关的小写不再保证发现或补齐被删除的旧页，也可能直到读取、巡检或恢复才发现静默损坏。检测窗口由实际巡检覆盖和调度决定，不能承诺“下一次写必定发现”。若仍要求每次写前发现所有旧依赖的任意损坏，就保留全依赖 I/O，不能同时宣称端到端按写集增长。
 
 ## 当前实现不是目标实现
 
-以下源码入口用于核对现状，不作为未来免检凭证：
+以下源码入口用于核对现状，不作为验收通过凭证。`PublishedDependencyReuse` 已由成功发布谱系与真实周期 owner 的有效巡检覆盖共同构造；无资格时仍完整读验存，资格在准备及首次 ACCEPT 前再次检查。此处确认调用路径存在，不据此宣布下述阶段 1–5 全部完成：
 
 | 当前入口 | 已有能力与尚存成本 |
 | --- | --- |
 | [State](../../src/contract/src/model.rs)、[Tracked](../../src/contract/src/tracked.rs)、[SharedRecords](../../src/contract/src/shared_records.rs) | 有写集和大记录共享；普通映射、永久操作收据仍用 `BTreeMap`，事件仍是 `Vec`，共享记录首次写仍复制整张键/句柄表；不是持久路径复制容器 |
 | [index.rs](../../src/engine/src/engine/index.rs) | 版本索引差分已消费可信写集；未知谱系/全字段变更及重建仍保留完整比较，不能把这一步称为端到端增量 |
-| [snapshot.rs](../../src/engine/src/journal/snapshot.rs)、[snapshot_reuse.rs](../../src/engine/src/journal/snapshot_reuse.rs)、[journal.rs](../../src/engine/src/journal.rs) | [ADR 0006](0006-bounded-metadata-roots.md)改用固定 Snapshot 映射根与 Candidate 历史目录根，按真实写集增量编码并维护精确预算摘要；全部旧依赖仍实读验存，未启用免读 |
+| [snapshot.rs](../../src/engine/src/journal/snapshot.rs)、[snapshot_reuse.rs](../../src/engine/src/journal/snapshot_reuse.rs)、[journal.rs](../../src/engine/src/journal.rs) | [ADR 0006](0006-bounded-metadata-roots.md)改用固定 Snapshot 映射根与 Candidate 历史目录根，按真实写集增量编码并维护精确预算摘要；有有效 `PublishedDependencyReuse` 时只安装本次新编码 Snapshot 对象，无资格时完整旧依赖实读验存；新编码同 hash 对象仍比较并同步 |
 | [history_package.rs](../../src/engine/src/history_package.rs)、[state_projection.rs](../../src/engine/src/state_projection.rs) | [一般 owner closure](../architecture/history-owner-deltas.md)从 State 冷建派生索引，按精确写集更新投影行；成功发布谱系内不再重建／复验全 manifest，冷／外部准入保留。[encoder-origin descriptor](../architecture/history-encoder-descriptors.md)沿实际编码输出路径复制，只有原 permit 允许命中历史免旧图读；未命中／无资格仍完整读验存，额外驻留为当前投影键和节点，SharedRecords 首写及选中文件的完整描述符仍有全量成本；源码不代表 CI 门禁通过 |
 | [publication.rs](../../src/engine/src/engine/publication.rs) | `PublishedStateBase` 仅在完整权威发布后且原 metadata epoch 仍有效时签发，匹配精确 State 分配、快照、序号和配置；不证明各对象此刻健康 |
 | [reads.rs](../../src/engine/src/engine/reads.rs)、[disk.rs](../../src/engine/src/disk.rs)、[engine_backend.rs](../../src/server/src/engine_backend.rs) | `Engine::check` 调用逐盘 `offline_check`，服务端仍持引擎锁；扫描版本目录、本盘证明、墓碑和正文，不是完整快照/历史元数据图的有界后台巡检，也没有由此建立周期调度或健康新鲜度 |
 
-当前普通准备在所有磁盘来源均缺失时，可能从仍有效的内存 State 精确重建原字段映射图或原历史根，再走原碰撞和同步规则；这不授权启动、恢复、导出从任意 State 或 SQLite 重定根。增量目标也不承诺在每次无关写入中保留这种全历史补齐时机。
+无免读资格的完整依赖准备在所有磁盘来源均缺失时，可能从仍有效的内存 State 精确重建原字段映射图或原历史根，再走原碰撞和同步规则；这不授权启动、恢复、导出从任意 State 或 SQLite 重定根。增量目标也不承诺在每次无关写入中保留这种全历史补齐时机。
 
 ## 责任与不变项
 

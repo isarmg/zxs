@@ -118,6 +118,19 @@ impl ApiError {
         let source = source.into();
         Self::invalid(source.to_string()).with_source(source)
     }
+    /// Password hashing and token generation are server operations; only a
+    /// rejected password is a client input error at these call sites.
+    pub(crate) fn authentication_operation(source: authentication::Error) -> Self {
+        if source == authentication::Error::InvalidPassword {
+            return Self::invalid_source(source);
+        }
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            storage_contract::ErrorCode::InternalError,
+            "authentication operation failed",
+        )
+        .with_source(source)
+    }
     pub(crate) fn contract_input(source: storage_contract::Error) -> Self {
         let status = match &source {
             storage_contract::Error::IdentifierGeneration { .. } => {

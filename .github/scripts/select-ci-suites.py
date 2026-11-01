@@ -17,7 +17,7 @@ ALL = ("rust-sources", "quality", "security", "workspace", *FOUNDATION,
        "web", "contracts", "build-tools", "smb-protocol")
 # Review the actual foundation consumers before updating this fingerprint.
 # A mismatch is only a full-CI fallback, never a product/admission restriction.
-REVIEWED_INPUTS = "1c01d409bc49dda378e797142738f197b5c0215516b4b9d5a540a0d71b04feda"
+REVIEWED_INPUTS = "ac1aae7c2b71253da8566d11f09490f4be5e41e4f7462d7ed9be5978fdacd283"
 SELF = ".github/scripts/select-ci-suites.py"
 SHA = re.compile(r"[0-9a-f]{40}")
 DOCS = frozenset(("docs/EXTERNAL_TEST_SOURCES.md", "docs/architecture/read-projections.md",
@@ -59,6 +59,10 @@ def affected(path):
     if path.endswith(".rs") and path.startswith("test/smb-vfs/"):
         # Only the dedicated SDK target consumes these tests, not the five shards.
         return set()
+    if path.endswith(".rs") and path.startswith("src/client/src/"):
+        # URL encoding checks storage-client; futures checks its all-targets.
+        # The native graph has no platform/crypto/data consumer of this package.
+        return {"foundation-language", "foundation-async"}
     if path.endswith(".rs") and path.startswith(("src/engine/src/", "src/server/src/")):
         # Async checks the actual server's all-target consumer, including engine.
         return {"foundation-language", "foundation-async"}

@@ -166,14 +166,45 @@ fn build_locked(root: &Path, web: &Path, build: &Path, command: &str) -> Result<
         }
         fs::rename(&dist, &backup)?;
     }
-    if let Err(error) = fs::rename(&staging, &dist) {
-        if had_previous {
-            fs::rename(&backup, &dist).context("failed to restore previous Web distribution")?;
-        }
-        return Err(error.into());
-    }
+    publish_staging(&staging, &dist, had_previous.then_some(backup.as_path()))?;
     if had_previous {
         fs::remove_dir_all(&backup)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct PublicationAndRestoreError {
+    publication: std::io::Error,
+    restore: std::io::Error,
+}
+impl std::fmt::Display for PublicationAndRestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Web publication failed: {}; additionally failed to restore previous Web distribution: {}",
+            self.publication, self.restore
+        )
+    }
+}
+impl std::error::Error for PublicationAndRestoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.publication)
+    }
+}
+
+fn publish_staging(staging: &Path, dist: &Path, backup: Option<&Path>) -> Result<()> {
+    if let Err(publication) = fs::rename(staging, dist) {
+        if let Some(backup) = backup
+            && let Err(restore) = fs::rename(backup, dist)
+        {
+            return Err(PublicationAndRestoreError {
+                publication,
+                restore,
+            }
+            .into());
+        }
+        return Err(publication).context("failed to publish Web distribution");
     }
     Ok(())
 }

@@ -12,7 +12,7 @@ cargo run --locked --offline -p web-build -- build --product-root .
 
 正式 Web 使用 `tools/web-build/src/wasm_release.rs` 中的发布配置：体积优化 `s`、fat LTO、符号剥离。即使调用环境带有原生 release profile 参数，也不会将大型函数名段带入浏览器发行物。
 
-发布有独占锁、输入前后摘要比较、完整资源 SHA-256 清单和确定性 WASM gzip；目录根和子项都拒绝符号链接，仅接收普通文件与目录。FIFO、socket 和设备等特殊文件会在读取前失败，避免输入清单扫描阻塞。普通发布失败会恢复旧目录。构建进程退出后才可处理遗留 `build/.web-build-lock`；发现 `build/.web-backup` 时先检查中断状态。两个目录重命名不构成断电事务。
+发布有独占锁、输入前后摘要比较、完整资源 SHA-256 清单和确定性 WASM gzip；目录根和子项都拒绝符号链接，仅接收普通文件与目录。FIFO、socket 和设备等特殊文件会在读取前失败，避免输入清单扫描阻塞。普通发布失败会尝试恢复旧目录；若恢复也失败，错误同时保留发布和恢复的原始 I/O 错误，以发布失败作为 `source`，不清理待检查的备份目录。构建进程退出后才可处理遗留 `build/.web-build-lock`；发现 `build/.web-backup` 时先检查中断状态。两个目录重命名不构成断电事务。
 
 JavaScript 仅由 wasm-bindgen 生成绑定，并由本工具生成通用资源启动文件；文件管理、认证、摘要和业务交互均来自 Rust。
 

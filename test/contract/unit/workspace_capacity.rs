@@ -51,7 +51,44 @@ fn capacity_roundtrip_requires_both_scopes_with_canonical_decimal_strings() {
         .unwrap()
         .remove("cold_records");
     assert!(json_codec::from_value::<WorkspaceCapacity>(missing_cold).is_err());
-    let mut unknown = encoded;
-    unknown["warning"] = json!("unknown");
-    assert!(json_codec::from_value::<WorkspaceCapacity>(unknown).is_err());
+    for warning in [
+        json!("unknown"),
+        json!({"ok": null}),
+        json!({"exhausted": null}),
+    ] {
+        let mut malformed = encoded.clone();
+        malformed["warning"] = warning;
+        assert!(json_codec::from_value::<WorkspaceCapacity>(malformed).is_err());
+    }
+}
+
+#[test]
+fn capacity_warning_accepts_only_current_string_tokens() {
+    for (token, warning) in [
+        ("ok", CapacityWarning::Ok),
+        ("near_limit", CapacityWarning::NearLimit),
+        ("exhausted", CapacityWarning::Exhausted),
+    ] {
+        assert_eq!(json_codec::to_value(warning).unwrap(), json!(token));
+        assert_eq!(
+            json_codec::from_value::<CapacityWarning>(json!(token)).unwrap(),
+            warning
+        );
+        let object =
+            json_codec::Value::Object([(token.to_owned(), json!(null))].into_iter().collect());
+        assert!(json_codec::from_value::<CapacityWarning>(object.clone()).is_err());
+        assert!(
+            json_codec::from_slice::<CapacityWarning>(&json_codec::to_vec(&object).unwrap())
+                .is_err()
+        );
+    }
+    for malformed in [
+        json!(null),
+        json!(1),
+        json!(true),
+        json!([]),
+        json!("unknown"),
+    ] {
+        assert!(json_codec::from_value::<CapacityWarning>(malformed).is_err());
+    }
 }

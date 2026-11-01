@@ -167,17 +167,21 @@ pub async fn open_index_read_connection(database_path: &Path) -> Result<SqliteCo
 }
 
 fn connect_error(error: sqlite_access::Error) -> Error {
-    if let sqlite_access::Error::Io(source) = error {
-        let kind = source.kind();
-        if let Some(inner) = source.into_inner() {
-            return match inner.downcast::<ConnectionLimitError>() {
-                Ok(error) => Error::ConnectionLimits(*error),
-                Err(inner) => Error::Sqlx(sqlite_access::Error::Io(io::Error::new(kind, inner))),
-            };
+    match error {
+        sqlite_access::Error::Io(source)
+            if source
+                .get_ref()
+                .is_some_and(|inner| inner.is::<ConnectionLimitError>()) =>
+        {
+            let limit = source
+                .into_inner()
+                .expect("invariant: connection limit error has an inner source")
+                .downcast::<ConnectionLimitError>()
+                .expect("invariant: inner source was identified as a connection limit error");
+            Error::ConnectionLimits(*limit)
         }
-        return Error::Sqlx(sqlite_access::Error::Io(io::Error::from(kind)));
+        error => Error::Sqlx(error),
     }
-    Error::Sqlx(error)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -218,19 +218,21 @@ async fn open_snapshot_pool(
 
 #[cfg(feature = "sqlite-pool")]
 fn snapshot_connect_error(error: sqlite_access::Error) -> SnapshotError {
-    if let sqlite_access::Error::Io(source) = error {
-        let kind = source.kind();
-        if let Some(inner) = source.into_inner() {
-            return match inner.downcast::<crate::sqlite::ConnectionLimitError>() {
-                Ok(error) => SnapshotError::ConnectionLimits(*error),
-                Err(inner) => {
-                    SnapshotError::Sqlx(sqlite_access::Error::Io(io::Error::new(kind, inner)))
-                }
-            };
+    match error {
+        sqlite_access::Error::Io(source)
+            if source
+                .get_ref()
+                .is_some_and(|inner| inner.is::<crate::sqlite::ConnectionLimitError>()) =>
+        {
+            let limit = source
+                .into_inner()
+                .expect("invariant: connection limit error has an inner source")
+                .downcast::<crate::sqlite::ConnectionLimitError>()
+                .expect("invariant: inner source was identified as a connection limit error");
+            SnapshotError::ConnectionLimits(*limit)
         }
-        return SnapshotError::Sqlx(sqlite_access::Error::Io(io::Error::from(kind)));
+        error => SnapshotError::Sqlx(error),
     }
-    SnapshotError::Sqlx(error)
 }
 
 fn sidecar(path: &Path, suffix: &str) -> PathBuf {

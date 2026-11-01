@@ -107,6 +107,8 @@ class Selector(unittest.TestCase):
         self.write("test/tools/browser-smoke/runner/naming.rs", "old\n")
         self.write("test/tools/browser-smoke/unit/main_tests.rs", "old\n")
         self.write("src/engine/src/engine.rs", "old\n")
+        self.write("src/client/src/lib.rs", "old\n")
+        self.write("src/client/src/request.rs", "old\n")
         self.write("src/smb-vfs/src/ffi.rs", "old\n")
         self.write("src/smb-vfs/src/lib.rs", "old\n")
         self.git("add", "."); self.git("commit", "-qm", "base")
@@ -143,6 +145,55 @@ class Selector(unittest.TestCase):
             self.assertIn(suite, result["suites"])
         self.assertEqual(result["base"], self.base)
         self.assertIn("evidence", result)
+
+    def test_client_content_keeps_real_consumers_and_all_other_suites(self):
+        result = self.run_selection(["src/client/src/request.rs"])
+        self.assertEqual(result["reused"], list(selection.FOUNDATION[:3]))
+        self.assertEqual(result["suites"], [s for s in selection.ALL
+                                            if s not in result["reused"]])
+        self.assertIn("evidence", result)
+
+    def test_client_allowlist_does_not_expand_other_inputs(self):
+        for path in ("src/client/Cargo.toml", "src/client/build.rs", "Cargo.lock",
+                     "src/client/src/data.json", "test/client/unit/request.rs",
+                     "src/platform/src/lib.rs", "src/web/src/lib.rs",
+                     "src/interface/src/lib.rs", ".github/scripts/check-url-encoding.py"):
+            with self.subTest(path=path):
+                self.assertIsNone(selection.affected(path))
+        self.assert_full(self.run_selection(["src/client/src/request.rs", "src/client/Cargo.toml"]))
+
+    def test_client_added_source_keeps_full_ci(self):
+        self.assert_full(self.run_selection(["src/client/src/new.rs"]))
+
+    def test_client_deleted_library_keeps_full_ci(self):
+        self.git("rm", "src/client/src/lib.rs")
+        self.assert_full(self.run_selection(["src/client/src/request.rs"]))
+
+    def test_client_requires_exact_success_and_main_push(self):
+        head = self.commit(["src/client/src/request.rs"])
+        event = {"before": self.base, "after": head,
+                 "repository": {"full_name": selection.REPOSITORY}}
+        for conclusion in ("failure", "cancelled", "skipped"):
+            failed = evidence(self.base)
+            failed[1]["jobs"][0]["conclusion"] = conclusion
+            with self.subTest(conclusion=conclusion):
+                self.assert_full(selection.select(self.root, "push", event, head,
+                                                  "refs/heads/main", fetch=fetcher(failed),
+                                                  reviewed=self.reviewed))
+        missing = ({"total_count": 0, "workflow_runs": []}, {})
+        self.assert_full(selection.select(self.root, "push", event, head, "refs/heads/main",
+                                          fetch=fetcher(missing), reviewed=self.reviewed))
+        for name, ref in (("pull_request", "refs/heads/main"),
+                          ("push", "refs/heads/validation")):
+            self.assert_full(selection.select(self.root, name, event, head, ref,
+                                              fetch=fetcher(evidence(self.base)),
+                                              reviewed=self.reviewed))
+
+    def test_client_future_foundation_input_invalidates_proof(self):
+        self.write("src/foundation/networking/reqwest/src/lib.rs", "changed consumer\n")
+        self.git("add", "."); self.git("commit", "-qm", "new foundation input")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.assert_full(self.run_selection(["src/client/src/request.rs"]))
 
     def test_browser_rust_edits_reuse_only_successful_foundation(self):
         result = self.run_selection(["test/tools/browser-smoke/runner/main.rs",
@@ -210,6 +261,7 @@ class Selector(unittest.TestCase):
 
     def test_ring_material_path_rejections_cannot_reuse_crypto(self):
         for prefix in ("src/smb-vfs/src/", "test/smb-vfs/", "src/engine/src/", "test/server/",
+                       "src/client/src/",
                        "test/tools/browser-smoke/runner/", "test/tools/browser-smoke/unit/"):
             for name in ("bad:name.rs", "bad\\name.rs", "../escape.rs", "./alias.rs", "/alias.rs"):
                 with self.subTest(path=prefix + name):
