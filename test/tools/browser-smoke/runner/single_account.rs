@@ -35,7 +35,7 @@ pub(super) fn run(browser: &Browser, password: &str) -> Result<()> {
     browser.click(&browser.button("Administration", "系统管理")?)?;
     if browser.script(
         r#"
-        const section = document.querySelector('section[aria-label="Administration"]');
+        const section = document.querySelector('section[aria-label="Daily administration"], section[aria-label="日常管理"]');
         if (!section || section.querySelector('input[type=password]')) return false;
         const text = section.textContent;
         return !['刷新账户', 'Refresh accounts', '账户 Accounts', '访问权限 ACL',

@@ -22,6 +22,7 @@ use std::{
 mod base64_compatibility_tests;
 
 mod accessibility;
+mod admin_language;
 mod contour_evidence;
 mod contours;
 mod diagnostics;
@@ -328,9 +329,10 @@ fn exercise(
     integrity_scrub::run(browser)?;
     browser.css(".zxs-monitor-page .zxs-metric-card")?;
     assert_metadata_only(browser)?;
-    println!("PASS administrator status page retains real telemetry controls");
+    println!("PASS monitor status page retains real telemetry controls");
     history_cancellation::monitor_range(browser)?;
     accessibility::run(browser)?;
+    admin_language::run(browser)?;
     single_account::run(browser, password)?;
     session_logout::run(browser, password)?;
     browser.click(&browser.button("Files", "文件")?)?;

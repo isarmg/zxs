@@ -226,10 +226,7 @@ fn actual_action_and_query_buttons_use_distinct_localized_keys() {
                 "duplicate button key: {key:?}"
             );
             let (zh, en) = key.translations();
-            assert!(
-                zh.chars().any(|ch| !ch.is_ascii()),
-                "missing Chinese: {key:?}"
-            );
+            assert!(!zh.is_ascii(), "missing Chinese: {key:?}");
             assert!(en.is_ascii(), "mixed English: {key:?}");
             assert_ne!(zh, en);
         }
