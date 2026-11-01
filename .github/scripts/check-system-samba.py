@@ -39,19 +39,22 @@ def wait_file(path, process, timeout=120):
     raise TimeoutError(path)
 
 
-def nonroot_io_evidence(log, uid):
-    """Bind Samba's debug-uid header to the immediately following I/O record."""
+def nonroot_io_evidence(logs, uid):
+    """Bind each I/O record to its own debug-uid header, including rotation."""
     evidence = {}
-    header = None
-    for line in log.splitlines():
-        if line.startswith("["):
-            header = line
-        elif header is not None:
-            for operation, message in (("read-existing", "smbd_smb2_read: report.txt -"),
-                                       ("write-new", "smbd_smb2_write: upload.txt -")):
-                if message in line and re.search(rf"effective\({uid}, [0-9]+\)", header):
-                    evidence[operation] = {"header": header, "request": line.strip()}
-            header = None
+    for log in logs:
+        # A rotation boundary must never pair one file's header with another
+        # file's body. Each complete request/header pair stands on its own.
+        header = None
+        for line in log.splitlines():
+            if line.startswith("["):
+                header = line
+            elif header is not None:
+                for operation, message in (("read-existing", "smbd_smb2_read: report.txt -"),
+                                           ("write-new", "smbd_smb2_write: upload.txt -")):
+                    if message in line and re.search(rf"effective\({uid}, [0-9]+\)", header):
+                        evidence[operation] = {"header": header, "request": line.strip()}
+                header = None
     if set(evidence) != {"read-existing", "write-new"}:
         raise RuntimeError("missing non-root Samba read/write request identity evidence")
     return evidence
@@ -265,7 +268,9 @@ force user = {smb_user.pw_name}
                 wait_file(engine_work / "verified.json", fixture)
                 if fixture.wait(timeout=30) != 0:
                     raise RuntimeError("real engine authoritative validation failed")
-                result["nonroot_io"] = nonroot_io_evidence((work / "samba-identity.log").read_text(), smb_user.pw_uid)
+                identity_logs = [work / "samba-identity.log.old", work / "samba-identity.log"]
+                result["nonroot_io"] = nonroot_io_evidence(
+                    [path.read_text() for path in identity_logs if path.is_file()], smb_user.pw_uid)
                 if list((work / "empty").iterdir()):
                     raise RuntimeError("VFS wrote into host export instead of the engine")
                 result["checks"].append("nonroot-engine-and-samba-io-private-socket")

@@ -33,13 +33,30 @@ class SystemSambaGate(unittest.TestCase):
         read = "smbd_smb2_read: report.txt - fnum 1"
         write = "smbd_smb2_write: upload.txt - fnum 2"
         good = record(21002, read) + record(21002, write)
-        self.assertEqual(set(GATE.nonroot_io_evidence(good, 21002)), {"read-existing", "write-new"})
+        self.assertEqual(set(GATE.nonroot_io_evidence([good], 21002)), {"read-existing", "write-new"})
         for bad in (record(0, read) + record(21002, write),
                     record(21002, read) + record(0, write),
                     record(21002, "unrelated") + "  " + read + "\n" + record(21002, write),
                     good.replace("report.txt", "other.txt"), ""):
             with self.subTest(log=bad), self.assertRaisesRegex(RuntimeError, "identity evidence"):
-                GATE.nonroot_io_evidence(bad, 21002)
+                GATE.nonroot_io_evidence([bad], 21002)
+
+    def test_io_evidence_handles_rotation_without_cross_file_header_pairing(self):
+        header = "[timestamp, 10, pid=47, effective(21002, 21002), real(21002, 0)] source\n"
+        read = "  smbd_smb2_read: report.txt - fnum 1\n"
+        write = "  smbd_smb2_write: upload.txt - fnum 2\n"
+        for logs in ([header + read + header + write, ""],
+                     [header + read, header + write],
+                     [header + read, header + write + "[later]\n  unrelated\n"]):
+            with self.subTest(logs=logs):
+                self.assertEqual(set(GATE.nonroot_io_evidence(logs, 21002)),
+                                 {"read-existing", "write-new"})
+        for logs in ([header + read + header, write],
+                     [header + read, ""], ["", header + write],
+                     [header.replace("effective(21002,", "effective(0,") + read, header + write],
+                     [header + read, header.replace("effective(21002,", "effective(0,") + write]):
+            with self.subTest(logs=logs), self.assertRaisesRegex(RuntimeError, "identity evidence"):
+                GATE.nonroot_io_evidence(logs, 21002)
 
     def test_fixture_requires_independent_nonroot_engine_and_samba_user(self):
         script = (ROOT / ".github/scripts/check-system-samba.py").read_text()
