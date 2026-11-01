@@ -3,9 +3,9 @@ use core::ops;
 /// A specialized copy-on-write byte string.
 ///
 /// The purpose of this type is to permit usage of a "borrowed or owned
-/// byte string" in a way that keeps std/no-std compatibility. With the `alloc`
-/// feature, it supports both variants. Without `alloc`, it stores only a
-/// borrowed `&[u8]`. We can't just use a plain Cow because Cow is not in
+/// byte string" in a way that keeps std/no-std compatibility. That is, in
+/// no-std/alloc mode, this type devolves into a simple &[u8] with no owned
+/// variant available. We can't just use a plain Cow because Cow is not in
 /// core.
 #[derive(Clone, Debug)]
 pub struct CowBytes<'a>(Imp<'a>);
@@ -43,7 +43,9 @@ impl<'a> CowBytes<'a> {
     /// Create a new owned CowBytes.
     #[cfg(feature = "alloc")]
     #[inline(always)]
-    pub(crate) fn new_owned(bytes: alloc::boxed::Box<[u8]>) -> CowBytes<'static> {
+    pub(crate) fn new_owned(
+        bytes: alloc::boxed::Box<[u8]>,
+    ) -> CowBytes<'static> {
         CowBytes(Imp::Owned(bytes))
     }
 
@@ -62,7 +64,9 @@ impl<'a> CowBytes<'a> {
     #[inline(always)]
     pub(crate) fn into_owned(self) -> CowBytes<'static> {
         match self.0 {
-            Imp::Borrowed(b) => CowBytes::new_owned(alloc::boxed::Box::from(b)),
+            Imp::Borrowed(b) => {
+                CowBytes::new_owned(alloc::boxed::Box::from(b))
+            }
             Imp::Owned(b) => CowBytes::new_owned(b),
         }
     }

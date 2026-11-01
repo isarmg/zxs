@@ -80,8 +80,8 @@ pub(crate) trait Vector: Copy + core::fmt::Debug {
 /// for `memchr` and `packedpair`. So instead, we abstraction over the specific
 /// representation with this trait and define the operations we actually need.
 pub(crate) trait MoveMask: Copy + core::fmt::Debug {
-    /// Return a mask whose least significant `n` lanes are zero and whose
-    /// remaining lanes are set.
+    /// Return a mask that is all zeros except for the least significant `n`
+    /// lanes in a corresponding vector.
     fn all_zeros_except_least_significant(n: usize) -> Self;
 
     /// Returns true if and only if this mask has a a non-zero bit anywhere.

@@ -20,8 +20,6 @@ pub(crate) trait Pointer {
 impl<T> Pointer for *const T {
     unsafe fn distance(self, origin: *const T) -> usize {
         // TODO: Replace with `ptr::sub_ptr` once stabilized.
-        // SAFETY: The caller guarantees `offset_from`'s requirements and
-        // `self >= origin`, so the distance is nonnegative and fits in usize.
         usize::try_from(self.offset_from(origin)).unwrap_unchecked()
     }
 
@@ -32,8 +30,6 @@ impl<T> Pointer for *const T {
 
 impl<T> Pointer for *mut T {
     unsafe fn distance(self, origin: *mut T) -> usize {
-        // SAFETY: Casting to const pointers preserves the caller's
-        // `offset_from` and ordering requirements.
         (self as *const T).distance(origin as *const T)
     }
 

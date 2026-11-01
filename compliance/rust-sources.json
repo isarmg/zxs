@@ -99523,7 +99523,7 @@
       "version": "2.3.1"
     },
     "src/foundation/text-unicode/memchr": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 2026-10-20：最终runtime平台收敛，退役与Linux amd64/browser wasm互斥的实现；保留历史fallback、未来Linux API与文档壳，选中实现展开等价证据见linux-amd64-runtime-final报告。 规范一致性：修正 alloc 存储与反向搜索所有权文档、MoveMask 位约定，补充 distance 的调用方 SAFETY 约束；不改匹配、位运算或检查。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 2026-10-20：最终runtime平台收敛，退役与Linux amd64/browser wasm互斥的实现；保留历史fallback、未来Linux API与文档壳，选中实现展开等价证据见linux-amd64-runtime-final报告。",
       "description": "Provides extremely fast (uses SIMD on x86_64, aarch64 and wasm32) routines for\n1, 2 or 3 byte search and single substring search.",
       "directory": "src/foundation/text-unicode/memchr",
       "files_sha256": {
@@ -99552,14 +99552,14 @@
         "src/arch/x86_64/sse2/memchr.rs": "4a0da381c96e56e221e95bb27583081b2f93969df942d03365ed80b8db1a05b5",
         "src/arch/x86_64/sse2/mod.rs": "38b70ae52a64ec974dbb91d04d6ca8013d9e06d1fe4af852206bbc2faf1c59aa",
         "src/arch/x86_64/sse2/packedpair.rs": "c3a3af4b68d50d6680ced0e53d3f6a71ef8e54ca2b389746a8942f2330ef21e1",
-        "src/cow.rs": "d6274ef15951bca6d370404da6680dcfe4818e50ac1ab83a0ba15ef5d461a9bb",
-        "src/ext.rs": "487ff3e2faf0db8de1a2071ea6dbe244d8895f9671618a9945b799af2eba787d",
+        "src/cow.rs": "2b053e393d3841f780425b3b0da5bec4f187603fa7c271b045ecb7d885b23395",
+        "src/ext.rs": "210f89d1e32211bc64414cbd56e97b4f56ce8a8832d321d77a9fe519634e27ea",
         "src/lib.rs": "564752fc2e819ccc3051af7c3d8a72bcafba9b48fdd6652c159108b2f3a4def8",
         "src/macros.rs": "3e4b39252bfa471fad384160a43f113ebfec7bec46a85d16f006622881dd2081",
         "src/memchr.rs": "207c3ccfb7913e56600d7820c1b297369eb9e95e2b377da29272161f14aa063d",
-        "src/memmem/mod.rs": "1b377a20acb76d4313bc2f827fdea66401b794e784b13cc21bd3c1c3df74c557",
+        "src/memmem/mod.rs": "d876e2d1de89ce6c74b4f970c84c524fe650134a9d33f24424161ace6da78857",
         "src/memmem/searcher.rs": "19915ab479b3169547bfbd22e9a315f290f2bb05076d014d19985fb9076d3fb5",
-        "src/vector.rs": "b8ee7f867a095a1b41d74019b7a46e30f8c51f14ac1821ccbbf0707cfdf81349"
+        "src/vector.rs": "6ca309c04e50d6cca68ca80560f8d13284429c11a4580505c025c62137a6a3ad"
       },
       "license": "Unlicense OR MIT",
       "license_materials": [

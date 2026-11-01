@@ -243,14 +243,12 @@ pub struct FindIter<'h, 'n> {
 
 impl<'h, 'n> FindIter<'h, 'n> {
     #[inline(always)]
-    pub(crate) fn new(haystack: &'h [u8], finder: Finder<'n>) -> FindIter<'h, 'n> {
+    pub(crate) fn new(
+        haystack: &'h [u8],
+        finder: Finder<'n>,
+    ) -> FindIter<'h, 'n> {
         let prestate = PrefilterState::new();
-        FindIter {
-            haystack,
-            prestate,
-            finder,
-            pos: 0,
-        }
+        FindIter { haystack, prestate, finder, pos: 0 }
     }
 
     /// Convert this iterator into its owned variant, such that it no longer
@@ -278,10 +276,8 @@ impl<'h, 'n> Iterator for FindIter<'h, 'n> {
     fn next(&mut self) -> Option<usize> {
         let needle = self.finder.needle();
         let haystack = self.haystack.get(self.pos..)?;
-        let idx = self
-            .finder
-            .searcher
-            .find(&mut self.prestate, haystack, needle)?;
+        let idx =
+            self.finder.searcher.find(&mut self.prestate, haystack, needle)?;
 
         let pos = self.pos + idx;
         self.pos = pos + needle.len().max(1);
@@ -298,7 +294,10 @@ impl<'h, 'n> Iterator for FindIter<'h, 'n> {
             Some(haystack_len) => match self.finder.needle().len() {
                 // Empty needles always succeed and match at every point
                 // (including the very end)
-                0 => (haystack_len.saturating_add(1), haystack_len.checked_add(1)),
+                0 => (
+                    haystack_len.saturating_add(1),
+                    haystack_len.checked_add(1),
+                ),
                 needle_len => (0, Some(haystack_len / needle_len)),
             },
         }
@@ -322,13 +321,12 @@ pub struct FindRevIter<'h, 'n> {
 
 impl<'h, 'n> FindRevIter<'h, 'n> {
     #[inline(always)]
-    pub(crate) fn new(haystack: &'h [u8], finder: FinderRev<'n>) -> FindRevIter<'h, 'n> {
+    pub(crate) fn new(
+        haystack: &'h [u8],
+        finder: FinderRev<'n>,
+    ) -> FindRevIter<'h, 'n> {
         let pos = Some(haystack.len());
-        FindRevIter {
-            haystack,
-            finder,
-            pos,
-        }
+        FindRevIter { haystack, finder, pos }
     }
 
     /// Convert this iterator into its owned variant, such that it no longer
@@ -337,7 +335,7 @@ impl<'h, 'n> FindRevIter<'h, 'n> {
     /// If this is already an owned iterator, then this is a no-op. Otherwise,
     /// this copies the needle.
     ///
-    /// This is only available when the `alloc` feature is enabled.
+    /// This is only available when the `std` feature is enabled.
     #[cfg(feature = "alloc")]
     #[inline]
     pub fn into_owned(self) -> FindRevIter<'h, 'static> {
@@ -453,7 +451,10 @@ impl<'n> Finder<'n> {
     /// assert_eq!(None, it.next());
     /// ```
     #[inline]
-    pub fn find_iter<'a, 'h>(&'a self, haystack: &'h [u8]) -> FindIter<'h, 'a> {
+    pub fn find_iter<'a, 'h>(
+        &'a self,
+        haystack: &'h [u8],
+    ) -> FindIter<'h, 'a> {
         FindIter::new(haystack, self.as_ref())
     }
 
@@ -467,10 +468,7 @@ impl<'n> Finder<'n> {
     #[cfg(feature = "alloc")]
     #[inline]
     pub fn into_owned(self) -> Finder<'static> {
-        Finder {
-            needle: self.needle.into_owned(),
-            searcher: self.searcher,
-        }
+        Finder { needle: self.needle.into_owned(), searcher: self.searcher }
     }
 
     /// Convert this finder into its borrowed variant.
@@ -557,8 +555,7 @@ impl<'n> FinderRev<'n> {
     /// assert_eq!(None, FinderRev::new("quux").rfind(haystack));
     /// ```
     pub fn rfind<B: AsRef<[u8]>>(&self, haystack: B) -> Option<usize> {
-        self.searcher
-            .rfind(haystack.as_ref(), self.needle.as_slice())
+        self.searcher.rfind(haystack.as_ref(), self.needle.as_slice())
     }
 
     /// Returns a reverse iterator over all occurrences of a substring in a
@@ -589,7 +586,10 @@ impl<'n> FinderRev<'n> {
     /// assert_eq!(None, it.next());
     /// ```
     #[inline]
-    pub fn rfind_iter<'a, 'h>(&'a self, haystack: &'h [u8]) -> FindRevIter<'h, 'a> {
+    pub fn rfind_iter<'a, 'h>(
+        &'a self,
+        haystack: &'h [u8],
+    ) -> FindRevIter<'h, 'a> {
         FindRevIter::new(haystack, self.as_ref())
     }
 
@@ -599,14 +599,11 @@ impl<'n> FinderRev<'n> {
     /// If this is already an owned finder, then this is a no-op. Otherwise,
     /// this copies the needle.
     ///
-    /// This is only available when the `alloc` feature is enabled.
+    /// This is only available when the `std` feature is enabled.
     #[cfg(feature = "alloc")]
     #[inline]
     pub fn into_owned(self) -> FinderRev<'static> {
-        FinderRev {
-            needle: self.needle.into_owned(),
-            searcher: self.searcher,
-        }
+        FinderRev { needle: self.needle.into_owned(), searcher: self.searcher }
     }
 
     /// Convert this finder into its borrowed variant.
@@ -657,7 +654,10 @@ impl FinderBuilder {
 
     /// Build a forward finder using the given needle from the current
     /// settings.
-    pub fn build_forward<'n, B: ?Sized + AsRef<[u8]>>(&self, needle: &'n B) -> Finder<'n> {
+    pub fn build_forward<'n, B: ?Sized + AsRef<[u8]>>(
+        &self,
+        needle: &'n B,
+    ) -> Finder<'n> {
         self.build_forward_with_ranker(DefaultFrequencyRank, needle)
     }
 
@@ -674,7 +674,11 @@ impl FinderBuilder {
     /// Build a forward finder using the given needle and a custom heuristic
     /// for determining the frequency of a given byte in the dataset. See
     /// [`HeuristicFrequencyRank`] for more details.
-    pub fn build_forward_with_ranker<'n, R: HeuristicFrequencyRank, B: ?Sized + AsRef<[u8]>>(
+    pub fn build_forward_with_ranker<
+        'n,
+        R: HeuristicFrequencyRank,
+        B: ?Sized + AsRef<[u8]>,
+    >(
         &self,
         ranker: R,
         needle: &'n B,
@@ -700,15 +704,15 @@ impl FinderBuilder {
     ) -> Finder<'static> {
         let needle = needle.into();
         let searcher = Searcher::new(self.prefilter, ranker, &needle);
-        Finder {
-            needle: CowBytes::new_owned(needle),
-            searcher,
-        }
+        Finder { needle: CowBytes::new_owned(needle), searcher }
     }
 
     /// Build a reverse finder using the given needle from the current
     /// settings.
-    pub fn build_reverse<'n, B: ?Sized + AsRef<[u8]>>(&self, needle: &'n B) -> FinderRev<'n> {
+    pub fn build_reverse<'n, B: ?Sized + AsRef<[u8]>>(
+        &self,
+        needle: &'n B,
+    ) -> FinderRev<'n> {
         let needle = needle.as_ref();
         FinderRev {
             needle: CowBytes::new(needle),
@@ -725,10 +729,7 @@ impl FinderBuilder {
     ) -> FinderRev<'static> {
         let needle = needle.into();
         let searcher = SearcherRev::new(&needle);
-        FinderRev {
-            needle: CowBytes::new_owned(needle),
-            searcher,
-        }
+        FinderRev { needle: CowBytes::new_owned(needle), searcher }
     }
 
     /// Configure the prefilter setting for the finder.
@@ -742,7 +743,4 @@ impl FinderBuilder {
 }
 
 #[cfg(test)]
-include!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../../test/foundation/memchr/unit/src/memmem/mod/tests_745.rs"
-));
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/memchr/unit/src/memmem/mod/tests_745.rs"));
