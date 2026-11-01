@@ -36,9 +36,27 @@ pub(super) enum QueryKind {
     Plan,
 }
 
-pub(super) const QUERIES: [(&str, QueryKind); 14] = [
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum QueryId {
+    Repositories,
+    Disks,
+    IntegrityCheck,
+    Repository,
+    SmbBinding,
+    Operation,
+    Plan,
+    BranchTree,
+    BranchDetails,
+    FileHistory,
+    HistoryGraph,
+    Policy,
+    PlacementRule,
+    Topology,
+}
+
+pub(super) const QUERIES: [(QueryId, QueryKind); 14] = [
     (
-        "Repositories",
+        QueryId::Repositories,
         QueryKind::Inspect {
             prefix: "/api/repositories",
             key: None,
@@ -46,7 +64,7 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
         },
     ),
     (
-        "Disks",
+        QueryId::Disks,
         QueryKind::Inspect {
             prefix: "/api/admin/disks",
             key: None,
@@ -54,7 +72,7 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
         },
     ),
     (
-        "Integrity check",
+        QueryId::IntegrityCheck,
         QueryKind::Inspect {
             prefix: "/api/admin/check",
             key: None,
@@ -62,7 +80,7 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
         },
     ),
     (
-        "Repository",
+        QueryId::Repository,
         QueryKind::Inspect {
             prefix: "/api/repositories",
             key: Some("repository"),
@@ -70,17 +88,17 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
         },
     ),
     (
-        "SMB binding",
+        QueryId::SmbBinding,
         QueryKind::Inspect {
             prefix: "/api/repositories",
             key: Some("repository"),
             suffix: "/smb-binding",
         },
     ),
-    ("Operation", QueryKind::Operation),
-    ("Plan", QueryKind::Plan),
+    (QueryId::Operation, QueryKind::Operation),
+    (QueryId::Plan, QueryKind::Plan),
     (
-        "Branch tree",
+        QueryId::BranchTree,
         QueryKind::Inspect {
             prefix: "/api/branches",
             key: Some("id"),
@@ -88,7 +106,7 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
         },
     ),
     (
-        "Branch details",
+        QueryId::BranchDetails,
         QueryKind::Inspect {
             prefix: "/api/branches",
             key: Some("id"),
@@ -96,7 +114,7 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
         },
     ),
     (
-        "File history",
+        QueryId::FileHistory,
         QueryKind::Inspect {
             prefix: "/api/files",
             key: Some("id"),
@@ -104,7 +122,7 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
         },
     ),
     (
-        "History graph",
+        QueryId::HistoryGraph,
         QueryKind::Inspect {
             prefix: "/api/history-trees",
             key: Some("id"),
@@ -112,7 +130,7 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
         },
     ),
     (
-        "Policy",
+        QueryId::Policy,
         QueryKind::Inspect {
             prefix: "/api/policies",
             key: Some("id"),
@@ -120,7 +138,7 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
         },
     ),
     (
-        "Placement rule",
+        QueryId::PlacementRule,
         QueryKind::Inspect {
             prefix: "/api/primary-placement-rules",
             key: Some("id"),
@@ -128,7 +146,7 @@ pub(super) const QUERIES: [(&str, QueryKind); 14] = [
         },
     ),
     (
-        "Topology",
+        QueryId::Topology,
         QueryKind::Inspect {
             prefix: "/api/backup-topologies/default",
             key: None,

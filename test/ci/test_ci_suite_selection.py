@@ -187,6 +187,40 @@ class Selector(unittest.TestCase):
     def test_selector_and_its_regressions_always_require_initial_full_run(self):
         self.assert_full(self.run_selection([selection.SELF, "test/ci/test_ci_suite_selection.py"]))
 
+    def test_exact_system_samba_gate_and_regression_changes_reuse_foundation_only(self):
+        result = self.run_selection(sorted(selection.SMB_GATE_INPUTS))
+        self.assertEqual(result["reused"], list(selection.FOUNDATION))
+        self.assertEqual(result["suites"], [s for s in selection.ALL if s not in selection.FOUNDATION])
+
+    def test_samba_gate_allowlist_does_not_allow_sibling_scripts_tests_or_manifests(self):
+        for path in (".github/scripts/smb-sdk.sh", ".github/scripts/check-system-samba-other.py",
+                     ".github/scripts/check-foundation.sh", ".github/scripts/check-sqlite-system.py",
+                     "test/ci/test_system_samba_other.py", "test/ci/test_ci_suite_selection.py",
+                     "test/ci/crypto_core_checks.py", "test/ci/fixtures/foundation-behaviour-tests.json",
+                     ".github/workflows/smb-sdk.yml", ".github/samba-debian-target.json",
+                     "src/smb-vfs/Cargo.toml"):
+            with self.subTest(path=path):
+                self.assertIsNone(selection.affected(path))
+        self.assert_full(self.run_selection([*selection.SMB_GATE_INPUTS, ".github/scripts/smb-sdk.sh"]))
+
+    def test_samba_gate_without_exact_success_or_on_pr_runs_all_suites(self):
+        head = self.commit(sorted(selection.SMB_GATE_INPUTS))
+        event = {"before": self.base, "after": head, "repository": {"full_name": selection.REPOSITORY}}
+        failed = evidence(self.base)
+        failed[1]["jobs"][1]["conclusion"] = "failure"
+        missing = ({"total_count": 0, "workflow_runs": []}, {})
+        for documents in (failed, missing):
+            self.assert_full(selection.select(self.root, "push", event, head, "refs/heads/main",
+                                              fetch=fetcher(documents), reviewed=self.reviewed))
+        self.assert_full(selection.select(self.root, "pull_request", event, head, "refs/heads/main",
+                                          fetch=fetcher(evidence(self.base)), reviewed=self.reviewed))
+
+    def test_samba_gate_future_foundation_consumer_invalidates_fingerprint(self):
+        self.write(".github/scripts/check-foundation.sh", "python3 .github/scripts/check-system-samba.py\n")
+        self.git("add", "."); self.git("commit", "-qm", "new gate consumer")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.assert_full(self.run_selection(sorted(selection.SMB_GATE_INPUTS)))
+
     def test_known_docs_only_can_reuse_all_five(self):
         result = self.run_selection(["docs/validation/release-checklist.md"])
         self.assertEqual(result["reused"], list(selection.FOUNDATION))

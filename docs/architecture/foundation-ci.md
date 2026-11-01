@@ -70,7 +70,7 @@ Release verification 依赖屏障。新增命令应同时更新脚本和库存�
 允许的路径不是“不重要文件”：既有 `src/smb-vfs/src/**/*.rs` 内容修改仍运行 language，
 `test/smb-vfs/**/*.rs` 只由独立 SDK 目标消费。SMB 文档仅精确允许
 `docs/components/smb.md` 与 `docs/validation/debian13-system-samba.md`；既有准确文档
-名单不变。构建脚本、manifest、协议包 `src/smb/`、SDK 合同、SDK 脚本、非 Rust fixture
+名单不变。构建脚本、manifest、协议包 `src/smb/`、SDK 合同、除下述两个精确输入外的 SDK 脚本、非 Rust fixture
 和其它文档均不新增豁免。每次仍运行全部非 Foundation 矩阵、static、SDK、生产 WASM
 及真实浏览器/发行候选检查；这不是减少 SMB 验收。
 
@@ -121,3 +121,35 @@ PY
 选择器自身或其测试变化都不在允许名单，故引入/调整本机制的 push 必须完整运行，
 不能借新摘要复用旧结果。后续合格的小修才可复用准确基线的真实成功证据；连续两次
 复用若使准确基线缺少五个实际成功 job，下一次仍全跑，不递归传递成功声明。
+
+
+### 系统 Samba 验收脚本的精确复用边界
+
+额外仅允许 `.github/scripts/check-system-samba.py` 和
+`test/ci/test_system_samba_gate.py` 复用五个 Foundation 分片，不允许整个 scripts 或
+Python 测试目录。这两者负责真正的身份、读写和撤权验收，并非“不重要的测试文件”。
+其修改仍必须通过独立 SDK 实际执行及 static 回归，不能用复用 Foundation 来证明 SMB 成功。
+
+消费链逐项核对如下：
+
+- `check.sh static` 的 `unittest discover -s test/ci -p 'test_*.py'` 执行此回归；
+  回归显式加载验收脚本，测试解析、隔离、标记发布并读取 SDK/workflow/服务器 fixture。
+  五个 Foundation case 不调用该 discovery，也不导入这两个文件；各分片的 Python
+  helpers 和明确 fixture 读取仍按上表审阅并保留在指纹内。language 的源码扫描只取
+  src/tools 的 Rust，manifest 扫描只取 Cargo.toml，不扫描这两个 Python 文件。
+- `smb-sdk.yml` 在独立 Debian runtime 容器里调用验收脚本，输入是本 job 构建的实际
+  VFS 和服务器 fixture；输出 `system-samba.json` 与日志进入准确 SHA 的
+  `debian13-vfs` artifact。`ci.yml` 仅 browser-smoke 下载此 artifact；Foundation
+  矩阵每个 job 独立 checkout，没有下载它或 static 生成文件的步骤。static 只输出套件
+  名单，不输出 Foundation 的源码/测试输入，所以没有跨 job 生成物反向依赖。
+- crypto 的 ring localgen 会原样复制这两个规范路径的普通文件，但只构建/运行 ring，
+  不执行脚本、发现 Python 测试或解释其内容；现有路径规范和 regular-file 条件仍适用。
+- 验收脚本只导入 Python 标准库；修改的解析函数由 static 回归执行，真实主入口由 SDK
+  执行。根服务器 Rust fixture 属于另外的受影响路径，其改动仍保留 async，不能随着
+  Python 脚本一并豁免。
+
+复核时还比较了已审阅的五组脚本、工具、Foundation 和 CI workflow：此扩展前这些
+消费者未变。未来若任一 Foundation 脚本新增导入、扫描或 artifact 输入，指纹必须失配
+并全跑，不能沿用本说明自动认可新消费者。选择器/其回归/本文自身修改仍触发首次全跑；
+最终合并树的指纹由合并者按上节流程审阅后生成。其它脚本、测试、manifest、无成功证据、
+PR/手动事件仍保留原全跑语义。

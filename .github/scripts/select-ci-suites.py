@@ -17,7 +17,7 @@ ALL = ("rust-sources", "quality", "security", "workspace", *FOUNDATION,
        "web", "contracts", "build-tools", "smb-protocol")
 # Review the actual foundation consumers before updating this fingerprint.
 # A mismatch is only a full-CI fallback, never a product/admission restriction.
-REVIEWED_INPUTS = "56f8ce5e441e8ba343c7d1100583116687aea6e806380db7476e86ada1155050"
+REVIEWED_INPUTS = "27bfb34fe3b309c9ebce9967b236d351c8a9b19a3eea870a3d213d33e6b1a4f3"
 SELF = ".github/scripts/select-ci-suites.py"
 SHA = re.compile(r"[0-9a-f]{40}")
 DOCS = frozenset(("docs/EXTERNAL_TEST_SOURCES.md", "docs/architecture/read-projections.md",
@@ -25,6 +25,10 @@ DOCS = frozenset(("docs/EXTERNAL_TEST_SOURCES.md", "docs/architecture/read-proje
                   "docs/validation/history-growth-benchmark.md",
                   "docs/components/smb.md", "docs/validation/debian13-system-samba.md"))
 
+# Executed by static/SDK only; foundation jobs use separate checkouts and do not
+# consume their artifacts. Do not broaden this to scripts or Python tests.
+SMB_GATE_INPUTS = frozenset((".github/scripts/check-system-samba.py",
+                             "test/ci/test_system_samba_gate.py"))
 
 
 class FullRun(Exception):
@@ -39,7 +43,7 @@ def affected(path):
     if (parsed.is_absolute() or ".." in parsed.parts or str(parsed) != path
             or "\\" in path or ":" in path):
         return None
-    if path in DOCS:
+    if path in DOCS or path in SMB_GATE_INPUTS:
         return set()
     if path.startswith(("tools/history-scale-bench/", "test/history-scale-bench/")) and path.endswith((".rs", ".py")):
         # The language shard scans all src/tools Rust source for retired paths.

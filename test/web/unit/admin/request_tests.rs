@@ -294,53 +294,65 @@ fn both_plan_actions_preserve_body_and_use_the_raw_receipt_contract() {
 fn fixed_inspections_and_identity_queries_keep_get_encoding_and_contracts() {
     let fields = all_fields();
     let expected = [
-        ("Repositories", "/api/repositories", Contract::Inspect),
-        ("Disks", "/api/admin/disks", Contract::Inspect),
-        ("Integrity check", "/api/admin/check", Contract::Inspect),
         (
-            "Repository",
+            QueryId::Repositories,
+            "/api/repositories",
+            Contract::Inspect,
+        ),
+        (QueryId::Disks, "/api/admin/disks", Contract::Inspect),
+        (
+            QueryId::IntegrityCheck,
+            "/api/admin/check",
+            Contract::Inspect,
+        ),
+        (
+            QueryId::Repository,
             "/api/repositories/repo%2F!",
             Contract::Inspect,
         ),
         (
-            "SMB binding",
+            QueryId::SmbBinding,
             "/api/repositories/repo%2F!/smb-binding",
             Contract::Inspect,
         ),
         (
-            "Operation",
+            QueryId::Operation,
             "/api/operations/id%2F!",
             Contract::Operation { id: "id/!".into() },
         ),
         (
-            "Plan",
+            QueryId::Plan,
             "/api/plans/id%2F!",
             Contract::Plan { id: "id/!".into() },
         ),
         (
-            "Branch tree",
+            QueryId::BranchTree,
             "/api/branches/id%2F!/tree",
             Contract::Inspect,
         ),
-        ("Branch details", "/api/branches/id%2F!", Contract::Inspect),
         (
-            "File history",
+            QueryId::BranchDetails,
+            "/api/branches/id%2F!",
+            Contract::Inspect,
+        ),
+        (
+            QueryId::FileHistory,
             "/api/files/id%2F!/history",
             Contract::Inspect,
         ),
         (
-            "History graph",
+            QueryId::HistoryGraph,
             "/api/history-trees/id%2F!/graph",
             Contract::Inspect,
         ),
-        ("Policy", "/api/policies/id%2F!", Contract::Inspect),
+        (QueryId::Policy, "/api/policies/id%2F!", Contract::Inspect),
         (
-            "Placement rule",
+            QueryId::PlacementRule,
             "/api/primary-placement-rules/id%2F!",
             Contract::Inspect,
         ),
         (
-            "Topology",
+            QueryId::Topology,
             "/api/backup-topologies/default",
             Contract::Inspect,
         ),
