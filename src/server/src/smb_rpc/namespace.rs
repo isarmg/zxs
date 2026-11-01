@@ -235,7 +235,16 @@ impl Session {
                     )
                 })?;
                 if source.kind != target_entry.kind {
-                    return Err(ApiError::invalid(
+                    let code = match target_entry.kind {
+                        storage_contract::NamespaceEntryKind::Directory => {
+                            storage_contract::ErrorCode::IsDirectory
+                        }
+                        storage_contract::NamespaceEntryKind::File => {
+                            storage_contract::ErrorCode::NotDirectory
+                        }
+                    };
+                    return Err(ApiError::conflict(
+                        code,
                         "rename replacement requires matching entry kinds",
                     ));
                 }

@@ -8,17 +8,6 @@ use super::*;
 pub(crate) struct NamespaceDraft {
     slots: Vec<Option<Entry>>,
     by_path: BTreeMap<String, usize>,
-    #[cfg(test)]
-    work: std::rc::Rc<std::cell::Cell<Work>>,
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-struct Work {
-    source_visits: usize,
-    map_operations: usize,
-    appended_slots: usize,
-    flattened_slots: usize,
 }
 
 impl NamespaceDraft {
@@ -27,15 +16,12 @@ impl NamespaceDraft {
         let mut draft = Self {
             slots: Vec::with_capacity(entries.len()),
             by_path: BTreeMap::new(),
-            #[cfg(test)]
-            work: Default::default(),
         };
         for entry in entries {
-            #[cfg(test)]
-            draft.record(|work| work.source_visits += 1);
             assert!(
                 draft
-                    .index_insert(entry.lookup_key().to_owned(), draft.slots.len())
+                    .by_path
+                    .insert(entry.lookup_key().to_owned(), draft.slots.len())
                     .is_none(),
                 "invariant: admitted namespace lookup keys are unique"
             );
@@ -45,26 +31,19 @@ impl NamespaceDraft {
     }
 
     pub(crate) fn get_key(&self, key: &str) -> Option<&Entry> {
-        #[cfg(test)]
-        self.record(|work| work.map_operations += 1);
         self.by_path
             .get(key)
             .and_then(|&slot| self.slots[slot].as_ref())
     }
 
-    fn index_insert(&mut self, key: String, slot: usize) -> Option<usize> {
-        #[cfg(test)]
-        self.record(|work| work.map_operations += 1);
-        self.by_path.insert(key, slot)
-    }
-
     pub(crate) fn replace(&mut self, entry: Entry) {
-        if let Some(previous) = self.index_insert(entry.lookup_key().to_owned(), self.slots.len()) {
+        if let Some(previous) = self
+            .by_path
+            .insert(entry.lookup_key().to_owned(), self.slots.len())
+        {
             self.slots[previous] = None;
         }
         self.slots.push(Some(entry));
-        #[cfg(test)]
-        self.record(|work| work.appended_slots += 1);
     }
 
     pub(crate) fn ensure_parents(&mut self, path: &name_policy::PortablePath) -> Result<()> {
@@ -99,16 +78,7 @@ impl NamespaceDraft {
     /// Preserve mutation order, not lookup-key order. These entries must pass
     /// `validate_entries` before becoming a published `NamespaceTree`.
     pub(crate) fn into_entries(self) -> Vec<Entry> {
-        #[cfg(test)]
-        self.record(|work| work.flattened_slots += self.slots.len());
         self.slots.into_iter().flatten().collect()
-    }
-
-    #[cfg(test)]
-    fn record(&self, update: impl FnOnce(&mut Work)) {
-        let mut work = self.work.get();
-        update(&mut work);
-        self.work.set(work);
     }
 }
 

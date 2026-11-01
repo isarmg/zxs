@@ -25,6 +25,14 @@ VmHWM 降低 20%、保存 P95 增量 ≤50ms 三项助手工程目标改为**非
 
 ## 有限且可复现的执行合同
 
+控制器 `phase` 对自己以新 session 启动的进程组负责：超时／资源不足以及
+监测异常或 `KeyboardInterrupt`／`SystemExit` 都先尝试 TERM，10 秒未退出
+再 KILL 并回收直接子进程。自然退出竞争仍须 wait，不向其他进程组发信号。
+监测失败写 `controller_failed`，回收失败写 `cleanup_failed` 与独立错误来源；
+原中断／错误继续向调用者传播，不能将残缺阶段标成 completed。若证据写入
+本身失败，原异常仍为主异常并携带写入失败来源。根工具测试用 mock 覆盖这些
+路径，不运行性能负载，不修改既有验收报告或预算。
+
 入口是 [screen.py](../../tools/local-rpc-acceptance/screen.py)，只允许在 GitHub Actions 执行负载。仓库保存 [workflow 模板](../../tools/local-rpc-acceptance/workflow.yml)，由独立验证 carrier 分支将其接到已登记的 `ci.yml` 并手动 dispatch。必填 `validation_sha` 指向保留正常 CI 的精确候选提交；所有验证和控制器 checkout 都使用该提交，记录其 SHA／tree，carrier 只提供启动工作流，避免替换后的 CI 破坏正常静态合同。候选分支保留正常 CI，不写 main；整合负责人只整合源码、测试、文档和模板，不整合 carrier 对 CI 的替换。
 
 机械检查、受影响格式／严格诊断、正常 SMB RPC 和协议消费者测试先行，之后才构建并运行负载。两个产品 checkout 均从固定 tree 起步，仅加根 `test/` 的 seed、共同 RPC 测试、明确版本的读适配和 Cargo／模块接线；构建前后记录基础 tree、有效测试 tree、所有覆盖文件 SHA256、实际 features、编译产物哈希和控制器身份。没有生产源码、FSYNC、FULL、副本、收据、门槛或缓存改动。

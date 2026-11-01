@@ -211,6 +211,33 @@ pub(super) fn monitor_range(browser: &Browser) -> Result<()> {
                 "current monitor history settles after delayed delivery",
                 "return window.__zxsMonitorCancellation.pending.at(-1).delivered&&!Array.from(document.querySelectorAll('.zxs-chart-empty')).some(e=>/Loading history|正在读取历史/.test(e.textContent))",
             )?;
+            check(
+                browser,
+                "loaded CPU history has a real SVG before heartbeat identity check",
+                "const svg=document.querySelector('[data-metric=cpu] .zxs-metric-chart svg');if(!svg)return false;const p=window.__zxsMonitorCancellation;p.svg=svg;p.completed=p.pending.length;return true",
+            )?;
+            check(
+                browser,
+                "next heartbeat starts while keeping the loaded chart node",
+                "const p=window.__zxsMonitorCancellation;return p.pending.length>p.completed&&p.pending.at(-1).ready",
+            )?;
+            browser.command("POST", "/execute/async", Some(json!({"script":
+                "const done=arguments[0];requestAnimationFrame(()=>requestAnimationFrame(()=>done(true)));",
+                "args":[]})))?;
+            browser.script(
+                "const p=window.__zxsMonitorCancellation;if(document.querySelector('[data-metric=cpu] .zxs-metric-chart svg')!==p.svg)throw new Error('loading heartbeat replaced unchanged history SVG');p.pending.at(-1).release();return true",
+            )?;
+            check(
+                browser,
+                "equal heartbeat response is delivered",
+                "return window.__zxsMonitorCancellation.pending.at(-1).delivered",
+            )?;
+            browser.command("POST", "/execute/async", Some(json!({"script":
+                "const done=arguments[0];requestAnimationFrame(()=>requestAnimationFrame(()=>done(true)));",
+                "args":[]})))?;
+            browser.script(
+                "if(document.querySelector('[data-metric=cpu] .zxs-metric-chart svg')!==window.__zxsMonitorCancellation.svg)throw new Error('equal heartbeat replaced unchanged history SVG');return true",
+            )?;
             Ok(())
         },
         || {
@@ -219,7 +246,7 @@ pub(super) fn monitor_range(browser: &Browser) -> Result<()> {
         },
     )?;
     println!(
-        "PASS monitor history 20 range replacements abort obsolete signals and ignore late deliveries"
+        "PASS monitor history range replacement cancels obsolete reads; equal heartbeats preserve loaded SVG identity"
     );
     Ok(())
 }

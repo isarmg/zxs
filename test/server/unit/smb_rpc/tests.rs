@@ -1647,6 +1647,31 @@ fn different_files_publish_concurrently_and_reopen_workspace_after_unrelated_sav
     two.close(second.handle, false).unwrap();
 }
 #[test]
+fn writer_reservations_compare_path_segments_without_prefix_aliasing() {
+    let (_temp, shared, _backend, branch) = fixture();
+    let mut owner = session(shared.clone(), &branch);
+    let mut other = session(shared, &branch);
+    for held in ["目录", "目录/child"] {
+        let reserved = owner.reserve_paths(&[held]).unwrap();
+        for conflict in ["目录", "目录/child", "目录/child/grandchild"] {
+            assert_eq!(
+                other.reserve_paths(&[conflict]).unwrap_err().code,
+                storage_contract::ErrorCode::FileWriteBusy,
+                "{held} must overlap {conflict}"
+            );
+        }
+        for unrelated in ["目录-other", "目录child", "other/目录"] {
+            let allowed = other.reserve_paths(&[unrelated]).unwrap();
+            other.release_paths(&allowed);
+        }
+        owner.release_paths(&reserved);
+    }
+    assert!(owner.writer_locks.is_empty());
+    assert!(other.writer_locks.is_empty());
+    assert!(owner.shared.file_writers.lock().unwrap().is_empty());
+}
+
+#[test]
 fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_entry() {
     let (_temp, shared, _backend, branch) = fixture();
     let mut one = session(shared.clone(), &branch);
@@ -1718,7 +1743,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
         })
         .unwrap_err()
         .code,
-        storage_contract::ErrorCode::InvalidRequest
+        storage_contract::ErrorCode::IsDirectory
     );
     two.dispatch(Request::Namespace {
         operation_id: new_id("op").unwrap(),

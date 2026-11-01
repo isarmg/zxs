@@ -26,14 +26,11 @@ fn independent_complete_files_have_matching_content_and_distinct_inodes() {
     .unwrap();
     assert_eq!(first.blake3, second.blake3);
     assert_ne!(first.identity.inode, second.identity.inode);
-    for name in ["one", "two"] {
+    for (name, receipt) in [("one", &first), ("two", &second)] {
         let path = root.path().join(name);
         assert_eq!(fs::metadata(&path).unwrap().nlink(), 1);
         let mut file = File::open(path).unwrap();
-        assert_eq!(
-            verify_full(&mut file, expectation).unwrap().blake3,
-            first.blake3
-        );
+        assert_eq!(&verify_full(&mut file, expectation).unwrap(), receipt);
     }
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
 }
@@ -84,7 +81,8 @@ fn publishing_never_clobbers_existing_payload_or_symlink() {
         )
         .is_err()
     );
-    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+    // Rename collisions are Unknown; both prepared staging files survive.
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 4);
 }
 
 #[test]
@@ -123,7 +121,10 @@ fn read_and_cleanup_failures_are_both_preserved_without_deleting_a_replacement()
     assert!(
         matches!(*operation, Error::Io(ref source) if source.raw_os_error() == Some(libc::EIO))
     );
-    assert_eq!(cleanup.raw_os_error(), Some(libc::EISDIR));
+    assert!(matches!(
+        cleanup,
+        crate::fs_safety::Error::IdentityChanged(_)
+    ));
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     assert!(
         fs::read_dir(directory.path())
@@ -142,7 +143,9 @@ fn published_payload_cleanup_does_not_remove_reused_name() {
     let root = tempfile::tempdir().unwrap();
     let name = "staged";
     fs::write(root.path().join(name), b"published").unwrap();
+    let held = File::open(root.path().join(name)).unwrap();
     let mut cleanup = StagingCleanup {
+        file: &held,
         directory: File::open(root.path()).unwrap(),
         name: name.into(),
         armed: true,
@@ -152,4 +155,242 @@ fn published_payload_cleanup_does_not_remove_reused_name() {
     fs::write(root.path().join(name), b"replacement").unwrap();
     drop(cleanup);
     assert_eq!(fs::read(root.path().join(name)).unwrap(), b"replacement");
+}
+
+#[test]
+fn reader_replacement_cannot_receive_a_receipt_for_another_inode() {
+    struct ReplacingReader {
+        directory: std::path::PathBuf,
+        done: bool,
+        retain_original: bool,
+    }
+    impl Read for ReplacingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.done {
+                return Ok(0);
+            }
+            self.done = true;
+            let staging = fs::read_dir(&self.directory)?.next().unwrap()?.path();
+            if self.retain_original {
+                fs::rename(&staging, self.directory.join("retained"))?;
+            } else {
+                fs::remove_file(&staging)?;
+            }
+            fs::write(staging, b"substitute")?;
+            buffer[..4].copy_from_slice(b"good");
+            Ok(4)
+        }
+    }
+    for retain_original in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = PrivateDirectory::create(temp.path().join("private")).unwrap();
+        let error = write_full(
+            &directory,
+            &EntryName::new("output").unwrap(),
+            &mut ReplacingReader {
+                directory: directory.path().to_owned(),
+                done: false,
+                retain_original,
+            },
+            Expectation {
+                bytes: 4,
+                blake3: Some(blake3::hash(b"good")),
+            },
+        )
+        .unwrap_err();
+        let Error::Cleanup { operation, cleanup } = error else {
+            panic!("replacement must survive cleanup");
+        };
+        assert!(matches!(
+            *operation,
+            Error::Publication(AtomicCommitError::NotPublished(_))
+        ));
+        assert!(matches!(
+            cleanup,
+            crate::fs_safety::Error::IdentityChanged(_)
+        ));
+        assert!(!directory.path().join("output").exists());
+        let staging = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .as_encoded_bytes()
+                    .starts_with(b".zxs-payload-")
+            })
+            .unwrap();
+        assert_eq!(fs::read(staging).unwrap(), b"substitute");
+        if retain_original {
+            assert_eq!(
+                fs::read(directory.path().join("retained")).unwrap(),
+                b"good"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires atomic-io.sh isolated LD_PRELOAD children"]
+fn payload_io_barriers_and_failures() {
+    let root = std::path::PathBuf::from(std::env::var_os("ZXS_ATOMIC_ROOT").unwrap());
+    let log = std::path::PathBuf::from(std::env::var_os("ZXS_ATOMIC_LOG").unwrap());
+    let stage = std::env::var("ZXS_ATOMIC_STAGE").unwrap();
+    let directory = PrivateDirectory::open_existing(&root).unwrap();
+    fs::write(root.join(".inject"), b"").unwrap();
+    let result = write_full(
+        &directory,
+        &EntryName::new("destination").unwrap(),
+        &mut Cursor::new(b"new"),
+        Expectation {
+            bytes: 3,
+            blake3: Some(blake3::hash(b"new")),
+        },
+    );
+    fs::remove_file(root.join(".inject")).unwrap();
+    let events = fs::read_to_string(log).unwrap();
+    if stage == "success" {
+        let receipt = result.unwrap();
+        let mut target = File::open(root.join("destination")).unwrap();
+        assert_eq!(
+            receipt,
+            verify_full(
+                &mut target,
+                Expectation {
+                    bytes: 3,
+                    blake3: None
+                }
+            )
+            .unwrap()
+        );
+    } else {
+        let error = result.unwrap_err();
+        match stage.as_str() {
+            "write" => assert!(matches!(error, Error::Io(_))),
+            "file-sync" => assert!(matches!(
+                error,
+                Error::Publication(AtomicCommitError::NotPublished(_))
+            )),
+            "directory-sync" => assert!(matches!(
+                error,
+                Error::Publication(AtomicCommitError::Published(_))
+            )),
+            "publish" | "rename-before" | "rename-after" | "create-race" => assert!(matches!(
+                error,
+                Error::Publication(AtomicCommitError::Unknown(_))
+            )),
+            _ => panic!("unexpected stage"),
+        }
+        let source = match &error {
+            Error::Io(source) => source,
+            Error::Publication(
+                AtomicCommitError::NotPublished(source)
+                | AtomicCommitError::Unknown(source)
+                | AtomicCommitError::Published(source),
+            ) => {
+                assert!(std::error::Error::source(&error).is_some());
+                match source {
+                    crate::fs_safety::Error::Io(source)
+                    | crate::fs_safety::Error::PublishedDurabilityUnknown(source) => source,
+                    _ => panic!("original I/O error must survive"),
+                }
+            }
+            _ => panic!("original I/O error must survive"),
+        };
+        let errno = source.raw_os_error();
+        assert_eq!(
+            errno,
+            Some(if matches!(stage.as_str(), "publish" | "create-race") {
+                libc::EEXIST
+            } else {
+                libc::EIO
+            })
+        );
+    }
+    let expected_events = match stage.as_str() {
+        "success" | "directory-sync" => "file-sync\ndirectory-sync\n",
+        "write" => "write-failure\n",
+        "rename-before" => "file-sync\nrename-before-eio\n",
+        "rename-after" => "file-sync\nrename-success-reported-eio\n",
+        "create-race" => "file-sync\nrename-race-eexist\n",
+        "file-sync" | "publish" => "file-sync\n",
+        _ => panic!("unexpected stage"),
+    };
+    assert_eq!(events, expected_events);
+    match stage.as_str() {
+        "success" | "directory-sync" | "rename-after" => {
+            assert_eq!(fs::read(root.join("destination")).unwrap(), b"new")
+        }
+        "create-race" => assert_eq!(fs::read(root.join("destination")).unwrap(), b"occupant"),
+        "publish" => assert_eq!(fs::read(root.join("destination")).unwrap(), b""),
+        _ => assert!(!root.join("destination").exists()),
+    }
+    let staging: Vec<_> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .as_encoded_bytes()
+                .starts_with(b".zxs-payload-")
+        })
+        .collect();
+    assert_eq!(
+        staging.len(),
+        usize::from(matches!(
+            stage.as_str(),
+            "publish" | "rename-before" | "create-race"
+        ))
+    );
+    for path in staging {
+        assert_eq!(fs::read(path).unwrap(), b"new");
+    }
+    println!("\nZXS_ATOMIC_IO_COMPLETE mode=payload stage={stage}");
+}
+
+#[test]
+fn reader_directory_replacement_keeps_publication_in_the_held_directory() {
+    struct MovingReader {
+        original: std::path::PathBuf,
+        retained: std::path::PathBuf,
+        done: bool,
+    }
+    impl Read for MovingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.done {
+                return Ok(0);
+            }
+            self.done = true;
+            fs::rename(&self.original, &self.retained)?;
+            fs::create_dir(&self.original)?;
+            fs::write(self.original.join("output"), b"substitute directory")?;
+            buffer[..4].copy_from_slice(b"good");
+            Ok(4)
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let directory = PrivateDirectory::create(temp.path().join("private")).unwrap();
+    let retained = temp.path().join("retained");
+    let expectation = Expectation {
+        bytes: 4,
+        blake3: Some(blake3::hash(b"good")),
+    };
+    let receipt = write_full(
+        &directory,
+        &EntryName::new("output").unwrap(),
+        &mut MovingReader {
+            original: directory.path().to_owned(),
+            retained: retained.clone(),
+            done: false,
+        },
+        expectation,
+    )
+    .unwrap();
+    let mut target = File::open(retained.join("output")).unwrap();
+    assert_eq!(receipt, verify_full(&mut target, expectation).unwrap());
+    assert_eq!(
+        fs::read(directory.path().join("output")).unwrap(),
+        b"substitute directory"
+    );
+    assert_eq!(fs::read_dir(retained).unwrap().count(), 1);
 }

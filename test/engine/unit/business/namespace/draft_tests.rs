@@ -155,14 +155,13 @@ fn flattened_draft_keeps_namespace_operations_and_deletion_order_unchanged() {
 }
 
 #[test]
-fn thousand_to_hundred_thousand_replacements_have_linear_draft_work() {
+fn thousand_to_hundred_thousand_replacements_keep_index_and_slot_order() {
     for count in [1_000, 10_000, 100_000] {
         let entries = (0..count)
             .rev()
             .map(|i| entry(&format!("file-{i:06}"), NamespaceEntryKind::File))
             .collect();
         let mut draft = NamespaceDraft::new(entries);
-        let work = draft.work.clone();
         // Same two lookup passes and replace operations as workspace commit.
         for i in 0..count {
             assert!(lookup(&draft, &format!("FILE-{i:06}")).is_some());
@@ -177,29 +176,24 @@ fn thousand_to_hundred_thousand_replacements_have_linear_draft_work() {
             draft.replace(replacement);
         }
         assert!(lookup(&draft, "missing").is_none());
+        assert_eq!(draft.by_path.len(), count);
+        assert_eq!(draft.slots.len(), 2 * count);
+        assert!(draft.slots[..count].iter().all(Option::is_none));
+        for (key, &slot) in &draft.by_path {
+            assert!(slot >= count);
+            assert_eq!(draft.slots[slot].as_ref().unwrap().lookup_key(), key);
+        }
         let entries = draft.into_entries();
         assert_eq!(entries.len(), count);
-        assert_eq!(
-            work.get(),
-            Work {
-                source_visits: count,
-                map_operations: 4 * count + 1,
-                appended_slots: count,
-                flattened_slots: 2 * count,
-            }
-        );
-        // Counts measure actual draft operations, not BTreeMap comparisons.
-        // Each map operation has the standard library's logarithmic bound.
         assert_eq!(entries[0].path, "file-000000");
         assert_eq!(entries[count - 1].path, format!("file-{:06}", count - 1));
     }
 }
 
 #[test]
-fn hundred_thousand_shared_parent_writes_do_not_rescan_siblings() {
+fn hundred_thousand_shared_parent_writes_reuse_parent_slots() {
     let count = 100_000;
     let mut draft = NamespaceDraft::new(Vec::new());
-    let work = draft.work.clone();
     for i in 0..count {
         let path = format!("Parent/Shared/file-{i:06}");
         assert!(lookup(&draft, &path).is_none());
@@ -208,17 +202,13 @@ fn hundred_thousand_shared_parent_writes_do_not_rescan_siblings() {
             .unwrap();
         draft.replace(entry(&path, NamespaceEntryKind::File));
     }
+    assert_eq!(draft.by_path.len(), count + 2);
+    assert_eq!(draft.slots.len(), count + 2);
+    assert_eq!(draft.by_path["parent"], 0);
+    assert_eq!(draft.by_path["parent/shared"], 1);
+    assert!(draft.slots.iter().all(Option::is_some));
     let entries = draft.into_entries();
     assert_eq!(entries.len(), count + 2);
-    assert_eq!(
-        work.get(),
-        Work {
-            source_visits: 0,
-            map_operations: 4 * count + 2,
-            appended_slots: count + 2,
-            flattened_slots: count + 2,
-        }
-    );
 }
 
 #[test]

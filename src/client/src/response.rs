@@ -8,10 +8,8 @@ fn protocol_error(error: ResponseError) -> Error {
     Error::Api {
         status: error.status,
         code: error.code,
-        message: match error.request_id {
-            Some(request_id) => format!("{} (request {request_id})", error.message),
-            None => error.message,
-        },
+        message: error.message,
+        request_id: error.request_id,
         retryable: error.retryable,
         source: error.source,
     }

@@ -16,7 +16,7 @@
 4. [运行容器](../../.github/containers/debian13-runtime.Dockerfile) 只有系统 apt Samba、其通用运行依赖及验证用 Python，没有 compiler/Cargo/SDK。`--network none` 仅允许隔离 loopback，不开放用户网络或主机服务。
 5. [实际客户端验收](../../.github/scripts/check-system-samba.py) 以既存隔离 root 身份和一次性独立凭据，在私有临时 passdb 中认证；真实 apt smbd 加载 VFS，SMB3 强制签名/加密，拒绝错误密码和匿名，上传/下载校字节、改名，权威 binding 撤销后必须 ACCESS_DENIED，恢复后删除。真实 EngineBackend 独立核对发布及最终状态；不以 mock RPC 或任意连接错误代替通过。
 
-所有配置/凭据/临时磁盘只在一次性 CI 隔离环境；不创建系统用户，不修改用户主机权限、不安装或启动真实部署服务。
+所有配置/凭据/临时磁盘只在一次性 CI 隔离环境；运行镜像预建两个独立的合成非 root 账户 `zxs-engine-test` 和 `zxs-smb-test`，分别用于引擎进程与 Samba 登录。验收脚本只使用这些既有账户；不创建或更改宿主 OS 账号，不修改用户主机权限、不安装或启动真实部署服务。
 部署侧按当前安装说明配置系统 Samba 单一既有账号和独立 SMB 凭据，禁 guest/force-user；ZXS 与 Samba 密码不静默复用。
 
 ## 安全更新
@@ -28,4 +28,4 @@
 
 撤权验收保持撤权前已经认证的同一 SMB tree，在原 authority 已撤销后执行 `ls`，必须返回 `NT_STATUS_ACCESS_DENIED`。客户端就绪 marker 只在初次 tree connect 后的串行本地命令发布，撤权前不执行其它远程命令，避免复用旧拒绝文本。另记录新 tree 的拒绝：该版本 Samba 将所有 connect-hook 失败统一为 `NT_STATUS_UNSUCCESSFUL`，此通用状态本身不当作权限验收。重新启用后仍须真实删除成功及服务端最终状态核验。
 
-隔离测试把两种拒绝明确分开：临时 AuthStore 用新的唯一 authority 替换原 authority，使已认证旧会话返回 Unauthorized/EACCES；同时关闭 repository binding，保证新的 tree 连接被拒绝。两者不是同一种错误，也不修改生产错误映射。任一时点只有一个临时管理员 authority；不创建、更改 OS 账号。随后重新打开原临时 AuthStore 并恢复 binding，验证真实删除和权威结果。
+隔离测试把两种拒绝明确分开：临时 AuthStore 用新的唯一 authority 替换原 authority，使已认证旧会话返回 Unauthorized/EACCES；同时关闭 repository binding，保证新的 tree 连接被拒绝。两者不是同一种错误，也不修改生产错误映射。任一时点只有一个临时管理员 authority；替换 authority 不创建或更改 OS 账号，也不改变镜像预建的两个合成身份。随后重新打开原临时 AuthStore 并恢复 binding，验证真实删除和权威结果。

@@ -194,8 +194,6 @@ pub struct AuthStore {
     backup: Option<BackupHook>,
     blocked: Arc<AtomicBool>,
     committed: Arc<RwLock<Option<Arc<Database>>>>,
-    #[cfg(test)]
-    password_work_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Drop for AuthStore {
@@ -336,8 +334,6 @@ impl LoginChallenge {
 pub(crate) struct PasswordChangeChallenge {
     identity: Identity,
     previous: Administrator,
-    #[cfg(test)]
-    password_work_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// Both Argon2 operations have succeeded, but the live authority and original
@@ -355,10 +351,6 @@ impl PasswordChangeChallenge {
         current_password: &str,
         new_password: &str,
     ) -> Result<PreparedPasswordChange, ApiError> {
-        #[cfg(test)]
-        if let Some(hook) = &self.password_work_hook {
-            hook();
-        }
         if !primitives::verify_password(current_password, &self.previous.password_hash) {
             return Err(ApiError::new(
                 ::http::StatusCode::FORBIDDEN,
@@ -372,10 +364,6 @@ impl PasswordChangeChallenge {
                 "administrator generation has been exhausted",
             )
         })?;
-        #[cfg(test)]
-        if let Some(hook) = &self.password_work_hook {
-            hook();
-        }
         let password_hash =
             primitives::hash_password(new_password).map_err(ApiError::invalid_source)?;
         Ok(PreparedPasswordChange {
@@ -610,8 +598,6 @@ impl AuthStore {
             backup: None,
             blocked: Arc::new(AtomicBool::new(false)),
             committed: Arc::new(RwLock::new(None)),
-            #[cfg(test)]
-            password_work_hook: None,
         };
         store.persist(true)?;
         Ok(store)
@@ -700,8 +686,6 @@ impl AuthStore {
             backup: None,
             blocked: Arc::new(AtomicBool::new(false)),
             committed: Arc::new(RwLock::new(None)),
-            #[cfg(test)]
-            password_work_hook: None,
         };
         if restore {
             store.persist(false)?;
@@ -817,8 +801,6 @@ impl AuthStore {
             backup: None,
             blocked: Arc::new(AtomicBool::new(true)),
             committed: Arc::new(RwLock::new(None)),
-            #[cfg(test)]
-            password_work_hook: None,
         }
     }
     /// The callback maintains a disaster-recovery copy, not admission authority.
@@ -944,8 +926,6 @@ impl AuthStore {
         Ok(PasswordChangeChallenge {
             identity: self.authenticate(token)?,
             previous: self.database()?.administrator.clone(),
-            #[cfg(test)]
-            password_work_hook: self.password_work_hook.clone(),
         })
     }
 

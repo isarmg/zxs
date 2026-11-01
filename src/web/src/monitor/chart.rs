@@ -122,6 +122,17 @@ fn series_projection(state: RwSignal<State>, metric: Metric) -> Memo<Series> {
     Memo::new(move |_| history.with(|history| series(history, &metric)))
 }
 
+fn presentation_projection(state: RwSignal<State>) -> Memo<(bool, String)> {
+    Memo::new(move |_| {
+        state.with(|s| {
+            (
+                s.monitor.history_loading && !s.monitor.history_loaded,
+                s.monitor.range.clone(),
+            )
+        })
+    })
+}
+
 pub(super) fn view(state: RwSignal<State>, metric: Metric) -> impl IntoView {
     let root = NodeRef::<html::Div>::new();
     let dimensions = RwSignal::new((280.0f64, 110.0f64));
@@ -155,21 +166,13 @@ pub(super) fn view(state: RwSignal<State>, metric: Metric) -> impl IntoView {
     let aria_label = format!("{} {}", label, t("历史图表", "history chart"));
     let is_power = metric.is_power();
     let samples = series_projection(state, metric);
-    let presentation = Memo::new(move |_| {
-        state.with(|s| {
-            (
-                s.monitor.history_loading,
-                s.monitor.history_loaded,
-                s.monitor.range.clone(),
-            )
-        })
-    });
+    let presentation = presentation_projection(state);
     view! {<div class="zxs-metric-chart" node_ref=root aria-label=aria_label>
         {move ||{
             let (width,height)=dimensions.get();
-            let (loading,loaded,range)=presentation.get();
+            let (loading,range)=presentation.get();
             let plot=samples.with(|series| plot(&series.points,series.from,series.to,series.interval,width,height,is_power));
-            if plot.paths.is_empty()&&plot.dots.is_empty(){return view!{<p class="zxs-chart-empty">{if loading&&!loaded{t("正在读取历史…","Loading history…")}else{t("暂无可用历史","No available history yet")}}</p>}.into_any();}
+            if plot.paths.is_empty()&&plot.dots.is_empty(){return view!{<p class="zxs-chart-empty">{if loading{t("正在读取历史…","Loading history…")}else{t("暂无可用历史","No available history yet")}}</p>}.into_any();}
             let axis_y=(height-4.).max(14.4);
             view!{<svg viewBox=format!("0 0 {width} {height}") preserveAspectRatio="none" role="img" aria-label=format!("{} · {}",label,range)>
                 <title>{format!("{} · {} · {}",label,range,t("空缺表示未采样或不可用，不表示零。","Gaps indicate missing or unavailable samples, not zero."))}</title>

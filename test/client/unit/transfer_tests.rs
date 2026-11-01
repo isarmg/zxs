@@ -285,7 +285,6 @@ async fn missing_or_weak_integrity_headers_never_publish_downloads() {
             "Content-Length: 4\r\nETag: W/\"{}\"\r\n",
             blake3::hash(b"file")
         ),
-        "Content-Length: 4\r\nETag: \"not-a-hash\"\r\n".to_owned(),
         format!("ETag: \"{}\"\r\n", blake3::hash(b"file")),
     ] {
         let (client, server) = reply(
@@ -368,8 +367,8 @@ async fn upload_integrity_rejections_preserve_server_error_details() {
         std::fs::write(source.path(), b"source is preserved").unwrap();
         assert!(
             matches!(client.upload_file("workspace_test", "item_test", "file", source.path()).await,
-            Err(Error::Api {status:422, code:actual, message, retryable:false, ..})
-            if actual == code && message == "upload rejected (request req_synthetic)")
+            Err(Error::Api {status:422, code:actual, message, request_id, retryable:false, ..})
+            if actual == code && message == "upload rejected" && request_id.as_deref() == Some("req_synthetic"))
         );
         assert_eq!(
             std::fs::read(source.path()).unwrap(),
@@ -592,4 +591,106 @@ async fn download_publication_and_cleanup_stay_with_the_selected_parent() {
     assert_eq!(std::fs::read(moved.join("file")).unwrap(), content);
     assert_eq!(std::fs::read_dir(moved).unwrap().count(), 1);
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn invalid_download_hashes_retain_typed_sources_before_staging() {
+    use std::error::Error as _;
+
+    for hash in [
+        "not-a-hash".to_owned(),
+        "A".repeat(64),
+        "0".repeat(63),
+        "0".repeat(65),
+    ] {
+        let (client, server) = reply(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nETag: \"{hash}\"\r\nConnection: close\r\n\r\nfile"
+        ).into_bytes()).await;
+        let directory = tempfile::tempdir().unwrap();
+        let error = client
+            .download_file("version_test", &directory.path().join("file"))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::DownloadContentHash(_)));
+        assert!(
+            error
+                .source()
+                .unwrap()
+                .is::<storage_contract::ParseContentHashError>()
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        server.await.unwrap();
+    }
+
+    let (client, server) = reply(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nETag: \"\xff\"\r\nConnection: close\r\n\r\nfile"
+            .to_vec(),
+    )
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let error = client
+        .download_file("version_test", &directory.path().join("file"))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::DownloadEtagEncoding(_)));
+    assert!(error.source().unwrap().is::<http::header::ToStrError>());
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn api_errors_keep_request_identity_separate_from_message_and_source() {
+    use std::error::Error as _;
+
+    for (code, request_id, malformed) in [
+        ("CHECKSUM_MISMATCH", Some("req_original"), false),
+        ("CHECKSUM_MISMATCH", None, false),
+        ("UNKNOWN_ERROR_CODE", Some("req_decode_failure"), true),
+    ] {
+        let message = "literal message (request not_the_request_id)";
+        let mut error = json_codec::json!({"code":code,"message":message,"retryable":false});
+        if let Some(request_id) = request_id {
+            error["request_id"] = request_id.into();
+        }
+        let body = json_codec::json!({"error":error}).to_string();
+        let (client, server) = reply(format!(
+            "HTTP/1.1 422 Unprocessable Entity\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+        ).into_bytes()).await;
+        let error = client
+            .request("GET", "/api/system/status", None)
+            .await
+            .unwrap_err();
+        let Error::Api {
+            status,
+            code,
+            message: actual_message,
+            request_id: actual_id,
+            retryable,
+            ..
+        } = &error
+        else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(*status, 422);
+        assert!(!retryable);
+        assert_eq!(actual_id.as_deref(), request_id);
+        if malformed {
+            assert_eq!(*code, storage_contract::ErrorCode::InvalidResponse);
+            let source = error.source().unwrap();
+            assert!(source.is::<storage_contract::client_protocol::ResponseDecodeError>());
+            assert!(source.source().unwrap().is::<json_codec::Error>());
+        } else {
+            assert_eq!(*code, storage_contract::ErrorCode::ChecksumMismatch);
+            assert_eq!(actual_message, message);
+            assert!(error.source().is_none());
+        }
+        let suffix = request_id
+            .map(|id| format!(" (request {id})"))
+            .unwrap_or_default();
+        assert_eq!(
+            error.to_string(),
+            format!("{code}: {actual_message}{suffix}")
+        );
+        server.await.unwrap();
+    }
 }

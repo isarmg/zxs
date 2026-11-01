@@ -73,6 +73,16 @@ class SystemSambaGate(unittest.TestCase):
         self.assertIn('allowed_uid: 0,', fixture)
         self.assertIn('engine_uid, 0,', fixture)
 
+    def test_validation_docs_distinguish_image_accounts_from_host_accounts(self):
+        dockerfile = (ROOT / ".github/containers/debian13-runtime.Dockerfile").read_text()
+        document = (ROOT / "docs/validation/debian13-system-samba.md").read_text()
+        for account in ("zxs-engine-test", "zxs-smb-test"):
+            self.assertRegex(dockerfile, rf"useradd[^\n]+{account}")
+            self.assertIn(f"`{account}`", document)
+        self.assertIn("运行镜像预建", document)
+        self.assertIn("不创建或更改宿主 OS 账号", document)
+        self.assertNotIn("不创建系统用户", document)
+
     def test_debian_source_and_abi_are_exact_not_upstream_fallback(self):
         target = json.loads((ROOT / ".github/samba-debian-target.json").read_text())
         self.assertEqual((target["release"], target["architecture"], target["vfs_interface"]), ("13", "amd64", 50))

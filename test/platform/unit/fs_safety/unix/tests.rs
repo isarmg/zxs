@@ -200,6 +200,7 @@ fn no_clobber_has_one_winner_and_never_replaces_an_occupant() {
                     &root,
                     &source,
                     &RelativePath::new("current").unwrap(),
+                    &File::open(root.resolve(&source)).unwrap(),
                 )
                 .is_ok()
             })
@@ -222,7 +223,8 @@ fn no_clobber_has_one_winner_and_never_replaces_an_occupant() {
         crate::fs_safety::NoClobberPublish::publish(
             &root,
             &current,
-            &RelativePath::new("occupied").unwrap()
+            &RelativePath::new("occupied").unwrap(),
+            &File::open(root.resolve(&current)).unwrap(),
         )
         .is_err()
     );

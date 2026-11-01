@@ -15,9 +15,8 @@ crate 入口在编译期拒绝非 Linux、非 x86_64 或非 64 位目标；内�
 | `sqlite` | SQLx 0.9 索引连接、WAL/FULL/外键、defensive、原生连接限额、完整性及快照检查 |
 | `schema_identity` | 索引表结构身份和确定性指纹 |
 | `secret` | 默认脱敏、不可序列化、释放时清零的秘密类型 |
-| `error` | 有长度上限的错误和请求标识；支持 ZXS 大写业务错误码 |
 
-`sqlite::block_on_sqlite_connection` 支持同步核心执行直接 `SqliteConnection` 操作；不支持连接池、网络、Tokio 定时器或递归调用。每次必须在 future 返回前显式 `Connection::close().await`。`open_index_connection` 固定索引连接策略并启用 defensive；`create_if_missing=false` 不允许隐式新建数据库。
+`sqlite::block_on_sqlite_connection` 支持同步核心执行直接 `SqliteConnection` 操作；不支持连接池、网络、Tokio 定时器或递归调用。同步 owner 可以跨调用持有直接连接；换文件或释放其保护锁前必须显式 `Connection::close().await`，不能在 future 中遗失连接所有权。`open_index_connection` 固定索引连接策略并启用 defensive；`create_if_missing=false` 不允许隐式新建数据库。
 
 平台库不拥有数据盘路由、产品账户状态、产品 DDL 或跨盘事务真相。SQLite 仅为可重建索引。`payload::Receipt` 证明单文件落盘，不能被当作 ACCEPT、FINALIZE 或 PUBLICATION。
 
@@ -26,8 +25,7 @@ crate 入口在编译期拒绝非 Linux、非 x86_64 或非 64 位目标；内�
 本项目定制包括：
 
 - 所有索引池连接和直接索引连接在处理业务语句前启用 SQLite defensive。
-- 错误码允许全大写或全小写，拒绝混合大小写，避免客户端歧义。
-- 完整 payload 使用固定 64 KiB 缓冲区，不使用硬链接、reflink、稀疏复制或去重；摘要或长度不匹配时清理暂存文件。
+- 完整 payload 使用固定 64 KiB 缓冲区，不使用硬链接、reflink、稀疏复制或去重；摘要或长度不匹配时，仅在名称仍绑定持有文件时清理暂存文件。
 - 存储核心和运维 CLI 使用此 crate 的 Linux amd64 本机能力；远程管理客户端 storage-client 和浏览器 Web 不引入 Linux 盘操作及 SQLite 本地 FFI。原生产品和构建宿主的支持范围仍仅为 Linux amd64。
 
 
@@ -165,3 +163,29 @@ CI入口 `.github/scripts/check-directory-retry.py` 从本次成功 Cargo JSON �
 单步create的现有错误分类与staged-create的Unknown阶段，并保留占位和暂存。
 该 libc 后端证据不冒充正常 direct-syscall 产物或真实 NFS/断电实测；正常后端
 屏障矩阵仍独立执行，生产后端与依赖特性没有更改。
+
+## 公开完整 payload 发布边界
+
+`NoClobberPublish::publish` 要求传入已持有的 `&File`，返回
+`AtomicCommitError`；不再仅凭名称重新打开文件并建立另一份身份。
+`payload::write_full` 在 reader 回调前持有新建文件，发布前核对暂存名称，
+rename 后再次将目标身份绑定到同一 FD 并核对普通单链接文件。成功收据的
+身份与摘要属于该文件，不给替代 inode 返回原文件的摘要。
+调用者仍须排除发布／清理期间并发命名空间变更，以及整个写入期间外部内容写入；
+名称／身份检查不是对任意并发写入的内容不可变证明，也不是条件 unlink 原语。
+reader 回调已发生的名称替换由检查拒绝，失败清理不删除观察到的替代物。
+
+发布前失败为 `NotPublished`；开始尝试 rename 后，任何失败回复（含 EEXIST）
+均为 `Unknown`，成功 rename 后的核验或目录屏障失败为 `Published`。
+`payload::Error::Publication` 保留该阶段及原 I/O 来源，Unknown/Published
+不自动删除暂存或目标，调用者须核验现场后决定后续处理。清理失败仍同时
+保留主要失败和清理来源。此公开 API 已收紧，不提供旧签名兼容；当前仓库
+生产业务未调用这两个 helper，不能将此修复描述为已发现的线上数据损坏。
+
+完整 payload 从原先两次文件 fsync 改为对持有 FD 的一次文件 fsync，顺序仍为
+文件屏障 → NOREPLACE rename → 目录屏障；固定 64 KiB 缓冲及全量摘要不变。
+这是系统调用预算变化，非端到端性能测量。根 `atomic-io.sh` 的普通屏障矩阵
+覆盖 payload 写、文件同步、真实占位冲突、目录同步；`rename` 矩阵须使用
+`rustix/use-libc` 隔离产物，覆盖 public/payload 的 rename 前 EIO、真实 rename
+后 EIO 与真实 EEXIST。断言阶段、原 errno、源／目标字节与现场保留，不冒充
+生产 direct-syscall 后端的 rename 注入或真实 NFS／物理断电验收。

@@ -705,36 +705,36 @@ pub(super) fn no_clobber_publish(
     directory: &PrivateDirectory,
     source: &RelativePath,
     destination: &RelativePath,
-) -> Result<(), Error> {
-    let source = entry_name(source)?;
-    let destination = entry_name(destination)?;
-    let file = File::from(
-        openat(
-            &directory.directory,
-            source,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(io::Error::from)?,
-    );
-    let identity = regular_single_link(&file, Path::new(source))?;
-    file.sync_all()?;
-    rename_no_replace(directory, source, destination).map_err(|error| {
-        if error == rustix::io::Errno::EXIST {
-            Error::DestinationExists(destination.into())
-        } else {
-            Error::Io(error.into())
+    held: &File,
+) -> Result<(), AtomicCommitError> {
+    let checked = (|| {
+        let source = entry_name(source)?;
+        let destination = entry_name(destination)?;
+        let identity = regular_single_link(held, Path::new(source))?;
+        let named = statat(&directory.directory, source, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(io::Error::from)?;
+        if (identity.st_dev, identity.st_ino) != (named.st_dev, named.st_ino) {
+            return Err(Error::IdentityChanged(source.into()));
         }
-    })?;
-    let current = statat(&directory.directory, destination, AtFlags::SYMLINK_NOFOLLOW)
-        .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
-    if (identity.st_dev, identity.st_ino) != (current.st_dev, current.st_ino) {
-        return Err(Error::IdentityChanged(destination.into()));
-    }
-    directory
-        .directory
-        .sync_all()
-        .map_err(Error::PublishedDurabilityUnknown)
+        held.sync_all()?;
+        Ok((source, destination, identity))
+    })();
+    let (source, destination, identity) = checked.map_err(AtomicCommitError::NotPublished)?;
+    rename_no_replace(directory, source, destination)
+        .map_err(|error| AtomicCommitError::Unknown(Error::Io(error.into())))?;
+    let confirmed = (|| {
+        let current = statat(&directory.directory, destination, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
+        if (identity.st_dev, identity.st_ino) != (current.st_dev, current.st_ino) {
+            return Err(Error::IdentityChanged(destination.into()));
+        }
+        regular_single_link(held, Path::new(destination))?;
+        directory
+            .directory
+            .sync_all()
+            .map_err(Error::PublishedDurabilityUnknown)
+    })();
+    confirmed.map_err(AtomicCommitError::Published)
 }
 
 // Both callers sync their held source file before this namespace-only step and

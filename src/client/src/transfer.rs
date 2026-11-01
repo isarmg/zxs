@@ -156,7 +156,9 @@ impl Client {
         Ok(PreparedUpload { request })
     }
     /// Publish only a complete verified file, without replacing any existing
-    /// destination. Staging owns cleanup on errors and cancellation.
+    /// destination. Before dispatching publication, dropping the future cleans
+    /// staging. Once the blocking publication task is dispatched, cancellation
+    /// does not stop it: the target may be published without a returned receipt.
     #[cfg(target_os = "linux")]
     pub async fn download_file(&self, version: &str, target: &Path) -> Result<(), Error> {
         let selected_target = super::download_target::Target::open(target)?;
@@ -171,23 +173,18 @@ impl Client {
             decode(response).await?;
             return Err(Error::Response("unexpected success envelope".into()));
         }
-        let expected = response
+        let etag = response
             .headers()
             .get(reqwest::header::ETAG)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| {
-                value
-                    .strip_prefix('"')
-                    .and_then(|value| value.strip_suffix('"'))
-            })
-            .filter(|value| {
-                value.len() == 64
-                    && value
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            })
-            .ok_or_else(|| Error::Response("missing or invalid immutable content hash".into()))?
-            .to_owned();
+            .ok_or_else(|| Error::Response("missing immutable content hash".into()))?
+            .to_str()
+            .map_err(Error::DownloadEtagEncoding)?;
+        let expected: storage_contract::ContentHash = etag
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .ok_or_else(|| Error::Response("expected a strong quoted content hash".into()))?
+            .parse()
+            .map_err(Error::DownloadContentHash)?;
         let expected_length = response
             .content_length()
             .ok_or_else(|| Error::Response("missing file length".into()))?;
@@ -207,7 +204,7 @@ impl Client {
             hash.update(&chunk);
             file.write_all(&chunk).await?;
         }
-        if length != expected_length || hash.finalize().to_hex().as_str() != expected {
+        if length != expected_length || hash.finalize() != expected.digest() {
             return Err(Error::ChecksumMismatch);
         }
         file.sync_all().await?;

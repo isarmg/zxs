@@ -24,11 +24,12 @@ pub enum Error {
     Join(#[from] tokio::task::JoinError),
     #[error("invalid HTTP method: {0}")]
     Method(#[from] http::method::InvalidMethod),
-    #[error("{code}: {message}")]
+    #[error("{code}: {message}{}", ApiRequestContext(request_id.as_deref()))]
     Api {
         status: u16,
         code: storage_contract::ErrorCode,
         message: String,
+        request_id: Option<String>,
         retryable: bool,
         #[source]
         source: Option<storage_contract::client_protocol::ResponseDecodeError>,
@@ -39,9 +40,25 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("invalid response: {0}")]
     Response(String),
+    #[error("invalid download ETag header: {0}")]
+    DownloadEtagEncoding(#[source] http::header::ToStrError),
+    #[error("invalid download content hash: {0}")]
+    DownloadContentHash(#[source] storage_contract::ParseContentHashError),
     #[error("CHECKSUM_MISMATCH: download did not match the immutable version hash")]
     ChecksumMismatch,
 }
+// Presentation borrows structured context; callers never need to parse it back
+// out of the server's message, and adapting an error does not format a new String.
+struct ApiRequestContext<'a>(Option<&'a str>);
+impl std::fmt::Display for ApiRequestContext<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(request_id) => write!(formatter, " (request {request_id})"),
+            None => Ok(()),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct Session {

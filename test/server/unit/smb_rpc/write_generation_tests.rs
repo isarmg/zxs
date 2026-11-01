@@ -633,3 +633,56 @@ mod measurement {
         );
     }
 }
+
+#[test]
+fn flush_reports_external_workspace_ownership_without_losing_pending_bytes() {
+    let (temp, shared, backend, branch) = fixture();
+    let mut session = session(shared, &branch);
+    let mut vfs = Vfs::open(&mut session, "report.txt", false, false);
+    vfs.write(&mut session, 0, b"smb").unwrap();
+
+    // An API upload bypasses the SMB-only path reservation, but the core owns
+    // the cross-transport file exclusion. Keep this workspace uncommitted.
+    let workspace = backend
+        .create_workspace(
+            &session.identity,
+            crate::CreateWorkspace {
+                branch_id: branch,
+                source_commit_id: None,
+            },
+        )
+        .unwrap();
+    let source = temp.path().join("external.txt");
+    fs::write(&source, b"api").unwrap();
+    backend
+        .upload(
+            &session.identity,
+            &workspace.workspace_id,
+            &new_id("entry").unwrap(),
+            &name_policy::PortablePath::parse("report.txt").unwrap(),
+            &crate::UploadSource::from_file(File::open(source).unwrap(), u64::MAX).unwrap(),
+        )
+        .unwrap();
+
+    let error = vfs.flush(&mut session).unwrap_err();
+    // The core reports FileBusy, and EngineBackend's shared public-code
+    // boundary converts it to FileWriteBusy before SMB receives the error.
+    assert_eq!(
+        error_code(&error),
+        storage_contract::ErrorCode::FileWriteBusy
+    );
+    let mut pending = [0; 3];
+    vfs.file.read_exact_at(&mut pending, 0).unwrap();
+    assert_eq!(&pending, b"smb");
+    let Handle::Write(writer) = &session.handles[&vfs.handle] else {
+        panic!("failed flush must retain the writer");
+    };
+    assert!(!writer.committed);
+    assert!(writer.dirty);
+
+    backend
+        .abort_workspace(&session.identity, &workspace.workspace_id)
+        .unwrap();
+    vfs.flush(&mut session).unwrap();
+    session.close(vfs.handle, false).unwrap();
+}

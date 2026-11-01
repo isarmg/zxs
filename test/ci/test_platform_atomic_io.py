@@ -12,6 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_NAME = "fs_safety::tests::atomic_io_barriers_and_failures"
+PAYLOAD_TEST = "payload::tests::payload_io_barriers_and_failures"
 artifact = runpy.run_path(str(ROOT / ".github/scripts/check-platform-atomic-io.py"))["test_artifact"]
 
 
@@ -54,22 +55,26 @@ class AtomicArtifactTests(unittest.TestCase):
             for tool in tools.iterdir():
                 tool.chmod(0o700)
             binary = root / "libtest"
-            for listed, result, marker, succeeds in (
-                (False, "", False, False),
-                (True, "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out;", True, False),
-                (True, "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;", False, False),
-                (True, "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;", True, True),
-            ):
-                with self.subTest(listed=listed, result=result, marker=marker):
+            passing = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;"
+            zero = "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out;"
+            cases = [(TEST_NAME, None, passing, True), (PAYLOAD_TEST, None, passing, True)]
+            for selected in (TEST_NAME, PAYLOAD_TEST):
+                cases.extend([(None, selected, zero, True), (None, selected, passing, False)])
+            cases.append((None, None, passing, True))
+            for missing, selected_failure, result, marker in cases:
+                succeeds = missing is None and selected_failure is None
+                with self.subTest(missing=missing, selected_failure=selected_failure, result=result, marker=marker):
                     binary.write_text(
                         f"#!{sys.executable}\n"
                         "import os, sys\n"
+                        "selected = sys.argv[sys.argv.index('--exact') + 1] if '--list' in sys.argv else sys.argv[-1]\n"
                         "if '--list' in sys.argv:\n"
-                        f"    print({(TEST_NAME + ': test') if listed else '0 tests'!r})\n"
+                        f"    print(selected + ': test' if selected != {missing!r} else '0 tests')\n"
                         "    sys.exit(0)\n"
-                        f"if {marker!r}:\n"
+                        f"failing = selected == {selected_failure!r}\n"
+                        f"if not failing or {marker!r}:\n"
                         "    print('ZXS_ATOMIC_IO_COMPLETE mode=' + os.environ['ZXS_ATOMIC_MODE'] + ' stage=' + os.environ['ZXS_ATOMIC_STAGE'])\n"
-                        f"print({result!r})\n"
+                        f"print({result!r} if failing else {passing!r})\n"
                     )
                     binary.chmod(0o700)
                     for suite in ("barriers", "rename"):
@@ -80,10 +85,12 @@ class AtomicArtifactTests(unittest.TestCase):
                         )
                         self.assertEqual(execution.returncode, 0 if succeeds else 1, execution.stderr)
                         if succeeds:
-                            self.assertEqual(execution.stdout.count("Atomic I/O mode="), 29 if suite == "barriers" else 6)
+                            self.assertEqual(execution.stdout.count("Atomic I/O mode="), 34 if suite == "barriers" else 12)
+                        elif missing is not None:
+                            kind = "payload" if missing == PAYLOAD_TEST else "atomic"
+                            self.assertIn(f"Missing exact ignored {kind} I/O test", execution.stderr)
                         else:
-                            self.assertIn("Missing exact ignored atomic I/O test" if not listed else
-                                          "Missing atomic I/O completion or single-test pass", execution.stderr)
+                            self.assertIn("Missing atomic I/O completion or single-test pass", execution.stderr)
 
 
 if __name__ == "__main__":

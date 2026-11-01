@@ -283,13 +283,17 @@ impl AtomicFile {
 
 pub struct NoClobberPublish;
 impl NoClobberPublish {
-    /// Publish a single-linked regular staging file within one held private directory.
+    /// Publish the held single-linked file within one held private directory.
+    /// Both names are checked against this descriptor, never a reopened substitute.
+    /// Once rename is attempted, any error is Unknown and the caller must preserve
+    /// staging/target evidence. Callers must prevent concurrent content writes.
     pub fn publish(
         directory: &PrivateDirectory,
         source: &RelativePath,
         destination: &RelativePath,
-    ) -> Result<(), Error> {
-        unix::no_clobber_publish(directory, source, destination)
+        held: &File,
+    ) -> Result<(), AtomicCommitError> {
+        unix::no_clobber_publish(directory, source, destination, held)
     }
 }
 

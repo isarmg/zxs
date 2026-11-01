@@ -5,9 +5,11 @@
 //! independent physical devices, and cross-disk decision records belong to the
 //! storage engine. A returned receipt attests this file publication only.
 
-use crate::fs_safety::{EntryName, NoClobberPublish, PrivateDirectory, RelativePath};
+use crate::fs_safety::{
+    AtomicCommitError, EntryName, NoClobberPublish, PrivateDirectory, RelativePath,
+};
 use error_definition::Error;
-use rustix::fs::{AtFlags, Mode, OFlags, openat, unlinkat};
+use rustix::fs::{AtFlags, Mode, OFlags, openat, statat, unlinkat};
 use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
@@ -34,7 +36,7 @@ pub enum Error {
     Cleanup {
         #[source]
         operation: Box<Error>,
-        cleanup: io::Error,
+        cleanup: crate::fs_safety::Error,
     },
     #[error("payload length does not match sealed length {expected}: observed {actual}")]
     Length { expected: u64, actual: u64 },
@@ -43,30 +45,51 @@ pub enum Error {
     #[error("secure random staging name could not be generated")]
     Randomness(#[source] system_entropy::Error),
     #[error(transparent)]
+    Publication(#[from] AtomicCommitError),
+    #[error(transparent)]
     Filesystem(#[from] crate::fs_safety::Error),
     #[error(transparent)]
     Io(#[from] io::Error),
 }
 
-struct StagingCleanup {
+struct StagingCleanup<'a> {
+    file: &'a File,
     directory: File,
     name: String,
     armed: bool,
 }
 
-impl StagingCleanup {
-    fn cleanup(&mut self) -> io::Result<()> {
+impl StagingCleanup<'_> {
+    fn cleanup(&mut self) -> Result<(), crate::fs_safety::Error> {
         if !self.armed {
             return Ok(());
         }
         self.armed = false;
+        // Reader callbacks may have moved or replaced the staging entry. Never
+        // delete an observed substitute merely because its name is ours.
+        use std::os::unix::fs::MetadataExt;
+        let held = self.file.metadata()?;
+        let named = match statat(
+            &self.directory,
+            self.name.as_str(),
+            AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(named) => named,
+            Err(rustix::io::Errno::NOENT) => return Ok(()),
+            Err(error) => return Err(io::Error::from(error).into()),
+        };
+        if (held.dev(), held.ino()) != (named.st_dev, named.st_ino) {
+            return Err(crate::fs_safety::Error::IdentityChanged(
+                self.name.clone().into(),
+            ));
+        }
         match unlinkat(&self.directory, self.name.as_str(), AtFlags::empty()) {
             Ok(()) | Err(rustix::io::Errno::NOENT) => Ok(()),
-            Err(error) => Err(error.into()),
+            Err(error) => Err(io::Error::from(error).into()),
         }
     }
 }
-impl Drop for StagingCleanup {
+impl Drop for StagingCleanup<'_> {
     fn drop(&mut self) {
         if let Err(error) = self.cleanup() {
             tracing::error!(%error, "payload staging cleanup during unwind failed");
@@ -77,10 +100,14 @@ impl Drop for StagingCleanup {
 /// Write exactly the sealed byte count using a fixed 64 KiB buffer.
 ///
 /// The destination must not exist. A destination that already exists, including
-/// a symlink, is never overwritten. On length/digest/I/O failures before rename,
-/// the exclusive staging file is removed. If final directory synchronization
-/// fails after rename, [`crate::fs_safety::Error::PublishedDurabilityUnknown`]
-/// is preserved so the engine can reconcile rather than falsely report failure.
+/// a symlink, is never overwritten. Before rename, failures remove staging only
+/// while its name still matches the held descriptor. Once rename is attempted,
+/// [`Error::Publication`] retains Unknown/Published phase and the I/O source;
+/// no automatic cleanup removes evidence needed for reconciliation.
+/// Callers must exclude other writes to staging contents throughout this call,
+/// including writes performed by reader callbacks, and exclude namespace mutation
+/// during publication/cleanup. Reader callbacks may replace names, but substitutions
+/// are rejected rather than receiving a receipt for the original descriptor.
 pub fn write_full(
     directory: &PrivateDirectory,
     destination: &EntryName,
@@ -108,11 +135,11 @@ pub fn write_full(
         .map_err(io::Error::from)?,
     );
     let mut cleanup = StagingCleanup {
+        file: &staging,
         directory: cleanup_directory,
         name,
         armed: true,
     };
-    let mut staging = staging;
     let result = (|| {
         let identity = crate::fs_safety::linux::SingleLinkRequirement::check(&staging)?;
         let mut hasher = blake3::Hasher::new();
@@ -136,7 +163,7 @@ pub fn write_full(
                     actual: bytes,
                 });
             }
-            staging.write_all(&buffer[..read])?;
+            (&staging).write_all(&buffer[..read])?;
             hasher.update(&buffer[..read]);
         }
         if bytes != expectation.bytes {
@@ -152,17 +179,15 @@ pub fn write_full(
         {
             return Err(Error::Digest);
         }
-        staging.sync_all()?;
         let published = NoClobberPublish::publish(
             directory,
             &RelativePath::new(&cleanup.name)?,
             &destination.as_relative(),
+            &staging,
         );
         if matches!(
             &published,
-            Ok(())
-                | Err(crate::fs_safety::Error::PublishedDurabilityUnknown(_)
-                    | crate::fs_safety::Error::IdentityChanged(_))
+            Ok(()) | Err(AtomicCommitError::Unknown(_) | AtomicCommitError::Published(_))
         ) {
             cleanup.armed = false;
         }

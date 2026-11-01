@@ -16,12 +16,6 @@ pub struct FileNodeSummary {
     pub tags: BTreeSet<String>,
 }
 
-#[cfg(test)]
-thread_local! {
-    static MERGE_EVENT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static TAG_NODE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 pub(crate) fn node_version(state: &State, file: &str, node: &str) -> Result<String> {
     let version = state
         .versions
@@ -77,11 +71,11 @@ pub(crate) fn base_parents(state: &State, node: &str) -> Vec<String> {
 
 pub(crate) fn node_parents(state: &State, node: &str) -> Vec<String> {
     let mut parents = base_parents(state, node);
-    for event in state.file_branch_merges.values().filter(|m| {
-        #[cfg(test)]
-        MERGE_EVENT_VISITS.set(MERGE_EVENT_VISITS.get() + 1);
-        m.result_node_id == node
-    }) {
+    for event in state
+        .file_branch_merges
+        .values()
+        .filter(|m| m.result_node_id == node)
+    {
         for parent in &event.parent_node_ids {
             if parent != node && !parents.contains(parent) {
                 parents.push(parent.clone());
@@ -97,8 +91,6 @@ pub(crate) fn node_tags(state: &State, node: &str) -> BTreeSet<String> {
     let mut current = node.to_owned();
     let mut seen = BTreeSet::new();
     while seen.insert(current.clone()) {
-        #[cfg(test)]
-        TAG_NODE_VISITS.set(TAG_NODE_VISITS.get() + 1);
         if let Some(n) = state.file_metadata_nodes.get(&current) {
             return n.tags.clone();
         }
@@ -116,8 +108,6 @@ pub(crate) struct NodeProjection<'a> {
     state: &'a State,
     tags: std::collections::BTreeMap<String, std::rc::Rc<BTreeSet<String>>>,
     merges: std::collections::BTreeMap<&'a str, Vec<&'a FileBranchMerge>>,
-    #[cfg(test)]
-    tag_visits: usize,
 }
 
 impl<'a> NodeProjection<'a> {
@@ -132,8 +122,6 @@ impl<'a> NodeProjection<'a> {
         let mut merges = std::collections::BTreeMap::<_, Vec<_>>::new();
         // Preserve the original map iteration order within each result node.
         for event in events {
-            #[cfg(test)]
-            MERGE_EVENT_VISITS.set(MERGE_EVENT_VISITS.get() + 1);
             merges
                 .entry(event.result_node_id.as_str())
                 .or_default()
@@ -143,8 +131,6 @@ impl<'a> NodeProjection<'a> {
             state,
             tags: Default::default(),
             merges,
-            #[cfg(test)]
-            tag_visits: 0,
         }
     }
 
@@ -175,11 +161,6 @@ impl<'a> NodeProjection<'a> {
                     break std::rc::Rc::new(BTreeSet::new());
                 }
                 path.push(current);
-                #[cfg(test)]
-                {
-                    self.tag_visits += 1;
-                    TAG_NODE_VISITS.set(TAG_NODE_VISITS.get() + 1);
-                }
                 // Metadata wins even for overlapping IDs and cyclic parents.
                 if let Some(metadata) = self.state.file_metadata_nodes.get(current) {
                     break std::rc::Rc::new(metadata.tags.clone());

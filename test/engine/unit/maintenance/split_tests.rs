@@ -1448,3 +1448,188 @@ fn split_at_deletion_preserves_facts_without_copying_deleted_content() {
         Some(&facts)
     );
 }
+
+// Independent pre-index admission oracle; intentionally scans per selected version.
+fn legacy_check_purge(engine: &Engine, history: &str, versions: &[String]) -> Result<()> {
+    let selected = versions.iter().collect::<BTreeSet<_>>();
+    let reads = engine
+        .reads
+        .lock()
+        .expect("invariant: read lease lock poisoned");
+    let counts = reads.counts()?;
+    for id in versions {
+        let v = engine.state.versions.get(id).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::VersionNotFound,
+                "selected version missing",
+            )
+        })?;
+        if v.history_tree_id != history {
+            return Err(Error::new(
+                storage_contract::ErrorCode::HistoryMismatch,
+                "purge version belongs to another history",
+            ));
+        }
+        if counts.get(id).copied().unwrap_or(0) > 0 {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ContentPinned,
+                "version has an active read lease",
+            ));
+        }
+        for b in engine
+            .state
+            .branches
+            .values()
+            .filter(|b| b.state == BranchState::Active)
+        {
+            if engine
+                .state
+                .commits
+                .get(&b.head_commit_id)
+                .is_some_and(|c| c.entries.iter().any(|e| e.version_id == *id))
+            {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ContentPinned,
+                    "version is used by an active branch HEAD",
+                ));
+            }
+        }
+        for branch in engine.state.directory_branches.values() {
+            if branch
+                .entries
+                .iter()
+                .any(|entry| entry.kind == NamespaceEntryKind::File && entry.version_id == *id)
+            {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ContentPinned,
+                    "version is referenced by a retained directory branch HEAD",
+                ));
+            }
+        }
+    }
+    for w in engine
+        .workspaces
+        .values()
+        .filter(|w| matches!(w.state, WorkspaceState::Open | WorkspaceState::Sealed))
+    {
+        if engine
+            .state
+            .commits
+            .get(&w.base_head)
+            .is_some_and(|c| c.entries.iter().any(|e| selected.contains(&e.version_id)))
+        {
+            return Err(Error::new(
+                storage_contract::ErrorCode::ContentPinned,
+                "an open workspace needs a selected version",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn purge_head_projection_matches_legacy_rejections_and_precedence() {
+    let (_temporary, mut engine, repo) = fixture();
+    let first = save(&mut engine, &repo.main_branch_id, b"old");
+    let old = engine.state.commits[&first]
+        .entries
+        .iter()
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
+        .unwrap()
+        .clone();
+    save(&mut engine, &repo.main_branch_id, b"new");
+    let latest = engine
+        .list_tree(&repo.main_branch_id)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.kind == NamespaceEntryKind::File)
+        .unwrap();
+    let choices = [
+        old.version_id.clone(),
+        latest.version_id.clone(),
+        "missing".into(),
+    ];
+    let check = |engine: &Engine| {
+        for history in [repo.history_tree_id.as_str(), "other-history"] {
+            for a in &choices {
+                for b in &choices {
+                    let selection = vec![a.clone(), b.clone()];
+                    let outcome = |result: Result<()>| {
+                        result.map_err(|error| (error.code(), error.message().into_owned()))
+                    };
+                    assert_eq!(
+                        outcome(engine.check_purge(history, &selection)),
+                        outcome(legacy_check_purge(engine, history, &selection)),
+                        "history={history}, selection={selection:?}",
+                    );
+                }
+            }
+        }
+    };
+    check(&engine);
+    let lease = engine.prepare_content(&old.version_id).unwrap();
+    check(&engine);
+    drop(lease);
+    let workspace = engine
+        .create_workspace(&repo.main_branch_id, "alice")
+        .unwrap();
+    std::sync::Arc::make_mut(&mut engine.state)
+        .branches
+        .get_mut(&repo.main_branch_id)
+        .unwrap()
+        .state = BranchState::Archived;
+    check(&engine); // Workspace still retains the HEAD of an archived branch.
+    engine
+        .workspaces
+        .get_mut(&workspace.workspace_id)
+        .unwrap()
+        .state = WorkspaceState::Aborted;
+    assert!(
+        engine
+            .check_purge(&repo.history_tree_id, &choices[..2])
+            .is_ok()
+    );
+    check(&engine);
+    std::sync::Arc::make_mut(&mut engine.state)
+        .directory_branches
+        .insert(
+            "retained".into(),
+            DirectoryBranch {
+                directory_branch_id: "retained".into(),
+                repository_id: repo.repository_id.clone(),
+                directory_id: "directory".into(),
+                path: String::new(),
+                name: "retained".into(),
+                parent_branch_id: None,
+                head_tree_id: "tree".into(),
+                commit_id: first,
+                entries: vec![old],
+                file_branches: BTreeMap::new(),
+                file_contexts: BTreeMap::new(),
+                inherited_files: BTreeMap::new(),
+                directory_refs: BTreeMap::new(),
+                materialized: false,
+                sequence: 1,
+            },
+        );
+    check(&engine); // Unselected, pending directory HEADs still pin content.
+    assert_eq!(
+        engine
+            .check_purge(&repo.history_tree_id, &choices[..1])
+            .unwrap_err()
+            .code(),
+        storage_contract::ErrorCode::ContentPinned
+    );
+    std::sync::Arc::make_mut(&mut engine.state)
+        .directory_branches
+        .get_mut("retained")
+        .unwrap()
+        .entries[0]
+        .kind = NamespaceEntryKind::Directory;
+    check(&engine);
+    assert!(
+        engine
+            .check_purge(&repo.history_tree_id, &choices[..2])
+            .is_ok()
+    );
+}

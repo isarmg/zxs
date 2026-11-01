@@ -109,3 +109,38 @@ fn chart_projection_reuses_admitted_history_across_resize_and_unrelated_updates(
         assert_eq!(samples.with(|s| s.points[0].1), Some(30.));
     });
 }
+
+#[test]
+fn loaded_chart_does_not_rebuild_for_polling_loading_transitions() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    Owner::new().with(|| {
+        let state = RwSignal::new(State::default());
+        state.update(|s| s.monitor.history_loaded = true);
+        let presentation = presentation_projection(state);
+        let builds = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&builds);
+        let render = Memo::new(move |_| {
+            presentation.get();
+            observed.fetch_add(1, Ordering::Relaxed)
+        });
+        render.get();
+        for loading in [true, false, true, false] {
+            state.update(|s| s.monitor.history_loading = loading);
+            render.get();
+        }
+        assert_eq!(builds.load(Ordering::Relaxed), 1);
+        state.update(|s| {
+            s.monitor.history_loaded = false;
+            s.monitor.history_loading = true;
+            s.monitor.range = "24h".into();
+        });
+        render.get();
+        assert_eq!(builds.load(Ordering::Relaxed), 2);
+        state.update(|s| s.monitor.history_loading = false);
+        render.get();
+        assert_eq!(builds.load(Ordering::Relaxed), 3);
+    });
+}

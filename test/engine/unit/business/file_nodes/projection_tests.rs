@@ -227,7 +227,7 @@ fn projection_matches_uncached_nodes_and_serialized_bytes() {
 }
 
 #[test]
-fn projection_walks_a_linear_history_once_in_either_query_order() {
+fn projection_shares_and_retains_tag_snapshots_in_either_query_order() {
     const LENGTH: usize = 4096;
     let mut state = State::default();
     metadata(&mut state, "0", &[], &["tag"]);
@@ -240,13 +240,23 @@ fn projection_walks_a_linear_history_once_in_either_query_order() {
             let id = if reverse { LENGTH - n - 1 } else { n }.to_string();
             assert_eq!(projection.tags(&id), &BTreeSet::from(["tag".into()]));
         }
-        assert_eq!(projection.tag_visits, LENGTH);
+        assert_eq!(projection.tags.len(), LENGTH);
+        let snapshot = std::rc::Rc::clone(&projection.tags["0"]);
+        assert!(
+            projection
+                .tags
+                .values()
+                .all(|tags| std::rc::Rc::ptr_eq(tags, &snapshot))
+        );
         for n in 0..LENGTH {
             projection.tags(&n.to_string());
         }
-        assert_eq!(
-            projection.tag_visits, LENGTH,
-            "replica lookups must not traverse again"
+        assert_eq!(projection.tags.len(), LENGTH);
+        assert!(
+            projection
+                .tags
+                .values()
+                .all(|tags| std::rc::Rc::ptr_eq(tags, &snapshot))
         );
     }
 }
@@ -378,7 +388,7 @@ fn batch_matches_public_single_node_results_including_partial_errors_and_scope()
 }
 
 #[test]
-fn batch_counts_one_merge_scan_and_one_tag_walk_without_cross_request_cache() {
+fn batch_consumes_merge_iterator_once_and_does_not_cache_across_requests() {
     const NODES: usize = 1024;
     const MERGES: usize = 257;
     let mut state = State::default();
@@ -401,8 +411,6 @@ fn batch_counts_one_merge_scan_and_one_tag_walk_without_cross_request_cache() {
             .map(|n| if reverse { NODES - n - 1 } else { n }.to_string())
             .collect::<Vec<_>>();
         let ids = ids.iter().map(String::as_str).collect::<Vec<_>>();
-        MERGE_EVENT_VISITS.set(0);
-        TAG_NODE_VISITS.set(0);
         let expected = ids
             .iter()
             .map(|id| {
@@ -415,17 +423,25 @@ fn batch_counts_one_merge_scan_and_one_tag_walk_without_cross_request_cache() {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        assert_eq!(MERGE_EVENT_VISITS.get(), NODES * MERGES);
-        assert_eq!(TAG_NODE_VISITS.get(), NODES * (NODES + 1) / 2);
-        MERGE_EVENT_VISITS.set(0);
-        TAG_NODE_VISITS.set(0);
-        let actual = engine.project_file_nodes(FileNodeProjectionRequest {
+        // Observe the existing iterator boundary, not a test-only business hook.
+        let visits = std::cell::Cell::new(0);
+        let events = engine.state.file_branch_merges.values().inspect(|_| {
+            visits.set(visits.get() + 1);
+        });
+        let mut projection = NodeProjection::from_merge_events(&engine.state, events);
+        assert_eq!(visits.get(), MERGES);
+        let actual = projection.summaries(FileNodeProjectionRequest {
             file_id: "file",
             node_ids: &ids,
         });
-        assert_eq!(MERGE_EVENT_VISITS.get(), MERGES);
-        assert_eq!(TAG_NODE_VISITS.get(), NODES);
+        assert_eq!(visits.get(), MERGES);
+        assert_eq!(projection.tags.len(), NODES);
+        let public = engine.project_file_nodes(FileNodeProjectionRequest {
+            file_id: "file",
+            node_ids: &ids,
+        });
         for (id, actual) in actual {
+            assert_eq!(public[&id].as_ref().unwrap(), actual.as_ref().unwrap());
             assert_eq!(actual.unwrap(), expected[&id], "{id}");
         }
     }

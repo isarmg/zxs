@@ -680,75 +680,12 @@ async fn exhausted_generation_returns_nonretryable_http_conflict_without_mutatio
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn password_work_does_not_hold_the_authority_lock_or_block_session_authentication() {
+async fn http_password_change_clears_cookie_and_revokes_the_request_session() {
     let root = crate::tests::private_tempdir();
     let mut store = AuthStore::initialize(root.path(), "owner", OLD_PASSWORD).unwrap();
     let login = store.login("owner", OLD_PASSWORD).unwrap();
-    let (started, mut work) = tokio::sync::mpsc::unbounded_channel();
-    let (resume, wait) = std::sync::mpsc::channel();
-    let wait = Mutex::new(wait);
-    store.password_work_hook = Some(Arc::new(move || {
-        started.send(()).unwrap();
-        // Independent watchdog bounds regressions without depending on Tokio.
-        wait.lock()
-            .unwrap()
-            .recv_timeout(Duration::from_secs(10))
-            .unwrap();
-    }));
     let (app, auth) = application(root.path(), store);
-    let changing = tokio::spawn(app.clone().oneshot(password_request(&login.token)));
-    let mut concurrent_login = None;
-    for stage in ["verify current password", "hash new password"] {
-        tokio::time::timeout(Duration::from_secs(10), work.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let unlocked = auth.try_lock().is_ok();
-        let response = if unlocked {
-            Some(
-                tokio::time::timeout(
-                    Duration::from_secs(2),
-                    app.clone().oneshot(
-                        Request::builder()
-                            .uri("/api/auth/me")
-                            .header("authorization", format!("Bearer {}", login.token))
-                            .body(Body::empty())
-                            .unwrap(),
-                    ),
-                )
-                .await,
-            )
-        } else {
-            None
-        };
-        if unlocked && stage == "hash new password" {
-            let response = tokio::time::timeout(
-                Duration::from_secs(5),
-                app.clone().oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/api/auth/login")
-                        .header("content-type", "application/json")
-                        .body(Body::from(
-                            json!({"username":"owner","password":OLD_PASSWORD}).to_string(),
-                        ))
-                        .unwrap(),
-                ),
-            )
-            .await
-            .unwrap()
-            .unwrap();
-            assert_eq!(response.status(), 200);
-            let bytes = http_routing::body::to_bytes(response.into_body(), 8192)
-                .await
-                .unwrap();
-            concurrent_login = Some(json_codec::from_slice::<LoginResult>(&bytes).unwrap());
-        }
-        resume.send(()).unwrap();
-        assert!(unlocked, "authority lock held during {stage}");
-        assert_eq!(response.unwrap().unwrap().unwrap().status(), 200, "{stage}");
-    }
-    let response = changing.await.unwrap().unwrap();
+    let response = app.oneshot(password_request(&login.token)).await.unwrap();
     assert_eq!(response.status(), 200);
     assert!(
         response.headers()["set-cookie"]
@@ -756,13 +693,84 @@ async fn password_work_does_not_hold_the_authority_lock_or_block_session_authent
             .unwrap()
             .contains("Max-Age=0")
     );
-    assert!(auth.lock().unwrap().authenticate(&login.token).is_err());
-    assert!(
-        auth.lock()
-            .unwrap()
-            .authenticate(&concurrent_login.unwrap().token)
-            .is_err()
+    let bytes = http_routing::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    assert_eq!(
+        json_codec::from_slice::<json_codec::Value>(&bytes).unwrap(),
+        json!({"changed":true,"reauthentication_required":true})
     );
+    assert!(auth.lock().unwrap().authenticate(&login.token).is_err());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn password_preparation_is_detached_and_revokes_sessions_created_before_publication() {
+    let root = crate::tests::private_tempdir();
+    let mut store = AuthStore::initialize(root.path(), "owner", OLD_PASSWORD).unwrap();
+    let login = store.login("owner", OLD_PASSWORD).unwrap();
+    let (app, auth) = application(root.path(), store);
+    let challenge = auth
+        .lock()
+        .unwrap()
+        .password_change_challenge(&login.token)
+        .unwrap();
+    let (resume, wait) = std::sync::mpsc::channel();
+    let (finished, prepared) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        wait.recv_timeout(Duration::from_secs(10)).unwrap();
+        finished
+            .send(challenge.prepare(OLD_PASSWORD, NEW_PASSWORD))
+            .unwrap();
+    });
+    // Hold the actual authority lock throughout both Argon2 operations. The
+    // detached challenge must finish without acquiring it, with no production hook.
+    let prepared = {
+        let _authority = auth.lock().unwrap();
+        resume.send(()).unwrap();
+        prepared
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap()
+    };
+    worker.join().unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/me")
+                .header("authorization", format!("Bearer {}", login.token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    // This HTTP login is newer than the challenge and prepared replacement.
+    // Publication must revoke it as well as the originally admitted session.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"username":"owner","password":OLD_PASSWORD}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let bytes = http_routing::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let concurrent_login = json_codec::from_slice::<LoginResult>(&bytes).unwrap();
+    let mut store = auth.lock().unwrap();
+    store.finish_password_change(prepared).unwrap();
+    assert!(store.authenticate(&login.token).is_err());
+    assert!(store.authenticate(&concurrent_login.token).is_err());
+    assert!(store.login("owner", NEW_PASSWORD).is_ok());
 }
 
 #[test]

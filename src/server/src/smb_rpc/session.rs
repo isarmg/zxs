@@ -78,8 +78,12 @@ impl Session {
             .collect::<BTreeSet<_>>();
         let overlaps = |left: &str, right: &str| {
             left == right
-                || left.starts_with(&format!("{right}/"))
-                || right.starts_with(&format!("{left}/"))
+                || left
+                    .strip_prefix(right)
+                    .is_some_and(|tail| tail.starts_with('/'))
+                || right
+                    .strip_prefix(left)
+                    .is_some_and(|tail| tail.starts_with('/'))
         };
         let mut writers = self
             .shared

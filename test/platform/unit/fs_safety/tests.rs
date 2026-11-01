@@ -591,8 +591,12 @@ fn create_and_public_publish_preserve_existing_destinations_and_sources() {
     let source = RelativePath::new("source").unwrap();
     fs::write(directory.resolve(&source), b"staged").unwrap();
     assert!(matches!(
-        NoClobberPublish::publish(&directory, &source, &destination.as_relative()),
-        Err(Error::DestinationExists(_))
+        NoClobberPublish::publish(
+            &directory, &source, &destination.as_relative(),
+            &File::open(directory.resolve(&source)).unwrap(),
+        ),
+        Err(AtomicCommitError::Unknown(Error::Io(ref error)))
+            if error.raw_os_error() == Some(libc::EEXIST)
     ));
     assert_eq!(fs::read(directory.resolve(&source)).unwrap(), b"staged");
     assert_eq!(
@@ -658,7 +662,28 @@ fn atomic_io_barriers_and_failures() {
                 }
                 result.map(drop).map_err(AtomicCommitError::into_source)
             }),
-        "public" => NoClobberPublish::publish(&directory, &source, &destination.as_relative()),
+        "public" => {
+            let result = NoClobberPublish::publish(
+                &directory,
+                &source,
+                &destination.as_relative(),
+                &File::open(directory.resolve(&source)).unwrap(),
+            );
+            if let Err(error) = &result {
+                assert_eq!(
+                    matches!(error, AtomicCommitError::Published(_)),
+                    stage == "directory-sync"
+                );
+                assert_eq!(
+                    matches!(error, AtomicCommitError::Unknown(_)),
+                    matches!(
+                        stage.as_str(),
+                        "publish" | "rename-before" | "rename-after" | "create-race"
+                    )
+                );
+            }
+            result.map_err(AtomicCommitError::into_source)
+        }
         _ => panic!("unknown test mode"),
     };
     fs::remove_file(root.join(".inject")).unwrap();
@@ -739,13 +764,24 @@ fn atomic_io_barriers_and_failures() {
                 );
                 assert!(root.join("destination").is_dir());
             } else {
-                assert!(matches!(result, Err(Error::DestinationExists(_))));
+                if mode == "public" {
+                    assert!(
+                        matches!(result, Err(Error::Io(ref error)) if error.raw_os_error() == Some(libc::EEXIST))
+                    );
+                } else {
+                    assert!(matches!(result, Err(Error::DestinationExists(_))));
+                }
                 assert_eq!(fs::read(root.join("destination")).unwrap(), b"");
             }
         }
         _ => panic!("unknown test stage"),
     }
-    if mode == "public" && matches!(stage.as_str(), "file-sync" | "publish") {
+    if mode == "public"
+        && matches!(
+            stage.as_str(),
+            "file-sync" | "publish" | "rename-before" | "create-race"
+        )
+    {
         assert_eq!(fs::read(root.join("source")).unwrap(), b"new");
     }
     assert!(root.is_dir());
@@ -761,7 +797,7 @@ fn atomic_io_barriers_and_failures() {
         .collect();
     assert_eq!(
         staging.len(),
-        usize::from(matches!(stage.as_str(), "rename-before" | "create-race"))
+        usize::from(mode != "public" && matches!(stage.as_str(), "rename-before" | "create-race"))
     );
     if let Some(path) = staging.first() {
         assert_eq!(fs::read(path).unwrap(), b"new");
@@ -793,7 +829,8 @@ fn public_publish_rejects_unsafe_sources_and_cross_directory_names() {
             NoClobberPublish::publish(
                 &directory,
                 &RelativePath::new(source).unwrap(),
-                &destination
+                &destination,
+                &File::open(directory.path().join(source)).unwrap(),
             )
             .is_err()
         );
@@ -805,7 +842,8 @@ fn public_publish_rejects_unsafe_sources_and_cross_directory_names() {
         NoClobberPublish::publish(
             &directory,
             &RelativePath::new("source").unwrap(),
-            &RelativePath::new("nested/destination").unwrap()
+            &RelativePath::new("nested/destination").unwrap(),
+            &File::open(directory.path().join("source")).unwrap(),
         )
         .is_err()
     );

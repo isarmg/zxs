@@ -260,6 +260,55 @@ fn unlink_and_rmdir_preserve_targets_of_the_wrong_kind() {
     }
 }
 
+#[test]
+fn rename_replacement_preserves_both_entries_and_reports_target_kind() {
+    let (_temp, shared, _backend, branch) = fixture();
+    let mut session = session(shared, &branch);
+    session
+        .dispatch(Request::Namespace {
+            operation_id: new_id("op").unwrap(),
+            kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
+            path: "empty".into(),
+            destination: None,
+            replace: false,
+        })
+        .unwrap();
+    let before = session.entries().unwrap();
+    for (source, target, expected) in [
+        (
+            "report.txt",
+            "empty",
+            storage_contract::ErrorCode::IsDirectory,
+        ),
+        (
+            "empty",
+            "report.txt",
+            storage_contract::ErrorCode::NotDirectory,
+        ),
+    ] {
+        let error = session
+            .dispatch(Request::Namespace {
+                operation_id: new_id("op").unwrap(),
+                kind: smb_protocol::protocol::NamespaceOperation::Rename,
+                path: source.into(),
+                destination: Some(target.into()),
+                replace: true,
+            })
+            .unwrap_err();
+        assert_eq!(error.code, expected);
+        assert_eq!(session.entries().unwrap(), before);
+        assert!(session.writer_locks.is_empty());
+        assert!(session.shared.file_writers.lock().unwrap().is_empty());
+        assert!(!fs::read_dir(&session.shared.spool).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .path()
+                .to_string_lossy()
+                .ends_with(".namespace.json")
+        }));
+    }
+}
+
 struct NamespaceFailure {
     inner: Arc<dyn Backend>,
     publish: bool,

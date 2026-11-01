@@ -364,6 +364,31 @@ impl Engine {
             .lock()
             .expect("invariant: read lease lock poisoned");
         let counts = reads.counts()?;
+        // Scan each HEAD collection at most once, retaining only selected IDs.
+        // Laziness preserves cheap missing/history/lease rejection and the
+        // existing branch-before-directory error precedence.
+        let branch_heads = std::cell::LazyCell::new(|| {
+            self.state
+                .branches
+                .values()
+                .filter(|branch| branch.state == BranchState::Active)
+                .filter_map(|branch| self.state.commits.get(&branch.head_commit_id))
+                .flat_map(|commit| &commit.entries)
+                .filter(|entry| selected.contains(&entry.version_id))
+                .map(|entry| entry.version_id.as_str())
+                .collect::<BTreeSet<_>>()
+        });
+        let directory_heads = std::cell::LazyCell::new(|| {
+            self.state
+                .directory_branches
+                .values()
+                .flat_map(|branch| &branch.entries)
+                .filter(|entry| {
+                    entry.kind == NamespaceEntryKind::File && selected.contains(&entry.version_id)
+                })
+                .map(|entry| entry.version_id.as_str())
+                .collect::<BTreeSet<_>>()
+        });
         for id in versions {
             let v = self.state.versions.get(id).ok_or_else(|| {
                 Error::new(
@@ -383,35 +408,17 @@ impl Engine {
                     "version has an active read lease",
                 ));
             }
-            for b in self
-                .state
-                .branches
-                .values()
-                .filter(|b| b.state == BranchState::Active)
-            {
-                if self
-                    .state
-                    .commits
-                    .get(&b.head_commit_id)
-                    .is_some_and(|c| c.entries.iter().any(|e| e.version_id == *id))
-                {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ContentPinned,
-                        "version is used by an active branch HEAD",
-                    ));
-                }
+            if branch_heads.contains(id.as_str()) {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ContentPinned,
+                    "version is used by an active branch HEAD",
+                ));
             }
-            for branch in self.state.directory_branches.values() {
-                if branch
-                    .entries
-                    .iter()
-                    .any(|entry| entry.kind == NamespaceEntryKind::File && entry.version_id == *id)
-                {
-                    return Err(Error::new(
-                        storage_contract::ErrorCode::ContentPinned,
-                        "version is referenced by a retained directory branch HEAD",
-                    ));
-                }
+            if directory_heads.contains(id.as_str()) {
+                return Err(Error::new(
+                    storage_contract::ErrorCode::ContentPinned,
+                    "version is referenced by a retained directory branch HEAD",
+                ));
             }
         }
         for w in self

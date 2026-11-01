@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / 'tools/local-rpc-acceptance/screen.py'
@@ -42,6 +42,127 @@ def pair(commits=220, number=0):
     order = ['baseline', 'candidate'] if number == 0 else ['candidate', 'baseline']
     return dict(status='completed', commits=commits, pair=number, order=order, manifest_sha256='sealed',
                 host=dict(child_cpus=[0, 1]), runs=[arm(label, commits) for label in order])
+
+
+class PhaseLifecycleTests(unittest.TestCase):
+    def child(self, returncode=None):
+        child = Mock(pid=12345, returncode=returncode)
+        child.poll.side_effect = lambda: child.returncode
+        def wait(timeout=None):
+            child.returncode = -15 if child.returncode is None else child.returncode
+            return child.returncode
+        child.wait.side_effect = wait
+        return child
+
+    def test_sampling_failure_and_interrupts_reap_owned_child_and_preserve_cause(self):
+        for error in (OSError(5, 'disk sample failed'), KeyboardInterrupt(), SystemExit(7)):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                child = self.child()
+                with patch.object(SCREEN.subprocess, 'Popen', return_value=child) as launch, \
+                     patch.object(SCREEN.shutil, 'disk_usage', side_effect=error), \
+                     patch.object(SCREEN.os, 'killpg') as kill:
+                    with self.assertRaises(type(error)) as raised:
+                        SCREEN.phase(['never-executed'], {}, root, 'build', float('inf'))
+                self.assertIs(raised.exception, error)
+                self.assertTrue(launch.call_args.kwargs['start_new_session'])
+                kill.assert_called_once_with(child.pid, SCREEN.signal.SIGTERM)
+                child.wait.assert_called_once_with(timeout=10)
+                report = json.loads((root/'build.json').read_text())
+                self.assertEqual(report['status'], 'controller_failed')
+                self.assertEqual(report['returncode'], -15)
+                self.assertIn(type(error).__name__, report['error'])
+                self.assertIn('finished_ns', report)
+
+    def test_limit_escalates_then_reaps_without_claiming_completion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            child = self.child()
+            def wait(timeout=None):
+                if timeout is not None:
+                    raise subprocess.TimeoutExpired('owned-child', timeout)
+                child.returncode = -9
+                return -9
+            child.wait.side_effect = wait
+            with patch.object(SCREEN.subprocess, 'Popen', return_value=child), \
+                 patch.object(SCREEN.os, 'killpg') as kill:
+                with self.assertRaises(AssertionError):
+                    SCREEN.phase(['never-executed'], {}, Path(tmp), 'build', 0)
+            self.assertEqual([call.args for call in kill.call_args_list],
+                             [(child.pid, SCREEN.signal.SIGTERM), (child.pid, SCREEN.signal.SIGKILL)])
+            self.assertEqual(child.wait.call_count, 2)
+            report = json.loads((Path(tmp)/'build.json').read_text())
+            self.assertEqual(report['status'], 'resource_or_time_limit')
+            self.assertEqual(report['returncode'], -9)
+
+    def test_naturally_exited_group_still_reaps_child(self):
+        child = self.child()
+        with patch.object(SCREEN.os, 'killpg', side_effect=ProcessLookupError):
+            SCREEN.stop_phase(child)
+        child.wait.assert_called_once_with(timeout=10)
+
+    def test_cleanup_failure_retains_original_and_cleanup_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            child = self.child()
+            primary = OSError(5, 'monitor failed')
+            cleanup = PermissionError(1, 'cannot signal owned group')
+            with patch.object(SCREEN.subprocess, 'Popen', return_value=child), \
+                 patch.object(SCREEN.shutil, 'disk_usage', side_effect=primary), \
+                 patch.object(SCREEN.os, 'killpg', side_effect=cleanup):
+                with self.assertRaises(OSError) as raised:
+                    SCREEN.phase(['never-executed'], {}, Path(tmp), 'build', float('inf'))
+            self.assertIs(raised.exception, primary)
+            self.assertIs(raised.exception.__cause__, cleanup)
+            report = json.loads((Path(tmp)/'build.json').read_text())
+            self.assertEqual(report['status'], 'cleanup_failed')
+            self.assertIn('monitor failed', report['error'])
+            self.assertIn('cannot signal owned group', report['cleanup_error'])
+
+    def test_report_failure_does_not_replace_an_interrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            child = self.child()
+            primary = KeyboardInterrupt()
+            reporting = OSError(28, 'evidence filesystem full')
+            original_write = SCREEN.write
+            writes = 0
+            def write(path, value):
+                nonlocal writes
+                writes += 1
+                if writes == 2:
+                    raise reporting
+                original_write(path, value)
+            with patch.object(SCREEN.subprocess, 'Popen', return_value=child), \
+                 patch.object(SCREEN.shutil, 'disk_usage', side_effect=primary), \
+                 patch.object(SCREEN.os, 'killpg'), patch.object(SCREEN, 'write', side_effect=write):
+                with self.assertRaises(KeyboardInterrupt) as raised:
+                    SCREEN.phase(['never-executed'], {}, Path(tmp), 'build', float('inf'))
+            self.assertIs(raised.exception, primary)
+            self.assertIs(raised.exception.__cause__, reporting)
+            child.wait.assert_called_once_with(timeout=10)
+
+    def test_launch_failure_does_not_signal_an_unowned_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            error = FileNotFoundError(2, 'missing executable')
+            with patch.object(SCREEN.subprocess, 'Popen', side_effect=error), \
+                 patch.object(SCREEN.os, 'killpg') as kill:
+                with self.assertRaises(FileNotFoundError) as raised:
+                    SCREEN.phase(['never-executed'], {}, Path(tmp), 'build', float('inf'))
+            self.assertIs(raised.exception, error)
+            kill.assert_not_called()
+            self.assertEqual(json.loads((Path(tmp)/'build.json').read_text())['status'], 'controller_failed')
+
+    def test_success_reaps_without_signalling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            child = self.child(returncode=0)
+            def launch(*args, **kwargs):
+                kwargs['stdout'].write('{"verified":true}\n')
+                return child
+            with patch.object(SCREEN.subprocess, 'Popen', side_effect=launch), \
+                 patch.object(SCREEN.os, 'killpg') as kill:
+                self.assertEqual(SCREEN.phase(['never-executed'], {}, Path(tmp), 'build', float('inf')),
+                                 {'verified': True})
+            kill.assert_not_called()
+            child.wait.assert_called_once_with()
+            self.assertEqual(json.loads((Path(tmp)/'build.json').read_text())['status'], 'completed')
 
 
 class ControllerTests(unittest.TestCase):

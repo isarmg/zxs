@@ -156,29 +156,73 @@ def inventory(root):
             total['files'] += 1
     return total
 
+def stop_phase(child):
+    # Popen starts a fresh session: this group belongs to this phase, not the
+    # controller or another workload. A naturally exited group is a normal race.
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        child.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait()
+
+
 def phase(command, env, directory, name, deadline):
     result = dict(name=name, command=command, status='running', started_ns=time.time_ns(),
                   timeout_seconds=1200, address_space_limit_bytes=8*GIB, minimum_free_bytes=8*GIB)
     write(directory / (name + '.json'), result)
-    with (directory / (name + '.stdout')).open('w') as stdout, (directory / (name + '.stderr')).open('w') as stderr:
-        child = subprocess.Popen(command, stdout=stdout, stderr=stderr, env=env,
-                                 start_new_session=True, preexec_fn=limit)
-        expiry = min(time.time() + 1200, deadline)
-        while child.poll() is None:
-            if time.time() >= expiry or shutil.disk_usage(directory).free < 8*GIB:
-                result['status'] = 'resource_or_time_limit'
-                os.killpg(child.pid, signal.SIGTERM)
-                try:
-                    child.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
+    child = None
+    failure = None
+    cleanup_failure = None
+    try:
+        with (directory / (name + '.stdout')).open('w') as stdout, (directory / (name + '.stderr')).open('w') as stderr:
+            child = subprocess.Popen(command, stdout=stdout, stderr=stderr, env=env,
+                                     start_new_session=True, preexec_fn=limit)
+            expiry = min(time.time() + 1200, deadline)
+            while child.poll() is None:
+                if time.time() >= expiry or shutil.disk_usage(directory).free < 8*GIB:
+                    result['status'] = 'resource_or_time_limit'
+                    break
+                time.sleep(0.25)
+    except BaseException as error:
+        failure = error
+        result.update(status='controller_failed', error=traceback.format_exc())
+    finally:
+        if child is not None:
+            try:
+                if child.poll() is None:
+                    stop_phase(child)
+                else:
                     child.wait()
-                break
-            time.sleep(0.25)
-        result.update(returncode=child.returncode, finished_ns=time.time_ns())
+            except BaseException as error:
+                cleanup_failure = error
+                result.update(status='cleanup_failed', cleanup_error=traceback.format_exc())
+            result['returncode'] = child.returncode
+        result['finished_ns'] = time.time_ns()
         if result['status'] == 'running':
             result['status'] = 'completed' if child.returncode == 0 else 'failed'
-    write(directory / (name + '.json'), result)
+    try:
+        write(directory / (name + '.json'), result)
+    except BaseException as error:
+        # Reporting failures cannot turn an interrupted/failed workload into a
+        # different primary exception. Its original traceback is retained.
+        if failure is not None:
+            raise failure from error
+        if cleanup_failure is not None:
+            raise cleanup_failure from error
+        raise
+    if failure is not None:
+        if cleanup_failure is not None:
+            raise failure from cleanup_failure
+        raise failure
+    if cleanup_failure is not None:
+        raise cleanup_failure
     assert result['status'] == 'completed', result
     raw = (directory / (name + '.stdout')).read_text()
     if name in ('requests', 'tails'):

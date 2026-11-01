@@ -27,7 +27,7 @@ pub(crate) struct Model {
     snapshot_decode_failure: Option<std::sync::Arc<json_codec::Error>>,
     pub capacity: Option<WorkspaceCapacity>,
     pub capacity_loading: bool,
-    pub capacity_failure: Option<Feedback>,
+    pub capacity_failure: Option<api::Error>,
     pub loading: bool,
     pub loaded: bool,
     pub failure: Option<Feedback>,
@@ -131,7 +131,7 @@ fn load_capacity(state: RwSignal<State>) {
             }
             Err(error) => state.update(|s| {
                 s.monitor.capacity = None;
-                s.monitor.capacity_failure = Some(feedback(&error));
+                s.monitor.capacity_failure = Some(error);
             }),
         }
         state.update(|s| s.monitor.capacity_loading = false);
@@ -144,15 +144,19 @@ fn accept_capacity_response(model: &mut Model, value: Value) {
             model.capacity = Some(capacity);
             model.capacity_failure = None;
         }
-        Err(_) => {
+        Err(source) => {
             model.capacity = None;
-            model.capacity_failure = Some(Feedback {
-                message: t(
+            let mut error = api::error(
+                storage_contract::ErrorCode::InvalidResponse,
+                t(
                     "容量响应格式无效，无法确认当前额度。",
                     "Invalid capacity response; current limits cannot be confirmed.",
                 ),
-                request_id: None,
-            });
+            );
+            error.source = Some(std::sync::Arc::new(api::ErrorSource::WorkspaceCapacity(
+                source,
+            )));
+            model.capacity_failure = Some(error);
         }
     }
 }
@@ -514,7 +518,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 {scrub::view(state)}
                 <article class="zxs-content-panel zxs-frame zxs-frame--inset" aria-label=t("持久工作区证据配额", "Retained workspace evidence capacity")>
                     <h2>{t("持久工作区证据配额", "Retained workspace evidence capacity")}</h2>
-                    {move || state.with(|s| s.monitor.capacity_failure.clone()).map(|failure| view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
+                    {move || state.with(|s| s.monitor.capacity_failure.as_ref().map(feedback)).map(|failure| view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
                     <p role="status">{move || state.with(|s| capacity_warning(s.monitor.capacity.as_ref()))}</p>
                     <p>{move || state.with(|s| format!("{}：{}", t("全池", "Pool"), capacity_summary(s.monitor.capacity.as_ref().map(|capacity| &capacity.global))))}</p>
                     <p>{move || state.with(|s| format!("{}：{}", t("当前账户", "Current account"), capacity_summary(s.monitor.capacity.as_ref().map(|capacity| &capacity.principal))))}</p>

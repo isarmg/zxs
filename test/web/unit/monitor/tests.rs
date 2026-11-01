@@ -383,3 +383,22 @@ fn live_observation_boundary_requires_explicit_classification_and_unique_disk_id
         assert!(observations::decode(&invalid).is_err());
     }
 }
+
+#[test]
+fn capacity_decode_failure_retains_source_without_exposing_wire_detail() {
+    use std::error::Error;
+    let mut model = Model::default();
+    let mut value = valid_capacity_response();
+    value["warning"] = "private-wire-marker".into();
+    accept_capacity_response(&mut model, value);
+    let error = model.capacity_failure.as_ref().unwrap();
+    assert_eq!(error.code, storage_contract::ErrorCode::InvalidResponse);
+    let source = error.source().unwrap();
+    assert!(source.to_string().contains("private-wire-marker"));
+    assert!(source.source().is_some());
+    assert!(!feedback(error).message.contains("private-wire-marker"));
+    assert!(model.capacity.is_none());
+    accept_capacity_response(&mut model, valid_capacity_response());
+    assert!(model.capacity_failure.is_none());
+    assert!(model.capacity.is_some());
+}

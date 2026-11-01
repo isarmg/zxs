@@ -193,6 +193,20 @@ fn remote_error_retains_operation_and_filesystem_errno() {
             Some("op_pending"),
         ),
         (
+            ErrorCode::IsDirectory,
+            "rename target is a directory",
+            libc::EISDIR,
+            false,
+            Some("op_rename_file"),
+        ),
+        (
+            ErrorCode::NotDirectory,
+            "rename target is not a directory",
+            libc::ENOTDIR,
+            false,
+            Some("op_rename_directory"),
+        ),
+        (
             ErrorCode::FileBranchConflict,
             "file branch changed after the workspace began",
             libc::EAGAIN,

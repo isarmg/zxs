@@ -49,7 +49,7 @@
 
 恢复读取 candidate/publication 时逐份验证日志绑定的精确摘要，不因首份对象缺失或损坏就忽略健康副本。仅用验证通过的对象修复安全的普通文件或缺失目标；所有副本失效时停止，不用多数票替代摘要，也不覆盖符号链接或硬链接目标。
 
-SQLite、容器 container.json 及当前名称是可重建投影，不能替代发布记录和不可变证明。新建分支不生成占位文件；检测到 legacy 或 pending-branches 旧容器结构时返回 `FORMAT_UNSUPPORTED`，不删除或迁移原材料。活动文件分支、工作区和读租约固定正文；目录只固定选中及尚未完成分支的当前 head，不永久固定旧子树。
+SQLite、容器 container.json 及当前名称是可重建投影，不能替代发布记录和不可变证明。新建分支不生成占位文件；检测到 legacy 或 pending-branches 旧容器结构时返回 `FORMAT_UNSUPPORTED`，不删除或迁移原材料。活动文件分支、工作区和读租约固定正文；当前清除准入固定所有保留的目录分支 HEAD 中的文件正文，包括未选中及尚未完成的分支。切换目录选择或完成物化本身不解除这些 HEAD 引用；所有相关保留 HEAD 推进后，旧目录树的存在本身不永久固定旧正文。
 
 读取继承冻结父版本，范围编辑保留父未改字节；零字节或同摘要首写仍建立独立版本。历史另存只为 staged 文件生成 FULL。Branch/Commit 空映射及新增目录 map 按当前稀疏编码省略序列化；FULL 证明仍使用确定性编码。语义、目录子树与默认视图见[分支说明](../design/branch-system-logic.md)。
 
@@ -154,6 +154,8 @@ cargo check --locked --offline -p storage-engine
 一般 history owner 增量、实际写集与未关闭成本见[owner closure](../architecture/history-owner-deltas.md)。
 
 ### 读取资源异常析构
+
+当前核心读租约从 `prepare_content` 登记起持续到持有者释放，以版本引用计数阻止清除或拆分，没有期限、续约或到期排空机制。存在活跃租约时维护返回 `ContentPinned`；租约登记异常时失败关闭。当前清除通过重新检查引用后发布 `Purged`，尚未实现持久化 `PURGE_PENDING` 及禁止新租约／续约的屏障。这不降低[清除规范](../13-retention-and-deletion.md#s13-04)与[有限租约目标](../19-capacity-and-performance.md#s19-10)：交付该协议仍需一致的计划代际、续约身份／内容检查及进行中 I/O 排空，不能仅给引用计数增加 TTL 后删除正文。
 
 读取租约析构只释放已登记的正计数；缺失或零计数会使该进程的租约登记表失败关闭，后续读取准入、purge 与拆分检查返回 `RecoveryRequired`，不把异常解释成无活跃读取。中毒登记表不恢复、不清空；析构记录异常且不二次 panic，正常业务仍拒绝使用中毒状态。历史范围快照独占的 SQLite 连接允许在析构时从中毒容器取出，仅用于关闭，不重用于查询；已有读取失败与关闭失败保留诊断。
 
