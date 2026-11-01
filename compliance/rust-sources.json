@@ -101860,14 +101860,14 @@
       "version": "0.2.129"
     },
     "src/foundation/web-runtime/wasm-encoder": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 规范一致性：穷尽匹配 Elements，准确描述表索引编码、符号种类、实例计数和 EQREF；不改变编码字节。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 规范一致性：穷尽匹配 Elements，准确描述表索引编码、符号种类、实例计数和 EQREF；不改变编码字节。；ComponentBuilder::append_names 从实际 values 命名表输出 Values 子节，修复遗漏值调试名及重复 Instances；保留其余命名空间、索引和子节顺序。",
       "description": "A low-level WebAssembly encoder.",
       "directory": "src/foundation/web-runtime/wasm-encoder",
       "files_sha256": {
         "Cargo.toml": "63f4fdeb12bc8dc6860ff36442cc2fdd71d8519f3a9dd79e105d7dcafe69f301",
         "src/component.rs": "992de8b4a14190f0a7d65aca8de28a37207fadb31a55e90e4e1bc4565eb38e08",
         "src/component/aliases.rs": "686100ebe50004fecfc0d99467bea4ea28a222d683eb1b746653fd334dbac92e",
-        "src/component/builder.rs": "4fcd459e0f483ea5452075de545a3f0647661e159e6c66e1bdf3dc1e76286e8b",
+        "src/component/builder.rs": "8fe66320db504b794a116e4c06d96a3dbca6b416477e00e187b1f55a27534349",
         "src/component/canonicals.rs": "03764bb3e61fe0e9c8f0dd421011a23b3931bd02b991b59b32540f95306bfcb1",
         "src/component/components.rs": "8f21463b58cf06246085a055c363c4aca58a896e6b3cf2e4bc9ee4198b31fa8f",
         "src/component/exports.rs": "de627907c12170a0f54e3ef9907a5d852ccff597f6a0bd6efe625714c2be09a6",

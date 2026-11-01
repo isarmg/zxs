@@ -156,3 +156,208 @@ fn dwarf_reader_decodes_leb_and_reports_truncation() {
     );
     assert!(EndianSlice::new(&[1], LittleEndian).read_u32().is_err());
 }
+
+mod component_builder_name_regressions {
+    use wasm_encoder::{
+        ComponentBuilder, ComponentTypeRef, ComponentValType, InstanceType, PrimitiveValType,
+    };
+    use wasmparser::{ComponentName, KnownCustom, Parser, Payload};
+
+    type NameEntries = Vec<(u32, String)>;
+    type NameMaps = Vec<(&'static str, NameEntries)>;
+
+    fn name_maps(bytes: &[u8]) -> (usize, NameMaps) {
+        let mut section_count = 0;
+        let mut result = Vec::new();
+        for payload in Parser::new(0).parse_all(bytes) {
+            let payload =
+                payload.expect("invariant: fixture component encoding is structurally readable");
+            if let Payload::CustomSection(section) = payload {
+                if section.name() != "component-name" {
+                    continue;
+                }
+                section_count += 1;
+                let KnownCustom::ComponentName(subsections) = section.as_known() else {
+                    panic!("invariant: component-name fixture must have a known parser");
+                };
+                for subsection in subsections {
+                    let subsection = subsection.expect(
+                        "invariant: fixture naming subsection must be structurally readable",
+                    );
+                    let (kind, names) = match subsection {
+                        ComponentName::CoreFuncs(names) => ("core-funcs", names),
+                        ComponentName::CoreGlobals(names) => ("core-globals", names),
+                        ComponentName::CoreMemories(names) => ("core-memories", names),
+                        ComponentName::CoreTables(names) => ("core-tables", names),
+                        ComponentName::CoreTags(names) => ("core-tags", names),
+                        ComponentName::CoreModules(names) => ("core-modules", names),
+                        ComponentName::CoreInstances(names) => ("core-instances", names),
+                        ComponentName::CoreTypes(names) => ("core-types", names),
+                        ComponentName::Types(names) => ("types", names),
+                        ComponentName::Instances(names) => ("instances", names),
+                        ComponentName::Components(names) => ("components", names),
+                        ComponentName::Funcs(names) => ("funcs", names),
+                        ComponentName::Values(names) => ("values", names),
+                        ComponentName::Component { .. } | ComponentName::Unknown { .. } => {
+                            panic!("invariant: fixtures register namespace names only");
+                        }
+                    };
+                    let entries = names
+                        .into_iter()
+                        .map(|entry| {
+                            let entry =
+                                entry.expect("invariant: fixture name map entry must be readable");
+                            (entry.index, entry.name.to_owned())
+                        })
+                        .collect();
+                    result.push((kind, entries));
+                }
+            }
+        }
+        (section_count, result)
+    }
+
+    fn entries(values: &[(u32, &str)]) -> NameEntries {
+        values
+            .iter()
+            .map(|&(index, name)| (index, name.to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn registered_values_have_one_complete_name_map() {
+        let mut builder = ComponentBuilder::default();
+        assert_eq!(
+            builder.import("v0", ComponentTypeRef::Value(PrimitiveValType::U32.into())),
+            0
+        );
+        assert_eq!(
+            builder.import(
+                "v1",
+                ComponentTypeRef::Value(PrimitiveValType::String.into())
+            ),
+            1
+        );
+        assert_eq!(builder.value_count(), 2);
+        assert_eq!(builder.instance_count(), 0);
+        builder.append_names();
+        let bytes = builder.finish();
+        assert_eq!(
+            name_maps(&bytes),
+            (1, vec![("values", entries(&[(0, "v0"), (1, "v1")]))])
+        );
+    }
+
+    #[test]
+    fn instance_map_is_not_duplicated_when_no_values_exist() {
+        let mut builder = ComponentBuilder::default();
+        let ty = builder.type_instance(Some("instance-type"), &InstanceType::new());
+        assert_eq!(ty, 0);
+        assert_eq!(builder.import("i0", ComponentTypeRef::Instance(ty)), 0);
+        assert_eq!(builder.import("i1", ComponentTypeRef::Instance(ty)), 1);
+        assert_eq!(builder.instance_count(), 2);
+        assert_eq!(builder.value_count(), 0);
+        builder.append_names();
+        let bytes = builder.finish();
+        assert_eq!(
+            name_maps(&bytes),
+            (
+                1,
+                vec![
+                    ("instances", entries(&[(0, "i0"), (1, "i1")])),
+                    ("types", entries(&[(0, "instance-type")])),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn mixed_maps_preserve_indices_and_existing_subsection_order() {
+        let mut builder = ComponentBuilder::default();
+        let instance_ty = builder.type_instance(Some("instance-type"), &InstanceType::new());
+        let function_ty = {
+            let (index, mut encoder) = builder.type_function(Some("function-type"));
+            encoder
+                .params(core::iter::empty::<(&str, ComponentValType)>())
+                .result(None);
+            index
+        };
+        assert_eq!((instance_ty, function_ty), (0, 1));
+        assert_eq!(
+            builder.import("v0", ComponentTypeRef::Value(PrimitiveValType::U32.into())),
+            0
+        );
+        assert_eq!(
+            builder.import("i0", ComponentTypeRef::Instance(instance_ty)),
+            0
+        );
+        assert_eq!(builder.import("f0", ComponentTypeRef::Func(function_ty)), 0);
+        assert_eq!(
+            builder.import("v1", ComponentTypeRef::Value(PrimitiveValType::Bool.into())),
+            1
+        );
+        assert_eq!(
+            builder.import("i1", ComponentTypeRef::Instance(instance_ty)),
+            1
+        );
+        assert_eq!(
+            (
+                builder.value_count(),
+                builder.instance_count(),
+                builder.func_count(),
+                builder.type_count()
+            ),
+            (2, 2, 1, 2)
+        );
+        builder.append_names();
+        let bytes = builder.finish();
+        assert_eq!(
+            name_maps(&bytes),
+            (
+                1,
+                vec![
+                    ("instances", entries(&[(0, "i0"), (1, "i1")])),
+                    ("funcs", entries(&[(0, "f0")])),
+                    (
+                        "types",
+                        entries(&[(0, "instance-type"), (1, "function-type")])
+                    ),
+                    ("values", entries(&[(0, "v0"), (1, "v1")])),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn ordinary_function_names_are_unchanged_without_instances_or_values() {
+        let mut builder = ComponentBuilder::default();
+        let ty = {
+            let (index, mut encoder) = builder.type_function(Some("signature"));
+            encoder
+                .params(core::iter::empty::<(&str, ComponentValType)>())
+                .result(None);
+            index
+        };
+        assert_eq!(builder.import("f", ComponentTypeRef::Func(ty)), 0);
+        builder.append_names();
+        let bytes = builder.finish();
+        assert_eq!(
+            name_maps(&bytes),
+            (
+                1,
+                vec![
+                    ("funcs", entries(&[(0, "f")])),
+                    ("types", entries(&[(0, "signature")])),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn unnamed_empty_builder_emits_no_name_section() {
+        let mut builder = ComponentBuilder::default();
+        builder.append_names();
+        let bytes = builder.finish();
+        assert_eq!(name_maps(&bytes), (0, vec![]));
+    }
+}

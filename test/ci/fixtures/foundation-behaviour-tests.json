@@ -32,6 +32,11 @@
       "targets": {
         "foundation-codec-boundaries": [
           "base64_known_vectors_and_rejected_padding",
+          "component_builder_name_regressions::instance_map_is_not_duplicated_when_no_values_exist",
+          "component_builder_name_regressions::mixed_maps_preserve_indices_and_existing_subsection_order",
+          "component_builder_name_regressions::ordinary_function_names_are_unchanged_without_instances_or_values",
+          "component_builder_name_regressions::registered_values_have_one_complete_name_map",
+          "component_builder_name_regressions::unnamed_empty_builder_emits_no_name_section",
           "dwarf_reader_decodes_leb_and_reports_truncation",
           "subtle_equality_and_selection_preserve_each_branch_value",
           "wasm_encoder_output_is_valid_and_exports_the_expected_function",

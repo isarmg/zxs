@@ -147,8 +147,8 @@ impl ComponentBuilder {
         if !self.components.names.is_empty() {
             names.components(&self.components.names);
         }
-        if !self.instances.names.is_empty() {
-            names.instances(&self.instances.names);
+        if !self.values.names.is_empty() {
+            names.values(&self.values.names);
         }
         if !names.is_empty() {
             self.custom_section(&names.as_custom());
