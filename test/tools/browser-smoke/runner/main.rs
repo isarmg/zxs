@@ -329,6 +329,7 @@ fn exercise(
     browser.css(".zxs-monitor-page .zxs-metric-card")?;
     assert_metadata_only(browser)?;
     println!("PASS administrator status page retains real telemetry controls");
+    history_cancellation::monitor_range(browser)?;
     accessibility::run(browser)?;
     single_account::run(browser, password)?;
     session_logout::run(browser, password)?;

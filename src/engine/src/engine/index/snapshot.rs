@@ -83,19 +83,19 @@ impl OwnedScopeRead {
 }
 impl Drop for OwnedScopeRead {
     fn drop(&mut self) {
-        if let Some(error) = self
-            .failure
-            .get_mut()
-            .expect("invariant: scope failure mutex poisoned")
-            .take()
+        if let Some(error) = match self.failure.get_mut() {
+            Ok(failure) => failure,
+            Err(poison) => poison.into_inner(), // Exclusive teardown only, never reused for queries.
+        }
+        .take()
         {
             tracing::warn!(%error, "history scope failure after read retired before recheck");
         }
-        if let Some(c) = self
-            .connection
-            .get_mut()
-            .expect("invariant: scope connection mutex poisoned")
-            .take()
+        if let Some(c) = match self.connection.get_mut() {
+            Ok(connection) => connection,
+            Err(poison) => poison.into_inner(), // Consume the connection solely to close it.
+        }
+        .take()
             && let Err(error) = platform_io::sqlite::block_on_sqlite_connection(c.close())
         {
             tracing::warn!(%error,"unused history scope snapshot shutdown failed");
@@ -191,3 +191,7 @@ impl Engine {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/engine/unit/engine/index/snapshot_drop_tests.rs"]
+mod drop_tests;

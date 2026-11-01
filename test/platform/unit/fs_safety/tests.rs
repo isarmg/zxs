@@ -774,3 +774,59 @@ fn io_error_source_preserves_errno_without_changing_display() {
         Some(13)
     );
 }
+
+mod directory_retry;
+
+#[test]
+#[ignore = "requires directory-retry.sh isolated LD_PRELOAD children"]
+fn directory_creation_retry_barriers() {
+    let root = PathBuf::from(std::env::var_os("ZXS_DIRECTORY_ROOT").unwrap());
+    let mode = std::env::var("ZXS_DIRECTORY_MODE").unwrap();
+    let parent = PrivateDirectory::open_existing(&root).unwrap();
+    directory_retry::check(|| {
+        match mode.as_str() {
+            "create" => PrivateDirectory::create(root.join("branch")),
+            "child" => parent.create_child(&EntryName::new("branch").unwrap()),
+            "trusted" => PrivateDirectory::create_trusted(root.join("branch/nested/prefix")),
+            _ => panic!("unknown directory retry mode"),
+        }
+        .map(drop)
+    });
+}
+
+#[test]
+fn recursive_create_preserves_existing_ancestor_admission() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let root = tempfile::tempdir().unwrap();
+    for mode in [0o755, 0o777] {
+        let ancestor = root.path().join(format!("ancestor-{mode:o}"));
+        std::fs::create_dir(&ancestor).unwrap();
+        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(mode)).unwrap();
+        let leaf = ancestor.join("new/leaf");
+        PrivateDirectory::create_all(&leaf).unwrap();
+        assert_eq!(
+            std::fs::metadata(&ancestor).unwrap().permissions().mode() & 0o7777,
+            mode
+        );
+        assert_eq!(
+            std::fs::metadata(&leaf).unwrap().permissions().mode() & 0o7777,
+            0o700
+        );
+        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(
+            PrivateDirectory::create_all(&leaf),
+            Err(Error::UnsafePermissions(_))
+        ));
+        assert_eq!(
+            std::fs::metadata(&leaf).unwrap().permissions().mode() & 0o7777,
+            0o755
+        );
+    }
+    let linked = root.path().join("linked");
+    symlink(root.path().join("ancestor-755"), &linked).unwrap();
+    assert!(PrivateDirectory::create_all(linked.join("escape")).is_err());
+    assert!(!root.path().join("ancestor-755/escape").exists());
+    assert!(PrivateDirectory::create_all("/").is_err());
+    assert!(PrivateDirectory::create_all(root.path().join("uncreated/../escape")).is_err());
+    assert!(!root.path().join("uncreated").exists());
+}

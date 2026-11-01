@@ -114,6 +114,55 @@ pub(super) fn create_private_directory(path: &Path) -> Result<PrivateDirectory, 
     create_private_at(&parent, name, path, None)
 }
 
+/// Recursive creation with the same existing-ancestor admission as `create`.
+pub(super) fn create_private_directories(path: &Path) -> Result<PrivateDirectory, Error> {
+    if !path.is_absolute() {
+        return Err(Error::AbsolutePathRequired(path.to_path_buf()));
+    }
+    if path.file_name().is_none()
+        || path
+            .components()
+            .any(|part| !matches!(part, Component::RootDir | Component::Normal(_)))
+    {
+        return Err(Error::UnsafeRelativePath(path.to_path_buf()));
+    }
+    let mut directory =
+        File::from(open("/", DIRECTORY_FLAGS, Mode::empty()).map_err(io::Error::from)?);
+    let mut current = PathBuf::from("/");
+    for component in path.components() {
+        let name = match component {
+            Component::RootDir => continue,
+            Component::Normal(name) => name,
+            _ => return Err(Error::UnsafeRelativePath(path.to_path_buf())),
+        };
+        current.push(name);
+        let next = match openat(&directory, name, DIRECTORY_FLAGS, Mode::empty()) {
+            Ok(fd) => {
+                let next = File::from(fd);
+                if current == path {
+                    validate_private_directory(&next, path)?;
+                }
+                // Existing ancestors can be left by a failed creation attempt.
+                next.sync_all()?;
+                directory.sync_all()?;
+                next
+            }
+            Err(rustix::io::Errno::NOENT) => {
+                // The missing component is itself a private creation target,
+                // including when another creator wins the mkdir race.
+                create_private_at(&directory, name, &current, None)?.directory
+            }
+            Err(error) => return Err(io::Error::from(error).into()),
+        };
+        directory = next;
+    }
+    Ok(PrivateDirectory {
+        path: path.to_path_buf(),
+        directory,
+        administration_owner: None,
+    })
+}
+
 pub(super) fn create_private_child(
     parent: &PrivateDirectory,
     name: &EntryName,
@@ -156,10 +205,9 @@ fn create_private_at(
         validate_private_directory(&directory, path)?;
     }
     // Never chmod an existing path: even a rejected symlink must have no effect.
-    if created {
-        directory.sync_all()?;
-        parent.sync_all()?;
-    }
+    // EXIST can be a retry after either creation barrier failed.
+    directory.sync_all()?;
+    parent.sync_all()?;
     Ok(PrivateDirectory {
         path: path.to_path_buf(),
         directory,
@@ -699,6 +747,10 @@ pub(super) fn trusted_private_directory(
         }
         if created {
             validate_private_directory(&next, &current)?;
+        }
+        if create {
+            // Reopening an ancestor does not prove its name survived a prior
+            // failed creation attempt. Repair every traversed name barrier.
             next.sync_all()?;
             directory.sync_all()?;
         }

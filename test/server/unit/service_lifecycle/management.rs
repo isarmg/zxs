@@ -718,7 +718,7 @@ fn discarded_queued_blocking_closure_still_owns_native_drain() {
     let (backend, mut started, release, mut finished) = writer();
     backend.stop_management();
     release.send(()).unwrap();
-    let mut drain = NativeDrain::new(backend);
+    let mut drain = NativeDrain::new(backend, None);
     // Model cancellation before Tokio polls a queued blocking closure. Merely
     // capturing the backend Arc would detach its native writer at this point.
     let queued = move || drain.run();
@@ -966,7 +966,7 @@ fn enqueue_failure_during_owner_unwind_drains_once_and_preserves_outer_panic() {
 fn competing_management_guards_wait_for_drain_completion_before_returning() {
     let (backend, started, release, mut finished) = writer();
     backend.stop_management();
-    let state = Arc::new(Mutex::new(NativeDrain::new(backend)));
+    let state = Arc::new(Mutex::new(NativeDrain::new(backend, None)));
     let first = ManagementDrain(Arc::clone(&state));
     let worker = std::thread::spawn(move || drop(first));
     started.blocking_recv().unwrap();

@@ -100,7 +100,8 @@ pub struct PrivateDirectory {
 impl PrivateDirectory {
     /// Create missing private components and reject replacement-capable ancestry.
     /// Root-owned standard ancestors and trusted sticky directories are allowed;
-    /// existing directories are validated, never chmodded or re-owned.
+    /// existing directories are validated, never chmodded or re-owned. Every
+    /// traversed directory and its parent are synchronized, including on retry.
     pub fn create_trusted(path: impl AsRef<Path>) -> Result<Self, Error> {
         unix::trusted_private_directory(path.as_ref(), true)
     }
@@ -134,7 +135,16 @@ impl PrivateDirectory {
     pub fn open_for_administration(path: impl AsRef<Path>) -> Result<Self, Error> {
         unix::open_administrative_directory(path.as_ref())
     }
-    /// Create or validate a direct child of this held private directory.
+    /// Create missing private directories and synchronize the entire absolute chain.
+    /// Existing ancestors need only be directories without symbolic links, matching
+    /// [`Self::create`]; only newly created components and the leaf must be private.
+    /// This does not impose [`Self::create_trusted`]'s stronger ancestry policy.
+    pub fn create_all(path: impl AsRef<Path>) -> Result<Self, Error> {
+        unix::create_private_directories(path.as_ref())
+    }
+
+    /// Create or validate a direct child of this held private directory, then
+    /// synchronize the child and parent even when the child already exists.
     pub fn create_child(&self, name: &EntryName) -> Result<Self, Error> {
         unix::create_private_child(self, name)
     }
@@ -167,6 +177,10 @@ impl PrivateDirectory {
     pub fn remove_file(&self, name: &EntryName) -> Result<(), Error> {
         unix::remove_file(self, name)
     }
+    /// Create or admit a private directory and synchronize it and its parent.
+    /// An existing name may belong to a prior creation whose synchronization failed.
+    /// The caller owns the durability of ancestors above the immediate parent;
+    /// use [`Self::create_trusted`] to establish the whole absolute chain.
     pub fn create(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref();
         unix::create_private_directory(path)

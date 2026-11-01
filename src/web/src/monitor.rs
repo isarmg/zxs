@@ -29,6 +29,7 @@ pub(crate) struct Model {
     pub history: crate::snapshot::Snapshot<Value>,
     pub range: String,
     pub history_loading: bool,
+    history_cancellation: Option<api::ReadCancellation>,
     pub history_loaded: bool,
     pub history_generation: u64,
     pub history_failure: Option<Feedback>,
@@ -47,6 +48,7 @@ impl Default for Model {
             history: Value::Null.into(),
             range: "1min".into(),
             history_loading: false,
+            history_cancellation: None,
             history_loaded: false,
             history_generation: 0,
             history_failure: None,
@@ -171,7 +173,17 @@ fn load_history(state: RwSignal<State>) {
     if state.with_untracked(|s| !s.session_active() || s.monitor.history_loading) {
         return;
     }
-    state.update(|s| s.monitor.history_loading = true);
+    let cancellation = match api::ReadCancellation::new() {
+        Ok(cancellation) => cancellation,
+        Err(error) => {
+            state.update(|s| s.monitor.history_failure = Some(feedback(&error)));
+            return;
+        }
+    };
+    state.update(|s| {
+        s.monitor.history_loading = true;
+        s.monitor.history_cancellation = Some(cancellation.clone());
+    });
     let (epoch, generation, range) = state.with_untracked(|s| {
         (
             s.session_epoch,
@@ -180,7 +192,8 @@ fn load_history(state: RwSignal<State>) {
         )
     });
     spawn_local(async move {
-        let result = api::request("GET", &format!("/api/system/history?range={range}"), None).await;
+        let result =
+            api::cancellable_get(&format!("/api/system/history?range={range}"), cancellation).await;
         complete_history_load(state, epoch, generation, &range, result);
     });
 }
@@ -204,7 +217,10 @@ fn complete_history_load(
         }),
         Err(error) => state.update(|s| s.monitor.history_failure = Some(feedback(&error))),
     }
-    state.update(|s| s.monitor.history_loading = false);
+    state.update(|s| {
+        s.monitor.history_loading = false;
+        s.monitor.history_cancellation = None;
+    });
 }
 fn history_matches(model: &Model, generation: u64, range: &str) -> bool {
     model.history_generation == generation && model.range == range
@@ -216,6 +232,9 @@ fn select_range(state: RwSignal<State>, range: String) {
         return;
     }
     state.update(|s| {
+        if let Some(cancellation) = s.monitor.history_cancellation.take() {
+            cancellation.abort();
+        }
         s.monitor.range = range;
         s.monitor.history_generation += 1;
         s.monitor.history_loading = false;

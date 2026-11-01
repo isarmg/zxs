@@ -151,3 +151,9 @@ cargo test --locked --offline -p web-app -p web-interface -p view-macros
 连接线 SVG 的 `NodeRef` 是输出所有权依据；仅该真实 SVG 内的 childList 与该 SVG 自身增删不请求树测量，混有真实节点变更的批次仍处理。相同 class 的外来 SVG 不是输出。G4 装饰不在此排除范围内，控制器状态仍可能影响作者布局。
 
 此优化只减少重复 resize 注册与连接线输出反馈，保留原测量函数、单 RAF 合帧和路径算法。每次有效树刷新仍读取 canvas 与全部版本节点并计算路径（O(N+E)）；不代表 G4 全量样式读取或树几何局部化已经解决。浏览器测试分别记录 selector 查询、树 RAF 内真实 `getBoundingClientRect` 与 RO observe/unobserve/活动目标；查询次数不再命名为测量次数。该测试须在真实 Chrome 中执行，编译与 JS 语法检查不构成运行通过。
+
+## 活动历史与监测读取边界
+
+活动历史仅接纳当前服务端 `backend_activity::ActivityHistoryResponse` 的对象信封及完整事件形状；浏览器私有 DTO 校验字符串序号、固定 200 条上限、展开详情和必需的 nullable 字段，拒绝裸数组、未知字段、缺失字段及错误类型。合法的空列表、`timestamp: null` 和 `principal: null` 保留业务含义。成功后只将类型化展示字段入模；非法响应保留旧快照和明确错误，不显示成功空记录状态。服务端协议和开放 action 字符串不变。
+
+监测范围切换通过既有 `ReadCancellation` 中止上一历史读取，当前完成后释放句柄；仍先处理当前会话 401，再按范围和代次拒绝迟到结果，旧完成不能结算新请求。该取消只用于读取，不推断写请求回滚。历史请求频率和图表算法不变；不宣称网络或吞吐实测改善。根单元测试覆盖响应边界、旧快照和取消完成竞态，实际浏览器 signal 中止行为须单独验收。

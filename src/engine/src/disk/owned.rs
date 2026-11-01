@@ -189,25 +189,18 @@ impl DiskRoot {
             return Ok(());
         };
         let (parent_path, name) = path.split_parent();
-        let parent = match self.open_relative_directory(parent_path.as_ref()) {
-            Ok(parent) => parent,
-            Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))
-                if error.kind() == std::io::ErrorKind::NotFound =>
-            {
-                self.private_relative_dir(parent_path.as_ref())?;
-                self.open_relative_directory(parent_path.as_ref())?
-            }
-            Err(error) => return Err(error),
-        };
-        let created = match rustix::fs::mkdirat(
+        // A previous attempt may have created any ancestor before its fsync
+        // failed. Admit and synchronize the complete chain, not just the leaf.
+        self.private_relative_dir(parent_path.as_ref())?;
+        let parent = self.open_relative_directory(parent_path.as_ref())?;
+        match rustix::fs::mkdirat(
             &parent,
             name.as_os_str(),
             rustix::fs::Mode::from_raw_mode(0o700),
         ) {
-            Ok(()) => true,
-            Err(rustix::io::Errno::EXIST) => false,
+            Ok(()) | Err(rustix::io::Errno::EXIST) => (),
             Err(error) => return Err(std::io::Error::from(error).into()),
-        };
+        }
         let directory = File::from(
             rustix::fs::openat2(
                 &parent,
@@ -225,10 +218,8 @@ impl DiskRoot {
         );
         let directory = PrivateDirectory::from_directory(directory, self.path.join(path.as_path()))
             .map_err(fs_error)?;
-        if created {
-            directory.sync().map_err(fs_error)?;
-            parent.sync_all()?;
-        }
+        directory.sync().map_err(fs_error)?;
+        parent.sync_all()?;
         Ok(())
     }
 
@@ -374,3 +365,7 @@ impl DiskResources {
         self.disks.get(&disk.disk_id)
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/disk/directory_retry_tests.rs"]
+mod directory_retry_tests;

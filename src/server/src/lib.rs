@@ -21,6 +21,7 @@ pub use shutdown::ShutdownSignal;
 #[cfg(feature = "core")]
 pub mod setup_recovery;
 pub use http_boundary::ApiError;
+mod periodic_worker;
 pub mod smb_rpc;
 mod spool_budget;
 mod telemetry;
@@ -1727,6 +1728,10 @@ pub fn router(
     let config = config.admit()?;
     let spool_budget = http_spool::HttpSpool::open_blocking(&config);
     let runtime = ManagementRuntime::start(backend, auth, &config)?;
+    let shutdown = Arc::new(service_lifecycle::EmbeddedManagementShutdown::new(
+        Arc::clone(&runtime.backend),
+        Arc::clone(&runtime.telemetry),
+    ));
     router_shared(
         runtime.backend,
         runtime.auth,
@@ -1734,6 +1739,7 @@ pub fn router(
         runtime.telemetry,
         spool_budget,
     )
+    .map(|router| router.layer(http_routing::Extension(shutdown)))
 }
 
 /// Common initialization for embedded routers and the network server. Callers
@@ -2034,6 +2040,7 @@ pub async fn serve_with_shutdown(
         auth,
         telemetry,
     } = ManagementRuntime::start(backend, auth, &config)?;
+    management_shutdown.set_telemetry(Arc::clone(&telemetry));
     // Keep optional bridge setup isolated from management lifecycle failures.
     let smb = config.smb.clone();
     let smb_max_file_bytes = config.max_upload_bytes;

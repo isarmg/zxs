@@ -813,7 +813,13 @@ fn offlock_active_batch_pins_real_purge_until_cancellation_drains_it() {
             let mut current = engine
                 .try_lock()
                 .expect("all metered reads run outside Engine lock");
-            let active = current.reads.lock().unwrap().contains_key(&old);
+            let active = current
+                .reads
+                .lock()
+                .unwrap()
+                .counts()
+                .unwrap()
+                .contains_key(&old);
             if active && !attempted {
                 attempted = true;
                 let error = current
@@ -834,7 +840,7 @@ fn offlock_active_batch_pins_real_purge_until_cancellation_drains_it() {
         IntegrityScrubCompletion::Cancelled
     ));
     assert!(
-        engine.reads.lock().unwrap().is_empty(),
+        engine.reads.lock().unwrap().counts().unwrap().is_empty(),
         "cancel returns only after the batch drops"
     );
     engine
@@ -860,7 +866,15 @@ fn offlock_held_body_survives_actual_container_rename_during_proof_reads() {
         |plan, id| engine.lock().unwrap().admit_integrity_scrub_batch(plan, id),
         |_| {
             let mut current = engine.try_lock().unwrap();
-            if !renamed && current.reads.lock().unwrap().contains_key(&id) {
+            if !renamed
+                && current
+                    .reads
+                    .lock()
+                    .unwrap()
+                    .counts()
+                    .unwrap()
+                    .contains_key(&id)
+            {
                 current
                     .file_namespace(
                         &repository.repository_id,
@@ -1062,7 +1076,7 @@ fn offlock_callback_cannot_substitute_an_equal_body_from_a_different_version() {
         "{report:?}"
     );
     assert!(!report.is_healthy());
-    assert!(engine.reads.lock().unwrap().is_empty());
+    assert!(engine.reads.lock().unwrap().counts().unwrap().is_empty());
 }
 
 #[test]
@@ -1485,7 +1499,7 @@ fn batch_from_a_previous_engine_owner_is_not_a_lease_for_the_reopened_pool() {
     );
     assert!(!report.is_healthy());
     assert!(
-        old_plan.owner.lock().unwrap().is_empty(),
+        old_plan.owner.lock().unwrap().counts().unwrap().is_empty(),
         "rejected old lease drains"
     );
 }

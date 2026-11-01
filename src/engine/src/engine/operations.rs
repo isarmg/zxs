@@ -217,8 +217,10 @@ impl Engine {
         if !self.blocked {
             return Err(operation_not_found());
         }
-        let members = self.trusted_evidence_members();
-        let mut first_error = None;
+        let super::EvidenceMembers {
+            members,
+            mut first_error,
+        } = self.trusted_evidence_members();
         for disk in &members {
             let scanned = match scan_at(&self.disk_resources.get(disk)?.root, disk) {
                 Ok(scanned) => scanned,

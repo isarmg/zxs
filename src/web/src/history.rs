@@ -1,6 +1,8 @@
+mod wire;
+
 use crate::{
     api, format,
-    ui::{State, current_session, fail, feedback, list, text},
+    ui::{State, current_session, fail, feedback},
 };
 use json_codec::Value;
 use web_interface::components::{
@@ -9,9 +11,18 @@ use web_interface::components::{
 use web_interface::tasks::spawn_local;
 use web_interface::{i18n::t, prelude::*};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Event {
+    timestamp: Option<String>,
+    slot_id: String,
+    path: String,
+    action: String,
+    principal: Option<String>,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct Model {
-    pub events: crate::snapshot::Snapshot<Vec<Value>>,
+    pub events: crate::snapshot::Snapshot<Vec<Event>>,
     pub loading: bool,
     pub loaded: bool,
     pub failure: Option<Feedback>,
@@ -24,27 +35,65 @@ pub(crate) fn load(state: RwSignal<State>) {
     state.update(|s| s.activity.loading = true);
     let epoch = state.with_untracked(|s| s.session_epoch);
     spawn_local(async move {
-        let result = api::request("GET", "/api/file-manager/history", None).await;
-        if !current_session(state, epoch) {
-            return;
-        }
-        match result {
-            Ok(value) => state.update(|s| {
-                s.activity.events = list(&value, "events").into();
-                s.activity.loaded = true;
-                s.activity.failure = None;
-            }),
-            Err(error) => {
-                if error.status == 401 {
-                    fail(state, error)
-                } else {
-                    state.update(|s| s.activity.failure = Some(feedback(&error)));
-                }
-            }
-        }
-        state.update(|s| s.activity.loading = false);
+        let result = api::request("GET", "/api/file-manager/history", None)
+            .await
+            .and_then(decode);
+        complete_load(state, epoch, result);
     });
 }
+
+fn complete_load(state: RwSignal<State>, epoch: u64, result: Result<Vec<Event>, api::Error>) {
+    if !current_session(state, epoch) {
+        return;
+    }
+    match result {
+        Ok(events) => state.update(|s| {
+            s.activity.events = events.into();
+            s.activity.loaded = true;
+            s.activity.failure = None;
+        }),
+        Err(error) if error.status == 401 => fail(state, error),
+        Err(error) => state.update(|s| s.activity.failure = Some(feedback(&error))),
+    }
+    state.update(|s| s.activity.loading = false);
+}
+
+fn decode(value: Value) -> Result<Vec<Event>, api::Error> {
+    let response: wire::Response = json_codec::from_value(value).map_err(|source| {
+        let mut error = api::error(
+            storage_contract::ErrorCode::InvalidResponse,
+            t(
+                "文件操作历史响应格式无效。",
+                "Invalid activity history response.",
+            ),
+        );
+        error.source = Some(std::sync::Arc::new(api::ErrorSource::ActivityHistory(
+            source,
+        )));
+        error
+    })?;
+    if response.limit != 200 || response.events.len() > response.limit {
+        return Err(api::error(
+            storage_contract::ErrorCode::InvalidResponse,
+            t(
+                "文件操作历史响应范围无效。",
+                "Invalid activity history response limit.",
+            ),
+        ));
+    }
+    Ok(response
+        .events
+        .into_iter()
+        .map(|event| Event {
+            timestamp: event.timestamp,
+            slot_id: event.slot_id,
+            path: event.path,
+            action: event.action,
+            principal: event.principal,
+        })
+        .collect())
+}
+
 fn action_label(action: &str) -> String {
     match action {
         "file_branch_pending" | "branch_pending" => t("分支登记", "Registered branch"),
@@ -86,7 +135,7 @@ fn action_label(action: &str) -> String {
 }
 
 // Isolate immutable events and the filter from unrelated management polling.
-fn visible_events(state: RwSignal<State>) -> Memo<Vec<Value>> {
+fn visible_events(state: RwSignal<State>) -> Memo<Vec<Event>> {
     let events = Memo::new(move |_| state.with(|s| s.activity.events.clone()));
     let disk = Memo::new(move |_| state.with(|s| s.activity.disk.clone()));
     Memo::new(move |_| {
@@ -96,7 +145,7 @@ fn visible_events(state: RwSignal<State>) -> Memo<Vec<Value>> {
             disk.with(|disk| {
                 events
                     .iter()
-                    .filter(|event| disk.is_empty() || text(event, &["slot_id"]) == *disk)
+                    .filter(|event| disk.is_empty() || event.slot_id == *disk)
                     .cloned()
                     .collect()
             })
@@ -127,12 +176,12 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         {move ||state.with(|s|s.activity.failure.clone()).map(|failure|view!{<ErrorState message=failure.message request_id=failure.request_id/>})}
         <Show when=move || !visible_events.with(Vec::is_empty)><div class="zxs-content-panel zxs-history-list-panel zxs-frame zxs-stack zxs-stack--flush"><ul class="zxs-activity-list zxs-history-list" aria-label=t("文件操作记录","File operation history")>{move ||{
             visible_events.get().into_iter().map(|event|{
-                let time=event["timestamp"].as_str().map(format::timestamp).unwrap_or_else(||t("未记录时间","Time not recorded"));
-                let path=text(&event,&["path","display_path"]);let slot=text(&event,&["slot_id"]);let principal=text(&event,&["principal"]);
-                view!{<li class="zxs-history-row zxs-flow zxs-flow--stretch"><span class="zxs-history-action zxs-row">{action_label(&text(&event,&["action"]))}</span><span class="zxs-history-path zxs-row">{if slot.is_empty(){path}else{format!("{slot}/{path}")}}</span><time class="zxs-row">{time}</time><span class="zxs-history-principal zxs-row">{if principal.is_empty(){"–".into()}else{principal}}</span></li>}
+                let time=event.timestamp.as_deref().map(format::timestamp).unwrap_or_else(||t("未记录时间","Time not recorded"));
+                let path=event.path;let slot=event.slot_id;let principal=event.principal.unwrap_or_default();
+                view!{<li class="zxs-history-row zxs-flow zxs-flow--stretch"><span class="zxs-history-action zxs-row">{action_label(&event.action)}</span><span class="zxs-history-path zxs-row">{if slot.is_empty(){path}else{format!("{slot}/{path}")}}</span><time class="zxs-row">{time}</time><span class="zxs-history-principal zxs-row">{if principal.is_empty(){"–".into()}else{principal}}</span></li>}
             }).collect_view()
         }}</ul></div></Show>
-        <Show when=move ||state.with(|s|s.activity.loaded)&&visible_events.with(Vec::is_empty)><EmptyState message=t("尚无文件操作记录。","No file operations have been recorded.")/></Show>
+        <Show when=move ||state.with(|s|s.activity.loaded && s.activity.failure.is_none())&&visible_events.with(Vec::is_empty)><EmptyState message=t("尚无文件操作记录。","No file operations have been recorded.")/></Show>
     </section>}
 }
 

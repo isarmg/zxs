@@ -38,11 +38,16 @@ struct ObserveGate {
 #[derive(Default)]
 struct MonitorBackend {
     observe_gate: Mutex<Option<ObserveGate>>,
+    stopped: std::sync::atomic::AtomicBool,
     // Receiver disconnection observes destruction without fallible Drop code.
     _dropped: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl Backend for MonitorBackend {
+    fn stop_management(&self) {
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
     fn operation_outcome(
         &self,
         _: &crate::auth::Identity,
@@ -648,7 +653,7 @@ fn unavailable_cache_falls_back_to_bounded_memory_without_losing_live_metrics() 
     let live = service.current().unwrap();
     assert!(live.cpu.logical_count > 0);
     assert!(live.memory.total_bytes.is_some());
-    let history = service.history.lock().unwrap();
+    let history = service.data.history.lock().unwrap();
     let now = date_time::OffsetDateTime::now_utc().unix_timestamp();
     assert!(HistoryWriter::open(&directory, now).is_err());
     assert!(!history.samples(now - 60, now, 5).is_empty());
@@ -667,6 +672,7 @@ fn read_only_sysfs_cache_falls_back_to_live_memory_monitoring() {
     assert!(HistoryWriter::open(Path::new("/sys/zxs-telemetry-cache-unit-test"), now).is_err());
     assert!(
         !service
+            .data
             .history
             .lock()
             .unwrap()
@@ -689,18 +695,20 @@ fn supported_ranges_bound_chart_points_and_reject_other_strings() {
 }
 
 #[test]
-fn active_periodic_refresh_releases_weak_service_and_backend_after_completion() {
+fn router_owner_drop_joins_active_periodic_refresh_before_releasing_backend() {
     use std::sync::mpsc;
 
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::tests::private_tempdir();
     let (dropped_tx, dropped_rx) = mpsc::channel();
     let backend = Arc::new(MonitorBackend {
         observe_gate: Mutex::new(None),
+        stopped: std::sync::atomic::AtomicBool::new(false),
         _dropped: Some(dropped_tx),
     });
     let weak_backend = Arc::downgrade(&backend);
-    let service = Telemetry::start(backend.clone(), &root.path().join("cache")).unwrap();
-    let weak_service = Arc::downgrade(&service);
+    let auth =
+        crate::auth::AuthStore::initialize(root.path(), "admin", "monitor-test-password").unwrap();
+    let app = crate::router(backend.clone(), auth, crate::ServerConfig::new(root.path())).unwrap();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     *backend.observe_gate.lock().unwrap() = Some(ObserveGate {
@@ -708,21 +716,25 @@ fn active_periodic_refresh_releases_weak_service_and_backend_after_completion() 
         release: release_rx,
     });
     drop(backend);
-    // Wait for the real periodic thread, without timing a guessed sleep or
-    // inserting a production hook. Its active refresh temporarily owns service.
     entered_rx.recv_timeout(Duration::from_secs(15)).unwrap();
-    drop(service);
-    assert!(weak_service.upgrade().is_some());
+    let (done, completed) = mpsc::channel();
+    let cleanup = std::thread::spawn(move || {
+        drop(app);
+        done.send(()).unwrap();
+    });
+    assert!(matches!(
+        completed.recv_timeout(Duration::from_millis(50)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
     assert!(weak_backend.upgrade().is_some());
     release_tx.send(()).unwrap();
+    completed.recv_timeout(Duration::from_secs(15)).unwrap();
+    cleanup.join().unwrap();
     assert!(matches!(
-        dropped_rx.recv_timeout(Duration::from_secs(15)),
-        Err(mpsc::RecvTimeoutError::Disconnected)
+        dropped_rx.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
     ));
-    assert!(weak_service.upgrade().is_none());
     assert!(weak_backend.upgrade().is_none());
-    // This proves resource release after the active refresh, not thread join or
-    // a shutdown flush: the native worker has no exposed JoinHandle.
 }
 
 #[test]
@@ -787,7 +799,7 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
         releases.push(release);
         let started = started.clone();
         jobs.push(tokio::spawn(telemetry_job(
-            service.request_slots.clone(),
+            service.data.request_slots.clone(),
             move || {
                 started.add_permits(1);
                 wait.recv_timeout(Duration::from_secs(10))
@@ -810,7 +822,7 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
     let canceled = jobs.pop().unwrap();
     canceled.abort();
     assert!(canceled.await.unwrap_err().is_cancelled());
-    assert_eq!(service.request_slots.available_permits(), 0);
+    assert_eq!(service.data.request_slots.available_permits(), 0);
     assert_eq!(
         request(&app, "/api/system/status", &token).await,
         StatusCode::TOO_MANY_REQUESTS
@@ -823,7 +835,7 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
     }
     jobs.pop().unwrap().await.unwrap().unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
-        while service.request_slots.available_permits() != 2 {
+        while service.data.request_slots.available_permits() != 2 {
             tokio::task::yield_now().await;
         }
     })
@@ -864,6 +876,7 @@ async fn rejected_symlink_cache_preserves_target_and_management_across_restarts(
         assert!(HistoryWriter::open(&cache, now).is_err());
         assert!(
             !service
+                .data
                 .history
                 .lock()
                 .unwrap()
@@ -990,4 +1003,66 @@ fn typed_monitor_sample_and_history_envelope_keep_exact_wire() {
         storage_contract::canonical_json(&response).unwrap(),
         br#"{"from":"from","interval_seconds":10,"range":"1h","samples":[],"to":"to"}"#
     );
+}
+
+#[tokio::test]
+async fn service_shutdown_waits_for_active_telemetry_even_with_a_live_router_owner() {
+    use std::sync::mpsc;
+    let root = crate::tests::private_tempdir();
+    let backend = Arc::new(MonitorBackend::default());
+    let service = Telemetry::start(backend.clone(), &root.path().join("cache")).unwrap();
+    let (entered, entry) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    *backend.observe_gate.lock().unwrap() = Some(ObserveGate {
+        entered,
+        release: released,
+    });
+    tokio::task::spawn_blocking(move || entry.recv_timeout(Duration::from_secs(15)).unwrap())
+        .await
+        .unwrap();
+    let mut shutdown = crate::service_lifecycle::ManagementShutdown::new(backend);
+    shutdown.set_telemetry(Arc::clone(&service));
+    let mut drain = tokio::spawn(async move { shutdown.finish().await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut drain)
+            .await
+            .is_err()
+    );
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), drain)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    // Explicit daemon drain, not the last Arc's Drop, consumed the worker.
+    service.drain().unwrap();
+}
+
+#[tokio::test]
+async fn embedded_router_clones_and_completed_requests_do_not_stop_live_owner() {
+    use service_stack::ServiceExt;
+    let root = crate::tests::private_tempdir();
+    let backend = Arc::new(MonitorBackend::default());
+    let auth =
+        crate::auth::AuthStore::initialize(root.path(), "admin", "monitor-test-password").unwrap();
+    let router =
+        crate::router(backend.clone(), auth, crate::ServerConfig::new(root.path())).unwrap();
+    let live = router.clone();
+    drop(router);
+    assert!(!backend.stopped.load(std::sync::atomic::Ordering::SeqCst));
+    let response = live
+        .clone()
+        .oneshot(
+            http_routing::http::Request::builder()
+                .uri("/healthz")
+                .body(http_routing::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), ::http::StatusCode::OK);
+    drop(response);
+    assert!(!backend.stopped.load(std::sync::atomic::Ordering::SeqCst));
+    drop(live);
+    assert!(backend.stopped.load(std::sync::atomic::Ordering::SeqCst));
 }

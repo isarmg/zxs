@@ -382,7 +382,7 @@ fn workspace_read_rejects_length_mismatch_even_when_hash_matches() {
             plan.open().err().unwrap().code(),
             storage_contract::ErrorCode::ChecksumMismatch
         );
-        assert!(engine.reads.lock().unwrap().is_empty());
+        assert!(engine.reads.lock().unwrap().counts().unwrap().is_empty());
     }
 }
 
@@ -407,7 +407,7 @@ fn partial_write_does_not_authenticate_corrupted_staging_bytes() {
             canonical_json(&before).unwrap()
         );
         assert_eq!(fs::read(&staged.source_path).unwrap(), damaged);
-        assert!(engine.reads.lock().unwrap().is_empty());
+        assert!(engine.reads.lock().unwrap().counts().unwrap().is_empty());
     }
     fs::write(&staged.source_path, b"original").unwrap();
     let updated = engine
@@ -437,7 +437,7 @@ fn partial_write_from_published_replica_keeps_verified_untouched_bytes() {
         .stage_range(&next.workspace_id, &new_id("entry"), "body", 0, b"O", None)
         .unwrap();
     assert_eq!(fs::read(staged.source_path).unwrap(), b"Original");
-    assert!(engine.reads.lock().unwrap().is_empty());
+    assert!(engine.reads.lock().unwrap().counts().unwrap().is_empty());
 }
 
 #[test]
@@ -508,18 +508,18 @@ fn read_leases_release_once_across_plan_moves_and_engine_drop() {
     let reads = Arc::clone(&engine.reads);
     let full = engine.open_content(&id).unwrap();
     let plan = engine.prepare_content(&id).unwrap();
-    assert_eq!(reads.lock().unwrap()[&id], 2);
+    assert_eq!(reads.lock().unwrap().counts().unwrap()[&id], 2);
     let range = plan.open().unwrap();
-    assert_eq!(reads.lock().unwrap()[&id], 2);
+    assert_eq!(reads.lock().unwrap().counts().unwrap()[&id], 2);
     let checksums = engine.prepare_content(&id).unwrap();
-    assert_eq!(reads.lock().unwrap()[&id], 3);
+    assert_eq!(reads.lock().unwrap().counts().unwrap()[&id], 3);
     assert!(!checksums.checksums().unwrap().is_empty());
-    assert_eq!(reads.lock().unwrap()[&id], 2);
+    assert_eq!(reads.lock().unwrap().counts().unwrap()[&id], 2);
     drop(engine);
     drop(full);
-    assert_eq!(reads.lock().unwrap()[&id], 1);
+    assert_eq!(reads.lock().unwrap().counts().unwrap()[&id], 1);
     drop(range);
-    assert!(reads.lock().unwrap().is_empty());
+    assert!(reads.lock().unwrap().counts().unwrap().is_empty());
 }
 
 #[test]
@@ -534,12 +534,12 @@ fn workspace_read_leases_release_cancelled_and_opened_plans_independently() {
         .prepare_workspace_content(&workspace.workspace_id, item, "admin")
         .unwrap();
     let key = plan.0.lease.version.clone();
-    assert_eq!(engine.reads.lock().unwrap()[&key], 2);
+    assert_eq!(engine.reads.lock().unwrap().counts().unwrap()[&key], 2);
     drop(cancelled);
     let opened = plan.open().unwrap();
-    assert_eq!(engine.reads.lock().unwrap()[&key], 1);
+    assert_eq!(engine.reads.lock().unwrap().counts().unwrap()[&key], 1);
     drop(opened);
-    assert!(engine.reads.lock().unwrap().is_empty());
+    assert!(engine.reads.lock().unwrap().counts().unwrap().is_empty());
     assert_eq!(
         engine
             .prepare_workspace_content(&workspace.workspace_id, item, "other")
@@ -548,25 +548,40 @@ fn workspace_read_leases_release_cancelled_and_opened_plans_independently() {
             .code(),
         storage_contract::ErrorCode::PermissionDenied
     );
-    assert!(engine.reads.lock().unwrap().is_empty());
+    assert!(engine.reads.lock().unwrap().counts().unwrap().is_empty());
 }
 
 #[test]
-#[should_panic(expected = "invariant: every read lease has a registered count")]
-fn read_lease_drop_exposes_missing_registration() {
+fn read_lease_drop_fences_missing_registration() {
     let (_temp, engine, workspace) = fixture();
     let staged = engine.workspace(&workspace.workspace_id).unwrap();
     let item = staged.files.keys().next().unwrap();
     let plan = engine
         .prepare_workspace_content(&workspace.workspace_id, item, "admin")
         .unwrap();
-    engine.reads.lock().unwrap().remove(&plan.0.lease.version);
+    engine
+        .reads
+        .lock()
+        .unwrap()
+        .counts
+        .remove(&plan.0.lease.version);
     drop(plan);
+    assert_eq!(
+        engine.reads.lock().unwrap().counts().unwrap_err().code(),
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(
+        engine
+            .prepare_workspace_content(&workspace.workspace_id, item, "admin")
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
 }
 
 #[test]
-#[should_panic(expected = "invariant: a live read lease has a positive count")]
-fn read_lease_drop_exposes_zero_registration() {
+fn read_lease_drop_fences_zero_registration() {
     let (_temp, engine, workspace) = fixture();
     let staged = engine.workspace(&workspace.workspace_id).unwrap();
     let item = staged.files.keys().next().unwrap();
@@ -577,9 +592,22 @@ fn read_lease_drop_exposes_zero_registration() {
         .reads
         .lock()
         .unwrap()
+        .counts
         .get_mut(&plan.0.lease.version)
         .unwrap() = 0;
     drop(plan);
+    assert_eq!(
+        engine.reads.lock().unwrap().counts().unwrap_err().code(),
+        ErrorCode::RecoveryRequired
+    );
+    assert_eq!(
+        engine
+            .prepare_workspace_content(&workspace.workspace_id, item, "admin")
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
 }
 
 #[test]
@@ -870,4 +898,54 @@ fn version_health_fallback_observes_shared_membership_but_not_missing_local_bodi
         );
         assert!(!engine.blocked);
     }
+}
+
+#[test]
+fn poisoned_read_lease_drop_during_unwind_preserves_registry() {
+    let (_temp, engine, workspace) = fixture();
+    let staged = engine.workspace(&workspace.workspace_id).unwrap();
+    let item = staged.files.keys().next().unwrap();
+    let plan = engine
+        .prepare_workspace_content(&workspace.workspace_id, item, "admin")
+        .unwrap();
+    let key = plan.0.lease.version.clone();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = engine.reads.lock().unwrap();
+        panic!("poison");
+    }));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _plan = plan;
+            panic!("outer unwind");
+        }))
+        .is_err()
+    );
+    assert!(engine.reads.is_poisoned());
+    assert_eq!(
+        engine.reads.lock().err().unwrap().into_inner().counts[&key],
+        1
+    );
+}
+
+#[test]
+fn invalid_read_release_keeps_purge_fenced_after_the_owner_is_gone() {
+    let (_temp, mut engine, version) = committed_fixture();
+    let history = engine.state.versions[&version].history_tree_id.clone();
+    let plan = engine.prepare_content(&version).unwrap();
+    assert_eq!(
+        engine
+            .create_purge_plan(&history, vec![version.clone()], "admin")
+            .unwrap_err()
+            .code(),
+        ErrorCode::ContentPinned
+    );
+    engine.reads.lock().unwrap().counts.remove(&version);
+    drop(plan);
+    assert_eq!(
+        engine
+            .create_purge_plan(&history, vec![version], "admin")
+            .unwrap_err()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
 }

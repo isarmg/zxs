@@ -99,3 +99,39 @@ replace 的目录冲突由 rename 前类型检查拒绝，create/public 由 NORE
 其 LD_PRELOAD 日志只覆盖 `std::fs::File` 的 libc write/fsync 路径，检查文件屏障
 时目标尚非该 inode、目录屏障时已存在目标，不声称拦截 rustix direct syscall、
 全进程 syscall 总数、精确 rename 时间或物理断电行为。
+
+## 目录创建失败后的重试屏障
+
+`PrivateDirectory::create` / `create_child` 在创建或打开并准入目录之后，均执行
+子目录同步、父目录同步。`EXIST` 只说明名称目前可见，不能证明先前 mkdir
+后的任一屏障已经完成；`created` 只用于新 inode 的行政所有者设置，不作为
+耐久证明。权限、所有者与拒绝符号链接规则不变，不修改现存目标权限。
+
+`create_trusted` 创建模式对沿途已存在的祖先同样执行上述屏障，避免深层重试
+跳过先前失败留下的祖先；只读 `open_trusted` 不增加同步。引擎
+`DiskRoot::private_relative_dir` 从持有根递归准入并同步整条相对祖先链，仍使用
+`BENEATH | NO_SYMLINKS | NO_XDEV`，不按命名路径重开磁盘根。
+
+不增加全局缓存或持久格式。创建/子创建成功路径固定两次目录 fsync；深度 d 的
+trusted 创建或引擎相对目录准备为 2d 次目录 fsync（相邻层的同一目录可能同步
+两次），原先全部已存在路径为零。引擎逐层相对 open 的解析分量总量为 O(d²)，
+递归栈 O(d)；这里优先修复耐久缺口，不宣称性能提升。叶文件发布自身屏障不变。
+
+根测试驱动 `test/platform/unit/fs_safety/directory-retry.sh <libtest> platform|engine`
+在隔离子进程注入一次真实 libc fsync EIO，覆盖 create、create_child、
+create_trusted 多层路径及引擎多层对象写入，分别在新目录自身/父目录首次同步
+失败后重试。断言原 EIO 来源、重试子后父屏障、原 inode、0700 权限与现存文件
+保全；脚本验证准确 ignored 测试和单测试完成标记，不允许零测试通过。
+这不等于完整事务掉电/恢复模型或物理断电验收；拦截只覆盖 std File 的 libc fsync。
+
+CI入口 `.github/scripts/check-directory-retry.py` 从本次成功 Cargo JSON 构建中
+取得 platform-io 与 storage-engine 的唯一 libtest，再执行上述十个故障/重试子进程。
+`test/ci/test_directory_retry.py` 拒绝缺目标、重复产物、未完成/失败构建、Rust
+诊断、零测试与缺完成标记；这组驱动负例不冒称执行了真实 fsync 故障。
+
+初始化与历史导出使用的 `disk::private_dir` 复用 `create_all`，对已存在祖先
+补齐屏障，不再只在 NOENT 时向上递归。它保留原准入域：已有祖先只要求目录且
+无符号链接，新创建组件和最终叶检查当前owner/0700；不增加trusted ancestry或
+跨挂载限制，不 chmod 或调整现存目录所有者。绝对链深度d为2d次同步；缺失
+组件复用原 `create_private_at` 的两屏障，不重复同步。
+`engine-path` 两场额外故障覆盖新祖先自身/父同步失败后深层导出路径重试。

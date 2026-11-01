@@ -2719,3 +2719,41 @@ mod snapshot_semantics_tests;
 
 #[path = "system_samba_tests.rs"]
 mod system_samba_tests;
+
+#[test]
+fn session_drop_after_writer_poison_retains_work_and_other_owners() {
+    let (_temp, shared, _backend, branch) = fixture();
+    let mut client = session(shared.clone(), &branch);
+    let (opened, file) = open_file(&mut client, true);
+    file.write_all_at(b"two", 0).unwrap();
+    let source = match &client.handles[&opened.handle] {
+        Handle::Write(writer) => writer.source.clone(),
+        _ => unreachable!(),
+    };
+    let other = (branch.clone(), "other".into());
+    shared.file_writers.lock().unwrap().insert(other.clone());
+    let before = shared.file_writers.lock().unwrap().clone();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = shared.file_writers.lock().unwrap();
+        panic!("poison");
+    }));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _client = client;
+            panic!("outer unwind");
+        }))
+        .is_err()
+    );
+    assert!(shared.file_writers.is_poisoned());
+    assert_eq!(
+        *shared.file_writers.lock().unwrap_err().into_inner(),
+        before
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"two");
+    assert!(source.with_extension("work.json").is_file());
+    let mut next = session(shared.clone(), &branch);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| next.reserve_paths(&["new"])))
+            .is_err()
+    );
+}

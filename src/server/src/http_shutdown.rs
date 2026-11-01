@@ -45,7 +45,10 @@ impl Connections {
 struct NetworkGuard(Arc<Mutex<Connections>>);
 impl Drop for NetworkGuard {
     fn drop(&mut self) {
-        self.0.lock().expect("service state lock poisoned").close();
+        match self.0.lock() {
+            Ok(mut connections) => connections.close(),
+            Err(poison) => poison.into_inner().close(), // Close only; poison stays set.
+        }
     }
 }
 
@@ -84,11 +87,13 @@ impl DrainStream {
 }
 impl Drop for DrainStream {
     fn drop(&mut self) {
-        self.connections
-            .lock()
-            .expect("service state lock poisoned")
-            .sockets
-            .remove(&self.key);
+        match self.connections.lock() {
+            Ok(mut connections) => {
+                connections.sockets.remove(&self.key);
+            }
+            // A damaged registry cannot safely continue serving any registered socket.
+            Err(poison) => poison.into_inner().close(),
+        }
     }
 }
 impl AsyncRead for DrainStream {

@@ -382,9 +382,14 @@ pub(crate) struct Claim {
 }
 impl Drop for Claim {
     fn drop(&mut self) {
-        {
-            let mut claims = self.claims.lock().expect("service state lock poisoned");
-            claims.remove(&self.key);
+        match self.claims.lock() {
+            Ok(mut claims) => {
+                claims.remove(&self.key);
+            }
+            Err(_) => {
+                // Preserve ownership and poison: no subsequent admission may trust this index.
+                tracing::error!("claims cleanup blocked by poisoned registry");
+            }
         }
     }
 }

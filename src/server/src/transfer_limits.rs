@@ -40,7 +40,8 @@ impl TransferLimits {
     }
 }
 pub(crate) struct Admission {
-    active: Mutex<usize>,
+    // None fences admission after an invalid release; it never means zero active work.
+    active: Mutex<Option<usize>>,
     slots: usize,
 }
 pub(crate) struct Permit {
@@ -49,12 +50,19 @@ pub(crate) struct Permit {
 impl Admission {
     pub(crate) fn new(limits: &TransferLimits) -> Arc<Self> {
         Arc::new(Self {
-            active: Mutex::new(0),
+            active: Mutex::new(Some(0)),
             slots: limits.slots,
         })
     }
     pub(crate) fn acquire(self: &Arc<Self>) -> Result<Permit, ApiError> {
-        let mut active = lock(&self.active);
+        let mut state = lock(&self.active);
+        let active = state.as_mut().ok_or_else(|| {
+            ApiError::new(
+                ::http::StatusCode::SERVICE_UNAVAILABLE,
+                storage_contract::ErrorCode::RecoveryRequired,
+                "HTTP transfer registry invariant failed",
+            )
+        })?;
         if *active >= self.slots {
             return Err(ApiError::limit("HTTP transfer capacity reached"));
         }
@@ -66,13 +74,15 @@ impl Admission {
 }
 impl Drop for Permit {
     fn drop(&mut self) {
-        {
-            let mut active = self
-                .admission
-                .active
-                .lock()
-                .expect("service state lock poisoned");
-            *active -= 1;
+        match self.admission.active.lock() {
+            Ok(mut state) => match state.as_mut() {
+                Some(active) if *active > 0 => *active -= 1,
+                _ => {
+                    *state = None;
+                    tracing::error!("HTTP transfer cleanup found an invalid permit count");
+                }
+            },
+            Err(_) => tracing::error!("HTTP transfer cleanup blocked by poisoned registry"),
         }
     }
 }
@@ -184,10 +194,12 @@ impl<S: Stream<Item = Result<bytes::Bytes, std::io::Error>>> Stream for BoundedS
 impl<S> Drop for BoundedStream<S> {
     fn drop(&mut self) {
         self.timer.abort();
-        self.state
-            .lock()
-            .expect("service state lock poisoned")
-            .stream = None;
+        // Teardown alone may take the resource out of poisoned state; never poll it again.
+        let stream = match self.state.lock() {
+            Ok(mut state) => state.stream.take(),
+            Err(poison) => poison.into_inner().stream.take(),
+        };
+        drop(stream);
     }
 }
 

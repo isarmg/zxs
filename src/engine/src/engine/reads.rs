@@ -99,7 +99,7 @@ impl Engine {
             .reads
             .lock()
             .expect("invariant: read lease lock poisoned");
-        *reads.entry(version_id.into()).or_default() += 1;
+        reads.acquire(version_id.into())?;
         drop(reads);
         Ok(OpenedContent {
             file,
@@ -136,12 +136,10 @@ impl Engine {
             .base_version_id
             .clone()
             .unwrap_or_else(|| format!("workspace:{workspace}:{item}"));
-        *self
-            .reads
+        self.reads
             .lock()
             .expect("invariant: read lease lock poisoned")
-            .entry(key.clone())
-            .or_default() += 1;
+            .acquire(key.clone())?;
         Ok(WorkspaceReadPlan(OpenedContent {
             file,
             size: staged.size,
@@ -271,12 +269,10 @@ impl Engine {
             .iter()
             .map(|slot| self.disk(slot).cloned())
             .collect::<Result<Vec<_>>>()?;
-        *self
-            .reads
+        self.reads
             .lock()
             .expect("invariant: read lease lock poisoned")
-            .entry(version_id.into())
-            .or_default() += 1;
+            .acquire(version_id.into())?;
         Ok(ContentReadPlan {
             metadata_integrity: Arc::clone(&self.metadata_integrity),
             config: self.config.clone(),

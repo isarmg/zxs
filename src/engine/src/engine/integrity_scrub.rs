@@ -141,7 +141,7 @@ pub struct IntegrityScrubPlan {
     state: std::sync::Arc<State>,
     snapshot: Option<String>,
     tails: std::collections::BTreeMap<String, Option<String>>,
-    owner: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, usize>>>,
+    owner: std::sync::Arc<std::sync::Mutex<super::ReadRegistry>>,
     verify_eof: bool,
     metadata_integrity: std::sync::Arc<super::provenance::MetadataIntegrity>,
     metadata_epoch: super::provenance::MetadataEpoch,
@@ -168,7 +168,7 @@ pub struct IntegrityScrubOutcome {
     metadata_epoch: super::provenance::MetadataEpoch,
     schedule: Option<ScheduledScrub>,
     started: std::time::Instant,
-    owner: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, usize>>>,
+    owner: std::sync::Arc<std::sync::Mutex<super::ReadRegistry>>,
     config: ValidatedConfig,
     report: IntegrityScrubReport,
     tails: std::collections::BTreeMap<String, Option<String>>,
@@ -243,12 +243,10 @@ impl Engine {
         {
             return Ok(IntegrityScrubBatchAdmission::Superseded);
         }
-        *self
-            .reads
+        self.reads
             .lock()
             .expect("invariant: read lease lock poisoned")
-            .entry(version_id.to_owned())
-            .or_default() += 1;
+            .acquire(version_id.to_owned())?;
         let lease = super::ReadLease {
             version: version_id.to_owned(),
             reads: std::sync::Arc::clone(&self.reads),

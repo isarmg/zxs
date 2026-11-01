@@ -26,14 +26,15 @@ impl std::ops::Deref for DispatchError {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        {
-            let mut writers = self
-                .shared
-                .file_writers
-                .lock()
-                .expect("service state lock poisoned");
-            for path in &self.writer_locks {
-                writers.remove(&(self.branch.clone(), path.clone()));
+        match self.shared.file_writers.lock() {
+            Ok(mut writers) => {
+                for path in &self.writer_locks {
+                    writers.remove(&(self.branch.clone(), path.clone()));
+                }
+            }
+            Err(_) => {
+                // Preserve ownership and poison: no subsequent admission may trust this index.
+                tracing::error!("writers cleanup blocked by poisoned registry");
             }
         }
         // Every live writer has handed out a mutable FD. The peer can have

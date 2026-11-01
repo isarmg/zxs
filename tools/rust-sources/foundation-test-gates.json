@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "description": "Reviewed gates that execute tests aimed at a foundation package, other than check-foundation-behaviour.py whose suites are read from the script itself. kind: U executes retained upstream material, P executes only project-authored tests or fixtures, F is a companion proc-macro whose expansion an executed suite exercises, I only compiles or links the package for another package's tests and never counts as executed.",
+  "description": "Reviewed gates that execute tests aimed at a foundation package, other than check-foundation-behaviour.py whose suites are read from the script itself. kind: U executes retained upstream material, P executes only project-authored tests or fixtures, F is a companion proc-macro whose expansion an executed suite exercises, I only compiles or links the package for another package's tests and never counts as executed. scripts names directly invoked CI entrypoints (not imported helpers); every entry including companion macros records its reachable shard.",
   "entries": [
     {
       "package": "ahash",
@@ -16,10 +16,9 @@
       "kind": "U",
       "shard": "foundation-crypto",
       "scripts": [
-        "test/ci/crypto_vectors.py",
         ".github/scripts/check-crypto-consolidation.py"
       ],
-      "detail": "tests/kat.rs and tests/phc_strings.rs (hex! rewritten) run in --release"
+      "detail": "helpers: test/ci/crypto_vectors.py; tests/kat.rs and tests/phc_strings.rs (hex! rewritten) run in --release"
     },
     {
       "package": "async-notification",
@@ -80,10 +79,9 @@
       "kind": "U",
       "shard": "foundation-crypto",
       "scripts": [
-        "test/ci/crypto_vectors.py",
         ".github/scripts/check-crypto-consolidation.py"
       ],
-      "detail": "test/foundation/blake2/tests/data/*.blb vectors regenerated into tests/vectors.rs (518 vectors) and run"
+      "detail": "helpers: test/ci/crypto_vectors.py; test/foundation/blake2/tests/data/*.blb vectors regenerated into tests/vectors.rs (518 vectors) and run"
     },
     {
       "package": "blake3",
@@ -209,9 +207,9 @@
       "kind": "U",
       "shard": "foundation-crypto",
       "scripts": [
-        "test/ci/crypto_core_checks.py"
+        ".github/scripts/check-crypto-consolidation.py"
       ],
-      "detail": "buffer/tests/mod.rs (11 cases, hex! rewritten) and hash/tests/dummy_fixed.rs + doctests"
+      "detail": "helpers: test/ci/crypto_core_checks.py; buffer/tests/mod.rs (11 cases, hex! rewritten) and hash/tests/dummy_fixed.rs + doctests"
     },
     {
       "package": "ctutils",
@@ -288,7 +286,10 @@
     {
       "package": "error-definition-macros",
       "kind": "F",
-      "scripts": [],
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-error-definition-family.py"
+      ],
       "detail": "derive exercised by executed test/foundation/error-definition/tests/test_*.rs"
     },
     {
@@ -357,7 +358,10 @@
     {
       "package": "futures-macro",
       "kind": "F",
-      "scripts": [],
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-futures-consolidation.py"
+      ],
       "detail": "join!/select! exercised by executed futures retained tests (--all-features)"
     },
     {
@@ -845,7 +849,10 @@
     {
       "package": "serialization-derive",
       "kind": "F",
-      "scripts": [],
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-serialization-consolidation.py"
+      ],
       "detail": "derive exercised by executed data-serialization lib/error-path tests and serialization-family fixture"
     },
     {
@@ -1132,7 +1139,10 @@
     {
       "package": "tokio-macros",
       "kind": "F",
-      "scripts": [],
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-runtime-join-map.py"
+      ],
       "detail": "#[tokio::test] used by executed fixtures (runtime-join-map.rs, runtime-adapters.rs, consumer.rs)"
     },
     {
@@ -1420,9 +1430,9 @@
       "kind": "P",
       "shard": "foundation-crypto",
       "scripts": [
-        "test/ci/crypto_core_checks.py"
+        ".github/scripts/check-crypto-consolidation.py"
       ],
-      "detail": "crypto-core-zeroize.rs via cryptographic_core::zeroize re-export; zeroize retained tests NOT run"
+      "detail": "helpers: test/ci/crypto_core_checks.py; crypto-core-zeroize.rs via cryptographic_core::zeroize re-export; zeroize retained tests NOT run"
     },
     {
       "package": "zerovec",

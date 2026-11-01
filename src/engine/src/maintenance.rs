@@ -363,6 +363,7 @@ impl Engine {
             .reads
             .lock()
             .expect("invariant: read lease lock poisoned");
+        let counts = reads.counts()?;
         for id in versions {
             let v = self.state.versions.get(id).ok_or_else(|| {
                 Error::new(
@@ -376,7 +377,7 @@ impl Engine {
                     "purge version belongs to another history",
                 ));
             }
-            if reads.get(id).copied().unwrap_or(0) > 0 {
+            if counts.get(id).copied().unwrap_or(0) > 0 {
                 return Err(Error::new(
                     storage_contract::ErrorCode::ContentPinned,
                     "version has an active read lease",
@@ -446,7 +447,10 @@ impl Engine {
         // tombstone, so an offline disk can distinguish intentional removal
         // from lost bytes without consulting another disk or SQLite.
         let mut published = None;
-        let members = self.trusted_evidence_members();
+        let crate::engine::EvidenceMembers {
+            members,
+            first_error,
+        } = self.trusted_evidence_members();
         for member in &members {
             let scanned = self
                 .metadata_integrity
@@ -497,12 +501,17 @@ impl Engine {
                 break;
             }
         }
-        let (candidate, publication, seal, snapshot) = published.ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::RecoveryRequired,
-                "published tombstone evidence is unavailable",
-            )
-        })?;
+        let (candidate, publication, seal, snapshot) =
+            published.ok_or_else(|| match first_error {
+                Some(error) => error.context(
+                    storage_contract::ErrorCode::RecoveryRequired,
+                    "published tombstone evidence is unavailable",
+                ),
+                None => Error::new(
+                    storage_contract::ErrorCode::RecoveryRequired,
+                    "published tombstone evidence is unavailable",
+                ),
+            })?;
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_purge_evidence")?;
         // Reading the publication closure does not authorize destructive I/O
@@ -637,7 +646,8 @@ impl Engine {
                     .filter(|e| e.kind == NamespaceEntryKind::File).map(|e| e.version_id.clone())
                     .collect::<BTreeSet<_>>();
                 let reads = engine.reads.lock().expect("invariant: read lease lock poisoned");
-                if selected_versions.iter().any(|id| reads.get(id).copied().unwrap_or(0) != 0) {
+                let counts = reads.counts()?;
+                if selected_versions.iter().any(|id| counts.get(id).copied().unwrap_or(0) != 0) {
                     return Err(Error::new(storage_contract::ErrorCode::ContentPinned, "split input has an active read lease"));
                 }
                 drop(reads);

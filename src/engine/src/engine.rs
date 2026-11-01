@@ -47,6 +47,13 @@ use config::acquire_locks;
 pub(crate) use source::ReadSource;
 pub use workspace_storage::{WorkspaceInventory, WorkspaceInventoryRecord};
 
+/// Healthy replicas may answer despite rejected members. If they cannot,
+/// retain the first concrete rejection rather than claiming evidence is absent.
+pub(crate) struct EvidenceMembers {
+    pub(crate) members: Vec<DiskConfig>,
+    pub(crate) first_error: Option<Error>,
+}
+
 /// The seal boundary that kept a recovery invocation from admitting evidence.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RecoverySealContext {
@@ -102,7 +109,7 @@ pub struct Engine {
     integrity_scrub_schedule: Option<std::sync::Weak<integrity_scrub::ScheduleState>>,
     pub(crate) next_slot: u64,
     pub(crate) journals: BTreeMap<String, crate::journal::JournalWriter>,
-    pub(crate) reads: Arc<Mutex<BTreeMap<String, usize>>>,
+    pub(crate) reads: Arc<Mutex<ReadRegistry>>,
     pub(crate) upload_preparations: Arc<Mutex<BTreeSet<String>>>,
     commit_preparation: Arc<std::sync::atomic::AtomicBool>,
     history_query_proof: Mutex<index::QueryProof>,
@@ -157,24 +164,51 @@ enum FaultAction {
 
 pub struct ReadLease {
     version: String,
-    reads: Arc<Mutex<BTreeMap<String, usize>>>,
+    reads: Arc<Mutex<ReadRegistry>>,
+}
+/// A failed lease invariant fences all later admission and destructive maintenance.
+#[derive(Default)]
+pub(crate) struct ReadRegistry {
+    counts: BTreeMap<String, usize>,
+    failed: bool,
+}
+impl ReadRegistry {
+    pub(crate) fn counts(&self) -> Result<&BTreeMap<String, usize>> {
+        if self.failed {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "read lease registry invariant failed",
+            ));
+        }
+        Ok(&self.counts)
+    }
+    fn acquire(&mut self, version: String) -> Result<()> {
+        self.counts()?;
+        *self.counts.entry(version).or_default() += 1;
+        Ok(())
+    }
 }
 impl Drop for ReadLease {
     fn drop(&mut self) {
-        let mut reads = self
-            .reads
-            .lock()
-            .expect("invariant: read lease lock poisoned");
-        let count = reads
-            .get_mut(&self.version)
-            .expect("invariant: every read lease has a registered count");
-        assert!(
-            *count > 0,
-            "invariant: a live read lease has a positive count"
-        );
-        *count -= 1;
-        if *count == 0 {
-            reads.remove(&self.version);
+        let mut reads = match self.reads.lock() {
+            Ok(reads) => reads,
+            Err(_) => {
+                // Keep the poisoned registry fenced; its counts cannot be trusted.
+                tracing::error!("read lease cleanup blocked by poisoned registry");
+                return;
+            }
+        };
+        match reads.counts.get_mut(&self.version) {
+            Some(count) if *count > 0 => {
+                *count -= 1;
+                if *count == 0 {
+                    reads.counts.remove(&self.version);
+                }
+            }
+            _ => {
+                reads.failed = true;
+                tracing::error!("read lease cleanup found an invalid registered count");
+            }
         }
     }
 }
@@ -383,7 +417,7 @@ impl Engine {
             integrity_scrub_schedule: None,
             next_slot: 1,
             journals,
-            reads: Arc::new(Mutex::new(BTreeMap::new())),
+            reads: Arc::new(Mutex::new(ReadRegistry::default())),
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_query_proof: Mutex::new(index::QueryProof::default()),
@@ -460,7 +494,7 @@ impl Engine {
             integrity_scrub_schedule: None,
             next_slot: 1,
             journals: BTreeMap::new(),
-            reads: Arc::new(Mutex::new(BTreeMap::new())),
+            reads: Arc::new(Mutex::new(ReadRegistry::default())),
             upload_preparations: Arc::new(Mutex::new(BTreeSet::new())),
             commit_preparation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             history_query_proof: Mutex::new(index::QueryProof::default()),
@@ -743,18 +777,33 @@ impl Engine {
             }
         }
     }
-    pub(crate) fn trusted_evidence_members(&self) -> Vec<DiskConfig> {
-        self.members()
-            .into_iter()
-            .filter(|disk| {
-                provenance::validate_owned_seal(
-                    &self.disk_resources,
-                    disk,
-                    &self.metadata_integrity,
-                )
-                .is_ok()
-            })
-            .collect()
+    pub(crate) fn trusted_evidence_members(&self) -> EvidenceMembers {
+        let mut selected = EvidenceMembers {
+            members: Vec::new(),
+            first_error: None,
+        };
+        for disk in self.members() {
+            match provenance::validate_owned_seal(
+                &self.disk_resources,
+                &disk,
+                &self.metadata_integrity,
+            ) {
+                Ok(()) => selected.members.push(disk),
+                Err(error) => {
+                    let code = error.code();
+                    selected.first_error.get_or_insert_with(|| {
+                        error.context(
+                            code,
+                            format!(
+                                "evidence member seal unavailable: disk {} slot {}",
+                                disk.disk_id, disk.slot_id
+                            ),
+                        )
+                    });
+                }
+            }
+        }
+        selected
     }
     pub(crate) fn members(&self) -> Vec<DiskConfig> {
         self.planning_context().members()

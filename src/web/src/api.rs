@@ -51,6 +51,8 @@ thread_local! { static CREDENTIALS: RefCell<Credentials> = RefCell::new(Credenti
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid activity history: {0}")]
+    ActivityHistory(#[source] json_codec::Error),
     #[error("invalid file-history branches: {0}")]
     FileHistory(#[source] crate::files::FileHistoryError),
     #[error("invalid directory page: {0}")]
@@ -124,7 +126,7 @@ impl std::fmt::Display for Error {
     }
 }
 
-fn error(code: storage_contract::ErrorCode, message: impl Into<String>) -> Error {
+pub(crate) fn error(code: storage_contract::ErrorCode, message: impl Into<String>) -> Error {
     Error {
         code,
         message: message.into(),

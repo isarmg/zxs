@@ -163,6 +163,11 @@ fn memory_status(total: u64, available: u64) -> MemoryStatus {
 }
 
 pub(crate) struct Telemetry {
+    worker: crate::periodic_worker::PeriodicWorker,
+    data: Arc<TelemetryData>,
+}
+
+struct TelemetryData {
     // This private handle invokes only the capability-gated, read-only sampler.
     // HTTP and protocol adapters retain AuthorizedBackend normally.
     backend: Arc<dyn Backend>,
@@ -187,7 +192,7 @@ impl Telemetry {
                 HistoryWriter::memory(now)
             }
         };
-        let service = Arc::new(Self {
+        let data = Arc::new(TelemetryData {
             backend,
             request_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             sampler: Mutex::new(sampler),
@@ -195,29 +200,41 @@ impl Telemetry {
         });
         // Synchronous initialization guarantees a usable first snapshot. A
         // backend without monitor support can still serve its other routes.
-        if let Err(error) = service.refresh(&mut writer) {
+        if let Err(error) = data.refresh(&mut writer) {
             tracing::warn!(error = ?error, "initial host sample is unavailable");
         }
-        let weak = Arc::downgrade(&service);
-        std::thread::Builder::new()
-            .name("zxs-telemetry".into())
-            .spawn(move || {
-                loop {
-                    std::thread::sleep(SAMPLE_INTERVAL);
-                    let Some(service) = weak.upgrade() else {
-                        break;
-                    };
-                    if let Err(error) = service.refresh(&mut writer) {
+        let service = Arc::new(Self {
+            worker: crate::periodic_worker::PeriodicWorker::new(),
+            data: Arc::clone(&data),
+        });
+        service
+            .worker
+            .start(
+                std::thread::Builder::new().name("zxs-telemetry".into()),
+                SAMPLE_INTERVAL,
+                SAMPLE_INTERVAL,
+                move || {
+                    if let Err(error) = data.refresh(&mut writer) {
                         tracing::warn!(error = ?error, "periodic host sample is unavailable");
                     }
-                    // Release the service while sleeping. Dropping its router
-                    // stops the sampler without retaining storage or auth state.
-                }
-            })
+                },
+            )
             .map_err(ApiError::io)?;
         Ok(service)
     }
 
+    pub(crate) fn stop(&self) {
+        self.worker.stop();
+    }
+    pub(crate) fn drain(&self) -> Result<(), ApiError> {
+        self.worker.drain()
+    }
+    fn current(&self) -> Result<Snapshot, ApiError> {
+        self.data.current()
+    }
+}
+
+impl TelemetryData {
     fn collect(&self) -> Result<Sample, ApiError> {
         // Host diagnostics must remain useful when the storage pool cannot open.
         let disks = self
@@ -303,7 +320,7 @@ pub(crate) async fn status(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> Result<Json<Snapshot>, ApiError> {
-    telemetry_job(state.telemetry.request_slots.clone(), move || {
+    telemetry_job(state.telemetry.data.request_slots.clone(), move || {
         require_current_session(&state.auth, &identity)?;
         state.telemetry.current().and_then(|status| {
             require_current_session(&state.auth, &identity)?;
@@ -376,13 +393,14 @@ pub(crate) async fn history(
     Extension(identity): Extension<Identity>,
     ApiQuery(query): ApiQuery<HistoryQuery>,
 ) -> Result<Json<HistoryResponse>, ApiError> {
-    telemetry_job(state.telemetry.request_slots.clone(), move || {
+    telemetry_job(state.telemetry.data.request_slots.clone(), move || {
         require_current_session(&state.auth, &identity)?;
         let (seconds, interval) = query.range.parameters();
         let to = date_time::OffsetDateTime::now_utc().unix_timestamp();
         let from = to - seconds;
         let samples = state
             .telemetry
+            .data
             .history
             .lock()
             .expect("service state lock poisoned")

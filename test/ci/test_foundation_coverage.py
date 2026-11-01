@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import tomllib
 import unittest
 from unittest.mock import patch
@@ -48,6 +49,119 @@ class FoundationCoverageConsumerTests(unittest.TestCase):
             "profile": "sqlite-pool-validation", "target": "x86_64-unknown-linux-gnu",
             "features": ["default", "proc-macro"], "consumers": ["platform-io"],
         }]})
+
+
+class FoundationCoverageReachabilityTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='foundation-wiring-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        for relative in ('.github/workflows/ci.yml', '.github/scripts/check.sh',
+                         '.github/scripts/check-foundation.sh', '.github/scripts/select-ci-suites.py'):
+            destination = self.root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text((ROOT / relative).read_text())
+        self.script = '.github/scripts/check-foundation-behaviour.py'
+        (self.root / self.script).touch()
+        self.gate = {'shard': 'foundation-async', 'scripts': [self.script]}
+
+    def edit(self, relative, old, new):
+        path = self.root / relative
+        source = path.read_text()
+        self.assertIn(old, source)
+        path.write_text(source.replace(old, new))
+
+    def validate(self):
+        with patch.object(COVERAGE, 'ROOT', self.root):
+            COVERAGE.validate_gate(self.gate, COVERAGE.invoked_scripts())
+
+    def test_all_222_packages_and_generated_behaviour_have_real_routes(self):
+        self.assertEqual(len(MAP['packages']), 222)
+        reachable = COVERAGE.invoked_scripts()
+        registry = json.loads((ROOT / 'tools/rust-sources/foundation-test-gates.json').read_text())
+        for gate in registry['entries']:
+            COVERAGE.validate_gate(gate, reachable)
+        for package in MAP['packages']:
+            for gate in package['gates']:
+                COVERAGE.validate_gate(gate, reachable)
+        for entries in COVERAGE.behaviour_entries(BEHAVIOUR).values():
+            for gate in entries:
+                COVERAGE.validate_gate(gate, reachable)
+
+    def test_comment_only_is_not_a_command(self):
+        self.edit('.github/scripts/check-foundation.sh',
+                  '    python3 ' + self.script, '    # python3 ' + self.script)
+        with self.assertRaisesRegex(AssertionError, 'not invoked'):
+            self.validate()
+
+    def test_orphan_script_cannot_supply_a_route(self):
+        self.edit('.github/scripts/check-foundation.sh', '    python3 ' + self.script, '')
+        (self.root / '.github/scripts/orphan.sh').write_text('python3 ' + self.script + '\n')
+        with self.assertRaises(AssertionError):
+            self.validate()
+
+    def test_same_basename_different_path_is_not_the_entrypoint(self):
+        self.edit('.github/scripts/check-foundation.sh',
+                  'python3 ' + self.script, 'python3 elsewhere/check-foundation-behaviour.py')
+        with self.assertRaisesRegex(AssertionError, 'not invoked'):
+            self.validate()
+
+    def test_wrong_shard_is_rejected(self):
+        self.gate['shard'] = 'foundation-data'
+        with self.assertRaisesRegex(AssertionError, 'not invoked'):
+            self.validate()
+
+    def test_command_removed_from_workflow_cannot_be_replaced_by_comment(self):
+        self.edit('.github/workflows/ci.yml',
+                  '        run: bash .github/scripts/check.sh "${{ matrix.suite }}"',
+                  '        # run: bash .github/scripts/check.sh "${{ matrix.suite }}"')
+        with self.assertRaises(AssertionError):
+            self.validate()
+
+    def test_unreachable_conditional_shell_command_fails_explicitly(self):
+        self.edit('.github/scripts/check-foundation.sh', '    python3 ' + self.script,
+                  '    if false; then\n      python3 ' + self.script + '\n    fi')
+        with self.assertRaisesRegex(AssertionError, 'unsupported coverage shell'):
+            self.validate()
+
+    def test_optional_workflow_step_is_not_accepted(self):
+        self.edit('.github/workflows/ci.yml', '      - name: Run locked test suite',
+                  '      - name: Run locked test suite\n        if: false')
+        with self.assertRaises(AssertionError):
+            self.validate()
+
+    def test_selector_id_on_another_step_is_not_an_output_route(self):
+        self.edit('.github/workflows/ci.yml', '        id: suites', '        id: not-suites')
+        self.edit('.github/workflows/ci.yml', '      - name: Run locked test suite',
+                  '      - name: Run locked test suite\n        id: suites')
+        with self.assertRaisesRegex(AssertionError, 'selector output'):
+            self.validate()
+
+    def test_missing_foundation_forwarding_is_rejected(self):
+        self.edit('.github/scripts/check.sh',
+                  'bash .github/scripts/check-foundation.sh "$1"',
+                  'bash .github/scripts/check-foundation.sh foundation-platform')
+        with self.assertRaisesRegex(AssertionError, 'forward'):
+            self.validate()
+
+    def test_browser_producer_dependency_is_required(self):
+        self.edit('.github/workflows/ci.yml',
+                  '    needs: [web-production, smb-sdk]', '    needs: smb-sdk')
+        with self.assertRaises(AssertionError):
+            self.validate()
+
+    def test_complex_existing_command_arguments_and_comments_are_preserved(self):
+        commands = list(COVERAGE.shell_commands(
+            'cargo test --locked --offline -p storage-engine --lib \\\n'
+            '  disk::admission_tests::cold_directory_admission_keeps_held_identity_after_mount_replacement \\\n'
+            '  -- --ignored --exact --test-threads=1\n'
+            'python3 ".github/scripts/check-binding-expressions.py" --clang # real command\n'))
+        self.assertEqual(commands[0][-4:], ['--', '--ignored', '--exact', '--test-threads=1'])
+        self.assertEqual(commands[1], ['python3', '.github/scripts/check-binding-expressions.py', '--clang'])
+
+    def test_unsupported_pipeline_is_not_silently_accepted(self):
+        with self.assertRaisesRegex(AssertionError, 'unsupported coverage shell syntax'):
+            list(COVERAGE.shell_commands('python3 ' + self.script + ' || true'))
 
 
 class FoundationCoverageMapTests(unittest.TestCase):

@@ -103,9 +103,13 @@ class SuiteCoverageTests(unittest.TestCase):
         })
         self.assertEqual(calls.count(calls[5]), 1)
         self.assertEqual(calls[6], {
-            "tool": "python3", "args": [".github/scripts/check-smb-budget-io.py"],
+            "tool": "python3", "args": [".github/scripts/check-directory-retry.py"],
         })
         self.assertEqual(calls.count(calls[6]), 1)
+        self.assertEqual(calls[7], {
+            "tool": "python3", "args": [".github/scripts/check-smb-budget-io.py"],
+        })
+        self.assertEqual(calls.count(calls[7]), 1)
 
     def test_history_io_rejects_successful_children_without_completion(self):
         root = Path(__file__).resolve().parents[2]

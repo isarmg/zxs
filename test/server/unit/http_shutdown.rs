@@ -209,3 +209,62 @@ fn network_cutoff_keeps_admitted_blocking_work_owned_until_runtime_exit() {
     host.join().unwrap();
     assert!(finished.load(Ordering::SeqCst));
 }
+
+#[tokio::test]
+async fn poisoned_network_destructors_close_sockets_during_unwind() {
+    use tokio::io::AsyncReadExt;
+    for drop_guard in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (accepted, _) = listener.accept().await.unwrap();
+        let socket = accepted.into_std().unwrap();
+        let cancel = socket.try_clone().unwrap();
+        let key = cancel.as_raw_fd();
+        let guard = NetworkGuard::default();
+        let connections = guard.0.clone();
+        let mut stream = DrainStream {
+            stream: TcpStream::from_std(socket).unwrap(),
+            cancel: Some(cancel),
+            key,
+            connections: connections.clone(),
+        };
+        stream.register();
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = connections.lock().unwrap();
+            panic!("poison");
+        });
+        if drop_guard {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _guard = guard;
+                    panic!("outer unwind");
+                }))
+                .is_err()
+            );
+            drop(stream);
+        } else {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _stream = stream;
+                    panic!("outer unwind");
+                }))
+                .is_err()
+            );
+            drop(guard);
+        }
+        let mut byte = [0];
+        assert_eq!(
+            tokio::time::timeout(DEADLINE, peer.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        assert!(connections.is_poisoned());
+        let closed = connections.lock().err().unwrap().into_inner();
+        assert!(closed.closed);
+        assert!(closed.sockets.is_empty());
+    }
+}

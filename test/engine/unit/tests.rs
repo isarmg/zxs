@@ -3142,7 +3142,15 @@ fn content_read_plan_pins_before_io_and_authenticates_manifest_outside_engine() 
     }
     let plan = engine.prepare_content(&version_id).unwrap();
     assert!(plan.open().is_err());
-    assert!(!engine.reads.lock().unwrap().contains_key(&version_id));
+    assert!(
+        !engine
+            .reads
+            .lock()
+            .unwrap()
+            .counts()
+            .unwrap()
+            .contains_key(&version_id)
+    );
 }
 
 #[test]

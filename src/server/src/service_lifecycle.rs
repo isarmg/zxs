@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 /// runtime teardown waits for them instead of silently detaching a writer.
 pub(crate) struct ManagementShutdown {
     backend: Option<Arc<dyn crate::Backend>>,
+    telemetry: Option<Arc<crate::telemetry::Telemetry>>,
     smb: crate::smb_rpc::ConnectionShutdown,
     drain: Option<tokio::task::JoinHandle<()>>,
     completion: Option<Arc<Mutex<NativeDrain>>>,
@@ -18,19 +19,38 @@ pub(crate) struct ManagementShutdown {
 /// Tokio may discard queued non-mandatory blocking jobs during runtime
 /// shutdown. The closure must own a drain-on-drop obligation, not just an Arc.
 struct NativeDrain {
+    telemetry: Option<Arc<crate::telemetry::Telemetry>>,
     backend: Option<Arc<dyn crate::Backend>>,
     completion: Option<DrainCompletion>,
 }
 impl NativeDrain {
-    fn new(backend: Arc<dyn crate::Backend>) -> Self {
+    fn new(
+        backend: Arc<dyn crate::Backend>,
+        telemetry: Option<Arc<crate::telemetry::Telemetry>>,
+    ) -> Self {
         Self {
             backend: Some(backend),
+            telemetry,
             completion: None,
         }
     }
     fn run(&mut self) {
         if let Some(backend) = self.backend.take() {
-            self.completion = Some(DrainCompletion(Some(backend.drain_management())));
+            let management = backend.drain_management();
+            let telemetry = self
+                .telemetry
+                .take()
+                .map_or(Ok(()), |telemetry| telemetry.drain());
+            let result = match (management, telemetry) {
+                (Ok(()), result) | (result, Ok(())) => result,
+                (Err(management), Err(telemetry)) => Err(crate::ApiError::io(io::Error::other(
+                    ManagementAndTelemetryError {
+                        management,
+                        telemetry,
+                    },
+                ))),
+            };
+            self.completion = Some(DrainCompletion(Some(result)));
         }
     }
 }
@@ -69,10 +89,14 @@ impl ManagementShutdown {
     pub(crate) fn new(backend: Arc<dyn crate::Backend>) -> Self {
         Self {
             backend: Some(backend),
+            telemetry: None,
             smb: crate::smb_rpc::ConnectionShutdown::new(),
             drain: None,
             completion: None,
         }
+    }
+    pub(crate) fn set_telemetry(&mut self, telemetry: Arc<crate::telemetry::Telemetry>) {
+        self.telemetry = Some(telemetry);
     }
     pub(crate) fn smb_connections(&self) -> crate::smb_rpc::ConnectionRegistry {
         self.smb.registry()
@@ -83,7 +107,10 @@ impl ManagementShutdown {
             return;
         };
         backend.stop_management();
-        let handoff = Arc::new(Mutex::new(NativeDrain::new(backend)));
+        if let Some(telemetry) = &self.telemetry {
+            telemetry.stop();
+        }
+        let handoff = Arc::new(Mutex::new(NativeDrain::new(backend, self.telemetry.take())));
         self.completion = Some(Arc::clone(&handoff));
         let drain = ManagementDrain(Arc::clone(&handoff));
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
@@ -156,6 +183,7 @@ where
         shutdown,
         ManagementShutdown {
             backend: None,
+            telemetry: None,
             smb: crate::smb_rpc::ConnectionShutdown::new(),
             drain: None,
             completion: None,
@@ -255,3 +283,34 @@ where
 #[cfg(test)]
 #[path = "../../../test/server/unit/service_lifecycle.rs"]
 mod tests;
+
+#[derive(Debug, error_definition::Error)]
+#[error("management shutdown failed: {management}; telemetry shutdown failed: {telemetry}")]
+struct ManagementAndTelemetryError {
+    #[source]
+    management: crate::ApiError,
+    telemetry: crate::ApiError,
+}
+
+/// Synchronous embedded-router ownership, independent of caller backend Arcs.
+/// No worker retains this guard, including while a sample is in flight.
+pub(crate) struct EmbeddedManagementShutdown(NativeDrain);
+impl EmbeddedManagementShutdown {
+    pub(crate) fn new(
+        backend: Arc<dyn crate::Backend>,
+        telemetry: Arc<crate::telemetry::Telemetry>,
+    ) -> Self {
+        Self(NativeDrain::new(backend, Some(telemetry)))
+    }
+}
+impl Drop for EmbeddedManagementShutdown {
+    fn drop(&mut self) {
+        if let Some(backend) = &self.0.backend {
+            backend.stop_management();
+        }
+        if let Some(telemetry) = &self.0.telemetry {
+            telemetry.stop();
+        }
+        self.0.run();
+    }
+}

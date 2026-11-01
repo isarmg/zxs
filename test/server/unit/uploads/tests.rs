@@ -379,3 +379,46 @@ fn status_projects_each_durable_state_without_private_fields_or_payload_reads() 
     record.logical_size = 0;
     assert_eq!(status(&record)["durable_ranges"], json_codec::json!([]));
 }
+
+#[test]
+fn claim_drop_keeps_poisoned_owners_and_does_not_double_panic() {
+    use std::sync::{Arc, Mutex};
+    let claims = Arc::new(Mutex::new(std::collections::BTreeSet::from([
+        "mine".into(),
+        "other".into(),
+    ])));
+    let claim = Claim {
+        claims: claims.clone(),
+        key: "mine".into(),
+    };
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = claims.lock().unwrap();
+        panic!("poison");
+    });
+    assert!(
+        std::panic::catch_unwind(|| {
+            let _claim = claim;
+            panic!("outer unwind");
+        })
+        .is_err()
+    );
+    assert!(claims.is_poisoned());
+    assert_eq!(claims.lock().unwrap_err().into_inner().len(), 2);
+}
+
+#[test]
+fn claim_drop_releases_only_its_own_key() {
+    use std::sync::{Arc, Mutex};
+    let claims = Arc::new(Mutex::new(std::collections::BTreeSet::from([
+        "mine".into(),
+        "other".into(),
+    ])));
+    drop(Claim {
+        claims: claims.clone(),
+        key: "mine".into(),
+    });
+    assert_eq!(
+        *claims.lock().unwrap(),
+        std::collections::BTreeSet::from(["other".into()])
+    );
+}

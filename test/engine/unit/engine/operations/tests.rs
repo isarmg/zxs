@@ -88,7 +88,10 @@ fn operation_read_plan_blocks_purge_until_observation_finishes() {
         .unwrap();
     let plan =
         engine.prepare_operation_health(engine.operation_record(original.operation_id).unwrap());
-    assert_eq!(engine.reads.lock().unwrap().get(&version), Some(&1));
+    assert_eq!(
+        engine.reads.lock().unwrap().counts().unwrap().get(&version),
+        Some(&1)
+    );
     assert_eq!(
         engine
             .commit_plan(
@@ -103,7 +106,15 @@ fn operation_read_plan_blocks_purge_until_observation_finishes() {
     let observed = plan.check().into_result();
     assert_eq!(observed.current_health.as_str(), "HEALTHY");
     assert_frozen(&observed, &original);
-    assert!(!engine.reads.lock().unwrap().contains_key(&version));
+    assert!(
+        !engine
+            .reads
+            .lock()
+            .unwrap()
+            .counts()
+            .unwrap()
+            .contains_key(&version)
+    );
     engine
         .commit_plan(
             &purge.plan_id,
@@ -136,12 +147,18 @@ fn operation_capture_is_metadata_only_deduplicated_and_cancel_safe() {
         engine.prepare_operation_health(engine.operation_record(operation.operation_id).unwrap());
     assert_eq!(plan.versions.len(), 1);
     assert_eq!(
-        engine.reads.lock().unwrap().get(&entry.version_id),
+        engine
+            .reads
+            .lock()
+            .unwrap()
+            .counts()
+            .unwrap()
+            .get(&entry.version_id),
         Some(&1)
     );
     SNAPSHOT_LOAD_COUNT.with(|count| assert_eq!(count.get(), 0));
     drop(plan);
-    assert!(engine.reads.lock().unwrap().is_empty());
+    assert!(engine.reads.lock().unwrap().counts().unwrap().is_empty());
     let observed = engine.operation(operation.operation_id).unwrap();
     assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
     assert_frozen(&observed, &operation);
@@ -179,7 +196,7 @@ fn health_reverifies_each_replica_and_never_rewrites_publication_facts() {
     assert_eq!(observed.current_health.as_str(), "UNAVAILABLE");
     assert_frozen(&observed, &operation);
     assert_eq!(engine.state.operations[&operation.operation_id], operation);
-    assert!(engine.reads.lock().unwrap().is_empty());
+    assert!(engine.reads.lock().unwrap().counts().unwrap().is_empty());
 }
 
 #[test]
@@ -224,7 +241,7 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
     assert_eq!(record.result().current_health.as_str(), "RECOVERING");
     let plan = engine.prepare_operation_health(record);
     assert!(plan.versions.is_empty());
-    assert!(engine.reads.lock().unwrap().is_empty());
+    assert!(engine.reads.lock().unwrap().counts().unwrap().is_empty());
     SNAPSHOT_LOAD_COUNT.with(|count| assert_eq!(count.get(), 0));
     // Ownership lookup does not load potentially large operation results.
     for hash in crate::journal::map_pages(&members[0], &snapshot.maps["operations"]) {
@@ -408,4 +425,210 @@ fn pending_receipt_reports_checksum_valid_malformed_record_as_log_corruption() {
         engine.operation_owner(operation).unwrap().as_deref(),
         Some("owner")
     );
+}
+
+fn pending_fixture(accepts: usize) -> (tempfile::TempDir, Engine, OperationId) {
+    let (root, mut engine, _repo) = fixture();
+    let operation = OperationId::generate();
+    engine.inject_fault_once(&format!("after_accept_{accepts}"));
+    assert!(
+        engine
+            .create_repository(
+                &storage_contract::RepositoryName::parse("pending seal").unwrap(),
+                "P01",
+                3,
+                "owner",
+                operation,
+            )
+            .is_err()
+    );
+    assert!(engine.blocked);
+    (root, engine, operation)
+}
+
+fn accepted_members(engine: &Engine) -> Vec<DiskConfig> {
+    engine
+        .members()
+        .into_iter()
+        .filter(|disk| {
+            scan_at(&engine.disk_resources.get(disk).unwrap().root, disk)
+                .unwrap()
+                .records
+                .iter()
+                .any(|(record, _)| {
+                    record.record_type == RecordType::Accept
+                        && record.sequence > engine.state.sequence
+                })
+        })
+        .collect()
+}
+
+#[test]
+fn pending_receipt_preserves_rejected_seal_causes_when_evidence_cannot_answer() {
+    use std::error::Error as _;
+    for all_members in [false, true] {
+        for corrupt in [false, true] {
+            let (_root, engine, operation) = pending_fixture(1);
+            let rejected = if all_members {
+                engine.members()
+            } else {
+                let accepted = accepted_members(&engine);
+                assert_eq!(accepted.len(), 1);
+                accepted
+            };
+            for disk in &rejected {
+                let path = disk.root.join("disk.json");
+                if corrupt {
+                    fs::write(path, b"{broken seal").unwrap();
+                } else {
+                    fs::remove_file(path).unwrap();
+                }
+            }
+            for error in [
+                engine.operation_record(operation).err().unwrap(),
+                engine.operation_owner(operation).unwrap_err(),
+            ] {
+                assert_eq!(
+                    error.code(),
+                    if corrupt {
+                        ErrorCode::DiskIdentityMismatch
+                    } else {
+                        ErrorCode::IoError
+                    }
+                );
+                assert!(error.message().contains(&rejected[0].disk_id));
+                assert!(error.message().contains(&rejected[0].slot_id));
+                let mut source = error.source();
+                let mut found = false;
+                while let Some(cause) = source {
+                    found |= if corrupt {
+                        cause.is::<json_codec::Error>()
+                    } else {
+                        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+                            io.kind() == std::io::ErrorKind::NotFound
+                                && io.raw_os_error() == Some(2)
+                        })
+                    };
+                    source = cause.source();
+                }
+                assert!(found, "seal rejection must retain its concrete cause");
+            }
+        }
+    }
+}
+
+#[test]
+fn pending_receipt_uses_sufficient_healthy_evidence_despite_rejected_member() {
+    let (_root, engine, operation) = pending_fixture(2);
+    let expected = engine.operation_record(operation).unwrap().result().clone();
+    let accepted = accepted_members(&engine);
+    assert_eq!(accepted.len(), 2);
+    fs::write(accepted[0].root.join("disk.json"), b"{broken seal").unwrap();
+    assert_eq!(
+        engine.operation_record(operation).unwrap().result(),
+        &expected
+    );
+    assert_eq!(
+        engine.operation_owner(operation).unwrap().as_deref(),
+        Some("owner")
+    );
+    assert!(engine.blocked);
+}
+
+#[test]
+fn pending_receipt_distinguishes_trusted_absence_from_unreadable_evidence() {
+    let (_root, engine, _operation) = pending_fixture(1);
+    let absent = OperationId::generate();
+    assert_eq!(
+        engine.operation_record(absent).err().unwrap().code(),
+        ErrorCode::OperationNotFound
+    );
+    assert_eq!(engine.operation_owner(absent).unwrap(), None);
+    fs::write(engine.members()[0].root.join("disk.json"), b"{broken seal").unwrap();
+    assert_eq!(
+        engine.operation_record(absent).err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(
+        engine.operation_owner(absent).unwrap_err().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+}
+
+#[test]
+fn history_export_preserves_seal_cause_only_when_healthy_evidence_cannot_answer() {
+    let (root, engine, repo) = fixture();
+    let members = engine.members();
+    fs::write(members[0].root.join("disk.json"), b"{broken seal").unwrap();
+    engine
+        .export_history_package(
+            &repo.history_tree_id,
+            &root.path().join("exports/healthy-export"),
+        )
+        .unwrap();
+    for disk in &members[1..] {
+        fs::write(disk.root.join("disk.json"), b"{broken seal").unwrap();
+    }
+    let destination = root.path().join("exports/unavailable-export");
+    let error = engine
+        .export_history_package(&repo.history_tree_id, &destination)
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert_seal_json_cause(&error);
+    assert!(!destination.exists());
+}
+
+#[test]
+fn purge_evidence_keeps_recovery_classification_and_does_not_delete_without_proof() {
+    let (_root, mut engine, repo) = fixture();
+    save(&mut engine, &repo.main_branch_id, b"old payload");
+    let version = engine.list_tree(&repo.main_branch_id).unwrap()[0]
+        .version_id
+        .clone();
+    save(&mut engine, &repo.main_branch_id, b"current payload");
+    let purge = engine
+        .create_purge_plan(&repo.history_tree_id, vec![version.clone()], "owner")
+        .unwrap();
+    engine.inject_fault_once("after_purge_evidence");
+    assert_eq!(
+        engine
+            .commit_plan(&purge.plan_id, "owner", OperationId::generate())
+            .unwrap_err()
+            .code(),
+        ErrorCode::InjectedFailure
+    );
+    let body = &engine.state.versions[&version];
+    let paths: Vec<_> = engine
+        .members()
+        .iter()
+        .map(|disk| {
+            let directory = version_dir(disk, &body.history_tree_id, &version);
+            crate::container_storage::content_path(&directory, body).unwrap()
+        })
+        .collect();
+    for disk in engine.members() {
+        fs::write(disk.root.join("disk.json"), b"{broken seal").unwrap();
+    }
+    let error = engine.cleanup_purged().unwrap_err();
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    assert_seal_json_cause(&error);
+    for path in paths {
+        assert_eq!(fs::read(path).unwrap(), b"old payload");
+    }
+}
+
+fn assert_seal_json_cause(error: &Error) {
+    use std::error::Error as _;
+    let Error::Context { source, .. } = error else {
+        panic!("unavailable evidence must retain its seal cause");
+    };
+    assert_eq!(source.code(), ErrorCode::DiskIdentityMismatch);
+    let mut source = error.source();
+    while let Some(cause) = source {
+        if cause.is::<json_codec::Error>() {
+            return;
+        }
+        source = cause.source();
+    }
+    panic!("seal rejection lost its concrete JSON source");
 }

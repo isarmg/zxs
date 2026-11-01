@@ -717,7 +717,10 @@ impl Engine {
         let manifest = HistoryManifest::project_state(&self.state, history)?;
         let mut proof = None;
         let mut graph_objects = Vec::new();
-        let members = self.trusted_evidence_members();
+        let crate::engine::EvidenceMembers {
+            members,
+            first_error,
+        } = self.trusted_evidence_members();
         for disk in &members {
             for (record, _) in self
                 .metadata_integrity
@@ -807,11 +810,15 @@ impl Engine {
                 break;
             }
         }
-        let proof = proof.ok_or_else(|| {
-            Error::new(
+        let proof = proof.ok_or_else(|| match first_error {
+            Some(error) => error.context(
                 storage_contract::ErrorCode::RecoveryRequired,
                 "no published manifest matches the current history",
-            )
+            ),
+            None => Error::new(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "no published manifest matches the current history",
+            ),
         })?;
         let parent = destination
             .parent()

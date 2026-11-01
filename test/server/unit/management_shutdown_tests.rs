@@ -344,3 +344,82 @@ fn concurrent_management_drains_wait_for_recovery_worker_exit() {
     }
     assert!(!backend.inner.recovering.load(Ordering::SeqCst));
 }
+
+#[test]
+fn observer_is_drained_even_while_it_strongly_owns_management_state() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (backend, _) = open_service(
+        &temporary.path().join("system"),
+        &temporary.path().join("management"),
+    )
+    .unwrap();
+    let (entered, entry) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let inner = Arc::clone(&backend.inner);
+    let weak = Arc::downgrade(&inner);
+    backend
+        .observer
+        .start(
+            std::thread::Builder::new(),
+            Duration::ZERO,
+            DEADLINE,
+            move || {
+                entered.send(()).unwrap();
+                released.recv_timeout(DEADLINE).unwrap();
+                inner.observe_storage_once();
+            },
+        )
+        .unwrap();
+    entry.recv_timeout(DEADLINE).unwrap();
+    backend.stop_management();
+    backend.stop_management();
+    let (done, completed) = mpsc::channel();
+    let cleanup = std::thread::spawn(move || {
+        drop(backend);
+        done.send(()).unwrap();
+    });
+    assert!(matches!(
+        completed.recv_timeout(Duration::from_millis(50)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    assert!(weak.upgrade().is_some());
+    release.send(()).unwrap();
+    completed.recv_timeout(DEADLINE).unwrap();
+    cleanup.join().unwrap();
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn observer_panic_does_not_skip_recovery_drain() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (backend, _) = open_service(
+        &temporary.path().join("system"),
+        &temporary.path().join("management"),
+    )
+    .unwrap();
+    let retained = Arc::new(());
+    let resource = Arc::clone(&retained);
+    *backend.inner.recovery_worker.lock().unwrap() =
+        Some(std::thread::spawn(move || drop(resource)));
+    let (entered, entry) = mpsc::channel();
+    backend
+        .observer
+        .start(
+            std::thread::Builder::new(),
+            Duration::ZERO,
+            DEADLINE,
+            move || {
+                entered.send(()).unwrap();
+                panic!("disk observer failed");
+            },
+        )
+        .unwrap();
+    entry.recv_timeout(DEADLINE).unwrap();
+    let error = backend.drain_management().unwrap_err();
+    let crate::http_boundary::ApiErrorSource::Io(source) = error.source.as_deref().unwrap() else {
+        panic!("expected native worker source")
+    };
+    assert!(source.to_string().contains("disk observer failed"));
+    assert_eq!(Arc::strong_count(&retained), 1);
+    assert!(backend.inner.recovery_worker.lock().unwrap().is_none());
+}

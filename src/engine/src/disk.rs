@@ -80,19 +80,9 @@ pub(crate) fn decode_seal(bytes: &[u8]) -> Result<DiskSeal> {
 }
 pub(crate) fn private_dir(path: &Path) -> Result<()> {
     let path = absolute_path(path)?;
-    match PrivateDirectory::create(&path) {
-        Ok(_) => (),
-        Err(platform_io::fs_safety::Error::Io(error))
-            if error.kind() == std::io::ErrorKind::NotFound =>
-        {
-            let parent = path
-                .parent()
-                .expect("invariant: missing child has a parent");
-            private_dir(parent)?;
-            PrivateDirectory::create(&path).map_err(fs_error)?;
-        }
-        Err(error) => return Err(fs_error(error)),
-    }
+    // A visible ancestor may be left behind by an earlier failed mkdir/fsync.
+    // Establish the whole absolute chain rather than recursing only on NOENT.
+    PrivateDirectory::create_all(&path).map_err(fs_error)?;
     Ok(())
 }
 pub(crate) fn existing_private_dir(path: &Path) -> Result<PrivateDirectory> {

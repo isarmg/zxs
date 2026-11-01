@@ -16,7 +16,7 @@
 | `contracts` | 契约工具测试及全仓 schema、配置、文档链接检查 |
 | `build-tools` | 发布校验、WASM 构建器、本地绑定工具、Unicode 重现、离线编排与性能报告校验器回归；不执行性能工作负载 |
 | `smb-protocol` | 显式选择独立的 smb-protocol 协议包 |
-| `smb-sdk` job | 固定哈希的官方 Samba 4.23.0 SDK，真实 VFS Clippy、测试编译和 release 构建均经过零 Rust 警告门禁，再正常执行链接测试 |
+| `smb-sdk` job | 按[中央 Debian Samba 目标](../.github/samba-debian-target.json)固定包版本、源码摘要与 VFS ABI；使用匹配 SDK 做 VFS Clippy、测试编译和 release 零 Rust 警告门禁，再执行链接测试，并在隔离 Debian 13 系统 smbd 中加载模块、运行真实 SMB 客户端验收（[边界与证据](validation/debian13-system-samba.md)） |
 | `web-production` | 本地维护的绑定工具、wasm32 release 构建、资源清单和压缩产物 |
 | `browser-smoke` | 实际 Web/WASM 对真实服务端的 Chrome 交互；响应式尺寸预览不冒充原生 App 验收 |
 

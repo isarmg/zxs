@@ -807,7 +807,13 @@ impl Engine {
                 continue;
             }
             let operation = &self.state.operations[&request.operation_id];
-            let members = self.trusted_evidence_members();
+            let super::EvidenceMembers {
+                members,
+                first_error,
+            } = self.trusted_evidence_members();
+            if let Some(error) = first_error {
+                damage.get_or_insert(error);
+            }
             for member in &members {
                 for (record, _) in self
                     .metadata_integrity

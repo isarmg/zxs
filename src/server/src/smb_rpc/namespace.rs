@@ -28,13 +28,14 @@ impl OperationReservation {
 }
 impl Drop for OperationReservation {
     fn drop(&mut self) {
-        {
-            let mut operations = self
-                .shared
-                .namespace_operations
-                .lock()
-                .expect("service state lock poisoned");
-            operations.remove(&self.operation_id);
+        match self.shared.namespace_operations.lock() {
+            Ok(mut operations) => {
+                operations.remove(&self.operation_id);
+            }
+            Err(_) => {
+                // Preserve ownership and poison: no subsequent admission may trust this index.
+                tracing::error!("operations cleanup blocked by poisoned registry");
+            }
         }
     }
 }
@@ -359,3 +360,7 @@ fn cleanup_namespace_record(path: &Path) {
 #[cfg(test)]
 #[path = "../../../../test/server/unit/smb_rpc/namespace/tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "core"))]
+#[path = "../../../../test/server/unit/smb_rpc/reservation_drop_tests.rs"]
+mod drop_tests;

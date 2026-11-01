@@ -268,3 +268,52 @@ fn disk_sampling_notice_distinguishes_unavailable_from_empty_success() {
     snapshot["disk_sampling_unavailable"] = Value::Bool(false);
     assert!(disk_sampling_notice(&snapshot).is_none());
 }
+
+#[test]
+fn cancelled_superseded_history_completion_cannot_clear_current_loading_or_feedback() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 9,
+            ..Default::default()
+        });
+        state.update(|s| {
+            s.monitor.range = "1min".into();
+            s.monitor.history_generation = 21;
+            s.monitor.history_loading = true;
+            s.monitor.history_failure = Some(Feedback {
+                message: "current".into(),
+                request_id: None,
+            });
+        });
+        // Return to the same range after rapid switching: generation still distinguishes reads.
+        for generation in 1..21 {
+            complete_history_load(
+                state,
+                9,
+                generation,
+                "1min",
+                Err(api::error(
+                    storage_contract::ErrorCode::TransportError,
+                    "The read was cancelled",
+                )),
+            );
+        }
+        state.with_untracked(|s| {
+            assert!(s.session_active());
+            assert!(s.monitor.history_loading);
+            assert_eq!(
+                s.monitor.history_failure.as_ref().unwrap().message,
+                "current"
+            );
+            assert_eq!(s.monitor.history_generation, 21);
+        });
+        complete_history_load(state, 9, 21, "1min", Ok(json_codec::json!({"samples":[]})));
+        state.with_untracked(|s| {
+            assert!(!s.monitor.history_loading);
+            assert!(s.monitor.history_loaded);
+            assert!(s.monitor.history_failure.is_none());
+            assert!(s.monitor.history_cancellation.is_none());
+        });
+    });
+}

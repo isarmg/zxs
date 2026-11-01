@@ -42,6 +42,10 @@ check-foundation-behaviour.py     本任务套件表（机器读取，不复制�
 test/ci/fixtures/foundation-test-coverage.json  与  docs/validation/foundation-test-coverage-map.md
 ```
 
+可达性检查从 `ci.yml` 的真实 `run` 步骤、selector 矩阵输出及 `check.sh` 所选分支出发，再解析 foundation 分片命令；按完整仓库相对路径和 shard 核对登记及自动生成的 behaviour 入口。`browser-smoke` 的 CSR 生产入口通过实际 `needs: web-production` 关联。登记的 `scripts` 是这些命令入口，不是入口内部导入的 helper；伴随宏也登记具体 runner 和 shard。
+
+解析器只接受当前工作流的 block-mapping 结构及所涉及 shell 分支的直线命令，保留续行、引号和已审阅构建变量赋值；未支持的控制流、管道或可选步骤明确失败，须先扩展解析与负例，不能靠注释、孤立脚本或同 basename 补齐登记。它只证明静态接线；selector 仍可复用先前证据，“已执行”分类不是当前提交每个分片都重新执行、更不是全部 API 通过的证明。实际通过仍需绑定提交的运行记录与测试清单。
+
 ## 分类
 
 | 类别 | 判定 |

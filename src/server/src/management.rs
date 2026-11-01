@@ -64,6 +64,7 @@ struct Inner {
 pub struct ManagementBackend {
     // Fields drop in declaration order: join scrub before releasing Inner/auth.
     scrub: IntegrityScrubService,
+    observer: crate::periodic_worker::PeriodicWorker,
     drain: Mutex<()>,
     inner: Arc<Inner>,
 }
@@ -189,6 +190,7 @@ pub fn open_service_with_options(
     }
     let backend = Arc::new(ManagementBackend {
         scrub: IntegrityScrubService::new(scrub_policy),
+        observer: crate::periodic_worker::PeriodicWorker::new(),
         drain: Mutex::new(()),
         inner: Arc::new(Inner {
             data_root: data_root.into(),
@@ -1429,29 +1431,24 @@ impl Backend for ManagementBackend {
         if let Err(error) = self.scrub.start(Arc::downgrade(&self.inner), reader) {
             tracing::error!(error = ?error, "integrity scrub scheduler could not start");
         }
-        let weak = Arc::downgrade(&self.inner);
-        if let Err(error) = std::thread::Builder::new()
-            .name("zxs-disk-observation".into())
-            .spawn(move || {
-                loop {
-                    let Some(inner) = weak.upgrade() else {
-                        break;
-                    };
-                    if inner.stopping.load(Ordering::SeqCst) {
-                        break;
-                    }
+        let inner = Arc::clone(&self.inner);
+        if let Err(error) = self.observer.start(
+            std::thread::Builder::new().name("zxs-disk-observation".into()),
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(5),
+            move || {
+                if !inner.stopping.load(Ordering::SeqCst) {
                     inner.observe_storage_once();
-                    drop(inner);
-                    std::thread::sleep(std::time::Duration::from_secs(5));
                 }
-            })
-        {
+            },
+        ) {
             tracing::warn!(error = ?error, "disk observation worker could not start");
         }
     }
     fn stop_management(&self) {
         self.scrub.stop();
         self.inner.stop();
+        self.observer.stop();
     }
     fn drain_management(&self) -> Result<(), ApiError> {
         self.stop_management();
@@ -1461,16 +1458,26 @@ impl Backend for ManagementBackend {
             Ok(drain) => drain,
             Err(poisoned) => poisoned.into_inner(),
         };
-        // Both native owners must drain, even if either reports failure.
+        // All native owners must drain, even if any reports failure.
+        let observer = self.observer.drain();
         let scrub = self.scrub.drain();
         let recovery = self.inner.drain();
-        match (scrub, recovery) {
+        let management = match (scrub, recovery) {
             (Ok(()), Ok(())) => Ok(()),
             (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
             (Err(scrub), Err(recovery)) => {
                 Err(ApiError::io(std::io::Error::other(ManagementDrainErrors {
                     scrub,
                     recovery,
+                })))
+            }
+        };
+        match (management, observer) {
+            (Ok(()), result) | (result, Ok(())) => result,
+            (Err(management), Err(observer)) => {
+                Err(ApiError::io(std::io::Error::other(ObserverDrainErrors {
+                    management,
+                    observer,
                 })))
             }
         }
@@ -1596,3 +1603,19 @@ mod shutdown_tests;
 #[cfg(test)]
 #[path = "../../../test/server/unit/management_admission_tests.rs"]
 mod admission_tests;
+
+#[derive(Debug, error_definition::Error)]
+#[error("management drain failed: {management}; disk observer drain failed: {observer}")]
+struct ObserverDrainErrors {
+    #[source]
+    management: ApiError,
+    observer: ApiError,
+}
+
+impl Drop for ManagementBackend {
+    fn drop(&mut self) {
+        if let Err(error) = self.drain_management() {
+            tracing::error!(error = ?error, "management backend shutdown failed");
+        }
+    }
+}

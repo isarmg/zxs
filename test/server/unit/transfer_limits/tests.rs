@@ -14,7 +14,7 @@ fn admission_enforces_the_single_capacity_and_releases_permits() {
     let c = admission.acquire().unwrap();
     assert_eq!(admission.acquire().err().unwrap().status, 429);
     drop((b, c));
-    assert_eq!(*admission.active.lock().unwrap(), 0);
+    assert_eq!(*admission.active.lock().unwrap(), Some(0));
 }
 
 #[test]
@@ -136,10 +136,10 @@ async fn timeout_does_not_release_a_running_blocking_read() {
     started_rx.await.unwrap();
     let body = pending.await.unwrap();
     assert_eq!(dropped.load(Ordering::SeqCst), 0);
-    assert_eq!(*admission.active.lock().unwrap(), 1);
+    assert_eq!(*admission.active.lock().unwrap(), Some(1));
     finish_tx.send(()).unwrap();
     wait_for_drop(&dropped).await;
-    assert_eq!(*admission.active.lock().unwrap(), 0);
+    assert_eq!(*admission.active.lock().unwrap(), Some(0));
     drop(body);
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
 }
@@ -193,5 +193,66 @@ async fn explicit_drop_releases_idle_stream_without_waiting_for_timer() {
     let limits = short_limits();
     let body = BoundedStream::new(source, &limits, Instant::now() + limits.total_timeout);
     drop(body);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn permit_poisoned_drop_during_unwind_preserves_fence() {
+    let admission = Admission::new(&TransferLimits::default());
+    let permit = admission.acquire().unwrap();
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = admission.active.lock().unwrap();
+        panic!("poison");
+    });
+    assert!(
+        std::panic::catch_unwind(|| {
+            let _permit = permit;
+            panic!("outer unwind");
+        })
+        .is_err()
+    );
+    assert!(admission.active.is_poisoned());
+    assert_eq!(*admission.active.lock().unwrap_err().into_inner(), Some(1));
+    assert!(std::panic::catch_unwind(|| admission.acquire()).is_err());
+}
+
+#[test]
+fn invalid_permit_count_fences_new_admission() {
+    let admission = Admission::new(&TransferLimits::default());
+    let permit = admission.acquire().unwrap();
+    *admission.active.lock().unwrap() = Some(0);
+    drop(permit);
+    assert_eq!(
+        admission.acquire().err().unwrap().code,
+        storage_contract::ErrorCode::RecoveryRequired
+    );
+}
+
+#[tokio::test]
+async fn panicking_stream_can_unwind_through_bounded_stream_drop() {
+    struct Panics(Arc<AtomicUsize>);
+    impl Stream for Panics {
+        type Item = Result<bytes::Bytes, std::io::Error>;
+        fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            panic!("stream poll failed");
+        }
+    }
+    impl Drop for Panics {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let limits = TransferLimits::default();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut body = BoundedStream::new(
+            Panics(dropped.clone()),
+            &limits,
+            Instant::now() + limits.total_timeout,
+        );
+        let mut context = Context::from_waker(futures::task::noop_waker_ref());
+        let _ = Pin::new(&mut body).poll_next(&mut context);
+    }));
+    assert!(result.is_err());
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
 }

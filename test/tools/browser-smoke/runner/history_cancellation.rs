@@ -138,3 +138,88 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     );
     Ok(())
 }
+
+// Reuse the real status page and Select: no test-only product entry point.
+pub(super) fn monitor_range(browser: &Browser) -> Result<()> {
+    browser.script(
+        r#"
+        const original = window.fetch;
+        const probe = window.__zxsMonitorCancellation = {
+            pending: [], seed: null, started: false,
+            restore: () => {
+                window.fetch = original;
+                for (const pending of probe.pending) pending.release();
+            }
+        };
+        window.fetch = async function(...args) {
+            const request = args[0];
+            const url = new URL(typeof request === 'string' ? request : request.url, location.href);
+            if (url.pathname !== '/api/system/history' ||
+                (!probe.started && url.searchParams.get('range') !== '30min')) {
+                return original.apply(this, args);
+            }
+            probe.started = true;
+            let release;
+            const gate = new Promise(resolve => release = resolve);
+            const pending = {signal: request.signal, release, ready: false, delivered: false};
+            probe.pending.push(pending);
+            if (!probe.seed) {
+                const response = await original.apply(this, args);
+                if (!response.ok) throw new Error('real monitor history seed failed');
+                probe.seed = await response.json();
+            }
+            pending.ready = true;
+            await gate;
+            pending.delivered = true;
+            return new Response(JSON.stringify(probe.seed), {
+                status: 200, headers: {'Content-Type': 'application/json'}
+            });
+        };
+        return true;
+    "#,
+    )?;
+    with_cleanup(
+        || {
+            for index in 0..21 {
+                let range = if index % 2 == 0 { "30min" } else { "1min" };
+                browser.click(&browser.css(".zxs-monitor-range .zxs-select-trigger")?)?;
+                browser.click(&browser.element(
+                    "xpath",
+                    &format!("//div[@role='option'][normalize-space(.)='{range}']"),
+                )?)?;
+                check(
+                    browser,
+                    "only current monitor history transport survives range replacement",
+                    &format!(
+                        "const p=window.__zxsMonitorCancellation.pending;return p.length==={}&&p.every((r,i)=>r.ready&&r.signal.aborted===(i<p.length-1))",
+                        index + 1
+                    ),
+                )?;
+            }
+            browser.script(
+                "for(const p of window.__zxsMonitorCancellation.pending.slice(0,-1))p.release();return true",
+            )?;
+            check(
+                browser,
+                "late cancelled monitor reads do not settle current range",
+                "const p=window.__zxsMonitorCancellation.pending;return p.slice(0,-1).every(r=>r.delivered)&&!p.at(-1).signal.aborted&&Array.from(document.querySelectorAll('.zxs-chart-empty')).some(e=>/Loading history|正在读取历史/.test(e.textContent))",
+            )?;
+            browser
+                .script("window.__zxsMonitorCancellation.pending.at(-1).release();return true")?;
+            check(
+                browser,
+                "current monitor history settles after delayed delivery",
+                "return window.__zxsMonitorCancellation.pending.at(-1).delivered&&!Array.from(document.querySelectorAll('.zxs-chart-empty')).some(e=>/Loading history|正在读取历史/.test(e.textContent))",
+            )?;
+            Ok(())
+        },
+        || {
+            browser.script("if(window.__zxsMonitorCancellation){window.__zxsMonitorCancellation.restore();delete window.__zxsMonitorCancellation;}return true")?;
+            Ok(())
+        },
+    )?;
+    println!(
+        "PASS monitor history 20 range replacements abort obsolete signals and ignore late deliveries"
+    );
+    Ok(())
+}
