@@ -228,7 +228,7 @@ fn optional_historical_save_overrides_remain_explicit_nulls() {
 
 #[test]
 fn both_plan_actions_preserve_body_and_use_the_raw_receipt_contract() {
-    let mut value = super::super::tests::plan_value();
+    let mut value = json!({"plan_id":"p","kind":"purge","principal":"admin","expected_sequence":"4","digest":"reviewed","input":{"history_tree_id":"h"},"state":"ready"});
     value["plan_id"] = "p/!".into();
     let parse = |value| {
         let response = Contract::Plan { id: "p/!".into() }.validate(value).unwrap();

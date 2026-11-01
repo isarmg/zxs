@@ -39,7 +39,7 @@ target/native/debug/zxs --root /srv/zxs/system \
 
 HTTP 默认监听 `0.0.0.0:7400`，可通过 `--listen` 指定其他 IPv4 或 IPv6 地址，不禁止非回环监听。浏览器使用服务器的实际 IP 或主机名访问，`0.0.0.0` 是绑定地址，不是客户端目标。网络可达范围、防火墙与传输保护由部署者管理；明文 HTTP 不保护传输中的凭据和数据。需要 HTTPS 时由反向代理终止 TLS，并指定公开 HTTPS Origin，例如 `--external-origin https://storage.example.org`。直接 HTTP 访问时不设置 `--external-origin`；设置该参数后仅接受声明的 HTTPS Origin。服务不根据任意转发头改变 Origin 或 Cookie 策略。`--web-dir` 可省略；省略时仅提供 API。
 
-公开 `router` / `serve_with_shutdown` 入口（CLI 经 `serve` 转入）消费原始 `ServerConfig`，失败返回错误；准入后以私有不可变配置及 `Arc` 共享，不在请求提取或中间件克隆中复制路径、代理列表。静态 HTTPS Origin 在准入时解析一次，缓存浏览器规范化表示；同源比较和 Secure Cookie 使用同一证明。每个请求的 Origin 仍逐次检查数量、文本及精确同源值，未配置外部 Origin 时仍逐次解析请求 Host，并要求 Origin 与该 HTTP 来源精确同源，不限制 Host 为回环；CSRF、Sec-Fetch-Site、真实代理对端与转发头校验不缓存、不省略。配置修改需重新准入，不提供运行中可变出口。
+公开 `router` / `serve_with_shutdown` 入口（CLI 经 `serve` 转入）消费原始 `ServerConfig`，失败返回错误；准入后以私有不可变配置及 `Arc` 共享，不在请求提取或中间件克隆中复制路径、代理列表。静态 HTTPS Origin 在准入时解析一次，缓存浏览器规范化表示；同源比较和 Secure Cookie 使用同一证明。每个请求的 Origin 仍逐次检查数量、文本及精确同源值，未配置外部 Origin 时仍逐次解析请求 Host，并要求 Origin 与该 HTTP 来源精确同源，不限制 Host 为回环；CSRF、Sec-Fetch-Site、真实代理对端与转发头校验不缓存、不省略。配置修改需重新准入，不提供运行中可变出口。 Origin／Host／Fetch 的完整头值与 Cookie CSRF 列表交给 `authentication` 单一算法，不选择重复字段的首值；外部 HTTPS 模式仍允许代理内侧 Host 不同于公开域名。Fetch 可省略，无 Origin 的普通 Bearer 请求保留原有单值语义；setup 状态的 Fetch 限制仍单独由共享算法执行。
 
 `--max-upload-bytes` 设置单次完整上传上限，默认 1073741824 字节；实际公开上限取它与存储池 `max_file_bytes` 的较小值。HTTP 上传和读取各自默认最多 2 个活动操作，唯一管理员的全部会话共享对应池，支持显式配置，见[传输准入与期限](#http-transfer-limits)；密码验证最多并发 4 个。引擎工作区数量、字节数、过期时间等限制来自初始化 JSON 配置。发布仍经互斥锁串行执行，上传、读取及工作区提交的部分准备在锁外完成，详见[写入流程](../architecture/write-flow.md)；未提供吞吐量保证。
 

@@ -1895,8 +1895,8 @@ fn admitted_configuration_shares_paths_proxies_and_canonical_origin() {
         cloned.trusted_proxy_ips.as_ptr()
     ));
     assert!(std::ptr::eq(
-        config.external_origin.as_ref().unwrap().0.as_ptr(),
-        cloned.external_origin.as_ref().unwrap().0.as_ptr(),
+        config.external_origin.as_ref().unwrap().as_str().as_ptr(),
+        cloned.external_origin.as_ref().unwrap().as_str().as_ptr(),
     ));
 }
 
@@ -2022,4 +2022,47 @@ fn remote_trusted_proxy_still_requires_exact_transport_peer() {
         )
         .is_err()
     );
+}
+
+#[path = "../../../auth/origin_vectors.rs"]
+mod origin_vectors;
+
+#[test]
+fn adapter_uses_shared_deployment_origin_vectors_and_preserves_error_source() {
+    use std::error::Error as _;
+    let root = tempfile::tempdir().unwrap();
+    for &(external, host, origin, accepted) in origin_vectors::ORIGIN_VECTORS {
+        let mut config = ServerConfig::new(root.path());
+        config.external_origin = external.map(str::to_owned);
+        let config = config.admit().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_str(host).unwrap());
+        headers.insert(header::ORIGIN, HeaderValue::from_str(origin).unwrap());
+        let result = same_origin(&headers, &config, true);
+        assert_eq!(result.is_ok(), accepted, "{external:?} {host} {origin}");
+        if let Err(error) = result {
+            let mut source = error.source();
+            let mut found = false;
+            while let Some(cause) = source {
+                if cause.is::<authentication::Error>() {
+                    found = true;
+                    break;
+                }
+                source = cause.source();
+            }
+            assert!(found, "missing authentication source: {error:?}");
+        }
+    }
+}
+
+#[test]
+fn optional_origin_keeps_native_fetch_semantics_but_rejects_ambiguity() {
+    let root = tempfile::tempdir().unwrap();
+    let config = ServerConfig::new(root.path()).admit().unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, HeaderValue::from_static("192.0.2.20:7400"));
+    headers.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+    assert!(same_origin(&headers, &config, false).is_ok());
+    headers.append("sec-fetch-site", HeaderValue::from_static("same-origin"));
+    assert!(same_origin(&headers, &config, false).is_err());
 }

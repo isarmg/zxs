@@ -28,15 +28,15 @@ pub(crate) fn protected_routes() -> Router<AppState> {
         .route("/api/management/recovery-commit", post(recovery_commit))
 }
 fn header(request: &Request, name: &'static str) -> Result<String, ApiError> {
-    if request.headers().get_all(name).iter().count() != 1 {
-        return Err(ApiError::unauthorized());
-    }
-    request
+    let values: Vec<_> = request
         .headers()
-        .get(name)
-        .and_then(|v| v.to_str().ok())
+        .get_all(name)
+        .iter()
+        .map(|v| v.as_bytes())
+        .collect();
+    authentication::require_single_security_header_value(name, &values)
         .map(str::to_owned)
-        .ok_or_else(ApiError::unauthorized)
+        .map_err(|source| ApiError::unauthorized().with_source(source))
 }
 fn csrf(token: &str) -> String {
     blake3::derive_key("zxs bootstrap csrf v1", token.as_bytes())
@@ -55,13 +55,11 @@ fn bootstrap_request(
             "setup credentials must not appear in a URL",
         ));
     }
-    if request
-        .headers()
-        .get("sec-fetch-site")
-        .is_some_and(|v| v != "same-origin")
-    {
-        return Err(ApiError::forbidden());
-    }
+    authentication::require_same_origin_fetch_metadata(&crate::http_auth::header_values(
+        request.headers(),
+        authentication::SEC_FETCH_SITE_HEADER,
+    ))
+    .map_err(|source| ApiError::forbidden().with_source(source))?;
     crate::http_auth::same_origin(request.headers(), &state.config, changing)?;
     let token = header(request, "x-zxs-bootstrap")?;
     if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {

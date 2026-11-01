@@ -368,15 +368,15 @@ fn missing_operation_identity_cannot_match_a_receipt_named_unknown() {
 }
 
 fn respond(model: &mut Model, request: &request::Request, value: Value) {
-    match request.contract.validate(value) {
+    match request.contract.validate(value).map_err(api::Error::from) {
         Ok(value) => accept(model, value),
         Err(error) => reject(model, &request.contract, &error),
     }
 }
-pub(super) fn plan_value() -> Value {
+fn plan_value() -> Value {
     json_codec::json!({"plan_id":"p","kind":"purge","principal":"admin","expected_sequence":"4","digest":"reviewed","input":{"history_tree_id":"h"},"state":"ready"})
 }
-pub(super) fn reviewed_plan() -> Option<ValidatedPlan> {
+fn reviewed_plan() -> Option<ValidatedPlan> {
     let response = Contract::Plan { id: "p".into() }
         .validate(plan_value())
         .unwrap();
@@ -641,11 +641,14 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
             state,
             4,
             &request.contract,
-            request.contract.validate(operation_receipt(
-                "PUBLISHED",
-                "completed",
-                "NOT_APPLICABLE",
-            )),
+            request
+                .contract
+                .validate(operation_receipt(
+                    "PUBLISHED",
+                    "completed",
+                    "NOT_APPLICABLE",
+                ))
+                .map_err(api::Error::from),
         );
         let error = api::Error {
             code: storage_contract::ErrorCode::InvalidAdminResponse,
@@ -682,11 +685,14 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
             state,
             5,
             &request.contract,
-            request.contract.validate(operation_receipt(
-                "PUBLISHED",
-                "completed",
-                "NOT_APPLICABLE",
-            )),
+            request
+                .contract
+                .validate(operation_receipt(
+                    "PUBLISHED",
+                    "completed",
+                    "NOT_APPLICABLE",
+                ))
+                .map_err(api::Error::from),
         );
         assert!(state.with_untracked(|s| s.admin_console.busy));
     });
@@ -709,11 +715,14 @@ fn current_session_completion_releases_busy_and_unauthorized_session() {
             state,
             5,
             &request.contract,
-            request.contract.validate(operation_receipt(
-                "PUBLISHED",
-                "completed",
-                "NOT_APPLICABLE",
-            )),
+            request
+                .contract
+                .validate(operation_receipt(
+                    "PUBLISHED",
+                    "completed",
+                    "NOT_APPLICABLE",
+                ))
+                .map_err(api::Error::from),
         );
         assert!(!state.with_untracked(|s| s.admin_console.busy));
         assert!(!state.with_untracked(|s| s.admin_console.result.is_empty()));
@@ -815,9 +824,11 @@ fn remote_errors_keep_status_request_identity_detail_and_source_in_the_model() {
     use std::error::Error as _;
     let contract = request::operation_outcome("original").contract;
     for status in [400, 409, 500] {
-        let mut error = Contract::Plan { id: "p".into() }
-            .validate(json_codec::json!({"plan_id":"p"}))
-            .unwrap_err();
+        let mut error = api::Error::from(
+            Contract::Plan { id: "p".into() }
+                .validate(json_codec::json!({"plan_id":"p"}))
+                .unwrap_err(),
+        );
         error.status = status;
         error.request_id = Some(format!("request-{status}"));
         error.message = "specific failure detail".into();
@@ -855,7 +866,7 @@ fn plan_decode_and_identity_failures_cannot_replace_a_review_or_settle_a_fence()
             uncertain_operation: Some(UncertainOperation::Known("original".into())),
             ..Default::default()
         };
-        let error = contract.validate(value).unwrap_err();
+        let error = api::Error::from(contract.validate(value).unwrap_err());
         reject(&mut model, &contract, &error);
         assert_eq!(model.plan, reviewed_plan());
         assert!(model.acknowledged);
@@ -864,7 +875,7 @@ fn plan_decode_and_identity_failures_cannot_replace_a_review_or_settle_a_fence()
     }
     let mut value = plan_value();
     value.as_object_mut().unwrap().remove("expected_sequence");
-    let error = contract.validate(value).unwrap_err();
+    let error = api::Error::from(contract.validate(value).unwrap_err());
     assert!(
         error
             .source()
@@ -918,4 +929,20 @@ fn terminal_lookup_without_a_pending_write_preserves_the_review() {
     assert_eq!(model.plan, reviewed_plan());
     assert!(model.acknowledged);
     assert!(model.uncertain_operation.is_none());
+}
+
+#[test]
+fn malformed_success_keeps_api_classification_and_decode_source() {
+    use std::error::Error as _;
+    let request = request::plan_action(reviewed_plan().as_ref(), true, true, "original").unwrap();
+    let error = api::Error::from(request.contract.validate(Value::Null).unwrap_err());
+    assert_eq!(
+        error.code,
+        storage_contract::ErrorCode::InvalidAdminResponse
+    );
+    assert_eq!(error.status, 200);
+    assert!(error.source().is_some());
+    assert!(!error.retryable);
+    assert!(error.request_id.is_none());
+    assert!(error.mutation_outcome_unknown());
 }

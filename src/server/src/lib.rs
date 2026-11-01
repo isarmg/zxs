@@ -1627,7 +1627,9 @@ impl ServerConfig {
         let external_origin = self
             .external_origin
             .as_deref()
-            .map(ExternalOrigin::parse)
+            .map(|origin| {
+                authentication::ExternalOrigin::parse(origin).map_err(ApiError::invalid_source)
+            })
             .transpose()?;
         Ok(Arc::new(AdmittedServerConfig {
             raw: self,
@@ -1640,7 +1642,7 @@ impl ServerConfig {
 /// are exposed, so its normalized origin cannot become stale.
 struct AdmittedServerConfig {
     raw: ServerConfig,
-    external_origin: Option<ExternalOrigin>,
+    external_origin: Option<authentication::ExternalOrigin>,
 }
 impl std::ops::Deref for AdmittedServerConfig {
     type Target = ServerConfig;
@@ -1651,28 +1653,6 @@ impl std::ops::Deref for AdmittedServerConfig {
 impl AdmittedServerConfig {
     fn secure_cookie(&self) -> bool {
         self.external_origin.is_some()
-    }
-}
-
-/// Canonical browser serialization of an admitted HTTPS origin.
-struct ExternalOrigin(String);
-impl ExternalOrigin {
-    fn parse(origin: &str) -> Result<Self, ApiError> {
-        let parsed = url_encoding::address::Url::parse(origin).map_err(ApiError::invalid_source)?;
-        if parsed.scheme() != "https"
-            || parsed.host_str().is_none()
-            || !parsed.username().is_empty()
-            || parsed.password().is_some()
-            || parsed.path() != "/"
-            || parsed.query().is_some()
-            || parsed.fragment().is_some()
-            || origin.ends_with('/')
-        {
-            return Err(ApiError::invalid(
-                "external origin must be an HTTPS origin without trailing slash",
-            ));
-        }
-        Ok(Self(parsed.origin().ascii_serialization()))
     }
 }
 

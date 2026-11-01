@@ -1066,3 +1066,61 @@ async fn embedded_router_clones_and_completed_requests_do_not_stop_live_owner() 
     drop(live);
     assert!(backend.stopped.load(std::sync::atomic::Ordering::SeqCst));
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires history/enumeration-eio.sh isolated LD_PRELOAD child"]
+fn enumeration_failure_preserves_source_and_uses_live_memory_history() {
+    tracing::collector::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .init();
+    let directory = std::path::PathBuf::from(std::env::var_os("ZXS_TELEMETRY_ENUM_ROOT").unwrap());
+    let now = date_time::OffsetDateTime::now_utc().unix_timestamp();
+    let (store, mut writer) = HistoryWriter::open(&directory, now).unwrap();
+    let (cpu, memory) = SystemSampler::new().sample();
+    let historical = now - 120;
+    writer
+        .record(
+            history::Sample {
+                unix_seconds: historical,
+                observations: 1,
+                statistics: None,
+                status: Snapshot {
+                    collected_at: timestamp(historical).unwrap(),
+                    cpu,
+                    memory,
+                    disks: vec![],
+                    disk_sampling_unavailable: false,
+                },
+            },
+            &Mutex::new(store),
+        )
+        .unwrap();
+    drop(writer);
+    let cache_file = directory.join(format!("recent-{}.jsonl", historical / 3600));
+    let before = std::fs::read(&cache_file).unwrap();
+    std::fs::write(directory.join(".inject"), b"arm child-only fault").unwrap();
+    let error = HistoryWriter::open(&directory, now)
+        .err()
+        .expect("enumeration must fail");
+    assert_eq!(error.raw_os_error(), Some(5));
+    let service = Telemetry::start(Arc::new(MonitorBackend::default()), &directory).unwrap();
+    let live = service.current().unwrap();
+    assert!(live.cpu.logical_count > 0);
+    assert!(live.memory.total_bytes.is_some());
+    let store = service.data.history.lock().unwrap();
+    assert!(store.samples(historical, historical, 5).is_empty());
+    let end = date_time::OffsetDateTime::now_utc().unix_timestamp();
+    assert!(!store.samples(now, end, 5).is_empty());
+    assert_eq!(std::fs::read(cache_file).unwrap(), before);
+    assert_eq!(
+        std::fs::read_dir(&directory)
+            .unwrap()
+            .collect::<std::io::Result<Vec<_>>>()
+            .unwrap()
+            .len(),
+        2,
+        "only the original recent file and the injection marker may remain"
+    );
+}

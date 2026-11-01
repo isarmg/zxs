@@ -12,6 +12,20 @@ use request::{Kind, QueryKind};
 pub(crate) use response::ResponseError;
 use response::{Contract, ValidatedAdminResponse, ValidatedPlan};
 
+impl From<ResponseError> for crate::api::Error {
+    fn from(source: ResponseError) -> Self {
+        let mut error = crate::api::error(
+            storage_contract::ErrorCode::InvalidAdminResponse,
+            "The response did not confirm the requested action. Inspect the original operation before retrying.",
+        );
+        error.status = 200;
+        error.source = Some(std::sync::Arc::new(crate::api::ErrorSource::AdminResponse(
+            source,
+        )));
+        error
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Failure {
     Remote(api::Error),
@@ -114,8 +128,10 @@ fn execute(state: RwSignal<State>, request: request::Request) {
             body,
             contract,
         } = request;
-        let result =
-            api::validated_request(method, &path, body, |value| contract.validate(value)).await;
+        let result = api::validated_request(method, &path, body, |value| {
+            contract.validate(value).map_err(Into::into)
+        })
+        .await;
         complete(state, epoch, &contract, result);
     });
 }

@@ -14,9 +14,12 @@ use argon2::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use error_definition::Error;
 use sha2::{Digest, Sha256};
-use std::{
-    net::{Ipv4Addr, Ipv6Addr},
-    str::{self, FromStr},
+use std::str;
+
+mod origin;
+pub use origin::{
+    ExternalOrigin, OriginRequirement, VerifiedSameOrigin, require_same_origin_fetch_metadata,
+    verify_same_origin,
 };
 use subtle::ConstantTimeEq;
 
@@ -123,67 +126,18 @@ pub enum Error {
     DuplicateSecurityHeader { name: &'static str, actual: usize },
     #[error("security header {name} has an invalid or non-canonical value")]
     InvalidSecurityHeaderValue { name: &'static str },
-    #[error("Origin must use the {expected} scheme in the selected runtime mode")]
-    UnexpectedOriginScheme { expected: &'static str },
-    #[error("Origin and Host do not identify the same normalized authority")]
-    OriginHostMismatch,
-    #[error("loopback development mode requires localhost, 127.0.0.0/8 or ::1")]
-    DevelopmentHostIsNotLoopback,
+    #[error("invalid origin or host URL: {0}")]
+    OriginUrl(#[source] url_encoding::address::ParseError),
+    #[error("external origin must be an HTTPS origin without trailing slash")]
+    InvalidExternalOrigin,
+    #[error("Origin does not exactly match the admitted browser origin")]
+    OriginMismatch,
     #[error("the CSRF header is not one canonical current authentication token")]
     InvalidCsrfToken,
     #[error("authentication token has invalid base64 encoding: {0}")]
     TokenEncoding(#[source] base64::DecodeError),
     #[error("the CSRF header does not match the current session")]
     CsrfTokenMismatch,
-}
-
-/// The only two browser deployment modes supported by the current policy.
-/// Production is HTTPS-only. Plain HTTP exists solely for an actual loopback
-/// host during local development; there is no proxy/header fallback mode.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AdministratorOriginMode {
-    ProductionHttps,
-    LoopbackDevelopmentHttp,
-}
-
-impl AdministratorOriginMode {
-    pub const fn scheme(self) -> &'static str {
-        match self {
-            Self::ProductionHttps => "https",
-            Self::LoopbackDevelopmentHttp => "http",
-        }
-    }
-
-    pub const fn default_port(self) -> u16 {
-        match self {
-            Self::ProductionHttps => 443,
-            Self::LoopbackDevelopmentHttp => 80,
-        }
-    }
-}
-
-/// Canonical result of strict Origin/Host and applicable Fetch Metadata verification.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct VerifiedSameOrigin {
-    scheme: &'static str,
-    host: String,
-    port: u16,
-}
-
-impl VerifiedSameOrigin {
-    pub fn scheme(&self) -> &'static str {
-        self.scheme
-    }
-
-    /// A lowercase DNS name or canonical IP literal without IPv6 brackets.
-    pub fn host(&self) -> &str {
-        &self.host
-    }
-
-    /// The effective port after applying the selected scheme's default.
-    pub const fn port(&self) -> u16 {
-        self.port
-    }
 }
 
 /// Validate a bounded untrusted login candidate, trim its ASCII whitespace,
@@ -415,233 +369,6 @@ where
         return Err(Error::CsrfTokenMismatch);
     }
     Ok(())
-}
-
-/// Enforce the current browser same-origin policy from complete header lists.
-///
-/// The caller must pass all `Origin`, effective `Host`/HTTP2 `:authority`, and
-/// `Sec-Fetch-Site` values. The API intentionally has no missing-header,
-/// forwarded-header, alternate-origin, or proxy-trust fallback. A deployment
-/// behind a reverse proxy must first produce the one authoritative external
-/// Host value according to that product's trusted-proxy boundary.
-pub fn require_administrator_same_origin<OriginValue, HostValue, SiteValue>(
-    mode: AdministratorOriginMode,
-    origin_values: &[OriginValue],
-    host_values: &[HostValue],
-    sec_fetch_site_values: &[SiteValue],
-) -> Result<VerifiedSameOrigin, Error>
-where
-    OriginValue: AsRef<[u8]>,
-    HostValue: AsRef<[u8]>,
-    SiteValue: AsRef<[u8]>,
-{
-    let origin = require_single_security_header_value(ORIGIN_HEADER, origin_values)?;
-    let host = require_single_security_header_value(HOST_HEADER, host_values)?;
-    let site = require_single_security_header_value(SEC_FETCH_SITE_HEADER, sec_fetch_site_values)?;
-    if site != "same-origin" {
-        return Err(Error::InvalidSecurityHeaderValue {
-            name: SEC_FETCH_SITE_HEADER,
-        });
-    }
-
-    verify_origin_host(mode, origin, host)
-}
-
-/// Verify a browser WebSocket handshake without requiring Fetch Metadata.
-///
-/// Browser WebSocket requests do not always send `Sec-Fetch-Site`. One strict
-/// `Origin` and authoritative `Host` remain required, and any supplied Fetch
-/// Metadata must be one exact `same-origin` value. This does not authorize a
-/// session or replace the caller's application authentication. The ordinary
-/// HTTP policy continues to require `Sec-Fetch-Site`.
-pub fn require_administrator_websocket_origin<OriginValue, HostValue, SiteValue>(
-    mode: AdministratorOriginMode,
-    origin_values: &[OriginValue],
-    host_values: &[HostValue],
-    sec_fetch_site_values: &[SiteValue],
-) -> Result<VerifiedSameOrigin, Error>
-where
-    OriginValue: AsRef<[u8]>,
-    HostValue: AsRef<[u8]>,
-    SiteValue: AsRef<[u8]>,
-{
-    let origin = require_single_security_header_value(ORIGIN_HEADER, origin_values)?;
-    let host = require_single_security_header_value(HOST_HEADER, host_values)?;
-    if !sec_fetch_site_values.is_empty() {
-        let site =
-            require_single_security_header_value(SEC_FETCH_SITE_HEADER, sec_fetch_site_values)?;
-        if site != "same-origin" {
-            return Err(Error::InvalidSecurityHeaderValue {
-                name: SEC_FETCH_SITE_HEADER,
-            });
-        }
-    }
-    verify_origin_host(mode, origin, host)
-}
-
-fn verify_origin_host(
-    mode: AdministratorOriginMode,
-    origin: &str,
-    host: &str,
-) -> Result<VerifiedSameOrigin, Error> {
-    let (scheme, origin_authority) =
-        origin
-            .split_once("://")
-            .ok_or(Error::InvalidSecurityHeaderValue {
-                name: ORIGIN_HEADER,
-            })?;
-    if scheme != mode.scheme() {
-        return Err(Error::UnexpectedOriginScheme {
-            expected: mode.scheme(),
-        });
-    }
-    let origin_authority = parse_authority(origin_authority, mode.default_port()).ok_or(
-        Error::InvalidSecurityHeaderValue {
-            name: ORIGIN_HEADER,
-        },
-    )?;
-    let host_authority = parse_authority(host, mode.default_port())
-        .ok_or(Error::InvalidSecurityHeaderValue { name: HOST_HEADER })?;
-
-    if mode == AdministratorOriginMode::LoopbackDevelopmentHttp
-        && (!origin_authority.host.is_loopback() || !host_authority.host.is_loopback())
-    {
-        return Err(Error::DevelopmentHostIsNotLoopback);
-    }
-    if origin_authority != host_authority {
-        return Err(Error::OriginHostMismatch);
-    }
-    Ok(VerifiedSameOrigin {
-        scheme: mode.scheme(),
-        host: origin_authority.host.canonical_text(),
-        port: origin_authority.port,
-    })
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct NormalizedAuthority {
-    host: NormalizedHost,
-    port: u16,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum NormalizedHost {
-    Dns(String),
-    Ipv4(Ipv4Addr),
-    Ipv6(Ipv6Addr),
-}
-
-impl NormalizedHost {
-    fn canonical_text(&self) -> String {
-        match self {
-            Self::Dns(value) => value.clone(),
-            Self::Ipv4(value) => value.to_string(),
-            Self::Ipv6(value) => value.to_string(),
-        }
-    }
-
-    fn is_loopback(&self) -> bool {
-        match self {
-            Self::Dns(value) => value == "localhost",
-            Self::Ipv4(value) => value.is_loopback(),
-            Self::Ipv6(value) => value.is_loopback(),
-        }
-    }
-}
-
-fn parse_authority(value: &str, default_port: u16) -> Option<NormalizedAuthority> {
-    if value.is_empty()
-        || value
-            .bytes()
-            .any(|byte| matches!(byte, b'/' | b'\\' | b'?' | b'#' | b'@' | b','))
-    {
-        return None;
-    }
-
-    if let Some(bracketed) = value.strip_prefix('[') {
-        let (host, remainder) = bracketed.split_once(']')?;
-        if host.is_empty() || remainder.contains(']') {
-            return None;
-        }
-        let address = Ipv6Addr::from_str(host).ok()?;
-        let port = parse_optional_port(remainder, default_port)?;
-        return Some(NormalizedAuthority {
-            host: NormalizedHost::Ipv6(address),
-            port,
-        });
-    }
-    if value.contains('[') || value.contains(']') {
-        return None;
-    }
-
-    let (host, port) = match value.rsplit_once(':') {
-        Some((host, port)) if !host.contains(':') => (host, parse_port(port)?),
-        Some(_) => return None,
-        None => (value, default_port),
-    };
-    Some(NormalizedAuthority {
-        host: parse_unbracketed_host(host)?,
-        port,
-    })
-}
-
-fn parse_optional_port(remainder: &str, default_port: u16) -> Option<u16> {
-    if remainder.is_empty() {
-        Some(default_port)
-    } else {
-        parse_port(remainder.strip_prefix(':')?)
-    }
-}
-
-fn parse_port(value: &str) -> Option<u16> {
-    if value.is_empty()
-        || value.len() > 5
-        || (value.len() > 1 && value.starts_with('0'))
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    let port = value.parse::<u16>().ok()?;
-    (port != 0).then_some(port)
-}
-
-fn parse_unbracketed_host(value: &str) -> Option<NormalizedHost> {
-    if value.is_empty() || value.len() > 253 || !value.is_ascii() {
-        return None;
-    }
-    if value
-        .bytes()
-        .all(|byte| byte.is_ascii_digit() || byte == b'.')
-    {
-        let address = Ipv4Addr::from_str(value).ok()?;
-        if address.to_string() != value {
-            return None;
-        }
-        return Some(NormalizedHost::Ipv4(address));
-    }
-    if value.starts_with('.') || value.ends_with('.') {
-        return None;
-    }
-    let normalized = value.to_ascii_lowercase();
-    for label in normalized.split('.') {
-        if label.is_empty()
-            || label.len() > 63
-            || !label
-                .as_bytes()
-                .first()
-                .is_some_and(u8::is_ascii_alphanumeric)
-            || !label
-                .as_bytes()
-                .last()
-                .is_some_and(u8::is_ascii_alphanumeric)
-            || !label
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            return None;
-        }
-    }
-    Some(NormalizedHost::Dns(normalized))
 }
 
 /// Extract one non-empty cookie value from a raw Cookie header. Framework

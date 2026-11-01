@@ -11,11 +11,34 @@ fn fields(pairs: &[(&str, &str)]) -> request::Fields {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
 }
-async fn apply(app: &Router, token: &str, kind: Kind, fields: &request::Fields) -> Value {
+struct Applied {
+    value: Value,
+    action: response::Action,
+}
+impl Applied {
+    fn into_plan(self) -> response::ValidatedPlan {
+        let response::Action::Plan(plan) = self.action else {
+            panic!("expected validated plan")
+        };
+        plan
+    }
+}
+fn plan_fixture(id: &str, digest: &str, state: &str) -> response::ValidatedPlan {
+    let value = json!({"plan_id":id,"digest":digest,"state":state,"kind":"purge",
+        "principal":"admin","expected_sequence":"4","input":{"history_tree_id":"h"}});
+    let validated = response::Contract::Plan { id: id.into() }
+        .validate(value)
+        .unwrap();
+    let response::Action::Plan(plan) = validated.action else {
+        panic!("expected validated plan")
+    };
+    plan
+}
+async fn apply(app: &Router, token: &str, kind: Kind, fields: &request::Fields) -> Applied {
     let request = request::build(kind, fields, &new_id("op"), "admin").unwrap();
     apply_request(app, token, request).await
 }
-async fn apply_request(app: &Router, token: &str, request: request::Request) -> Value {
+async fn apply_request(app: &Router, token: &str, request: request::Request) -> Applied {
     let request::Request {
         method,
         path,
@@ -23,7 +46,35 @@ async fn apply_request(app: &Router, token: &str, request: request::Request) -> 
         contract,
     } = request;
     let value = success(app, token, method, &path, body).await;
-    contract.validate(value).unwrap()
+    let validated = contract.validate(value.clone()).unwrap();
+    assert_eq!(
+        validated.display,
+        json_codec::to_string_pretty(&value).unwrap()
+    );
+    match &validated.action {
+        response::Action::Mutation { operation } => {
+            assert_eq!(contract.mutation_operation(), Some(operation.as_str()))
+        }
+        response::Action::PlanReceipt(receipt) => {
+            assert_eq!(
+                contract.mutation_operation(),
+                Some(receipt.operation_id.to_string().as_str())
+            );
+            assert_eq!(json_codec::to_value(receipt).unwrap(), value);
+        }
+        response::Action::Outcome { operation, status } => {
+            assert_eq!(value["operation_id"], operation.as_str());
+            assert_eq!(
+                storage_contract::client_protocol::operation_status(&value),
+                Some(*status)
+            );
+        }
+        response::Action::Inspect | response::Action::Plan(_) => {}
+    }
+    Applied {
+        value,
+        action: validated.action,
+    }
 }
 #[tokio::test]
 async fn web_daily_forms_execute_real_management_operations() {
@@ -37,9 +88,9 @@ async fn web_daily_forms_execute_real_management_operations() {
         &fields(&[("name", "Web managed"), ("slot", "P01"), ("copies", "1")]),
     )
     .await;
-    let id = repo["repository_id"].as_str().unwrap();
-    let branch = repo["main_branch_id"].as_str().unwrap();
-    let history = repo["history_tree_id"].as_str().unwrap();
+    let id = repo.value["repository_id"].as_str().unwrap();
+    let branch = repo.value["main_branch_id"].as_str().unwrap();
+    let history = repo.value["history_tree_id"].as_str().unwrap();
     // Retired account/grant actions are not representable by the production Kind.
     assert!(matches!(
         request::build(Kind::Inspect, &fields(&[]), &new_id("op"), "admin"),
@@ -148,7 +199,10 @@ async fn web_daily_forms_execute_real_management_operations() {
             ("history", history),
             ("source_branch", branch),
             ("source_commit", commit),
-            ("target_branch", created["branch_id"].as_str().unwrap()),
+            (
+                "target_branch",
+                created.value["branch_id"].as_str().unwrap(),
+            ),
             ("target_commit", commit),
         ]),
     )
@@ -172,11 +226,12 @@ async fn web_daily_forms_execute_real_management_operations() {
             ]),
         )
         .await;
-        assert!(request::plan_action(&plan, true, false, &new_id("op")).is_err());
-        let request = request::plan_action(&plan, publish, true, &new_id("op")).unwrap();
+        let plan = plan.into_plan();
+        assert!(request::plan_action(Some(&plan), true, false, &new_id("op")).is_err());
+        let request = request::plan_action(Some(&plan), publish, true, &new_id("op")).unwrap();
         let result = apply_request(&app, &admin, request).await;
         if publish {
-            assert_eq!(result["commit_state"], "PUBLISHED");
+            assert_eq!(result.value["commit_state"], "PUBLISHED");
         }
     }
     success(&app, &admin, "GET", "/api/admin/check", None).await;
@@ -207,13 +262,13 @@ fn web_daily_contracts_reject_invalid_input_and_bind_exact_review_digest() {
     assert!(matches!(error, InputError::Generation(_)));
     assert!(std::error::Error::source(&error).is_some());
 
-    let plan = json!({"plan_id":"plan/x","digest":"reviewed-digest","state":"ready"});
-    let request = request::plan_action(&plan, true, true, "op_test").unwrap();
+    let plan = plan_fixture("plan/x", "reviewed-digest", "ready");
+    let request = request::plan_action(Some(&plan), true, true, "op_test").unwrap();
     assert_eq!(request.path, "/api/plans/plan%2Fx/commit");
     assert_eq!(request.body.unwrap()["plan_digest"], "reviewed-digest");
     assert!(
         request::plan_action(
-            &json!({"plan_id":"p","digest":"d","state":"completed"}),
+            Some(&plan_fixture("p", "d", "completed")),
             true,
             true,
             "op_test"
@@ -300,11 +355,11 @@ async fn web_purge_and_split_preview_digest_cancel_and_commit_use_real_engine() 
             ("versions", &first),
             ("commit", &cut),
         ]);
-        let cancel = apply(&app, &admin, kind, &input).await;
-        let request = request::plan_action(&cancel, false, false, &new_id("op")).unwrap();
+        let cancel = apply(&app, &admin, kind, &input).await.into_plan();
+        let request = request::plan_action(Some(&cancel), false, false, &new_id("op")).unwrap();
         apply_request(&app, &admin, request).await;
-        let plan = apply(&app, &admin, kind, &input).await;
-        let mut request = request::plan_action(&plan, true, true, &new_id("op")).unwrap();
+        let plan = apply(&app, &admin, kind, &input).await.into_plan();
+        let mut request = request::plan_action(Some(&plan), true, true, &new_id("op")).unwrap();
         request.body.as_mut().unwrap()["plan_digest"] = "wrong-review-digest".into();
         assert!(
             !send(
@@ -318,9 +373,9 @@ async fn web_purge_and_split_preview_digest_cancel_and_commit_use_real_engine() 
             .0
             .is_success()
         );
-        let request = request::plan_action(&plan, true, true, &new_id("op")).unwrap();
+        let request = request::plan_action(Some(&plan), true, true, &new_id("op")).unwrap();
         assert_eq!(
-            apply_request(&app, &admin, request).await["commit_state"],
+            apply_request(&app, &admin, request).await.value["commit_state"],
             "PUBLISHED"
         );
     }

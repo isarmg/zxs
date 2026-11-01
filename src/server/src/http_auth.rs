@@ -306,54 +306,27 @@ pub(crate) fn same_origin(
     config: &AdmittedServerConfig,
     required: bool,
 ) -> Result<(), ApiError> {
-    let Some(origin) = headers.get(header::ORIGIN) else {
-        return if required {
-            Err(ApiError::forbidden())
+    authentication::verify_same_origin(
+        config.external_origin.as_ref(),
+        if required {
+            authentication::OriginRequirement::Required
         } else {
-            Ok(())
-        };
-    };
-    if headers.get_all(header::ORIGIN).iter().count() != 1 {
-        return Err(ApiError::forbidden());
-    }
-    let origin = origin
-        .to_str()
-        .map_err(|source| ApiError::forbidden().with_source(source))?;
-    let direct_origin;
-    let expected = match &config.external_origin {
-        Some(origin) => origin.0.as_str(),
-        None => {
-            let host = headers
-                .get(header::HOST)
-                .and_then(|host| host.to_str().ok())
-                .ok_or_else(ApiError::forbidden)?;
-            let parsed = url_encoding::address::Url::parse(&format!("http://{host}"))
-                .map_err(|source| ApiError::forbidden().with_source(source))?;
-            if headers.get_all(header::HOST).iter().count() != 1
-                || parsed.host_str().is_none()
-                || !parsed.username().is_empty()
-                || parsed.password().is_some()
-                || parsed.path() != "/"
-                || parsed.query().is_some()
-                || parsed.fragment().is_some()
-                || host.contains('/')
-                || host.contains('\\')
-            {
-                return Err(ApiError::forbidden());
-            }
-            direct_origin = parsed.origin().ascii_serialization();
-            direct_origin.as_str()
-        }
-    };
-    if origin != expected {
-        return Err(ApiError::forbidden());
-    }
-    if let Some(site) = headers.get("sec-fetch-site")
-        && site != "same-origin"
-    {
-        return Err(ApiError::forbidden());
-    }
-    Ok(())
+            authentication::OriginRequirement::Optional
+        },
+        &header_values(headers, authentication::ORIGIN_HEADER),
+        &header_values(headers, authentication::HOST_HEADER),
+        &header_values(headers, authentication::SEC_FETCH_SITE_HEADER),
+    )
+    .map(|_| ())
+    .map_err(|source| ApiError::forbidden().with_source(source))
+}
+
+pub(crate) fn header_values<'a>(headers: &'a HeaderMap, name: &'static str) -> Vec<&'a [u8]> {
+    headers
+        .get_all(name)
+        .iter()
+        .map(HeaderValue::as_bytes)
+        .collect()
 }
 
 fn request_token(headers: &HeaderMap) -> Result<(String, bool), ApiError> {
@@ -402,23 +375,15 @@ pub(crate) async fn authorize(
     );
     same_origin(request.headers(), &state.config, cookie && changing)?;
     if cookie && changing {
-        let csrf = request
-            .headers()
-            .get("x-csrf-token")
-            .and_then(|value| value.to_str().ok())
-            .ok_or_else(ApiError::forbidden)?;
-        if request.headers().get_all("x-csrf-token").iter().count() != 1
-            || !authentication::token_matches_hash(
-                csrf,
-                &authentication::token_hash(
-                    &authentication::derive_csrf_token(&token)
-                        .map_err(|source| ApiError::forbidden().with_source(source))?,
-                ),
-            )
-        {
-            return Err(ApiError::forbidden());
-        }
+        let expected = authentication::derive_csrf_token(&token)
+            .map_err(|source| ApiError::forbidden().with_source(source))?;
+        authentication::require_csrf_token_matches_hash(
+            &header_values(request.headers(), authentication::CSRF_HEADER),
+            &authentication::token_hash(&expected),
+        )
+        .map_err(|source| ApiError::forbidden().with_source(source))?;
     }
+
     let identity = state.auth_reader.authenticate(&token)?;
     request.extensions_mut().insert(identity);
     request.extensions_mut().insert(SessionToken(token));

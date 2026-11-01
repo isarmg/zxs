@@ -16,14 +16,13 @@ fn contract(kind: Kind, fields: &[(&str, &str)]) -> Contract {
     .contract
 }
 fn plan_contract(commit: bool) -> Contract {
-    request::plan_action(
-        super::super::tests::reviewed_plan().as_ref(),
-        commit,
-        true,
-        OPERATION,
-    )
-    .unwrap()
-    .contract
+    let validated = Contract::Plan { id: "p".into() }.validate(plan()).unwrap();
+    let Action::Plan(plan) = validated.action else {
+        panic!("expected plan")
+    };
+    request::plan_action(Some(&plan), commit, true, OPERATION)
+        .unwrap()
+        .contract
 }
 fn plan() -> Value {
     json!({"plan_id":"p","kind":"purge","principal":"admin","expected_sequence":"4","digest":"digest","input":{"history_tree_id":"h"},"state":"ready"})
@@ -381,18 +380,9 @@ fn merge_link_response_must_match_every_captured_endpoint_identity() {
 }
 
 #[test]
-fn malformed_success_keeps_the_existing_unknown_mutation_classification() {
+fn malformed_success_preserves_its_decode_source() {
     use std::error::Error as _;
     let error = plan_contract(true).validate(Value::Null).unwrap_err();
-    assert_eq!(
-        error.code,
-        storage_contract::ErrorCode::InvalidAdminResponse
-    );
-    assert_eq!(error.status, 200);
+    assert!(matches!(error, ResponseError::Decode(_)));
     assert!(error.source().is_some());
-    assert!(!error.retryable);
-    assert!(error.request_id.is_none());
-    assert!(storage_contract::client_protocol::mutation_outcome_unknown(
-        error.status
-    ));
 }

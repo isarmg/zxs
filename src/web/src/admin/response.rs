@@ -29,19 +29,6 @@ pub(crate) enum ResponseError {
     #[error("administration response does not match {0}")]
     Contract(&'static str),
 }
-impl From<ResponseError> for crate::api::Error {
-    fn from(source: ResponseError) -> Self {
-        let mut error = crate::api::error(
-            storage_contract::ErrorCode::InvalidAdminResponse,
-            "The response did not confirm the requested action. Inspect the original operation before retrying.",
-        );
-        error.status = 200;
-        error.source = Some(std::sync::Arc::new(crate::api::ErrorSource::AdminResponse(
-            source,
-        )));
-        error
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ValidatedPlan(Plan);
@@ -155,14 +142,7 @@ impl Contract {
         }
     }
 
-    pub(super) fn validate(
-        &self,
-        value: Value,
-    ) -> Result<ValidatedAdminResponse, crate::api::Error> {
-        self.parse(value).map_err(Into::into)
-    }
-
-    fn parse(&self, value: Value) -> Result<ValidatedAdminResponse, ResponseError> {
+    pub(super) fn validate(&self, value: Value) -> Result<ValidatedAdminResponse, ResponseError> {
         let display =
             json_codec::to_string_pretty(&value).expect("invariant: JSON values serialize");
         let action = match self {

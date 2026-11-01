@@ -113,420 +113,165 @@ fn token_generation_hashing_and_cookie_parsing_are_bounded() {
     );
 }
 
-fn verify_origin(
-    mode: AdministratorOriginMode,
-    origin: &str,
-    host: &str,
-    site: &str,
-) -> Result<VerifiedSameOrigin, Error> {
-    require_administrator_same_origin(
-        mode,
-        &[origin.as_bytes()],
-        &[host.as_bytes()],
-        &[site.as_bytes()],
-    )
-}
-
 #[test]
-fn production_origin_is_https_and_compares_normalized_effective_authority() {
-    let verified = verify_origin(
-        AdministratorOriginMode::ProductionHttps,
-        "https://Console.Example.TEST:443",
-        "console.example.test",
-        "same-origin",
-    )
-    .unwrap();
-    assert_eq!(verified.scheme(), "https");
-    assert_eq!(verified.host(), "console.example.test");
-    assert_eq!(verified.port(), 443);
-
-    let ipv6 = verify_origin(
-        AdministratorOriginMode::ProductionHttps,
-        "https://[2001:0db8:0:0:0:0:0:1]:8443",
-        "[2001:db8::1]:8443",
-        "same-origin",
-    )
-    .unwrap();
-    assert_eq!(ipv6.host(), "2001:db8::1");
-    assert_eq!(ipv6.port(), 8443);
-}
-
-#[test]
-fn websocket_origin_accepts_missing_fetch_metadata_without_weakening_http() {
+fn origin_policy_preserves_direct_http_and_exact_browser_serialization() {
     let empty: [&[u8]; 0] = [];
-    let origin = [b"https://Console.Example.TEST:443".as_slice()];
-    let host = [b"console.example.test".as_slice()];
-    let verified = require_administrator_websocket_origin(
-        AdministratorOriginMode::ProductionHttps,
-        &origin,
-        &host,
-        &empty,
-    )
-    .unwrap();
-    assert_eq!(verified.scheme(), "https");
-    assert_eq!(verified.host(), "console.example.test");
-    assert_eq!(verified.port(), 443);
-    assert_eq!(
-        require_administrator_same_origin(
-            AdministratorOriginMode::ProductionHttps,
-            &origin,
-            &host,
+    for (host, origin) in [
+        ("192.0.2.20:7400", "http://192.0.2.20:7400"),
+        ("STORAGE.EXAMPLE:80", "http://storage.example"),
+        ("[2001:0db8::20]:80", "http://[2001:db8::20]"),
+        ("0.0.0.0:7400", "http://0.0.0.0:7400"),
+    ] {
+        let proof = verify_same_origin(
+            None,
+            OriginRequirement::Required,
+            &[origin],
+            &[host],
             &empty,
-        ),
-        Err(Error::MissingSecurityHeader {
-            name: SEC_FETCH_SITE_HEADER
-        })
-    );
-    assert_eq!(
-        require_administrator_websocket_origin(
-            AdministratorOriginMode::ProductionHttps,
-            &origin,
-            &host,
-            &[b"same-origin".as_slice()],
         )
-        .unwrap(),
-        verified
-    );
-    let loopback = require_administrator_websocket_origin(
-        AdministratorOriginMode::LoopbackDevelopmentHttp,
-        &[b"http://[0:0:0:0:0:0:0:1]".as_slice()],
-        &[b"[::1]:80".as_slice()],
-        &empty,
-    )
-    .unwrap();
-    assert_eq!(loopback.host(), "::1");
-    assert_eq!(loopback.port(), 80);
-}
-
-#[test]
-fn websocket_origin_requires_one_origin_and_host_even_without_fetch_metadata() {
-    let empty: [&[u8]; 0] = [];
-    let origin = [b"https://console.example.test".as_slice()];
-    let host = [b"console.example.test".as_slice()];
-    for (origins, hosts, error) in [
-        (
-            empty.to_vec(),
-            host.to_vec(),
-            Error::MissingSecurityHeader {
-                name: ORIGIN_HEADER,
-            },
-        ),
-        (
-            origin.to_vec(),
-            empty.to_vec(),
-            Error::MissingSecurityHeader { name: HOST_HEADER },
-        ),
-        (
-            vec![origin[0], origin[0]],
-            host.to_vec(),
-            Error::DuplicateSecurityHeader {
-                name: ORIGIN_HEADER,
-                actual: 2,
-            },
-        ),
-        (
-            origin.to_vec(),
-            vec![host[0], host[0]],
-            Error::DuplicateSecurityHeader {
-                name: HOST_HEADER,
-                actual: 2,
-            },
-        ),
-    ] {
-        assert_eq!(
-            require_administrator_websocket_origin(
-                AdministratorOriginMode::ProductionHttps,
-                &origins,
-                &hosts,
-                &empty,
-            ),
-            Err(error)
-        );
-    }
-}
-
-#[test]
-fn websocket_origin_rejects_supplied_invalid_or_multiple_fetch_metadata() {
-    let origin = [b"https://console.example.test".as_slice()];
-    let host = [b"console.example.test".as_slice()];
-    for site in [
-        "",
-        "same-site",
-        "cross-site",
-        "none",
-        "same-origin,cross-site",
-        "same-origin ",
-    ] {
-        assert_eq!(
-            require_administrator_websocket_origin(
-                AdministratorOriginMode::ProductionHttps,
-                &origin,
-                &host,
-                &[site.as_bytes()],
-            ),
-            Err(Error::InvalidSecurityHeaderValue {
-                name: SEC_FETCH_SITE_HEADER
-            })
-        );
-    }
-    assert_eq!(
-        require_administrator_websocket_origin(
-            AdministratorOriginMode::ProductionHttps,
-            &origin,
-            &host,
-            &[b"same-origin".as_slice(), b"same-origin".as_slice()],
-        ),
-        Err(Error::DuplicateSecurityHeader {
-            name: SEC_FETCH_SITE_HEADER,
-            actual: 2
-        })
-    );
-}
-
-#[test]
-fn websocket_origin_keeps_scheme_authority_and_loopback_boundaries() {
-    let empty: [&[u8]; 0] = [];
-    for (mode, origin, host, error) in [
-        (
-            AdministratorOriginMode::ProductionHttps,
-            "http://console.example.test",
-            "console.example.test",
-            Error::UnexpectedOriginScheme { expected: "https" },
-        ),
-        (
-            AdministratorOriginMode::ProductionHttps,
-            "https://other.example.test",
-            "console.example.test",
-            Error::OriginHostMismatch,
-        ),
-        (
-            AdministratorOriginMode::ProductionHttps,
-            "https://console.example.test:444",
-            "console.example.test",
-            Error::OriginHostMismatch,
-        ),
-        (
-            AdministratorOriginMode::ProductionHttps,
-            "https://console.example.test/",
-            "console.example.test",
-            Error::InvalidSecurityHeaderValue {
-                name: ORIGIN_HEADER,
-            },
-        ),
-        (
-            AdministratorOriginMode::ProductionHttps,
-            "null",
-            "console.example.test",
-            Error::InvalidSecurityHeaderValue {
-                name: ORIGIN_HEADER,
-            },
-        ),
-        (
-            AdministratorOriginMode::LoopbackDevelopmentHttp,
-            "http://console.example.test",
-            "console.example.test",
-            Error::DevelopmentHostIsNotLoopback,
-        ),
-    ] {
-        assert_eq!(
-            require_administrator_websocket_origin(
-                mode,
-                &[origin.as_bytes()],
-                &[host.as_bytes()],
-                &empty,
-            ),
-            Err(error)
-        );
-    }
-}
-
-#[test]
-fn loopback_http_mode_accepts_only_actual_loopback_authorities() {
-    for (origin, host, expected) in [
-        ("http://LOCALHOST:3000", "localhost:3000", "localhost"),
-        ("http://127.0.0.42:8080", "127.0.0.42:8080", "127.0.0.42"),
-        ("http://[0:0:0:0:0:0:0:1]", "[::1]:80", "::1"),
-    ] {
-        let verified = verify_origin(
-            AdministratorOriginMode::LoopbackDevelopmentHttp,
-            origin,
-            host,
-            "same-origin",
-        )
+        .unwrap()
         .unwrap();
-        assert_eq!(verified.host(), expected);
+        assert_eq!(proof.as_str(), origin);
+        for wrong in [
+            format!("{origin}/"),
+            origin.replace("http:", "https:"),
+            format!("{origin}:80"),
+        ] {
+            assert!(
+                verify_same_origin(None, OriginRequirement::Required, &[wrong], &[host], &empty)
+                    .is_err()
+            );
+        }
     }
-
-    assert!(matches!(
-        verify_origin(
-            AdministratorOriginMode::LoopbackDevelopmentHttp,
-            "http://development.example.test",
-            "development.example.test",
-            "same-origin",
-        ),
-        Err(Error::DevelopmentHostIsNotLoopback)
-    ));
 }
 
 #[test]
-fn same_origin_policy_rejects_missing_duplicate_cross_site_and_mismatch() {
-    let origin = [b"https://console.example.test".as_slice()];
-    let host = [b"console.example.test".as_slice()];
-    let site = [b"same-origin".as_slice()];
-    let empty: [&[u8]; 0] = [];
-
-    assert!(matches!(
-        require_administrator_same_origin(
-            AdministratorOriginMode::ProductionHttps,
-            &empty,
-            &host,
-            &site,
-        ),
-        Err(Error::MissingSecurityHeader {
-            name: ORIGIN_HEADER
-        })
-    ));
-    assert!(matches!(
-        require_administrator_same_origin(
-            AdministratorOriginMode::ProductionHttps,
-            &origin,
-            &empty,
-            &site,
-        ),
-        Err(Error::MissingSecurityHeader { name: HOST_HEADER })
-    ));
-    assert!(matches!(
-        require_administrator_same_origin(
-            AdministratorOriginMode::ProductionHttps,
-            &origin,
-            &host,
-            &empty,
-        ),
-        Err(Error::MissingSecurityHeader {
-            name: SEC_FETCH_SITE_HEADER
-        })
-    ));
-
-    let duplicate_origin = [origin[0], origin[0]];
-    assert!(matches!(
-        require_administrator_same_origin(
-            AdministratorOriginMode::ProductionHttps,
-            &duplicate_origin,
-            &host,
-            &site,
-        ),
-        Err(Error::DuplicateSecurityHeader {
-            name: ORIGIN_HEADER,
-            actual: 2
-        })
-    ));
-    let duplicate_host = [host[0], host[0]];
-    assert!(matches!(
-        require_administrator_same_origin(
-            AdministratorOriginMode::ProductionHttps,
-            &origin,
-            &duplicate_host,
-            &site,
-        ),
-        Err(Error::DuplicateSecurityHeader {
-            name: HOST_HEADER,
-            actual: 2
-        })
-    ));
-    let duplicate_site = [site[0], site[0]];
-    assert!(matches!(
-        require_administrator_same_origin(
-            AdministratorOriginMode::ProductionHttps,
-            &origin,
-            &host,
-            &duplicate_site,
-        ),
-        Err(Error::DuplicateSecurityHeader {
-            name: SEC_FETCH_SITE_HEADER,
-            actual: 2
-        })
-    ));
-    assert!(matches!(
-        verify_origin(
-            AdministratorOriginMode::ProductionHttps,
-            "https://console.example.test",
-            "console.example.test",
-            "cross-site",
-        ),
-        Err(Error::InvalidSecurityHeaderValue {
-            name: SEC_FETCH_SITE_HEADER
-        })
-    ));
-    assert!(matches!(
-        verify_origin(
-            AdministratorOriginMode::ProductionHttps,
-            "https://console.example.test:444",
-            "console.example.test",
-            "same-origin",
-        ),
-        Err(Error::OriginHostMismatch)
-    ));
+fn external_https_preserves_internal_host_and_exact_origin() {
+    let external = ExternalOrigin::parse("HTTPS://EXAMPLE.COM:443").unwrap();
+    assert_eq!(external.as_str(), "https://example.com");
+    for hosts in [vec![], vec!["127.0.0.1:7400"]] {
+        assert!(
+            verify_same_origin(
+                Some(&external),
+                OriginRequirement::Required,
+                &["https://example.com"],
+                &hosts,
+                &["same-origin"]
+            )
+            .is_ok()
+        );
+    }
+    for wrong in [
+        "https://EXAMPLE.COM",
+        "https://example.com:443",
+        "http://example.com",
+        "null",
+        "https://example.com/",
+        "https://example.com?x",
+        "https://user@example.com",
+        "https://evil.example",
+    ] {
+        assert_eq!(
+            verify_same_origin(
+                Some(&external),
+                OriginRequirement::Required,
+                &[wrong],
+                &["internal:7400"],
+                &["same-origin"]
+            ),
+            Err(Error::OriginMismatch)
+        );
+    }
+    for invalid in [
+        "http://example.com",
+        "https://example.com/",
+        "https://example.com/path",
+        "https://user@example.com",
+        "https://example.com?x",
+        "https://example.com#x",
+    ] {
+        assert!(ExternalOrigin::parse(invalid).is_err());
+    }
 }
 
 #[test]
-fn same_origin_policy_rejects_noncanonical_origin_and_host_syntax() {
-    for origin in [
-        "http://console.example.test",
-        "HTTPS://console.example.test",
+fn origin_policy_rejects_duplicate_and_joined_security_fields() {
+    let origin = ["http://example.com"];
+    let host = ["example.com"];
+    let site = ["same-origin"];
+    for (origins, hosts, sites) in [
+        (vec![origin[0], origin[0]], host.to_vec(), site.to_vec()),
+        (
+            origin.to_vec(),
+            vec![host[0], "evil.example"],
+            site.to_vec(),
+        ),
+        (origin.to_vec(), host.to_vec(), vec![site[0], "cross-site"]),
+        (
+            vec!["http://example.com,http://evil.example"],
+            host.to_vec(),
+            site.to_vec(),
+        ),
+        (
+            origin.to_vec(),
+            vec!["example.com,evil.example"],
+            site.to_vec(),
+        ),
+        (
+            origin.to_vec(),
+            host.to_vec(),
+            vec!["same-origin,cross-site"],
+        ),
+        (origin.to_vec(), host.to_vec(), vec!["cross-site"]),
     ] {
-        assert!(matches!(
-            verify_origin(
-                AdministratorOriginMode::ProductionHttps,
-                origin,
-                "console.example.test",
-                "same-origin",
-            ),
-            Err(Error::UnexpectedOriginScheme { expected: "https" })
-        ));
+        assert!(
+            verify_same_origin(None, OriginRequirement::Required, &origins, &hosts, &sites)
+                .is_err()
+        );
     }
+    let empty: [&str; 0] = [];
+    assert!(
+        verify_same_origin(None, OriginRequirement::Optional, &empty, &host, &empty)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        verify_same_origin(
+            None,
+            OriginRequirement::Optional,
+            &empty,
+            &host,
+            &["cross-site"]
+        )
+        .is_ok()
+    );
+    assert!(require_same_origin_fetch_metadata(&["cross-site"]).is_err());
+    assert!(require_same_origin_fetch_metadata(&empty).is_ok());
+    assert!(verify_same_origin(None, OriginRequirement::Required, &empty, &host, &empty).is_err());
+    assert!(verify_same_origin(None, OriginRequirement::Required, &origin, &empty, &site).is_err());
+    assert!(verify_same_origin(None, OriginRequirement::Required, &origin, &host, &empty).is_ok());
+    assert!(
+        verify_same_origin(
+            None,
+            OriginRequirement::Optional,
+            &empty,
+            &host,
+            &["same-origin", "cross-site"]
+        )
+        .is_err()
+    );
+}
 
-    for origin in [
-        "https://user@console.example.test",
-        "https://console.example.test/",
-        "https://console.example.test?query",
-        "https://console.example.test#fragment",
-        "https://console.example.test:0",
-        "https://console.example.test:0443",
-        "https://console_example.test",
-        "https://console.example.test.",
-    ] {
-        assert!(matches!(
-            verify_origin(
-                AdministratorOriginMode::ProductionHttps,
-                origin,
-                "console.example.test",
-                "same-origin",
-            ),
-            Err(Error::InvalidSecurityHeaderValue {
-                name: ORIGIN_HEADER
-            })
-        ));
-    }
-
-    for host in [
-        "https://console.example.test",
-        "user@console.example.test",
-        "console.example.test/path",
-        "console.example.test?query",
-        "console.example.test:0443",
-        "127.000.000.001",
-        "::1",
-    ] {
-        assert!(matches!(
-            verify_origin(
-                AdministratorOriginMode::ProductionHttps,
-                "https://console.example.test",
-                host,
-                "same-origin",
-            ),
-            Err(Error::InvalidSecurityHeaderValue { name: HOST_HEADER })
-        ));
-    }
+#[test]
+fn origin_url_failure_retains_concrete_source() {
+    use std::error::Error as _;
+    let error = ExternalOrigin::parse("https://[").unwrap_err();
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .is::<url_encoding::address::ParseError>()
+    );
 }
 
 #[test]
@@ -643,4 +388,68 @@ fn external_authentication_failures_retain_concrete_sources() {
     assert!(error.source().unwrap().is::<argon2::password_hash::Error>());
     let error = Error::Random(system_entropy::Error::UNEXPECTED);
     assert!(error.source().unwrap().is::<system_entropy::Error>());
+}
+
+#[path = "../origin_vectors.rs"]
+mod origin_vectors;
+
+#[test]
+fn shared_deployment_origin_vectors() {
+    for &(external, host, origin, accepted) in origin_vectors::ORIGIN_VECTORS {
+        let external = external.map(|value| ExternalOrigin::parse(value).unwrap());
+        assert_eq!(
+            verify_same_origin(
+                external.as_ref(),
+                OriginRequirement::Required,
+                &[origin],
+                &[host],
+                &[] as &[&str]
+            )
+            .is_ok(),
+            accepted,
+            "{external:?} {host} {origin}"
+        );
+    }
+}
+
+#[test]
+fn malformed_authorities_and_non_ascii_headers_fail_at_the_shared_boundary() {
+    for host in [
+        "user@example.com",
+        "example.com/path",
+        "example.com?x",
+        "example.com#x",
+        "example.com\\evil",
+        "[",
+        "::1",
+        "example.com,evil",
+    ] {
+        assert!(
+            verify_same_origin(
+                None,
+                OriginRequirement::Required,
+                &["http://example.com"],
+                &[host],
+                &[] as &[&str]
+            )
+            .is_err(),
+            "{host}"
+        );
+    }
+    for origin in [
+        b"http://example.com ".as_slice(),
+        b"http://example.com\n",
+        b"\xff",
+    ] {
+        assert!(
+            verify_same_origin(
+                None,
+                OriginRequirement::Required,
+                &[origin],
+                &["example.com"],
+                &[] as &[&str]
+            )
+            .is_err()
+        );
+    }
 }

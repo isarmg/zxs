@@ -1130,3 +1130,169 @@ async fn direct_remote_http_setup_and_login_preserve_credentials_and_csrf() {
     assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(probe.mutations.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn ordinary_http_origin_header_matrix_keeps_bearer_cookie_and_proxy_boundaries() {
+    for proxy in [false, true] {
+        let (_temp, app, _probe) = configured_app(false, proxy);
+        let origin = if proxy {
+            "https://storage.example.org"
+        } else {
+            "http://192.0.2.10"
+        };
+        let host = if proxy {
+            "127.0.0.1:7400"
+        } else {
+            "192.0.2.10:80"
+        };
+        let build = |path: &str| {
+            HttpRequest::builder()
+                .method("POST")
+                .uri(path)
+                .extension(http_routing::extract::ConnectInfo(
+                    "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+                ))
+                .header("host", host)
+                .header("x-forwarded-for", "192.0.2.20")
+                .header("content-type", "application/json")
+        };
+        let response = app
+            .clone()
+            .oneshot(
+                build("/api/auth/login")
+                    .header("origin", origin)
+                    .body(Body::from(
+                        json!({"username":"admin", "password":"long-test-password"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let session: Value =
+            json_codec::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        let token = session["token"].as_str().unwrap();
+        let csrf = authentication::derive_csrf_token(token).unwrap();
+        // Invalid body stops before a password change, but only after real authorization.
+        for (cookie, origin_present, fetch, expected) in [
+            (false, false, None, StatusCode::BAD_REQUEST),
+            (false, false, Some("cross-site"), StatusCode::BAD_REQUEST),
+            (true, false, None, StatusCode::FORBIDDEN),
+            (true, true, None, StatusCode::BAD_REQUEST),
+            (false, true, Some("cross-site"), StatusCode::FORBIDDEN),
+        ] {
+            let mut request = build("/api/auth/password");
+            if cookie {
+                request = request
+                    .header("cookie", format!("zxs_session={token}"))
+                    .header("x-csrf-token", &csrf);
+            } else {
+                request = request.header("authorization", format!("Bearer {token}"));
+            }
+            if origin_present {
+                request = request.header("origin", origin);
+            }
+            if let Some(site) = fetch {
+                request = request.header("sec-fetch-site", site);
+            }
+            assert_eq!(
+                app.clone()
+                    .oneshot(request.body(Body::from("{}")).unwrap())
+                    .await
+                    .unwrap()
+                    .status(),
+                expected,
+                "proxy={proxy} cookie={cookie} origin={origin_present}"
+            );
+        }
+        for (name, first, second) in [
+            ("origin", origin, origin),
+            ("origin", origin, "https://evil.example"),
+            ("host", host, "evil.example"),
+            ("sec-fetch-site", "same-origin", "cross-site"),
+            ("x-csrf-token", csrf.as_str(), csrf.as_str()),
+            ("x-csrf-token", csrf.as_str(), "wrong"),
+        ] {
+            let mut request =
+                build("/api/auth/password").header("cookie", format!("zxs_session={token}"));
+            if name != "origin" {
+                request = request.header("origin", origin);
+            }
+            if name != "x-csrf-token" {
+                request = request.header("x-csrf-token", &csrf);
+            }
+            // Host already exists in build; append the conflict once.
+            if name != "host" {
+                request = request.header(name, first);
+            }
+            request = request.header(name, second);
+            assert_eq!(
+                app.clone()
+                    .oneshot(request.body(Body::from("{}")).unwrap())
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::FORBIDDEN,
+                "proxy={proxy} duplicate={name}"
+            );
+        }
+        let request = build("/api/auth/password")
+            .header("authorization", format!("Bearer {token}"))
+            .header("sec-fetch-site", "same-origin")
+            .header("sec-fetch-site", "cross-site");
+        assert_eq!(
+            app.clone()
+                .oneshot(request.body(Body::from("{}")).unwrap())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+}
+
+#[tokio::test]
+async fn bootstrap_fetch_and_csrf_duplicates_are_rejected_before_mutation() {
+    let (_temp, app, probe) = app();
+    for (method, path, duplicate, first, second) in [
+        (
+            "GET",
+            "/api/setup/status",
+            "sec-fetch-site",
+            "same-origin",
+            "cross-site",
+        ),
+        (
+            "POST",
+            "/api/setup/initialize",
+            "sec-fetch-site",
+            "same-origin",
+            "cross-site",
+        ),
+        (
+            "POST",
+            "/api/setup/initialize",
+            "x-csrf-token",
+            csrf(TOKEN).as_str(),
+            csrf(TOKEN).as_str(),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                request(method, path, "{}")
+                    .header("x-zxs-bootstrap", TOKEN)
+                    .header(duplicate, first)
+                    .header(duplicate, second)
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            response.status(),
+            StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED
+        ));
+    }
+    assert_eq!(probe.mutations.load(Ordering::SeqCst), 0);
+}

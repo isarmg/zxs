@@ -64,6 +64,7 @@ dependencies = [
  "sha2",
  "subtle",
  "system-entropy",
+ "url-encoding",
 ]
 
 [[package]]

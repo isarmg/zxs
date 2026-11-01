@@ -182,13 +182,14 @@ impl HistoryWriter {
         writer.maintenance(now)?;
         let mut result = HistoryStore::default();
         let mut files = fs::read_dir(directory)?
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                cache_name(&entry.file_name().to_string_lossy())
+            .filter_map(|entry| match entry {
+                Ok(entry) => cache_name(&entry.file_name().to_string_lossy())
                     .is_some_and(|(recent, bucket)| file_in_window(recent, bucket, now))
+                    .then_some(Ok(entry)),
+                Err(error) => Some(Err(error)),
             })
             .take(36)
-            .collect::<Vec<_>>();
+            .collect::<io::Result<Vec<_>>>()?;
         files.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
         let mut recovery_bytes = 0_usize;
         let mut recent = BTreeMap::new();
