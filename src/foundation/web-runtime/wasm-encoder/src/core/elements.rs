@@ -1,4 +1,4 @@
-use crate::{ConstExpr, Encode, RefType, Section, SectionId, encode_section};
+use crate::{encode_section, ConstExpr, Encode, RefType, Section, SectionId};
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
@@ -69,9 +69,9 @@ pub enum ElementMode<'a> {
     Active {
         /// The table index.
         ///
-        /// `Active` element specifying a `None` table forces the MVP encoding and refers to the
-        /// 0th table holding `funcref`s. Non-`None` tables use the encoding introduced with the
-        /// bulk memory proposal and can refer to tables with any valid reference type.
+        /// `None` uses the implicit table 0 encoding for function indices and
+        /// `funcref` expressions; other expressions encode table 0 explicitly.
+        /// `Some` always encodes the supplied table index.
         table: Option<u32>,
         /// The offset within the table to place this segment.
         offset: &'a ConstExpr,
@@ -127,7 +127,8 @@ impl ElementSection {
                     // ... otherwise fall through for all other expressions here
                     // with table 0 or an explicitly specified table to the 0x02
                     // encoding.
-                    (None, Elements::Expressions(..)) | (Some(_), _) => {
+                    (None, Elements::Expressions(..))
+                    | (Some(_), Elements::Functions(_) | Elements::Expressions(..)) => {
                         (0x02 | expr_bit).encode(&mut self.bytes);
                         table.unwrap_or(0).encode(&mut self.bytes);
                         encode_type = true;
@@ -166,9 +167,9 @@ impl ElementSection {
 
     /// Define an active element segment.
     ///
-    /// `Active` element specifying a `None` table forces the MVP encoding and refers to the 0th
-    /// table holding `funcref`s. Non-`None` tables use the encoding introduced with the bulk
-    /// memory proposal and can refer to tables with any valid reference type.
+    /// `None` uses the implicit table 0 encoding for function indices and
+    /// `funcref` expressions; other expressions encode table 0 explicitly.
+    /// `Some` always encodes the supplied table index.
     pub fn active(
         &mut self,
         table_index: Option<u32>,

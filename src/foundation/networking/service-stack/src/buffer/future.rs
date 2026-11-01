@@ -64,7 +64,9 @@ where
         loop {
             match this.state.as_mut().project() {
                 ResponseStateProj::Failed { error } => {
-                    return Poll::Ready(Err(error.take().expect("polled after error")));
+                    return Poll::Ready(Err(error.take().expect(
+                        "invariant: failed response retains its error until its first poll",
+                    )));
                 }
                 ResponseStateProj::Rx { rx } => match ready!(rx.poll(cx)) {
                     Ok(Ok(fut)) => this.state.set(ResponseState::Poll { fut }),

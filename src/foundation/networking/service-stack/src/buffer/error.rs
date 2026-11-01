@@ -28,7 +28,7 @@ impl ServiceError {
     // Private to avoid exposing `Clone` trait as part of the public API
     pub(crate) fn clone(&self) -> ServiceError {
         ServiceError {
-            inner: self.inner.clone(),
+            inner: Arc::clone(&self.inner),
         }
     }
 }
