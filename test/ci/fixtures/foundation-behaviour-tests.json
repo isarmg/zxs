@@ -1528,6 +1528,34 @@
         ]
       }
     },
+    "integration:futures": {
+      "features": [
+        "alloc",
+        "async-await",
+        "async-await-macro",
+        "channel",
+        "executor",
+        "shared-state",
+        "sink",
+        "std",
+        "thread-pool",
+        "utilities"
+      ],
+      "subject": "futures",
+      "targets": {
+        "foundation-futures-contracts": [
+          "predicate_errors_preserve_later_items_and_error_values",
+          "predicate_errors_release_their_consumed_items_promptly",
+          "scan_hint_allows_the_callback_to_stop_early",
+          "scan_hint_includes_the_pending_callback_output",
+          "try_skip_while_terminates_after_a_predicate_error_and_eof",
+          "try_take_while_terminates_after_a_predicate_error_and_eof",
+          "zip_keeps_a_queued_item_until_its_partner_arrives",
+          "zip_reports_termination_when_left_ends",
+          "zip_reports_termination_when_right_ends"
+        ]
+      }
+    },
     "integration:futures-intrusive": {
       "features": [
         "alloc",
