@@ -219,10 +219,7 @@ fn authorize_read_rechecks_current_owner_and_account_for_every_open_handle_kind(
                 "UNAUTHORIZED",
             )
         } else {
-            (
-                AuthStore::unavailable(&temp.path().join("recovering-auth")),
-                "RECOVERY_REQUIRED",
-            )
+            (AuthStore::unavailable(), "RECOVERY_REQUIRED")
         };
         temp.auth.lock().unwrap().replace_authority(replacement);
         check_read_authorization(&mut client, &backend, &branch, &handles, Some(error));

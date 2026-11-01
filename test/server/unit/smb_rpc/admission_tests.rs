@@ -134,7 +134,7 @@ fn configured_samba_account_binds_the_current_single_authority_and_fails_closed_
     temp.auth
         .lock()
         .unwrap()
-        .replace_authority(AuthStore::unavailable(&temp.path().join("recovering")));
+        .replace_authority(AuthStore::unavailable());
     live.wire
         .send(
             &Request::<String>::Stat {

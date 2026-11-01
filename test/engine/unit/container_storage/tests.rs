@@ -1563,6 +1563,7 @@ fn existing_body_sync_io_failure_retains_its_cause() {
     assert_eq!(source.raw_os_error(), Some(5));
     assert_eq!(fs::read(target).unwrap(), b"verified existing body");
     assert_eq!(fs::read(directory.join("unrelated")).unwrap(), b"unrelated");
+    println!("\nZXS_EXISTING_BODY_SYNC_COMPLETE");
 }
 
 #[test]

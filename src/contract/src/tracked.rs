@@ -38,7 +38,7 @@ pub struct Tracked<T, K = String> {
 }
 pub type TrackedMap<T> = Tracked<BTreeMap<String, T>>;
 pub type TrackedRecords<T> = Tracked<SharedRecords<T>>;
-pub type TrackedOperations<T> = Tracked<BTreeMap<crate::OperationId, T>, crate::OperationId>;
+pub type TrackedOperations<T> = Tracked<SharedRecords<T, crate::OperationId>, crate::OperationId>;
 
 impl<T, K: Clone + Ord> Tracked<T, K> {
     pub fn new(value: T) -> Self {

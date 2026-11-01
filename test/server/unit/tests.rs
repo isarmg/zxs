@@ -1062,9 +1062,9 @@ async fn interrupted_upload_retains_durable_bytes_and_rejects_different_retry() 
     )
     .unwrap()
     .unwrap();
-    assert_eq!(record.persisted_bytes, 8);
+    assert_eq!(record.persisted_bytes(), 8);
     assert_eq!(
-        std::fs::read(root.path().join("api-spool").join(&record.data_file)).unwrap(),
+        std::fs::read(root.path().join("api-spool").join(record.data_file())).unwrap(),
         b"original"
     );
     let response = app
@@ -1089,8 +1089,8 @@ async fn interrupted_upload_retains_durable_bytes_and_rejects_different_retry() 
         )
         .unwrap()
         .unwrap()
-        .data_file,
-        record.data_file
+        .data_file(),
+        record.data_file()
     );
     let data_files = std::fs::read_dir(root.path().join("api-spool"))
         .unwrap()
@@ -1136,7 +1136,7 @@ async fn durable_retry_progress_appends_without_copying_the_same_generation() {
             .unwrap()
             .unwrap();
         assert_eq!(
-            std::fs::read(spool.join(current.data_file)).unwrap(),
+            std::fs::read(spool.join(current.data_file())).unwrap(),
             content.as_bytes()
         );
         assert_eq!(
@@ -1235,8 +1235,11 @@ async fn unpublished_retry_cleanup_covers_short_long_and_cancelled_bodies() {
     let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
         .unwrap()
         .unwrap();
-    assert_eq!(current.data_file, original.data_file);
-    assert_eq!(std::fs::read(spool.join(current.data_file)).unwrap(), bytes);
+    assert_eq!(current.data_file(), original.data_file());
+    assert_eq!(
+        std::fs::read(spool.join(current.data_file())).unwrap(),
+        bytes
+    );
 }
 
 #[tokio::test]
@@ -1272,13 +1275,13 @@ async fn successful_new_generation_preserves_old_bytes_and_retry_reuses_its_file
                 .unwrap(),
         );
         assert_eq!(
-            std::fs::read(spool.join(&records[0].data_file)).unwrap(),
+            std::fs::read(spool.join(records[0].data_file())).unwrap(),
             b"original"
         );
     }
-    assert_eq!(records[1].data_file, records[2].data_file);
+    assert_eq!(records[1].data_file(), records[2].data_file());
     assert_eq!(
-        std::fs::read(spool.join(&records[2].data_file)).unwrap(),
+        std::fs::read(spool.join(records[2].data_file())).unwrap(),
         b"replacement"
     );
     let retained = std::fs::read_dir(&spool)
@@ -1292,10 +1295,10 @@ async fn successful_new_generation_preserves_old_bytes_and_retry_reuses_its_file
         })
         .collect::<Vec<_>>();
     assert_eq!(retained.len(), 1);
-    let retained: uploads::UploadRecord =
+    let retained: uploads::PersistedUploadRecord =
         json_codec::from_slice(&std::fs::read(&retained[0]).unwrap()).unwrap();
     assert_eq!(retained.generation, 1);
-    assert_eq!(retained.data_file, records[0].data_file);
+    assert_eq!(retained.data_file, records[0].data_file());
 }
 
 #[test]
@@ -2014,7 +2017,7 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         )
         .unwrap()
         .unwrap()
-        .state,
+        .state(),
         crate::uploads::UploadState::Complete
     );
 }

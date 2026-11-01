@@ -1,5 +1,5 @@
 //! Owned descriptor snapshots and close/save ordering.
-use super::{Context, Open, authentication, bad, context, sdk};
+use super::{Context, Open, bad, context, sdk};
 
 type Request = RawRequest<storage_contract::OperationId>;
 use smb_protocol::{
@@ -48,16 +48,77 @@ pub(super) fn close_opened(
 pub(super) fn finish_open(
     context: &mut Context,
     opened: Open,
-    authorized: bool,
+    authorization: std::io::Result<()>,
 ) -> std::io::Result<i32> {
-    let remote = opened.info.handle;
-    close_opened(opened, |request| {
-        if authorized {
-            context.client.call(request).map(|_| ())
-        } else {
-            // Detach releases the handle without publishing after revocation.
-            context.client.call(Request::Detach { handle: remote })?;
-            Err(authentication::denied())
+    match authorization {
+        Ok(()) => close_opened(opened, |request| context.client.call(request).map(|_| ())),
+        Err(authentication) => {
+            let remote = opened.info.handle;
+            // Detach releases ownership without publishing. Keep authentication
+            // primary even if Detach, the I/O lock or local close also fails.
+            let cleanup = close_opened(opened, |_| {
+                context
+                    .client
+                    .call(Request::Detach { handle: remote })
+                    .map(|_| ())
+            });
+            match cleanup {
+                Ok(_) => Err(authentication),
+                Err(cleanup) => Err(cleanup_error(Err(authentication), cleanup)),
+            }
         }
-    })
+    }
 }
+
+pub(super) fn cleanup_error(
+    authorization: std::io::Result<()>,
+    cleanup: std::io::Error,
+) -> std::io::Error {
+    match authorization {
+        Ok(()) => cleanup,
+        Err(authentication) => std::io::Error::new(
+            authentication.kind(),
+            DeniedCleanup {
+                authentication,
+                cleanup,
+            },
+        ),
+    }
+}
+
+pub(super) fn error_errno(error: &std::io::Error) -> i32 {
+    match error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<DeniedCleanup>())
+    {
+        Some(failure) => smb_protocol::client::error_errno(&failure.authentication),
+        None => smb_protocol::client::error_errno(error),
+    }
+}
+
+/// The authentication failure remains primary; cleanup is additional evidence.
+#[derive(Debug)]
+struct DeniedCleanup {
+    authentication: std::io::Error,
+    cleanup: std::io::Error,
+}
+
+impl std::fmt::Display for DeniedCleanup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}; cleanup also failed: {}",
+            self.authentication, self.cleanup
+        )
+    }
+}
+
+impl std::error::Error for DeniedCleanup {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.authentication)
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../../test/smb-vfs/unit/module/descriptor_cleanup_tests.rs"]
+mod tests;

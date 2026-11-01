@@ -323,3 +323,132 @@ fn fresh_branch_is_not_returned_before_publication_and_recovery_replays_once() {
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
     }
 }
+
+#[test]
+fn failed_receipt_candidate_keeps_published_values_and_sibling_snapshot_isolated() {
+    let fixture = Fixture::new();
+    let mut engine = fixture.initialize();
+    let repo = repository(&mut engine, 3);
+    let old_id = *engine.state().operations.keys().next().unwrap();
+    let published = engine.state().clone();
+    let sibling = published.clone();
+    let before = canonical_json(&published).unwrap();
+    let rejected_id = OperationId::generate();
+    let result = engine.plan_mutation_digest(
+        "test.receipt-isolation",
+        "admin",
+        rejected_id,
+        json!({}),
+        None,
+        |_, next, _| {
+            // Exercise both map detachment and nested owned JSON mutation on
+            // a real planner candidate, then abandon it through the error path.
+            next.operations.get_mut(&old_id).unwrap().result["discarded"] =
+                json!({"nested": ["candidate only"]});
+            *next.operation_principals.get_mut(&old_id).unwrap() = "candidate only".into();
+            let mut receipt = next.operations[&old_id].clone();
+            receipt.operation_id = rejected_id;
+            next.operations.insert(rejected_id, receipt);
+            next.operation_principals
+                .insert(rejected_id, "candidate only".into());
+            Err(Error::new(
+                ErrorCode::StateInvalid,
+                "discard this candidate",
+            ))
+        },
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("the failed candidate must not become a plan"),
+    };
+    assert_eq!(error.code(), ErrorCode::StateInvalid);
+    assert_eq!(canonical_json(engine.state()).unwrap(), before);
+    assert_eq!(canonical_json(&published).unwrap(), before);
+    assert_eq!(canonical_json(&sibling).unwrap(), before);
+    assert!(!engine.state().operations.contains_key(&rejected_id));
+    assert!(
+        !engine
+            .state()
+            .operation_principals
+            .contains_key(&rejected_id)
+    );
+    // A subsequent real write must not inherit the abandoned receipt edits.
+    let source = engine.state().histories[&repo.history_tree_id]
+        .root_commit_id
+        .clone();
+    engine
+        .create_branch(
+            &source,
+            &BranchName::parse("after rejection").unwrap(),
+            "admin",
+            OperationId::generate(),
+        )
+        .unwrap();
+    assert_eq!(
+        engine.state().operations[&old_id],
+        published.operations[&old_id]
+    );
+    assert_eq!(engine.state().operation_principals[&old_id], "admin");
+    assert_eq!(canonical_json(&sibling).unwrap(), before);
+}
+
+#[test]
+fn old_branch_receipt_replays_after_later_writes_and_restart_without_new_events() {
+    let fixture = Fixture::new();
+    let mut engine = fixture.initialize();
+    let repo = repository(&mut engine, 3);
+    let source = engine.state().histories[&repo.history_tree_id]
+        .root_commit_id
+        .clone();
+    let name = BranchName::parse("original").unwrap();
+    let old_id = OperationId::generate();
+    let original = engine
+        .create_branch(&source, &name, "admin", old_id)
+        .unwrap();
+    let frozen = engine.state().clone();
+    let receipt = canonical_json(&frozen.operations[&old_id]).unwrap();
+    let count = frozen.operations.len();
+    for ordinal in 0..8 {
+        engine
+            .create_branch(
+                &source,
+                &BranchName::parse(&format!("later {ordinal}")).unwrap(),
+                "admin",
+                OperationId::generate(),
+            )
+            .unwrap();
+        assert_eq!(
+            canonical_json(&engine.state().operations[&old_id]).unwrap(),
+            receipt
+        );
+        assert!(std::ptr::eq(
+            &engine.state().operations[&old_id],
+            &frozen.operations[&old_id]
+        ));
+        assert!(std::ptr::eq(
+            &engine.state().operation_principals[&old_id],
+            &frozen.operation_principals[&old_id]
+        ));
+        assert_eq!(frozen.operations.len(), count);
+    }
+    assert_eq!(engine.state().operations.len(), count + 8);
+    for reopened in [false, true] {
+        if reopened {
+            drop(engine);
+            engine = Engine::open(&fixture.root).unwrap();
+        }
+        let before = canonical_json(engine.state()).unwrap();
+        assert_eq!(
+            engine
+                .create_branch(&source, &name, "admin", old_id)
+                .unwrap(),
+            original
+        );
+        assert_eq!(canonical_json(engine.state()).unwrap(), before);
+        assert_eq!(
+            canonical_json(&engine.state().operations[&old_id]).unwrap(),
+            receipt
+        );
+        assert_eq!(engine.state().operation_principals[&old_id], "admin");
+    }
+}

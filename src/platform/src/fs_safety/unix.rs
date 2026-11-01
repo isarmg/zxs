@@ -4,7 +4,7 @@ use super::{
     RelativePath, temporary_name,
 };
 use rustix::{
-    fd::{AsFd, OwnedFd},
+    fd::AsFd,
     fs::{
         AtFlags, FileType, Mode, OFlags, fstat, mkdirat, open, openat, renameat, statat, unlinkat,
     },
@@ -348,7 +348,15 @@ fn regular_single_link(fd: impl AsFd, path: &Path) -> Result<rustix::fs::Stat, E
     Ok(stat)
 }
 
-fn validate_destination(directory: &PrivateDirectory, name: &OsStr) -> Result<(), Error> {
+enum DestinationState {
+    Missing,
+    Existing,
+}
+
+fn validate_destination(
+    directory: &PrivateDirectory,
+    name: &OsStr,
+) -> Result<DestinationState, Error> {
     verify_administration(directory)?;
     match statat(&directory.directory, name, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(stat) => {
@@ -359,9 +367,9 @@ fn validate_destination(directory: &PrivateDirectory, name: &OsStr) -> Result<()
                 return Err(Error::MultipleLinks(name.into()));
             }
             validate_administrative_file(directory, &stat, Path::new(name))?;
-            Ok(())
+            Ok(DestinationState::Existing)
         }
-        Err(rustix::io::Errno::NOENT) => Ok(()),
+        Err(rustix::io::Errno::NOENT) => Ok(DestinationState::Missing),
         Err(error) => Err(io::Error::from(error).into()),
     }
 }
@@ -384,7 +392,7 @@ pub(super) fn atomic_create(
 
 struct StagingCleanup<'a> {
     directory: &'a File,
-    name: &'a str,
+    name: String,
     armed: bool,
 }
 impl StagingCleanup<'_> {
@@ -393,17 +401,189 @@ impl StagingCleanup<'_> {
             return Ok(());
         }
         self.armed = false;
-        match unlinkat(self.directory, self.name, AtFlags::empty()) {
+        match unlinkat(self.directory, self.name.as_str(), AtFlags::empty()) {
             Ok(()) | Err(rustix::io::Errno::NOENT) => Ok(()),
             Err(error) => Err(error.into()),
+        }
+    }
+    fn failed(&mut self, operation: Error) -> Error {
+        match self.cleanup() {
+            Ok(()) => operation,
+            Err(cleanup) => Error::Cleanup {
+                operation: Box::new(operation),
+                cleanup,
+            },
         }
     }
 }
 impl Drop for StagingCleanup<'_> {
     fn drop(&mut self) {
         if let Err(error) = self.cleanup() {
-            tracing::error!(%error, "atomic staging cleanup during unwind failed");
+            tracing::error!(%error, "atomic staging cleanup during unwind or cancellation failed");
         }
+    }
+}
+
+/// Exclusive, unpublished file owned by one held directory. Dropping cancels it.
+/// Only `prepare` can establish the file barrier required for publication.
+pub struct StagedAtomicFile<'a> {
+    directory: &'a PrivateDirectory,
+    destination: EntryName,
+    file: File,
+    cleanup: StagingCleanup<'a>,
+}
+
+/// Complete bytes whose file barrier has succeeded; publication consumes this owner.
+pub struct PreparedAtomicFile<'a> {
+    staged: StagedAtomicFile<'a>,
+    identity: rustix::fs::Stat,
+}
+
+/// Evidence about publication: not attempted, attempted with unknown outcome, or published.
+#[derive(Debug, error_definition::Error)]
+pub enum AtomicCommitError {
+    #[error("atomic publication did not occur: {0}")]
+    NotPublished(#[source] Error),
+    #[error("atomic publication outcome is unknown: {0}")]
+    Unknown(#[source] Error),
+    #[error("atomic publication occurred but could not be confirmed: {0}")]
+    Published(#[source] Error),
+}
+impl AtomicCommitError {
+    /// Discard phase information for callers using the original one-step API.
+    pub fn into_source(self) -> Error {
+        match self {
+            Self::NotPublished(error) | Self::Unknown(error) | Self::Published(error) => error,
+        }
+    }
+}
+
+pub(super) fn atomic_stage<'a>(
+    directory: &'a PrivateDirectory,
+    destination: &EntryName,
+) -> Result<StagedAtomicFile<'a>, Error> {
+    verify_administration(directory)?;
+    let temporary = temporary_name()?;
+    let fd = openat(
+        &directory.directory,
+        temporary.as_str(),
+        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    )
+    .map_err(io::Error::from)?;
+    Ok(StagedAtomicFile {
+        directory,
+        destination: destination.clone(),
+        file: File::from(fd),
+        cleanup: StagingCleanup {
+            directory: &directory.directory,
+            name: temporary,
+            armed: true,
+        },
+    })
+}
+
+impl<'a> StagedAtomicFile<'a> {
+    /// Write and synchronize the complete payload without changing the destination.
+    /// On failure, cleanup is attempted and its error retains the original source.
+    pub fn prepare(mut self, bytes: &[u8]) -> Result<PreparedAtomicFile<'a>, Error> {
+        let result = (|| {
+            if let Some((uid, gid)) = self.directory.administration_owner {
+                rustix::fs::fchown(
+                    &self.file,
+                    Some(rustix::process::Uid::from_raw(uid)),
+                    Some(rustix::process::Gid::from_raw(gid)),
+                )
+                .map_err(io::Error::from)?;
+            }
+            let identity = regular_single_link(&self.file, Path::new(&self.cleanup.name))?;
+            self.file.write_all(bytes)?;
+            self.file.sync_all()?;
+            Ok(identity)
+        })();
+        match result {
+            Ok(identity) => Ok(PreparedAtomicFile {
+                staged: self,
+                identity,
+            }),
+            Err(error) => Err(self.cleanup.failed(error)),
+        }
+    }
+}
+
+impl PreparedAtomicFile<'_> {
+    /// Publish without replacing an existing destination, then sync the held directory.
+    /// Success returns the exact published descriptor. Failure reports publication phase.
+    pub fn create(self) -> Result<File, AtomicCommitError> {
+        self.commit(true)
+    }
+    /// Replace the destination, then sync the held directory, retaining its descriptor.
+    /// This does not prove that a diagnostic directory path still names the held directory;
+    /// callers requiring that policy must call `PrivateDirectory::verify_identity`.
+    pub fn replace(self) -> Result<File, AtomicCommitError> {
+        self.commit(false)
+    }
+    fn commit(mut self, create_only: bool) -> Result<File, AtomicCommitError> {
+        let staged = &mut self.staged;
+        let directory = staged.directory;
+        let name = staged.destination.as_os_str();
+        let checked = (|| {
+            if matches!(
+                validate_destination(directory, name)?,
+                DestinationState::Existing
+            ) && create_only
+            {
+                return Err(Error::DestinationExists(name.into()));
+            }
+            // A split-phase caller may do other work before commit. Recheck the
+            // staging name for both publication modes, never publish a substitute.
+            regular_single_link(&staged.file, Path::new(&staged.cleanup.name))?;
+            let named = statat(
+                &directory.directory,
+                staged.cleanup.name.as_str(),
+                AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(io::Error::from)?;
+            if (self.identity.st_dev, self.identity.st_ino) != (named.st_dev, named.st_ino) {
+                return Err(Error::IdentityChanged(staged.cleanup.name.clone().into()));
+            }
+            Ok(())
+        })();
+        if let Err(error) = checked {
+            return Err(AtomicCommitError::NotPublished(
+                staged.cleanup.failed(error),
+            ));
+        }
+        // A filesystem can change the namespace yet report an error (e.g. an
+        // NFS RPC replay after server failure). Once attempted, neither errno
+        // nor a failed reply proves non-publication. Preserve staging evidence.
+        staged.cleanup.armed = false;
+        let renamed = if create_only {
+            rename_no_replace(directory, OsStr::new(&staged.cleanup.name), name)
+        } else {
+            renameat(
+                &directory.directory,
+                staged.cleanup.name.as_str(),
+                &directory.directory,
+                name,
+            )
+        };
+        renamed.map_err(|error| AtomicCommitError::Unknown(Error::Io(error.into())))?;
+        let result = (|| {
+            let named = statat(&directory.directory, name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
+            if (self.identity.st_dev, self.identity.st_ino) != (named.st_dev, named.st_ino) {
+                return Err(Error::IdentityChanged(
+                    staged.destination.as_path().to_path_buf(),
+                ));
+            }
+            directory
+                .directory
+                .sync_all()
+                .map_err(Error::PublishedDurabilityUnknown)
+        })();
+        result.map_err(AtomicCommitError::Published)?;
+        Ok(self.staged.file)
     }
 }
 
@@ -415,79 +595,24 @@ fn atomic_write(
 ) -> Result<File, Error> {
     let name = entry_name(destination)?;
     validate_destination(directory, name)?;
-    let temporary = temporary_name()?;
-    let fd: OwnedFd = openat(
-        &directory.directory,
-        temporary.as_str(),
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::from_raw_mode(0o600),
-    )
-    .map_err(io::Error::from)?;
-    let mut file = File::from(fd);
-    let mut cleanup = StagingCleanup {
-        directory: &directory.directory,
-        name: &temporary,
-        armed: true,
-    };
-    let result = (|| {
-        if let Some((uid, gid)) = directory.administration_owner {
-            // Only the exclusive new temporary descriptor is re-owned. The
-            // destination inode is never chowned, chmodded, or followed.
-            rustix::fs::fchown(
-                &file,
-                Some(rustix::process::Uid::from_raw(uid)),
-                Some(rustix::process::Gid::from_raw(gid)),
-            )
-            .map_err(io::Error::from)?;
-        }
-        let identity = regular_single_link(&file, Path::new(&temporary))?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        validate_destination(directory, name)?;
-        if create_only {
-            regular_single_link(&file, Path::new(&temporary))?;
-            let staged = statat(
-                &directory.directory,
-                temporary.as_str(),
-                AtFlags::SYMLINK_NOFOLLOW,
-            )
-            .map_err(io::Error::from)?;
-            if (identity.st_dev, identity.st_ino) != (staged.st_dev, staged.st_ino) {
-                return Err(Error::IdentityChanged(temporary.clone().into()));
-            }
-            // This exclusive staging descriptor has just completed its file barrier.
-            // Publish only; the shared tail verifies its inode and syncs the directory.
-            rename_no_replace(directory, OsStr::new(&temporary), name)?;
-        } else {
-            renameat(
-                &directory.directory,
-                temporary.as_str(),
-                &directory.directory,
-                name,
-            )
-            .map_err(io::Error::from)?;
-        }
-        cleanup.armed = false;
-        let published = statat(&directory.directory, name, AtFlags::SYMLINK_NOFOLLOW)
-            .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
-        if (identity.st_dev, identity.st_ino) != (published.st_dev, published.st_ino) {
-            return Err(Error::IdentityChanged(destination.as_path().to_path_buf()));
-        }
-        directory
-            .directory
-            .sync_all()
-            .map_err(Error::PublishedDurabilityUnknown)
-    })();
-    match result {
-        Ok(()) => Ok(file),
-        Err(operation) => match cleanup.cleanup() {
-            Ok(()) => Err(operation),
-            Err(cleanup) => Err(Error::Cleanup {
-                operation: Box::new(operation),
-                cleanup,
-            }),
-        },
+    let prepared = atomic_stage(directory, &EntryName::new(name)?)?.prepare(bytes)?;
+    if create_only {
+        prepared.create()
+    } else {
+        prepared.replace()
     }
+    .map_err(|error| match error {
+        // Keep the current one-step create API's collision category. The
+        // staged API (and AuthStore) still receives Unknown with the errno;
+        // this projection must never manufacture a NotPublished proof.
+        AtomicCommitError::Unknown(Error::Io(source))
+            if create_only
+                && source.raw_os_error() == Some(rustix::io::Errno::EXIST.raw_os_error()) =>
+        {
+            Error::DestinationExists(destination.as_path().to_path_buf())
+        }
+        other => other.into_source(),
+    })
 }
 
 pub(super) fn advisory_lock(
@@ -594,7 +719,13 @@ pub(super) fn no_clobber_publish(
     );
     let identity = regular_single_link(&file, Path::new(source))?;
     file.sync_all()?;
-    rename_no_replace(directory, source, destination)?;
+    rename_no_replace(directory, source, destination).map_err(|error| {
+        if error == rustix::io::Errno::EXIST {
+            Error::DestinationExists(destination.into())
+        } else {
+            Error::Io(error.into())
+        }
+    })?;
     let current = statat(&directory.directory, destination, AtFlags::SYMLINK_NOFOLLOW)
         .map_err(|error| Error::PublishedDurabilityUnknown(error.into()))?;
     if (identity.st_dev, identity.st_ino) != (current.st_dev, current.st_ino) {
@@ -612,7 +743,7 @@ fn rename_no_replace(
     directory: &PrivateDirectory,
     source: &OsStr,
     destination: &OsStr,
-) -> Result<(), Error> {
+) -> rustix::io::Result<()> {
     rustix::fs::renameat_with(
         &directory.directory,
         source,
@@ -620,13 +751,6 @@ fn rename_no_replace(
         destination,
         rustix::fs::RenameFlags::NOREPLACE,
     )
-    .map_err(|error| {
-        if error == rustix::io::Errno::EXIST {
-            Error::DestinationExists(destination.into())
-        } else {
-            io::Error::from(error).into()
-        }
-    })
 }
 
 /// DFS keeps at most 128 directory handles, independent of directory width.

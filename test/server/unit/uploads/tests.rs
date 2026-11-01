@@ -96,9 +96,7 @@ fn failed_atomic_staged_progress_retains_bytes_and_blocks_admission_until_invent
         path: "file".into(),
         generation: 1,
         logical_size: 9,
-        content_hash: Some(storage_contract::ContentHash::from_digest(blake3::hash(
-            b"new bytes",
-        ))),
+        content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"new bytes")),
         persisted_bytes: 9,
         persisted_hash: blake3::hash(b"new bytes").to_hex().to_string(),
         state: crate::uploads::UploadState::Incomplete,
@@ -145,7 +143,7 @@ fn interrupted_upload_retains_and_checks_its_persisted_prefix() {
         path: "file".into(),
         generation: 1,
         logical_size: 30,
-        content_hash: Some("0".repeat(64).parse().unwrap()),
+        content_hash: "0".repeat(64).parse().unwrap(),
         persisted_bytes: 16,
         persisted_hash: blake3::hash(b"original partial").to_hex().to_string(),
         state: crate::uploads::UploadState::Incomplete,
@@ -188,9 +186,7 @@ fn failed_atomic_progress_publication_cleans_up_its_temporary_file() {
         path: "file".into(),
         generation: 1,
         logical_size: 0,
-        content_hash: Some(storage_contract::ContentHash::from_digest(blake3::hash(
-            b"",
-        ))),
+        content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"")),
         persisted_bytes: 0,
         persisted_hash: blake3::hash(b"").to_hex().to_string(),
         state: crate::uploads::UploadState::Incomplete,
@@ -253,9 +249,7 @@ fn upload_progress_and_retry_prefix_reject_links_without_reading_targets() {
         path: "file".into(),
         generation: 1,
         logical_size: 8,
-        content_hash: Some(storage_contract::ContentHash::from_digest(blake3::hash(
-            b"original",
-        ))),
+        content_hash: storage_contract::ContentHash::from_digest(blake3::hash(b"original")),
         persisted_bytes: 8,
         persisted_hash: blake3::hash(b"original").to_hex().to_string(),
         state: crate::uploads::UploadState::Incomplete,
@@ -352,7 +346,7 @@ fn status_projects_each_durable_state_without_private_fields_or_payload_reads() 
         path: "private-path".into(),
         generation: u64::MAX,
         logical_size: u64::MAX,
-        content_hash: Some("0".repeat(64).parse().unwrap()),
+        content_hash: "0".repeat(64).parse().unwrap(),
         persisted_bytes: u64::MAX,
         persisted_hash: "1".repeat(64),
         state: UploadState::Incomplete,
@@ -421,4 +415,88 @@ fn claim_drop_releases_only_its_own_key() {
         *claims.lock().unwrap(),
         std::collections::BTreeSet::from(["other".into()])
     );
+}
+
+const EMPTY_UPLOAD_VECTOR: &[u8] = br#"{"workspace_id":"ws","item_id":"item","principal":"alice","path":"file","generation":"1","logical_size":"0","content_hash":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262","persisted_bytes":"0","persisted_hash":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262","state":"incomplete","data_file":"data"}"#;
+
+#[test]
+fn required_digest_recovery_preserves_fixed_empty_upload_json_vector() {
+    let root = private_tempdir();
+    let path = root.path().join(format!("{}.json", key("ws", "item")));
+    fs::write(&path, EMPTY_UPLOAD_VECTOR).unwrap();
+    let record = load(root.path(), "ws", "item").unwrap().unwrap();
+    assert_eq!(
+        record.content_hash(),
+        storage_contract::ContentHash::from_digest(blake3::hash(b""))
+    );
+    assert_eq!(record.logical_size(), 0);
+    assert_eq!(record.persisted_bytes(), 0);
+    persist(root.path(), &record).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), EMPTY_UPLOAD_VECTOR);
+    retain_generation(root.path(), &record).unwrap();
+    let retained = fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("retained-")
+        })
+        .unwrap();
+    assert_eq!(fs::read(retained).unwrap(), EMPTY_UPLOAD_VECTOR);
+}
+
+#[test]
+fn required_digest_recovery_preserves_fixed_interrupted_upload_json_vector() {
+    const PARTIAL: &[u8] = br#"{"workspace_id":"ws","item_id":"item","principal":"alice","path":"file","generation":"2","logical_size":"9","content_hash":"0000000000000000000000000000000000000000000000000000000000000000","persisted_bytes":"3","persisted_hash":"6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85","state":"incomplete","data_file":"data"}"#;
+    let root = private_tempdir();
+    let path = root.path().join(format!("{}.json", key("ws", "item")));
+    fs::write(&path, PARTIAL).unwrap();
+    fs::write(root.path().join("data"), b"abc").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(root.path().join("data"), fs::Permissions::from_mode(0o600)).unwrap();
+    let record = load(root.path(), "ws", "item").unwrap().unwrap();
+    assert_eq!(
+        record.persisted_hash(),
+        blake3::hash(b"abc").to_hex().as_str()
+    );
+    assert_eq!(record.generation(), 2);
+    assert_eq!(record.persisted_bytes(), 3);
+    let mut prefix = ExistingPrefix::open(root.path(), &record).unwrap().unwrap();
+    prefix.check(b"abc").unwrap();
+    assert!(prefix.complete());
+    persist(root.path(), &record).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), PARTIAL);
+}
+
+#[test]
+fn required_digest_recovery_rejects_missing_null_and_invalid_without_rewriting() {
+    let root = private_tempdir();
+    let path = root.path().join(format!("{}.json", key("ws", "item")));
+    fs::write(root.path().join("data"), b"evidence").unwrap();
+    for hash in [
+        None,
+        Some(json_codec::Value::Null),
+        Some(json_codec::json!("invalid")),
+    ] {
+        let mut value: json_codec::Value = json_codec::from_slice(EMPTY_UPLOAD_VECTOR).unwrap();
+        match hash {
+            None => {
+                value.as_object_mut().unwrap().remove("content_hash");
+            }
+            Some(hash) => {
+                value["content_hash"] = hash;
+            }
+        }
+        let bytes = json_codec::to_vec(&value).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        let error = load(root.path(), "ws", "item").unwrap_err();
+        assert_eq!(error.status, http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code, storage_contract::ErrorCode::UploadStateInvalid);
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read(root.path().join("data")).unwrap(), b"evidence");
+    }
 }

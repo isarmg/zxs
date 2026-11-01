@@ -14,7 +14,7 @@
 use data_serialization::Deserialize;
 use json_codec::Value;
 use smb_protocol::{
-    client::{Client, Mutation, WriteSequence, error_errno},
+    client::{Client, Mutation, WriteSequence},
     protocol::{
         AuthorizedMetadata, DirectoryPage, FileMtime, NamespaceOperation, OpenResult,
         Request as RawRequest, StatResult,
@@ -55,7 +55,7 @@ mod authentication;
 mod descriptors;
 mod directory_ownership;
 mod paths;
-use descriptors::{finish_open, snapshot};
+use descriptors::{error_errno, finish_open, snapshot};
 use paths::{at_name, name, text};
 
 struct Open {
@@ -668,12 +668,18 @@ unsafe extern "C" fn close(
     guarded(|| {
         // SAFETY: The owning host callback supplies a live handle; Context access stays on this
         // event-loop thread and does not escape the callback.
-        let authorized = unsafe { context(handle) }.is_ok();
+        let authorization = unsafe { context(handle) }.map(|_| ());
         // SAFETY: Release must remain possible after reauthentication/revocation.
         // This bypass only removes ownership; a failed check forces Detach below.
-        let context = unsafe { context_for_cleanup(handle) }?;
-        let opened = context.files.remove(&(fsp as usize)).ok_or_else(bad)?;
-        finish_open(context, opened, authorized)
+        let context = match unsafe { context_for_cleanup(handle) } {
+            Ok(context) => context,
+            Err(cleanup) => return Err(descriptors::cleanup_error(authorization, cleanup)),
+        };
+        let opened = match context.files.remove(&(fsp as usize)) {
+            Some(opened) => opened,
+            None => return Err(descriptors::cleanup_error(authorization, bad())),
+        };
+        finish_open(context, opened, authorization)
     })
 }
 
@@ -1154,11 +1160,14 @@ unsafe extern "C" fn closedir(
         // and skips CLOSE. Keep its Open available during enumeration, then
         // release that exact owner here rather than merely dropping the cursor.
         // SAFETY: The host handle remains live on its owning event loop.
-        let authorized = unsafe { context(handle) }.is_ok();
+        let authorization = unsafe { context(handle) }.map(|_| ());
         // SAFETY: Resource release must remain possible after identity revocation;
         // finish_open uses Detach instead of publishing when authorization fails.
-        let context = unsafe { context_for_cleanup(handle) }?;
-        let opened = directory_ownership::take_directory_open(
+        let context = match unsafe { context_for_cleanup(handle) } {
+            Ok(context) => context,
+            Err(cleanup) => return Err(descriptors::cleanup_error(authorization, cleanup)),
+        };
+        let opened = match directory_ownership::take_directory_open(
             &mut context.files,
             directory.owner,
             directory.handle,
@@ -1168,8 +1177,11 @@ unsafe extern "C" fn closedir(
                     opened.info.kind == NamespaceEntryKind::Directory,
                 )
             },
-        )?;
-        finish_open(context, opened, authorized)
+        ) {
+            Ok(opened) => opened,
+            Err(cleanup) => return Err(descriptors::cleanup_error(authorization, cleanup)),
+        };
+        finish_open(context, opened, authorization)
     })
 }
 

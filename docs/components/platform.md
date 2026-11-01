@@ -72,10 +72,32 @@ create-only 在发布前保留单链接检查及临时名称到持有 inode 的�
 单链接准入、文件同步、NOREPLACE、发布身份检查和目录同步。
 上述入口都只接受同一持有目录内的单个名称，不新增跨目录发布能力。
 
-rename 前失败保留原目标；内部临时文件由清理守卫回收，公共发布的 source
-由调用方拥有。rename 成功即解除临时清理；之后目录同步失败返回
+尝试 rename 之前的验证、写入及文件同步失败保留原目标，内部临时文件由
+清理守卫回收，公共发布的 source 由调用方拥有。开始尝试 rename 即解除自动
+临时清理：失败回复不证明命名空间没有改变，尚存在的暂存与目标作为证据保留。
+rename 成功之后目录同步失败返回
 `PublishedDurabilityUnknown` 并保留已发布目标，不伪称回滚。replace、权限、
 现存对象重试屏障、锁文件与祖先目录持久化协议不变。
+
+`AtomicFile::stage` 只建立同目录的独占暂存 owner；`StagedAtomicFile::prepare`
+写完整字节并完成文件同步后才返回 `PreparedAtomicFile`。后者的消费式
+`create` / `replace` 执行原发布与目录屏障，返回准确已发布 FD；
+`AtomicCommitError::{NotPublished, Unknown, Published}` 分别表示尚未尝试发布、
+已尝试但回复失败、已发布后验证或同步失败。无覆盖目标已经存在的明确检查
+在调用 rename 之前返回 `DestinationExists`；rename 自身返回的任何错误都属于
+`Unknown`，保留原 errno，不把 EEXIST/ENOENT 当作未发生证明。单步入口委托同一实现并保留原 `Error` API；不新增业务回调。
+认证库借此在文件同步后、目录项发布前提交既有权威备份，不重排屏障。
+现有单步 `AtomicFile::create` 仅在其 `Error` 适配处把竞态 EEXIST 保持为
+`DestinationExists` 分类；这不是 `NotPublished` 证明，也不影响 staged API 的
+`Unknown` 与原 errno。AuthStore直接消费staged结果，不经过这个投影。
+阶段 owner 在尚未尝试发布时放弃或失败，只清理持有目录中的临时名；
+`Unknown`/`Published` 不自动删除证据，目标不参与取消清理。
+此边界适用于用户选择的文件系统，不新增本地文件系统限制；
+[rename(2) 的 NFS 故障说明](https://www.man7.org/linux/man-pages/man2/rename.2.html#BUGS)
+明确指出失败回复可能发生在实际重命名之后。
+分阶段后 create/replace 都在提交处复核暂存名与已同步 FD 的 inode/单链接，
+不把准备前的名称证明当作永久有效。目录命名路径策略仍由调用方在发布边界
+调用 `verify_identity`；平台原子写本身始终绑定原目录而不追随路径替身。
 
 `AtomicFile::replace_held` 与 `replace` 复用相同原子写、清理及全部屏障，
 仅在成功后移交原来的只写文件描述符，而非关闭后按路径重新打开。
@@ -92,7 +114,7 @@ SMB 活动恢复记录用它绑定刚持久化的 inode；持有 FD 本身不证
 （不计创建祖先目录）；这不是端到端性能实测。故意仅在被删除的第二次同步
 注入 EIO 时，错误表现当然不再逐调用相同；耐久顺序仍为文件先于 rename、
 目录后于 rename。根测试 `test/platform/unit/fs_safety/atomic-io.sh` 接受已编译的
-platform-io libtest 二进制，隔离运行 create/replace/replace-held/public 的成功、写失败、
+platform-io libtest 二进制，隔离运行 create/replace/replace-held/staged-create/staged-replace/public 的成功、写失败、
 文件同步失败、真实发布冲突和目录同步失败；断言命名空间、源保全与清理。
 replace 的目录冲突由 rename 前类型检查拒绝，create/public 由 NOREPLACE 拒绝；
 这不冒称每种发布冲突都到达了 rename 系统调用。
@@ -135,3 +157,11 @@ CI入口 `.github/scripts/check-directory-retry.py` 从本次成功 Cargo JSON �
 跨挂载限制，不 chmod 或调整现存目录所有者。绝对链深度d为2d次同步；缺失
 组件复用原 `create_private_at` 的两屏障，不重复同步。
 `engine-path` 两场额外故障覆盖新祖先自身/父同步失败后深层导出路径重试。
+
+认证故障驱动还显式构建 `rustix/use-libc` 隔离测试产物，使 LD_PRELOAD 能调用
+真正的 renameat/renameat2 后再返回 EIO。创建/替换各覆盖调用前 EIO（保留已同步
+暂存）与成功后 EIO（目标已更新但回复失败）；检查 `Unknown`、原 errno 与证据。
+另在预检查后创建占位目标，再调用real renameat2获得真实EEXIST，分别验证
+单步create的现有错误分类与staged-create的Unknown阶段，并保留占位和暂存。
+该 libc 后端证据不冒充正常 direct-syscall 产物或真实 NFS/断电实测；正常后端
+屏障矩阵仍独立执行，生产后端与依赖特性没有更改。

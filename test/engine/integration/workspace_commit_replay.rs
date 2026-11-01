@@ -937,6 +937,7 @@ fn workspace_evidence_io_failure_is_not_absence_or_corrupt_mirror() {
         fs::remove_file(marker).unwrap();
         assert_eq!(fs::read(path).unwrap(), original);
     }
+    println!("\nZXS_WORKSPACE_READ_COMPLETE errno={errno}");
 }
 
 #[test]
@@ -967,4 +968,5 @@ fn unreadable_workspace_request_is_not_a_missing_mirror() {
     }
     assert!(denied, "permission source must survive: {error:?}");
     assert_eq!(fs::read(path).unwrap(), original);
+    println!("\nZXS_WORKSPACE_PERMISSION_COMPLETE");
 }

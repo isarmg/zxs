@@ -11,6 +11,8 @@ use std::{
 
 mod unix;
 
+pub use unix::{AtomicCommitError, PreparedAtomicFile, StagedAtomicFile};
+
 /// Whether a private payload must be newly created or already exist.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadOpenMode {
@@ -226,6 +228,16 @@ impl PrivateDirectory {
 pub struct AtomicFile;
 
 impl AtomicFile {
+    /// Create an exclusive unpublished staging owner anchored to this directory.
+    /// No destination is changed; `prepare` must synchronize its bytes before commit.
+    /// Unlike the one-step APIs, destination checks occur at commit, after preparation.
+    pub fn stage<'a>(
+        directory: &'a PrivateDirectory,
+        destination: &EntryName,
+    ) -> Result<StagedAtomicFile<'a>, Error> {
+        unix::atomic_stage(directory, destination)
+    }
+
     pub fn create(
         directory: &PrivateDirectory,
         destination: &EntryName,

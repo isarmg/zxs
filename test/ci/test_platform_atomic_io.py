@@ -72,17 +72,18 @@ class AtomicArtifactTests(unittest.TestCase):
                         f"print({result!r})\n"
                     )
                     binary.chmod(0o700)
-                    execution = subprocess.run(
-                        ["bash", str(ROOT / "test/platform/unit/fs_safety/atomic-io.sh"), str(binary)],
-                        env=dict(os.environ, PATH=f"{tools}{os.pathsep}{os.environ['PATH']}"),
-                        text=True, capture_output=True,
-                    )
-                    self.assertEqual(execution.returncode, 0 if succeeds else 1, execution.stderr)
-                    if succeeds:
-                        self.assertEqual(execution.stdout.count("Atomic I/O mode="), 19)
-                    else:
-                        self.assertIn("Missing exact ignored atomic I/O test" if not listed else
-                                      "Missing atomic I/O completion or single-test pass", execution.stderr)
+                    for suite in ("barriers", "rename"):
+                        execution = subprocess.run(
+                            ["bash", str(ROOT / "test/platform/unit/fs_safety/atomic-io.sh"), str(binary), suite],
+                            env=dict(os.environ, PATH=f"{tools}{os.pathsep}{os.environ['PATH']}"),
+                            text=True, capture_output=True,
+                        )
+                        self.assertEqual(execution.returncode, 0 if succeeds else 1, execution.stderr)
+                        if succeeds:
+                            self.assertEqual(execution.stdout.count("Atomic I/O mode="), 29 if suite == "barriers" else 6)
+                        else:
+                            self.assertIn("Missing exact ignored atomic I/O test" if not listed else
+                                          "Missing atomic I/O completion or single-test pass", execution.stderr)
 
 
 if __name__ == "__main__":

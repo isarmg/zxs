@@ -4117,7 +4117,26 @@ fn pending_operation_requires_a_trusted_decision_not_prepared_objects() {
                 )
                 .is_err()
         );
-        if fault == "after_accept_1" {
+        assert!(!engine.state.operations.contains_key(&operation));
+        assert!(!engine.state.operation_principals.contains_key(&operation));
+        if fault == "after_prepare_3" {
+            // Prepared objects alone are not an accepted decision. All members
+            // remain readable, so this is a trustworthy absence observation.
+            assert_eq!(
+                engine.operation(operation).unwrap_err().code(),
+                storage_contract::ErrorCode::OperationNotFound
+            );
+            assert_eq!(engine.operation_owner(operation).unwrap(), None);
+        } else {
+            let accepted = engine.operation(operation).unwrap();
+            assert_eq!(
+                accepted.commit_state,
+                storage_contract::CommitState::InDoubt
+            );
+            assert_eq!(
+                engine.operation_owner(operation).unwrap().as_deref(),
+                Some("admin")
+            );
             let disk = engine
                 .members()
                 .into_iter()
@@ -4129,13 +4148,44 @@ fn pending_operation_requires_a_trusted_decision_not_prepared_objects() {
                         .any(|(record, _)| record.record_type == RecordType::Accept)
                 })
                 .unwrap();
-            fs::write(disk.root.join("disk.json"), b"untrusted").unwrap();
+            let seal_path = disk.root.join("disk.json");
+            let seal = fs::read(&seal_path).unwrap();
+            fs::write(&seal_path, b"untrusted").unwrap();
+            // The only member carrying ACCEPT is no longer admissible. Neither
+            // a pending receipt nor its owner can be disclosed, but the healthy
+            // prepared replicas cannot prove the operation never existed.
+            for error in [
+                engine.operation(operation).unwrap_err(),
+                engine.operation_owner(operation).unwrap_err(),
+            ] {
+                use std::error::Error as _;
+                assert_eq!(
+                    error.code(),
+                    storage_contract::ErrorCode::DiskIdentityMismatch
+                );
+                assert!(error.message().contains(&disk.disk_id));
+                assert!(error.message().contains(&disk.slot_id));
+                let mut source = error.source();
+                let mut found_json = false;
+                while let Some(cause) = source {
+                    found_json |= cause.is::<json_codec::Error>();
+                    source = cause.source();
+                }
+                assert!(
+                    found_json,
+                    "unreadable decision evidence retains its JSON cause"
+                );
+            }
+            assert!(engine.blocked);
+            assert!(!engine.state.operations.contains_key(&operation));
+            assert!(!engine.state.operation_principals.contains_key(&operation));
+            fs::write(&seal_path, &seal).unwrap();
+            assert_eq!(engine.operation(operation).unwrap(), accepted);
+            assert_eq!(
+                engine.operation_owner(operation).unwrap().as_deref(),
+                Some("admin")
+            );
         }
-        assert_eq!(
-            engine.operation(operation).unwrap_err().code(),
-            storage_contract::ErrorCode::OperationNotFound
-        );
-        assert_eq!(engine.operation_owner(operation).unwrap(), None);
     }
 }
 

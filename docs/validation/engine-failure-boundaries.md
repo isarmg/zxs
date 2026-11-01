@@ -26,6 +26,13 @@
 
 ## 验证记录与入口
 
+持续 CI 入口为 `python3 .github/scripts/check-engine-fault-io.py`，由 `check.sh workspace` 调用。
+它从本次 Cargo JSON 选择唯一的引擎 libtest 与 `workspace_commit_replay` artifact，
+分别执行 errno 5、13、已有正文 fsync EIO 和真实权限测试；每次要求精确 ignored 测试存在、
+恰好一项通过及测试末尾完成标记，注入场景还要求目标夹具命中日志。真实权限场景直接在
+非 root runner 执行，内核权限探针必须失败；root 或 DAC 绕过不能跳过或记作通过。
+此入口不创建用户、不提权，也不改变宿主权限；仍不是坏盘或断电验收。
+
 本提交准备阶段实际通过：定向 Rust 1.99 rustfmt、`git diff --check`，测试专用 C 夹具 `cc -Wall -Wextra -Werror -fsyntax-only test/engine/integration/workspace_read_error.c`。
 
 准备提交时未执行 Rust 编译和测试；后续在 R16 集成树实际执行，见下文。静态检查不替代运行证据。

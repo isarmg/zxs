@@ -12,9 +12,16 @@ fixture="$(cd "$(dirname "$0")" && pwd)"
 temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
 cc -shared -fPIC -Wall -Wextra -Werror "$fixture/atomic_io.c" -ldl -o "$temporary/atomic-io.so"
-for mode in create replace replace-held public; do
-  for stage in success write file-sync publish directory-sync; do
+case "${2:-barriers}" in
+  barriers) modes=(create replace replace-held staged-create staged-replace public); stages=(success write file-sync publish directory-sync) ;;
+  rename) modes=(create staged-create staged-replace); stages=(rename-after rename-before create-race) ;;
+  *) echo "unknown atomic fault suite" >&2; exit 1 ;;
+esac
+for mode in "${modes[@]}"; do
+  for stage in "${stages[@]}"; do
     [[ "$mode:$stage" != public:write ]] || continue
+    [[ "$mode:$stage" != staged-replace:create-race ]] || continue
+    if [[ "${2:-barriers}" == rename && "$mode" == create && "$stage" != create-race ]]; then continue; fi
     root="$temporary/$mode-$stage"
     mkdir -m 700 "$root"
     echo "Atomic I/O mode=$mode stage=$stage"

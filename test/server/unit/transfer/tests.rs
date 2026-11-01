@@ -1467,7 +1467,7 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
             uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
                 .unwrap()
                 .unwrap()
-                .generation,
+                .generation(),
             1
         );
         drop(release);
@@ -1492,10 +1492,10 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
     let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000001")
         .unwrap()
         .unwrap();
-    assert_eq!(current.generation, 2);
-    assert_eq!(current.state, crate::uploads::UploadState::Complete);
-    assert_eq!(fs::read(spool.join(&current.data_file)).unwrap(), b"new");
-    assert_eq!(fs::read(spool.join(&previous.data_file)).unwrap(), b"old");
+    assert_eq!(current.generation(), 2);
+    assert_eq!(current.state(), crate::uploads::UploadState::Complete);
+    assert_eq!(fs::read(spool.join(current.data_file())).unwrap(), b"new");
+    assert_eq!(fs::read(spool.join(previous.data_file())).unwrap(), b"old");
     let retained = fs::read_dir(&spool)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -1507,11 +1507,11 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
         })
         .collect::<Vec<_>>();
     assert_eq!(retained.len(), 1);
-    let record: uploads::UploadRecord =
+    let record: uploads::PersistedUploadRecord =
         storage_contract::decode_strict(&fs::read(&retained[0]).unwrap()).unwrap();
     assert_eq!(
         json_codec::to_vec(&record).unwrap(),
-        json_codec::to_vec(&previous).unwrap()
+        json_codec::to_vec(&previous.persisted()).unwrap()
     );
 }
 
@@ -1693,7 +1693,7 @@ async fn fragmented_upload_checkpoints_before_pending_and_verifies_retry_tail() 
         loop {
             if let Some(record) =
                 uploads::load(&spool, "ws", "entry_00000000000000000000000000000009").unwrap()
-                && std::fs::metadata(spool.join(&record.data_file))
+                && std::fs::metadata(spool.join(record.data_file()))
                     .unwrap()
                     .len()
                     == 65 * 16384
@@ -1705,9 +1705,9 @@ async fn fragmented_upload_checkpoints_before_pending_and_verifies_retry_tail() 
     })
     .await
     .unwrap();
-    assert_eq!(record.persisted_bytes, 1048576);
+    assert_eq!(record.persisted_bytes(), 1048576);
     assert_eq!(
-        record.persisted_hash,
+        record.persisted_hash(),
         blake3::hash(&bytes[..1048576]).to_hex().as_str()
     );
     upload.abort();
@@ -1725,11 +1725,14 @@ async fn fragmented_upload_checkpoints_before_pending_and_verifies_retry_tail() 
     let current = uploads::load(&spool, "ws", "entry_00000000000000000000000000000009")
         .unwrap()
         .unwrap();
-    assert_eq!(current.generation, record.generation);
-    assert_eq!(current.content_hash, record.content_hash);
-    assert_eq!(current.data_file, record.data_file);
-    assert_eq!(current.persisted_bytes, bytes.len() as u64);
-    assert_eq!(std::fs::read(spool.join(current.data_file)).unwrap(), bytes);
+    assert_eq!(current.generation(), record.generation());
+    assert_eq!(current.content_hash(), record.content_hash());
+    assert_eq!(current.data_file(), record.data_file());
+    assert_eq!(current.persisted_bytes(), bytes.len() as u64);
+    assert_eq!(
+        std::fs::read(spool.join(current.data_file())).unwrap(),
+        bytes
+    );
 }
 
 // Explicit measurement: no timing assertion and no claim about network framing.
@@ -1775,7 +1778,10 @@ async fn upload_batching_ready_and_paced_measurement() {
             let elapsed = start.elapsed();
             assert_eq!(response.status(), StatusCode::OK);
             let record = uploads::load(&spool, "ws", &item).unwrap().unwrap();
-            assert_eq!(std::fs::read(spool.join(record.data_file)).unwrap(), bytes);
+            assert_eq!(
+                std::fs::read(spool.join(record.data_file())).unwrap(),
+                bytes
+            );
             println!(
                 "upload batching: paced={paced}, run={run}, bytes={}, elapsed_us={}",
                 bytes.len(),
@@ -1836,7 +1842,7 @@ fn published_upload_wire_preserves_large_integers_empty_ranges_and_sealed_manife
 }
 
 #[tokio::test]
-async fn typed_content_hash_header_rejects_noncanonical_values_before_staging() {
+async fn typed_upload_digest_rejects_invalid_headers_conflicts_and_mismatched_bytes() {
     use service_stack::ServiceExt;
     let root = crate::tests::private_tempdir();
     let mut auth =
@@ -1891,7 +1897,10 @@ async fn typed_content_hash_header_rejects_noncanonical_values_before_staging() 
         .header("x-zxs-content-hash", &hash)
         .body(Body::from("abc"))
         .unwrap();
-    assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        app.clone().oneshot(request).await.unwrap().status(),
+        StatusCode::OK
+    );
     let record = uploads::load(
         &spool,
         "ws_00000000000000000000000000000000",
@@ -1899,8 +1908,85 @@ async fn typed_content_hash_header_rejects_noncanonical_values_before_staging() 
     )
     .unwrap()
     .unwrap();
-    assert_eq!(record.content_hash.unwrap().to_string(), hash);
-    assert_eq!(std::fs::read(spool.join(record.data_file)).unwrap(), b"abc");
+    assert_eq!(record.content_hash().to_string(), hash);
+    assert_eq!(
+        std::fs::read(spool.join(record.data_file())).unwrap(),
+        b"abc"
+    );
+    for (generation, declared, body, expected_status, expected_code) in [
+        (
+            1,
+            blake3::hash(b"xyz"),
+            "abc",
+            StatusCode::CONFLICT,
+            Some("UPLOAD_GENERATION_CONFLICT"),
+        ),
+        (
+            2,
+            blake3::hash(b"abc"),
+            "xyz",
+            StatusCode::BAD_REQUEST,
+            Some("CHECKSUM_MISMATCH"),
+        ),
+        (3, blake3::hash(b""), "", StatusCode::OK, None),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(uri)
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("x-zxs-logical-size", body.len().to_string())
+                    .header("x-zxs-upload-generation", generation.to_string())
+                    .header("x-zxs-content-hash", declared.to_hex().as_str())
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected_status);
+        if let Some(code) = expected_code {
+            let bytes = http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            let error: json_codec::Value = json_codec::from_slice(&bytes).unwrap();
+            assert_eq!(error["error"]["code"], code);
+        }
+        let current = uploads::load(
+            &spool,
+            "ws_00000000000000000000000000000000",
+            "entry_00000000000000000000000000000000",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            std::fs::read(spool.join(record.data_file())).unwrap(),
+            b"abc"
+        );
+        if generation == 1 {
+            assert_eq!(current.content_hash(), record.content_hash());
+            assert_eq!(current.data_file(), record.data_file());
+        } else {
+            assert_eq!(
+                current.content_hash(),
+                storage_contract::ContentHash::from_digest(declared)
+            );
+            assert_eq!(current.generation(), generation);
+            assert_eq!(
+                current.state(),
+                if generation == 2 {
+                    uploads::UploadState::ChecksumMismatch
+                } else {
+                    uploads::UploadState::Complete
+                }
+            );
+            assert_eq!(
+                std::fs::read(spool.join(current.data_file())).unwrap(),
+                body.as_bytes()
+            );
+        }
+    }
 }
 
 #[test]

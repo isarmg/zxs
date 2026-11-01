@@ -621,7 +621,7 @@ fn atomic_io_barriers_and_failures() {
     let directory = PrivateDirectory::open_existing(&root).unwrap();
     let destination = EntryName::new("destination").unwrap();
     let source = RelativePath::new("source").unwrap();
-    let replaces = matches!(mode.as_str(), "replace" | "replace-held");
+    let replaces = matches!(mode.as_str(), "replace" | "replace-held" | "staged-replace");
     if replaces {
         fs::write(root.join("destination"), b"old").unwrap();
     } else if mode == "public" {
@@ -635,6 +635,29 @@ fn atomic_io_barriers_and_failures() {
         "replace-held" => {
             AtomicFile::replace_held(&directory, &destination.as_relative(), b"new").map(drop)
         }
+        "staged-create" | "staged-replace" => AtomicFile::stage(&directory, &destination)
+            .and_then(|staged| staged.prepare(b"new"))
+            .and_then(|prepared| {
+                let result = if replaces {
+                    prepared.replace()
+                } else {
+                    prepared.create()
+                };
+                if let Err(error) = &result {
+                    assert_eq!(
+                        matches!(error, AtomicCommitError::Published(_)),
+                        stage == "directory-sync"
+                    );
+                    assert_eq!(
+                        matches!(error, AtomicCommitError::Unknown(_)),
+                        matches!(
+                            stage.as_str(),
+                            "rename-before" | "rename-after" | "create-race"
+                        )
+                    );
+                }
+                result.map(drop).map_err(AtomicCommitError::into_source)
+            }),
         "public" => NoClobberPublish::publish(&directory, &source, &destination.as_relative()),
         _ => panic!("unknown test mode"),
     };
@@ -677,6 +700,37 @@ fn atomic_io_barriers_and_failures() {
                 assert!(!root.join("destination").exists());
             }
         }
+        "create-race" => {
+            assert_eq!(events, "file-sync\nrename-race-eexist\n");
+            if mode == "create" {
+                assert!(
+                    matches!(result, Err(Error::DestinationExists(ref path)) if path == Path::new("destination"))
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(Error::Io(ref error)) if error.raw_os_error() == Some(17))
+                );
+            }
+            assert_eq!(fs::read(root.join("destination")).unwrap(), b"occupant");
+        }
+        "rename-before" | "rename-after" => {
+            assert!(matches!(result, Err(Error::Io(ref error)) if error.raw_os_error() == Some(5)));
+            assert_eq!(
+                events,
+                if stage == "rename-after" {
+                    "file-sync\nrename-success-reported-eio\n"
+                } else {
+                    "file-sync\nrename-before-eio\n"
+                }
+            );
+            if stage == "rename-after" {
+                assert_eq!(fs::read(root.join("destination")).unwrap(), b"new");
+            } else if replaces {
+                assert_eq!(fs::read(root.join("destination")).unwrap(), b"old");
+            } else {
+                assert!(!root.join("destination").exists());
+            }
+        }
         "publish" => {
             assert_eq!(events, "file-sync\n");
             if replaces {
@@ -695,13 +749,23 @@ fn atomic_io_barriers_and_failures() {
         assert_eq!(fs::read(root.join("source")).unwrap(), b"new");
     }
     assert!(root.is_dir());
-    assert!(fs::read_dir(&root).unwrap().all(|entry| {
-        !entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".state-atomic-")
-    }));
+    let staging: Vec<_> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".state-atomic-")
+        })
+        .collect();
+    assert_eq!(
+        staging.len(),
+        usize::from(matches!(stage.as_str(), "rename-before" | "create-race"))
+    );
+    if let Some(path) = staging.first() {
+        assert_eq!(fs::read(path).unwrap(), b"new");
+    }
     println!("\nZXS_ATOMIC_IO_COMPLETE mode={mode} stage={stage}");
 }
 
@@ -829,4 +893,42 @@ fn recursive_create_preserves_existing_ancestor_admission() {
     assert!(PrivateDirectory::create_all("/").is_err());
     assert!(PrivateDirectory::create_all(root.path().join("uncreated/../escape")).is_err());
     assert!(!root.path().join("uncreated").exists());
+}
+
+#[test]
+fn staged_atomic_owner_cancels_and_publishes_only_into_held_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("private");
+    let moved = temp.path().join("moved");
+    let directory = PrivateDirectory::create(&root).unwrap();
+    let name = EntryName::new("record").unwrap();
+    drop(AtomicFile::stage(&directory, &name).unwrap());
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    let prepared = AtomicFile::stage(&directory, &name)
+        .unwrap()
+        .prepare(b"new")
+        .unwrap();
+    assert!(!root.join("record").exists());
+    drop(prepared);
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    let prepared = AtomicFile::stage(&directory, &name)
+        .unwrap()
+        .prepare(b"new")
+        .unwrap();
+    fs::rename(&root, &moved).unwrap();
+    let replacement = PrivateDirectory::create(&root).unwrap();
+    AtomicFile::create(&replacement, &name, b"replacement").unwrap();
+    prepared.create().unwrap();
+    assert_eq!(fs::read(moved.join("record")).unwrap(), b"new");
+    assert_eq!(fs::read(root.join("record")).unwrap(), b"replacement");
+    let prepared = AtomicFile::stage(&directory, &name)
+        .unwrap()
+        .prepare(b"update")
+        .unwrap();
+    assert!(matches!(
+        prepared.create(),
+        Err(AtomicCommitError::NotPublished(Error::DestinationExists(_)))
+    ));
+    assert_eq!(fs::read(moved.join("record")).unwrap(), b"new");
+    assert_eq!(fs::read_dir(&moved).unwrap().count(), 1);
 }

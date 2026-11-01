@@ -24,6 +24,7 @@ ssize_t read(int fd, void *buffer, size_t count) {
             if (access(path, F_OK) == 0) {
                 int failure = atoi(requested);
                 if (failure == EIO || failure == EACCES) {
+                    fprintf(stderr, "\nZXS_TEST_WORKSPACE_READ errno=%d %s\n", failure, path);
                     errno = failure;
                     return -1;
                 }

@@ -162,9 +162,12 @@ tmp=$(mktemp -d)
 cc -Wall -Wextra -Werror -shared -fPIC \
   test/engine/unit/container_storage/fsync_eio.c -ldl -o "$tmp/fsync-eio.so"
 env LD_PRELOAD="$tmp/fsync-eio.so" "$ENGINE_TEST_BINARY" \
-  existing_body_sync_io_failure_retains_its_cause --ignored --nocapture --test-threads=1
+  container_storage::tests::existing_body_sync_io_failure_retains_its_cause \
+  --ignored --exact --nocapture --test-threads=1
 ```
 
+持续 CI 由 `check.sh workspace` 调用 `.github/scripts/check-engine-fault-io.py`，
+使用本次 Cargo JSON 的唯一 libtest，要求精确测试、fsync 注入命中日志、完成标记和恰好一项通过。
 测试要求保留真实 errno/source、正文和无关文件原字节，并先成功同步父目录及无关文件。
 这是用户态 syscall 故障注入，不是物理盘故障或掉电证明；未使用 ptrace 或提权。
 

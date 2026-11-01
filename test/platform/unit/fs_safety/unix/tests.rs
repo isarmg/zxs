@@ -277,7 +277,7 @@ fn staging_cleanup_reports_failure_and_disarms_before_drop() {
     std::fs::create_dir(root.path().join("staged")).unwrap();
     let mut cleanup = StagingCleanup {
         directory: &directory,
-        name: "staged",
+        name: "staged".into(),
         armed: true,
     };
     assert_eq!(

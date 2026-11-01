@@ -95,7 +95,9 @@ fn oversized_keys_and_bulk_mutation_have_bounded_tracking() {
 #[test]
 fn operation_map_insert_tracks_change_without_string_keys() {
     let id = crate::OperationId::generate();
-    let before = TrackedOperations::new(BTreeMap::from([(id, "owner".to_owned())]));
+    let before = [(id, "owner".to_owned())]
+        .into_iter()
+        .collect::<TrackedOperations<_>>();
     let mut next = before.clone();
     next.begin_tracking();
     assert!(next.changes_since(&before).is_empty());
@@ -142,8 +144,8 @@ fn operation_write_sets_are_typed_bounded_and_branch_isolated() {
     let encoded = crate::canonical_json(&branch).unwrap();
     let decoded: TrackedOperations<String> = json_codec::from_slice(&encoded).unwrap();
     assert_eq!(decoded.changes_since(&before), MapChanges::All);
-    let escaped: &mut BTreeMap<crate::OperationId, String> = &mut branch;
-    escaped.retain(|_, _| false);
+    let escaped: &mut SharedRecords<String, crate::OperationId> = &mut branch;
+    escaped.remove_discard(&id);
     assert_eq!(branch.changes_since(&before), MapChanges::All);
     next.begin_tracking();
     assert_eq!(next.changes_since(&before), MapChanges::All);
@@ -266,4 +268,99 @@ fn every_mutable_map_escape_detaches_and_preserves_retained_snapshot() {
     }
     let owned: BTreeMap<_, _> = before.clone().into_iter().collect();
     assert_eq!(&owned, &*before);
+}
+
+#[test]
+fn operation_insert_shares_old_payloads_and_only_selected_mutation_clones() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Debug)]
+    struct Counted {
+        payload: json_codec::Value,
+        clones: Arc<AtomicUsize>,
+    }
+    impl Clone for Counted {
+        fn clone(&self) -> Self {
+            self.clones.fetch_add(1, Ordering::Relaxed);
+            Self {
+                payload: self.payload.clone(),
+                clones: Arc::clone(&self.clones),
+            }
+        }
+    }
+    let clones = Arc::new(AtomicUsize::new(0));
+    let value = || Counted {
+        payload: json_codec::json!({"nested": [{"payload": "x".repeat(4096)}]}),
+        clones: Arc::clone(&clones),
+    };
+    let id = |n| {
+        format!("op_{n:032x}")
+            .parse::<crate::OperationId>()
+            .unwrap()
+    };
+    // Control reproduces the former owned-value map on the same bounded input.
+    {
+        let control = Tracked::<_, crate::OperationId>::new(
+            (0..1024)
+                .map(|n| (id(n), value()))
+                .collect::<BTreeMap<_, _>>(),
+        );
+        let mut candidate = control.clone();
+        candidate.begin_tracking();
+        candidate.insert(id(1024), value());
+        assert_eq!(clones.load(Ordering::Relaxed), 1024);
+    }
+    clones.store(0, Ordering::Relaxed);
+    let before: TrackedOperations<_> = (0..1024).map(|n| (id(n), value())).collect();
+    let mut next = before.clone();
+    next.begin_tracking();
+    next.insert(id(1024), value());
+    assert_eq!(clones.load(Ordering::Relaxed), 0);
+    assert!(!next.shares_storage_with(&before));
+    for (key, old) in before.iter() {
+        assert!(std::ptr::eq(old, next.get(key).unwrap()));
+    }
+    assert_eq!(
+        next.changes_since(&before),
+        MapChanges::Keys(Arc::new(BTreeSet::from([id(1024)])))
+    );
+    // Mutable escape is conservative, but still copies only the touched value.
+    next.get_mut(&id(0)).unwrap().payload["nested"] = json_codec::json!([]);
+    assert_eq!(clones.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        before[&id(0)].payload["nested"][0]["payload"]
+            .as_str()
+            .unwrap()
+            .len(),
+        4096
+    );
+    drop(next);
+    assert_eq!(before.len(), 1024);
+    assert_eq!(clones.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn operation_receipt_bytes_and_owned_results_survive_discarded_candidates() {
+    const BYTES: &[u8] = br#"{"op_00000000000000000000000000000001":{"branch_id":null,"commit_id":null,"commit_state":"PUBLISHED","current_health":"HEALTHY","history_tree_id":null,"kind":"test.receipt","operation_id":"op_00000000000000000000000000000001","protection_at_publish":"NOT_APPLICABLE","request_digest":"fixed-digest","result":{"nested":[{"answer":"original"}]},"sequence":"7"}}"#;
+    let before: TrackedOperations<crate::OperationResult> = json_codec::from_slice(BYTES).unwrap();
+    let id: crate::OperationId = "op_00000000000000000000000000000001".parse().unwrap();
+    let plain: BTreeMap<crate::OperationId, crate::OperationResult> =
+        json_codec::from_slice(BYTES).unwrap();
+    assert_eq!(crate::canonical_json(&before).unwrap(), BYTES);
+    assert_eq!(
+        crate::object_hash("state-page", &before).unwrap(),
+        crate::object_hash("state-page", &plain).unwrap()
+    );
+    let mut owned_result = before[&id].clone();
+    owned_result.result["nested"][0]["answer"] = json_codec::json!("owned reply");
+    let failure: Result<(), &'static str> = {
+        let mut candidate = before.clone();
+        candidate.begin_tracking();
+        candidate.get_mut(&id).unwrap().result["nested"][0]["answer"] =
+            json_codec::json!("unpublished");
+        assert_eq!(candidate[&id].result["nested"][0]["answer"], "unpublished");
+        Err("candidate rejected")
+    };
+    assert_eq!(failure, Err("candidate rejected"));
+    assert_eq!(crate::canonical_json(&before).unwrap(), BYTES);
+    assert_eq!(before[&id], plain[&id]);
 }

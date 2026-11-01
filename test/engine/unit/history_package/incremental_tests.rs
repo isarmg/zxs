@@ -207,8 +207,8 @@ fn selection_retarget_alias_sources_and_shared_directory_membership_are_exact() 
 fn independent_fields_are_ignored_and_unknown_lineage_falls_back() {
     let before = fixture();
     let mut next = fork(&before);
-    next.operations.clear();
-    next.operation_principals.clear();
+    next.operations = Default::default();
+    next.operation_principals = Default::default();
     next.plans.clear();
     next.events.clear();
     next.control_auth = Some(json!({"changed":true}));
@@ -253,7 +253,7 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let mut next = fork(&before);
     next.sequence += 1;
-    next.operations.clear();
+    next.operations = Default::default();
     let (actual, objects) =
         prepare_history_manifests_incremental(&before, &next, &roots, &config.disks, MAX_METADATA)
             .unwrap();

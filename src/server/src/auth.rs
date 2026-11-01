@@ -3,12 +3,13 @@
 use crate::ApiError;
 use authentication as primitives;
 use data_serialization::{Deserialize, Serialize};
-use platform_io::fs_safety::{AdvisoryLock, EntryName, PrivateDirectory, RelativePath};
+use platform_io::fs_safety::{
+    AdvisoryLock, AtomicCommitError, AtomicFile, EntryName, PrivateDirectory, RelativePath,
+};
 use std::{
     collections::BTreeMap,
-    fs::{self, OpenOptions},
-    io::Write,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    fs,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{
         Arc, RwLock, Weak,
@@ -183,7 +184,8 @@ pub struct LoginResult {
 pub type BackupHook = Arc<dyn Fn(json_codec::Value) -> Result<(), ApiError> + Send + Sync>;
 
 pub struct AuthStore {
-    path: PathBuf,
+    directory: Option<PrivateDirectory>,
+    name: EntryName,
     // An unavailable control plane has no credential authority, not a dummy account.
     // Writer-owned candidate; never exposed through AuthReader before persistence.
     db: Option<Database>,
@@ -430,19 +432,30 @@ fn private_directory(root: &Path) -> Result<PrivateDirectory, ApiError> {
     PrivateDirectory::open_trusted(root).map_err(ApiError::invalid_source)
 }
 
-fn read_credentials(path: &Path) -> Result<Vec<u8>, ApiError> {
-    let directory = private_directory(
-        path.parent()
-            .ok_or_else(|| ApiError::invalid("missing credential parent"))?,
-    )?;
-    let name = EntryName::new(
-        path.file_name()
-            .ok_or_else(|| ApiError::invalid("missing credential name"))?,
-    )
-    .map_err(ApiError::invalid_source)?;
+fn read_credentials(directory: &PrivateDirectory, name: &EntryName) -> Result<Vec<u8>, ApiError> {
     directory
-        .read_bounded(&name, MAX_STORE_BYTES)
+        .read_bounded(name, MAX_STORE_BYTES)
         .map_err(ApiError::invalid_source)
+}
+
+fn credential_name(management: bool) -> EntryName {
+    EntryName::new(if management {
+        "management-auth.json"
+    } else {
+        "auth.json"
+    })
+    .expect("invariant: static credential filename is valid")
+}
+
+// Filesystem publication failures are server-side storage errors, not malformed
+// HTTP input. Keep the platform phase/source chain for diagnostics.
+fn credential_publication_error(source: platform_io::fs_safety::Error) -> ApiError {
+    ApiError::new(
+        ::http::StatusCode::INTERNAL_SERVER_ERROR,
+        storage_contract::ErrorCode::IoError,
+        "local credential publication failed",
+    )
+    .with_source(source)
 }
 
 fn require_available(blocked: &AtomicBool) -> Result<(), ApiError> {
@@ -537,9 +550,8 @@ impl AuthStore {
             caller,
         )
     }
-    fn acquire_lock(root: &Path) -> Result<AdvisoryLock, ApiError> {
-        let directory = private_directory(root)?;
-        AdvisoryLock::acquire(&directory, &RelativePath::new("auth.lock").expect("invariant: static credential lock filename is valid"))
+    fn acquire_lock(directory: &PrivateDirectory) -> Result<AdvisoryLock, ApiError> {
+        AdvisoryLock::acquire(directory, &RelativePath::new("auth.lock").expect("invariant: static credential lock filename is valid"))
             .map_err(|error| match error {
                 source @ platform_io::fs_safety::Error::AlreadyLocked(_) => ApiError::conflict(
                     storage_contract::ErrorCode::AuthStoreBusy,
@@ -568,19 +580,16 @@ impl AuthStore {
     ) -> Result<Self, ApiError> {
         let root = absolute_root(root)?;
         let root = root.as_path();
-        let path = root.join(if management {
-            "management-auth.json"
-        } else {
-            "auth.json"
-        });
+        let name = credential_name(management);
+        let path = root.join(name.as_path());
         if path.symlink_metadata().is_ok() {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::AuthAlreadyInitialized,
                 "credentials already exist",
             ));
         }
-        PrivateDirectory::create_trusted(absolute_root(root)?).map_err(ApiError::invalid_source)?;
-        let auth_lock = Self::acquire_lock(root)?;
+        let directory = PrivateDirectory::create_trusted(root).map_err(ApiError::invalid_source)?;
+        let auth_lock = Self::acquire_lock(&directory)?;
         let username = primitives::normalize_administrator_username(username)
             .map_err(ApiError::invalid_source)?;
         let hash = primitives::hash_password(password).map_err(ApiError::invalid_source)?;
@@ -593,7 +602,8 @@ impl AuthStore {
             sessions: BTreeMap::new(),
         };
         let store = Self {
-            path,
+            directory: Some(directory),
+            name,
             db: Some(db),
             _lock: Some(auth_lock),
             local_authority: management,
@@ -636,12 +646,10 @@ impl AuthStore {
     ) -> Result<Self, ApiError> {
         let root = absolute_root(root)?;
         let root = root.as_path();
-        let auth_lock = Self::acquire_lock(root)?;
-        let path = root.join(if management {
-            "management-auth.json"
-        } else {
-            "auth.json"
-        });
+        let directory = private_directory(root)?;
+        let auth_lock = Self::acquire_lock(&directory)?;
+        let name = credential_name(management);
+        let path = root.join(name.as_path());
         let local = match fs::symlink_metadata(&path) {
             Ok(metadata) => {
                 if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -661,12 +669,15 @@ impl AuthStore {
                     if metadata.len() > MAX_STORE_BYTES as u64 {
                         return Err(ApiError::invalid("credential store exceeds limit"));
                     }
-                    Some(read_credentials(&path)?)
+                    Some(read_credentials(&directory, &name)?)
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(ApiError::io(error)),
         };
+        directory
+            .verify_identity()
+            .map_err(ApiError::invalid_source)?;
         let restore = authoritative.is_some();
         let snapshot = match authoritative {
             Some(snapshot) => snapshot,
@@ -681,7 +692,8 @@ impl AuthStore {
         };
         let db = Database::from_snapshot(&snapshot)?;
         let store = Self {
-            path,
+            directory: Some(directory),
+            name,
             db: Some(db),
             _lock: Some(auth_lock),
             local_authority: management,
@@ -711,65 +723,70 @@ impl AuthStore {
                 "credential store exceeds serialized byte limit",
             ));
         }
-        let temporary = self.path.with_extension(format!(
-            "tmp-{}",
-            primitives::random_token().map_err(ApiError::invalid_source)?
-        ));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true).mode(0o600);
-        let mut file = options.open(&temporary).map_err(ApiError::io)?;
-        let mut local_published = false;
+        let directory = self
+            .directory
+            .as_ref()
+            .expect("invariant: initialized credentials retain their locked directory");
+        directory
+            .verify_identity()
+            .map_err(credential_publication_error)?;
+        // Keep staging acquisition separate from file preparation: the former
+        // has no uncertain write outcome and must not fence existing sessions.
+        let staged =
+            AtomicFile::stage(directory, &self.name).map_err(credential_publication_error)?;
+        let mut publication_uncertain = false;
         let result = (|| {
-            file.write_all(&bytes).map_err(ApiError::io)?;
-            file.sync_all().map_err(ApiError::io)?;
+            let prepared = staged
+                .prepare(&bytes)
+                .map_err(credential_publication_error)?;
             if !self.local_authority
                 && let Some(backup) = &self.backup
                 && let Err(error) = backup(self.snapshot()?)
             {
-                // Admission rejected before any decision or auth publication.
-                if error.code != storage_contract::ErrorCode::CommitPreparationBusy {
-                    self.blocked.store(true, Ordering::SeqCst);
-                }
                 return Err(error);
             }
-            if initial {
-                fs::hard_link(&temporary, &self.path).map_err(|source| {
-                    if source.kind() == std::io::ErrorKind::AlreadyExists {
-                        ApiError::conflict(
-                            storage_contract::ErrorCode::AuthAlreadyInitialized,
-                            "credentials already exist",
-                        )
-                        .with_source(source)
-                    } else {
-                        ApiError::io(source)
-                    }
-                })?;
-                local_published = true;
-                fs::remove_file(&temporary).map_err(ApiError::io)?;
+            // The backup may block or run application work. Revalidate at the
+            // publication boundary, while all actual I/O stays descriptor-relative.
+            directory
+                .verify_identity()
+                .map_err(credential_publication_error)?;
+            let committed = if initial {
+                prepared.create()
             } else {
-                fs::rename(&temporary, &self.path).map_err(ApiError::io)?;
-                local_published = true;
-            }
-            fs::File::open(self.path.parent().unwrap())
-                .and_then(|dir| dir.sync_all())
-                .map_err(ApiError::io)?;
-            Ok(())
+                prepared.replace()
+            };
+            committed.map(drop).map_err(|error| {
+                publication_uncertain = matches!(
+                    error,
+                    AtomicCommitError::Unknown(_) | AtomicCommitError::Published(_)
+                );
+                let known_collision = matches!(
+                    error,
+                    AtomicCommitError::NotPublished(
+                        platform_io::fs_safety::Error::DestinationExists(_)
+                    )
+                );
+                let source = error.into_source();
+                if initial && known_collision {
+                    ApiError::conflict(
+                        storage_contract::ErrorCode::AuthAlreadyInitialized,
+                        "credentials already exist",
+                    )
+                    .with_source(source)
+                } else {
+                    credential_publication_error(source)
+                }
+            })
         })();
-        if result.is_err() {
-            if local_published
+        if result.is_err()
+            && (publication_uncertain
                 || self.local_authority
                 || self.backup.is_some()
                     && result.as_ref().err().is_none_or(|error| {
                         error.code != storage_contract::ErrorCode::CommitPreparationBusy
-                    })
-            {
-                self.blocked.store(true, Ordering::SeqCst);
-            }
-            match fs::remove_file(temporary) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => tracing::warn!(error = ?error, "credential staging cleanup failed"),
-            }
+                    }))
+        {
+            self.blocked.store(true, Ordering::SeqCst);
         }
         if result.is_ok() {
             self.publish_committed();
@@ -790,9 +807,10 @@ impl AuthStore {
         self.db.is_some() && !self.blocked.load(Ordering::SeqCst)
     }
     #[cfg(feature = "core")]
-    pub(crate) fn unavailable(root: &Path) -> Self {
+    pub(crate) fn unavailable() -> Self {
         Self {
-            path: root.join("management-auth.json"),
+            directory: None,
+            name: credential_name(true),
             db: None,
             _lock: None,
             local_authority: true,

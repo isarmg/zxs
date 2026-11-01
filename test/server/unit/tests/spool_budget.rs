@@ -177,7 +177,10 @@ async fn interrupted_and_checksum_failed_bytes_remain_charged_after_restart() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(record.state, crate::uploads::UploadState::ChecksumMismatch);
+    assert_eq!(
+        record.state(),
+        crate::uploads::UploadState::ChecksumMismatch
+    );
     drop(app);
     let app = restart(root.path(), limit);
     let response = app
@@ -194,7 +197,7 @@ async fn interrupted_and_checksum_failed_bytes_remain_charged_after_restart() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(data_count(root.path()), 2);
     assert_eq!(
-        std::fs::read(root.path().join("api-spool").join(record.data_file)).unwrap(),
+        std::fs::read(root.path().join("api-spool").join(record.data_file())).unwrap(),
         b"wrong"
     );
 }
@@ -229,7 +232,7 @@ async fn cancellation_settles_actual_unknown_tail_and_retry_never_overwrites_it(
                 "entry_00000000000000000000000000000001",
             )
             .unwrap()
-                && std::fs::metadata(root.path().join("api-spool").join(&record.data_file))
+                && std::fs::metadata(root.path().join("api-spool").join(record.data_file()))
                     .unwrap()
                     .len()
                     == 3
@@ -242,7 +245,8 @@ async fn cancellation_settles_actual_unknown_tail_and_retry_never_overwrites_it(
     .await
     .unwrap();
     assert_eq!(
-        record.persisted_bytes, 0,
+        record.persisted_bytes(),
+        0,
         "small tail has not been declared durable"
     );
     let response = app
@@ -292,7 +296,7 @@ async fn cancellation_settles_actual_unknown_tail_and_retry_never_overwrites_it(
     .await
     .unwrap();
     assert_eq!(
-        std::fs::read(root.path().join("api-spool").join(&record.data_file)).unwrap(),
+        std::fs::read(root.path().join("api-spool").join(record.data_file())).unwrap(),
         b"abc"
     );
     drop(app);
@@ -311,7 +315,7 @@ async fn cancellation_settles_actual_unknown_tail_and_retry_never_overwrites_it(
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(data_count(root.path()), 1);
     assert_eq!(
-        std::fs::read(root.path().join("api-spool").join(record.data_file)).unwrap(),
+        std::fs::read(root.path().join("api-spool").join(record.data_file())).unwrap(),
         expected
     );
 }
@@ -355,9 +359,9 @@ async fn upload_idle_timeout_preserves_tail_and_allows_verified_retry() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(record.persisted_bytes, 3);
+    assert_eq!(record.persisted_bytes(), 3);
     assert_eq!(
-        std::fs::read(root.path().join("api-spool").join(record.data_file)).unwrap(),
+        std::fs::read(root.path().join("api-spool").join(record.data_file())).unwrap(),
         b"abc"
     );
     let response = app
@@ -417,8 +421,8 @@ fn upload_total_timeout_retains_unfinished_evidence_despite_progress() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(record.state, crate::uploads::UploadState::Incomplete);
-    let bytes = std::fs::read(root.path().join("api-spool").join(record.data_file)).unwrap();
+    assert_eq!(record.state(), crate::uploads::UploadState::Incomplete);
+    let bytes = std::fs::read(root.path().join("api-spool").join(record.data_file())).unwrap();
     assert!(!bytes.is_empty());
     assert!(bytes.len() < 100);
     assert!(bytes.iter().all(|&byte| byte == b'x'));

@@ -31,24 +31,175 @@ impl<'de> Deserialize<'de> for UploadState {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
+// Only boundary DTOs implement serialization. Internal records cannot contain a missing digest.
+#[derive(Clone, Debug)]
 pub(crate) struct UploadRecord {
-    pub workspace_id: String,
-    pub item_id: String,
-    pub principal: String,
-    pub path: String,
+    workspace_id: String,
+    item_id: String,
+    principal: String,
+    path: String,
+    generation: u64,
+    logical_size: u64,
+    content_hash: storage_contract::ContentHash,
+    persisted_bytes: u64,
+    persisted_hash: String,
+    state: UploadState,
+    data_file: String,
+}
+
+// Decode owned strings at the disk boundary; borrow them for publication without cloning.
+#[derive(Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub(crate) struct PersistedUploadRecord<S = String> {
+    pub workspace_id: S,
+    pub item_id: S,
+    pub principal: S,
+    pub path: S,
     #[serialization(with = "storage_contract::u64_string")]
     pub generation: u64,
     #[serialization(with = "storage_contract::u64_string")]
     pub logical_size: u64,
-    pub content_hash: Option<storage_contract::ContentHash>,
+    pub content_hash: storage_contract::ContentHash,
     #[serialization(with = "storage_contract::u64_string")]
     pub persisted_bytes: u64,
-    pub persisted_hash: String,
+    pub persisted_hash: S,
     pub state: UploadState,
+    pub data_file: S,
+}
+
+pub(crate) struct UploadDeclaration {
+    pub workspace_id: String,
+    pub item_id: String,
+    pub principal: String,
+    pub path: String,
+    pub generation: u64,
+    pub logical_size: u64,
+    pub content_hash: storage_contract::ContentHash,
     pub data_file: String,
 }
+
+impl UploadRecord {
+    pub(crate) fn new(input: UploadDeclaration) -> Result<Self, ApiError> {
+        Self::from_persisted(PersistedUploadRecord {
+            workspace_id: input.workspace_id,
+            item_id: input.item_id,
+            principal: input.principal,
+            path: input.path,
+            generation: input.generation,
+            logical_size: input.logical_size,
+            content_hash: input.content_hash,
+            data_file: input.data_file,
+            persisted_bytes: 0,
+            persisted_hash: blake3::hash(b"").to_hex().to_string(),
+            state: UploadState::Incomplete,
+        })
+    }
+
+    fn from_persisted(record: PersistedUploadRecord) -> Result<Self, ApiError> {
+        if record.persisted_bytes > record.logical_size
+            || record.data_file.contains('/')
+            || record.data_file.contains('\\')
+            || record.data_file.starts_with('.')
+            || record.data_file.is_empty()
+            || record.generation == 0
+            || record.persisted_hash.len() != 64
+            || !record
+                .persisted_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ApiError::new(
+                ::http::StatusCode::INTERNAL_SERVER_ERROR,
+                storage_contract::ErrorCode::UploadStateInvalid,
+                "invalid upload state",
+            ));
+        }
+        Ok(Self {
+            workspace_id: record.workspace_id,
+            item_id: record.item_id,
+            principal: record.principal,
+            path: record.path,
+            generation: record.generation,
+            logical_size: record.logical_size,
+            content_hash: record.content_hash,
+            persisted_bytes: record.persisted_bytes,
+            persisted_hash: record.persisted_hash,
+            state: record.state,
+            data_file: record.data_file,
+        })
+    }
+
+    pub(crate) fn persisted(&self) -> PersistedUploadRecord<&str> {
+        let Self {
+            workspace_id,
+            item_id,
+            principal,
+            path,
+            generation,
+            logical_size,
+            content_hash,
+            persisted_bytes,
+            persisted_hash,
+            state,
+            data_file,
+        } = self;
+        PersistedUploadRecord {
+            workspace_id,
+            item_id,
+            principal,
+            path,
+            generation: *generation,
+            logical_size: *logical_size,
+            content_hash: *content_hash,
+            persisted_bytes: *persisted_bytes,
+            persisted_hash,
+            state: *state,
+            data_file,
+        }
+    }
+
+    pub(crate) fn principal(&self) -> &str {
+        &self.principal
+    }
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub(crate) fn logical_size(&self) -> u64 {
+        self.logical_size
+    }
+    pub(crate) fn content_hash(&self) -> storage_contract::ContentHash {
+        self.content_hash
+    }
+    pub(crate) fn persisted_bytes(&self) -> u64 {
+        self.persisted_bytes
+    }
+    pub(crate) fn persisted_hash(&self) -> &str {
+        &self.persisted_hash
+    }
+    pub(crate) fn state(&self) -> UploadState {
+        self.state
+    }
+    pub(crate) fn data_file(&self) -> &str {
+        &self.data_file
+    }
+
+    pub(crate) fn checkpoint(&mut self, length: u64, hash: blake3::Hash) {
+        assert!(
+            length <= self.logical_size,
+            "invariant: upload progress is bounded by declared length"
+        );
+        self.persisted_bytes = length;
+        self.persisted_hash = hash.to_hex().to_string();
+    }
+
+    pub(crate) fn set_state(&mut self, state: UploadState) {
+        self.state = state;
+    }
+}
+
 pub(crate) fn key(workspace: &str, item: &str) -> String {
     let mut hash = blake3::Hasher::new();
     hash.update(workspace.as_bytes());
@@ -66,37 +217,24 @@ pub(crate) fn load(
         EntryName::new(format!("{}.json", key(workspace, item))).map_err(crate::upload_fs_error)?;
     match directory.read_bounded(&name, 16384) {
         Ok(bytes) => {
-            let record =
-                storage_contract::decode_strict::<UploadRecord>(&bytes).map_err(|source| {
+            let record = storage_contract::decode_strict::<PersistedUploadRecord>(&bytes).map_err(
+                |source| {
                     ApiError::new(
                         ::http::StatusCode::INTERNAL_SERVER_ERROR,
                         storage_contract::ErrorCode::UploadStateInvalid,
                         "invalid upload state",
                     )
                     .with_source(source)
-                })?;
-            if record.workspace_id != workspace
-                || record.item_id != item
-                || record.persisted_bytes > record.logical_size
-                || record.data_file.contains('/')
-                || record.data_file.contains('\\')
-                || record.data_file.starts_with('.')
-                || record.data_file.is_empty()
-                || record.generation == 0
-                || record.content_hash.is_none()
-                || record.persisted_hash.len() != 64
-                || !record
-                    .persisted_hash
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            {
+                },
+            )?;
+            if record.workspace_id != workspace || record.item_id != item {
                 return Err(ApiError::new(
                     ::http::StatusCode::INTERNAL_SERVER_ERROR,
                     storage_contract::ErrorCode::UploadStateInvalid,
                     "invalid upload state",
                 ));
             }
-            Ok(Some(record))
+            Ok(Some(UploadRecord::from_persisted(record)?))
         }
         Err(platform_io::fs_safety::Error::Io(error))
             if error.kind() == std::io::ErrorKind::NotFound =>
@@ -209,8 +347,8 @@ fn persist_held(
     record: &UploadRecord,
 ) -> Result<(), ApiError> {
     use platform_io::fs_safety::{AtomicFile, RelativePath};
-    let bytes =
-        json_codec::to_vec(record).expect("invariant: internal JSON serialization succeeds");
+    let bytes = json_codec::to_vec(&record.persisted())
+        .expect("invariant: internal JSON serialization succeeds");
     if bytes.len() > 16384 {
         return Err(ApiError::invalid("upload metadata exceeds limit"));
     }
@@ -250,7 +388,7 @@ struct UploadStatus<'a> {
     upload_generation: u64,
     #[serialization(with = "storage_contract::u64_string")]
     logical_size: u64,
-    content_hash: Option<storage_contract::ContentHash>,
+    content_hash: storage_contract::ContentHash,
     state: UploadStatusState,
     durable_ranges: Vec<ReceivedRange<'a>>,
     sealed_manifest_hash: Option<&'a str>,
@@ -272,8 +410,8 @@ pub(crate) fn status(record: &UploadRecord) -> json_codec::Value {
         logical_size,
         content_hash,
         persisted_bytes,
-        persisted_hash,
-        state,
+        persisted_hash: _,
+        state: _,
         principal: _,
         path: _,
         data_file: _,
@@ -284,12 +422,12 @@ pub(crate) fn status(record: &UploadRecord) -> json_codec::Value {
         upload_generation: *generation,
         logical_size: *logical_size,
         content_hash: *content_hash,
-        state: (*state).into(),
+        state: record.state().into(),
         durable_ranges: if *persisted_bytes > 0 {
             vec![ReceivedRange {
                 offset: 0,
                 length: *persisted_bytes,
-                content_hash: persisted_hash,
+                content_hash: record.persisted_hash(),
             }]
         } else {
             vec![]
@@ -342,7 +480,7 @@ impl ExistingPrefix {
             .open_payload(&name, PayloadOpenMode::Existing)
             .map_err(crate::upload_fs_error)?;
         let length = file.metadata().map_err(ApiError::io)?.len();
-        if length < record.persisted_bytes || length > record.logical_size {
+        if length < record.persisted_bytes() || length > record.logical_size {
             return Err(ApiError::new(
                 ::http::StatusCode::INTERNAL_SERVER_ERROR,
                 storage_contract::ErrorCode::UploadStateInvalid,

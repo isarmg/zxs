@@ -1,4 +1,5 @@
 use super::*;
+use std::fs::OpenOptions;
 
 #[test]
 fn identity_serialization_omits_both_admission_constraints() {
@@ -368,7 +369,10 @@ fn credential_lock_rejects_symlinks_hardlinks_and_public_files() {
             }
             _ => unreachable!(),
         }
-        assert!(AuthStore::acquire_lock(root.path()).is_err(), "{kind}");
+        assert!(
+            AuthStore::acquire_lock(&private_directory(root.path()).unwrap()).is_err(),
+            "{kind}"
+        );
         assert_eq!(fs::read(&target).unwrap(), b"must remain unchanged");
     }
 }
@@ -389,7 +393,13 @@ fn credential_reader_enforces_limit_on_open_descriptor() {
         .unwrap()
         .set_len(MAX_STORE_BYTES as u64 + 1)
         .unwrap();
-    assert!(read_credentials(&path).is_err());
+    assert!(
+        read_credentials(
+            &private_directory(root.path()).unwrap(),
+            &EntryName::new("credential").unwrap()
+        )
+        .is_err()
+    );
 }
 
 #[cfg(unix)]
@@ -403,10 +413,16 @@ fn credential_control_files_reject_fifos_without_waiting_for_a_peer() {
         Mode::from_raw_mode(0o600),
     )
     .unwrap();
-    assert!(AuthStore::acquire_lock(root.path()).is_err());
+    assert!(AuthStore::acquire_lock(&private_directory(root.path()).unwrap()).is_err());
     let credential = root.path().join("auth.json");
     mkfifoat(CWD, &credential, Mode::from_raw_mode(0o600)).unwrap();
-    assert!(read_credentials(&credential).is_err());
+    assert!(
+        read_credentials(
+            &private_directory(root.path()).unwrap(),
+            &EntryName::new("auth.json").unwrap()
+        )
+        .is_err()
+    );
 }
 
 #[cfg(unix)]
@@ -473,14 +489,12 @@ fn credential_reopen_rejects_replaceable_ancestry_without_changing_it() {
 #[cfg(feature = "core")]
 #[test]
 fn unavailable_control_plane_never_invents_a_default_administrator() {
-    let root = crate::tests::private_tempdir();
-    let mut store = AuthStore::unavailable(root.path());
+    let mut store = AuthStore::unavailable();
     assert!(!store.is_available());
     assert!(store.snapshot().is_err());
     assert!(store.sole_identity().is_err());
     assert!(store.identity_for_principal("admin").is_err());
     assert!(store.login("admin", "a-long-test-password").is_err());
-    assert!(!root.path().join("management-auth.json").exists());
 }
 
 #[cfg(feature = "core")]
@@ -513,4 +527,234 @@ fn snapshot_admission_preserves_binding_and_rechecks_session_revocation() {
         .unwrap();
     let admission = AdmissionSnapshot::from_snapshot(&store.snapshot().unwrap()).unwrap();
     assert!(admission.revalidate_identity(&caller).is_err());
+}
+
+#[test]
+fn credential_publication_rejects_replaced_parent_without_writing_the_replacement() {
+    let parent = crate::tests::private_tempdir();
+    let root = parent.path().join("live");
+    let retired = parent.path().join("retired");
+    drop(AuthStore::initialize(&root, "owner", "directory-identity-password").unwrap());
+    let mut store = AuthStore::open(&root).unwrap();
+    let before = fs::read(root.join("auth.json")).unwrap();
+    fs::rename(&root, &retired).unwrap();
+    let replacement = PrivateDirectory::create_trusted(&root).unwrap();
+    let replacement_lock = AuthStore::acquire_lock(&private_directory(&root).unwrap()).unwrap();
+    assert_eq!(
+        AuthStore::acquire_lock(&private_directory(&retired).unwrap())
+            .err()
+            .unwrap()
+            .code,
+        storage_contract::ErrorCode::AuthStoreBusy
+    );
+    let result = store.login("owner", "directory-identity-password");
+    assert!(
+        result.is_err(),
+        "publication must not follow a replacement directory; login succeeded={}, replacement credential exists={}",
+        result.is_ok(),
+        root.join("auth.json").exists()
+    );
+    assert!(!root.join("auth.json").exists());
+    assert_eq!(fs::read(retired.join("auth.json")).unwrap(), before);
+    drop((replacement_lock, replacement));
+}
+
+#[test]
+fn credential_staging_cleanup_stays_with_locked_directory_when_backup_replaces_parent() {
+    let parent = crate::tests::private_tempdir();
+    let root = parent.path().join("live");
+    let retired = parent.path().join("retired");
+    let mut store = AuthStore::initialize(&root, "owner", "directory-identity-password").unwrap();
+    let login = store.login("owner", "directory-identity-password").unwrap();
+    let reader = store.reader();
+    let before = fs::read(root.join("auth.json")).unwrap();
+    let backup_root = root.clone();
+    let backup_retired = retired.clone();
+    // Use the actual publication collaborator, not a business-only test hook.
+    store.backup = Some(Arc::new(move |_| {
+        fs::rename(&backup_root, &backup_retired).map_err(ApiError::io)?;
+        PrivateDirectory::create_trusted(&backup_root).map_err(ApiError::invalid_source)?;
+        Ok(())
+    }));
+    assert!(
+        store
+            .change_password(
+                &login.token,
+                "directory-identity-password",
+                "new-directory-password"
+            )
+            .is_err()
+    );
+    assert!(!root.join("auth.json").exists());
+    assert_eq!(fs::read(retired.join("auth.json")).unwrap(), before);
+    assert_eq!(
+        fs::read_dir(&retired).unwrap().count(),
+        2,
+        "no staging residue in held directory"
+    );
+    assert_eq!(
+        fs::read_dir(&root).unwrap().count(),
+        0,
+        "replacement was never touched"
+    );
+    assert_eq!(
+        reader.authenticate(&login.token).unwrap_err().code,
+        storage_contract::ErrorCode::RecoveryRequired
+    );
+}
+
+#[test]
+fn credential_publication_rejects_changed_directory_permissions_and_symlink() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    for symbolic in [false, true] {
+        let parent = crate::tests::private_tempdir();
+        let root = parent.path().join("live");
+        let retired = parent.path().join("retired");
+        let mut store =
+            AuthStore::initialize(&root, "owner", "directory-identity-password").unwrap();
+        let before = fs::read(root.join("auth.json")).unwrap();
+        if symbolic {
+            fs::rename(&root, &retired).unwrap();
+            symlink(&retired, &root).unwrap();
+        } else {
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(store.login("owner", "directory-identity-password").is_err());
+        assert_eq!(fs::read(root.join("auth.json")).unwrap(), before);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+    }
+}
+
+#[test]
+fn initial_credential_publication_never_clobbers_existing_authority() {
+    let root = crate::tests::private_tempdir();
+    let store = AuthStore::initialize(root.path(), "owner", "directory-identity-password").unwrap();
+    let before = fs::read(root.path().join("auth.json")).unwrap();
+    assert_eq!(
+        store.persist(true).unwrap_err().code,
+        storage_contract::ErrorCode::AuthAlreadyInitialized
+    );
+    assert_eq!(fs::read(root.path().join("auth.json")).unwrap(), before);
+    assert!(store.is_available());
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+}
+
+/// Run by auth-io.sh in isolated children using the platform's real libc I/O interposer.
+#[cfg(feature = "core")]
+#[test]
+#[ignore = "requires isolated file/directory fsync failure injection"]
+fn credential_io_barriers_preserve_publication_order_and_failure_fencing() {
+    use std::io::Write;
+    let root = PathBuf::from(std::env::var_os("ZXS_ATOMIC_ROOT").unwrap());
+    let log = PathBuf::from(std::env::var_os("ZXS_ATOMIC_LOG").unwrap());
+    let stage = std::env::var("ZXS_ATOMIC_STAGE").unwrap();
+    let mode = std::env::var("ZXS_AUTH_MODE").unwrap();
+    let management = mode == "management";
+    let mut store =
+        AuthStore::initialize_at(&root, "owner", "directory-identity-password", management)
+            .unwrap();
+    let login = store.login("owner", "directory-identity-password").unwrap();
+    let reader = store.reader();
+    let before = store.snapshot().unwrap();
+    let path = root.join(store.name.as_path());
+    let bytes = fs::read(&path).unwrap();
+    if mode != "plain" {
+        let log = log.clone();
+        store.backup = Some(Arc::new(move |_| {
+            let mut log = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log)
+                .map_err(ApiError::io)?;
+            writeln!(log, "backup").map_err(ApiError::io)
+        }));
+    }
+    fs::write(root.join(".inject"), b"").unwrap();
+    let result = store.logout(&login.token);
+    fs::remove_file(root.join(".inject")).unwrap();
+    let events = fs::read_to_string(&log).unwrap();
+    let expected = match stage.as_str() {
+        "write" => "write-failure\n".to_owned(),
+        "file-sync" => "file-sync\n".to_owned(),
+        "publish" => if mode == "backup" {
+            "file-sync\nbackup\n"
+        } else {
+            "file-sync\n"
+        }
+        .to_owned(),
+        "rename-before" | "rename-after" => {
+            let mut expected = "file-sync\n".to_owned();
+            if mode == "backup" {
+                expected.push_str("backup\n");
+            }
+            expected.push_str(if stage == "rename-after" {
+                "rename-success-reported-eio\n"
+            } else {
+                "rename-before-eio\n"
+            });
+            expected
+        }
+        "success" | "directory-sync" => {
+            let mut expected = "file-sync\n".to_owned();
+            if mode == "backup" {
+                expected.push_str("backup\n");
+            }
+            expected.push_str("directory-sync\n");
+            if management && stage == "success" {
+                expected.push_str("backup\n");
+            }
+            expected
+        }
+        _ => panic!("unknown injection stage"),
+    };
+    assert_eq!(events, expected);
+    if stage == "success" {
+        result.unwrap();
+        assert!(store.is_available());
+        assert_eq!(
+            reader.authenticate(&login.token).unwrap_err().code,
+            storage_contract::ErrorCode::Unauthorized
+        );
+    } else {
+        assert!(result.is_err());
+        if matches!(stage.as_str(), "rename-before" | "rename-after") {
+            assert!(matches!(result.as_ref().unwrap_err().source.as_deref(),
+                Some(crate::http_boundary::ApiErrorSource::Filesystem(platform_io::fs_safety::Error::Io(error))) if error.raw_os_error() == Some(5)));
+        }
+        assert_eq!(store.snapshot().unwrap(), before);
+        let blocked = management
+            || mode == "backup"
+            || matches!(
+                stage.as_str(),
+                "directory-sync" | "rename-before" | "rename-after"
+            );
+        assert_eq!(store.is_available(), !blocked);
+        assert_eq!(reader.authenticate(&login.token).is_err(), blocked);
+    }
+    match stage.as_str() {
+        "write" | "file-sync" | "rename-before" => assert_eq!(fs::read(path).unwrap(), bytes),
+        "publish" => assert!(path.is_dir()),
+        "success" | "directory-sync" | "rename-after" => {
+            let durable: json_codec::Value =
+                json_codec::from_slice(&fs::read(path).unwrap()).unwrap();
+            assert!(durable["sessions"].as_object().unwrap().is_empty());
+        }
+        _ => unreachable!(),
+    }
+    let staging: Vec<_> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".state-atomic-")
+        })
+        .collect();
+    assert_eq!(staging.len(), usize::from(stage == "rename-before"));
+    if let Some(path) = staging.first() {
+        let evidence: json_codec::Value = json_codec::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert!(evidence["sessions"].as_object().unwrap().is_empty());
+    }
+    println!("\nZXS_AUTH_IO_COMPLETE mode={mode} stage={stage}");
 }

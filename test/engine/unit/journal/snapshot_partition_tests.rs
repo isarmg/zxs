@@ -311,15 +311,36 @@ fn canonical_value_encoding_preserves_publication_bytes_and_hashes() {
     let state: State = json_codec::from_slice(fixture.state_bytes.as_bytes()).unwrap();
     assert_eq!(state.commits.len(), 7);
     assert_eq!(state.versions.len(), 4);
+    let mut detached = state.clone();
+    detached.begin_tracking();
+    // Force the receipt and principal maps and values through copy-on-write,
+    // then restore their logical contents. Allocation identity and tracking
+    // metadata must never enter current snapshot/history bytes or hashes.
+    let operation = *state.operations.keys().next().unwrap();
+    detached.operations.get_mut(&operation).unwrap().result =
+        json_codec::json!({"temporary": true});
+    *detached.operation_principals.get_mut(&operation).unwrap() = "temporary".into();
     assert_eq!(
         canonical_json(&state).unwrap(),
         fixture.state_bytes.as_bytes()
     );
-    let snapshot = prepare_snapshot(&state, MAX_METADATA).unwrap();
-    assert_eq!(snapshot.hash, fixture.snapshot_hash);
-    assert_eq!(object_bytes(&snapshot.objects), fixture.snapshot_objects);
-    let (catalog, objects) =
-        crate::history_package::prepare_history_manifests(&state, MAX_METADATA).unwrap();
-    assert_eq!(catalog.reference(), &fixture.history_roots);
-    assert_eq!(object_bytes(&objects), fixture.history_objects);
+    detached
+        .operations
+        .insert(operation, state.operations[&operation].clone());
+    detached
+        .operation_principals
+        .insert(operation, state.operation_principals[&operation].clone());
+    for state in [&state, &detached] {
+        assert_eq!(
+            canonical_json(state).unwrap(),
+            fixture.state_bytes.as_bytes()
+        );
+        let snapshot = prepare_snapshot(state, MAX_METADATA).unwrap();
+        assert_eq!(snapshot.hash, fixture.snapshot_hash);
+        assert_eq!(object_bytes(&snapshot.objects), fixture.snapshot_objects);
+        let (catalog, objects) =
+            crate::history_package::prepare_history_manifests(state, MAX_METADATA).unwrap();
+        assert_eq!(catalog.reference(), &fixture.history_roots);
+        assert_eq!(object_bytes(&objects), fixture.history_objects);
+    }
 }

@@ -32,20 +32,21 @@ fn total(budget: &SpoolBudget) -> u64 {
         .map(|entry| entry.bytes)
         .sum()
 }
-fn record(name: &str, principal: &str) -> UploadRecord {
-    UploadRecord {
+fn record(name: &str, principal: &str, generation: u64) -> uploads::UploadRecord {
+    let mut record = uploads::UploadRecord::new(uploads::UploadDeclaration {
         workspace_id: "ws".into(),
         item_id: "item".into(),
         principal: principal.into(),
         path: "file".into(),
-        generation: 1,
+        generation,
         logical_size: 20,
-        content_hash: Some("0".repeat(64).parse().unwrap()),
-        persisted_bytes: 3,
-        persisted_hash: blake3::hash(b"abc").to_hex().to_string(),
-        state: crate::uploads::UploadState::Complete,
+        content_hash: "0".repeat(64).parse().unwrap(),
         data_file: name.into(),
-    }
+    })
+    .unwrap();
+    record.checkpoint(3, blake3::hash(b"abc"));
+    record.set_state(uploads::UploadState::Complete);
+    record
 }
 #[test]
 fn reservation_settles_to_retained_bytes_not_success_or_declared_length() {
@@ -123,14 +124,13 @@ fn recovery_counts_retained_generations_failed_unknown_and_orphan_bytes_once() {
     let config = limits(8 * METADATA_ALLOWANCE, 8 * METADATA_ALLOWANCE);
     let budget = SpoolBudget::recover(root.path(), config.clone()).unwrap();
     retained(&budget, "alice", "old.data", 20, b"abc");
-    let old = record("old.data", "alice");
+    let old = record("old.data", "alice", 1);
     uploads::persist(root.path(), &old).unwrap();
     uploads::retain_generation(root.path(), &old).unwrap();
     uploads::retain_generation(root.path(), &old).unwrap();
     retained(&budget, "alice", "new.data", 20, b"failure");
-    let mut new = record("new.data", "alice");
-    new.generation = 2;
-    new.state = crate::uploads::UploadState::ChecksumMismatch;
+    let mut new = record("new.data", "alice", 2);
+    new.set_state(crate::uploads::UploadState::ChecksumMismatch);
     uploads::persist(root.path(), &new).unwrap();
     drop(budget);
     fs::write(root.path().join("unknown.data"), b"unknown").unwrap();
@@ -284,12 +284,18 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
     let quota = METADATA_ALLOWANCE + size;
     let budget = SpoolBudget::recover(root.path(), limits(quota, quota)).unwrap();
     retained(&budget, "alice", "batch.data", size, b"abcdef");
-    let mut progress = record("batch.data", "alice");
-    progress.logical_size = size;
-    progress.content_hash = Some(storage_contract::ContentHash::from_digest(blake3::hash(
-        &complete,
-    )));
-    progress.state = crate::uploads::UploadState::Incomplete;
+    let mut progress = uploads::UploadRecord::new(uploads::UploadDeclaration {
+        workspace_id: "ws".into(),
+        item_id: "item".into(),
+        principal: "alice".into(),
+        path: "file".into(),
+        generation: 1,
+        logical_size: size,
+        content_hash: storage_contract::ContentHash::from_digest(blake3::hash(&complete)),
+        data_file: "batch.data".into(),
+    })
+    .unwrap();
+    progress.checkpoint(3, blake3::hash(b"abc"));
     uploads::persist(root.path(), &progress).unwrap();
     drop(budget);
 
@@ -309,7 +315,7 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
     assert_eq!(staged.write(&batch).unwrap_err().status, 429);
     assert_eq!(fs::read(root.path().join("batch.data")).unwrap(), b"abcdef");
     let unchanged = uploads::load(root.path(), "ws", "item").unwrap().unwrap();
-    assert_eq!(unchanged.persisted_bytes, 3);
+    assert_eq!(unchanged.persisted_bytes(), 3);
     assert_eq!(
         uploads::status(&unchanged)["durable_ranges"][0]["length"],
         "3"
@@ -338,8 +344,7 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
     assert!(prefix.complete());
     staged.write(&batch).unwrap();
     staged.sync().unwrap();
-    progress.persisted_bytes = size;
-    progress.persisted_hash = blake3::hash(&complete).to_hex().to_string();
+    progress.checkpoint(size, blake3::hash(&complete));
     uploads::persist_staged(&progress, &staged).unwrap();
     drop(staged);
     assert_eq!(total(&budget), quota);
@@ -348,7 +353,7 @@ fn rejected_batch_headroom_preserves_actual_tail_and_verified_retry_accounting()
         uploads::load(root.path(), "ws", "item")
             .unwrap()
             .unwrap()
-            .generation,
+            .generation(),
         1
     );
 }
@@ -386,7 +391,7 @@ fn recovered_metadata_and_longer_payload_survive_short_retry_settlement() {
     let root = private_tempdir();
     let payload = b"retained payload";
     fs::write(root.path().join("retained.data"), payload).unwrap();
-    let metadata = json_codec::to_vec(&record("retained.data", "alice")).unwrap();
+    let metadata = json_codec::to_vec(&record("retained.data", "alice", 1).persisted()).unwrap();
     let count = METADATA_ALLOWANCE as usize / metadata.len() + 1;
     for index in 0..count {
         fs::write(root.path().join(format!("record-{index}.json")), &metadata).unwrap();
@@ -408,4 +413,31 @@ fn recovered_metadata_and_longer_payload_survive_short_retry_settlement() {
         fs::read(root.path().join("retained.data")).unwrap(),
         payload
     );
+}
+
+#[test]
+fn recovery_charges_missing_or_null_upload_digest_as_unknown_without_rewriting() {
+    for missing in [true, false] {
+        let root = private_tempdir();
+        fs::write(root.path().join("retained.data"), b"abc").unwrap();
+        let mut value =
+            json_codec::to_value(record("retained.data", "alice", 1).persisted()).unwrap();
+        if missing {
+            value.as_object_mut().unwrap().remove("content_hash");
+        } else {
+            value["content_hash"] = json_codec::Value::Null;
+        }
+        let bytes = json_codec::to_vec(&value).unwrap();
+        fs::write(root.path().join("record.json"), &bytes).unwrap();
+        let budget = SpoolBudget::recover(root.path(), limits(u64::MAX, u64::MAX)).unwrap();
+        let ledger = budget.ledger.lock().unwrap();
+        assert!(ledger.files["retained.data"].owner.is_none());
+        assert!(ledger.files["record.json"].owner.is_none());
+        assert_eq!(
+            ledger.total,
+            2 * METADATA_ALLOWANCE + 3 + bytes.len() as u64
+        );
+        assert_eq!(fs::read(root.path().join("record.json")).unwrap(), bytes);
+        assert_eq!(fs::read(root.path().join("retained.data")).unwrap(), b"abc");
+    }
 }

@@ -177,7 +177,7 @@ pub fn open_service_with_options(
     create_private_directory(management_root)?;
     let mut auth = AuthStore::open_management(management_root).unwrap_or_else(|error| {
         tracing::warn!(code = %error.code, error = %StartupDiagnostic(&error), "management credentials require recovery");
-        AuthStore::unavailable(management_root)
+        AuthStore::unavailable()
     });
     if auth.is_available() {
         // Record local authority before accepting any credential mutation,
@@ -185,7 +185,7 @@ pub fn open_service_with_options(
         let claim = create_private_directory(data_root).and_then(|_| claim_authority(data_root));
         if let Err(error) = claim {
             tracing::warn!(code = %error.code, error = %StartupDiagnostic(&error), "cannot durably establish management authority");
-            auth = AuthStore::unavailable(management_root);
+            auth = AuthStore::unavailable();
         }
     }
     let backend = Arc::new(ManagementBackend {

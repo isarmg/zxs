@@ -3,7 +3,7 @@
 //! Reservations precede body consumption. Their owner stays alive with every
 //! blocking writer; dropping one settles to retained physical file length, not
 //! upload success. Unknown files and uncertain I/O never earn free capacity.
-use crate::{ApiError, lock, uploads::UploadRecord};
+use crate::{ApiError, lock, uploads::PersistedUploadRecord};
 use data_serialization::{Deserialize, Serialize};
 use platform_io::fs_safety::{AdvisoryLock, EntryName, PrivateDirectory, RelativePath};
 use std::{
@@ -269,7 +269,7 @@ impl SpoolBudget {
                     }
                 }
             } else if name.contains(".json") {
-                match metadata::<UploadRecord>(&entry.path()) {
+                match metadata::<PersistedUploadRecord>(&entry.path()) {
                     Ok(record) => {
                         covered_metadata.insert(name, record.data_file.clone());
                         set_owner(&mut owners, record.data_file, record.principal)?;

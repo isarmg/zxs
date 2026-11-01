@@ -47,7 +47,7 @@ pub(crate) async fn upload_status(
             // Keep them until actual work ends, even if the requester disconnects.
             let published = backend.published_upload_status(&identity, &workspace, &item)?;
             if let Some(record) = uploads::load(&state.config.spool_dir, &workspace, &item)? {
-                if record.principal != identity.principal {
+                if record.principal() != identity.principal {
                     return Err(ApiError::forbidden());
                 }
                 // A replacement can be durably receiving while the engine still owns
@@ -55,7 +55,7 @@ pub(crate) async fn upload_status(
                 // remain authoritative, including their completed publication state.
                 if published
                     .as_ref()
-                    .is_none_or(|status| record.generation > status.generation)
+                    .is_none_or(|status| record.generation() > status.generation)
                 {
                     return Ok(Json(uploads::status(&record)));
                 }
@@ -270,10 +270,8 @@ async fn upload_inner(
                         .map_err(ApiError::invalid_source)
                 })
         })
-        .transpose()?;
-    if expected_hash.is_none() {
-        return Err(ApiError::invalid("X-ZXS-Content-Hash is required"));
-    }
+        .transpose()?
+        .ok_or_else(|| ApiError::invalid("X-ZXS-Content-Hash is required"))?;
     if headers.get_all("x-zxs-content-hash").iter().count() != 1 {
         return Err(ApiError::invalid("duplicate content hash header"));
     }
@@ -298,21 +296,18 @@ async fn upload_inner(
     .map_err(ApiError::join)??;
     let mut prefix = None;
     if let Some(previous) = &previous {
-        if previous.principal != identity.principal || previous.path != query.path {
+        if previous.principal() != identity.principal || previous.path() != query.path {
             return Err(ApiError::forbidden());
         }
-        if generation < previous.generation {
+        if generation < previous.generation() {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::UploadGenerationConflict,
                 "an upload from a newer generation already exists",
             ));
         }
-        if generation == previous.generation {
-            if expected_length != previous.logical_size
-                || expected_hash
-                    .as_ref()
-                    .zip(previous.content_hash.as_ref())
-                    .is_some_and(|(a, b)| a != b)
+        if generation == previous.generation() {
+            if expected_length != previous.logical_size()
+                || expected_hash != previous.content_hash()
             {
                 return Err(ApiError::conflict(
                     storage_contract::ErrorCode::UploadGenerationConflict,
@@ -332,9 +327,9 @@ async fn upload_inner(
     }
     let retry = previous
         .as_ref()
-        .filter(|previous| previous.generation == generation);
+        .filter(|previous| previous.generation() == generation);
     let (data_file, mode) = match retry {
-        Some(previous) => (previous.data_file.clone(), PayloadOpenMode::Existing),
+        Some(previous) => (previous.data_file().to_owned(), PayloadOpenMode::Existing),
         None => (
             format!(
                 "upload-{}.data",
@@ -356,7 +351,7 @@ async fn upload_inner(
     })
     .await
     .map_err(ApiError::join)??;
-    let mut record = uploads::UploadRecord {
+    let mut record = uploads::UploadRecord::new(uploads::UploadDeclaration {
         workspace_id: workspace.clone(),
         item_id: item.clone(),
         principal: identity.principal.clone(),
@@ -364,14 +359,11 @@ async fn upload_inner(
         generation,
         logical_size: expected_length,
         content_hash: expected_hash,
-        persisted_bytes: 0,
-        persisted_hash: blake3::hash(b"").to_hex().to_string(),
-        state: crate::uploads::UploadState::Incomplete,
         data_file,
-    };
+    })?;
     if let Some(previous) = previous
         .as_ref()
-        .filter(|previous| generation > previous.generation)
+        .filter(|previous| generation > previous.generation())
     {
         let root = spool.clone();
         let previous = previous.clone();
@@ -391,7 +383,7 @@ async fn upload_inner(
     }
     if previous
         .as_ref()
-        .is_none_or(|previous| generation > previous.generation)
+        .is_none_or(|previous| generation > previous.generation())
     {
         persist_upload(&record, &admission, &staged_file).await?;
     }
@@ -415,8 +407,7 @@ async fn upload_inner(
             Ok(None) => break,
             Err(source) => {
                 if prefix.as_ref().is_none_or(|prefix| prefix.complete()) {
-                    record.persisted_bytes = length;
-                    record.persisted_hash = hash.clone().finalize().to_hex().to_string();
+                    record.checkpoint(length, hash.clone().finalize());
                     persist_upload(&record, &admission, &staged_file).await?;
                 }
                 let error = timeout_error();
@@ -430,8 +421,7 @@ async fn upload_inner(
             Ok(chunk) => chunk,
             Err(error) => {
                 if prefix.as_ref().is_none_or(|prefix| prefix.complete()) {
-                    record.persisted_bytes = length;
-                    record.persisted_hash = hash.clone().finalize().to_hex().to_string();
+                    record.checkpoint(length, hash.clone().finalize());
                     persist_upload(&record, &admission, &staged_file).await?;
                 }
                 return Err(ApiError::invalid(format!(
@@ -495,8 +485,7 @@ async fn upload_inner(
         if length.saturating_sub(last_persisted) >= 1024 * 1024
             && prefix.as_ref().is_none_or(|prefix| prefix.complete())
         {
-            record.persisted_bytes = length;
-            record.persisted_hash = hash.clone().finalize().to_hex().to_string();
+            record.checkpoint(length, hash.clone().finalize());
             persist_upload(&record, &admission, &staged_file).await?;
             last_persisted = length;
         }
@@ -508,8 +497,7 @@ async fn upload_inner(
             "retry ended before the previously persisted prefix; original work data is retained",
         ));
     }
-    record.persisted_bytes = length;
-    record.persisted_hash = hash.clone().finalize().to_hex().to_string();
+    record.checkpoint(length, hash.clone().finalize());
     persist_upload(&record, &admission, &staged_file).await?;
     if length != expected_length {
         return Err(ApiError::new(
@@ -519,8 +507,8 @@ async fn upload_inner(
         ));
     }
     let actual_hash = storage_contract::ContentHash::from_digest(hash.finalize());
-    if expected_hash.is_some_and(|expected| expected != actual_hash) {
-        record.state = crate::uploads::UploadState::ChecksumMismatch;
+    if expected_hash != actual_hash {
+        record.set_state(crate::uploads::UploadState::ChecksumMismatch);
         persist_upload(&record, &admission, &staged_file).await?;
         return Err(ApiError::new(
             ::http::StatusCode::BAD_REQUEST,
@@ -528,7 +516,6 @@ async fn upload_inner(
             "uploaded bytes do not match the declared hash; work data is retained",
         ));
     }
-    record.content_hash = Some(actual_hash);
     let backend = state.backend.clone();
     let owner = identity.clone();
     let ws = workspace.clone();
@@ -550,7 +537,7 @@ async fn upload_inner(
                 &source,
                 generation,
             )?;
-            record.state = crate::uploads::UploadState::Complete;
+            record.set_state(crate::uploads::UploadState::Complete);
             uploads::persist_staged(&record, &staged_file)?;
             Ok::<_, ApiError>(staged)
         })

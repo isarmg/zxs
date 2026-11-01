@@ -477,7 +477,15 @@ fn directory_cleanup_preserves_admission_failure_and_is_terminal_after_errors() 
         io::Read,
         os::{fd::FromRawFd, unix::net::UnixListener},
     };
-    for scenario in ["first_page", "later_page", "close_error", "revoked"] {
+    for scenario in [
+        "first_page",
+        "later_page",
+        "close_error",
+        "revoked",
+        "bad_utf8",
+        "changed_user",
+        "detach_error",
+    ] {
         let socket = std::env::temp_dir().join(format!(
             "zxs-vfs-directory-{}-{}.sock",
             std::process::id(),
@@ -539,13 +547,16 @@ fn directory_cleanup_preserves_admission_failure_and_is_terminal_after_errors() 
                 wire.send(&error(), None).unwrap();
             }
             let request = wire.receive::<Request>().unwrap().0;
-            if scenario == "revoked" {
+            if matches!(
+                scenario,
+                "revoked" | "bad_utf8" | "changed_user" | "detach_error"
+            ) {
                 assert!(matches!(request, Request::Detach { handle: 7 }));
             } else {
                 assert!(matches!(request, Request::Close { handle: 7 }));
             }
             wire.send(
-                &if scenario == "close_error" {
+                &if matches!(scenario, "close_error" | "detach_error") {
                     error()
                 } else {
                     Response::Ok {
@@ -611,19 +622,28 @@ fn directory_cleanup_preserves_admission_failure_and_is_terminal_after_errors() 
                     assert!(readdir(&mut host, &mut fsp, directory).is_null());
                     assert_eq!(*libc::__errno_location(), libc::EIO);
                 }
-                if scenario == "revoked" {
-                    authenticated.connection.force_user = true;
+                match scenario {
+                    "revoked" | "detach_error" => authenticated.connection.force_user = true,
+                    "bad_utf8" => authenticated.info.account_name = c"\xff".as_ptr().cast_mut(),
+                    "changed_user" => authenticated.info.account_name = c"bob".as_ptr().cast_mut(),
+                    _ => {}
                 }
                 let result = closedir(&mut host, directory);
                 assert_eq!(
                     result,
-                    if matches!(scenario, "close_error" | "revoked") {
+                    if matches!(
+                        scenario,
+                        "close_error" | "revoked" | "bad_utf8" | "changed_user" | "detach_error"
+                    ) {
                         -1
                     } else {
                         0
                     }
                 );
-                if scenario == "revoked" {
+                if matches!(
+                    scenario,
+                    "revoked" | "bad_utf8" | "changed_user" | "detach_error"
+                ) {
                     assert_eq!(*libc::__errno_location(), libc::EACCES);
                 }
             }

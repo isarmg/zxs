@@ -17,7 +17,7 @@ int fsync(int fd) {
         struct stat metadata;
         if (fstat(fd, &metadata) == 0 && S_ISREG(metadata.st_mode)
             && strstr(path, "/file-containers/") && strstr(path, "/versions/v")) {
-            fprintf(stderr, "ZXS_TEST_FSYNC_EIO %s\n", path);
+            fprintf(stderr, "\nZXS_TEST_FSYNC_EIO %s\n", path);
             errno = EIO;
             return -1;
         }

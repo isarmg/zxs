@@ -126,7 +126,7 @@ fn committed_revocations_refresh_existing_readers() {
 #[test]
 fn setup_and_recovery_keep_existing_reader_connected_to_new_authority() {
     let root = crate::tests::private_tempdir();
-    let mut store = AuthStore::unavailable(root.path());
+    let mut store = AuthStore::unavailable();
     let reader = store.reader();
     assert_eq!(
         reader.authenticate("invalid").unwrap_err().code,
@@ -174,18 +174,19 @@ fn failed_system_authority_rename_blocks_readers_without_publishing_revocation()
     let login = store.login("owner", PASSWORD).unwrap();
     let reader = store.reader();
     let before = store.snapshot().unwrap();
-    let durable = fs::read(&store.path).unwrap();
-    // A real filesystem failure after temporary file sync, not a business hook.
-    let obstruction = root.path().join("replacement-directory");
-    fs::create_dir(&obstruction).unwrap();
-    let original = std::mem::replace(&mut store.path, obstruction);
+    let original = root.path().join(store.name.as_path());
+    let durable = fs::read(&original).unwrap();
+    // A real destination rejection at commit, after temporary file sync.
+    let saved = root.path().join("saved-authority");
+    fs::rename(&original, &saved).unwrap();
+    fs::create_dir(&original).unwrap();
     let error = store.logout(&login.token).unwrap_err();
     assert!(matches!(
         error.source.as_deref(),
-        Some(crate::http_boundary::ApiErrorSource::Io(_))
+        Some(crate::http_boundary::ApiErrorSource::Filesystem(_))
     ));
     assert_eq!(store.snapshot().unwrap(), before);
-    assert_eq!(fs::read(&original).unwrap(), durable);
+    assert_eq!(fs::read(&saved).unwrap(), durable);
     assert_eq!(
         reader.authenticate(&login.token).unwrap_err().code,
         storage_contract::ErrorCode::RecoveryRequired
@@ -195,7 +196,7 @@ fn failed_system_authority_rename_blocks_readers_without_publishing_revocation()
             .unwrap()
             .file_name()
             .to_string_lossy()
-            .contains(".tmp-")
+            .starts_with(".state-atomic-")
     }));
 }
 

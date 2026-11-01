@@ -11,12 +11,13 @@ use std::{borrow::Borrow, collections::BTreeMap, ops::Index, sync::Arc};
 ///
 /// Its serialized representation is the ordinary map of records. Shared record
 /// handles preserve copy-on-write isolation when a reader outlives the map borrow.
+/// Keys are text IDs by default; permanent receipts use typed operation IDs.
 #[derive(Debug, PartialEq)]
-pub struct SharedRecords<T> {
-    records: Arc<BTreeMap<String, Arc<T>>>,
+pub struct SharedRecords<T, K = String> {
+    records: Arc<BTreeMap<K, Arc<T>>>,
 }
 
-impl<T> Clone for SharedRecords<T> {
+impl<T, K> Clone for SharedRecords<T, K> {
     fn clone(&self) -> Self {
         Self {
             records: Arc::clone(&self.records),
@@ -24,13 +25,13 @@ impl<T> Clone for SharedRecords<T> {
     }
 }
 
-impl<T> Default for SharedRecords<T> {
+impl<T, K: Ord + Clone> Default for SharedRecords<T, K> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> SharedRecords<T> {
+impl<T, K: Ord + Clone> SharedRecords<T, K> {
     pub fn new() -> Self {
         Self {
             records: Arc::new(BTreeMap::new()),
@@ -53,15 +54,15 @@ impl<T> SharedRecords<T> {
 
     pub fn get<Q: Ord + ?Sized>(&self, key: &Q) -> Option<&T>
     where
-        String: Borrow<Q>,
+        K: Borrow<Q>,
     {
         self.records.get(key).map(Arc::as_ref)
     }
 
     /// Borrow the stored key and record together without cloning either.
-    pub fn get_key_value<Q: Ord + ?Sized>(&self, key: &Q) -> Option<(&String, &T)>
+    pub fn get_key_value<Q: Ord + ?Sized>(&self, key: &Q) -> Option<(&K, &T)>
     where
-        String: Borrow<Q>,
+        K: Borrow<Q>,
     {
         self.records
             .get_key_value(key)
@@ -72,19 +73,19 @@ impl<T> SharedRecords<T> {
     /// Later writes through this map or `Arc::make_mut` remain isolated.
     pub fn get_shared<Q: Ord + ?Sized>(&self, key: &Q) -> Option<Arc<T>>
     where
-        String: Borrow<Q>,
+        K: Borrow<Q>,
     {
         self.records.get(key).map(Arc::clone)
     }
 
     pub fn contains_key<Q: Ord + ?Sized>(&self, key: &Q) -> bool
     where
-        String: Borrow<Q>,
+        K: Borrow<Q>,
     {
         self.records.contains_key(key)
     }
 
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&String, &T)> + ExactSizeIterator {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&K, &T)> + ExactSizeIterator {
         self.records
             .iter()
             .map(|(key, value)| (key, value.as_ref()))
@@ -100,10 +101,37 @@ impl<T> SharedRecords<T> {
         self.records.values()
     }
 
-    pub fn keys(&self) -> impl DoubleEndedIterator<Item = &String> + ExactSizeIterator {
+    pub fn keys(&self) -> impl DoubleEndedIterator<Item = &K> + ExactSizeIterator {
         self.records.keys()
     }
 
+    /// Merge logical records without materializing incoming or replaced values.
+    /// Later mutation remains isolated through the ordinary copy-on-write path.
+    pub fn extend_shared(&mut self, source: &Self) {
+        if source.is_empty() {
+            return;
+        }
+        Arc::make_mut(&mut self.records).extend(
+            source
+                .records
+                .iter()
+                .map(|(key, value)| (key.clone(), Arc::clone(value))),
+        );
+    }
+
+    /// Remove a record without materializing its value, even when shared.
+    pub fn remove_discard<Q: Ord + ?Sized>(&mut self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+    {
+        if !self.contains_key(key) {
+            return false;
+        }
+        Arc::make_mut(&mut self.records).remove(key).is_some()
+    }
+}
+
+impl<T> SharedRecords<T> {
     /// Select an independent logical subset, sharing immutable record payloads.
     /// Calls the predicate once per record in key order. Full selection shares the backing map;
     /// partial selection copies only selected keys and handles, never T.
@@ -124,37 +152,12 @@ impl<T> SharedRecords<T> {
             ),
         }
     }
-
-    /// Merge logical records without materializing incoming or replaced values.
-    /// Later mutation remains isolated through the ordinary copy-on-write path.
-    pub fn extend_shared(&mut self, source: &Self) {
-        if source.is_empty() {
-            return;
-        }
-        Arc::make_mut(&mut self.records).extend(
-            source
-                .records
-                .iter()
-                .map(|(key, value)| (key.clone(), Arc::clone(value))),
-        );
-    }
-
-    /// Remove a record without materializing its value, even when shared.
-    pub fn remove_discard<Q: Ord + ?Sized>(&mut self, key: &Q) -> bool
-    where
-        String: Borrow<Q>,
-    {
-        if !self.contains_key(key) {
-            return false;
-        }
-        Arc::make_mut(&mut self.records).remove(key).is_some()
-    }
 }
 
-impl<T: Clone> SharedRecords<T> {
+impl<T: Clone, K: Ord + Clone> SharedRecords<T, K> {
     pub fn get_mut<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<&mut T>
     where
-        String: Borrow<Q>,
+        K: Borrow<Q>,
     {
         if !self.contains_key(key) {
             return None;
@@ -165,7 +168,7 @@ impl<T: Clone> SharedRecords<T> {
     }
 
     /// A replaced value is cloned only if another map still references it.
-    pub fn insert(&mut self, key: String, value: T) -> Option<T> {
+    pub fn insert(&mut self, key: K, value: T) -> Option<T> {
         Arc::make_mut(&mut self.records)
             .insert(key, Arc::new(value))
             .map(Arc::unwrap_or_clone)
@@ -175,7 +178,7 @@ impl<T: Clone> SharedRecords<T> {
     /// Use `remove_discard` when the caller does not need the removed value.
     pub fn remove<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<T>
     where
-        String: Borrow<Q>,
+        K: Borrow<Q>,
     {
         if !self.contains_key(key) {
             return None;
@@ -186,9 +189,9 @@ impl<T: Clone> SharedRecords<T> {
     }
 }
 
-impl<T, Q: Ord + ?Sized> Index<&Q> for SharedRecords<T>
+impl<T, K: Ord + Clone, Q: Ord + ?Sized> Index<&Q> for SharedRecords<T, K>
 where
-    String: Borrow<Q>,
+    K: Borrow<Q>,
 {
     type Output = T;
     fn index(&self, key: &Q) -> &Self::Output {
@@ -196,8 +199,8 @@ where
     }
 }
 
-impl<T> Extend<(String, T)> for SharedRecords<T> {
-    fn extend<I: IntoIterator<Item = (String, T)>>(&mut self, values: I) {
+impl<T, K: Ord + Clone> Extend<(K, T)> for SharedRecords<T, K> {
+    fn extend<I: IntoIterator<Item = (K, T)>>(&mut self, values: I) {
         // Do not use insert: discarded replacements must not clone payloads.
         // An empty extension also leaves the shared map untouched.
         let mut values = values.into_iter();
@@ -212,8 +215,8 @@ impl<T> Extend<(String, T)> for SharedRecords<T> {
     }
 }
 
-impl<T> FromIterator<(String, T)> for SharedRecords<T> {
-    fn from_iter<I: IntoIterator<Item = (String, T)>>(values: I) -> Self {
+impl<T, K: Ord + Clone> FromIterator<(K, T)> for SharedRecords<T, K> {
+    fn from_iter<I: IntoIterator<Item = (K, T)>>(values: I) -> Self {
         Self {
             records: Arc::new(
                 values
@@ -225,16 +228,17 @@ impl<T> FromIterator<(String, T)> for SharedRecords<T> {
     }
 }
 
-impl<T: Serialize> Serialize for SharedRecords<T> {
+impl<T: Serialize, K: Serialize + Ord + Clone> Serialize for SharedRecords<T, K> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_map(self.iter())
     }
 }
 
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for SharedRecords<T> {
+impl<'de, T: Deserialize<'de>, K: Deserialize<'de> + Ord + Clone> Deserialize<'de>
+    for SharedRecords<T, K>
+{
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        BTreeMap::<String, T>::deserialize(deserializer)
-            .map(|records| records.into_iter().collect())
+        BTreeMap::<K, T>::deserialize(deserializer).map(|records| records.into_iter().collect())
     }
 }
 
