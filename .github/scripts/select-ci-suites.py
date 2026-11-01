@@ -17,7 +17,7 @@ ALL = ("rust-sources", "quality", "security", "workspace", *FOUNDATION,
        "web", "contracts", "build-tools", "smb-protocol")
 # Review the actual foundation consumers before updating this fingerprint.
 # A mismatch is only a full-CI fallback, never a product/admission restriction.
-REVIEWED_INPUTS = "f1b9afe48b30cecabef0089494a6047979a35a164f0136755b9a107d11a1f22b"
+REVIEWED_INPUTS = "9b298124b8da16278d871f9829772f228e06884925ce561ee8152b7f409a3c25"
 SELF = ".github/scripts/select-ci-suites.py"
 SHA = re.compile(r"[0-9a-f]{40}")
 DOCS = frozenset(("docs/EXTERNAL_TEST_SOURCES.md", "docs/architecture/read-projections.md",
@@ -48,6 +48,11 @@ def affected(path):
     if path.startswith(("tools/history-scale-bench/", "test/history-scale-bench/")) and path.endswith((".rs", ".py")):
         # The language shard scans all src/tools Rust source for retired paths.
         return {"foundation-language"} if path.startswith("tools/") and path.endswith(".rs") else set()
+    if path.endswith(".rs") and path.startswith(("test/tools/browser-smoke/runner/",
+                                                "test/tools/browser-smoke/unit/")):
+        # Only build-tools/browser jobs compile this bin; foundation selects
+        # other packages and its src/tools source scan excludes root test/.
+        return set()
     if path.endswith(".rs") and path.startswith("src/smb-vfs/src/"):
         # Serialization's retired-path scan includes all src Rust, including VFS.
         return {"foundation-language"}
@@ -177,7 +182,8 @@ def select(root, event_name, event, head, ref, *, fetch=get_json, reviewed=REVIE
             # Cargo loads every workspace member manifest even for selected -p
             # jobs. Source additions/deletions can change auto-target discovery
             # or remove a default lib.rs/main.rs entry point in an unbuilt member.
-            if path.startswith("src/") and path.endswith(".rs") and (path not in before or path not in after):
+            if (path.startswith(("src/", "test/tools/browser-smoke/"))
+                    and path.endswith(".rs") and (path not in before or path not in after)):
                 raise FullRun(f"source inventory changed: {path}")
             for entries in (before, after):
                 if path in entries and entries[path][:2] != ("100644", "blob"):

@@ -166,6 +166,16 @@ fn wait_for<T>(label: &str, mut check: impl FnMut() -> Result<T>) -> Result<T> {
         }
     }
 }
+fn decode_webdriver_response(method: &str, path: &str, status: u16, bytes: &[u8]) -> Result<Value> {
+    let response: Value = json_codec::from_slice(bytes)?;
+    // Successful script results are arbitrary JSON, including an "error" field.
+    // Only the protocol HTTP status marks a WebDriver command failure.
+    if status >= 400 {
+        return Err(format!("WebDriver {method} {path}: {}", response["value"]).into());
+    }
+    Ok(response["value"].clone())
+}
+
 struct Browser {
     port: u16,
     session: String,
@@ -178,11 +188,7 @@ impl Browser {
             &format!("/session/{}{path}", self.session),
             body,
         )?;
-        let response: Value = json_codec::from_slice(&bytes)?;
-        if status >= 400 || response["value"]["error"].is_string() {
-            return Err(format!("WebDriver {method} {path}: {}", response["value"]).into());
-        }
-        Ok(response["value"].clone())
+        decode_webdriver_response(method, path, status, &bytes)
     }
     fn element(&self, using: &str, selector: &str) -> Result<String> {
         wait_for(selector, || {

@@ -150,3 +150,40 @@ fn development_servers_keep_explicit_reference_web_directory() {
     );
     assert_eq!(command.get_current_dir(), Some(Path::new("/fixture")));
 }
+
+#[test]
+fn webdriver_success_keeps_arbitrary_script_json_including_error_fields() {
+    for value in [
+        json!({"error":"","ready":true,"sources":1}),
+        json!({"error":"application diagnostic","message":"not a protocol failure"}),
+        json!([{"error":"nested"}]),
+        json!("text"),
+        json!(42),
+        json!(true),
+        Value::Null,
+    ] {
+        let bytes = json_codec::to_vec(&json!({"value":value})).unwrap();
+        assert_eq!(
+            decode_webdriver_response("POST", "/execute/sync", 200, &bytes).unwrap(),
+            value
+        );
+    }
+}
+
+#[test]
+fn webdriver_error_http_preserves_protocol_failure_even_for_success_looking_values() {
+    for status in [400, 404, 500] {
+        for value in [
+            json!({"error":"no such element","message":"missing button","stacktrace":"driver trace"}),
+            json!({"ready":true}),
+            Value::Null,
+        ] {
+            let bytes = json_codec::to_vec(&json!({"value":value})).unwrap();
+            let error = decode_webdriver_response("POST", "/execute/sync", status, &bytes)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("WebDriver POST /execute/sync"));
+            assert!(error.contains(&value.to_string()));
+        }
+    }
+}

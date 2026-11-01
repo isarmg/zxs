@@ -181,7 +181,13 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             println!(
                 "PASS real source-scope registration and selected-entry read before batch NFC review"
             );
-            browser.script("const input=document.querySelector('.zxs-batch-entry input');input.value='e\\u0301';input.dispatchEvent(new Event('input',{bubbles:true}));return true")?;
+            let codepoints = browser.script(&format!(
+                "const input=document.querySelector('.zxs-batch-entry input');input.value={};input.dispatchEvent(new Event('input',{{bubbles:true}}));return Array.from(input.value,ch=>ch.codePointAt(0))",
+                json!("e\u{301}")
+            ))?;
+            if codepoints != json!([0x65, 0x301]) {
+                return Err(format!("batch NFC input must remain decomposed: {codepoints}").into());
+            }
             browser.click(&browser.button("Apply selected operation", "执行所选操作")?)?;
             browser.button("Confirm NFC name", "确认使用 NFC 名称")?;
             no_write(browser, 4)?;

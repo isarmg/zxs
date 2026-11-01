@@ -103,6 +103,9 @@ class Selector(unittest.TestCase):
         self.git("config", "user.email", "test@example.invalid")
         self.write("Cargo.toml", "fixed\n")
         self.write(".github/scripts/check-foundation.sh", "reviewed\n")
+        self.write("test/tools/browser-smoke/runner/main.rs", "old\n")
+        self.write("test/tools/browser-smoke/runner/naming.rs", "old\n")
+        self.write("test/tools/browser-smoke/unit/main_tests.rs", "old\n")
         self.write("src/engine/src/engine.rs", "old\n")
         self.write("src/smb-vfs/src/ffi.rs", "old\n")
         self.write("src/smb-vfs/src/lib.rs", "old\n")
@@ -141,6 +144,46 @@ class Selector(unittest.TestCase):
         self.assertEqual(result["base"], self.base)
         self.assertIn("evidence", result)
 
+    def test_browser_rust_edits_reuse_only_successful_foundation(self):
+        result = self.run_selection(["test/tools/browser-smoke/runner/main.rs",
+                                     "test/tools/browser-smoke/runner/naming.rs",
+                                     "test/tools/browser-smoke/unit/main_tests.rs"])
+        self.assertEqual(result["reused"], list(selection.FOUNDATION))
+        self.assertEqual(result["suites"], [s for s in selection.ALL if s not in selection.FOUNDATION])
+        self.assertIn("evidence", result)
+
+    def test_browser_allowlist_excludes_scripts_manifests_and_other_tools(self):
+        for path in ("test/tools/browser-smoke/runner/probe.py", "test/tools/browser-smoke/unit/probe.py",
+                     "test/tools/browser-smoke/fixtures/probe.rs", "test/tools/other/runner/main.rs",
+                     "tools/browser-smoke/main.rs", "tools/browser-smoke/Cargo.toml"):
+            self.assertIsNone(selection.affected(path), path)
+        self.assert_full(self.run_selection(["test/tools/browser-smoke/runner/probe.py"]))
+
+    def test_browser_additions_keep_full_ci(self):
+        self.assert_full(self.run_selection(["test/tools/browser-smoke/unit/new_tests.rs"]))
+
+    def test_browser_deleted_explicit_bin_keeps_full_ci(self):
+        self.git("rm", "test/tools/browser-smoke/runner/main.rs")
+        self.assert_full(self.run_selection(["test/tools/browser-smoke/runner/naming.rs"]))
+
+    def test_browser_without_exact_success_or_on_pr_keeps_full_ci(self):
+        head = self.commit(["test/tools/browser-smoke/runner/naming.rs"])
+        event = {"before": self.base, "after": head, "repository": {"full_name": selection.REPOSITORY}}
+        failed = evidence(self.base)
+        failed[1]["jobs"][0]["conclusion"] = "failure"
+        missing = ({"total_count": 0, "workflow_runs": []}, {})
+        for documents in (failed, missing):
+            self.assert_full(selection.select(self.root, "push", event, head, "refs/heads/main",
+                                              fetch=fetcher(documents), reviewed=self.reviewed))
+        self.assert_full(selection.select(self.root, "pull_request", event, head, "refs/heads/main",
+                                          fetch=fetcher(evidence(self.base)), reviewed=self.reviewed))
+
+    def test_browser_new_foundation_consumer_invalidates_proof(self):
+        self.write(".github/scripts/check-foundation.sh", "cargo test -p browser-smoke\n")
+        self.git("add", "."); self.git("commit", "-qm", "new browser consumer")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.assert_full(self.run_selection(["test/tools/browser-smoke/runner/naming.rs"]))
+
     def test_smb_sources_keep_language_and_all_non_foundation_suites(self):
         result = self.run_selection(["src/smb-vfs/src/ffi.rs", "test/smb-vfs/unit/ffi.rs",
                                      "docs/components/smb.md"])
@@ -166,7 +209,8 @@ class Selector(unittest.TestCase):
         self.assert_full(self.run_selection(["src/smb-vfs/src/ffi.rs", "src/smb-vfs/build.rs"]))
 
     def test_ring_material_path_rejections_cannot_reuse_crypto(self):
-        for prefix in ("src/smb-vfs/src/", "test/smb-vfs/", "src/engine/src/", "test/server/"):
+        for prefix in ("src/smb-vfs/src/", "test/smb-vfs/", "src/engine/src/", "test/server/",
+                       "test/tools/browser-smoke/runner/", "test/tools/browser-smoke/unit/"):
             for name in ("bad:name.rs", "bad\\name.rs", "../escape.rs", "./alias.rs", "/alias.rs"):
                 with self.subTest(path=prefix + name):
                     self.assertIsNone(selection.affected(prefix + name))
