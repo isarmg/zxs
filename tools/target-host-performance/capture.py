@@ -77,7 +77,15 @@ def stop(process):
 def run(args):
     repo = args.repo.resolve(strict=True)
     binary = args.binary.resolve(strict=True)
-    if args.workload == "probe":
+    if args.workload == "namespace":
+        if args.history is not None or args.namespace_files is None or args.namespace_case is None:
+            raise ValueError("namespace requires --namespace-files and --namespace-case, without --history")
+        if not 4 <= args.namespace_files <= 256:
+            raise ValueError("namespace files must be 4..256")
+        probe_args = [str(args.namespace_files), args.namespace_case]
+    elif args.history is None:
+        raise ValueError("this workload requires --history")
+    elif args.workload == "probe":
         if not 4 <= args.history <= 1024:
             raise ValueError("probe history must be 4..=1024")
         probe_args = [str(args.history)]
@@ -132,6 +140,8 @@ def run(args):
             "CARGO_PROFILE_RELEASE_OPT_LEVEL", "CARGO_PROFILE_RELEASE_DEBUG",
             "CARGO_PROFILE_RELEASE_LTO", "CARGO_PROFILE_RELEASE_CODEGEN_UNITS")},
         "workload": args.workload, "history": args.history,
+        "namespace_files": args.namespace_files if args.workload == "namespace" else None,
+        "namespace_case": args.namespace_case if args.workload == "namespace" else None,
         "payload_bytes": args.payload_bytes if args.workload.startswith("phases-") else None,
         "concurrency": "one probe process; existing fixture read thread only",
         "cache_state": "new fixture; OS cache uncontrolled; no cache dropping; first open follows writes",
@@ -214,8 +224,11 @@ def main():
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--workload", choices=("probe", "recovery-fixed", "recovery-growing",
-                                               "phases-fixed", "phases-growing"), required=True)
-    parser.add_argument("--history", type=int, required=True)
+                                               "phases-fixed", "phases-growing", "namespace"), required=True)
+    parser.add_argument("--history", type=int)
+    parser.add_argument("--namespace-files", type=int)
+    parser.add_argument("--namespace-case", choices=("empty", "content-one", "content-new", "content-four",
+                                                    "rename", "delete", "rename-conflict", "delete-conflict"))
     parser.add_argument("--payload-bytes", type=int, choices=(64, 128), default=128)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--build-command", required=True)
