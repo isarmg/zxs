@@ -1,7 +1,7 @@
 # 目标主机性能基线的测量边界
 
 本入口保存受限云环境的可复现实验方法与证据索引，不是 Ultra 288V 主机验收或性能承诺。
-工具为[集中采集器](../../tools/target-host-performance/README.md)与公开 Engine API
+工具为[集中采集器](../tools/target-host-performance.md)与公开 Engine API
 [阶段探针](../../tools/perf-check/src/bin/resource-phases.rs)。原有工作负载仍见
 [perf-check](../tools/perf-check.md)和[恢复测量](recovery-deduplication.md)。
 

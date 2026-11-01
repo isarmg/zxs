@@ -1,10 +1,10 @@
 # 目标主机优化的云环境测量入口
 
 本目录编排隔离 Development 探针，不修改产品或持久化协议。
-原始负载、正确性断言和计时范围见[性能检查](../../docs/tools/perf-check.md)及
-[恢复测量](../../docs/validation/recovery-deduplication.md)。云结果明确标作
+原始负载、正确性断言和计时范围见[性能检查](perf-check.md)及
+[恢复测量](../validation/recovery-deduplication.md)。云结果明确标作
 `cloud-development-proxy-experiment`，不能代表 Ultra 288V、12 块 E1.S 或真实 Samba 网络性能。
-已执行范围、基线数字及候选边界见[目标主机性能基线](../../docs/validation/target-host-performance.md)。
+已执行范围、基线数字及候选边界见[目标主机性能基线](../validation/target-host-performance.md)。
 
 根协调者先冻结源码，再集中构建；所有运行必须使用同一次构建的确切 target、profile、
 features 与 Cargo.lock。新开一次构建前结束现有测量，不在另一个 worktree 复用来源不清的 target。
