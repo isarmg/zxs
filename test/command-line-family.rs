@@ -99,3 +99,126 @@ mod contracts {
         let help=Actions::try_parse_from(["actions","run","--help"]).err().unwrap();assert_eq!(help.exit_code(),0);assert!(help.to_string().contains("--count <COUNT>"));
     }
 }
+
+mod command_line_error_source_regressions {
+    use command_line::error::{Error, ErrorFormatter, ErrorKind, KindFormatter};
+    use std::error::Error as StdError;
+    use std::fmt;
+    use std::io;
+
+    #[derive(Debug)]
+    struct LeafCause;
+
+    impl fmt::Display for LeafCause {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("fixture leaf cause")
+        }
+    }
+
+    impl StdError for LeafCause {}
+
+    #[derive(Debug)]
+    struct IoContext {
+        operation_id: u32,
+        cause: LeafCause,
+    }
+
+    impl fmt::Display for IoContext {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "fixture operation {} failed", self.operation_id)
+        }
+    }
+
+    impl StdError for IoContext {
+        fn source(&self) -> Option<&(dyn StdError + 'static)> {
+            Some(&self.cause)
+        }
+    }
+
+    fn source_messages(mut cause: &(dyn StdError + 'static)) -> Vec<String> {
+        let mut messages = Vec::new();
+        loop {
+            messages.push(cause.to_string());
+            match cause.source() {
+                Some(next) => cause = next,
+                None => return messages,
+            }
+        }
+    }
+
+    fn check_io_conversion<F: ErrorFormatter>() {
+        let original = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            IoContext {
+                operation_id: 17,
+                cause: LeafCause,
+            },
+        );
+        let expected_kind = original.kind();
+        let expected_message_chain = source_messages(&original);
+        // Both conversions already use raw() to own the presentation text.
+        // The regression must preserve those exact bytes, not change formatter policy.
+        let previous = Error::<F>::raw(ErrorKind::Io, &original);
+        let expected_display = previous.to_string();
+        let expected_render = previous.render().to_string();
+
+        let converted: Error<F> = original.into();
+
+        assert_eq!(converted.kind(), ErrorKind::Io);
+        assert_eq!(converted.to_string(), expected_display);
+        assert_eq!(converted.render().to_string(), expected_render);
+        let source = converted
+            .source()
+            .expect("conversion must retain the original io::Error as source");
+        let retained = source
+            .downcast_ref::<io::Error>()
+            .expect("source must preserve the io::Error type");
+        assert_eq!(retained.kind(), expected_kind);
+        let context = retained
+            .get_ref()
+            .expect("fixture io::Error owns an inner cause")
+            .downcast_ref::<IoContext>()
+            .expect("the typed inner cause must remain available");
+        assert_eq!(context.operation_id, 17);
+        assert_eq!(source_messages(source), expected_message_chain);
+    }
+
+    fn check_fmt_conversion<F: ErrorFormatter>() {
+        let original = fmt::Error;
+        let expected_message_chain = source_messages(&original);
+        let previous = Error::<F>::raw(ErrorKind::Format, original);
+        let expected_display = previous.to_string();
+        let expected_render = previous.render().to_string();
+
+        let converted: Error<F> = original.into();
+
+        assert_eq!(converted.kind(), ErrorKind::Format);
+        assert_eq!(converted.to_string(), expected_display);
+        assert_eq!(converted.render().to_string(), expected_render);
+        let source = converted
+            .source()
+            .expect("conversion must retain the original fmt::Error as source");
+        assert!(source.downcast_ref::<fmt::Error>().is_some());
+        assert_eq!(source_messages(source), expected_message_chain);
+    }
+
+    #[test]
+    fn io_conversion_preserves_default_formatter_source_and_message() {
+        check_io_conversion::<command_line::error::DefaultFormatter>();
+    }
+
+    #[test]
+    fn io_conversion_preserves_kind_formatter_source_and_message() {
+        check_io_conversion::<KindFormatter>();
+    }
+
+    #[test]
+    fn fmt_conversion_preserves_default_formatter_source_and_message() {
+        check_fmt_conversion::<command_line::error::DefaultFormatter>();
+    }
+
+    #[test]
+    fn fmt_conversion_preserves_kind_formatter_source_and_message() {
+        check_fmt_conversion::<KindFormatter>();
+    }
+}
