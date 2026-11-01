@@ -149,7 +149,9 @@ lock directory = {work}/lock
 pid directory = {work}/pid
 ncalrpc dir = {work}/ncalrpc
 log file = {work}/samba-identity.log
-log level = 1 smb2:10
+# Isolated synthetic fixture only: distinguish parent ACL checks from VFS/RPC failures.
+log level = 10
+max log size = 4096
 debug uid = yes
 debug pid = yes
 load printers = no
@@ -280,7 +282,7 @@ force user = {smb_user.pw_name}
                             child.wait()
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 # Keep diagnostic output, never synthetic passwords/auth files.
-                for name in ("engine.log", "smbd.log", "samba-identity.log"):
+                for name in ("engine.log", "smbd.log", "samba-identity.log.old", "samba-identity.log"):
                     if not (work / name).exists():
                         continue
                     text = (work / name).read_text(errors="replace").replace(password, "[redacted]")

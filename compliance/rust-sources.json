@@ -52063,7 +52063,7 @@
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "cf85f72fb40b8d9a90ac77d7a6df9a6d1c649a00bba9f6636901721e6d5c9d98",
     "compliance/external-tests/foundation.json": "a4f53e9155bef82562af92319b06cdd9fd7009b05912ca4a947873ee2b8a0f0a",
-    "compliance/external-tests/integrated.json": "03b27ca3f1e893ad9a4af429572c8d57691257a7498a3cc16cd90cd9134cf0e8",
+    "compliance/external-tests/integrated.json": "dea8c0d3ae9b85a70985b4278f586836c450f7261f03829338025c564e872737",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -79215,9 +79215,9 @@
       ]
     },
     "src/macros": {
-      "bytes": 11196,
+      "bytes": 13969,
       "directory": "src/macros",
-      "file_count": 7,
+      "file_count": 9,
       "files": [
         {
           "path": "test/macros/unit/component/case_normalization_tests.rs",
@@ -79230,6 +79230,20 @@
           "sha256": "92437fbf2224cf0065a3e59d12eaa3c49349e6bce61cb948ea15d3da5bc64511",
           "source": "src/macros/src/lib.rs",
           "source_sha256_before": "beb1d3eb2526c4e63f832f2888452fc97b862b4d8649bf69ca8abeaa27b38caa"
+        },
+        {
+          "path": "test/macros/unit/memo/tests.rs",
+          "sha256": "be4c490b0b4d8952d8814280450a82137fd507267d2629566fcb74df9b5b8f90",
+          "source": "test/macros/unit/memo/tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "be4c490b0b4d8952d8814280450a82137fd507267d2629566fcb74df9b5b8f90"
+        },
+        {
+          "path": "test/macros/unit/slice/tests.rs",
+          "sha256": "47cc8a71cb42ecf43d1f9367236dbcbb796b5f3932050a46f3118bd12a962171",
+          "source": "test/macros/unit/slice/tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "47cc8a71cb42ecf43d1f9367236dbcbb796b5f3932050a46f3118bd12a962171"
         },
         {
           "path": "test/macros/unit/view/attribute_order_tests.rs",
@@ -79771,9 +79785,9 @@
         "src/component.rs": "7eb8cac336f8d2dc87a0392d5a4c2b35316fd8d5a42bbe6607f05f1a44aae7df",
         "src/diagnostics.rs": "b501d80659ee3202adc4f60e6eec000389fe34eeb19cc0fb60e02c15aaabd03e",
         "src/lib.rs": "4a322e327c0ca689cd978fbae9561873f23796ea2f27e14043fd910852d1501c",
-        "src/memo.rs": "9ac1857a33a83f73eafb576895ce02f3d0c0898ca869ae8741747fa281a01539",
+        "src/memo.rs": "c2893396e20c04248b2672b602fd395d74f999af85799a100cec3c8ceab8609e",
         "src/prop_options.rs": "436813de316b1d79bf6de933aba6a6d0f990410fbb2899763c9267f148f74046",
-        "src/slice.rs": "496a010eedcb7f8c4b74a9aed209f2ff5c435d3efba6f9d3d877864eb18fc943",
+        "src/slice.rs": "5e4e2cae6a4ae88c9893666ac93bb2479cc591f41bd202e6a8a1f639dd11d61c",
         "src/slot.rs": "fcf5b8d2495f6866ef7b278b8fa8a3fce78cbdf3e5cb3d9005e07f6a3a0e7200",
         "src/view/component_builder.rs": "01d324df7244163a5f2a2c87dc38e8e296213129fc3228bcb28119fb6eaa358b",
         "src/view/mod.rs": "ed0eb96dfa88fcc1e16e4adc91e3ad31e9c265eddc5f50826540d12689a84b43",
@@ -102222,9 +102236,9 @@
         "src/component.rs": "7eb8cac336f8d2dc87a0392d5a4c2b35316fd8d5a42bbe6607f05f1a44aae7df",
         "src/diagnostics.rs": "b501d80659ee3202adc4f60e6eec000389fe34eeb19cc0fb60e02c15aaabd03e",
         "src/lib.rs": "4a322e327c0ca689cd978fbae9561873f23796ea2f27e14043fd910852d1501c",
-        "src/memo.rs": "9ac1857a33a83f73eafb576895ce02f3d0c0898ca869ae8741747fa281a01539",
+        "src/memo.rs": "c2893396e20c04248b2672b602fd395d74f999af85799a100cec3c8ceab8609e",
         "src/prop_options.rs": "436813de316b1d79bf6de933aba6a6d0f990410fbb2899763c9267f148f74046",
-        "src/slice.rs": "496a010eedcb7f8c4b74a9aed209f2ff5c435d3efba6f9d3d877864eb18fc943",
+        "src/slice.rs": "5e4e2cae6a4ae88c9893666ac93bb2479cc591f41bd202e6a8a1f639dd11d61c",
         "src/slot.rs": "fcf5b8d2495f6866ef7b278b8fa8a3fce78cbdf3e5cb3d9005e07f6a3a0e7200",
         "src/view/component_builder.rs": "01d324df7244163a5f2a2c87dc38e8e296213129fc3228bcb28119fb6eaa358b",
         "src/view/mod.rs": "ed0eb96dfa88fcc1e16e4adc91e3ad31e9c265eddc5f50826540d12689a84b43",

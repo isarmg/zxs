@@ -195,11 +195,10 @@ fn topology_wins_over_misordered_sequences_and_input_order_is_irrelevant() {
     );
 }
 #[test]
-fn cycles_and_duplicates_are_safe_without_losing_unrelated_edges_or_nodes() {
+fn cycles_preserve_unrelated_edges_and_nodes() {
     let tree = layout(&[
         v("a", 1, &["b"]),
         v("b", 2, &["a"]),
-        v("c", 3, &["a", "a", "c"]),
         v("c", 3, &["a", "a", "c"]),
         v("d", 4, &[]),
     ]);
@@ -713,14 +712,11 @@ fn indexed_layout_matches_reference_for_every_four_node_directed_graph() {
 }
 
 #[test]
-fn indexed_layout_preserves_conflicting_identity_and_parent_normalization() {
+fn indexed_layout_preserves_unique_identity_order_and_parent_normalization() {
     let mut records = vec![
         v("a", 1, &["missing", "a"]),
         v("b", 2, &["a", "a", "missing", "b"]),
         v("c", 3, &["b", "a"]),
-        // Whole-Version ordering chooses this duplicate before normalization.
-        v("c", 3, &["a", "b"]),
-        v("c", 4, &["d"]),
         v("d", 4, &["c"]),
         v("e", 5, &[]),
     ];
@@ -1243,4 +1239,17 @@ fn indexed_path_getters_observe_new_geometry_without_changing_edge_identity() {
         });
         assert_eq!(path.get_untracked(), "");
     });
+}
+
+#[test]
+#[should_panic(expected = "invariant: admitted history nodes have unique identities")]
+fn duplicate_projected_nodes_are_internal_bugs() {
+    let record = node(json_codec::json!({"node_id":"same", "sequence":"1"}));
+    layout(&metadata(&[record.clone(), record]));
+}
+
+#[test]
+#[should_panic(expected = "invariant: admitted history nodes have unique identities")]
+fn conflicting_node_identities_are_not_silently_selected() {
+    layout(&[v("same", 1, &[]), v("same", 2, &["parent"])]);
 }

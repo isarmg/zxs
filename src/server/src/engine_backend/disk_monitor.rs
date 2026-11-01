@@ -13,7 +13,22 @@ fn disk_sample(observation: DiskObservation) -> DiskSample {
     } = observation;
     let (capacity, observation_failure) = match capacity {
         Ok(capacity) => (Some(capacity), None),
-        Err(error) => (None, Some(std::sync::Arc::new(error))),
+        Err(error) => {
+            let issue = match error.stage {
+                storage_engine::DiskObservationStage::Seal => {
+                    crate::DiskObservationIssue::Seal(error.source.code())
+                }
+                storage_engine::DiskObservationStage::Capacity => {
+                    crate::DiskObservationIssue::Capacity(error.source.code())
+                }
+            };
+            (
+                None,
+                Some(std::sync::Arc::new(crate::DiskObservationFailure::new(
+                    issue, error,
+                ))),
+            )
+        }
     };
     let (power_watts, power_unavailable_reason) = crate::telemetry::disk_power(
         disk.physical_device.as_deref(),

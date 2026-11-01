@@ -1,4 +1,5 @@
 //! Fresh diagnostic observations are separate from permanent publication outcomes.
+#[cfg(any(feature = "core", test))]
 use crate::ApiError;
 
 #[derive(Debug)]
@@ -32,10 +33,12 @@ impl CheckedOperationHealth {
         &self.checked_at
     }
 
+    #[cfg(feature = "core")]
     pub(crate) fn completed(state: storage_contract::CurrentHealth) -> Result<Self, ApiError> {
         Self::at(state, std::time::SystemTime::now())
     }
 
+    #[cfg(feature = "core")]
     pub(crate) fn at(
         state: storage_contract::CurrentHealth,
         time: std::time::SystemTime,
@@ -47,6 +50,7 @@ impl CheckedOperationHealth {
     }
 }
 
+#[cfg(any(feature = "core", test))]
 fn checked_at(time: std::time::SystemTime) -> Result<String, ApiError> {
     let invalid = || {
         ApiError::new(

@@ -3,7 +3,7 @@
 pub struct DiskSample {
     pub slot_id: String,
     /// Internal diagnostic source; the telemetry boundary emits only stage and code.
-    pub observation_failure: Option<std::sync::Arc<storage_engine::DiskObservationFailure>>,
+    pub observation_failure: Option<std::sync::Arc<DiskObservationFailure>>,
     pub online: bool,
     pub read_only: bool,
     pub simulation: bool,
@@ -59,11 +59,30 @@ pub enum DiskObservationIssue {
     Capacity(storage_contract::ErrorCode),
 }
 
-impl From<&storage_engine::DiskObservationFailure> for DiskObservationIssue {
-    fn from(error: &storage_engine::DiskObservationFailure) -> Self {
-        match error.stage {
-            storage_engine::DiskObservationStage::Seal => Self::Seal(error.source.code()),
-            storage_engine::DiskObservationStage::Capacity => Self::Capacity(error.source.code()),
+/// Application boundary for a backend's concrete observation failure.
+/// The safe classification is independent of the optional storage engine.
+#[derive(Debug, error_definition::Error)]
+#[error("disk observation failed: {source}")]
+pub struct DiskObservationFailure {
+    issue: DiskObservationIssue,
+    #[source]
+    source: Box<dyn std::error::Error + Send + Sync>,
+}
+
+impl DiskObservationFailure {
+    pub fn new(
+        issue: DiskObservationIssue,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            issue,
+            source: Box::new(source),
         }
+    }
+}
+
+impl From<&DiskObservationFailure> for DiskObservationIssue {
+    fn from(error: &DiskObservationFailure) -> Self {
+        error.issue.clone()
     }
 }

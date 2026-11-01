@@ -1,5 +1,6 @@
 //! zxs HTTP boundary. Storage semantics stay in the synchronous core backend.
 pub mod auth;
+#[cfg(any(feature = "core", test))]
 mod content_proof_budget;
 #[cfg(feature = "core")]
 pub mod engine_backend;
@@ -155,7 +156,9 @@ pub use backend_default_directory::{
     SelectedDirectoryBranch,
 };
 mod backend_monitoring;
-pub use backend_monitoring::{DiskSample, PowerUnavailable};
+pub use backend_monitoring::{
+    DiskObservationFailure, DiskObservationIssue, DiskSample, PowerUnavailable,
+};
 mod backend_read;
 mod backend_status;
 pub use backend_status::{

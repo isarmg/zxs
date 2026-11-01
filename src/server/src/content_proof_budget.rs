@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // One maximum-format manifest can be admitted even during its encoded/decoded
 // overlap. Other content opens share this ceiling; it is not a per-handle grant.
 const LIMIT: usize = 2 * (512 * 1024 * 1024 + storage_contract::CHECKSUM_HEADER_BYTES);
+#[cfg(feature = "core")]
 static BUDGET: Budget = Budget(AtomicUsize::new(0));
 
 struct Budget(AtomicUsize);
@@ -13,6 +14,7 @@ pub(crate) struct Reservation<'a> {
     bytes: usize,
 }
 
+#[cfg(feature = "core")]
 pub(crate) fn reserve(encoded_bytes: usize) -> Result<Reservation<'static>, ApiError> {
     BUDGET.reserve(encoded_bytes)
 }

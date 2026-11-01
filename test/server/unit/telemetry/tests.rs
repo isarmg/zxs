@@ -1139,21 +1139,19 @@ fn disk_observation_wire_contains_only_safe_classification() {
         usage_percent: None,
         power_watts: None,
         power_unavailable_reason: Some(crate::PowerUnavailable::SimulatedDisk),
-        observation_failure: Some(std::sync::Arc::new(
-            storage_engine::DiskObservationFailure {
-                slot_id: "P01".into(),
-                stage: storage_engine::DiskObservationStage::Capacity,
-                source: Box::new(
-                    std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "/private/secret sentinel",
-                    )
-                    .into(),
-                ),
-            },
-        )),
+        observation_failure: Some(std::sync::Arc::new(crate::DiskObservationFailure::new(
+            crate::DiskObservationIssue::Capacity(storage_contract::ErrorCode::IoError),
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "/private/secret sentinel",
+            ),
+        ))),
     };
-    assert!(std::error::Error::source(sample.observation_failure.as_deref().unwrap()).is_some());
+    let source = std::error::Error::source(sample.observation_failure.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        source.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
     let wire = json_codec::to_value(DiskStatus::from(sample)).unwrap();
     let expected: Value = json_codec::from_str(include_str!(
         "../../fixtures/disk-observation-unavailable.json"

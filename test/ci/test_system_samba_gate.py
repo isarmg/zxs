@@ -48,6 +48,9 @@ class SystemSambaGate(unittest.TestCase):
         self.assertIn('valid users = {smb_user.pw_name}', script)
         self.assertIn('assert_owner_mode(Path(ready["socket"]), engine_user.pw_uid, 0o600)', script)
         self.assertIn('assert_owner_mode(work / "empty", 0, 0o555)', script)
+        self.assertIn('log level = 10\nmax log size = 4096', script)
+        self.assertIn('("engine.log", "smbd.log", "samba-identity.log.old", "samba-identity.log")', script)
+        self.assertIn('.replace(password, "[redacted]")', script)
         self.assertNotIn('"--debug-stdout"', script)  # stdout omits the debug-uid header
         fixture = (ROOT / "test/server/unit/smb_rpc/system_samba_tests.rs").read_text()
         self.assertIn('allowed_uid: 0,', fixture)

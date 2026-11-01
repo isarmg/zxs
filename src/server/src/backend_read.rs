@@ -267,13 +267,13 @@ impl From<ResolvedEntry> for ResolveResponse {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(feature = "core", test))]
 #[derive(data_serialization::Serialize)]
 pub(crate) struct FileHistoryResponse {
     file_id: String,
     versions: Vec<VersionRecordResponse>,
 }
-#[cfg(test)]
+#[cfg(all(feature = "core", test))]
 impl FileHistoryResponse {
     pub(crate) fn new(file_id: String, versions: Vec<storage_contract::FileVersion>) -> Self {
         Self {

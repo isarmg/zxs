@@ -89,6 +89,18 @@ fn zero_capacity_remains_known_and_failure_retains_internal_source() {
     assert!(zero.observation_failure.is_none());
     let failed = disk_sample(online_observation(None));
     let error = failed.observation_failure.unwrap();
-    assert_eq!(error.stage, storage_engine::DiskObservationStage::Capacity);
-    assert!(std::error::Error::source(error.as_ref()).is_some());
+    assert!(matches!(
+        crate::DiskObservationIssue::from(error.as_ref()),
+        crate::DiskObservationIssue::Capacity(storage_contract::ErrorCode::IoError)
+    ));
+    let source = std::error::Error::source(error.as_ref()).unwrap();
+    let engine_failure = source
+        .downcast_ref::<storage_engine::DiskObservationFailure>()
+        .unwrap();
+    assert_eq!(
+        engine_failure.stage,
+        storage_engine::DiskObservationStage::Capacity
+    );
+    assert_eq!(engine_failure.slot_id, "P01");
+    assert!(std::error::Error::source(engine_failure).is_some());
 }

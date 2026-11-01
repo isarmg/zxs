@@ -43,7 +43,6 @@ fn metadata(records: &[FileNode]) -> Vec<Version> {
                 .map(|parent| parent.id().to_owned())
                 .collect::<Vec<_>>();
             parents.sort();
-            parents.dedup();
             Version {
                 id: record.id().to_owned(),
                 sequence: record.sequence(),
@@ -52,7 +51,6 @@ fn metadata(records: &[FileNode]) -> Vec<Version> {
         })
         .collect::<Vec<_>>();
     versions.sort();
-    versions.dedup();
     versions
 }
 
@@ -149,19 +147,16 @@ thread_local! {
 /// Only declared, visible parents produce edges. Cyclic edges are isolated
 /// rather than inventing chronology or making the traversal recurse forever.
 fn layout(versions: &[Version]) -> Layout {
-    let mut nodes = BTreeMap::<String, Version>::new();
-    // Stable conflict handling also makes duplicate identities harmless.
-    let mut sorted = versions.to_vec();
-    sorted.sort();
-    for version in sorted {
-        nodes.entry(version.id.clone()).or_insert(version);
+    let mut nodes = versions.to_vec();
+    nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut indexes = BTreeMap::new();
+    for (index, version) in nodes.iter().enumerate() {
+        // Ingress rejects duplicate node identities; projection preserves them.
+        assert!(
+            indexes.insert(version.id.as_str(), index).is_none(),
+            "invariant: admitted history nodes have unique identities"
+        );
     }
-    let nodes = nodes.into_values().collect::<Vec<_>>();
-    let indexes = nodes
-        .iter()
-        .enumerate()
-        .map(|(index, version)| (version.id.as_str(), index))
-        .collect::<BTreeMap<_, _>>();
     let mut children = vec![Vec::new(); nodes.len()];
     for (child, version) in nodes.iter().enumerate() {
         for parent in &version.parents {

@@ -22,10 +22,6 @@ impl Parse for SliceMacroInput {
         let path: Punctuated<rust_syntax::Member, Token![.]> =
             Punctuated::parse_separated_nonempty(input)?;
 
-        if path.is_empty() {
-            return Err(input.error("expected identifier"));
-        }
-
         if !input.is_empty() {
             return Err(input.error("unexpected token"));
         }
@@ -53,3 +49,7 @@ pub fn slice_impl(tokens: TokenStream) -> TokenStream {
     let input = parse_macro_input!(tokens as SliceMacroInput);
     input.into_token_stream().into()
 }
+
+#[cfg(test)]
+#[path = "../../../test/macros/unit/slice/tests.rs"]
+mod tests;
