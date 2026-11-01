@@ -51,6 +51,10 @@ thread_local! { static CREDENTIALS: RefCell<Credentials> = RefCell::new(Credenti
 
 #[derive(Debug, error_definition::Error)]
 pub enum ErrorSource {
+    #[error("invalid monitor history: {0}")]
+    MonitorHistory(#[source] crate::monitor::HistoryError),
+    #[error("{0}")]
+    AdminResponse(#[source] crate::admin::ResponseError),
     #[error("invalid activity history: {0}")]
     ActivityHistory(#[source] json_codec::Error),
     #[error("invalid file-history branches: {0}")]
@@ -379,6 +383,18 @@ async fn decode(fetched: Fetched) -> Result<Value, Error> {
 
 pub async fn request(method: &str, path: &str, body: Option<Value>) -> Result<Value, Error> {
     decode(fetch(method, path, body).await?).await
+}
+
+/// Keep the actual HTTP status when endpoint-specific success decoding fails.
+pub(crate) async fn validated_request<T>(
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+    validate: impl FnOnce(Value) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let fetched = fetch(method, path, body).await?;
+    let status = fetched.response.status();
+    validate(decode(fetched).await?).map_err(|error| error.with_status(status))
 }
 
 pub(crate) async fn cancellable_get(

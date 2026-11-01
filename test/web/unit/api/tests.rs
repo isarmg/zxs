@@ -271,3 +271,22 @@ fn invalid_api_path_preserves_the_contract_error_source() {
         Some(ErrorSource::Path(_))
     ));
 }
+
+#[test]
+fn endpoint_validation_status_keeps_request_identity_and_source() {
+    use std::error::Error as _;
+    let mut failure = Error::from(crate::admin::ResponseError::Contract("plan digest"));
+    failure.request_id = Some("request-admin".into());
+    let source = failure.source.clone().unwrap();
+    for status in [200, 201, 202, 204] {
+        let failure = failure.clone().with_status(status);
+        assert_eq!(failure.status, status);
+        assert_eq!(failure.request_id.as_deref(), Some("request-admin"));
+        assert!(std::sync::Arc::ptr_eq(
+            failure.source.as_ref().unwrap(),
+            &source
+        ));
+        assert!(failure.source().is_some());
+        assert!(failure.mutation_outcome_unknown());
+    }
+}

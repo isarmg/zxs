@@ -79392,10 +79392,10 @@
     "e37e4ee6074dabae4638f15f4926b9af9c67c0b100fd2d7db4e45d323be61509"
   ],
   "lockfiles_sha256": {
-    "Cargo.lock": "d69274c69ac1e6b8a18df42ed044b789ab3a45d4bec9e0b89add86b73e64b0d5"
+    "Cargo.lock": "6a4a2c465552fc8212480eec25dbb406817e7f7aeccc3a9c1a4897ed72bda214"
   },
   "manifests_sha256": {
-    "Cargo.toml": "d2d6dcf58778908a31654b6d7e6321f9ef7875fc112f019b37760ef8d1f068e7",
+    "Cargo.toml": "509857d3180512f222f5048ecaae7dc3f52577bbd90986cab144d7f2df7bc742",
     "src/auth/Cargo.toml": "e6986ad60c15d48e2b3d60a5157de60ac7318f1ecc80befc1adfd60059b5dab3",
     "src/client/Cargo.toml": "0dca81316feaf3caf87f0d244cb1d9f6a54232d97e836892f4fb196fbd8bcbb5",
     "src/contract/Cargo.toml": "3acfdea00c1014c819ed23cd723591db141177629502661fd4e088b7dcc0da8b",
@@ -79630,7 +79630,7 @@
     "src/server/Cargo.toml": "b26f08e30c291e51470f0f528c2f9185eed907d0d2f1b22c01924f3fd63417c4",
     "src/smb-vfs/Cargo.toml": "0106d55c98c1383db6d579eb9c7ed7ac0d91e069e6e6bd2722bc670b2cdef1cd",
     "src/smb/Cargo.toml": "66ca64b286cff2b2a6b2f551145e267b2eac6017affcd4c239605a9d080ecec4",
-    "src/web/Cargo.toml": "63d46675a945db2b110adfcd370956ef7d6980c50d8e863c518f21101a2edf98",
+    "src/web/Cargo.toml": "983a805f1d96f44a3c46b0988279789cfb7b0ac8af0d4b2abe2beb9408179111",
     "tools/browser-smoke/Cargo.toml": "fe0db8d33c6a8143d67cfb4a4fbf2d528a113e078a51f88b31e7b5e70d85baa8",
     "tools/contract-check/Cargo.toml": "25ab62023c5fc48b88d7eff349ee634a3e474f523a05ebf76bdb962685d80567",
     "tools/perf-check/Cargo.toml": "0711cfa82680a487e214f0c125e181144bb8bb0944a60c11051a8b751a079694",
@@ -81024,7 +81024,7 @@
         "src/query_engine/value_debug.rs": "efc3328047f4c52308967d60218c8cd18047cfdd9d5508fe0b62d2e5ee892641",
         "src/sqlite/arguments.rs": "c21a7ff0d70444d4fa637606e5242ee20f50aeff3dd8c5250776d0c6b0f558e5",
         "src/sqlite/column.rs": "084ac19c20989d03deb34d89be43d58133dcfe638d055f14e5c4b5b2c0d7001f",
-        "src/sqlite/connection/collation.rs": "f4d6f4783804e52f71e6dcdab5c9e680f8e44d03afb64f51ee1552b8e6341299",
+        "src/sqlite/connection/collation.rs": "da0ce0c599bedf658ce7e700fadfb7547effc1aa08155c77ce3ac462ac06bcb9",
         "src/sqlite/connection/describe.rs": "4245e6b8bce8fec1764529ecca126870e84ee8d3fe0340e0fa4149236e72896d",
         "src/sqlite/connection/deserialize.rs": "fd133b892b08b6e7f33f97754fc13122ef3600fc1063206dcdae2b604c96dec2",
         "src/sqlite/connection/establish.rs": "d8bac82d207a3f0f65eaae75fe8cfcb7474037877dc0455392281c741daed9f8",
@@ -81147,7 +81147,7 @@
         "src/query_engine/value_debug.rs": "efc3328047f4c52308967d60218c8cd18047cfdd9d5508fe0b62d2e5ee892641",
         "src/sqlite/arguments.rs": "c21a7ff0d70444d4fa637606e5242ee20f50aeff3dd8c5250776d0c6b0f558e5",
         "src/sqlite/column.rs": "084ac19c20989d03deb34d89be43d58133dcfe638d055f14e5c4b5b2c0d7001f",
-        "src/sqlite/connection/collation.rs": "f4d6f4783804e52f71e6dcdab5c9e680f8e44d03afb64f51ee1552b8e6341299",
+        "src/sqlite/connection/collation.rs": "da0ce0c599bedf658ce7e700fadfb7547effc1aa08155c77ce3ac462ac06bcb9",
         "src/sqlite/connection/describe.rs": "4245e6b8bce8fec1764529ecca126870e84ee8d3fe0340e0fa4149236e72896d",
         "src/sqlite/connection/deserialize.rs": "fd133b892b08b6e7f33f97754fc13122ef3600fc1063206dcdae2b604c96dec2",
         "src/sqlite/connection/establish.rs": "d8bac82d207a3f0f65eaae75fe8cfcb7474037877dc0455392281c741daed9f8",
@@ -95986,7 +95986,7 @@
         "src/query_engine/value_debug.rs": "efc3328047f4c52308967d60218c8cd18047cfdd9d5508fe0b62d2e5ee892641",
         "src/sqlite/arguments.rs": "c21a7ff0d70444d4fa637606e5242ee20f50aeff3dd8c5250776d0c6b0f558e5",
         "src/sqlite/column.rs": "084ac19c20989d03deb34d89be43d58133dcfe638d055f14e5c4b5b2c0d7001f",
-        "src/sqlite/connection/collation.rs": "f4d6f4783804e52f71e6dcdab5c9e680f8e44d03afb64f51ee1552b8e6341299",
+        "src/sqlite/connection/collation.rs": "da0ce0c599bedf658ce7e700fadfb7547effc1aa08155c77ce3ac462ac06bcb9",
         "src/sqlite/connection/describe.rs": "4245e6b8bce8fec1764529ecca126870e84ee8d3fe0340e0fa4149236e72896d",
         "src/sqlite/connection/deserialize.rs": "fd133b892b08b6e7f33f97754fc13122ef3600fc1063206dcdae2b604c96dec2",
         "src/sqlite/connection/establish.rs": "d8bac82d207a3f0f65eaae75fe8cfcb7474037877dc0455392281c741daed9f8",
@@ -114408,6 +114408,18 @@
           "features": [
             "futures-executor",
             "wasm-bindgen"
+          ],
+          "roles": [
+            "runtime"
+          ]
+        },
+        "src/foundation/core-types/date-time": {
+          "features": [
+            "alloc",
+            "default",
+            "formatting",
+            "parsing",
+            "std"
           ],
           "roles": [
             "runtime"

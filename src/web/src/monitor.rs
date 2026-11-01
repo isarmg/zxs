@@ -1,4 +1,6 @@
 mod chart;
+mod history;
+pub(crate) use history::Error as HistoryError;
 mod scrub;
 
 use crate::{
@@ -26,7 +28,7 @@ pub(crate) struct Model {
     pub loading: bool,
     pub loaded: bool,
     pub failure: Option<Feedback>,
-    pub history: crate::snapshot::Snapshot<Value>,
+    history: crate::snapshot::Snapshot<Option<history::History>>,
     pub range: String,
     pub history_loading: bool,
     history_cancellation: Option<api::ReadCancellation>,
@@ -45,7 +47,7 @@ impl Default for Model {
             loading: false,
             loaded: false,
             failure: None,
-            history: Value::Null.into(),
+            history: None.into(),
             range: "1min".into(),
             history_loading: false,
             history_cancellation: None,
@@ -210,17 +212,25 @@ fn complete_history_load(
         return;
     }
     match result {
-        Ok(value) => state.update(|s| {
-            s.monitor.history = value.into();
-            s.monitor.history_loaded = true;
-            s.monitor.history_failure = None;
-        }),
+        Ok(value) => state.update(|s| accept_history_response(&mut s.monitor, value, range)),
         Err(error) => state.update(|s| s.monitor.history_failure = Some(feedback(&error))),
     }
     state.update(|s| {
         s.monitor.history_loading = false;
         s.monitor.history_cancellation = None;
     });
+}
+fn accept_history_response(model: &mut Model, value: Value, range: &str) {
+    match history::decode(value, range) {
+        Ok(history) => {
+            if model.history.as_ref() != Some(&history) {
+                model.history = Some(history).into();
+            }
+            model.history_loaded = true;
+            model.history_failure = None;
+        }
+        Err(error) => model.history_failure = Some(feedback(&error)),
+    }
 }
 fn history_matches(model: &Model, generation: u64, range: &str) -> bool {
     model.history_generation == generation && model.range == range
@@ -239,7 +249,7 @@ fn select_range(state: RwSignal<State>, range: String) {
         s.monitor.history_generation += 1;
         s.monitor.history_loading = false;
         s.monitor.history_loaded = false;
-        s.monitor.history = Value::Null.into();
+        s.monitor.history = None.into();
         s.monitor.history_failure = None;
     });
     load_history(state);
@@ -332,15 +342,6 @@ impl Metric {
             Self::CpuPower | Self::Disk { power: true, .. } => power(&record["power_watts"]),
             Self::Disk { .. } if record["online"] == false => None,
             Self::Disk { .. } => disk_usage(record),
-        }
-    }
-    fn history_value(&self, snapshot: &Value) -> Option<f64> {
-        match self {
-            // A history bucket retains the final online flag, but its capacity
-            // fields average all valid observations. Entirely offline buckets
-            // still contain nulls; the live value keeps its offline guard above.
-            Self::Disk { power: false, .. } => disk_usage(self.record(snapshot)),
-            _ => self.value(snapshot),
         }
     }
     fn current(&self, snapshot: &Value) -> String {

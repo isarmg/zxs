@@ -1,5 +1,6 @@
 use super::*;
 use crate::management::Storage;
+use json_codec::Value;
 #[test]
 fn inspection_survives_data_failure_but_storage_writes_require_an_active_session() {
     let mut state = State {
@@ -53,27 +54,30 @@ fn edited_plan_inputs_require_a_new_preview_before_commit_or_cancel() {
         let mut model = Model {
             kind,
             fields: [(key.into(), original.into())].into_iter().collect(),
-            plan: json_codec::json!({"plan_id":"plan-a", "digest":"reviewed", "state":"ready"}),
+            plan: reviewed_plan(),
             result: "previous plan preview".into(),
             acknowledged: true,
             ..Default::default()
         };
         model.edit_field(key, changed.into());
         assert_eq!(model.fields[key], changed);
-        assert!(model.plan.is_null(), "{kind:?} retained its previous plan");
+        assert!(model.plan.is_none(), "{kind:?} retained its previous plan");
         assert!(!model.acknowledged);
         assert!(model.result.is_empty());
         // Even a queued acknowledgment cannot make the previous target usable.
         model.acknowledged = true;
         for commit in [true, false] {
-            assert!(request::plan_action(&model.plan, commit, model.acknowledged, "new").is_err());
+            assert!(
+                request::plan_action(model.plan.as_ref(), commit, model.acknowledged, "new")
+                    .is_err()
+            );
         }
     }
 }
 
 #[test]
 fn field_events_cannot_change_pending_or_unconfirmed_admin_intent() {
-    let plan = json_codec::json!({"plan_id":"plan-a", "digest":"reviewed", "state":"ready"});
+    let plan = reviewed_plan();
     for (busy, uncertain) in [
         (true, None),
         (false, Some(UncertainOperation::Known("original".into()))),
@@ -109,7 +113,7 @@ fn field_events_cannot_change_pending_or_unconfirmed_admin_intent() {
 fn repeated_field_values_preserve_the_exact_review() {
     let mut model = Model {
         fields: [("id".into(), "plan-a".into())].into_iter().collect(),
-        plan: json_codec::json!({"plan_id":"plan-a", "digest":"reviewed", "state":"ready"}),
+        plan: reviewed_plan(),
         acknowledged: true,
         ..Default::default()
     };
@@ -122,7 +126,7 @@ fn repeated_field_values_preserve_the_exact_review() {
 
 #[test]
 fn invalid_success_and_early_not_found_preserve_review_and_uncertainty() {
-    let reviewed = json_codec::json!({"plan_id":"p", "digest":"reviewed", "state":"ready"});
+    let reviewed = reviewed_plan();
     for response in [
         Value::Null,
         json_codec::json!({}),
@@ -134,7 +138,7 @@ fn invalid_success_and_early_not_found_preserve_review_and_uncertainty() {
             uncertain_operation: Some(UncertainOperation::Known("original".into())),
             ..Default::default()
         };
-        let request = request::plan_action(&reviewed, true, true, "original").unwrap();
+        let request = request::plan_action(reviewed.as_ref(), true, true, "original").unwrap();
         respond(&mut model, &request, response);
         assert_eq!(model.plan, reviewed);
         assert!(model.acknowledged);
@@ -344,7 +348,17 @@ fn missing_operation_identity_cannot_match_a_receipt_named_unknown() {
     // Project the captured diagnostic into the outcome-only wire contract.
     receipt.as_object_mut().unwrap().remove("current_health");
     receipt["operation_id"] = "unknown".into();
-    assert!(response::terminal(&receipt, "unknown"));
+    assert!(matches!(
+        request::operation_outcome("unknown")
+            .contract
+            .validate(receipt.clone())
+            .unwrap()
+            .action,
+        response::Action::Outcome {
+            status: storage_contract::client_protocol::OperationStatus::Published,
+            ..
+        }
+    ));
     respond(&mut model, &request::operation_outcome("unknown"), receipt);
     assert_eq!(
         model.uncertain_operation,
@@ -354,13 +368,22 @@ fn missing_operation_identity_cannot_match_a_receipt_named_unknown() {
 }
 
 fn respond(model: &mut Model, request: &request::Request, value: Value) {
-    match request.contract.validate(value).map_err(api::Error::from) {
-        Ok(value) => accept(model, &request.contract, value),
+    match request.contract.validate(value) {
+        Ok(value) => accept(model, value),
         Err(error) => reject(model, &request.contract, &error),
     }
 }
-fn reviewed_plan() -> Value {
+pub(super) fn plan_value() -> Value {
     json_codec::json!({"plan_id":"p","kind":"purge","principal":"admin","expected_sequence":"4","digest":"reviewed","input":{"history_tree_id":"h"},"state":"ready"})
+}
+pub(super) fn reviewed_plan() -> Option<ValidatedPlan> {
+    let response = Contract::Plan { id: "p".into() }
+        .validate(plan_value())
+        .unwrap();
+    let response::Action::Plan(plan) = response.action else {
+        panic!("expected plan")
+    };
+    Some(plan)
 }
 fn operation_receipt(commit: &str, state: &str, protection: &str) -> Value {
     let mut value: Value = json_codec::from_str(include_str!(
@@ -426,7 +449,7 @@ fn only_the_original_terminal_operation_query_settles_the_fence() {
                 settled,
                 "{commit}/{queried}"
             );
-            assert_eq!(model.plan.is_null(), settled);
+            assert_eq!(model.plan.is_none(), settled);
             assert_eq!(model.acknowledged, !settled);
             assert_eq!(model.fields["name"], "draft");
         }
@@ -451,7 +474,7 @@ fn wrong_operation_response_preserves_review_and_original_identity() {
         model.uncertain_operation,
         Some(UncertainOperation::Known("original".into()))
     );
-    assert!(!model.error.is_empty());
+    assert!(model.error.is_some());
 }
 
 #[test]
@@ -467,7 +490,7 @@ fn plan_queries_install_the_plan_but_cannot_settle_a_mutation() {
         &[("id".into(), "p".into())].into_iter().collect(),
     )
     .unwrap();
-    respond(&mut model, &request, plan.clone());
+    respond(&mut model, &request, plan_value());
     assert_eq!(model.plan, plan);
     assert!(!model.acknowledged);
     assert_eq!(
@@ -490,7 +513,7 @@ fn preview_success_installs_review_but_preview_failures_never_create_a_mutation_
         ..Default::default()
     };
     let plan = reviewed_plan();
-    respond(&mut model, &request, plan.clone());
+    respond(&mut model, &request, plan_value());
     assert_eq!(model.plan, plan);
     assert!(!model.acknowledged);
     respond(&mut model, &request, Value::Null);
@@ -540,7 +563,9 @@ fn every_mutation_failure_keeps_its_captured_operation_not_the_current_form() {
     .map(|kind| request::build(kind, &fields, "original", "admin").unwrap())
     .collect::<Vec<_>>();
     for commit in [true, false] {
-        requests.push(request::plan_action(&reviewed_plan(), commit, true, "original").unwrap());
+        requests.push(
+            request::plan_action(reviewed_plan().as_ref(), commit, true, "original").unwrap(),
+        );
     }
     for request in requests {
         for status in [0, 200, 409, 503] {
@@ -576,16 +601,16 @@ fn successful_commit_and_cancel_clear_the_review_only_after_raw_validation() {
     let receipt = json_codec::json!({"operation_id":operation,"kind":"plan.cancel","commit_id":null,"history_tree_id":null,"branch_id":null,"commit_state":"PUBLISHED","protection_at_publish":"NOT_APPLICABLE","current_health":"UNKNOWN","request_digest":"digest","sequence":"4","result":{}});
     for commit in [true, false] {
         let plan = reviewed_plan();
-        let request = request::plan_action(&plan, commit, true, operation).unwrap();
+        let request = request::plan_action(plan.as_ref(), commit, true, operation).unwrap();
         let mut model = Model {
             plan,
             acknowledged: true,
             ..Default::default()
         };
         respond(&mut model, &request, receipt.clone());
-        assert!(model.plan.is_null());
+        assert!(model.plan.is_none());
         assert!(!model.acknowledged);
-        assert!(model.error.is_empty());
+        assert!(model.error.is_none());
         assert!(model.uncertain_operation.is_none());
     }
 }
@@ -602,7 +627,10 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
                 plan: reviewed_plan(),
                 acknowledged: true,
                 result: "new result".into(),
-                error: "new error".into(),
+                error: Some(Failure::Remote(api::error(
+                    storage_contract::ErrorCode::InternalError,
+                    "new error",
+                ))),
                 uncertain_operation: Some(UncertainOperation::Known("new operation".into())),
                 ..Default::default()
             },
@@ -613,14 +641,11 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
             state,
             4,
             &request.contract,
-            request
-                .contract
-                .validate(operation_receipt(
-                    "PUBLISHED",
-                    "completed",
-                    "NOT_APPLICABLE",
-                ))
-                .map_err(api::Error::from),
+            request.contract.validate(operation_receipt(
+                "PUBLISHED",
+                "completed",
+                "NOT_APPLICABLE",
+            )),
         );
         let error = api::Error {
             code: storage_contract::ErrorCode::InvalidAdminResponse,
@@ -639,7 +664,14 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
             assert_eq!(s.admin_console.plan, reviewed_plan());
             assert!(s.admin_console.acknowledged);
             assert_eq!(s.admin_console.result, "new result");
-            assert_eq!(s.admin_console.error, "new error");
+            assert!(
+                s.admin_console
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .display()
+                    .contains("new error")
+            );
             assert_eq!(
                 s.admin_console.uncertain_operation,
                 Some(UncertainOperation::Known("new operation".into()))
@@ -650,14 +682,11 @@ fn late_success_and_unauthorized_completion_cannot_change_a_new_session() {
             state,
             5,
             &request.contract,
-            request
-                .contract
-                .validate(operation_receipt(
-                    "PUBLISHED",
-                    "completed",
-                    "NOT_APPLICABLE",
-                ))
-                .map_err(api::Error::from),
+            request.contract.validate(operation_receipt(
+                "PUBLISHED",
+                "completed",
+                "NOT_APPLICABLE",
+            )),
         );
         assert!(state.with_untracked(|s| s.admin_console.busy));
     });
@@ -680,14 +709,11 @@ fn current_session_completion_releases_busy_and_unauthorized_session() {
             state,
             5,
             &request.contract,
-            request
-                .contract
-                .validate(operation_receipt(
-                    "PUBLISHED",
-                    "completed",
-                    "NOT_APPLICABLE",
-                ))
-                .map_err(api::Error::from),
+            request.contract.validate(operation_receipt(
+                "PUBLISHED",
+                "completed",
+                "NOT_APPLICABLE",
+            )),
         );
         assert!(!state.with_untracked(|s| s.admin_console.busy));
         assert!(!state.with_untracked(|s| s.admin_console.result.is_empty()));
@@ -757,7 +783,10 @@ fn typed_execution_checks_session_busy_and_storage_before_starting_work() {
                 s.session_transition = transition;
                 s.management.storage = storage;
                 s.admin_console.busy = busy;
-                s.admin_console.error = "existing error".into();
+                s.admin_console.error = Some(Failure::Remote(api::error(
+                    storage_contract::ErrorCode::InternalError,
+                    "existing error",
+                )));
             });
             execute(
                 state,
@@ -768,8 +797,125 @@ fn typed_execution_checks_session_busy_and_storage_before_starting_work() {
             }
             state.with_untracked(|s| {
                 assert_eq!(s.admin_console.busy, busy);
-                assert_eq!(s.admin_console.error, "existing error");
+                assert!(
+                    s.admin_console
+                        .error
+                        .as_ref()
+                        .unwrap()
+                        .display()
+                        .contains("existing error")
+                );
             });
         }
     });
+}
+
+#[test]
+fn remote_errors_keep_status_request_identity_detail_and_source_in_the_model() {
+    use std::error::Error as _;
+    let contract = request::operation_outcome("original").contract;
+    for status in [400, 409, 500] {
+        let mut error = Contract::Plan { id: "p".into() }
+            .validate(json_codec::json!({"plan_id":"p"}))
+            .unwrap_err();
+        error.status = status;
+        error.request_id = Some(format!("request-{status}"));
+        error.message = "specific failure detail".into();
+        let mut model = Model::default();
+        reject(&mut model, &contract, &error);
+        let failure = model.error.as_ref().unwrap();
+        let displayed = failure.display();
+        assert!(displayed.contains(&format!("HTTP {status}")));
+        assert!(displayed.contains(&format!("request-{status}")));
+        assert!(displayed.contains("specific failure detail"));
+        let Failure::Remote(saved) = failure else {
+            panic!("expected remote failure")
+        };
+        assert_eq!(saved.code, error.code);
+        assert_eq!(saved.status, status);
+        assert_eq!(saved.request_id, error.request_id);
+        assert!(std::sync::Arc::ptr_eq(
+            saved.source.as_ref().unwrap(),
+            error.source.as_ref().unwrap()
+        ));
+        assert!(saved.source().unwrap().source().unwrap().source().is_some());
+    }
+}
+
+#[test]
+fn plan_decode_and_identity_failures_cannot_replace_a_review_or_settle_a_fence() {
+    use std::error::Error as _;
+    let contract = Contract::Plan { id: "p".into() };
+    for (field, replacement) in [("plan_id", "other"), ("digest", "")] {
+        let mut value = plan_value();
+        value[field] = replacement.into();
+        let mut model = Model {
+            plan: reviewed_plan(),
+            acknowledged: true,
+            uncertain_operation: Some(UncertainOperation::Known("original".into())),
+            ..Default::default()
+        };
+        let error = contract.validate(value).unwrap_err();
+        reject(&mut model, &contract, &error);
+        assert_eq!(model.plan, reviewed_plan());
+        assert!(model.acknowledged);
+        assert!(model.reload_blocked());
+        assert!(error.source().is_some());
+    }
+    let mut value = plan_value();
+    value.as_object_mut().unwrap().remove("expected_sequence");
+    let error = contract.validate(value).unwrap_err();
+    assert!(
+        error
+            .source()
+            .unwrap()
+            .to_string()
+            .contains("expected_sequence")
+    );
+}
+
+#[test]
+fn timeout_preserves_the_exact_typed_plan_and_original_operation() {
+    let reviewed = reviewed_plan();
+    let request = request::plan_action(reviewed.as_ref(), true, true, "original").unwrap();
+    let mut model = Model {
+        plan: reviewed.clone(),
+        acknowledged: true,
+        ..Default::default()
+    };
+    let error = api::error(
+        storage_contract::ErrorCode::RequestTimeout,
+        "request timed out",
+    );
+    reject(&mut model, &request.contract, &error);
+    assert_eq!(model.plan, reviewed);
+    assert!(model.acknowledged);
+    assert_eq!(
+        model.uncertain_operation,
+        Some(UncertainOperation::Known("original".into()))
+    );
+    assert!(model.reload_blocked());
+    // A valid unrelated outcome still cannot unlock the uncertain write.
+    let mut value = operation_receipt("PUBLISHED", "completed", "NOT_APPLICABLE");
+    value["operation_id"] = "other".into();
+    respond(&mut model, &request::operation_outcome("other"), value);
+    assert_eq!(model.plan, reviewed);
+    assert!(model.reload_blocked());
+}
+
+#[test]
+fn terminal_lookup_without_a_pending_write_preserves_the_review() {
+    let mut model = Model {
+        plan: reviewed_plan(),
+        acknowledged: true,
+        ..Default::default()
+    };
+    respond(
+        &mut model,
+        &request::operation_outcome("original"),
+        operation_receipt("PUBLISHED", "completed", "NOT_APPLICABLE"),
+    );
+    assert_eq!(model.plan, reviewed_plan());
+    assert!(model.acknowledged);
+    assert!(model.uncertain_operation.is_none());
 }

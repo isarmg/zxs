@@ -1,5 +1,12 @@
 use super::*;
 
+fn empty_history(range: &str) -> Value {
+    json_codec::json!({
+        "range":range, "from":"2026-01-01T00:00:00Z",
+        "to":"2026-01-01T00:01:00Z", "interval_seconds":5, "samples":[]
+    })
+}
+
 #[test]
 fn superseded_history_read_revokes_authentication_without_settling_the_new_read() {
     Owner::new().with(|| {
@@ -12,7 +19,7 @@ fn superseded_history_read_revokes_authentication_without_settling_the_new_read(
             s.monitor.range = "24h".into();
             s.monitor.history_generation = 2;
             s.monitor.history_loading = true;
-            s.monitor.history = json_codec::json!({"current":"snapshot"}).into();
+            accept_history_response(&mut s.monitor, empty_history("24h"), "24h");
         });
         complete_history_load(
             state,
@@ -32,7 +39,7 @@ fn superseded_history_read_revokes_authentication_without_settling_the_new_read(
             assert!(!s.session_active());
             assert!(s.monitor.history_loading);
             assert_eq!(s.monitor.history_generation, 2);
-            assert_eq!(s.monitor.history["current"], "snapshot");
+            assert!(s.monitor.history.is_some());
             assert_eq!(s.errors.len(), 1);
         });
     });
@@ -50,7 +57,7 @@ fn superseded_history_data_and_prior_session_errors_leave_current_state_unchange
             s.monitor.range = "24h".into();
             s.monitor.history_generation = 2;
             s.monitor.history_loading = true;
-            s.monitor.history = json_codec::json!({"current":"snapshot"}).into();
+            accept_history_response(&mut s.monitor, empty_history("24h"), "24h");
         });
         complete_history_load(state, 8, 1, "1min", Ok(json_codec::json!({"stale":true})));
         for (epoch, status) in [(7, 401), (8, 503)] {
@@ -72,7 +79,7 @@ fn superseded_history_data_and_prior_session_errors_leave_current_state_unchange
         state.with_untracked(|s| {
             assert!(s.session_active());
             assert!(s.monitor.history_loading);
-            assert_eq!(s.monitor.history["current"], "snapshot");
+            assert!(s.monitor.history.is_some());
             assert!(s.monitor.history_failure.is_none());
             assert!(s.errors.is_empty());
         });
@@ -308,7 +315,7 @@ fn cancelled_superseded_history_completion_cannot_clear_current_loading_or_feedb
             );
             assert_eq!(s.monitor.history_generation, 21);
         });
-        complete_history_load(state, 9, 21, "1min", Ok(json_codec::json!({"samples":[]})));
+        complete_history_load(state, 9, 21, "1min", Ok(empty_history("1min")));
         state.with_untracked(|s| {
             assert!(!s.monitor.history_loading);
             assert!(s.monitor.history_loaded);

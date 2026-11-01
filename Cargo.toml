@@ -50,6 +50,7 @@ rust-version = "1.99"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+date-time = { version = "0.3.55", path = "src/foundation/core-types/date-time" }
 authentication = { path = "src/auth" }
 storage-contract = { path = "src/contract" }
 name-policy = { path = "src/naming" }

@@ -2,7 +2,8 @@
 //! Domain-returning endpoints are not operation receipts.
 use json_codec::Value;
 use storage_contract::{
-    Branch, MergeLink, OperationResult, Plan, Repository, client_protocol::ResponseError,
+    Branch, MergeLink, OperationResult, Plan, PlanState, Repository,
+    client_protocol::OperationStatus,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +19,64 @@ impl PreviewKind {
             Self::Split => "split",
             Self::HistoricalSave => "historical_save",
         }
+    }
+}
+
+#[derive(Debug, error_definition::Error)]
+pub(crate) enum ResponseError {
+    #[error("invalid administration response: {0}")]
+    Decode(#[source] json_codec::Error),
+    #[error("administration response does not match {0}")]
+    Contract(&'static str),
+}
+impl From<ResponseError> for crate::api::Error {
+    fn from(source: ResponseError) -> Self {
+        let mut error = crate::api::error(
+            storage_contract::ErrorCode::InvalidAdminResponse,
+            "The response did not confirm the requested action. Inspect the original operation before retrying.",
+        );
+        error.status = 200;
+        error.source = Some(std::sync::Arc::new(crate::api::ErrorSource::AdminResponse(
+            source,
+        )));
+        error
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ValidatedPlan(Plan);
+impl ValidatedPlan {
+    pub(super) fn plan(&self) -> &Plan {
+        &self.0
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct ValidatedAdminResponse {
+    pub(super) display: String,
+    pub(super) action: Action,
+}
+#[derive(Debug)]
+pub(super) enum Action {
+    Inspect,
+    Plan(ValidatedPlan),
+    Outcome {
+        operation: String,
+        status: OperationStatus,
+    },
+    Mutation {
+        operation: String,
+    },
+    PlanReceipt(OperationResult),
+}
+fn decode<T: data_serialization::de::DeserializeOwned>(value: Value) -> Result<T, ResponseError> {
+    json_codec::from_value(value).map_err(ResponseError::Decode)
+}
+fn require(valid: bool, context: &'static str) -> Result<(), ResponseError> {
+    if valid {
+        Ok(())
+    } else {
+        Err(ResponseError::Contract(context))
     }
 }
 
@@ -96,46 +155,100 @@ impl Contract {
         }
     }
 
-    pub(super) fn validate(&self, value: Value) -> Result<Value, ResponseError> {
-        let valid = match self {
-            Self::Inspect => true,
+    pub(super) fn validate(
+        &self,
+        value: Value,
+    ) -> Result<ValidatedAdminResponse, crate::api::Error> {
+        self.parse(value).map_err(Into::into)
+    }
+
+    fn parse(&self, value: Value) -> Result<ValidatedAdminResponse, ResponseError> {
+        let display =
+            json_codec::to_string_pretty(&value).expect("invariant: JSON values serialize");
+        let action = match self {
+            Self::Inspect => Action::Inspect,
             Self::Operation { id } => {
-                storage_contract::client_protocol::operation_observation_status(&value).is_some()
-                    && value["operation_id"].as_str() == Some(id.as_str())
+                storage_contract::client_protocol::operation_observation_status(&value)
+                    .ok_or(ResponseError::Contract("operation observation shape"))?;
+                require(
+                    value["operation_id"].as_str() == Some(id),
+                    "operation identity",
+                )?;
+                Action::Inspect
             }
             Self::OperationOutcome { id } => {
-                operation_shape(&value) && value["operation_id"].as_str() == Some(id.as_str())
+                let status = storage_contract::client_protocol::operation_status(&value)
+                    .ok_or(ResponseError::Contract("operation outcome shape"))?;
+                require(
+                    value["operation_id"].as_str() == Some(id),
+                    "operation identity",
+                )?;
+                Action::Outcome {
+                    operation: id.clone(),
+                    status,
+                }
             }
             Self::Plan { id } => {
-                json_codec::from_value::<Plan>(value.clone()).is_ok()
-                    && value["input"].is_object()
-                    && nonempty(&value["digest"])
-                    && value["plan_id"].as_str() == Some(id.as_str())
+                let plan: Plan = decode(value)?;
+                require(
+                    plan.input.is_object() && !plan.digest.is_empty() && plan.plan_id == *id,
+                    "plan identity, input and digest",
+                )?;
+                Action::Plan(ValidatedPlan(plan))
+            }
+            Self::Preview {
+                kind,
+                history_tree_id,
+                principal,
+            } => {
+                let plan: Plan = decode(value)?;
+                require(
+                    !plan.plan_id.is_empty()
+                        && !plan.digest.is_empty()
+                        && plan.kind == kind.as_str()
+                        && plan.state == PlanState::Ready
+                        && plan.principal == *principal
+                        && plan.input["history_tree_id"].as_str() == Some(history_tree_id),
+                    "preview identity, principal, history, state and digest",
+                )?;
+                Action::Plan(ValidatedPlan(plan))
             }
             Self::Repository {
+                operation,
                 name,
                 primary_slot_id,
                 target_copies,
-                ..
             } => {
-                json_codec::from_value::<Repository>(value.clone()).is_ok()
-                    && nonempty(&value["repository_id"])
-                    && nonempty(&value["history_tree_id"])
-                    && nonempty(&value["main_branch_id"])
-                    && value["name"].as_str() == Some(name.as_str())
-                    && value["primary_slot_id"].as_str() == Some(primary_slot_id.as_str())
-                    && value["target_copies"].as_u64() == Some(u64::from(*target_copies))
+                let repository: Repository = decode(value)?;
+                require(
+                    !repository.repository_id.is_empty()
+                        && !repository.history_tree_id.is_empty()
+                        && !repository.main_branch_id.is_empty()
+                        && repository.name == *name
+                        && repository.primary_slot_id == *primary_slot_id
+                        && repository.target_copies == *target_copies,
+                    "repository identity and requested configuration",
+                )?;
+                Action::Mutation {
+                    operation: operation.clone(),
+                }
             }
             Self::Branch {
+                operation,
                 name,
                 source_commit_id,
-                ..
             } => {
-                branch_creation_shape(&value)
-                    && nonempty(&value["branch_id"])
-                    && nonempty(&value["history_tree_id"])
-                    && value["name"].as_str() == Some(name.as_str())
-                    && value["fork_commit_id"].as_str() == Some(source_commit_id.as_str())
+                let branch = branch_creation(value)?;
+                require(
+                    !branch.branch_id.is_empty()
+                        && !branch.history_tree_id.is_empty()
+                        && branch.name == *name
+                        && branch.fork_commit_id == *source_commit_id,
+                    "branch identity and source",
+                )?;
+                Action::Mutation {
+                    operation: operation.clone(),
+                }
             }
             Self::MergeLink {
                 operation,
@@ -145,93 +258,76 @@ impl Contract {
                 target_branch_id,
                 target_commit_id,
             } => {
-                json_codec::from_value::<MergeLink>(value.clone()).is_ok()
-                    && nonempty(&value["merge_link_id"])
-                    && value["operation_id"].as_str() == Some(operation.as_str())
-                    && value["history_tree_id"].as_str() == Some(history_tree_id.as_str())
-                    && value["source_branch_id"].as_str() == Some(source_branch_id.as_str())
-                    && value["source_commit_id"].as_str() == Some(source_commit_id.as_str())
-                    && value["target_branch_id"].as_str() == Some(target_branch_id.as_str())
-                    && value["target_commit_id"].as_str() == Some(target_commit_id.as_str())
-            }
-            Self::Preview {
-                kind,
-                history_tree_id,
-                principal,
-            } => {
-                json_codec::from_value::<Plan>(value.clone()).is_ok()
-                    && nonempty(&value["plan_id"])
-                    && nonempty(&value["digest"])
-                    && value["kind"] == kind.as_str()
-                    && value["state"] == "ready"
-                    && value["principal"].as_str() == Some(principal.as_str())
-                    && value["input"]["history_tree_id"].as_str() == Some(history_tree_id.as_str())
+                let link: MergeLink = decode(value)?;
+                require(
+                    !link.merge_link_id.is_empty()
+                        && link.operation_id.to_string() == *operation
+                        && link.history_tree_id == *history_tree_id
+                        && link.source_branch_id == *source_branch_id
+                        && link.source_commit_id == *source_commit_id
+                        && link.target_branch_id == *target_branch_id
+                        && link.target_commit_id == *target_commit_id,
+                    "merge link identities",
+                )?;
+                Action::Mutation {
+                    operation: operation.clone(),
+                }
             }
             Self::PlanReceipt { operation } => {
-                json_codec::from_value::<OperationResult>(value.clone()).is_ok()
-                    && nonempty(&value["kind"])
-                    && nonempty(&value["request_digest"])
-                    && confirmed(&value, operation)
+                let receipt: OperationResult = decode(value)?;
+                require(
+                    !receipt.kind.is_empty()
+                        && !receipt.request_digest.is_empty()
+                        && !operation.is_empty()
+                        && receipt.operation_id.to_string() == *operation
+                        && matches!(
+                            receipt.commit_state,
+                            storage_contract::CommitState::Published
+                                | storage_contract::CommitState::Acked
+                                | storage_contract::CommitState::PublishedDegraded
+                        ),
+                    "plan operation identity and publication",
+                )?;
+                Action::PlanReceipt(receipt)
             }
             Self::MutationReceipt { operation } => {
-                operation_shape(&value) && confirmed(&value, operation)
+                let status = storage_contract::client_protocol::operation_status(&value)
+                    .ok_or(ResponseError::Contract("mutation receipt shape"))?;
+                require(
+                    !operation.is_empty()
+                        && value["operation_id"].as_str() == Some(operation)
+                        && matches!(
+                            status,
+                            OperationStatus::Published | OperationStatus::Degraded
+                        ),
+                    "mutation identity and publication",
+                )?;
+                Action::Mutation {
+                    operation: operation.clone(),
+                }
             }
         };
-        if valid {
-            Ok(value)
-        } else {
-            Err(ResponseError::new(
-                200,
-                storage_contract::ErrorCode::InvalidAdminResponse,
-                "The response did not confirm the requested action. Inspect the original operation before retrying.",
-            ))
-        }
+        Ok(ValidatedAdminResponse { display, action })
     }
 }
-fn nonempty(value: &Value) -> bool {
-    value.as_str().is_some_and(|s| !s.is_empty())
-}
-fn branch_creation_shape(value: &Value) -> bool {
-    // CreateBranch returns branch_wire, not the persisted Branch. Validate and
-    // remove only its public content projection before decoding the strict
-    // domain record; unrelated fields must still be rejected.
-    let mut domain = value.clone();
-    let Some(fields) = domain.as_object_mut() else {
-        return false;
-    };
+fn branch_creation(mut domain: Value) -> Result<Branch, ResponseError> {
+    // The public content projection is separate from the strict domain record.
+    let fields = domain
+        .as_object_mut()
+        .ok_or(ResponseError::Contract("branch object"))?;
     let materialized = fields.remove("materialized");
     let inherited = fields.remove("inherited");
     let content_state = fields.remove("content_state");
-    let Ok(branch) = json_codec::from_value::<Branch>(domain) else {
-        return false;
-    };
+    let branch: Branch = decode(domain)?;
     let pending = !branch.pending_file_versions.is_empty();
-    materialized.as_ref().and_then(Value::as_bool) == Some(!pending)
-        && inherited.as_ref().and_then(Value::as_bool) == Some(pending)
-        && content_state.as_ref().and_then(Value::as_str)
-            == Some(if pending { "PENDING" } else { "LIVE" })
-}
-fn operation_shape(value: &Value) -> bool {
-    storage_contract::client_protocol::operation_status(value).is_some()
-}
-fn confirmed(value: &Value, operation: &str) -> bool {
-    !operation.is_empty()
-        && value["operation_id"].as_str() == Some(operation)
-        && matches!(
-            value["commit_state"].as_str(),
-            Some("PUBLISHED" | "ACKED" | "PUBLISHED_DEGRADED")
-        )
-}
-pub(super) fn terminal(value: &Value, operation: &str) -> bool {
-    use storage_contract::client_protocol::{OperationStatus, operation_status};
-    !operation.is_empty()
-        && value["operation_id"].as_str() == Some(operation)
-        && matches!(
-            operation_status(value),
-            Some(
-                OperationStatus::Published | OperationStatus::Degraded | OperationStatus::Rejected
-            )
-        )
+    require(
+        materialized.as_ref().and_then(Value::as_bool) == Some(!pending)
+            && inherited.as_ref().and_then(Value::as_bool) == Some(pending)
+            && content_state.as_ref().and_then(Value::as_str)
+                == Some(if pending { "PENDING" } else { "LIVE" }),
+        "branch content projection",
+    )?;
+    Ok(branch)
 }
 
 #[cfg(test)]

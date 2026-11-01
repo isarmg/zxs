@@ -87,3 +87,5 @@ SQLite ABI 符号、`_sqlx_savepoint_*` SQL 标识及 `file:sqlx-in-memory-*` �
 ## 外部字符串边界
 
 准备 SQL 在执行任何前缀语句前拒绝 NUL，避免 SQLite 提前终止解析后留下不消耗输入的尾段。文件名也在 URI 编码之前拒绝 NUL；`immutable` 或 VFS 参数不能让 `%00` 绕过检查并打开截断后的其他路径。显式 `file:` URI 的有效路径/查询部分还拒绝会被 SQLite 解码为 NUL 的 `%00`，VFS 名称拒绝内嵌 NUL。普通字面 `%00` 文件名、URI `%2500`、被忽略的片段及内存库保持原语义。
+
+Collation 两个入口（连接选项与已锁定句柄）均在释放 Rust 自动资源管理之前验证名称的 C 字符串表示；内嵌 NUL 仍返回原有协议错误，不遗留闭包捕获资源。SQLite 注册失败仍由调用方回收尚未交给 SQLite 的闭包，成功注册则在替换或关闭连接时由 SQLite 释放。根 `test/platform/unit/sqlite/driver/collation.rs` 以 Weak 引用覆盖两入口的 NUL 拒绝、合法反向排序及关闭，以及真实活动语句导致的 `SQLITE_BUSY` 注册失败。当前第一方产品未发现自定义 collation 消费者；本修补仅处理公开库 API 的资源所有权，不解决回调 panic 隔离，也不构成整个驱动的安全证明。查询复杂度、同步次数和成功路径的所有权语义不变。

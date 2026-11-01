@@ -155,8 +155,6 @@ pub(super) enum InputError {
     PlanNotReady,
     #[error("Review the full plan and acknowledge its consequences first")]
     ReviewRequired,
-    #[error("Plan digest missing")]
-    MissingDigest,
 }
 
 fn segment(value: &str) -> String {
@@ -372,26 +370,21 @@ pub(super) fn build(
 }
 
 pub(super) fn plan_action(
-    plan: &Value,
+    plan: Option<&super::response::ValidatedPlan>,
     commit: bool,
     acknowledged: bool,
     operation: &str,
 ) -> Result<Request, InputError> {
-    let id = plan["plan_id"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or(InputError::MissingPlan)?;
-    if plan["state"] != "ready" {
+    let plan = plan.ok_or(InputError::MissingPlan)?.plan();
+    let id = &plan.plan_id;
+    if plan.state != storage_contract::PlanState::Ready {
         return Err(InputError::PlanNotReady);
     }
     if commit {
         if !acknowledged {
             return Err(InputError::ReviewRequired);
         }
-        let digest = plan["digest"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or(InputError::MissingDigest)?;
+        let digest = &plan.digest;
         Ok(Request {
             method: "POST",
             path: format!("/api/plans/{}/commit", segment(id)),

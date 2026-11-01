@@ -17,7 +17,7 @@ fn contract(kind: Kind, fields: &[(&str, &str)]) -> Contract {
 }
 fn plan_contract(commit: bool) -> Contract {
     request::plan_action(
-        &json!({"plan_id":"p","state":"ready","digest":"digest"}),
+        super::super::tests::reviewed_plan().as_ref(),
         commit,
         true,
         OPERATION,
@@ -40,6 +40,22 @@ fn wire_operation() -> Value {
     value.as_object_mut().unwrap().remove("current_health");
     value["operation_id"] = "op_00000000000000000000000000000001".into();
     value
+}
+fn terminal(value: &Value, operation: &str) -> bool {
+    matches!(
+        request::operation_outcome(operation)
+            .contract
+            .validate(value.clone()),
+        Ok(ValidatedAdminResponse {
+            action: Action::Outcome {
+                status: OperationStatus::Published
+                    | OperationStatus::Degraded
+                    | OperationStatus::Rejected,
+                ..
+            },
+            ..
+        })
+    )
 }
 #[test]
 fn operation_contracts_reject_missing_wrong_and_nonterminal_receipts() {
@@ -373,7 +389,7 @@ fn malformed_success_keeps_the_existing_unknown_mutation_classification() {
         storage_contract::ErrorCode::InvalidAdminResponse
     );
     assert_eq!(error.status, 200);
-    assert!(error.source().is_none());
+    assert!(error.source().is_some());
     assert!(!error.retryable);
     assert!(error.request_id.is_none());
     assert!(storage_contract::client_protocol::mutation_outcome_unknown(

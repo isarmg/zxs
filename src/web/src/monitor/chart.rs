@@ -1,6 +1,5 @@
 //! Missing samples and collection gaps stay gaps in the responsive SVG history.
 use super::{Metric, State};
-use json_codec::Value;
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_interface::{html, i18n::t, prelude::*};
 
@@ -89,12 +88,6 @@ fn plot(
         bottom,
     }
 }
-fn milliseconds(value: &Value) -> Option<f64> {
-    value
-        .as_str()
-        .map(js_sys::Date::parse)
-        .filter(|value| value.is_finite())
-}
 fn axis_max(value: f64) -> String {
     if value >= 1000. {
         format!("{:.1}k", value / 1000.)
@@ -112,34 +105,21 @@ struct Series {
     to: f64,
     interval: f64,
 }
-fn series(history: &Value, metric: &Metric, parse: fn(&Value) -> Option<f64>) -> Series {
-    Series {
-        points: history["samples"]
-            .as_array()
-            .map(|samples| {
-                samples
-                    .iter()
-                    .filter_map(|sample| {
-                        Some((
-                            parse(&sample["collected_at"])? / 1000.,
-                            metric.history_value(sample),
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-        from: parse(&history["from"]).unwrap_or(0.) / 1000.,
-        to: parse(&history["to"]).unwrap_or(0.) / 1000.,
-        interval: history["interval_seconds"].as_f64().unwrap_or(5.),
+fn series(history: &Option<super::history::History>, metric: &Metric) -> Series {
+    match history {
+        Some(history) => Series {
+            points: history.points(metric),
+            from: history.from,
+            to: history.to,
+            interval: history.interval,
+        },
+        // No response yet is presentation state, not a malformed response default.
+        None => Series::default(),
     }
 }
-fn series_projection(
-    state: RwSignal<State>,
-    metric: Metric,
-    parse: fn(&Value) -> Option<f64>,
-) -> Memo<Series> {
+fn series_projection(state: RwSignal<State>, metric: Metric) -> Memo<Series> {
     let history = Memo::new(move |_| state.with(|s| s.monitor.history.clone()));
-    Memo::new(move |_| history.with(|history| series(history, &metric, parse)))
+    Memo::new(move |_| history.with(|history| series(history, &metric)))
 }
 
 pub(super) fn view(state: RwSignal<State>, metric: Metric) -> impl IntoView {
@@ -174,7 +154,7 @@ pub(super) fn view(state: RwSignal<State>, metric: Metric) -> impl IntoView {
     let label = metric.label();
     let aria_label = format!("{} {}", label, t("历史图表", "history chart"));
     let is_power = metric.is_power();
-    let samples = series_projection(state, metric, milliseconds);
+    let samples = series_projection(state, metric);
     let presentation = Memo::new(move |_| {
         state.with(|s| {
             (

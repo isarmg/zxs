@@ -252,7 +252,8 @@ fn poll_projection_copies_only_unpolled_operation_ids_and_keeps_session_epoch() 
     };
     state.files.file_history =
         crate::files::history::tests::history(json!({"nodes":[{"note":"x".repeat(100_000)}]}));
-    state.monitor.history = json!({"samples":[{"extra":"y".repeat(100_000)}]}).into();
+    // The typed monitor snapshot participates in the clone check even before
+    // its first valid response; malformed JSON cannot be installed in the model.
     state.files.operations = vec![
         FileOperation::unknown("pending"),
         FileOperation::unknown("in-flight"),

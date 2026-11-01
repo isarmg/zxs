@@ -228,9 +228,18 @@ fn optional_historical_save_overrides_remain_explicit_nulls() {
 
 #[test]
 fn both_plan_actions_preserve_body_and_use_the_raw_receipt_contract() {
-    let plan = json!({"plan_id":"p/!","state":"ready","digest":"reviewed"});
+    let mut value = super::super::tests::plan_value();
+    value["plan_id"] = "p/!".into();
+    let parse = |value| {
+        let response = Contract::Plan { id: "p/!".into() }.validate(value).unwrap();
+        let super::super::response::Action::Plan(plan) = response.action else {
+            panic!("expected plan")
+        };
+        plan
+    };
+    let plan = parse(value.clone());
     for commit in [true, false] {
-        let request = plan_action(&plan, commit, true, "original").unwrap();
+        let request = plan_action(Some(&plan), commit, true, "original").unwrap();
         assert_eq!(request.method, "POST");
         assert_eq!(
             request.path,
@@ -258,30 +267,27 @@ fn both_plan_actions_preserve_body_and_use_the_raw_receipt_contract() {
         assert_eq!(request.contract.mutation_operation(), Some("original"));
     }
     assert!(matches!(
-        plan_action(&plan, true, false, "original"),
+        plan_action(Some(&plan), true, false, "original"),
         Err(InputError::ReviewRequired)
     ));
-    assert!(plan_action(&plan, false, false, "original").is_ok());
+    assert!(plan_action(Some(&plan), false, false, "original").is_ok());
     assert!(matches!(
-        plan_action(&Value::Null, true, true, "original"),
+        plan_action(None, true, true, "original"),
         Err(InputError::MissingPlan)
     ));
-    for state in ["committed", "cancelled", "stale"] {
-        let mut plan = plan.clone();
-        plan["state"] = state.into();
+    for state in ["committed", "cancelled", "completed"] {
+        let mut value = value.clone();
+        value["state"] = state.into();
+        let plan = parse(value);
         for commit in [true, false] {
             assert!(matches!(
-                plan_action(&plan, commit, true, "original"),
+                plan_action(Some(&plan), commit, true, "original"),
                 Err(InputError::PlanNotReady)
             ));
         }
     }
-    let mut plan = plan;
-    plan["digest"] = "".into();
-    assert!(matches!(
-        plan_action(&plan, true, true, "original"),
-        Err(InputError::MissingDigest)
-    ));
+    value["digest"] = "".into();
+    assert!(Contract::Plan { id: "p/!".into() }.validate(value).is_err());
 }
 
 #[test]
