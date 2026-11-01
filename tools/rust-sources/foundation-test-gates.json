@@ -463,7 +463,7 @@
       "scripts": [
         ".github/scripts/check-http-transport.py"
       ],
-      "detail": "behavior (25) and ffi (2)"
+      "detail": "behavior (29, including proxy write progress) and ffi (2)"
     },
     {
       "package": "http-transport",

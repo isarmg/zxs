@@ -85,6 +85,12 @@ python3 tools/rust-sources/collect_notices.py --output /tmp/rust-notice-review
 安全 backport 或完整组件升级的验收。源码治理、实际消费者回归及公告扫描仍分别验证；
 任何公告 finding 的处理政策不因增加这条源码维护链而改变。
 
+当前第二张实际收据
+[`16f5b394…`](../../compliance/proof-maintenance/16f5b39477c05e0df34e296682097f028f028797f6ed2ecc7e2d1e227a984fe1.json.gz)
+记录代理 CONNECT 写入非空余量却零进展时返回 `WriteZero` 的修改。
+公开 `Tunnel` 回归位于 `test/architecture/http-transport/proxy_write.rs`，由既有
+HTTP transport 门禁接入；原来源外测快照不变。
+
 ## 基础组件测试覆盖映射
 
 `python3 tools/rust-sources/foundation_coverage.py --write` 依据来源清单的 profile 解析、每个 profile 入口的 `cargo tree`、外置测试根、已审阅的 `foundation-test-gates.json` 和 `check-foundation-behaviour.py` 套件表，生成 `test/ci/fixtures/foundation-test-coverage.json` 与 [覆盖映射](../validation/foundation-test-coverage-map.md)；`rust-sources` 套件以 `--check` 核对。分类与验收见[测试覆盖闭环](../validation/foundation-test-coverage.md)。

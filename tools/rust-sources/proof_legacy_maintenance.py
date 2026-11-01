@@ -10,7 +10,10 @@ import source_layout
 import source_layout_corrections
 
 KEY = 'legacy_proof_maintenance_receipts'
-RECEIPTS = ('e37e4ee6074dabae4638f15f4926b9af9c67c0b100fd2d7db4e45d323be61509',)
+RECEIPTS = (
+    'e37e4ee6074dabae4638f15f4926b9af9c67c0b100fd2d7db4e45d323be61509',
+    '16f5b39477c05e0df34e296682097f028f028797f6ed2ecc7e2d1e227a984fe1',
+)
 OWNER = 'src/foundation/networking/http-transport'
 LOGICAL = 'src/foundation/http-transport'
 FILE = 'src/common/demand.rs'

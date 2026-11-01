@@ -124,8 +124,14 @@ def main():
             f'http-body={{path={json.dumps(str(ROOT/"src/foundation/networking/http-body"))},features=["utilities"]}}\n'+
             f'service-stack={{path={json.dumps(str(ROOT/"src/foundation/networking/service-stack"))},features=["util"]}}\n'+
             '[[test]]\nname="behavior"\npath="test/behavior.rs"\n')
-        (work/'test/behavior.rs').write_bytes((ROOT/'test/architecture/http-transport/behavior.rs').read_bytes() + (ROOT/'test/architecture/http-transport/combined.rs').read_bytes() + (ROOT/'test/architecture/http-transport/upgrade.rs').read_bytes() + (ROOT/'test/architecture/http-transport/client_state.rs').read_bytes() + (ROOT/'test/architecture/http-transport/probe_timeout.rs').read_bytes())
+        (work/'test/behavior.rs').write_bytes(
+            (ROOT/'test/architecture/http-transport/behavior.rs').read_bytes()
+            + (ROOT/'test/architecture/http-transport/combined.rs').read_bytes()
+            + (ROOT/'test/architecture/http-transport/upgrade.rs').read_bytes()
+            + (ROOT/'test/architecture/http-transport/client_state.rs').read_bytes()
+            + (ROOT/'test/architecture/http-transport/probe_timeout.rs').read_bytes()
+            + (ROOT/'test/architecture/http-transport/proxy_write.rs').read_bytes())
         run(work,'generate-lockfile');output=run(work,'test','--locked','--test','behavior')
-        assert re.search(r'test result: ok\. 25 passed; 0 failed',output),output
-        print(f'http-transport: {count} native/WASM feature checks, absent HTTP2 rejection, 25 transport/routing/readiness/upgrade/state tests, 2 FFI allocation/ABI tests, 6 retained primitive tests and 12 additional primitive contracts (including repeated races) passed')
+        assert re.search(r'test result: ok\. 29 passed; 0 failed',output),output
+        print(f'http-transport: {count} native/WASM feature checks, absent HTTP2 rejection, 29 transport/routing/readiness/upgrade/state/proxy tests, 2 FFI allocation/ABI tests, 6 retained primitive tests and 12 additional primitive contracts (including repeated races) passed')
 if __name__=='__main__':main()

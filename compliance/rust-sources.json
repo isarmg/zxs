@@ -79431,7 +79431,8 @@
   "foundation_layout_receipt": "5f02def35b57751ea9e54a2f1f22fdfebdbd6dda1ed910de7f8fa805f55e281d",
   "initial_test_relocation_sha256": "791ad728a408677dd54ef98e3feaffe825c5fc5670e888440615933d9498ecc3",
   "legacy_proof_maintenance_receipts": [
-    "e37e4ee6074dabae4638f15f4926b9af9c67c0b100fd2d7db4e45d323be61509"
+    "e37e4ee6074dabae4638f15f4926b9af9c67c0b100fd2d7db4e45d323be61509",
+    "16f5b39477c05e0df34e296682097f028f028797f6ed2ecc7e2d1e227a984fe1"
   ],
   "lockfiles_sha256": {
     "Cargo.lock": "9f7c5447d044e101d420074c29ad7a3123be70dc775a9ebd9e04df17da129333"
@@ -84513,7 +84514,7 @@
         "src/adapters/common/sync.rs": "cd5908f0bfc7398ba8b3862e9273d3a89f4d133470b307d8ee82c0a1ebe7af08",
         "src/adapters/common/timer.rs": "0af825cea718f066ab1047846835612c81d17dbbd71e2aeca3fa455434d0d583",
         "src/adapters/mod.rs": "12bee7ecb0d9aca879cf19e661f1594e1269ac192e75a68a7066cd87d9bcc57f",
-        "src/adapters/rt/io.rs": "b514b400ad12b7299fff8fe4f24e42a65908ae9d2d4bc930f68abcf38e09d209",
+        "src/adapters/rt/io.rs": "fb3357afc96d3dd9fb274bf1a559f012978d64a85a10201ef35b2d997d37fd04",
         "src/adapters/rt/mod.rs": "7407678c7cf00709d61dc4e31f935111c18efc89538bd1b473438452d2ef6374",
         "src/adapters/rt/tokio.rs": "b1c4854ba60593a8552bd20f2cc615a2dedbeaba00c396b4c7d9a6ca07752cb6",
         "src/adapters/rt/tokio/with_hyper_io.rs": "90c6895cca7b951204fc3a5cf33ab7f385a103fe88c1a2444e9acb8a6161915c",
@@ -88224,7 +88225,7 @@
         "src/adapters/common/sync.rs": "cd5908f0bfc7398ba8b3862e9273d3a89f4d133470b307d8ee82c0a1ebe7af08",
         "src/adapters/common/timer.rs": "0af825cea718f066ab1047846835612c81d17dbbd71e2aeca3fa455434d0d583",
         "src/adapters/mod.rs": "12bee7ecb0d9aca879cf19e661f1594e1269ac192e75a68a7066cd87d9bcc57f",
-        "src/adapters/rt/io.rs": "b514b400ad12b7299fff8fe4f24e42a65908ae9d2d4bc930f68abcf38e09d209",
+        "src/adapters/rt/io.rs": "fb3357afc96d3dd9fb274bf1a559f012978d64a85a10201ef35b2d997d37fd04",
         "src/adapters/rt/mod.rs": "7407678c7cf00709d61dc4e31f935111c18efc89538bd1b473438452d2ef6374",
         "src/adapters/rt/tokio.rs": "b1c4854ba60593a8552bd20f2cc615a2dedbeaba00c396b4c7d9a6ca07752cb6",
         "src/adapters/rt/tokio/with_hyper_io.rs": "90c6895cca7b951204fc3a5cf33ab7f385a103fe88c1a2444e9acb8a6161915c",
@@ -88358,7 +88359,7 @@
         "src/adapters/common/sync.rs": "cd5908f0bfc7398ba8b3862e9273d3a89f4d133470b307d8ee82c0a1ebe7af08",
         "src/adapters/common/timer.rs": "0af825cea718f066ab1047846835612c81d17dbbd71e2aeca3fa455434d0d583",
         "src/adapters/mod.rs": "12bee7ecb0d9aca879cf19e661f1594e1269ac192e75a68a7066cd87d9bcc57f",
-        "src/adapters/rt/io.rs": "b514b400ad12b7299fff8fe4f24e42a65908ae9d2d4bc930f68abcf38e09d209",
+        "src/adapters/rt/io.rs": "fb3357afc96d3dd9fb274bf1a559f012978d64a85a10201ef35b2d997d37fd04",
         "src/adapters/rt/mod.rs": "7407678c7cf00709d61dc4e31f935111c18efc89538bd1b473438452d2ef6374",
         "src/adapters/rt/tokio.rs": "b1c4854ba60593a8552bd20f2cc615a2dedbeaba00c396b4c7d9a6ca07752cb6",
         "src/adapters/rt/tokio/with_hyper_io.rs": "90c6895cca7b951204fc3a5cf33ab7f385a103fe88c1a2444e9acb8a6161915c",
@@ -88492,7 +88493,7 @@
         "src/adapters/common/sync.rs": "cd5908f0bfc7398ba8b3862e9273d3a89f4d133470b307d8ee82c0a1ebe7af08",
         "src/adapters/common/timer.rs": "0af825cea718f066ab1047846835612c81d17dbbd71e2aeca3fa455434d0d583",
         "src/adapters/mod.rs": "12bee7ecb0d9aca879cf19e661f1594e1269ac192e75a68a7066cd87d9bcc57f",
-        "src/adapters/rt/io.rs": "b514b400ad12b7299fff8fe4f24e42a65908ae9d2d4bc930f68abcf38e09d209",
+        "src/adapters/rt/io.rs": "fb3357afc96d3dd9fb274bf1a559f012978d64a85a10201ef35b2d997d37fd04",
         "src/adapters/rt/mod.rs": "7407678c7cf00709d61dc4e31f935111c18efc89538bd1b473438452d2ef6374",
         "src/adapters/rt/tokio.rs": "b1c4854ba60593a8552bd20f2cc615a2dedbeaba00c396b4c7d9a6ca07752cb6",
         "src/adapters/rt/tokio/with_hyper_io.rs": "90c6895cca7b951204fc3a5cf33ab7f385a103fe88c1a2444e9acb8a6161915c",
@@ -97164,7 +97165,7 @@
         "src/adapters/common/sync.rs": "cd5908f0bfc7398ba8b3862e9273d3a89f4d133470b307d8ee82c0a1ebe7af08",
         "src/adapters/common/timer.rs": "0af825cea718f066ab1047846835612c81d17dbbd71e2aeca3fa455434d0d583",
         "src/adapters/mod.rs": "12bee7ecb0d9aca879cf19e661f1594e1269ac192e75a68a7066cd87d9bcc57f",
-        "src/adapters/rt/io.rs": "b514b400ad12b7299fff8fe4f24e42a65908ae9d2d4bc930f68abcf38e09d209",
+        "src/adapters/rt/io.rs": "fb3357afc96d3dd9fb274bf1a559f012978d64a85a10201ef35b2d997d37fd04",
         "src/adapters/rt/mod.rs": "7407678c7cf00709d61dc4e31f935111c18efc89538bd1b473438452d2ef6374",
         "src/adapters/rt/tokio.rs": "b1c4854ba60593a8552bd20f2cc615a2dedbeaba00c396b4c7d9a6ca07752cb6",
         "src/adapters/rt/tokio/with_hyper_io.rs": "90c6895cca7b951204fc3a5cf33ab7f385a103fe88c1a2444e9acb8a6161915c",
