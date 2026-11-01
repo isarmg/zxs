@@ -334,6 +334,26 @@ fn exercise(
     accessibility::run(browser)?;
     admin_language::run(browser)?;
     single_account::run(browser, password)?;
+    // Language reload intentionally resets file navigation and selection. Restore
+    // the seeded directory AND selected file required by the logout write/metadata fences.
+    browser.click(&browser.button("Files", "文件")?)?;
+    browser.click(&browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?)?;
+    open_fixture_directory(browser)?;
+    browser.click(&browser.element(
+        "xpath",
+        "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']",
+    )?)?;
+    browser.css(".zxs-entry-version-history")?;
+    wait_for(
+        "restored seeded directory and selected writable file",
+        || {
+            if browser.script("const note=document.querySelector('button[aria-label=\"Edit file note\"], button[aria-label=\"编辑文件备注\"]');return document.querySelector('.zxs-entry-navigation > span')?.textContent.trim()==='P01/browser-fixtures' && document.querySelector('.zxs-file-heading h2')?.textContent.trim()==='browser-smoke.txt' && !!note && !note.disabled")? == true {
+            Ok(())
+        } else {
+            Err("logout fixture directory, file selection or note readiness not restored".into())
+        }
+        },
+    )?;
     session_logout::run(browser, password)?;
     browser.click(&browser.button("Files", "文件")?)?;
     let stale_history = session_delivery::begin_paused_history(browser)?;
