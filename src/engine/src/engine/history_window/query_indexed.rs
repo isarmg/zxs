@@ -313,36 +313,10 @@ fn select_scope(
         for pick in &mut selected.entries {
             pick.content_branch = branches.get(&pick.id).cloned().flatten();
         }
-        let mut edge_count = 0;
-        let count = selected.entries.len();
-        for (index, pick) in selected.entries.iter_mut().enumerate() {
+        let previews = capture_parent_previews(reader, &query, &selected.entries)?;
+        for (pick, parents) in selected.entries.iter_mut().zip(previews) {
             cancellation.checkpoint()?;
-            // Exactly the existing page's sequential preview budget, not 256
-            // per node. Each target merge stream is exhausted before caching.
-            let limit = MAX_HISTORY_PREVIEW_EDGES - edge_count - (count - index - 1);
-            let mut selector = Selector::new(Position::Start, limit)?;
-            nodes::visit_parents_from(
-                query.state,
-                query.scope(),
-                &pick.id,
-                cancellation,
-                reader.merges(),
-                |parent| {
-                    selector.offer(parent, ());
-                    Ok(())
-                },
-            )?;
-            let parents = selector.finish()?;
-            edge_count += parents.entries.len();
-            pick.parents = Some(Captured {
-                entries: parents
-                    .entries
-                    .into_iter()
-                    .map(|(parent, ())| parent.to_owned())
-                    .collect(),
-                has_before: parents.has_before,
-                has_after: parents.has_after,
-            });
+            pick.parents = Some(parents);
             let node = query.node(&pick.id)?;
             if !matches!(node, nodes::Node::Content(_)) {
                 let source = nodes::path_source_from(
@@ -383,6 +357,107 @@ fn select_scope(
         owner_version: owner.version_id.clone(),
         page,
     })
+}
+
+/// Page-local parent sets share the existing edge budget, rather than one
+/// budget per node. Each prefix's retained size only grows as candidates arrive:
+/// adding to an earlier set can displace later entries, but cannot shrink their
+/// combined prefix. Thus later limits only shrink; evicted largest keys can
+/// never become eligible again. This gives exactly the sequential preview split.
+struct ParentPreviews<'a> {
+    entries: Vec<(std::collections::BTreeSet<&'a str>, bool)>,
+    limits: Vec<usize>,
+}
+impl<'a> ParentPreviews<'a> {
+    fn new(count: usize) -> Self {
+        Self {
+            entries: vec![(std::collections::BTreeSet::new(), false); count],
+            limits: (0..count)
+                .map(|index| MAX_HISTORY_PREVIEW_EDGES - (count - index - 1))
+                .collect(),
+        }
+    }
+
+    fn offer(&mut self, node: usize, parent: &'a str) {
+        let (parents, more) = &mut self.entries[node];
+        if parents.len() == self.limits[node] && parents.last().is_some_and(|last| parent > *last) {
+            *more = true;
+            return;
+        }
+        if !parents.insert(parent) {
+            return;
+        }
+        if parents.len() > self.limits[node] {
+            parents.pop_last();
+            *more = true;
+            return;
+        }
+        // Only an increased retained count can shrink later budgets. Replacing
+        // a full set's largest key or reoffering an edge needs no page-wide work.
+        let count = self.entries.len();
+        let mut preceding = 0;
+        for (index, (parents, more)) in self.entries.iter_mut().enumerate() {
+            let limit = MAX_HISTORY_PREVIEW_EDGES - preceding - (count - index - 1);
+            self.limits[index] = limit;
+            while parents.len() > limit {
+                parents.pop_last();
+                *more = true;
+            }
+            preceding += parents.len();
+        }
+    }
+
+    fn finish(self) -> Vec<Captured<String>> {
+        self.entries
+            .into_iter()
+            .map(|(parents, more)| Captured {
+                entries: parents.into_iter().map(str::to_owned).collect(),
+                has_before: false,
+                has_after: more,
+            })
+            .collect()
+    }
+}
+
+fn capture_parent_previews(
+    reader: &ScopeReader<'_, '_>,
+    query: &Query<'_>,
+    selected: &[NodePick],
+) -> Result<Vec<Captured<String>>> {
+    let mut previews = ParentPreviews::new(selected.len());
+    let positions = selected
+        .iter()
+        .enumerate()
+        .map(|(index, pick)| (pick.id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    for (index, pick) in selected.iter().enumerate() {
+        for parent in nodes::base_parents(query.state, &pick.id) {
+            query.cancel.checkpoint()?;
+            if nodes::node(query.state, query.scope(), parent).is_some() {
+                previews.offer(index, parent);
+            }
+        }
+    }
+    if !selected.is_empty() {
+        // Consume the entire authenticated stream even when every preview is
+        // full. Only the selected page's node IDs and <=256 parents are retained.
+        for merge in reader.merges() {
+            query.cancel.checkpoint()?;
+            let merge = merge?;
+            let Some(&index) = positions.get(merge.result_node_id.as_str()) else {
+                continue;
+            };
+            for parent in &merge.parent_node_ids {
+                query.cancel.checkpoint()?;
+                if parent != &merge.result_node_id
+                    && nodes::node(query.state, query.scope(), parent).is_some()
+                {
+                    previews.offer(index, parent);
+                }
+            }
+        }
+    }
+    Ok(previews.finish())
 }
 
 impl<'a> Query<'a> {

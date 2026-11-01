@@ -1192,3 +1192,341 @@ fn indexed_auxiliary_snapshot_keeps_old_view_after_publication_and_rebuild() {
         ));
     }
 }
+
+// Query-only scope fixture: target parents exceed the shared preview budget,
+// while unrelated merges must not enter the authenticated target stream.
+fn batched_parent_engine(temp: &tempfile::TempDir, unrelated: usize) -> Engine {
+    let mut engine = indexed_engine(temp, 0);
+    let state = Arc::make_mut(&mut engine.state);
+    let source = state.versions["ver_00000000000000000000000000000000"].clone();
+    let template = state.file_branch_merges.values().next().unwrap().clone();
+    let mut parents = Vec::new();
+    for n in 0..300 {
+        let mut version = source.clone();
+        version.version_id = format!("ver_{:032x}", n + 0x90000);
+        version.version_sequence = 0;
+        version.source_version_ids.clear();
+        parents.push(version.version_id.clone());
+        state.versions.insert(version.version_id.clone(), version);
+    }
+    // Add later merge IDs first. The stream's stable ordering and parent key
+    // order must not turn arrival order into page or preview order.
+    for n in (0..65).rev() {
+        let mut merge = template.clone();
+        merge.merge_id = format!("fmerge_{:032x}", n + 0x90000);
+        merge.result_node_id = format!("ver_{:032x}", 16 - (n % 3));
+        merge.reused_node = n % 2 == 0;
+        merge.parent_node_ids = parents.iter().rev().cloned().collect();
+        merge.parent_node_ids.extend([
+            parents[0].clone(),
+            merge.result_node_id.clone(),
+            "ver_00000000000000000000000000000064".into(),
+            "ver_00000000000000000000000000000065".into(),
+        ]);
+        state
+            .file_branch_merges
+            .insert(merge.merge_id.clone(), merge);
+    }
+    for n in 0..unrelated {
+        let mut merge = template.clone();
+        merge.merge_id = format!("fmerge_{:032x}", n + 0xa0000);
+        merge.file_id = format!("file_{:032x}", n + 0xa0000);
+        state
+            .file_branch_merges
+            .insert(merge.merge_id.clone(), merge);
+    }
+    engine.bind_recovered_history_roots(BTreeMap::from([(
+        context().history_tree_id.as_str().to_owned(),
+        "a".repeat(64),
+    )]));
+    engine.rebuild_index().unwrap();
+    engine
+}
+
+#[test]
+fn batched_parent_stream_keeps_sequential_budget_and_reads_target_merges_once() {
+    let mut counts = Vec::new();
+    for unrelated in [0, 257] {
+        let temp = tempfile::tempdir().unwrap();
+        let engine = batched_parent_engine(&temp, unrelated);
+        let view = engine.metadata_view();
+        let context = context();
+        let cancel = HistoryWindowCancellation::new();
+        let mut measured = Vec::new();
+        for limit in [1, 2, 7, 64] {
+            let mut request = request(HistoryCollection::Nodes, limit);
+            for step in 0..3 {
+                crate::engine::index::reset_scope_read_metrics();
+                let selected =
+                    capture_indexed_selection(&engine, &view, &request, &context, &cancel)
+                        .unwrap()
+                        .unwrap();
+                let metrics = crate::engine::index::scope_read_metrics();
+                assert_eq!(metrics.0[5], 68, "one complete target merge stream");
+                measured.push(metrics.0[5]);
+                let actual = view
+                    .history_window_selected(&request, &context, &cancel, Some(&selected))
+                    .unwrap();
+                let expected = view.history_window(&request, &context, &cancel).unwrap();
+                assert_eq!(
+                    json_codec::to_value(&actual).unwrap(),
+                    json_codec::to_value(expected).unwrap()
+                );
+                let HistoryWindowPage::Nodes {
+                    nodes, edges, page, ..
+                } = actual
+                else {
+                    unreachable!()
+                };
+                assert!(edges.len() <= MAX_HISTORY_PREVIEW_EDGES);
+                if step == 0 {
+                    assert!(matches!(nodes[0].parents, HistoryParentSet::More { .. }));
+                    request.cursor = page.next_cursor;
+                } else if step == 1 {
+                    request.cursor = page.previous_cursor;
+                }
+            }
+        }
+        counts.push(measured);
+    }
+    assert_eq!(counts[0], counts[1]);
+    eprintln!(
+        "batched parent merge visits at unrelated 0/257, limits 1/2/7/64 and forward/backward: {counts:?}"
+    );
+}
+
+#[test]
+fn batched_parent_stream_authenticates_unselected_tail_before_returning_preview() {
+    use sqlite_access::{Connection, Executor};
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = batched_parent_engine(&temp, 0);
+    let state = Arc::make_mut(&mut engine.state);
+    let mut tail = state.file_branch_merges.values().next().unwrap().clone();
+    tail.merge_id = "fmerge_ffffffffffffffffffffffffffffffff".into();
+    tail.result_node_id = "ver_00000000000000000000000000000000".into();
+    tail.parent_node_ids.clear();
+    state.file_branch_merges.insert(tail.merge_id.clone(), tail);
+    engine.bind_recovered_history_roots(BTreeMap::from([(
+        context().history_tree_id.as_str().to_owned(),
+        "a".repeat(64),
+    )]));
+    engine.rebuild_index().unwrap();
+    let view = engine.metadata_view();
+    let request = request(HistoryCollection::Nodes, 1);
+    let context = context();
+    let cancel = HistoryWindowCancellation::new();
+    let expected = view.history_window(&request, &context, &cancel).unwrap();
+    platform_io::sqlite::block_on_sqlite_connection(async {
+        let mut connection = platform_io::sqlite::open_index_connection(
+            &engine.root.join("index.sqlite"),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        connection.execute("DELETE FROM history_scope_members WHERE kind=5 AND id='fmerge_ffffffffffffffffffffffffffffffff'").await.unwrap();
+        connection.close().await.unwrap();
+    });
+    let selected = capture_indexed_selection(&engine, &view, &request, &context, &cancel).unwrap();
+    assert!(
+        selected.is_none(),
+        "even an unselected empty tail member must authenticate"
+    );
+    let actual = view
+        .history_window_selected(&request, &context, &cancel, selected.as_ref())
+        .unwrap();
+    assert_eq!(
+        json_codec::to_value(actual).unwrap(),
+        json_codec::to_value(expected).unwrap()
+    );
+    assert!(matches!(
+        engine.index_health(),
+        crate::engine::index::IndexHealth::Unavailable(_)
+    ));
+}
+
+#[test]
+fn parent_preview_accumulator_matches_complete_sequential_budget_in_any_arrival_order() {
+    for count in [1, 2, 7, 64] {
+        let all = (0..count)
+            .map(|node| {
+                let length = match node {
+                    0 => 300,
+                    1 => 0,
+                    2 => 257,
+                    _ => node % 5,
+                };
+                (0..length)
+                    .rev()
+                    .map(|parent| format!("parent_{parent:04}"))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let grouped = all
+            .iter()
+            .enumerate()
+            .flat_map(|(node, parents)| parents.iter().map(move |parent| (node, parent.as_str())))
+            .collect::<Vec<_>>();
+        let mut reversed = grouped.clone();
+        reversed.reverse();
+        let interleaved = (0..300)
+            .flat_map(|offset| {
+                all.iter().enumerate().filter_map(move |(node, parents)| {
+                    parents.get(offset).map(|parent| (node, parent.as_str()))
+                })
+            })
+            .collect::<Vec<_>>();
+        for arrivals in [grouped, reversed, interleaved] {
+            let mut previews = ParentPreviews::new(count);
+            for (node, parent) in arrivals {
+                // Repeated edges must neither consume budget nor erase More.
+                let old_limits = previews.limits.clone();
+                previews.offer(node, parent);
+                previews.offer(node, parent);
+                assert!(
+                    previews
+                        .limits
+                        .iter()
+                        .zip(old_limits)
+                        .all(|(new, old)| *new <= old)
+                );
+                assert!(
+                    previews
+                        .entries
+                        .iter()
+                        .map(|(keys, _)| keys.len())
+                        .sum::<usize>()
+                        <= MAX_HISTORY_PREVIEW_EDGES
+                );
+            }
+            let actual = previews.finish();
+            let mut used = 0;
+            for (index, parents) in all.iter().enumerate() {
+                // Independent complete-set oracle followed by the original
+                // sequential page budget, including reserved empty nodes.
+                let unique = parents
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<std::collections::BTreeSet<_>>();
+                let budget = MAX_HISTORY_PREVIEW_EDGES - used - (count - index - 1);
+                let expected = unique
+                    .iter()
+                    .take(budget)
+                    .map(|key| (*key).to_owned())
+                    .collect::<Vec<_>>();
+                used += expected.len();
+                assert_eq!(actual[index].entries, expected);
+                assert!(!actual[index].has_before);
+                assert_eq!(actual[index].has_after, unique.len() > budget);
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "controlled local comparison; reports timing without a performance gate"]
+fn batched_parent_preview_controlled_comparison() {
+    use std::time::Instant;
+    let temp = tempfile::tempdir().unwrap();
+    let engine = batched_parent_engine(&temp, 257);
+    let view = engine.metadata_view();
+    let context = context();
+    let cancel = HistoryWindowCancellation::new();
+    for limit in [1, 7, 64] {
+        let request = request(HistoryCollection::Nodes, limit);
+        let selection = capture_indexed_selection(&engine, &view, &request, &context, &cancel)
+            .unwrap()
+            .unwrap();
+        let CapturedPage::Nodes(selected) = selection.page else {
+            unreachable!()
+        };
+        let query = Query::new(&view, &request, &context, &cancel).unwrap();
+        let mut samples = Vec::new();
+        for round in 0..5 {
+            let mut pair = Vec::new();
+            for batched in if round % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                crate::engine::index::reset_scope_read_metrics();
+                let started = Instant::now();
+                let captured = engine
+                    .with_history_scope(
+                        request.file_id.as_str(),
+                        context.history_tree_id.as_str(),
+                        |reader| {
+                            if batched {
+                                capture_parent_previews(reader, &query, &selected.entries)
+                            } else {
+                                // Previous production algorithm, kept only as a
+                                // local measurement oracle over the same frozen view.
+                                let mut used = 0;
+                                let mut previews = Vec::new();
+                                for (index, pick) in selected.entries.iter().enumerate() {
+                                    let budget = MAX_HISTORY_PREVIEW_EDGES
+                                        - used
+                                        - (selected.entries.len() - index - 1);
+                                    let mut selector = Selector::new(Position::Start, budget)?;
+                                    nodes::visit_parents_from(
+                                        query.state,
+                                        query.scope(),
+                                        &pick.id,
+                                        &cancel,
+                                        reader.merges(),
+                                        |parent| {
+                                            selector.offer(parent, ());
+                                            Ok(())
+                                        },
+                                    )?;
+                                    let parents = selector.finish()?;
+                                    used += parents.entries.len();
+                                    previews.push(Captured {
+                                        entries: parents
+                                            .entries
+                                            .into_iter()
+                                            .map(|(parent, ())| parent.to_owned())
+                                            .collect(),
+                                        has_before: parents.has_before,
+                                        has_after: parents.has_after,
+                                    });
+                                }
+                                Ok(previews)
+                            }
+                        },
+                    )
+                    .unwrap()
+                    .unwrap();
+                let elapsed = started.elapsed();
+                let visits = crate::engine::index::scope_read_metrics().0[5];
+                assert_eq!(
+                    visits,
+                    if batched {
+                        68
+                    } else {
+                        68 * selected.entries.len()
+                    }
+                );
+                let values = captured
+                    .into_iter()
+                    .map(|p| (p.entries, p.has_before, p.has_after))
+                    .collect::<Vec<_>>();
+                pair.push((batched, elapsed, visits, values));
+            }
+            assert_eq!(
+                pair[0].3, pair[1].3,
+                "complete preview oracle at limit {limit}"
+            );
+            pair.sort_by_key(|p| p.0);
+            samples.push((
+                pair[0].1.as_nanos(),
+                pair[1].1.as_nanos(),
+                pair[0].2,
+                pair[1].2,
+            ));
+        }
+        eprintln!(
+            "parent_preview_controlled limit={limit} target_merges=68 unrelated_merges=257 (old_ns,new_ns,old_visits,new_visits)={samples:?}"
+        );
+    }
+}
