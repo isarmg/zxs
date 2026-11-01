@@ -202,13 +202,16 @@ class FoundationCoverageMapTests(unittest.TestCase):
 
     def test_behaviour_suites_preserve_retained_and_project_authored_classifications(self):
         packages = {package["package"]: package for package in MAP["packages"]}
-        for name in BEHAVIOUR.UNIT_SUITES + tuple(suite.subject for suite in BEHAVIOUR.STANDALONE_SUITES):
+        retained = set(BEHAVIOUR.UNIT_SUITES) | {suite.subject for suite in BEHAVIOUR.STANDALONE_SUITES}
+        for name in retained:
             self.assertEqual(packages[name]["classification"], "executed", name)
             self.assertIn("U", {gate["kind"] for gate in packages[name]["gates"]}, name)
         for suite in BEHAVIOUR.INTEGRATION_SUITES:
             package = packages[suite.subject]
             self.assertEqual(package["classification"], "executed", suite.subject)
             expected = {"U" if path.startswith("test/foundation/") else "P" for path in suite.tests}
+            if suite.subject in retained:
+                expected.add("U")
             recorded = {gate["kind"] for gate in package["gates"]
                         if gate["scripts"] == [".github/scripts/check-foundation-behaviour.py"]}
             self.assertEqual(recorded, expected, suite.subject)

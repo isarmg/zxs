@@ -2146,10 +2146,11 @@ impl<T> Extend<(Option<HeaderName>, T)> for HeaderMap<T> {
         // Reserve the entire hint lower bound if the map is empty.
         // Otherwise reserve half the hint (rounded up), so the map
         // will only resize twice in the worst case.
+        let lower = iter.size_hint().0;
         let hint = if self.is_empty() {
-            iter.size_hint().0
+            lower
         } else {
-            (iter.size_hint().0 + 1) / 2
+            lower / 2 + lower % 2
         };
 
         // Clamp the hint so an over-estimate cannot overflow `reserve`.
@@ -2206,10 +2207,11 @@ impl<T> Extend<(HeaderName, T)> for HeaderMap<T> {
         // will only resize twice in the worst case.
         let iter = iter.into_iter();
 
+        let lower = iter.size_hint().0;
         let hint = if self.is_empty() {
-            iter.size_hint().0
+            lower
         } else {
-            (iter.size_hint().0 + 1) / 2
+            lower / 2 + lower % 2
         };
 
         // Clamp the hint so an over-estimate cannot overflow `reserve`.
@@ -2359,7 +2361,11 @@ impl<'a, T> Iterator for Iter<'a, T> {
         let map = self.map;
         debug_assert!(map.entries.len() >= self.entry);
 
-        let lower = map.entries.len() - self.entry;
+        let mut lower = map.entries.len() - self.entry;
+        if self.cursor.is_none() && !map.entries.is_empty() {
+            // `entry` still points to the bucket whose values were consumed.
+            lower -= 1;
+        }
         // We could pessimistically guess at the upper bound, saying
         // that its lower + map.extra_values.len(). That could be
         // way over though, such as if we're near the end, and have
@@ -2444,7 +2450,11 @@ impl<'a, T> Iterator for IterMut<'a, T> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         debug_assert!(self.entries_len >= self.entry);
 
-        let lower = self.entries_len - self.entry;
+        let mut lower = self.entries_len - self.entry;
+        if self.cursor.is_none() && self.entries_len != 0 {
+            // `entry` still points to the bucket whose values were consumed.
+            lower -= 1;
+        }
         // We could pessimistically guess at the upper bound, saying
         // that its lower + map.extra_values.len(). That could be
         // way over though, such as if we're near the end, and have
@@ -4016,7 +4026,10 @@ mod as_header_name {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/http/functions/src/header/map/test_bounds_4018.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/http/functions/src/header/map/test_bounds_4018.rs"
+));
 
 #[cfg(test)]
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/http/functions/src/header/map/skip_duplicates_during_key_iteration_4038.rs"));

@@ -1883,6 +1883,31 @@
         ]
       }
     },
+    "integration:http": {
+      "features": [
+        "default",
+        "std"
+      ],
+      "subject": "http",
+      "targets": {
+        "foundation-http-contracts": [
+          "http_public_contract_regressions::borrowed_long_invalid_names_return_error_before_entry",
+          "http_public_contract_regressions::extend_named_entries_handles_maximum_infinite_lower_bound",
+          "http_public_contract_regressions::extend_optional_entries_handles_maximum_infinite_lower_bound",
+          "http_public_contract_regressions::iter_mut_size_hint_bounds_follow_remaining_values",
+          "http_public_contract_regressions::iter_size_hint_bounds_follow_remaining_values",
+          "http_public_contract_regressions::lowercase_name_rejects_double_quote",
+          "http_public_contract_regressions::static_long_invalid_names_panic_before_entry",
+          "http_public_contract_regressions::static_long_invalid_names_panic_before_try_append",
+          "http_public_contract_regressions::static_long_invalid_names_panic_before_try_insert",
+          "http_public_contract_regressions::static_name_rejects_double_quote",
+          "http_public_contract_regressions::valid_long_name_paths_preserve_normalization_and_lookup",
+          "http_public_contract_regressions::valid_name_constructors_preserve_token_punctuation",
+          "http_public_contract_regressions::values_mut_size_hint_bounds_follow_remaining_values",
+          "http_public_contract_regressions::values_size_hint_bounds_follow_remaining_values"
+        ]
+      }
+    },
     "integration:http-range-header": {
       "features": [],
       "subject": "http-range-header",

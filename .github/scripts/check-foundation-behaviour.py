@@ -75,6 +75,7 @@ UNIT_SUITES = ('bytes', 'cmov', 'flag-set', 'futures-intrusive', 'guardian', 'ht
 
 FOUNDATION_TESTS = 'test/foundation/'
 INTEGRATION_SUITES = (
+    Suite('http', ('test/ci/fixtures/foundation-http-contracts.rs',), edition='2024'),
     Suite('futures', ('test/ci/fixtures/foundation-futures-contracts.rs',), edition='2024'),
     Suite('flume', tuple(FOUNDATION_TESTS + 'flume/tests/' + name + '.rs'
                          for name in ('basic', 'iter', 'array', 'list', 'zero'))

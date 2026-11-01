@@ -96890,7 +96890,7 @@
       "version": "0.4.1"
     },
     "src/foundation/networking/http": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。；修复 HeaderName 小写表误收双引号及 HeaderMap 长借用/静态名称的遗漏校验；迭代器下界扣除已消费桶，Extend 半量容量提示改为不溢出的向上取整，保留名称长度和容量上限。",
       "description": "A set of types for representing HTTP requests and responses.",
       "directory": "src/foundation/networking/http",
       "files_sha256": {
@@ -96899,9 +96899,9 @@
         "src/convert.rs": "648ef74bc21184c960ee21e43033584390d1900d107cdae8c1d9a4a35f9a3fc7",
         "src/error.rs": "1e74a0fed12a12e31e8dc35d251e6ba835d6436ec3c0e7ae07f1288851330a79",
         "src/extensions.rs": "65021dcfe51b358b3564b7c4308c1599e0bb3e742178d0c2e32e55d8d6ca8d09",
-        "src/header/map.rs": "8a1860c01812228735d8d0cf3ac33e6ab47df0ecdbd830024a27beacbd609ab7",
+        "src/header/map.rs": "ae2e8a1463e6e224e138118a3b6fbde4b7fcead3106089c64ba6f1566542e943",
         "src/header/mod.rs": "26109659d73db5fd66bda033daf2b9eebc1eac7af22c48323f808af09da599b5",
-        "src/header/name.rs": "5631653e9dacff70fc35f90dac22833ef18dca7b3f8490efafb8430a9c5ef0a0",
+        "src/header/name.rs": "3b221b701c794ba4a2a30fb45037a210b4600c1312302a585c98bd4a952337c6",
         "src/header/value.rs": "1764ba9a74906acc0e9527214756c6f65b4c93d99646220dc0f9fc4b574d5163",
         "src/lib.rs": "3a6de7e75456ba0cc7776883e3db7ebf6ac7bc6c6b5748f4c23c3f03b4a52b10",
         "src/method.rs": "2fc6b37500f364c71c9adb179f4f6b0632d0d480d145d117cf69a409d6b371c5",

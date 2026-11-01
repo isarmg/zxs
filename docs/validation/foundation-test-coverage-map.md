@@ -84,7 +84,7 @@
 | `heck` | — | build-tools：x86_64／compile／无<br>root-native：x86_64／compile／无<br>schema-async-validation：x86_64／compile／无<br>validation-tools：x86_64／compile／无 | browser-smoke、contract-check、storage-rescue、storage-server、web-bindings | 8 文件／8 属性 | U check-foundation-behaviour.py |
 | `hmac` | — | root-native：x86_64／runtime／无<br>validation-tools：x86_64／compile／无 | authentication、browser-smoke、storage-rescue、storage-server | 12 文件／1 属性 | P check-crypto-consolidation.py |
 | `html-escape` | — | web：wasm32／compile／default, std | web-app | 无 | P check-foundation-behaviour.py |
-| `http` | — | root-native：x86_64／runtime／default, std<br>validation-tools：x86_64／compile／default, std | browser-smoke、storage-client、storage-server | 22 文件／143 属性 | U check-foundation-behaviour.py |
+| `http` | — | root-native：x86_64／runtime／default, std<br>validation-tools：x86_64／compile／default, std | browser-smoke、storage-client、storage-server | 22 文件／143 属性 | P check-foundation-behaviour.py<br>U check-foundation-behaviour.py |
 | `http-body` | — | root-native：x86_64／runtime／default, utilities<br>validation-tools：x86_64／compile／default, utilities | browser-smoke、storage-client、storage-server | 12 文件／43 属性 | U check-http-body-consolidation.py |
 | `http-range-header` | — | root-native：x86_64／runtime／无<br>validation-tools：x86_64／compile／无 | browser-smoke、storage-server | 1 文件／34 属性 | P check-foundation-behaviour.py |
 | `http-routing` | — | root-native：x86_64／runtime／http1, json, query, tokio, tower-log, tracing<br>validation-tools：x86_64／compile／http1, json, query, tokio, tower-log, tracing | browser-smoke、storage-server | 49 文件／268 属性 | P check-http-routing.py |
