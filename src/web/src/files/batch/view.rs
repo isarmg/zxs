@@ -41,6 +41,15 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 .unwrap_or_default()
         })
     });
+    let confirmation = Memo::new(move |_| {
+        state.with(|s| {
+            s.files
+                .batch
+                .as_ref()
+                .and_then(|draft| draft.name_error.clone())
+                .filter(|failure| failure.entry.is_some() && failure.error.candidate().is_some())
+        })
+    });
     view! {<Show when=move ||active.get()>
         <section class="zxs-content-panel zxs-batch-editor zxs-frame zxs-stack" aria-label=t("批量文件操作","Batch file operation")>
             <div class="zxs-file-heading zxs-flow"><h2 class="zxs-row">{move ||state.with(|s|s.files.batch.as_ref().map(|draft|format!("{} · {} {}",draft.kind.label(),draft.entries.len(),t("项","items"))).unwrap_or_default())}</h2><button class="zxs-button" disabled=move ||state.with(file_actions::pending) on:click=move |_|state.update(|s|s.files.batch=None)>{t("取消","Cancel")}</button></div>
@@ -68,6 +77,12 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                 <button class="zxs-button" disabled=move ||blocked.get()||state.with(|s|s.files.batch.as_ref().is_none_or(|draft|draft.selected_sources.is_empty())) on:click=move |_|update(state,|draft|{if let Some(source)=draft.selected_sources.first(){draft.mappings.push(Mapping{source:source.clone(),target:String::new()});}})>{t("添加分支映射","Add branch mapping")}</button>
             </Show>
             <Show when=move ||state.with(|s|s.files.batch.as_ref().is_some_and(|draft|draft.registration.as_ref().is_some_and(|registration|registration.published)))><button class="zxs-button" disabled=move ||state.with(|s|!s.session_active()||file_actions::pending(s)||s.files.batch.as_ref().is_none_or(|draft|draft.loading)) on:click=move |_|reload_registered_scope(state)>{t("重试读取目录分支", "Retry loading folder branches")}</button></Show>
+            {move ||confirmation.get().map(|expected| view! {
+                <button class="zxs-button" type="button" disabled=move ||blocked.get()
+                    on:click=move |_|super::actions::confirm_name(state, &expected)>
+                    {t("确认使用 NFC 名称", "Confirm NFC name")}
+                </button>
+            })}
             <p class="zxs-row zxs-inline-error" role="status">{move ||state.with(|s|s.files.batch.as_ref().map(|draft|draft.error.clone()).unwrap_or_default())}</p>
             <div class="zxs-file-toolbar zxs-flow"><button class="zxs-button" disabled=move ||blocked.get()||state.with(|s|s.files.batch.as_ref().is_none_or(|draft|!draft.source_resolved)) on:click=move |_|submit(state)>{t("执行所选操作","Apply selected operation")}</button></div>
         </section>

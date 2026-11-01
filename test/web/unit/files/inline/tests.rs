@@ -51,7 +51,10 @@ fn directory_names_use_current_portable_names_not_the_metadata_budget() {
         assert_eq!(edit_value(&name, InputKind::BranchName), Edit::Invalid);
     }
     assert_eq!(target.edit_value("  ", ""), Edit::Cancel);
-    assert_eq!(target.edit_value(" 草稿 ", ""), Edit::Save("草稿".into()));
+    assert!(matches!(
+        target.edit_value(" 草稿 ", ""),
+        Edit::NameError(_)
+    ));
     for name in [
         ".",
         "..",
@@ -63,7 +66,10 @@ fn directory_names_use_current_portable_names_not_the_metadata_budget() {
         "a\n",
         &"文".repeat(81),
     ] {
-        assert_eq!(target.edit_value(name, ""), Edit::Invalid, "{name}");
+        assert!(
+            matches!(target.edit_value(name, ""), Edit::NameError(_)),
+            "{name}"
+        );
     }
 }
 
@@ -74,17 +80,23 @@ fn directory_creation_validates_the_complete_path_budget() {
         target.edit_value("文", &"a".repeat(198)),
         Edit::Save("文".into())
     );
-    assert_eq!(target.edit_value("文", &"a".repeat(199)), Edit::Invalid);
+    assert!(matches!(
+        target.edit_value("文", &"a".repeat(199)),
+        Edit::NameError(_)
+    ));
     assert!(name_policy::validate_name(&"a".repeat(201)).is_ok());
-    assert_eq!(target.edit_value(&"a".repeat(201), ""), Edit::Invalid);
+    assert!(matches!(
+        target.edit_value(&"a".repeat(201), ""),
+        Edit::NameError(_)
+    ));
     assert_eq!(
         target.edit_value("文", &vec!["a"; 31].join("/")),
         Edit::Save("文".into())
     );
-    assert_eq!(
+    assert!(matches!(
         target.edit_value("文", &vec!["a"; 32].join("/")),
-        Edit::Invalid
-    );
+        Edit::NameError(_)
+    ));
 }
 
 #[test]
@@ -111,13 +123,16 @@ fn both_branch_rename_targets_keep_their_own_metadata_limit() {
 fn clearing_a_note_is_distinct_from_cancelling_a_name() {
     assert_eq!(edit_value("", InputKind::Note), Edit::Save(String::new()));
     assert_eq!(edit_value("  ", InputKind::BranchName), Edit::Cancel);
-    assert_eq!(
+    assert!(matches!(
         edit_value(" 草稿 ", InputKind::BranchName),
-        Edit::Save("草稿".into())
-    );
+        Edit::NameError(_)
+    ));
     for value in ["a\nb", "a\rb", "a\tb", "a\0b", "a\u{7f}b", "a\n"] {
         assert_eq!(edit_value(value, InputKind::Note), Edit::Invalid);
-        assert_eq!(edit_value(value, InputKind::BranchName), Edit::Invalid);
+        assert!(matches!(
+            edit_value(value, InputKind::BranchName),
+            Edit::NameError(_)
+        ));
     }
 }
 
@@ -210,10 +225,10 @@ fn directory_branch_rename_keeps_the_record_identity_and_shares_cancel_and_byte_
         edit_value(&"a".repeat(129), target.input_kind()),
         Edit::Invalid
     );
-    assert_eq!(
+    assert!(matches!(
         edit_value(" renamed ", target.input_kind()),
-        Edit::Save("renamed".into())
-    );
+        Edit::NameError(_)
+    ));
 }
 
 fn active_state() -> State {
@@ -551,4 +566,154 @@ fn scheduled_shared_context_effects_preserve_pending_drafts_and_follow_page_owne
     remounted.cleanup();
     Executor::poll_local();
     root.cleanup();
+}
+
+#[test]
+fn nonempty_names_preserve_original_bytes_in_policy_errors() {
+    for original in [
+        " draft ",
+        "\u{a0}draft",
+        "draft\u{2003}",
+        " draft",
+        "draft ",
+    ] {
+        for kind in [InputKind::NamespaceName, InputKind::BranchName] {
+            let Edit::NameError(error) = edit_value(original, kind) else {
+                panic!("nonempty input must reach the policy unchanged: {original:?}");
+            };
+            assert_eq!(error.name, original);
+            assert!(std::error::Error::source(&error).is_some());
+        }
+    }
+    for blank in ["", " \t\n", "\u{a0}\u{2003}"] {
+        assert_eq!(edit_value(blank, InputKind::NamespaceName), Edit::Cancel);
+    }
+    assert_eq!(
+        edit_value("draft 2", InputKind::NamespaceName),
+        Edit::Save("draft 2".into())
+    );
+}
+
+#[test]
+fn nfc_candidate_is_not_a_save_and_must_fit_the_current_destination() {
+    for (original, candidate) in [("e\u{301}", "é"), ("\u{1100}\u{1161}", "가")] {
+        let Edit::NameError(error) = Target::CreateDirectory.edit_value(original, "") else {
+            panic!("NFD input must wait for explicit confirmation");
+        };
+        assert_eq!(error.name, original);
+        assert_eq!(error.candidate(), Some(candidate));
+        assert_eq!(
+            Target::CreateDirectory.edit_value(candidate, ""),
+            Edit::Save(candidate.into())
+        );
+        assert!(matches!(
+            Target::CreateDirectory.edit_value(candidate, &"a".repeat(199)),
+            Edit::NameError(_)
+        ));
+    }
+}
+
+fn accept_displayed_name(draft: Draft) -> bool {
+    let Some(expected) = draft.name_error.get_untracked() else {
+        return false;
+    };
+    draft.accept_name(&expected)
+}
+
+fn propose(draft: Draft, original: &str) {
+    draft.start(original.into());
+    draft.name_error.set(Some(std::sync::Arc::new(
+        super::super::naming::validate(original).unwrap_err(),
+    )));
+}
+
+#[test]
+fn confirmation_cancel_and_changed_context_never_admit_a_request() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(active_state());
+        let draft = unobserved_draft(state);
+        propose(draft, "e\u{301}");
+        assert_eq!(draft.value.get_untracked(), "e\u{301}");
+        assert!(!draft.pending());
+        draft.cancel_idle();
+        assert!(!accept_displayed_name(draft));
+        assert!(!draft.editing.get_untracked());
+        propose(draft, "e\u{301}");
+        state.update(|s| s.files.directory = "other".into());
+        assert!(accept_displayed_name(draft));
+        draft.submit(|| panic!("confirmation must not write to a changed destination"));
+        assert!(!draft.pending());
+        assert!(!draft.editing.get_untracked());
+    });
+}
+
+#[test]
+fn confirmation_is_exact_and_does_not_survive_a_changed_input() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(active_state());
+        let draft = unobserved_draft(state);
+        propose(draft, "e\u{301}");
+        draft.value.set("different".into());
+        assert!(!accept_displayed_name(draft));
+        assert_eq!(draft.value.get_untracked(), "different");
+        draft.cancel_idle();
+        propose(draft, "e\u{301}");
+        assert!(accept_displayed_name(draft));
+        assert_eq!(draft.value.get_untracked().as_bytes(), "é".as_bytes());
+        assert!(draft.name_error.get_untracked().is_none());
+        draft.submit(|| Some("confirmed-operation".into()));
+        assert_eq!(
+            draft.operation.get_untracked().as_deref(),
+            Some("confirmed-operation")
+        );
+        draft.cancel_idle();
+        assert!(draft.pending());
+    });
+}
+
+// Deliberately uses only the pre-fix API, so this regression can run on the
+// audited baseline rather than failing to compile because of new error types.
+#[test]
+fn nonempty_namespace_input_must_never_be_silently_trimmed() {
+    for original in [" 草稿 ", "\u{a0}draft", "draft\u{2003}"] {
+        assert_ne!(
+            edit_value(original, InputKind::NamespaceName),
+            Edit::Save(original.trim().to_owned()),
+            "nonempty user input was silently rewritten: {original:?}"
+        );
+    }
+}
+
+#[test]
+fn normalization_candidates_do_not_bypass_name_or_branch_byte_budgets() {
+    for (prefix, kind) in [
+        (237, InputKind::NamespaceName),
+        (125, InputKind::BranchName),
+    ] {
+        // U+0344 expands to U+0308 U+0301 without composing with a digit.
+        let original = format!("{}\u{344}", "1".repeat(prefix));
+        let Edit::NameError(error) = edit_value(&original, kind) else {
+            panic!("expected policy NFC suggestion");
+        };
+        let candidate = error.candidate().unwrap();
+        assert!(candidate.len() > original.len());
+        assert!(!matches!(edit_value(candidate, kind), Edit::Save(_)));
+    }
+}
+
+#[test]
+fn a_stale_inline_confirm_click_cannot_accept_a_new_equal_proposal() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(active_state());
+        let draft = unobserved_draft(state);
+        propose(draft, "e\u{301}");
+        let stale = draft.name_error.get_untracked().unwrap();
+        draft.name_error.set(Some(std::sync::Arc::new(
+            super::super::naming::validate("e\u{301}").unwrap_err(),
+        )));
+        assert!(!draft.accept_name(&stale));
+        assert_eq!(draft.value.get_untracked(), "e\u{301}");
+        assert!(accept_displayed_name(draft));
+        assert_eq!(draft.value.get_untracked(), "é");
+    });
 }

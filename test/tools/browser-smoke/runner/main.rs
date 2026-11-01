@@ -38,6 +38,7 @@ mod integrity_scrub;
 mod lifecycle;
 mod management;
 mod metadata;
+mod naming;
 mod server_launcher;
 mod session_delivery;
 use metadata::{assert_metadata_only, metadata_edit, open_fixture_directory};
@@ -292,6 +293,7 @@ fn exercise(
     open_fixture_directory(browser)?;
     assert_metadata_only(browser)?;
     println!("PASS engine-seeded file browsing in the real server namespace");
+    naming::run(browser)?;
     file_rows::run(browser)?;
     file_pagination::run(browser)?;
     history_cancellation::run(browser)?;

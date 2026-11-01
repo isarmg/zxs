@@ -10,6 +10,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifndef ZXS_STAGING_PREFIX
+#define ZXS_STAGING_PREFIX ".state-atomic-"
+#endif
+
 static int kind(int fd) {
     const char *root = getenv("ZXS_ATOMIC_ROOT");
     if (!root) return 0;
@@ -26,7 +30,7 @@ static int kind(int fd) {
     size_t length = strlen(root);
     return S_ISREG(metadata.st_mode) && !strncmp(path, root, length)
         && path[length] == '/' &&
-        (!strncmp(path + length + 1, ".state-atomic-", 14)
+        (!strncmp(path + length + 1, ZXS_STAGING_PREFIX, strlen(ZXS_STAGING_PREFIX))
          || !strcmp(path + length + 1, "source"));
 }
 
@@ -94,7 +98,7 @@ static int rename_target(int olddirfd, const char *oldpath, int newdirfd, const 
     if (!root || !stage || (strcmp(stage, "rename-before") && strcmp(stage, "rename-after") && strcmp(stage, "create-race"))) return 0;
     char marker[4096], descriptor[64], path[4096];
     snprintf(marker, sizeof(marker), "%s/.inject", root);
-    if (access(marker, F_OK) || strncmp(oldpath, ".state-atomic-", 14)) return 0;
+    if (access(marker, F_OK) || strncmp(oldpath, ZXS_STAGING_PREFIX, strlen(ZXS_STAGING_PREFIX))) return 0;
     const char *destination = getenv("ZXS_ATOMIC_DESTINATION");
     if (strcmp(newpath, destination ? destination : "destination")) return 0;
     for (int i = 0; i < 2; i++) {

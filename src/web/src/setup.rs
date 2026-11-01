@@ -2,13 +2,9 @@
 use crate::api;
 use json_codec::{Value, json};
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum Action {
-    #[default]
-    Wizard,
-    Preset,
-    Complete,
-}
+mod response;
+use response::{Action, Success};
+
 use web_interface::{
     components::{ErrorState, Select, SelectOption},
     i18n::t,
@@ -37,6 +33,22 @@ impl Status {
     }
 }
 
+#[derive(Clone, Debug, error_definition::Error)]
+enum Failure {
+    #[error("{0}")]
+    Request(#[source] api::Error),
+    #[error(
+        "{}",
+        t(
+            "设置响应未确认。请在服务器本地检查，勿重复初始化。",
+            "Setup was not confirmed. Check locally on the server; do not initialize again."
+        )
+    )]
+    Response(#[source] std::sync::Arc<response::ResponseError>),
+    #[error("{0}")]
+    Input(String),
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct Model {
     key: String,
@@ -60,7 +72,7 @@ pub(crate) struct Model {
     complete: bool,
     restart_required: bool,
     generation: u64,
-    failure: Option<String>,
+    failure: Option<Failure>,
     status: Status,
 }
 fn valid_selection(model: &Model) -> bool {
@@ -120,7 +132,7 @@ fn finish_check(s: &mut Model, generation: u64, key: &str, result: Result<Value,
     match result {
         Ok(value) if !key.is_empty() => accept_status(s, &value),
         Ok(_) => {}
-        Err(error) => s.failure = Some(error.to_string()),
+        Err(error) => s.failure = Some(Failure::Request(error)),
     }
 }
 fn accept_status(s: &mut Model, value: &Value) {
@@ -193,7 +205,7 @@ fn choose(s: &mut Model, action: Action) {
 }
 
 fn initialize(state: RwSignal<Model>) {
-    let Some((key, csrf, path, body, generation)) = state
+    let Some((key, csrf, path, body, generation, action)) = state
         .try_update(|s| {
             if !can_initialize(s) {
                 return None;
@@ -205,7 +217,14 @@ fn initialize(state: RwSignal<Model>) {
             let password = std::mem::take(&mut s.password);
             let (path, body) = submission(s, password);
             s.completion_available = false;
-            Some((key, std::mem::take(&mut s.csrf), path, body, s.generation))
+            Some((
+                key,
+                std::mem::take(&mut s.csrf),
+                path,
+                body,
+                s.generation,
+                s.action,
+            ))
         })
         .flatten()
     else {
@@ -219,31 +238,31 @@ fn initialize(state: RwSignal<Model>) {
         {
             return;
         }
-        state.update(|s| finish_initialization(s, result));
+        state.update(|s| finish_initialization(s, action, result));
     });
 }
-fn finish_initialization(s: &mut Model, result: Result<Value, api::Error>) {
+fn finish_initialization(s: &mut Model, action: Action, result: Result<Value, api::Error>) {
     s.pending = false;
     s.empty = false;
     s.confirmed = false;
     match result {
-        Ok(value) if value["accepted"] == true || value["initialized"] == true => {
-            s.complete = true;
-            // A successful authorized completion resolves the earlier unknown
-            // initialization. Keep complete set to prevent fresh initialization.
-            s.unknown = false;
-            s.restart_required = value["restart_required"] == true;
-        }
-        Ok(_) => {
-            s.unknown = true;
-            s.failure = Some(t(
-                "设置响应未确认。请在服务器本地检查，勿重复初始化。",
-                "Setup was not confirmed. Check locally on the server; do not initialize again.",
-            ));
-        }
+        Ok(value) => match response::validate(action, value) {
+            Ok(success) => {
+                s.complete = true;
+                // Only a valid response to the captured action resolves uncertainty.
+                // Keep complete set to prevent fresh initialization.
+                s.unknown = false;
+                s.restart_required = success == Success::RestartRequired;
+                s.failure = None;
+            }
+            Err(error) => {
+                s.unknown = true;
+                s.failure = Some(Failure::Response(std::sync::Arc::new(error)));
+            }
+        },
         Err(error) => {
             s.unknown |= error.mutation_outcome_unknown();
-            s.failure = Some(error.to_string());
+            s.failure = Some(Failure::Request(error));
         }
     }
 }
@@ -314,12 +333,12 @@ fn finish_preset_preview(
                 .into();
         }
         Ok(_) => {
-            s.failure = Some(t(
+            s.failure = Some(Failure::Input(t(
                 "预置方案摘要不完整，禁止初始化。",
                 "The preset preview is incomplete; initialization is blocked.",
-            ))
+            )))
         }
-        Err(error) => s.failure = Some(error.to_string()),
+        Err(error) => s.failure = Some(Failure::Request(error)),
     }
 }
 fn preset_view(state: RwSignal<Model>) -> impl IntoView {
@@ -396,7 +415,7 @@ pub(crate) fn view(state: RwSignal<Model>) -> impl IntoView {
             </Show>
             <Show when=move ||state.with(|s|s.complete)><p role="status">{move ||state.with(|s|if s.restart_required {t("初始化完成。请在服务器本地重启服务，然后使用新管理员登录。","Initialization completed. Restart the service locally, then sign in with the new administrator.")} else {t("设置已接受，服务正在打开存储。请检查管理状态后使用新管理员登录；不要再次初始化。","Setup accepted; the service is opening storage. Check management status, then sign in with the new administrator. Do not initialize again.")})}</p></Show>
             <Show when=move ||state.with(|s|s.unknown)><p role="alert">{t("结果未知，已禁用重复初始化。请重新验证授权或在服务器本地核实状态；仅服务器确认的中断补全可以继续。","Outcome unknown. Repeated initialization is disabled. Recheck authorization or verify locally; only server-proven interrupted completion may proceed.")}</p></Show>
-            {move ||state.with(|s|s.failure.clone()).map(|message|view!{<ErrorState message=message/>})}
+            {move ||state.with(|s|s.failure.as_ref().map(ToString::to_string)).map(|message|view!{<ErrorState message=message/>})}
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|s.pending) on:click=move |_|state.update(|s|{let generation=s.generation+1;let unknown=s.unknown;let complete=s.complete;let restart_required=s.restart_required;*s=Model{generation,unknown,complete,restart_required,..Default::default()};})>{t("清除设置输入","Clear setup inputs")}</button>
         </form></details>
     }

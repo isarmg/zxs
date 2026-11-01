@@ -4,6 +4,26 @@ use command_line::Subcommand;
 use json_codec::json;
 use std::path::{Path, PathBuf};
 use storage_engine::{Config, ValidatedConfig};
+#[derive(Debug)]
+struct BackupFailure {
+    path: PathBuf,
+    source: Box<dyn std::error::Error + Send + Sync>,
+}
+impl std::fmt::Display for BackupFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cannot preserve configuration backup {:?} (the draft was not changed)",
+            self.path
+        )
+    }
+}
+impl std::error::Error for BackupFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Produce an uninitialized draft; does not access or initialize devices.
@@ -119,11 +139,9 @@ fn register_disk(
             backup.file_name().ok_or("backup file name is required")?,
             &original,
         )
-        .map_err(|error| {
-            format!(
-                "cannot preserve configuration backup {} (the draft was not changed): {error}",
-                backup.display()
-            )
+        .map_err(|source| BackupFailure {
+            path: backup.clone(),
+            source,
         })?;
     transaction.replace_private(&candidate)?;
     Ok(backup)

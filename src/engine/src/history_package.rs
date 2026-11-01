@@ -627,7 +627,10 @@ fn package_object(package: &Path, kind: &str, hash: &str) -> Result<PathBuf> {
 }
 
 fn load_package(package: &Path) -> Result<(HistoryManifest, PackageProof, HistoryPackageReport)> {
-    let proof: PackageProof = read_json(&package.join("publication.json"))?;
+    let proof: PackageProof = decode_proof(&read_bytes(
+        &package.join("publication.json"),
+        MAX_METADATA,
+    )?)?;
     let root = AuthenticatedMetadataObject::authenticate(
         "history-manifest",
         &proof.manifest_hash,

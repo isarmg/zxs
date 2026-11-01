@@ -1,10 +1,11 @@
 use super::*;
 
 #[test]
-fn a_blank_name_cancels_and_valid_names_are_trimmed() {
+fn a_blank_name_cancels_but_nonempty_names_are_not_trimmed() {
     assert_eq!(branch_name(" \t\n "), Name::Empty);
-    assert_eq!(branch_name("  草稿  "), Name::Valid("草稿".into()));
-    assert_eq!(branch_name(" draft 2 "), Name::Valid("draft 2".into()));
+    assert!(matches!(branch_name("  草稿  "), Name::Rejected(_)));
+    assert!(matches!(branch_name(" draft 2 "), Name::Rejected(_)));
+    assert_eq!(branch_name("draft 2"), Name::Valid("draft 2".into()));
 }
 
 #[test]
@@ -22,7 +23,10 @@ fn invalid_names_never_become_branch_requests() {
         &"稿".repeat(43),
         &"a".repeat(129),
     ] {
-        assert_eq!(branch_name(value), Name::Invalid);
+        assert!(matches!(
+            branch_name(value),
+            Name::Invalid | Name::Rejected(_)
+        ));
     }
     assert!(matches!(
         branch_name(&format!("{}ab", "稿".repeat(42))),
@@ -102,4 +106,37 @@ fn a_missing_visible_version_never_uses_the_source_id_for_a_branch_request() {
         let _ = Target::CurrentFileVersion.submit(state, "another".into());
         assert!(!state.with_untracked(|s| s.files.mutation_pending));
     });
+}
+
+#[test]
+fn nonempty_branch_input_must_never_be_silently_trimmed() {
+    for original in [" 草稿 ", "\u{a0}draft", "draft\u{2003}"] {
+        assert_ne!(
+            branch_name(original),
+            Name::Valid(original.trim().to_owned())
+        );
+    }
+}
+
+#[test]
+fn branch_nfc_errors_keep_original_and_candidate_without_producing_a_name() {
+    for (original, candidate) in [("e\u{301}", "é"), ("\u{1100}\u{1161}", "가")] {
+        let Name::Rejected(error) = branch_name(original) else {
+            panic!("NFD branch name must wait for confirmation");
+        };
+        assert_eq!(error.name.as_bytes(), original.as_bytes());
+        assert_eq!(error.candidate(), Some(candidate));
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(branch_name(candidate), Name::Valid(candidate.into()));
+    }
+    for original in ["\u{a0}draft", "draft\u{2003}"] {
+        let Name::Rejected(error) = branch_name(original) else {
+            panic!("Unicode whitespace cannot be silently removed");
+        };
+        assert_eq!(error.name, original);
+        assert!(matches!(
+            error.source,
+            name_policy::Error::UnsupportedCharacter(_)
+        ));
+    }
 }

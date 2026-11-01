@@ -2037,3 +2037,261 @@ fn download_context_is_paired_nonempty_and_parses_lookup_spelling_once() {
     assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
     assert!(std::error::Error::source(&error).is_some());
 }
+
+#[tokio::test]
+async fn content_preconditions_precede_ranges_and_release_leases() {
+    for method in [Method::GET, Method::HEAD] {
+        for (name, value, status) in [
+            (
+                header::IF_MATCH,
+                "\"other\"",
+                StatusCode::PRECONDITION_FAILED,
+            ),
+            (
+                header::IF_MATCH,
+                "W/\"hash\"",
+                StatusCode::PRECONDITION_FAILED,
+            ),
+            (
+                header::IF_NONE_MATCH,
+                "W/\"hash\"",
+                StatusCode::NOT_MODIFIED,
+            ),
+            (header::IF_NONE_MATCH, "*", StatusCode::NOT_MODIFIED),
+        ] {
+            let dropped = Arc::new(AtomicUsize::new(0));
+            let mut headers = HeaderMap::new();
+            headers.insert(name, HeaderValue::from_static(value));
+            headers.append(header::RANGE, HeaderValue::from_static("bytes=invalid"));
+            headers.append(header::RANGE, HeaderValue::from_static("bytes=0-1"));
+            let response =
+                content_response(content(dropped.clone()), method.clone(), headers).unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()[header::ETAG], "\"hash\"");
+            assert!(!response.headers().contains_key(header::CONTENT_RANGE));
+            assert_eq!(dropped.load(Ordering::SeqCst), 1);
+            let body = http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            if method == "HEAD" || status == StatusCode::NOT_MODIFIED {
+                assert!(body.is_empty());
+            } else {
+                let error: Value = json_codec::from_slice(&body).unwrap();
+                assert_eq!(error["error"]["code"], "HTTP_PRECONDITION_FAILED");
+                assert_eq!(error["error"]["retryable"], false);
+                assert!(error["error"]["request_id"].is_string());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn content_preconditions_lists_wildcards_and_priority() {
+    for method in [Method::GET, Method::HEAD] {
+        for (conditions, expected) in [
+            (vec![("if-match", "*")], StatusCode::OK),
+            (vec![("if-match", "\"hash\"")], StatusCode::OK),
+            (
+                vec![("if-match", "\"other\", W/\"hash\"")],
+                StatusCode::PRECONDITION_FAILED,
+            ),
+            (
+                vec![("if-match", "\"other\", W/\"hash\", \"hash\"")],
+                StatusCode::OK,
+            ),
+            (
+                vec![("if-match", "\"other\""), ("if-match", "\"hash\"")],
+                StatusCode::OK,
+            ),
+            (
+                vec![
+                    ("if-none-match", "\"other\""),
+                    ("if-none-match", "W/\"hash\""),
+                ],
+                StatusCode::NOT_MODIFIED,
+            ),
+            (
+                vec![("if-none-match", "\"other,hash\", \"another\"")],
+                StatusCode::OK,
+            ),
+            (
+                vec![("if-match", " , \"other,hash\", ,\"hash\", ")],
+                StatusCode::OK,
+            ),
+            (
+                vec![("if-match", "\"other\""), ("if-none-match", "*")],
+                StatusCode::PRECONDITION_FAILED,
+            ),
+            (
+                vec![("if-match", "*"), ("if-none-match", "*")],
+                StatusCode::NOT_MODIFIED,
+            ),
+            (
+                vec![("if-match", "\"hash\""), ("if-none-match", "\"other\"")],
+                StatusCode::OK,
+            ),
+            (vec![("if-match", "")], StatusCode::PRECONDITION_FAILED),
+            (vec![("if-none-match", "")], StatusCode::OK),
+        ] {
+            let mut headers = HeaderMap::new();
+            for (name, value) in &conditions {
+                headers.append(
+                    header::HeaderName::from_static(name),
+                    HeaderValue::from_str(value).unwrap(),
+                );
+            }
+            let response =
+                content_response(content(Arc::default()), method.clone(), headers).unwrap();
+            assert_eq!(response.status(), expected, "{method} {conditions:?}");
+            let body = http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            if method == Method::HEAD || expected == StatusCode::NOT_MODIFIED {
+                assert!(body.is_empty());
+            } else if expected == StatusCode::OK {
+                assert_eq!(body.as_ref(), b"0123456789");
+            } else {
+                let error: Value = json_codec::from_slice(&body).unwrap();
+                assert_eq!(error["error"]["code"], "HTTP_PRECONDITION_FAILED");
+                assert_eq!(error["error"]["retryable"], false);
+                assert!(error["error"]["request_id"].is_string());
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_content_conditions_are_rejected_without_retaining_lease() {
+    for value in [
+        "* , \"hash\"",
+        "*,*",
+        "hash",
+        "w/\"hash\"",
+        "\"unterminated",
+        "\"has space\"",
+        "\"hash\"junk",
+        "\"hash\", junk",
+    ] {
+        for name in [header::IF_MATCH, header::IF_NONE_MATCH] {
+            let dropped = Arc::new(AtomicUsize::new(0));
+            let mut headers = HeaderMap::new();
+            headers.insert(name, HeaderValue::from_str(value).unwrap());
+            let error =
+                content_response(content(dropped.clone()), Method::GET, headers).unwrap_err();
+            assert_eq!(error.status, StatusCode::BAD_REQUEST, "{value}");
+            assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
+            assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        }
+    }
+    let mut headers = HeaderMap::new();
+    headers.append(header::IF_MATCH, HeaderValue::from_static("*"));
+    headers.append(header::IF_MATCH, HeaderValue::from_static("\"hash\""));
+    assert_eq!(
+        content_response(content(Arc::default()), Method::GET, headers)
+            .unwrap_err()
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn content_preconditions_preserve_ranges_and_backend_header_error_source() {
+    for (condition, value, range, if_range, status, expected) in [
+        (
+            "if-match",
+            "*",
+            "bytes=2-3",
+            "\"hash\"",
+            StatusCode::PARTIAL_CONTENT,
+            "23",
+        ),
+        (
+            "if-none-match",
+            "\"other\"",
+            "bytes=2-3",
+            "\"hash\"",
+            StatusCode::PARTIAL_CONTENT,
+            "23",
+        ),
+        (
+            "if-match",
+            "\"hash\"",
+            "bytes=2-3",
+            "W/\"hash\"",
+            StatusCode::OK,
+            "0123456789",
+        ),
+        (
+            "if-match",
+            "*",
+            "bytes=2-3",
+            "\"stale\"",
+            StatusCode::OK,
+            "0123456789",
+        ),
+    ] {
+        let mut headers = HeaderMap::new();
+        for (name, value) in [(condition, value), ("range", range), ("if-range", if_range)] {
+            headers.insert(
+                header::HeaderName::from_static(name),
+                HeaderValue::from_static(value),
+            );
+        }
+        let response = content_response(content(Arc::default()), Method::GET, headers).unwrap();
+        assert_eq!(response.status(), status);
+        assert_eq!(
+            http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+    let mut headers = HeaderMap::new();
+    headers.insert(header::IF_MATCH, HeaderValue::from_static("*"));
+    headers.insert(header::RANGE, HeaderValue::from_static("bytes=99-"));
+    let response = content_response(content(Arc::default()), Method::GET, headers).unwrap();
+    assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */10");
+    let mut headers = HeaderMap::new();
+    headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("*"));
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let mut invalid = content(dropped.clone());
+    invalid.hash = "invalid\r\nhash".into();
+    let error = content_response(invalid, Method::GET, headers).unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert!(error.source.is_some());
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn opaque_etag_bytes_and_empty_representations_obey_conditions() {
+    let mut headers = HeaderMap::new();
+    headers.append(
+        header::IF_MATCH,
+        HeaderValue::from_bytes(b"\"\xff,opaque\\tag\", \"hash\"").unwrap(),
+    );
+    headers.append(header::IF_NONE_MATCH, HeaderValue::from_static("\"other\""));
+    assert_eq!(
+        content_response(content(Arc::default()), Method::GET, headers)
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    for method in [Method::GET, Method::HEAD] {
+        let mut empty = content(Arc::default());
+        empty.size = 0;
+        empty.file.set_len(0).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("*"));
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-0"));
+        let response = content_response(empty, method, headers).unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert!(!response.headers().contains_key(header::CONTENT_LENGTH));
+        assert!(
+            http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+}

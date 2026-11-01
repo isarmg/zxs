@@ -173,6 +173,7 @@ fn remote_errno(code: ErrorCode) -> i32 {
         | ErrorCode::HistoryNotFound
         | ErrorCode::HistoryPackageInvalid
         | ErrorCode::HttpError
+        | ErrorCode::HttpPreconditionFailed
         | ErrorCode::HttpUploadsPending
         | ErrorCode::HttpUploadsUnavailable
         | ErrorCode::IdempotencyKeyReused

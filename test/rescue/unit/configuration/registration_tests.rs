@@ -421,3 +421,25 @@ fn untrusted_backup_entries_fail_closed_without_changing_the_draft() {
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 3, "{kind}");
     }
 }
+
+#[test]
+fn backup_failure_retains_io_source_and_path_context() {
+    use std::error::Error;
+    let failure = BackupFailure {
+        path: PathBuf::from("draft.before-registration"),
+        source: Box::new(std::io::Error::from_raw_os_error(5)),
+    };
+    assert!(failure.to_string().contains("draft was not changed"));
+    assert_eq!(
+        failure
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(5)
+    );
+    let diagnostic = crate::diagnostic_chain(&failure);
+    assert!(diagnostic.contains("draft.before-registration"));
+    assert!(diagnostic.contains("Input/output error (os error 5)"));
+}

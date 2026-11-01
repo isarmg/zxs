@@ -234,3 +234,21 @@ fn operation_identifiers_are_parsed_at_the_command_line_boundary() {
         }
     }
 }
+
+#[test]
+fn diagnostic_chain_keeps_nested_sources_and_escapes_terminal_controls() {
+    let error = storage_engine::Error::Filesystem(std::io::Error::from_raw_os_error(5).into())
+        .context(storage_engine::ErrorCode::HistoryPackageInvalid, "inner")
+        .context(
+            storage_engine::ErrorCode::HistoryPackageInvalid,
+            "outer\n\x1b[31m",
+        );
+    let diagnostic = diagnostic_chain(&error);
+    assert!(diagnostic.contains("outer\\n\\u{1b}[31m"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("Input/output error (os error 5)"),
+        "{diagnostic}"
+    );
+    assert!(!diagnostic.contains('\n'));
+    assert!(!diagnostic.contains('\x1b'));
+}

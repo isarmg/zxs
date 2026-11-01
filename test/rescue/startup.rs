@@ -332,6 +332,23 @@ fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
     assert_eq!(bytes, b"verified package bytes");
     drop(content);
     drop(restored);
+    let proof_path = package.join("publication.json");
+    let mut proof: json_codec::Value =
+        json_codec::from_slice(&std::fs::read(&proof_path).unwrap()).unwrap();
+    proof["manifest_hash"] = json_codec::Value::String("0".repeat(64));
+    std::fs::write(&proof_path, json_codec::to_vec(&proof).unwrap()).unwrap();
+    let output = invoke(&source, &["check".as_ref(), package.as_os_str()]);
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        diagnostic.contains("manifest is not bound by the published candidate"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.contains("caused by:"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("immutable object digest differs"),
+        "{diagnostic}"
+    );
     std::fs::write(package.join("publication.json"), b"invalid proof").unwrap();
     assert!(
         !invoke(&source, &["check".as_ref(), package.as_os_str()])

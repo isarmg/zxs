@@ -8,6 +8,7 @@ mod history_index;
 mod inline;
 mod merge;
 mod model;
+mod naming;
 mod page;
 mod review;
 mod rows;

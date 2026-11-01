@@ -2,7 +2,7 @@
 //! never switches the current directory or the SMB default branch.
 use super::{
     actions as file_actions,
-    model::{Model, entry_key, join_path, valid_name},
+    model::{Model, entry_key, join_path},
     page::Entry,
 };
 use crate::{
@@ -61,6 +61,19 @@ impl Drop for ScopeRead {
         self.0.abort();
     }
 }
+/// Identity of one displayed failure, not just an equal spelling. Rebuilding
+/// a review must not let a queued click confirm its replacement proposal.
+#[derive(Clone)]
+struct NameFailure {
+    entry: Option<String>,
+    error: std::sync::Arc<super::naming::Error>,
+}
+impl PartialEq for NameFailure {
+    fn eq(&self, other: &Self) -> bool {
+        self.entry == other.entry && std::sync::Arc::ptr_eq(&self.error, &other.error)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Draft {
     id: String,
@@ -83,6 +96,7 @@ pub(crate) struct Draft {
     registration: Option<ScopeRegistration>,
     generation: u64,
     error: String,
+    name_error: Option<NameFailure>,
 }
 fn branch_id(branch: &ScopeBranch) -> String {
     branch.summary().id().to_owned()

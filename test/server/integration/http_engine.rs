@@ -2272,6 +2272,100 @@ async fn durable_http_save_seals_the_real_manifest_and_keeps_original_publicatio
             .unwrap()[..],
         &bytes[2..10]
     );
+    let etag = format!("\"{}\"", blake3::hash(bytes).to_hex());
+    let weak_etag = format!("W/{etag}");
+    let listed_etag = format!("\"other,tag\", {etag}");
+    for method in ["GET", "HEAD"] {
+        for (condition, value, expected) in [
+            ("if-match", "\"stale\"", StatusCode::PRECONDITION_FAILED),
+            ("if-none-match", etag.as_str(), StatusCode::NOT_MODIFIED),
+            (
+                "if-none-match",
+                weak_etag.as_str(),
+                StatusCode::NOT_MODIFIED,
+            ),
+            (
+                "if-none-match",
+                listed_etag.as_str(),
+                StatusCode::NOT_MODIFIED,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(format!("/api/versions/{version}/content"))
+                        .header("authorization", format!("Bearer {token}"))
+                        .header(condition, value)
+                        .header("range", "bytes=999999999-")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            assert_eq!(response.headers()["etag"], etag);
+            let body = http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            if method == "HEAD" || expected == StatusCode::NOT_MODIFIED {
+                assert!(body.is_empty());
+            } else {
+                let error: Value = json_codec::from_slice(&body).unwrap();
+                assert_eq!(error["error"]["code"], "HTTP_PRECONDITION_FAILED");
+                assert_eq!(error["error"]["retryable"], false);
+                assert!(error["error"]["request_id"].is_string());
+            }
+        }
+    }
+    for method in ["GET", "HEAD"] {
+        for path in [
+            format!("/api/versions/{}/content", new_id("version")),
+            format!(
+                "/api/versions/{version}/content?repository_id=missing&path=documents/file.txt"
+            ),
+        ] {
+            for (condition, value) in [("if-match", "\"stale\""), ("if-none-match", "*")] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(&path)
+                            .header("authorization", format!("Bearer {token}"))
+                            .header(condition, value)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+                assert!(!response.headers().contains_key("etag"));
+            }
+        }
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/versions/{version}/content"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("if-match", "\"stale\"")
+                .header("if-match", &etag)
+                .header("range", "bytes=2-9")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        &http_routing::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap()[..],
+        &bytes[2..10]
+    );
     let checksums = app
         .clone()
         .oneshot(

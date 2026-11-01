@@ -75,6 +75,7 @@ pub(crate) fn start(state: RwSignal<State>, kind: Kind, entry: Option<Entry>) {
             registration: None,
             generation: 0,
             error: String::new(),
+            name_error: None,
         };
         Ok(Some(draft))
     });
@@ -232,6 +233,7 @@ fn same_draft(state: RwSignal<State>, id: &str) -> bool {
 pub(super) fn update(state: RwSignal<State>, f: impl FnOnce(&mut Draft)) {
     state.update(|s| {
         if let Some(draft) = s.files.batch.as_mut() {
+            draft.name_error = None;
             f(draft)
         }
     });
@@ -669,6 +671,54 @@ pub(super) fn complete_registered_scope(
         }
     }
 }
+/// Confirmation changes only the displayed original; the complete request is
+/// rebuilt against the current branch identities and target paths below.
+pub(super) fn accept_name(draft: &mut Draft, expected: &NameFailure) -> bool {
+    if draft.loading || draft.submitted_operation.is_some() || draft.registration.is_some() {
+        return false;
+    }
+    if draft.name_error.as_ref() != Some(expected) {
+        return false;
+    }
+    let Some(NameFailure {
+        entry: Some(entry),
+        error,
+    }) = draft.name_error.take()
+    else {
+        return false;
+    };
+    let Some(candidate) = error.candidate() else {
+        return false;
+    };
+    let Some(name) = draft
+        .names
+        .get_mut(&entry)
+        .filter(|name| **name == error.name)
+    else {
+        return false;
+    };
+    *name = candidate.to_owned();
+    draft.error.clear();
+    true
+}
+
+pub(super) fn confirm_name(state: RwSignal<State>, expected: &NameFailure) {
+    let accepted = state
+        .try_update(|s| {
+            if !file_actions::write_allowed(s) {
+                return false;
+            }
+            let Some(draft) = s.files.batch.as_mut() else {
+                return false;
+            };
+            accept_name(draft, expected)
+        })
+        .unwrap_or(false);
+    if accepted {
+        submit(state);
+    }
+}
+
 pub(super) fn submit(state: RwSignal<State>) {
     let Some((request, slot, epoch, draft_id)) = state.with_untracked(|s| {
         if !file_actions::write_allowed(s) {
@@ -690,7 +740,26 @@ pub(super) fn submit(state: RwSignal<State>) {
     let mut body = match request {
         Ok(body) => body,
         Err(error) => {
-            update(state, |draft| draft.error = error);
+            update(state, |draft| {
+                draft.error = error.to_string();
+                draft.name_error = match error {
+                    request::Error::Name { entry, error } => {
+                        draft.error = error.message();
+                        Some(NameFailure {
+                            entry: Some(entry),
+                            error: std::sync::Arc::new(error),
+                        })
+                    }
+                    request::Error::Path(error) => {
+                        draft.error = error.message();
+                        Some(NameFailure {
+                            entry: None,
+                            error: std::sync::Arc::new(error),
+                        })
+                    }
+                    request::Error::Scope(_) => None,
+                };
+            });
             return;
         }
     };

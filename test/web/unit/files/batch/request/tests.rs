@@ -114,6 +114,7 @@ fn draft(kind: Kind) -> Draft {
         registration: None,
         generation: 0,
         error: String::new(),
+        name_error: None,
     }
 }
 #[test]
@@ -389,7 +390,12 @@ fn copying_to_multiple_explicit_targets_never_infers_a_cartesian_product() {
         2
     );
     draft.mappings.push(draft.mappings[0].clone());
-    assert!(request(&draft).unwrap_err().contains("duplicate"));
+    assert!(
+        request(&draft)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate")
+    );
 }
 #[test]
 fn an_absent_entry_rejects_the_entire_selected_scope() {
@@ -1145,4 +1151,120 @@ fn scope_boundary_rejects_duplicate_facts_and_partial_summaries_before_retention
             crate::files::DirectoryPageError::Path { .. }
         ))
     ));
+}
+
+fn accept_displayed_name(draft: &mut Draft) -> bool {
+    let expected = draft.name_error.clone().unwrap();
+    actions::accept_name(draft, &expected)
+}
+
+fn propose_first_name(draft: &mut Draft) -> (String, String) {
+    let Error::Name { entry, error } = request(draft).unwrap_err() else {
+        panic!("expected a name failure before constructing a transaction");
+    };
+    assert!(std::error::Error::source(&error).is_some());
+    let original = error.name.clone();
+    draft.name_error = Some(NameFailure {
+        entry: Some(entry.clone()),
+        error: std::sync::Arc::new(error),
+    });
+    (entry, original)
+}
+
+#[test]
+fn batch_keeps_original_names_and_confirms_each_entry_without_partial_requests() {
+    for kind in [Kind::Rename, Kind::Move, Kind::Copy] {
+        let mut draft = draft(kind);
+        for name in draft.names.values_mut() {
+            *name = "e\u{301}".into();
+        }
+        let (first, original) = propose_first_name(&mut draft);
+        assert_eq!(original.as_bytes(), "e\u{301}".as_bytes());
+        assert!(draft.names.values().all(|name| name == "e\u{301}"));
+        assert!(accept_displayed_name(&mut draft));
+        assert_eq!(draft.names[&first], "é");
+        assert_eq!(
+            draft
+                .names
+                .values()
+                .filter(|name| *name == "e\u{301}")
+                .count(),
+            1
+        );
+        let (second, _) = propose_first_name(&mut draft);
+        assert_ne!(first, second);
+        assert!(accept_displayed_name(&mut draft));
+        let body = request(&draft).unwrap();
+        assert!(
+            body["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["target"]["path"].as_str().unwrap().ends_with("/é"))
+        );
+    }
+}
+
+#[test]
+fn batch_confirmation_revalidates_target_budget_and_cannot_apply_to_replaced_input() {
+    let mut draft = draft(Kind::Copy);
+    let first = entry_key(&draft.entries[0]);
+    draft.names.insert(first.clone(), "e\u{301}".into());
+    propose_first_name(&mut draft);
+    draft.names.insert(first.clone(), "replacement".into());
+    assert!(!accept_displayed_name(&mut draft));
+    assert_eq!(draft.names[&first], "replacement");
+    draft.names.insert(first.clone(), "e\u{301}".into());
+    propose_first_name(&mut draft);
+    update_scope(&mut draft.targets[0], json!({"path":"a".repeat(199)}));
+    assert!(accept_displayed_name(&mut draft));
+    let Error::Path(error) = request(&draft).unwrap_err() else {
+        panic!("current complete target path must be revalidated");
+    };
+    assert_eq!(error.source, name_policy::Error::InvalidPath);
+    assert!(std::error::Error::source(&error).is_some());
+}
+
+#[test]
+fn batch_rejects_edge_and_unicode_whitespace_without_rewriting_the_input() {
+    for original in [" new.txt ", "\u{a0}new.txt", "new.txt\u{2003}"] {
+        let mut draft = draft(Kind::Rename);
+        let key = entry_key(&draft.entries[0]);
+        draft.names.insert(key.clone(), original.into());
+        let (_, rejected) = propose_first_name(&mut draft);
+        assert_eq!(rejected, original);
+        assert!(!accept_displayed_name(&mut draft));
+        assert_eq!(draft.names[&key], original);
+    }
+}
+
+#[test]
+fn confirmed_expanding_nfc_candidate_still_obeys_the_authoritative_name_budget() {
+    let mut draft = draft(Kind::Rename);
+    let key = entry_key(&draft.entries[0]);
+    draft
+        .names
+        .insert(key, format!("{}\u{344}", "1".repeat(237)));
+    propose_first_name(&mut draft);
+    assert!(accept_displayed_name(&mut draft));
+    let Error::Name { error, .. } = request(&draft).unwrap_err() else {
+        panic!("expanded NFC candidate must be rejected");
+    };
+    assert_eq!(error.source, name_policy::Error::NameTooLong);
+}
+
+#[test]
+fn queued_confirmation_cannot_consume_a_replacement_proposal_with_equal_text() {
+    let mut draft = draft(Kind::Rename);
+    let key = entry_key(&draft.entries[0]);
+    draft.names.insert(key.clone(), "e\u{301}".into());
+    propose_first_name(&mut draft);
+    let stale = draft.name_error.clone().unwrap();
+    // A new Apply after a review change creates a distinct proposal even if
+    // both visible spellings happen to equal the previous ones.
+    propose_first_name(&mut draft);
+    assert!(!actions::accept_name(&mut draft, &stale));
+    assert_eq!(draft.names[&key], "e\u{301}");
+    assert!(accept_displayed_name(&mut draft));
+    assert_eq!(draft.names[&key], "é");
 }

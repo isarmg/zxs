@@ -44,6 +44,8 @@ flowchart LR
 
 ## 12.2 HTTP 范围读取
 
+条件头在 backend 完成当前授权、内容墓碑与历史域状态检查后、解析 Range 和构造正文流之前执行：`If-Match` 使用强比较，不满足返回 `412`；再以弱比较执行 `If-None-Match`，命中返回 `304`。GET/HEAD 均支持单独 `*`、ETag 列表与多个同名头字段，列表内带引号的不透明值可以包含逗号；不能把弱 ETag 当成 If-Match 强匹配。语法错误返回 `400 INVALID_REQUEST`，不将混用 `*` 的列表当成通配符。条件终止请求不发送文件内容并立即释放读取租约与准入槽；304 无响应体，GET 的 412 使用 `HTTP_PRECONDITION_FAILED` 统一 JSON 错误封套，HEAD 无响应体。条件成立后保留原有 If-Range、GET 单范围/416 与 HEAD 忽略 Range 的行为。本接口没有 Last-Modified 日期验证器。
+
 内容接口使用稳定逻辑版本ID，返回完整文件的逻辑字节，支持 `Range`、`206 Partial Content`、`Content-Range`、内容长度和强ETag。每次GET/HEAD/条件请求先核对当前认证、内容墓碑和域状态，再判断304或206；PURGED不得因ETag相同继续返回内容。协议层使用条件请求避免错误复用缓存；具体语义依 HTTP 标准实现。[S18]
 
 ```http

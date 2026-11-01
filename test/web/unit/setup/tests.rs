@@ -169,11 +169,11 @@ fn setup_outcome_blocks_app_owned_reload_until_confirmed() {
 #[test]
 fn verified_completion_releases_reload_guard_without_readmitting_initialization() {
     for success in [
-        json!({"accepted":true}),
-        json!({"initialized":true,"restart_required":true}),
+        json!({"initialized":true,"completed":true,"restart_required":false,"recovering":true}),
+        json!({"initialized":true,"completed":true,"restart_required":true,"recovering":false}),
     ] {
         let mut model = authorized();
-        finish_initialization(&mut model, Ok(json!({})));
+        finish_initialization(&mut model, Action::Wizard, Ok(json!({})));
         assert!(model.unknown);
         assert!(model.reload_blocked());
         assert!(!can_initialize(&model));
@@ -189,7 +189,7 @@ fn verified_completion_releases_reload_guard_without_readmitting_initialization(
             "proof alone cannot settle the outcome"
         );
         model.pending = true;
-        finish_initialization(&mut model, Ok(success));
+        finish_initialization(&mut model, Action::Complete, Ok(success));
         assert!(model.complete);
         assert!(!model.unknown);
         assert!(!model.reload_blocked());
@@ -204,6 +204,7 @@ fn failed_completion_preserves_the_original_unknown_reload_fence() {
     model.pending = true;
     finish_initialization(
         &mut model,
+        Action::Complete,
         Err(api::Error {
             code: storage_contract::ErrorCode::InvalidRequest,
             message: "rejected".into(),
@@ -353,20 +354,27 @@ fn an_empty_key_cannot_accept_authorization_but_still_reports_input_errors() {
             .failure
             .as_ref()
             .unwrap()
+            .to_string()
             .contains("INVALID_SETUP_REQUEST")
     );
 }
 
 #[test]
 fn form_cleanup_does_not_discard_initialization_outcome_recovery() {
-    for (result, complete) in [(json!({"initialized":true}), true), (json!({}), false)] {
+    for (result, complete) in [
+        (
+            json!({"initialized":true,"restart_required":false,"recovering":true}),
+            true,
+        ),
+        (json!({}), false),
+    ] {
         let mut model = authorized();
         model.pending = true;
         model.generation = 7;
         clear_authorization(&mut model);
         assert_eq!(model.generation, 7);
         assert!(model.pending, "cleanup cannot settle an issued write");
-        finish_initialization(&mut model, Ok(result));
+        finish_initialization(&mut model, Action::Wizard, Ok(result));
         assert!(!model.pending);
         assert_eq!(model.complete, complete);
         assert_eq!(model.unknown, !complete);
@@ -392,4 +400,117 @@ fn setup_status_accepts_only_the_wire_vocabulary() {
         Status::from_wire(Some("unknown")),
         Status::Unknown
     ));
+}
+
+#[test]
+fn incomplete_or_contradictory_success_keeps_setup_unknown() {
+    for value in [
+        json!({"accepted":true}),
+        json!({"initialized":true}),
+        json!({"initialized":true,"restart_required":false}),
+        json!({"initialized":true,"restart_required":false,"recovering":false}),
+        json!({"initialized":true,"restart_required":true,"recovering":true}),
+        json!({"initialized":true,"restart_required":false,"recovering":true,"completed":true}),
+    ] {
+        let mut model = authorized();
+        model.pending = true;
+        finish_initialization(&mut model, Action::Wizard, Ok(value.clone()));
+        assert!(model.unknown, "{value}");
+        assert!(!model.complete, "{value}");
+        assert!(model.reload_blocked());
+        assert!(!can_initialize(&model));
+    }
+}
+
+#[test]
+fn setup_success_contract_is_action_bound_and_preserves_restart_state() {
+    for action in [Action::Wizard, Action::Preset, Action::Complete] {
+        for restart in [false, true] {
+            let mut value =
+                json!({"initialized":true,"restart_required":restart,"recovering":!restart});
+            if action == Action::Complete {
+                value["completed"] = json!(true);
+            }
+            let mut model = authorized();
+            // The response belongs to the issued action, not the current form.
+            model.action = if action == Action::Complete {
+                Action::Wizard
+            } else {
+                Action::Complete
+            };
+            model.unknown = true;
+            finish_initialization(&mut model, action, Ok(value));
+            assert!(model.complete && !model.unknown);
+            assert_eq!(model.restart_required, restart);
+            assert!(!model.reload_blocked());
+            assert!(!can_initialize(&model));
+            assert!(model.failure.is_none());
+        }
+    }
+}
+
+#[test]
+fn every_setup_required_field_is_strict_and_unknown_fields_are_rejected() {
+    for action in [Action::Wizard, Action::Preset, Action::Complete] {
+        let mut valid = json!({"initialized":true,"restart_required":false,"recovering":true});
+        if action == Action::Complete {
+            valid["completed"] = json!(true);
+        }
+        for field in valid.as_object().unwrap().keys() {
+            for replacement in [None, Some(Value::Null), Some(json!("true")), Some(json!(1))] {
+                let mut value = valid.clone();
+                match replacement {
+                    None => {
+                        value.as_object_mut().unwrap().remove(field);
+                    }
+                    Some(replacement) => {
+                        value[field] = replacement;
+                    }
+                }
+                let mut model = authorized();
+                model.unknown = true;
+                model.pending = true;
+                finish_initialization(&mut model, action, Ok(value.clone()));
+                assert!(model.unknown && !model.complete, "{action:?}: {value}");
+                assert!(!model.pending && model.reload_blocked());
+                assert!(!can_initialize(&model));
+                let failure = model.failure.as_ref().unwrap();
+                let source = std::error::Error::source(failure).unwrap();
+                assert!(
+                    std::error::Error::source(source).is_some(),
+                    "decoder source must survive"
+                );
+                assert!(
+                    !failure.to_string().contains(field),
+                    "raw decoder details are not user feedback"
+                );
+            }
+        }
+        for field in ["accepted", "unexpected_secret_field"] {
+            let mut value = valid.clone();
+            value[field] = json!(true);
+            let mut model = authorized();
+            finish_initialization(&mut model, action, Ok(value));
+            assert!(model.unknown && !model.complete && model.reload_blocked());
+        }
+        for field in if action == Action::Complete {
+            vec!["initialized", "completed"]
+        } else {
+            vec!["initialized"]
+        } {
+            let mut value = valid.clone();
+            value[field] = json!(false);
+            let mut model = authorized();
+            finish_initialization(&mut model, action, Ok(value));
+            assert!(model.unknown && !model.complete && model.reload_blocked());
+        }
+        for recovery in [false, true] {
+            let mut value = valid.clone();
+            value["recovering"] = json!(recovery);
+            value["restart_required"] = json!(recovery);
+            let mut model = authorized();
+            finish_initialization(&mut model, action, Ok(value));
+            assert!(model.unknown && !model.complete && model.reload_blocked());
+        }
+    }
 }

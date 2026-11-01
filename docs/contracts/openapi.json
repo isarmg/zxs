@@ -421,7 +421,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "强比较；支持单独 * 或 ETag 列表（含多个同名字段）。不满足返回 412，先于 If-None-Match 与 Range。"
           },
           {
             "name": "If-None-Match",
@@ -429,7 +430,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "弱比较；支持单独 * 或 ETag 列表（含多个同名字段）。命中返回无响应体的 304；仍先核对当前授权、内容墓碑和域状态。"
           },
           {
             "name": "repository_id",
@@ -519,7 +521,7 @@
             }
           },
           "304": {
-            "description": "经当前授权检查后返回未修改。"
+            "description": "经当前授权、内容墓碑和域状态检查后返回未修改；含当前 ETag，无响应体。"
           },
           "416": {
             "description": "范围越界。",
@@ -548,6 +550,16 @@
                 }
               }
             }
+          },
+          "412": {
+            "description": "If-Match 强比较不满足；不返回文件内容。统一 JSON 错误封套。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -569,7 +581,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "强比较；支持单独 * 或 ETag 列表（含多个同名字段）。不满足返回 412，先于 If-None-Match 与 Range。"
           },
           {
             "name": "If-None-Match",
@@ -577,7 +590,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "弱比较；支持单独 * 或 ETag 列表（含多个同名字段）。命中返回无响应体的 304；仍先核对当前授权、内容墓碑和域状态。"
           }
         ],
         "responses": {
@@ -605,7 +619,7 @@
             }
           },
           "304": {
-            "description": "经授权检查后的条件响应。"
+            "description": "经当前授权、内容墓碑和域状态检查后返回未修改；含当前 ETag，无响应体。"
           },
           "default": {
             "description": "结构化调用错误；原业务结果必须查询 operation。",
@@ -616,6 +630,9 @@
                 }
               }
             }
+          },
+          "412": {
+            "description": "If-Match 强比较不满足；不返回文件内容。HEAD 无响应体。"
           }
         }
       }
@@ -12640,6 +12657,7 @@
               "HISTORY_NOT_FOUND",
               "HISTORY_PACKAGE_INVALID",
               "HTTP_ERROR",
+              "HTTP_PRECONDITION_FAILED",
               "HTTP_UPLOADS_PENDING",
               "HTTP_UPLOADS_UNAVAILABLE",
               "IDEMPOTENCY_KEY_REUSED",

@@ -1767,3 +1767,69 @@ async fn disk_registration_keeps_build_specific_refusal_after_body_parsing() {
         assert_error(response, status, code, false).await;
     }
 }
+
+#[tokio::test]
+async fn authenticated_content_preconditions_use_router_before_static_validation() {
+    let root = crate::tests::private_tempdir();
+    let mut config = ServerConfig::new(root.path());
+    config.http_transfer_limits.slots = 1;
+    let app = application_config(root.path(), config);
+    let (token, _, _) = authenticated(&app).await;
+    let etag = format!("\"{}\"", blake3::hash(b"0123456789").to_hex());
+    for method in ["GET", "HEAD"] {
+        for (condition, value, status) in [
+            ("if-match", "\"other\"", StatusCode::PRECONDITION_FAILED),
+            ("if-none-match", etag.as_str(), StatusCode::NOT_MODIFIED),
+            ("if-none-match", "*", StatusCode::NOT_MODIFIED),
+            ("if-match", "*", StatusCode::OK),
+        ] {
+            for authenticated in [false, true] {
+                let mut request = Request::builder()
+                    .method(method)
+                    .uri("/api/versions/version/content")
+                    .header(condition, value);
+                if authenticated {
+                    request = request.header("authorization", format!("Bearer {token}"));
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    if authenticated {
+                        status
+                    } else {
+                        StatusCode::UNAUTHORIZED
+                    }
+                );
+                if authenticated {
+                    assert_eq!(response.headers()[header::ETAG], etag);
+                } else {
+                    assert!(!response.headers().contains_key(header::ETAG));
+                }
+                let body = http_routing::body::to_bytes(response.into_body(), 8192)
+                    .await
+                    .unwrap();
+                if method == "HEAD" || authenticated && status == StatusCode::NOT_MODIFIED {
+                    assert!(body.is_empty());
+                } else if authenticated && status == StatusCode::OK {
+                    assert_eq!(body.as_ref(), b"0123456789");
+                } else {
+                    let error: Value = json_codec::from_slice(&body).unwrap();
+                    assert!(error["error"]["request_id"].is_string());
+                    assert_eq!(
+                        error["error"]["code"],
+                        if authenticated {
+                            "HTTP_PRECONDITION_FAILED"
+                        } else {
+                            "UNAUTHORIZED"
+                        }
+                    );
+                    assert_eq!(error["error"]["retryable"], false);
+                }
+            }
+        }
+    }
+}

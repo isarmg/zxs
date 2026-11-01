@@ -1,6 +1,7 @@
 //! Single-line metadata edits share the branch editor's commit/cancel behavior.
 use super::{actions, history::NodeKind, model::NamespaceAction};
 use crate::{icons::FileIcon, ui::State};
+use wasm_bindgen::JsCast;
 use web_interface::{html, i18n::t, prelude::*};
 
 // Branch labels and notes retain their metadata budget; namespace names use name-policy.
@@ -56,9 +57,10 @@ impl Target {
         let edit = edit_value(value, self.input_kind());
         if matches!(self, Self::CreateDirectory)
             && let Edit::Save(name) = &edit
-            && name_policy::validate_path(&super::model::join_path(directory, name)).is_err()
+            && let Err(source) =
+                name_policy::validate_path(&super::model::join_path(directory, name))
         {
-            return Edit::Invalid;
+            return Edit::NameError(super::naming::Error::new(name, source));
         }
         edit
     }
@@ -144,6 +146,7 @@ impl Target {
 enum Edit {
     Cancel,
     Invalid,
+    NameError(super::naming::Error),
     Save(String),
 }
 
@@ -159,16 +162,15 @@ fn edit_value(value: &str, kind: InputKind) -> Edit {
             Edit::Invalid
         }
     } else {
-        let name = value.trim();
-        if name.is_empty() {
+        if value.trim().is_empty() {
             Edit::Cancel
-        } else if !value.chars().any(char::is_control)
-            && (kind == InputKind::NamespaceName || name.len() <= MAX_TEXT_BYTES)
-            && super::model::valid_name(name)
-        {
-            Edit::Save(name.to_owned())
-        } else {
+        } else if kind == InputKind::BranchName && value.len() > MAX_TEXT_BYTES {
             Edit::Invalid
+        } else {
+            match super::naming::validate(value) {
+                Ok(()) => Edit::Save(value.to_owned()),
+                Err(error) => Edit::NameError(error),
+            }
         }
     }
 }
@@ -183,6 +185,7 @@ pub(super) struct Draft {
     pub(super) editing: RwSignal<bool>,
     pub(super) value: RwSignal<String>,
     pub(super) error: RwSignal<bool>,
+    pub(super) name_error: RwSignal<Option<std::sync::Arc<super::naming::Error>>>,
     operation: RwSignal<Option<String>>,
     history_root: RwSignal<Option<String>>,
     scope: EditScope,
@@ -276,6 +279,7 @@ impl Draft {
             editing: RwSignal::new(false),
             value: RwSignal::new(String::new()),
             error: RwSignal::new(false),
+            name_error: RwSignal::new(None),
             operation: RwSignal::new(None),
             history_root: RwSignal::new(None),
             scope,
@@ -316,6 +320,7 @@ impl Draft {
         self.editing.set(false);
         self.value.set(String::new());
         self.error.set(false);
+        self.name_error.set(None);
         self.operation.set(None);
         self.history_root.set(None);
     }
@@ -336,6 +341,49 @@ impl Draft {
                 state.files.history_editors -= 1;
             }
         });
+    }
+
+    pub(super) fn blur(self, event: web_sys::FocusEvent) {
+        if self.name_error.with_untracked(|error| {
+            error
+                .as_ref()
+                .is_none_or(|error| error.candidate().is_none())
+        }) {
+            self.cancel_idle();
+            return;
+        }
+        let within_editor = event
+            .related_target()
+            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+            .zip(
+                event
+                    .target()
+                    .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+                    .and_then(|input| {
+                        input
+                            .closest(".zxs-inline-edit, .zxs-inline-branch, .zxs-version-note-row")
+                            .expect("invariant: editor selector is valid")
+                    }),
+            )
+            .is_some_and(|(next, editor)| editor.contains(Some(&next)));
+        if !within_editor {
+            self.cancel_idle();
+        }
+    }
+
+    pub(super) fn accept_name(self, expected: &std::sync::Arc<super::naming::Error>) -> bool {
+        let candidate = self.name_error.with_untracked(|error| {
+            let error = error.as_ref()?;
+            (std::sync::Arc::ptr_eq(error, expected) && self.value.get_untracked() == error.name)
+                .then(|| error.candidate().map(str::to_owned))
+                .flatten()
+        });
+        let Some(candidate) = candidate else {
+            return false;
+        };
+        self.value.set(candidate);
+        self.name_error.set(None);
+        true
     }
 
     pub(super) fn cancel_idle(self) {
@@ -365,6 +413,7 @@ impl Draft {
         );
         self.value.set(value);
         self.error.set(false);
+        self.name_error.set(None);
         self.editing.set(true);
     }
 
@@ -400,6 +449,7 @@ impl Draft {
         // Establish the blur guard before admission changes disabled state.
         self.operation.set(Some(String::new()));
         self.error.set(false);
+        self.name_error.set(None);
         self.operation.set(submit());
     }
 
@@ -463,6 +513,7 @@ impl Editor {
         });
         match edit {
             Edit::Invalid => self.draft.error.set(true),
+            Edit::NameError(error) => self.draft.name_error.set(Some(std::sync::Arc::new(error))),
             Edit::Cancel => self.draft.cancel_idle(),
             Edit::Save(value) => self
                 .draft
@@ -481,7 +532,7 @@ fn editor_input(editor: Editor) -> impl IntoView {
     });
     view! {
         <input class="zxs-inline-input zxs-input zxs-input--compact zxs-input--underline" node_ref=input type="text"
-            aria-label=editor.label.get_value() aria-invalid=move ||editor.draft.error.get().to_string()
+            aria-label=editor.label.get_value() aria-invalid=move ||(editor.draft.error.get() || editor.draft.name_error.get().is_some()).to_string()
             title=if editor.kind == InputKind::NamespaceName {
                 t("名称及完整路径须符合共享命名规则；Enter 保存，Esc 或点击其他位置取消。", "Names and complete paths must meet the shared naming rules. Enter saves; Escape or clicking elsewhere cancels.")
             } else {
@@ -489,8 +540,8 @@ fn editor_input(editor: Editor) -> impl IntoView {
             }
             data-max-bytes=(editor.kind != InputKind::NamespaceName).then_some(MAX_TEXT_BYTES) autocomplete="off" autocapitalize="none" spellcheck="false"
             prop:value=move ||editor.draft.value.get() disabled=move ||editor.disabled.get()||editor.draft.pending()
-            on:input=move |event|{editor.draft.value.set(event_target_value(&event));editor.draft.error.set(false);}
-            on:blur=move |_|editor.draft.cancel_idle()
+            on:input=move |event|{editor.draft.value.set(event_target_value(&event));editor.draft.error.set(false);editor.draft.name_error.set(None);}
+            on:blur=move |event|editor.draft.blur(event)
             on:keydown=move |event:web_sys::KeyboardEvent| {
                 if event.is_composing(){return;}
                 match event.key().as_str() {
@@ -507,6 +558,7 @@ fn editor_input(editor: Editor) -> impl IntoView {
                 format!("{bytes}/{MAX_TEXT_BYTES} {}",t("字节","bytes"))
             }
         }}</span>
+        {name_feedback(editor.draft, move |expected| { if !editor.disabled.get_untracked() && !editor.draft.pending() && editor.draft.accept_name(expected) { editor.commit(); } })}
         <Show when=move ||editor.draft.error.get()>
             <span class="zxs-inline-error zxs-row" role="status">{match editor.kind {
                 InputKind::Note => t("备注最多 128 个 UTF-8 字节，不能包含换行或控制字符。", "Notes must be at most 128 UTF-8 bytes without line breaks or control characters."),
@@ -514,6 +566,36 @@ fn editor_input(editor: Editor) -> impl IntoView {
                 InputKind::NamespaceName => t("名称或完整路径不符合共享命名规则。", "The name or complete path does not meet the shared naming rules."),
             }}</span>
         </Show>
+    }
+}
+
+pub(super) fn name_feedback(
+    draft: Draft,
+    confirm: impl Fn(&std::sync::Arc<super::naming::Error>) + Copy + Send + Sync + 'static,
+) -> impl IntoView {
+    let cancel_on_escape = move |event: web_sys::KeyboardEvent| {
+        if event.key() == "Escape" {
+            event.prevent_default();
+            event.stop_propagation();
+            draft.cancel_idle();
+        }
+    };
+    view! {
+        <span class="zxs-inline-error zxs-row" role="status">
+            {move || draft.name_error.with(|error| error.as_ref().map(|error| error.message()))}
+        </span>
+        {move ||draft.name_error.get().filter(|error|error.candidate().is_some()).map(|expected|view! {
+            <button class="zxs-button" type="button"
+                on:blur=move |event|draft.blur(event) on:keydown=cancel_on_escape
+                on:click=move |_|confirm(&expected)>
+                {t("确认使用 NFC 名称", "Confirm NFC name")}
+            </button>
+            <button class="zxs-button" type="button"
+                on:blur=move |event|draft.blur(event) on:keydown=cancel_on_escape
+                on:click=move |_|draft.cancel_idle()>
+                {t("取消", "Cancel")}
+            </button>
+        })}
     }
 }
 

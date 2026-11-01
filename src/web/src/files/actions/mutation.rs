@@ -139,8 +139,12 @@ pub(crate) fn rename_directory_branch(
     if repository.is_empty()
         || branch_id.is_empty()
         || name.len() > storage_contract::MAX_NOTE_BYTES
-        || !crate::files::model::valid_name(&name)
     {
+        return None;
+    }
+    if let Err(source) = crate::files::model::validate_name(&name) {
+        let error = crate::files::naming::Error::new(&name, source);
+        set_notice(state, error.message());
         return None;
     }
     record_mutation(
@@ -164,8 +168,12 @@ pub(crate) fn rename_file_branch(
         || file.is_empty()
         || branch_id.is_empty()
         || name.len() > storage_contract::MAX_NOTE_BYTES
-        || !crate::files::model::valid_name(&name)
     {
+        return None;
+    }
+    if let Err(source) = crate::files::model::validate_name(&name) {
+        let error = crate::files::naming::Error::new(&name, source);
+        set_notice(state, error.message());
         return None;
     }
     record_mutation(

@@ -663,8 +663,9 @@ impl Engine {
                 );
                 let root = &self.disk_resources.get(d)?.root;
                 let proof_dir = local_proof_directory_at(root, &directory, hash)?;
-                let proof =
-                    root.read_json_observed(&proof_dir.join("commit-proof.json"), &mut |_| Ok(()))?;
+                let proof = decode_proof(
+                    &root.read_bytes(&proof_dir.join("commit-proof.json"), MAX_METADATA)?,
+                )?;
                 root.write_json(
                     &proof_dir.join("publication-proof.json"),
                     &LocalPublicationRef {

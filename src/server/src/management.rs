@@ -1585,6 +1585,10 @@ impl Backend for ManagementBackend {
 }
 
 #[cfg(test)]
+#[path = "../../web/src/setup/response.rs"]
+mod web_setup_response;
+
+#[cfg(test)]
 #[path = "../../../test/server/unit/management.rs"]
 mod management_tests;
 

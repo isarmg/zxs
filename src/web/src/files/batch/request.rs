@@ -1,5 +1,25 @@
 //! Pure scope validation and transaction payload construction.
 use super::*;
+
+#[derive(Debug, error_definition::Error)]
+pub(super) enum Error {
+    #[error("{error}")]
+    Name {
+        entry: String,
+        #[source]
+        error: super::super::naming::Error,
+    },
+    #[error(transparent)]
+    Path(#[from] super::super::naming::Error),
+    #[error("{0}")]
+    Scope(String),
+}
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Self::Scope(message)
+    }
+}
+
 pub(super) fn destination_path(
     path: &str,
 ) -> name_policy::Result<Option<name_policy::PortablePath>> {
@@ -43,34 +63,28 @@ fn find_entry<'a>(branch: &'a ScopeBranch, chosen: &Entry) -> Result<&'a Selecte
         })
         .ok_or_else(error_missing)
 }
-fn target_ref(branch: &ScopeBranch, path: String) -> Result<Value, String> {
-    if name_policy::validate_path(&path).is_err() {
-        return Err(t(
-            "目标路径不符合共享命名规则。",
-            "The destination path does not meet the shared naming rules.",
-        ));
-    }
+fn target_ref(branch: &ScopeBranch, path: String) -> Result<Value, Error> {
+    name_policy::validate_path(&path)
+        .map_err(|source| super::super::naming::Error::new(&path, source))?;
     let id = branch.summary().id();
     let tree = branch.summary().head_tree_id();
     Ok(json!({"directory_branch_id":id,"expected_tree_id":tree,"path":path}))
 }
 /// Scope and identity are captured before submission. Never infer all possible
 /// source/target pairs or silently skip an entry absent in another branch.
-pub(super) fn request(draft: &Draft) -> Result<Value, String> {
+pub(super) fn request(draft: &Draft) -> Result<Value, Error> {
     if !draft.source_resolved || draft.loading {
         return Err(t(
             "请先读取源目录分支。",
             "Load the source folder branches first.",
-        ));
+        )
+        .into());
     }
     if draft.selected_sources.is_empty() {
-        return Err(t(
-            "至少选择一个源分支。",
-            "Select at least one source branch.",
-        ));
+        return Err(t("至少选择一个源分支。", "Select at least one source branch.").into());
     }
     if draft.entries.is_empty() {
-        return Err(error_missing());
+        return Err(error_missing().into());
     }
     let mut items = vec![];
     let mut unique = BTreeSet::new();
@@ -86,11 +100,12 @@ pub(super) fn request(draft: &Draft) -> Result<Value, String> {
             return Err(t(
                 "请为每个源分支指定目标映射。",
                 "Specify a destination mapping for every source branch.",
-            ));
+            )
+            .into());
         }
         for mapping in &draft.mappings {
             if !draft.selected_sources.contains(&mapping.source) {
-                return Err(error_missing());
+                return Err(error_missing().into());
             }
             let source = draft
                 .sources
@@ -114,7 +129,7 @@ pub(super) fn request(draft: &Draft) -> Result<Value, String> {
                     .names
                     .get(&entry_key(chosen))
                     .ok_or_else(error_missing)?;
-                validate_name(name)?;
+                validate_name(&entry_key(chosen), name)?;
                 let destination = join_path(target.summary().path(), name);
                 let key = (
                     mapping.source.clone(),
@@ -123,10 +138,9 @@ pub(super) fn request(draft: &Draft) -> Result<Value, String> {
                     destination.clone(),
                 );
                 if !unique.insert(key) {
-                    return Err(t(
-                        "存在重复映射，请先移除。",
-                        "Remove the duplicate mapping.",
-                    ));
+                    return Err(
+                        t("存在重复映射，请先移除。", "Remove the duplicate mapping.").into(),
+                    );
                 }
                 items.push(json!({"source":branch_ref(source,entry),"target":target_ref(target,destination)?}));
             }
@@ -146,7 +160,7 @@ pub(super) fn request(draft: &Draft) -> Result<Value, String> {
                         .names
                         .get(&entry_key(chosen))
                         .ok_or_else(error_missing)?;
-                    validate_name(name)?;
+                    validate_name(&entry_key(chosen), name)?;
                     let path = entry.path();
                     let parent = path
                         .rsplit_once('/')
@@ -160,15 +174,11 @@ pub(super) fn request(draft: &Draft) -> Result<Value, String> {
     }
     Ok(json!({"kind":draft.kind.contract_kind(),"items":items}))
 }
-fn validate_name(name: &str) -> Result<(), String> {
-    if valid_name(name) {
-        Ok(())
-    } else {
-        Err(t(
-            "名称不符合共享文件命名规则。",
-            "The name does not meet the shared file naming rules.",
-        ))
-    }
+fn validate_name(entry: &str, name: &str) -> Result<(), Error> {
+    super::super::naming::validate(name).map_err(|error| Error::Name {
+        entry: entry.into(),
+        error,
+    })
 }
 #[cfg(test)]
 #[path = "../../../../../test/web/unit/files/batch/request/tests.rs"]

@@ -126,6 +126,27 @@ impl Args {
     }
 }
 
+/// Final local diagnostic boundary. Escape controls so untrusted paths and
+/// nested causes cannot inject terminal commands or forge additional lines.
+fn diagnostic_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = String::new();
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        if !message.is_empty() {
+            message.push_str("; caused by: ");
+        }
+        for character in cause.to_string().chars() {
+            if character.is_control() {
+                message.extend(character.escape_default());
+            } else {
+                message.push(character);
+            }
+        }
+        current = cause.source();
+    }
+    message
+}
+
 fn main() {
     let args = Args::parse();
     tracing::collector::fmt()
@@ -136,7 +157,7 @@ fn main() {
         .log_internal_errors(false)
         .init();
     if let Err(error) = run(args) {
-        eprintln!("zxs-rescue: {error}");
+        eprintln!("zxs-rescue: {}", diagnostic_chain(error.as_ref()));
         std::process::exit(1);
     }
 }
@@ -158,14 +179,7 @@ fn report_recovery_warnings(engine: &mut Engine) {
         ("checkpoint save skipped", checkpoint_save),
     ] {
         if let Some(error) = warning {
-            let mut message = error.to_string();
-            let mut source = std::error::Error::source(&error);
-            while let Some(cause) = source {
-                use std::fmt::Write;
-                write!(&mut message, "; caused by: {cause}")
-                    .expect("String formatting is infallible");
-                source = cause.source();
-            }
+            let message = diagnostic_chain(&error);
             eprintln!("zxs-rescue: {action}: {message}");
         }
     }

@@ -324,8 +324,8 @@ pub(crate) fn breadcrumbs(path: &str) -> Vec<(String, String)> {
     }
     result
 }
-pub(crate) fn valid_name(name: &str) -> bool {
-    name_policy::validate_name(name).is_ok()
+pub(crate) fn validate_name(name: &str) -> name_policy::Result<()> {
+    name_policy::validate_name(name)
 }
 pub(crate) fn file_kind(entry: &Entry) -> bool {
     entry.kind() == storage_contract::NamespaceEntryKind::File

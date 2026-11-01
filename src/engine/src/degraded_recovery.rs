@@ -169,7 +169,9 @@ pub(crate) fn discover_publication(
             let path =
                 local_proof_directory_at(root, &directory, hash)?.join("publication-proof.json");
             {
-                let local: LocalPublication = match root.read_json_observed(&path, &mut |_| Ok(()))
+                let local: LocalPublication = match root
+                    .read_bytes(&path, MAX_METADATA)
+                    .and_then(|bytes| decode_proof(&bytes))
                 {
                     Ok(local) => local,
                     Err(Error::Filesystem(platform_io::fs_safety::Error::Io(error)))

@@ -864,8 +864,11 @@ fn verify_retained_tombstone_observed(
             "retained version differs from admitted version",
         ));
     }
-    let tombstone: ContentTombstone =
-        root.read_json_observed(&directory.join("purged.json"), observe)?;
+    let tombstone: ContentTombstone = decode_proof(&root.read_bytes_observed(
+        &directory.join("purged.json"),
+        MAX_METADATA,
+        observe,
+    )?)?;
     if tombstone.state != state {
         return Err(Error::new(
             ErrorCode::TombstoneInvalid,

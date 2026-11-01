@@ -29,16 +29,31 @@ fn owned_draft_reads_are_bounded_and_reject_links_without_requiring_secret_mode(
 }
 
 #[test]
-fn atomic_create_is_private_no_clobber_and_cleans_failed_staging() {
+fn atomic_create_is_private_no_clobber_and_preserves_uncertain_staging() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("published");
     write_new(&path, b"complete").unwrap();
     let metadata = fs::metadata(&path).unwrap();
     assert_eq!(metadata.mode() & 0o7777, 0o600);
     assert_eq!(metadata.nlink(), 1);
-    assert!(write_new(&path, b"overwrite").is_err());
+    let error = write_new(&path, b"overwrite").unwrap_err();
+    let failure = error.downcast_ref::<PublicationFailure>().unwrap();
+    let AtomicCommitError::Unknown(platform_io::fs_safety::Error::Io(source)) = &failure.source
+    else {
+        panic!("rename collision must remain Unknown: {failure:?}");
+    };
+    assert_eq!(source.raw_os_error(), Some(17));
+    assert_eq!(
+        fs::read(directory.path().join(&failure.staging)).unwrap(),
+        b"overwrite"
+    );
+    assert_eq!(
+        FileIdentity::from_fd(File::open(directory.path().join(&failure.staging)).unwrap())
+            .unwrap(),
+        failure.identity
+    );
     assert_eq!(fs::read(&path).unwrap(), b"complete");
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
     let alias = directory.path().join("alias");
     symlink(&path, &alias).unwrap();
     assert!(write_new(&alias, b"follow link").is_err());
@@ -46,7 +61,7 @@ fn atomic_create_is_private_no_clobber_and_cleans_failed_staging() {
     let occupied = directory.path().join("occupied");
     fs::create_dir(&occupied).unwrap();
     assert!(write_new(&occupied, b"must not publish").is_err());
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 3);
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 6);
 }
 
 #[test]
@@ -70,7 +85,7 @@ fn concurrent_private_publication_has_exactly_one_complete_winner() {
     );
     let bytes = fs::read(&*path).unwrap();
     assert!(bytes == b"first" || bytes == b"second");
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
 }
 
 #[test]
@@ -291,4 +306,143 @@ fn failed_drop_cleanup_does_not_panic_when_the_diagnostic_sink_is_full() {
         });
     });
     assert!(root.path().join("staged").is_dir());
+}
+
+/// Run only through publication-io.sh, in one isolated libc-backend process.
+#[test]
+#[ignore = "requires the isolated libc rename/fsync interposer"]
+fn publication_faults_preserve_phase_identity_and_evidence() {
+    let root = std::path::PathBuf::from(std::env::var_os("ZXS_ATOMIC_ROOT").unwrap());
+    let mode = std::env::var("ZXS_ATOMIC_MODE").unwrap();
+    let stage = std::env::var("ZXS_ATOMIC_STAGE").unwrap();
+    let target = root.join("destination");
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    if mode == "replace" {
+        fs::write(&target, b"original").unwrap();
+    }
+    fs::write(root.join(".inject"), b"").unwrap();
+    let result = match mode.as_str() {
+        "create" => write_new(&target, b"candidate"),
+        "replace" => replace_private(&target, b"candidate"),
+        _ => panic!("unknown publication mode"),
+    };
+    fs::remove_file(root.join(".inject")).unwrap();
+    let staged: Vec<_> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with(".zxs-rescue-")
+        })
+        .collect();
+    let events = fs::read_to_string(std::env::var_os("ZXS_ATOMIC_LOG").unwrap()).unwrap();
+    match stage.as_str() {
+        "success" => {
+            result.unwrap();
+            assert!(staged.is_empty());
+            assert_eq!(fs::read(&target).unwrap(), b"candidate");
+            assert_eq!(events, "file-sync\ndirectory-sync\n");
+        }
+        "file-sync" => {
+            let error = result.unwrap_err();
+            assert_eq!(
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(5)
+            );
+            assert!(staged.is_empty());
+            assert_eq!(events, "file-sync\n");
+            if mode == "replace" {
+                assert_eq!(fs::read(&target).unwrap(), b"original");
+            } else {
+                assert!(!target.exists());
+            }
+        }
+        "rename-before" | "rename-after" | "create-race" | "directory-sync" => {
+            let error = result.unwrap_err();
+            let failure = error.downcast_ref::<PublicationFailure>().unwrap();
+            assert_eq!(
+                failure.directory,
+                FileIdentity::from_fd(File::open(&root).unwrap()).unwrap()
+            );
+            assert_eq!(failure.target, Path::new("destination"));
+            let source = match (&failure.source, stage.as_str()) {
+                (
+                    AtomicCommitError::Published(
+                        platform_io::fs_safety::Error::PublishedDurabilityUnknown(error),
+                    ),
+                    "directory-sync",
+                ) => error,
+                (
+                    AtomicCommitError::Unknown(platform_io::fs_safety::Error::Io(error)),
+                    "rename-before" | "rename-after" | "create-race",
+                ) => error,
+                _ => panic!("wrong phase: {failure:?}"),
+            };
+            assert_eq!(
+                source.raw_os_error(),
+                Some(if stage == "create-race" { 17 } else { 5 })
+            );
+            if stage == "rename-before" || stage == "create-race" {
+                assert_eq!(staged, [root.join(&failure.staging)]);
+                assert_eq!(fs::read(&staged[0]).unwrap(), b"candidate");
+                assert_eq!(
+                    FileIdentity::from_fd(File::open(&staged[0]).unwrap()).unwrap(),
+                    failure.identity
+                );
+                if stage == "create-race" {
+                    assert_eq!(fs::read(&target).unwrap(), b"occupant");
+                } else if mode == "replace" {
+                    assert_eq!(fs::read(&target).unwrap(), b"original");
+                } else {
+                    assert!(!target.exists());
+                }
+            } else {
+                assert!(staged.is_empty());
+                assert_eq!(fs::read(&target).unwrap(), b"candidate");
+                assert_eq!(
+                    FileIdentity::from_fd(File::open(&target).unwrap()).unwrap(),
+                    failure.identity
+                );
+            }
+            let event = match stage.as_str() {
+                "rename-before" => "rename-before-eio",
+                "rename-after" => "rename-success-reported-eio",
+                "create-race" => "rename-race-eexist",
+                "directory-sync" => "directory-sync",
+                _ => unreachable!(),
+            };
+            assert_eq!(events, format!("file-sync\n{event}\n"));
+        }
+        _ => panic!("unknown fault stage"),
+    }
+    assert_eq!(fs::metadata(&root).unwrap().mode() & 0o7777, 0o755);
+    println!("\nZXS_RESCUE_PUBLICATION_COMPLETE mode={mode} stage={stage}");
+}
+
+#[test]
+fn cleanup_failure_keeps_both_typed_causes() {
+    use std::error::Error;
+    let failure = CleanupFailure {
+        operation: Box::new(std::io::Error::from_raw_os_error(5)),
+        cleanup: std::io::Error::from_raw_os_error(21),
+    };
+    assert_eq!(
+        failure
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(5)
+    );
+    assert_eq!(failure.cleanup.raw_os_error(), Some(21));
+    let diagnostic = crate::diagnostic_chain(&failure);
+    assert!(diagnostic.contains("os error 5"));
+    assert!(diagnostic.contains("os error 21"));
 }

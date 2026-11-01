@@ -102,3 +102,22 @@ zxs-rescue configuration register-disk --config /srv/private-layout/custom.json 
 格式、路径或 I/O 错误中断命令，不输出完整成功标记；已有输出仍是部分诊断，不得据此清理数据。
 枚举器只保留配置根、一个目录游标和当前受单清单上限约束的内容，无每 ID 集合；因此既有超额池也可查看。
 除原有 writer lock 文件可能被创建外，不修改配置锚、清单、正文或索引；该命令不授予超额池写入能力。
+
+### 草稿发布失败的证据与诊断
+
+草稿输出父目录可为公共目录，不会被改成 0700；文件仍为 0600、单链接普通文件，
+全部操作锚定持有目录。rename 开始尝试即解除暂存自动清理，包含 EEXIST 的失败
+回复都作为 `Unknown`，保留原 errno、目标/暂存名称及目录和文件身份。
+成功 rename 后验证或目录屏障失败为 `Published`；不得根据非零退出码删除证据
+或盲目重试。发布前写入/同步失败才清理暂存，清理失败与首要错误一并保留。
+备份失败携带具名路径/source 上下文且不继续替换草稿；这不表示备份本身未发布。
+CLI 最终诊断遍历完整来源链，并转义控制字符；不打印草稿正文或秘密。
+
+隔离门禁 `test/rescue/unit/private_io/publication-io.sh <rescue-libtest> <zxs-rescue>`
+要求 `cargo test --locked --offline -p storage-rescue --features rustix/use-libc --no-run`
+生成的当前产物。它执行真实 rename 前/后 EIO、真实 EEXIST 及文件/目录同步故障，
+核验阶段、errno、inode、暂存/目标保全、目录权限和屏障；同时核对真实 CLI 备份失败
+的完整来源链和未修改原草稿。libc 测试后端不改变生产后端，也不冒充 NFS/掉电测试。
+该修复不改变草稿两次发布的顺序或成功路径每文件一次 fsync、每发布一次目录
+fsync 的预算；新增持有文件单链接/身份检查及发布后相对 stat 身份核对，错误时
+才分配证据上下文。总工作仍为 O(草稿字节数)，没有额外全文件散列或读取。

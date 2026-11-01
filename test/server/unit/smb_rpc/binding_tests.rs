@@ -614,3 +614,160 @@ fn hello_captures_typed_repository_but_each_synthetic_root_access_rechecks_bindi
     drop(client);
     worker.join().unwrap().unwrap();
 }
+
+fn error_chain(error: &ApiError) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut source = std::error::Error::source(error);
+    while let Some(error) = source {
+        chain.push(error.to_string());
+        source = error.source();
+    }
+    chain
+}
+
+#[derive(Clone, Copy)]
+enum FlushRevocation {
+    Authority,
+    UnavailableAuthority,
+    BindingDisabled,
+    BindingReenabled,
+}
+
+fn no_change_flush_revocation(revocation: FlushRevocation) {
+    let (temp, shared, backend, branch) = fixture();
+    let mut active = session(shared.clone(), &branch);
+    let repository_id = repository(&shared);
+    let repo = shared
+        .backend
+        .repository_snapshot(&active.identity, &repository_id)
+        .unwrap();
+    active.identity.smb_binding = Some(crate::auth::SmbBinding {
+        repository_id,
+        branch_id: branch.clone(),
+        generation: repo.smb_binding_generation,
+    });
+    let (reader, reader_fd) = open_file(&mut active, false);
+    let (writer, writer_fd) = open_file(&mut active, true);
+    let (directory, directory_fd) = active
+        .open("".into(), false, false, false, false, false)
+        .unwrap();
+    let directory: OpenResult = json_codec::from_value(directory).unwrap();
+    // Test a clean unpublished writer as well as the published clean writer
+    // needed for an administrative binding change (active work blocks rebind).
+    assert_eq!(
+        active.flush(writer.handle).unwrap(),
+        json!({"saved":true,"changed":false})
+    );
+    writer_fd.write_all_at(b"new", 0).unwrap();
+    active.dirty(writer.handle).unwrap();
+    active.flush(writer.handle).unwrap();
+    let handles = [reader.handle, writer.handle, directory.handle];
+    for handle in handles {
+        assert_eq!(
+            active.flush(handle).unwrap(),
+            json!({"saved":true,"changed":false})
+        );
+    }
+    let expected = match revocation {
+        FlushRevocation::Authority => {
+            let replacement = AuthStore::initialize(
+                &temp.path().join("replacement-auth"),
+                "replacement-owner",
+                "long-test-password",
+            )
+            .unwrap();
+            temp.auth.lock().unwrap().replace_authority(replacement);
+            storage_contract::ErrorCode::Unauthorized
+        }
+        FlushRevocation::UnavailableAuthority => {
+            temp.auth
+                .lock()
+                .unwrap()
+                .replace_authority(AuthStore::unavailable());
+            storage_contract::ErrorCode::RecoveryRequired
+        }
+        FlushRevocation::BindingDisabled | FlushRevocation::BindingReenabled => {
+            rebind(&shared, &branch, false);
+            if matches!(revocation, FlushRevocation::BindingReenabled) {
+                rebind(&shared, &branch, true);
+            }
+            storage_contract::ErrorCode::SmbRebindRequired
+        }
+    };
+    for handle in handles {
+        let authorization = active.authorize_read(handle).unwrap_err();
+        backend.take_authorizations();
+        backend.take_version_authorizations();
+        let error = active.flush(handle).unwrap_err();
+        assert_eq!(error.code, expected);
+        assert_eq!(error.status, authorization.status);
+        assert_eq!(error.message, authorization.message);
+        assert_eq!(error_chain(&error), error_chain(&authorization));
+        if handle == reader.handle {
+            assert_eq!(
+                backend.take_version_authorizations(),
+                vec![reader.version_id.clone().unwrap()]
+            );
+            assert!(backend.take_authorizations().is_empty());
+        } else {
+            assert!(backend.take_version_authorizations().is_empty());
+            assert_eq!(backend.take_authorizations(), vec![branch.clone()]);
+        }
+        assert!(active.handles.contains_key(&handle));
+    }
+    // Revocation must not prevent terminal cleanup or leave a writer lock.
+    active.close(reader.handle, false).unwrap();
+    active.close(writer.handle, false).unwrap();
+    active.detach(directory.handle).unwrap();
+    assert!(active.handles.is_empty());
+    assert!(active.writer_locks.is_empty());
+    assert!(shared.file_writers.lock().unwrap().is_empty());
+    assert_eq!(backend.uploads.load(Ordering::SeqCst), 1);
+    drop((reader_fd, writer_fd, directory_fd));
+}
+
+#[test]
+fn no_change_flush_rechecks_authority_for_all_handle_kinds() {
+    no_change_flush_revocation(FlushRevocation::Authority);
+}
+
+#[test]
+fn no_change_flush_rejects_unavailable_authority_for_all_handle_kinds() {
+    no_change_flush_revocation(FlushRevocation::UnavailableAuthority);
+}
+
+#[test]
+fn no_change_flush_rechecks_binding_for_all_handle_kinds() {
+    no_change_flush_revocation(FlushRevocation::BindingDisabled);
+    no_change_flush_revocation(FlushRevocation::BindingReenabled);
+}
+
+#[test]
+fn no_change_flush_revoked_unpublished_writer_close_retains_work_and_releases_handle() {
+    let (temp, shared, _, branch) = fixture();
+    let mut active = session(shared.clone(), &branch);
+    let (opened, _fd) = open_file(&mut active, true);
+    let source = match &active.handles[&opened.handle] {
+        Handle::Write(writer) => writer.source.clone(),
+        _ => unreachable!(),
+    };
+    temp.auth
+        .lock()
+        .unwrap()
+        .replace_authority(AuthStore::unavailable());
+    assert_eq!(
+        active.flush(opened.handle).unwrap_err().code,
+        storage_contract::ErrorCode::RecoveryRequired
+    );
+    assert_eq!(
+        active.close(opened.handle, false).unwrap_err().code,
+        storage_contract::ErrorCode::RecoveryRequired
+    );
+    assert!(active.handles.is_empty());
+    assert!(shared.file_writers.lock().unwrap().is_empty());
+    assert_eq!(fs::read(&source).unwrap(), b"old");
+    let record: Value =
+        json_codec::from_slice(&fs::read(source.with_extension("work.json")).unwrap()).unwrap();
+    assert_eq!(record["handle_state"], "detached");
+    assert_eq!(record["detach_error"]["code"], "RECOVERY_REQUIRED");
+}

@@ -48,6 +48,7 @@ pub(crate) struct Record {
     pub previous_frame_hash: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct Receipt {
     pub disk_id: String,
     pub slot_id: String,
@@ -795,14 +796,35 @@ fn decode_object<T: data_serialization::de::DeserializeOwned + Serialize>(
     hash: &str,
     bytes: &[u8],
 ) -> Result<T> {
-    let value = decode_strict(bytes)?;
-    if object_hash(kind, &value)? != hash {
+    let value = storage_contract::strict_json(bytes)?;
+    if storage_contract::object_hash_value(kind, &value)? != hash {
         return Err(Error::new(
             storage_contract::ErrorCode::ObjectCorrupt,
             "immutable object digest differs",
         ));
     }
-    Ok(value)
+    decode_proof_value(value)
+}
+
+/// Local compound proofs have no outer digest. Preserve every nested hash input
+/// before existing receipt/identity verification; a typed projection is not proof.
+pub(crate) fn decode_proof<T: data_serialization::de::DeserializeOwned + Serialize>(
+    bytes: &[u8],
+) -> Result<T> {
+    decode_proof_value(storage_contract::strict_json(bytes)?)
+}
+
+fn decode_proof_value<T: data_serialization::de::DeserializeOwned + Serialize>(
+    value: json_codec::Value,
+) -> Result<T> {
+    let proof = T::deserialize(&value)?;
+    if json_codec::to_value(&proof)? != value {
+        return Err(Error::new(
+            ErrorCode::ObjectCorrupt,
+            "proof representation differs from its complete input",
+        ));
+    }
+    Ok(proof)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -975,6 +997,7 @@ fn resolve_raw_snapshot(
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct VersionEvidence {
     pub version: FileVersion,
     pub placement: Placement,
@@ -995,6 +1018,7 @@ pub(crate) struct Candidate {
     pub history_roots: crate::metadata_map::Reference,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct Finalize {
     pub candidate_hash: String,
     pub accepts: Vec<Receipt>,
@@ -1002,6 +1026,7 @@ pub(crate) struct Finalize {
     pub recovery_id: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct PayloadReceipt {
     pub version_id: String,
     pub disk_id: String,
@@ -1009,6 +1034,7 @@ pub(crate) struct PayloadReceipt {
     pub proof_hash: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct CommitProof {
     pub candidate_hash: String,
     pub finalize: Finalize,
@@ -1018,6 +1044,7 @@ pub(crate) struct CommitProof {
     pub route_slot_ids: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct Publication {
     pub candidate_hash: String,
     pub finalize: Finalize,
@@ -1163,6 +1190,7 @@ pub(crate) fn verify_publication_seal(
     Ok(())
 }
 #[derive(Clone, Debug, Deserialize)]
+#[serialization(deny_unknown_fields)]
 pub(crate) struct LocalPublication {
     pub candidate: Candidate,
     pub publication: Publication,
@@ -1263,7 +1291,8 @@ fn verify_local_membership(
 
 #[cfg(test)]
 pub(crate) fn verify_tombstone(directory: &Path, version: &FileVersion) -> Result<()> {
-    let tombstone: ContentTombstone = read_json(&directory.join("purged.json"))?;
+    let tombstone: ContentTombstone =
+        decode_proof(&read_bytes(&directory.join("purged.json"), MAX_METADATA)?)?;
     verify_tombstone_content_in_context(directory, version, &tombstone, None)
 }
 
@@ -1350,7 +1379,10 @@ pub(crate) fn local_proof_directory_at(
     candidate: &str,
 ) -> Result<PathBuf> {
     let original = directory.join("commit-proof.json");
-    match root.read_json_observed::<CommitProof>(&original, &mut |_| Ok(())) {
+    match root
+        .read_bytes(&original, MAX_METADATA)
+        .and_then(|bytes| decode_proof::<CommitProof>(&bytes))
+    {
         Ok(proof) => {
             if proof.candidate_hash != candidate {
                 return Ok(directory.join("protection-proofs").join(candidate));
@@ -1458,8 +1490,8 @@ fn verify_local_version_publication(
             "version directory identity differs from its descriptor",
         ));
     }
-    let local: LocalPublication = read_local_json(&directory.join("publication-proof.json"), read)?;
-    let proof: CommitProof = read_local_json(&directory.join("commit-proof.json"), read)?;
+    let local: LocalPublication = decode_proof(&read(&directory.join("publication-proof.json"))?)?;
+    let proof: CommitProof = decode_proof(&read(&directory.join("commit-proof.json"))?)?;
     let candidate_hash = object_hash("candidate", &local.candidate)?;
     let c = &local.candidate;
     let p = &local.publication;
@@ -1575,3 +1607,7 @@ mod snapshot_partition_tests;
 #[cfg(test)]
 #[path = "../../../test/engine/unit/journal/snapshot_incremental_oracle_tests.rs"]
 mod snapshot_incremental_oracle_tests;
+
+#[cfg(test)]
+#[path = "../../../test/engine/unit/journal/proof_decoding_tests.rs"]
+mod proof_decoding_tests;

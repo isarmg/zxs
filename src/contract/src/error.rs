@@ -115,6 +115,7 @@ error_codes! {
     HistoryNotFound => "HISTORY_NOT_FOUND",
     HistoryPackageInvalid => "HISTORY_PACKAGE_INVALID",
     HttpError => "HTTP_ERROR",
+    HttpPreconditionFailed => "HTTP_PRECONDITION_FAILED",
     HttpUploadsPending => "HTTP_UPLOADS_PENDING",
     HttpUploadsUnavailable => "HTTP_UPLOADS_UNAVAILABLE",
     IdempotencyKeyReused => "IDEMPOTENCY_KEY_REUSED",

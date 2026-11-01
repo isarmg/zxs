@@ -17,7 +17,7 @@ ALL = ("rust-sources", "quality", "security", "workspace", *FOUNDATION,
        "web", "contracts", "build-tools", "smb-protocol")
 # Review the actual foundation consumers before updating this fingerprint.
 # A mismatch is only a full-CI fallback, never a product/admission restriction.
-REVIEWED_INPUTS = "16aa488f6ce0bcf8dc35ac93bf15283018a854d6da96d8aef14c20c307d284db"
+REVIEWED_INPUTS = "aefcd3847cc6d15f306f9683c0ce8a69b129fe107802f789f170027173d591b9"
 SELF = ".github/scripts/select-ci-suites.py"
 SHA = re.compile(r"[0-9a-f]{40}")
 DOCS = frozenset(("docs/EXTERNAL_TEST_SOURCES.md", "docs/architecture/read-projections.md",

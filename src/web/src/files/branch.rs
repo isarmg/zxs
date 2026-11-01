@@ -64,21 +64,20 @@ fn file_source(model: &super::model::Model, target: &Target) -> Option<(String, 
 enum Name {
     Empty,
     Invalid,
+    Rejected(super::naming::Error),
     Valid(String),
 }
 
 fn branch_name(value: &str) -> Name {
-    let controls = value.chars().any(char::is_control);
-    let value = value.trim();
-    if value.is_empty() {
+    if value.trim().is_empty() {
         Name::Empty
-    } else if !controls
-        && value.len() <= super::inline::MAX_TEXT_BYTES
-        && name_policy::validate_name(value).is_ok()
-    {
-        Name::Valid(value.to_owned())
-    } else {
+    } else if value.len() > super::inline::MAX_TEXT_BYTES {
         Name::Invalid
+    } else {
+        match super::naming::validate(value) {
+            Ok(()) => Name::Valid(value.to_owned()),
+            Err(error) => Name::Rejected(error),
+        }
     }
 }
 
@@ -107,13 +106,13 @@ pub(super) fn control(
                 view! {
                     <input class="zxs-branch-name zxs-input zxs-input--compact zxs-input--underline" node_ref=input type="text"
                         aria-label=t("分支名称","Branch name")
-                        aria-invalid=move || error.get().to_string()
+                        aria-invalid=move || (error.get() || draft.name_error.get().is_some()).to_string()
                         title=t("最多 128 个 UTF-8 字节。","Up to 128 UTF-8 bytes.") data-max-bytes="128" autocomplete="off"
                         autocapitalize="none" spellcheck="false"
                         prop:value=move || value.get()
                         disabled=move || disabled.get() || draft.pending()
-                        on:input=move |event| { value.set(event_target_value(&event)); error.set(false); }
-                        on:blur=move |_| draft.cancel_idle()
+                        on:input=move |event| { value.set(event_target_value(&event)); error.set(false); draft.name_error.set(None); }
+                        on:blur=move |event| draft.blur(event)
                         on:keydown=move |event: web_sys::KeyboardEvent| {
                             if event.is_composing() { return; }
                             match event.key().as_str() {
@@ -126,6 +125,7 @@ pub(super) fn control(
                                     if disabled.get_untracked() || draft.pending() { return; }
                                     match branch_name(&value.get_untracked()) {
                                         Name::Invalid => error.set(true),
+                                        Name::Rejected(error) => draft.name_error.set(Some(std::sync::Arc::new(error))),
                                         Name::Empty => draft.cancel_idle(),
                                         Name::Valid(name) => draft.submit(|| target.get_value().submit(state, name)),
                                     }
@@ -142,6 +142,15 @@ pub(super) fn control(
                     </button>
                 }.into_any()
             }}
+            {super::inline::name_feedback(draft, move |expected| {
+                if disabled.get_untracked() || draft.pending() || !draft.accept_name(expected) { return; }
+                match branch_name(&value.get_untracked()) {
+                    Name::Valid(name) => draft.submit(|| target.get_value().submit(state, name)),
+                    Name::Rejected(error) => draft.name_error.set(Some(std::sync::Arc::new(error))),
+                    Name::Invalid => error.set(true),
+                    Name::Empty => draft.cancel_idle(),
+                }
+            })}
             <Show when=move ||error.get()>
                 <span class="zxs-branch-error zxs-row" role="status">{t("分支名称无效，最多 128 个 UTF-8 字节。","Invalid branch name. Use at most 128 UTF-8 bytes.")}</span>
             </Show>

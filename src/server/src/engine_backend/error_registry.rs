@@ -25,6 +25,10 @@ pub(super) const PUBLIC_STATUS: &[(ErrorCode, ::http::StatusCode)] = &[
     (ErrorCode::Unauthorized, ::http::StatusCode::UNAUTHORIZED),
     (ErrorCode::Forbidden, ::http::StatusCode::FORBIDDEN),
     (ErrorCode::ContentPurged, ::http::StatusCode::GONE),
+    (
+        ErrorCode::HttpPreconditionFailed,
+        ::http::StatusCode::PRECONDITION_FAILED,
+    ),
     (ErrorCode::NoSpace, ::http::StatusCode::INSUFFICIENT_STORAGE),
     (
         ErrorCode::ResourceLimitExceeded,
@@ -262,6 +266,7 @@ pub(super) fn public_code(internal: ErrorCode) -> ErrorCode {
         | ErrorCode::HistoryNotFound
         | ErrorCode::HistoryPackageInvalid
         | ErrorCode::HttpError
+        | ErrorCode::HttpPreconditionFailed
         | ErrorCode::HttpUploadsPending
         | ErrorCode::HttpUploadsUnavailable
         | ErrorCode::IdempotencyKeyReused
@@ -606,6 +611,7 @@ pub(super) fn status(code: ErrorCode) -> ::http::StatusCode {
         | ErrorCode::UploadGenerationConflict
         | ErrorCode::WorkspaceClosed => ::http::StatusCode::CONFLICT,
         ErrorCode::ContentPurged => ::http::StatusCode::GONE,
+        ErrorCode::HttpPreconditionFailed => ::http::StatusCode::PRECONDITION_FAILED,
         ErrorCode::QuotaExceeded | ErrorCode::ResourceLimitExceeded => {
             ::http::StatusCode::TOO_MANY_REQUESTS
         }

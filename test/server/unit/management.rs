@@ -1,3 +1,4 @@
+use super::web_setup_response;
 use crate::{Backend, projection_failure};
 use crate::{ServerConfig, auth::AuthStore, management::*, router};
 use http_routing::{
@@ -401,6 +402,10 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
     .unwrap();
     assert_eq!(code, StatusCode::OK, "{value:?}");
     assert_eq!(value["restart_required"], false);
+    assert_eq!(
+        web_setup_response::validate(web_setup_response::Action::Wizard, value.clone()).unwrap(),
+        web_setup_response::Success::Recovering
+    );
     assert!(data.join("management-authority.json").exists());
     assert!(management.join("management-auth.json").exists());
     assert_eq!(
@@ -837,6 +842,11 @@ async fn web_completion_requires_bound_pristine_pre_authority_setup_proof() {
         if completion_expected {
             assert_eq!(code, StatusCode::OK, "{value:?}");
             assert_eq!(value["completed"], true);
+            assert_eq!(
+                web_setup_response::validate(web_setup_response::Action::Complete, value.clone())
+                    .unwrap(),
+                web_setup_response::Success::Recovering
+            );
             wait_for_ready(&backend).await;
             assert!(data.join("management-authority.json").exists());
             assert!(management.join("management-auth.json").exists());
@@ -1013,6 +1023,10 @@ async fn preset_web_setup_is_lazy_digest_bound_and_preserves_custom_configuratio
     assert_eq!(code, StatusCode::OK);
     let (code,value)=bootstrap_json(&app,&key,"/api/setup/initialize-preset",Some(json!({"preset_id":"custom","config_digest":preview["config_digest"],"username":"admin","password":"a-long-test-password"}))).await;
     assert_eq!(code, StatusCode::OK, "{value:?}");
+    assert_eq!(
+        web_setup_response::validate(web_setup_response::Action::Preset, value.clone()).unwrap(),
+        web_setup_response::Success::Recovering
+    );
     wait_for_ready(&backend).await;
     let persisted: Value =
         json_codec::from_slice(&std::fs::read(data.join("config.json")).unwrap()).unwrap();

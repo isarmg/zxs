@@ -269,8 +269,12 @@ fn local_publication_borrowed_schema_preserves_encoding_and_reader_policy() {
     let expected = assert_local_publication_encoding(&local);
     let mut raw: json_codec::Value = decode_strict(&expected).unwrap();
     raw["additional_local_field"] = json_codec::json!(true);
-    let accepted: LocalPublication = decode_strict(&canonical_json(&raw).unwrap()).unwrap();
-    assert_eq!(assert_local_publication_encoding(&accepted), expected);
+    let error = decode_strict::<LocalPublication>(&canonical_json(&raw).unwrap()).unwrap_err();
+    assert_eq!(error.code(), storage_contract::ErrorCode::InvalidJson);
+    assert!(std::error::Error::source(&error).is_some());
+    raw.as_object_mut()
+        .unwrap()
+        .remove("additional_local_field");
     raw["candidate"]["additional_candidate_field"] = json_codec::json!(true);
     assert!(decode_strict::<LocalPublication>(&canonical_json(&raw).unwrap()).is_err());
     let duplicate = [b"{\"candidate\":null,".as_slice(), &expected[1..]].concat();

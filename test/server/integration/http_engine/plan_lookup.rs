@@ -297,6 +297,9 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
             "committed"
         );
         assert!(payloads.iter().all(|path| path.exists()));
+        if !split {
+            assert_conditional_content_is_purged(&app, &token, &first).await;
+        }
         let published_events = success(&app, &token, "GET", "/api/events", None).await;
         let (_, retried_failure) =
             send(&app, Some(&token), "POST", &path, Some(body.clone())).await;
@@ -318,6 +321,9 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
         );
         assert!(payloads.iter().all(|path| !path.exists()));
         assert!(blocker.is_file());
+        if !split {
+            assert_conditional_content_is_purged(&app, &token, &first).await;
+        }
         drop(app);
         let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
         let auth = backend.open_auth(&system).unwrap();
@@ -327,5 +333,36 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
         assert_eq!(replay["request_digest"], receipt["request_digest"]);
         assert_eq!(replay["result"], receipt["result"]);
         assert_eq!(replay["sequence"], receipt["sequence"]);
+    }
+}
+
+async fn assert_conditional_content_is_purged(app: &Router, token: &str, version: &str) {
+    for method in ["GET", "HEAD"] {
+        for (condition, value) in [("if-match", "\"stale\""), ("if-none-match", "*")] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(format!("/api/versions/{version}/content"))
+                        .header("authorization", format!("Bearer {token}"))
+                        .header(condition, value)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::GONE);
+            assert!(!response.headers().contains_key("etag"));
+            let body = http_routing::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            if method == "HEAD" {
+                assert!(body.is_empty());
+            } else {
+                let error: Value = json_codec::from_slice(&body).unwrap();
+                assert_eq!(error["error"]["code"], "CONTENT_PURGED");
+            }
+        }
     }
 }

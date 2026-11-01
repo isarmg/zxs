@@ -1044,7 +1044,8 @@ pub(crate) fn offline_check_in_context(
                 let directory = v.path();
                 let version: FileVersion = read_json(&directory.join("version.json"))?;
                 if let Some(file) = open_optional_regular(&directory.join("purged.json"))? {
-                    let tombstone = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
+                    let tombstone =
+                        crate::journal::decode_proof(&read_file_bytes(file, MAX_METADATA)?)?;
                     crate::journal::verify_tombstone_content_in_context(
                         &directory, &version, &tombstone, metadata,
                     )?;

@@ -5610,6 +5610,7 @@
             "HISTORY_NOT_FOUND",
             "HISTORY_PACKAGE_INVALID",
             "HTTP_ERROR",
+            "HTTP_PRECONDITION_FAILED",
             "HTTP_UPLOADS_PENDING",
             "HTTP_UPLOADS_UNAVAILABLE",
             "IDEMPOTENCY_KEY_REUSED",

@@ -359,9 +359,9 @@ fn breadcrumbs_stay_relative_to_the_selected_disk() {
 #[test]
 fn names_cannot_escape_the_directory() {
     for bad in ["", ".", "..", "a/b", "a\\b", "a\n"] {
-        assert!(!valid_name(bad));
+        assert!(validate_name(bad).is_err());
     }
-    assert!(valid_name("report 2026.txt"));
+    assert!(validate_name("report 2026.txt").is_ok());
 }
 #[test]
 fn visible_inherited_content_is_readable_without_becoming_owned_content() {

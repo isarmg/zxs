@@ -298,27 +298,19 @@ impl Session {
         }
     }
     pub(super) fn flush(&mut self, handle: u64) -> Result<Value, ApiError> {
-        let Some(entry) = self.handles.get_mut(&handle) else {
-            return Err(ApiError::new(
-                ::http::StatusCode::NOT_FOUND,
-                storage_contract::ErrorCode::NotFound,
-                "SMB handle missing",
-            ));
-        };
-        let writer = match entry {
-            Handle::Read(content, _) => {
-                content.file.sync_all().map_err(ApiError::io)?;
-                return Ok(json!({"saved":true,"changed":false}));
+        if !matches!(self.handles.get(&handle), Some(Handle::Write(writer)) if writer.dirty) {
+            // No-change acknowledgements are still I/O, not terminal cleanup.
+            self.authorize_read(handle)?;
+            match &self.handles[&handle] {
+                Handle::Read(content, _) => content.file.sync_all().map_err(ApiError::io)?,
+                Handle::Directory(directory) => directory.file.sync_all().map_err(ApiError::io)?,
+                Handle::Write(_) => {}
             }
-            Handle::Directory(directory) => {
-                directory.file.sync_all().map_err(ApiError::io)?;
-                return Ok(json!({"saved":true,"changed":false}));
-            }
-            Handle::Write(writer) => writer,
-        };
-        if !writer.dirty {
             return Ok(json!({"saved":true,"changed":false}));
         }
+        let Some(Handle::Write(writer)) = self.handles.get_mut(&handle) else {
+            unreachable!("invariant: publication follows a dirty writer match");
+        };
         if writer.committed {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::WorkspaceRebaseRequired,
@@ -418,7 +410,11 @@ impl Session {
             ));
         }
         let saved = (|| {
-            if !abort {
+            // Clean handles only need terminal cleanup; a revoked identity
+            // must not turn their release into a new I/O acknowledgement.
+            if !abort
+                && matches!(self.handles.get(&handle), Some(Handle::Write(writer)) if writer.dirty)
+            {
                 self.flush(handle)?;
             }
             if let Some(Handle::Write(writer)) = self.handles.get(&handle)

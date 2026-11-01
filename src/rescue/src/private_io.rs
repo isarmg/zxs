@@ -3,8 +3,8 @@
 //! clobbered; draft replacements require a held transaction.
 use crate::Result;
 use platform_io::fs_safety::{
-    EntryName,
-    linux::{AdvisoryLock, MountPolicy, OpenAt2Root},
+    AtomicCommitError, EntryName,
+    linux::{AdvisoryLock, FileIdentity, MountPolicy, OpenAt2Root, SingleLinkRequirement},
 };
 use rustix::fs::{
     AtFlags, Mode, OFlags, RenameFlags, openat, renameat, renameat_with, statat, unlinkat,
@@ -16,6 +16,46 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
 };
+
+/// Names are relative to the held directory identity, not a reopened path.
+#[derive(Debug)]
+struct PublicationFailure {
+    directory: FileIdentity,
+    staging: String,
+    target: std::path::PathBuf,
+    identity: FileIdentity,
+    source: AtomicCommitError,
+}
+impl std::fmt::Display for PublicationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "rescue publication target {:?}, staging {:?}, directory {:?}, file {:?}",
+            self.target, self.staging, self.directory, self.identity
+        )
+    }
+}
+impl std::error::Error for PublicationFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+#[derive(Debug)]
+struct CleanupFailure {
+    operation: Box<dyn std::error::Error + Send + Sync>,
+    cleanup: std::io::Error,
+}
+impl std::fmt::Display for CleanupFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "staging cleanup also failed: {}", self.cleanup)
+    }
+}
+impl std::error::Error for CleanupFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.operation.as_ref())
+    }
+}
 
 struct AnchoredPath {
     directory: OpenAt2Root,
@@ -109,21 +149,16 @@ impl DraftTransaction {
 
     pub(crate) fn write_backup(&self, name: &OsStr, original: &[u8]) -> Result<()> {
         let replace = self.entry_exists(name)?;
-        Ok(write_atomic_at(
+        write_atomic_at(
             &self.target.directory,
             &EntryName::new(name)?,
             original,
             replace,
-        )?)
+        )
     }
 
     pub(crate) fn replace_private(&self, bytes: &[u8]) -> Result<()> {
-        Ok(write_atomic_at(
-            &self.target.directory,
-            &self.target.name,
-            bytes,
-            true,
-        )?)
+        write_atomic_at(&self.target.directory, &self.target.name, bytes, true)
     }
 }
 
@@ -156,12 +191,7 @@ impl Drop for StagingCleanup<'_> {
 /// A directory-sync failure after rename preserves PublishedDurabilityUnknown.
 pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let target = AnchoredPath::open(path)?;
-    Ok(write_atomic_at(
-        &target.directory,
-        &target.name,
-        bytes,
-        false,
-    )?)
+    write_atomic_at(&target.directory, &target.name, bytes, false)
 }
 
 fn write_atomic_at(
@@ -169,13 +199,13 @@ fn write_atomic_at(
     target: &EntryName,
     bytes: &[u8],
     replace: bool,
-) -> std::result::Result<(), platform_io::fs_safety::Error> {
+) -> Result<()> {
     use platform_io::fs_safety::Error;
     let directory = root.directory();
     if replace {
         let existing = root.open_file(&target.as_relative(), false)?;
         if existing.metadata()?.uid() != rustix::process::geteuid().as_raw() {
-            return Err(Error::UnsafePermissions(target.as_path().to_owned()));
+            return Err(Error::UnsafePermissions(target.as_path().to_owned()).into());
         }
     }
     let name = format!(
@@ -197,18 +227,21 @@ fn write_atomic_at(
         name,
         armed: true,
     };
-    let result = (|| {
+    let result: Result<()> = (|| {
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        if replace {
+        let identity = SingleLinkRequirement::check(&file)?;
+        // A failed reply (including EEXIST) is not proof that rename did not
+        // happen. From the syscall attempt onward, preserve both names.
+        cleanup.armed = false;
+        let renamed = if replace {
             renameat(
                 directory,
                 cleanup.name.as_str(),
                 directory,
                 target.as_os_str(),
             )
-            .map_err(std::io::Error::from)?;
         } else {
             renameat_with(
                 directory,
@@ -217,24 +250,35 @@ fn write_atomic_at(
                 target.as_os_str(),
                 RenameFlags::NOREPLACE,
             )
-            .map_err(std::io::Error::from)?;
+        };
+        let failure = |source| PublicationFailure {
+            directory: root.identity(),
+            staging: cleanup.name.clone(),
+            target: target.as_path().to_owned(),
+            identity,
+            source,
+        };
+        renamed.map_err(|error| failure(AtomicCommitError::Unknown(Error::Io(error.into()))))?;
+        let published = statat(directory, target.as_os_str(), AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|error| failure(AtomicCommitError::Published(Error::Io(error.into()))))?;
+        if (published.st_dev, published.st_ino) != (identity.device, identity.inode) {
+            return Err(failure(AtomicCommitError::Published(Error::IdentityChanged(
+                target.as_path().to_owned(),
+            )))
+            .into());
         }
-        // The temporary name no longer belongs to us after publication. Disarm
-        // before syncing so a later user of that name cannot be removed by Drop.
-        cleanup.armed = false;
-        directory
-            .sync_all()
-            .map_err(platform_io::fs_safety::Error::PublishedDurabilityUnknown)?;
+        directory.sync_all().map_err(|error| {
+            failure(AtomicCommitError::Published(
+                Error::PublishedDurabilityUnknown(error),
+            ))
+        })?;
         Ok(())
     })();
     match result {
         Ok(value) => Ok(value),
         Err(operation) => match cleanup.cleanup() {
             Ok(()) => Err(operation),
-            Err(cleanup) => Err(Error::Cleanup {
-                operation: Box::new(operation),
-                cleanup,
-            }),
+            Err(cleanup) => Err(Box::new(CleanupFailure { operation, cleanup })),
         },
     }
 }

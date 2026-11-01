@@ -767,6 +767,80 @@ fn content_response(
         tokio::time::Instant::now() + limits.total_timeout,
     )
 }
+#[derive(Clone, Copy)]
+enum TagComparison {
+    Strong,
+    Weak,
+}
+
+// RFC 9110 sections 5.6.1, 8.8.3 and 13.1: field lines form one list,
+// but commas inside opaque tags are data, and '*' is not a list member.
+fn entity_tag_matches(
+    headers: &HeaderMap,
+    name: header::HeaderName,
+    etag: &[u8],
+    comparison: TagComparison,
+) -> Result<Option<bool>, ApiError> {
+    let values = headers.get_all(name);
+    let mut values = values.iter().peekable();
+    let Some(first) = values.next() else {
+        return Ok(None);
+    };
+    if trim_ows(first.as_bytes()) == b"*" && values.peek().is_none() {
+        return Ok(Some(true));
+    }
+    let mut matched = false;
+    for value in std::iter::once(first).chain(values) {
+        let mut remaining = trim_ows(value.as_bytes());
+        while !remaining.is_empty() {
+            // Empty list elements are ignored, including across field lines.
+            if let Some(rest) = remaining.strip_prefix(b",") {
+                remaining = trim_ows(rest);
+                continue;
+            }
+            let weak = remaining.starts_with(b"W/");
+            if weak {
+                remaining = &remaining[2..];
+            }
+            let Some(opaque) = remaining.strip_prefix(b"\"") else {
+                return Err(ApiError::invalid("invalid entity-tag condition"));
+            };
+            let end = opaque
+                .iter()
+                .position(|byte| *byte == b'"')
+                .ok_or_else(|| ApiError::invalid("unterminated entity-tag condition"))?;
+            if !opaque[..end]
+                .iter()
+                .all(|byte| matches!(*byte, 0x21 | 0x23..=0x7e | 0x80..=0xff))
+            {
+                return Err(ApiError::invalid("invalid entity-tag character"));
+            }
+            let tag = &remaining[..end + 2];
+            matched |= tag == etag && (!weak || matches!(comparison, TagComparison::Weak));
+            remaining = trim_ows(&remaining[end + 2..]);
+            if !remaining.is_empty() && !remaining.starts_with(b",") {
+                return Err(ApiError::invalid("invalid entity-tag list separator"));
+            }
+        }
+    }
+    Ok(Some(matched))
+}
+
+fn trim_ows(value: &[u8]) -> &[u8] {
+    value.trim_ascii_start().trim_ascii_end()
+}
+
+fn content_precondition(headers: &HeaderMap, etag: &[u8]) -> Result<Option<StatusCode>, ApiError> {
+    if entity_tag_matches(headers, header::IF_MATCH, etag, TagComparison::Strong)? == Some(false) {
+        return Ok(Some(StatusCode::PRECONDITION_FAILED));
+    }
+    if entity_tag_matches(headers, header::IF_NONE_MATCH, etag, TagComparison::Weak)? == Some(true)
+    {
+        return Ok(Some(StatusCode::NOT_MODIFIED));
+    }
+    Ok(None)
+}
+
 fn content_response_with_limits(
     content: Content,
     method: Method,
@@ -781,6 +855,30 @@ fn content_response_with_limits(
     let hash = content.hash;
     let lease = content.lease;
     let etag = format!("\"{hash}\"");
+    // Public Backend implementations supply the hash; validate its header
+    // encoding before either a conditional response or a streaming response.
+    let etag_header = HeaderValue::from_str(&etag).map_err(ApiError::invalid_source)?;
+    // The backend already checked current authorization and content/domain
+    // state. Preconditions precede Range and must not create a body stream.
+    if let Some(status) = content_precondition(&headers, etag.as_bytes())? {
+        let mut response = if status == StatusCode::PRECONDITION_FAILED {
+            ApiError::new(
+                status,
+                storage_contract::ErrorCode::HttpPreconditionFailed,
+                "If-Match does not match the current content ETag",
+            )
+            .into_response()
+        } else {
+            Response::new(Body::empty())
+        };
+        *response.status_mut() = status;
+        if method == Method::HEAD {
+            *response.body_mut() = Body::empty();
+        }
+        response.headers_mut().insert(header::ETAG, etag_header);
+        return Ok(response);
+    }
+
     // RFC 9110 section 14.2 defines Range processing only for GET.
     let range = if method != Method::GET
         || headers
@@ -892,11 +990,7 @@ fn content_response_with_limits(
         header::CONTENT_LENGTH,
         HeaderValue::from_str(&length.to_string()).unwrap(),
     );
-    // Public Backend implementations supply the content hash.
-    headers.insert(
-        header::ETAG,
-        HeaderValue::from_str(&etag).map_err(ApiError::invalid_source)?,
-    );
+    headers.insert(header::ETAG, etag_header);
     if status == StatusCode::PARTIAL_CONTENT {
         headers.insert(
             header::CONTENT_RANGE,
