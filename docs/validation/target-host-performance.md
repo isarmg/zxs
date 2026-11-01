@@ -63,7 +63,8 @@ release 为 `lto="thin"`、`codegen-units=1`、`strip="debuginfo"`，未设 `tar
 stdout/stderr、资源采样、wait4 统计与 `SHA256SUMS`。文中摘录不代替原始数据。
 运行目录分别为 `probe8-r1`、`fixed64-r1`、`growing64-r1`、`diagnostic` 和阶段探针目录。
 采集器默认 60 秒、采样 RSS 2GiB、空闲预留 4GiB 是本次实验保护，均不是产品达标阈值。
-每 250ms 观察会有开销和盲区；外层完成时间可比实际退出晚最多一次采样间隔。
+每次轮询后 sleep 250ms，有采样开销和盲区；外层结束是观察到退出的时点，
+采样、输出与 OS 调度均可增加滞后，250ms 不是严格上限。
 
 ## 既有探针的基线
 
@@ -213,6 +214,42 @@ source.patch 在归档。前后 scratch 与实际 fixture 绝对路径等长，�
 保留候选的依据是局部分配和重复工作减少；不宣称延迟加速，也不排除较小延迟回归。
 这些少量云样本不能构造 P95/P99 或目标硬件达标结论。
 
+### 全局计数观察器与三种时间口径
+
+这里的 32 格矩阵和 12 轮冻结配对均无条件启用同一 `CountedSystem`，贯穿 Rust 子进程
+生命周期，包含夹具与 oracle。初始 `perf-check`、`recovery-startup` 和 `resource-phases`
+没有安装这个计数观察器；它们的不同工作负载与时间不能直接拼作此处的前后对照。
+capture 的 Python 进程也不由该 Rust 分配器计数。
+
+每次成功 alloc/alloc_zeroed/realloc 在 System 返回后新增成功判断及两次 Relaxed 原子
+fetch_add；另有阶段快照读取，dealloc 仅转发。Relaxed 仍有硬件成本和多线程竞争。
+两版使用同一观察器统一口径，但分配次数、时序与线程交错不同，不能假定开销抵消。
+已有证据没有 counter-off 对照，不能计算观察器开销百分比或从墙钟差中扣除估计开销。
+
+| 时间 | 实际边界及范围 |
+| --- | --- |
+| namespace 三阶段与其和 | 各次 PhaseTimer 在开始读计数之前取 Instant，结束先取 elapsed 再读结束计数。包含 API 内 I/O、同步及观察器影响；capture 还包含闭包内 request.clone。三阶段和不连续，不含阶段间解包/Receipt 构造、create/stage、日志、预先 canonical、重启/校验和网络/SMB |
+| capture 外层 wall_seconds | 源码在打开三个输出文件之前取开始时间，wait4 观察到退出后取结束时间；包含 Popen、整个夹具/操作/oracle、退出清理与观察滞后。前置冻结/provenance 和后置 source/binary 哈希不在其中；原 wall_scope 字段的 Popen start 是较窄的文字描述，应按源码边界解释 |
+| 初始 resource-phases 的 create_through_finish | 一次连续时钟从工作区创建前到 finish 返回，包含 stage、request 构造和时钟开销；不包括其后的检查点，也没有真实传输或 mutex 等待观测 |
+
+分配调用数和字节数各自独立读取，计数区间与 ns 并非完全重合的同一原子快照；后台线程
+可能跨越边界。不能将差值全部归因一个私有函数。Python 轮询的名义 250ms 粒度不适用于
+Rust 内部 Instant 阶段时钟，外层 wall 也不能替代小操作的阶段时间。
+
+约 6.1%/3.1% 是每版三个样本的**边际中位数之比**。N16 empty 三对 candidate−baseline
+分别为 +79.116、−83.833、+8.686ms；N128 content-new 为 −60.045、+74.844、+110.948ms。
+后者两个边际中位数之差为 +34.153ms，而对内差中位数为 +74.844ms，不能混称同一估计。
+各场景只有三对、各两正一负；范围重叠不证明无回归，也不证明回归。已有数据既不能
+认定稳定的该幅度生产回归，也不能排除回归，分配请求下降与时延结论继续分列。
+
+如集成决定必须区分较小延迟差，下一项可证假设可收窄为：不累计分配计数时，
+N128 content-new 的产品前后阶段差是否仍有相同方向。最小提案只取这一场景、
+预先固定三对 AB/BA/AB（六个新进程），用同边界 timing-only 工具、普通 System 分配器、
+相同 target/profile/特性及完整 oracle，并重新绑定两份来源/二进制；分配字段标未测。
+不自动扩大样本或设置新达标阈值。该提案尚未实施或运行；即便执行，也不能将新时段
+timing-only 与旧 counted 数据直接相减当观察器开销，后者需要另行登记同产品来源、
+同窗口的 counted/uncounted 对照。本候选保持独立分支，尚不据此合入 main。
+
 ### 正确性与静态验证
 
 在同一冻结产品/测试源码、明确 x86_64 target 下：7 个新增私有 hot_path_tests、
@@ -268,3 +305,13 @@ JournalWriter 当前 sequence 成功后清除已保存 tail，不存在已证实
 本轮未部署、未触碰真实数据盘、未改变权限/凭据，也未设置新的硬性验收阈值。
 后续产品热点改动先分配文件所有权，再按同一精确源码/目标/特性比较 before/after；
 格式、协议、同步阶段变化另行证明，不由测量目标授权。
+
+### CI 预检记录与接线修复
+
+提交 `054ba6cc` 的 [run 41325360732](https://github.com/isarmg/zxs/actions/runs/41325360732)
+仅执行 Static job，因 `tools/target-host-performance/README.md` 位于 docs 之外而失败；
+其余 Tests/SDK/WASM/Standalone 均跳过，不构成 CI 通过。工具说明移至
+`docs/tools/target-host-performance.md` 并调整链接，没有放宽来源门禁或修改历史收据。
+本地完整 `bash .github/scripts/check.sh static` 在进程内 umask 022 下通过。
+本实例默认 umask 077 会使打包 mock 的解压目录成为 700、触发原 755 断言；未修改测试，
+仅对该预检子进程设置创建掩码。产品/测试/计时工具源码与已测候选不变，性能实验未重跑。
