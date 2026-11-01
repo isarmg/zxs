@@ -118,6 +118,11 @@ async fn system_samba_real_engine_fixture() {
     let username = std::env::var("ZXS_SMB_E2E_USER")
         .expect("explicit existing isolated Unix account required");
     smb_protocol::protocol::validate_username(&username).unwrap();
+    let engine_uid = smb_protocol::protocol::effective_uid();
+    assert_ne!(
+        engine_uid, 0,
+        "real engine must run as its private service user"
+    );
     let (temp, shared, _backend, branch) = fixture();
     binding_tests::rebind(&shared, &branch, true);
     let repository = repository(&shared);
@@ -125,7 +130,8 @@ async fn system_samba_real_engine_fixture() {
     let config = crate::SmbConfig {
         socket: socket.clone(),
         spool_dir: temp.path().join("system-samba-spool"),
-        allowed_uid: smb_protocol::protocol::effective_uid(),
+        // Samba connects before impersonating the independent authenticated user.
+        allowed_uid: 0,
         username,
         spool_limits: crate::SpoolLimits {
             bytes_per_account: 16 * 1024 * 1024,
@@ -144,7 +150,14 @@ async fn system_samba_real_engine_fixture() {
     })
     .await
     .unwrap();
-    let ready = json!({"socket":socket,"repository_id":repository,"branch_id":branch,"payload":std::str::from_utf8(PAYLOAD).unwrap()});
+    let ready = json!({
+        "engine_uid": engine_uid,
+        "allowed_peer_uid": 0,
+        "socket": socket,
+        "repository_id": repository,
+        "branch_id": branch,
+        "payload": std::str::from_utf8(PAYLOAD).unwrap(),
+    });
     platform_io::fs_safety::AtomicFile::create(
         &directory,
         &platform_io::fs_safety::EntryName::new("ready.json").unwrap(),

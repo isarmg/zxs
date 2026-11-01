@@ -10,6 +10,8 @@ pub use published::{
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
     #[error(transparent)]
+    DiskObservation(crate::DiskObservationFailure),
+    #[error(transparent)]
     PublishedWorkspaceReconciliation(Box<PublishedWorkspaceReconciliation>),
     #[error(transparent)]
     PublishedRecoveryReconciliation(Box<PublishedRecoveryReconciliation>),
@@ -91,7 +93,8 @@ impl Error {
                 retryable: true,
                 source,
             },
-            source @ (Self::Checkpoint(_)
+            source @ (Self::DiskObservation(_)
+            | Self::Checkpoint(_)
             | Self::Clock(_)
             | Self::ClockRange(_)
             | Self::Filesystem(_)
@@ -117,7 +120,8 @@ impl Error {
             Self::Contract(source) => source.is_retryable(),
             Self::Cleanup { operation, .. } => operation.is_retryable(),
             Self::Context { retryable, .. } => *retryable,
-            Self::PublishedWorkspaceReconciliation(_)
+            Self::DiskObservation(_)
+            | Self::PublishedWorkspaceReconciliation(_)
             | Self::PublishedRecoveryReconciliation(_)
             | Self::Checkpoint(_)
             | Self::Clock(_)
@@ -137,6 +141,7 @@ impl Error {
     }
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::DiskObservation(error) => error.source.code(),
             Self::PublishedWorkspaceReconciliation(_)
             | Self::PublishedRecoveryReconciliation(_) => ErrorCode::RecoveryRequired,
             Self::Contract(source) => source.code(),
@@ -157,6 +162,7 @@ impl Error {
     }
     pub fn message(&self) -> Cow<'_, str> {
         match self {
+            Self::DiskObservation(_) => "disk observation unavailable".into(),
             Self::PublishedWorkspaceReconciliation(error) => error.message().into(),
             Self::PublishedRecoveryReconciliation(error) => error.message().into(),
             Self::Contract(source) => source.message(),
@@ -207,7 +213,8 @@ impl Error {
             Self::PublishedRecoveryReconciliation(error) => Some(error.result()),
             Self::Context { source, .. } => source.published_result(),
             Self::Cleanup { operation, .. } => operation.published_result(),
-            Self::Clock(_)
+            Self::DiskObservation(_)
+            | Self::Clock(_)
             | Self::ClockRange(_)
             | Self::Checkpoint(_)
             | Self::Contract(_)

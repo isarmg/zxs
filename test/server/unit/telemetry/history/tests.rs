@@ -182,6 +182,7 @@ fn mixed_null_metrics_remain_exact_after_two_aggregations_and_persistence() {
         sample.status.memory.used_bytes = bytes;
         sample.status.memory.available_bytes = bytes;
         sample.status.disks = vec![super::super::DiskStatus {
+            observation_failure: None,
             id: "P01".into(),
             name: "P01".into(),
             online: true,
@@ -287,6 +288,7 @@ fn disk_averages_keep_valid_observations_when_the_bucket_ends_offline() {
     let disk_sample = |at, online: bool| {
         let mut point = sample(at, Some(20.0));
         point.status.disks = vec![super::super::DiskStatus {
+            observation_failure: None,
             id: "P01".into(),
             name: "P01".into(),
             online,

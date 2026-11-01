@@ -68,12 +68,13 @@ fn live_reads_and_detached_plan_keep_the_admitted_disks_after_root_replacement()
     bytes.clear();
     plan.open().unwrap().file.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"original");
+    assert!(engine.disk_status().is_err());
     assert!(
         engine
-            .disk_status()
-            .unwrap()
+            .prepare_disk_observation()
+            .sample()
             .iter()
-            .all(|disk| !disk.online)
+            .all(|disk| !disk.status.online)
     );
     assert!(
         engine

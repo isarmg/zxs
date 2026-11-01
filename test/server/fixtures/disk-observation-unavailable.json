@@ -1,0 +1,1 @@
+{"observation_failure":{"stage":"capacity","code":"IO_ERROR"},"id":"P01","name":"P01","online":true,"read_only":false,"simulation":true,"total_bytes":null,"available_bytes":null,"used_bytes":null,"usage_percent":null,"power_watts":null,"power_unavailable_reason":"simulated_disk"}

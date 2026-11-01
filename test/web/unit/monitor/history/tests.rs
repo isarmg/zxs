@@ -9,7 +9,7 @@ fn fixture(samples: usize, disks: usize) -> Value {
             "cpu":{"usage_percent":s % 100, "logical_count":8,"power_watts":null,"power_unavailable_reason":"sampling"},
             "memory":{"used_bytes":"25","total_bytes":"100","available_bytes":"75"},
             "disks":(0..disks).filter(|d| (s+d)%7 != 0).map(|d| json!({
-                "id":format!("P{d}"),"name":format!("Disk {d}"), "online":s%3!=0,"read_only":false,"simulation":false,
+                "observation_failure":null,"id":format!("P{d}"),"name":format!("Disk {d}"), "online":s%3!=0,"read_only":false,"simulation":false,
                 "total_bytes":"1000","used_bytes":"300","available_bytes":"600",
                 "usage_percent":if s%4==0 {None} else {Some(30.)},
                 "power_watts":if s%5==0 {None} else {Some(d as f64)},"power_unavailable_reason":null
@@ -247,4 +247,28 @@ fn offline_bucket_capacity_and_missing_disk_preserve_old_gap_semantics() {
             .1,
         None
     );
+}
+
+#[test]
+fn server_disk_observation_vector_is_strictly_decoded_and_retained() {
+    let bytes =
+        include_str!("../../../../../test/server/fixtures/disk-observation-unavailable.json");
+    let disk: wire::Disk = json_codec::from_str(bytes).unwrap();
+    assert!(matches!(
+        disk.observation_failure,
+        Some(wire::DiskObservationIssue::Capacity(
+            storage_contract::ErrorCode::IoError
+        ))
+    ));
+    let mut response = fixture(1, 0);
+    response["samples"][0]["disks"] = json!([json_codec::from_str::<Value>(bytes).unwrap()]);
+    let history = project(response, "1h").unwrap();
+    assert!(
+        history.samples[0].disks["P01"]
+            .observation_failure
+            .is_some()
+    );
+    let mut value: Value = json_codec::from_str(bytes).unwrap();
+    value["observation_failure"]["source"] = json!("private source");
+    assert!(json_codec::from_value::<wire::Disk>(value).is_err());
 }

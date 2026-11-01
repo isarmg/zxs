@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import re
+import pwd
+import stat
 from pathlib import Path
 import secrets
 import shlex
@@ -37,9 +39,37 @@ def wait_file(path, process, timeout=120):
     raise TimeoutError(path)
 
 
+def nonroot_io_evidence(log, uid):
+    """Bind Samba's debug-uid header to the immediately following I/O record."""
+    evidence = {}
+    header = None
+    for line in log.splitlines():
+        if line.startswith("["):
+            header = line
+        elif header is not None:
+            for operation, message in (("read-existing", "smbd_smb2_read: report.txt -"),
+                                       ("write-new", "smbd_smb2_write: upload.txt -")):
+                if message in line and re.search(rf"effective\({uid}, [0-9]+\)", header):
+                    evidence[operation] = {"header": header, "request": line.strip()}
+            header = None
+    if set(evidence) != {"read-existing", "write-new"}:
+        raise RuntimeError("missing non-root Samba read/write request identity evidence")
+    return evidence
+
+
+def assert_owner_mode(path, uid, mode):
+    metadata = path.lstat()
+    if metadata.st_uid != uid or stat.S_IMODE(metadata.st_mode) != mode:
+        raise RuntimeError(f"unexpected isolated fixture ownership/mode: {path}")
+
+
 def run(args):
     if os.geteuid() != 0 or os.environ.get("ZXS_ISOLATED_SAMBA_TEST") != "1":
         raise RuntimeError("requires explicit isolated Debian fixture, never a user host")
+    engine_user = pwd.getpwnam("zxs-engine-test")
+    smb_user = pwd.getpwnam("zxs-smb-test")
+    if 0 in (engine_user.pw_uid, smb_user.pw_uid) or engine_user.pw_uid == smb_user.pw_uid:
+        raise RuntimeError("engine and Samba accounts must be distinct non-root identities")
     target = json.loads((ROOT / ".github/samba-debian-target.json").read_text())
     for package in ("samba", "samba-common-bin", "smbclient"):
         actual = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", package], text=True)
@@ -61,26 +91,44 @@ def run(args):
               "host": subprocess.check_output(["smbd", "--version"], text=True).strip(), "checks": []}
     with tempfile.TemporaryDirectory(prefix="zxs-apt-samba-") as temp:
         work = Path(temp)
+        # Public export ancestry is root-owned; engine state remains private.
+        work.chmod(0o755)
+        engine_work = work / "engine"
+        engine_work.mkdir(mode=0o700)
+        os.chown(engine_work, engine_user.pw_uid, engine_user.pw_gid)
         password = secrets.token_hex(24)
         auth = work / "auth"
-        auth.write_text(f"username = root\npassword = {password}\n")
+        auth.write_text(f"username = {smb_user.pw_name}\npassword = {password}\n")
         auth.chmod(0o600)
         bad_auth = work / "bad-auth"
-        bad_auth.write_text("username = root\npassword = definitely-wrong\n")
+        bad_auth.write_text(f"username = {smb_user.pw_name}\npassword = definitely-wrong\n")
         bad_auth.chmod(0o600)
-        environment = {**os.environ, "ZXS_SMB_E2E_DIR": temp, "ZXS_SMB_E2E_USER": "root"}
+        environment = {**os.environ, "ZXS_SMB_E2E_DIR": str(engine_work), "ZXS_SMB_E2E_USER": smb_user.pw_name}
         for stale in ("LD_LIBRARY_PATH", "ZXS_SAMBA_ROOT", "ZXS_SMB_SDK_SOURCE", "ZXS_SMB_SDK_BUILD"):
             environment.pop(stale, None)
         children = []
         with (work / "engine.log").open("wb") as engine_log, (work / "smbd.log").open("wb") as daemon_log:
             try:
                 fixture = subprocess.Popen([str(args.fixture.resolve()), TEST, "--ignored", "--exact", "--nocapture"],
-                    env=environment, stdout=engine_log, stderr=subprocess.STDOUT, start_new_session=True)
+                    env=environment, stdout=engine_log, stderr=subprocess.STDOUT, start_new_session=True,
+                    user=engine_user.pw_uid, group=engine_user.pw_gid, extra_groups=[])
                 children.append(fixture)
-                wait_file(work / "ready.json", fixture)
-                ready = json.loads((work / "ready.json").read_text())
+                wait_file(engine_work / "ready.json", fixture)
+                ready = json.loads((engine_work / "ready.json").read_text())
                 for name in ("empty", "private", "state", "cache", "lock", "pid", "ncalrpc"):
                     (work / name).mkdir(mode=0o700)
+                (work / "empty").chmod(0o555)
+                assert_owner_mode(work, 0, 0o755)
+                assert_owner_mode(work / "empty", 0, 0o555)
+                assert_owner_mode(engine_work, engine_user.pw_uid, 0o700)
+                assert_owner_mode(Path(ready["socket"]).parent, engine_user.pw_uid, 0o700)
+                assert_owner_mode(Path(ready["socket"]), engine_user.pw_uid, 0o600)
+                if ready["engine_uid"] != engine_user.pw_uid or ready["allowed_peer_uid"] != 0:
+                    raise RuntimeError("engine identity/peer admission differs from deployment model")
+                result["identity"] = {"engine_uid": engine_user.pw_uid, "samba_account": smb_user.pw_name,
+                                      "samba_uid": smb_user.pw_uid, "allowed_peer_uid": 0,
+                                      "socket_mode": "0600", "socket_directory_mode": "0700",
+                                      "export_owner_uid": 0, "export_mode": "0555"}
                 config = work / "smb.conf"
                 config.write_text(f'''[global]
 server role = standalone server
@@ -100,7 +148,10 @@ cache directory = {work}/cache
 lock directory = {work}/lock
 pid directory = {work}/pid
 ncalrpc dir = {work}/ncalrpc
-log file = {work}/samba-log.%m
+log file = {work}/samba-identity.log
+log level = 1 smb2:10
+debug uid = yes
+debug pid = yes
 load printers = no
 disable spoolss = yes
 printcap name = /dev/null
@@ -109,7 +160,7 @@ path = {work}/empty
 vfs objects = zxs
 zxs:socket = {ready['socket']}
 zxs:repository = {ready['repository_id']}
-valid users = root
+valid users = {smb_user.pw_name}
 guest ok = no
 read only = no
 smb encrypt = required
@@ -123,13 +174,16 @@ use sendfile = no
 store dos attributes = no
 ea support = no
 follow symlinks = no
+[forced]
+copy = zxs
+force user = {smb_user.pw_name}
 ''')
                 subprocess.run(["testparm", "--suppress-prompt", str(config)], env=environment,
                                stdout=daemon_log, stderr=subprocess.STDOUT, check=True)
-                subprocess.run(["smbpasswd", "-s", "-a", "root", "-c", str(config)],
+                subprocess.run(["smbpasswd", "-s", "-a", smb_user.pw_name, "-c", str(config)],
                     input=f"{password}\n{password}\n", text=True, env=environment,
                     stdout=daemon_log, stderr=subprocess.STDOUT, check=True)
-                daemon = subprocess.Popen(["smbd", "--foreground", "--no-process-group", "--debug-stdout", "--configfile", str(config)],
+                daemon = subprocess.Popen(["smbd", "--foreground", "--no-process-group", "--configfile", str(config)],
                     env=environment, stdout=daemon_log, stderr=subprocess.STDOUT, start_new_session=True)
                 children.append(daemon)
                 base = ["smbclient", "//127.0.0.1/zxs", "-p", "44545", "--client-protection=encrypt", "-m", "SMB3"]
@@ -157,7 +211,17 @@ follow symlinks = no
                 client("ls", credential=bad_auth, succeeds=False)
                 client("ls", credential=None, succeeds=False)
                 client("ls")
+                forced = subprocess.run([base[0], "//127.0.0.1/forced", *base[2:], "-A", str(auth), "-c", "ls"],
+                    env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+                if forced.returncode == 0 or "NT_STATUS_UNSUCCESSFUL" not in forced.stdout:
+                    raise RuntimeError("force-user tree was not rejected by connect hook: " + forced.stdout)
+                result["checks"].append("force-user-rejected")
                 result["checks"].extend(["wrong-password-rejected", "guest-rejected"])
+                original = work / "original.bin"
+                client(f'get report.txt "{original}"')
+                if original.read_bytes() != b"old":
+                    raise RuntimeError("existing engine body read via Samba differs")
+                result["checks"].append("read-existing-file")
                 payload = work / "payload.bin"
                 payload.write_bytes(ready["payload"].encode("utf-8"))
                 received = work / "received.bin"
@@ -175,8 +239,8 @@ follow symlinks = no
                 session.stdin.write("!touch " + shlex.quote(str(session_ready)) + "\n")
                 session.stdin.flush()
                 wait_file(session_ready, session, timeout=30)
-                publish_marker(work, "uploaded")
-                wait_file(work / "revoked", fixture)
+                publish_marker(engine_work, "uploaded")
+                wait_file(engine_work / "revoked", fixture)
                 # No earlier remote command ran on this session, so the only
                 # possible ACCESS_DENIED below belongs to this post-revoke ls.
                 denial, _ = session.communicate("ls\nquit\n", timeout=30)
@@ -192,14 +256,18 @@ follow symlinks = no
                     raise RuntimeError("revoked new tree was not rejected by connect hook: " + new_tree.stdout)
                 result["revoked_existing_tree"] = {"authority_revoked": True, "returncode": session.returncode, "output": denial}
                 result["revoked_new_tree"] = new_tree.stdout
-                publish_marker(work, "denied")
-                wait_file(work / "enabled", fixture)
+                publish_marker(engine_work, "denied")
+                wait_file(engine_work / "enabled", fixture)
                 client("del kept.txt")
-                publish_marker(work, "done")
-                wait_file(work / "verified.json", fixture)
+                publish_marker(engine_work, "done")
+                wait_file(engine_work / "verified.json", fixture)
                 if fixture.wait(timeout=30) != 0:
                     raise RuntimeError("real engine authoritative validation failed")
-                result["engine"] = json.loads((work / "verified.json").read_text())
+                result["nonroot_io"] = nonroot_io_evidence((work / "samba-identity.log").read_text(), smb_user.pw_uid)
+                if list((work / "empty").iterdir()):
+                    raise RuntimeError("VFS wrote into host export instead of the engine")
+                result["checks"].append("nonroot-engine-and-samba-io-private-socket")
+                result["engine"] = json.loads((engine_work / "verified.json").read_text())
                 result["checks"].extend(["put-get-bytes", "rename", "binding-revocation-rejected", "delete", "authoritative-engine-state"])
             finally:
                 for child in reversed(children):
@@ -212,7 +280,9 @@ follow symlinks = no
                             child.wait()
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 # Keep diagnostic output, never synthetic passwords/auth files.
-                for name in ("engine.log", "smbd.log"):
+                for name in ("engine.log", "smbd.log", "samba-identity.log"):
+                    if not (work / name).exists():
+                        continue
                     text = (work / name).read_text(errors="replace").replace(password, "[redacted]")
                     (args.output.parent / name).write_text(text)
     args.output.write_text(json.dumps(result, indent=2) + "\n")

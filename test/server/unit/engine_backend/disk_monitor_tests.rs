@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 
 fn online_observation(capacity: Option<(u64, u64, u64)>) -> DiskObservation {
     DiskObservation {
-        status: storage_engine::DiskStatus {
+        status: storage_engine::ObservedDiskStatus {
             slot_id: "P01".into(),
             disk_id: "disk-1".into(),
             level: 1,
@@ -11,11 +11,20 @@ fn online_observation(capacity: Option<(u64, u64, u64)>) -> DiskObservation {
             online: true,
             metadata_member: true,
             physical_device: None,
-            available_bytes: capacity.map(|capacity| capacity.1).unwrap_or(0),
             used_bytes: 99,
             simulation: true,
         },
-        capacity,
+        capacity: capacity.ok_or_else(|| storage_engine::DiskObservationFailure {
+            slot_id: "P01".into(),
+            stage: storage_engine::DiskObservationStage::Capacity,
+            source: Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "private path sentinel",
+                )
+                .into(),
+            ),
+        }),
     }
 }
 
@@ -70,4 +79,16 @@ fn unmounted_member_capacity_is_unknown_in_management_payload() {
         .unwrap();
     assert!(present.online);
     assert!(present.total_bytes.unwrap() > 0);
+}
+
+#[test]
+fn zero_capacity_remains_known_and_failure_retains_internal_source() {
+    let zero = disk_sample(online_observation(Some((0, 0, 0))));
+    assert_eq!(zero.total_bytes, Some(0));
+    assert_eq!(zero.available_bytes, Some(0));
+    assert!(zero.observation_failure.is_none());
+    let failed = disk_sample(online_observation(None));
+    let error = failed.observation_failure.unwrap();
+    assert_eq!(error.stage, storage_engine::DiskObservationStage::Capacity);
+    assert!(std::error::Error::source(error.as_ref()).is_some());
 }

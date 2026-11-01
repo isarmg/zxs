@@ -967,6 +967,7 @@ fn history_range_rejects_enum_objects() {
 #[test]
 fn typed_monitor_sample_and_history_envelope_keep_exact_wire() {
     let disk = DiskStatus::from(crate::DiskSample {
+        observation_failure: None,
         slot_id: "P01".into(),
         online: true,
         read_only: false,
@@ -978,11 +979,11 @@ fn typed_monitor_sample_and_history_envelope_keep_exact_wire() {
         power_watts: None,
         power_unavailable_reason: Some(crate::PowerUnavailable::SimulatedDisk),
     });
-    let expected = json!({"id":"P01","name":"P01","online":true,"read_only":false,"simulation":true,"total_bytes":"18446744073709551615","available_bytes":null,"used_bytes":"7","usage_percent":30.0,"power_watts":null,"power_unavailable_reason":"simulated_disk"});
+    let expected = json!({"observation_failure":null,"id":"P01","name":"P01","online":true,"read_only":false,"simulation":true,"total_bytes":"18446744073709551615","available_bytes":null,"used_bytes":"7","usage_percent":30.0,"power_watts":null,"power_unavailable_reason":"simulated_disk"});
     assert_eq!(json_codec::to_value(&disk).unwrap(), expected);
     assert_eq!(
         json_codec::to_vec(&disk).unwrap(),
-        br#"{"id":"P01","name":"P01","online":true,"read_only":false,"simulation":true,"total_bytes":"18446744073709551615","available_bytes":null,"used_bytes":"7","usage_percent":30.0,"power_watts":null,"power_unavailable_reason":"simulated_disk"}"#
+        br#"{"observation_failure":null,"id":"P01","name":"P01","online":true,"read_only":false,"simulation":true,"total_bytes":"18446744073709551615","available_bytes":null,"used_bytes":"7","usage_percent":30.0,"power_watts":null,"power_unavailable_reason":"simulated_disk"}"#
     );
     let restored: DiskStatus = json_codec::from_value(expected).unwrap();
     assert_eq!(restored.total_bytes, Some(u64::MAX));
@@ -1123,4 +1124,42 @@ fn enumeration_failure_preserves_source_and_uses_live_memory_history() {
         2,
         "only the original recent file and the injection marker may remain"
     );
+}
+
+#[test]
+fn disk_observation_wire_contains_only_safe_classification() {
+    let sample = crate::DiskSample {
+        slot_id: "P01".into(),
+        online: true,
+        read_only: false,
+        simulation: true,
+        total_bytes: None,
+        available_bytes: None,
+        used_bytes: None,
+        usage_percent: None,
+        power_watts: None,
+        power_unavailable_reason: Some(crate::PowerUnavailable::SimulatedDisk),
+        observation_failure: Some(std::sync::Arc::new(
+            storage_engine::DiskObservationFailure {
+                slot_id: "P01".into(),
+                stage: storage_engine::DiskObservationStage::Capacity,
+                source: Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "/private/secret sentinel",
+                    )
+                    .into(),
+                ),
+            },
+        )),
+    };
+    assert!(std::error::Error::source(sample.observation_failure.as_deref().unwrap()).is_some());
+    let wire = json_codec::to_value(DiskStatus::from(sample)).unwrap();
+    let expected: Value = json_codec::from_str(include_str!(
+        "../../fixtures/disk-observation-unavailable.json"
+    ))
+    .unwrap();
+    assert_eq!(wire, expected);
+    assert!(!wire.to_string().contains("secret"));
+    assert!(!wire.to_string().contains("sentinel"));
 }

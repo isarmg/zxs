@@ -32,6 +32,7 @@ struct Sample {
 }
 #[derive(Clone, Debug, PartialEq)]
 struct Disk {
+    observation_failure: Option<wire::DiskObservationIssue>,
     usage: Option<f64>,
     power: Option<f64>,
 }
@@ -130,7 +131,18 @@ fn project_sample(sample: wire::Sample) -> Result<Sample, Error> {
         let usage =
             percent(disk.usage_percent)?.or_else(|| ratio(disk.used_bytes, disk.total_bytes));
         let power = power(disk.power_watts)?;
-        if disk.id.is_empty() || disks.insert(disk.id, Disk { usage, power }).is_some() {
+        if disk.id.is_empty()
+            || disks
+                .insert(
+                    disk.id,
+                    Disk {
+                        usage,
+                        power,
+                        observation_failure: disk.observation_failure,
+                    },
+                )
+                .is_some()
+        {
             return Err(Error::Field("duplicate or empty disk id"));
         }
     }

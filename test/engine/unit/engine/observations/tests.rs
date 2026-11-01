@@ -22,8 +22,8 @@ fn missing_member_with_empty_mountpoint_never_reports_host_capacity() {
         .find(|disk| disk.status.slot_id == member.slot_id)
         .unwrap();
     assert!(!observed.status.online);
-    assert_eq!(observed.status.available_bytes, 0);
-    assert!(observed.capacity.is_none());
+    assert!(observed.capacity.is_err());
+    assert!(plan.status().is_err());
     assert!(engine.disk_capacity(&member.slot_id).is_err());
 }
 
@@ -56,9 +56,9 @@ fn observation_owns_snapshot_and_probes_without_engine() {
         assert_eq!(observed.status.slot_id, expected.slot_id);
         assert_eq!(observed.status.online, expected.online);
         assert_eq!(observed.status.used_bytes, expected.used_bytes);
-        let capacity = observed.capacity.unwrap();
+        let capacity = observed.capacity.as_ref().unwrap();
         assert!(capacity.0 > 0);
-        assert_eq!(observed.status.available_bytes, capacity.1);
+        assert!(observed.status.online);
     }
 }
 
@@ -234,4 +234,122 @@ fn metadata_probe_ignores_nonmembers_and_unrelated_historical_placements() {
     assert_eq!(probe.member_count(), 1);
     std::fs::rename(&config.disks[1].root, root.path().join("removed-backup")).unwrap();
     probe.verify().unwrap();
+}
+
+#[test]
+fn corrupt_seal_retains_decode_source_and_revokes_epoch() {
+    let root = tempfile::tempdir().unwrap();
+    let config = Config::development([root.path().join("member")]);
+    let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let plan = engine.prepare_disk_observation();
+    std::fs::write(config.disks[0].root.join("disk.json"), b"broken seal").unwrap();
+    let observed = plan.sample().pop().unwrap();
+    assert!(!observed.status.online);
+    let error = observed.capacity.unwrap_err();
+    assert_eq!(error.stage, DiskObservationStage::Seal);
+    assert_eq!(error.source.code(), ErrorCode::DiskIdentityMismatch);
+    assert!(std::error::Error::source(&error.source).is_some());
+    assert!(!epoch.matches(&engine.metadata_integrity));
+    let Error::DiskObservation(error) = plan.status().unwrap_err() else {
+        panic!("expected typed observation failure")
+    };
+    assert_eq!(error.stage, DiskObservationStage::Seal);
+}
+
+#[test]
+fn zero_capacity_is_a_successful_sample_not_an_unavailable_status() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("member")]),
+    )
+    .unwrap();
+    let mut observed = engine.prepare_disk_observation().sample().pop().unwrap();
+    // Linux nsfs reports real zero capacity, not an observation failure.
+    let namespace = std::fs::File::open("/proc/self/ns/mnt").unwrap();
+    observed.capacity = Ok(filesystem_capacity(&namespace).unwrap());
+    assert_eq!(observed.capacity.as_ref().unwrap(), &(0, 0, 0));
+    let status = observed.into_status().unwrap();
+    assert!(status.online);
+    assert_eq!(status.available_bytes, 0);
+}
+
+#[test]
+#[ignore = "run alone under strace -f -e inject=fstatfs:error=EIO"]
+fn capacity_syscall_failure_preserves_source_without_revoking_metadata_epoch() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("member")]),
+    )
+    .unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    let plan = engine.prepare_disk_observation();
+    let observed = plan.sample().pop().unwrap();
+    assert!(observed.status.online);
+    let error = observed.capacity.unwrap_err();
+    assert_eq!(error.stage, DiskObservationStage::Capacity);
+    assert_eq!(error.source.code(), ErrorCode::IoError);
+    let mut source: &(dyn std::error::Error + 'static) = &error;
+    while let Some(next) = source.source() {
+        source = next;
+    }
+    assert_eq!(
+        source
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .raw_os_error(),
+        Some(5)
+    );
+    assert!(epoch.matches(&engine.metadata_integrity));
+    assert!(plan.status().is_err());
+}
+
+#[test]
+#[ignore = "run alone with observations/read_error.c compiled as LD_PRELOAD"]
+fn seal_permission_failure_preserves_source_and_revokes_epoch() {
+    let root = tempfile::tempdir().unwrap();
+    let config = Config::development([root.path().join("member")]);
+    let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    std::fs::write(config.disks[0].root.join("observation-read-error"), b"").unwrap();
+    let observed = engine.prepare_disk_observation().sample().pop().unwrap();
+    assert!(!observed.status.online);
+    let error = observed.capacity.unwrap_err();
+    assert_eq!(error.stage, DiskObservationStage::Seal);
+    assert_eq!(error.source.code(), ErrorCode::IoError);
+    let mut source: &(dyn std::error::Error + 'static) = &error;
+    while let Some(next) = source.source() {
+        source = next;
+    }
+    assert_eq!(
+        source.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert!(!epoch.matches(&engine.metadata_integrity));
+}
+
+#[test]
+fn capacity_failure_conversion_retains_stage_and_source_not_zero() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("member")]),
+    )
+    .unwrap();
+    let mut observed = engine.prepare_disk_observation().sample().pop().unwrap();
+    observed.capacity = Err(DiskObservationFailure {
+        slot_id: observed.status.slot_id.clone(),
+        stage: DiskObservationStage::Capacity,
+        source: Box::new(std::io::Error::from_raw_os_error(5).into()),
+    });
+    let error = observed.into_status().unwrap_err();
+    assert_eq!(error.code(), ErrorCode::IoError);
+    assert_eq!(error.message(), "disk observation unavailable");
+    let Error::DiskObservation(failure) = error else {
+        panic!("expected typed failure")
+    };
+    assert_eq!(failure.stage, DiskObservationStage::Capacity);
+    assert!(std::error::Error::source(&failure).is_some());
 }

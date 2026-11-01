@@ -906,7 +906,7 @@ fn monitoring_contracts_share_snapshots_and_preserve_unavailable_values_and_auth
         "collected_at":"2026-10-19T00:00:00Z",
         "cpu":{"usage_percent":12.5,"logical_count":4,"power_watts":15.5,"power_unavailable_reason":null},
         "memory":{"total_bytes":"18446744073709551615","used_bytes":"10","available_bytes":"18446744073709551605"},
-        "disks":[{"id":"P01","name":"P01","online":true,"read_only":false,"simulation":true,"total_bytes":"100","available_bytes":"50","used_bytes":"50","usage_percent":50,"power_watts":null,"power_unavailable_reason":"simulated_disk"}]
+        "disks":[{"observation_failure":null,"id":"P01","name":"P01","online":true,"read_only":false,"simulation":true,"total_bytes":"100","available_bytes":"50","used_bytes":"50","usage_percent":50,"power_watts":null,"power_unavailable_reason":"simulated_disk"}]
     });
     assert!(snapshot_schema.is_valid(&snapshot));
     let mut unavailable = snapshot.clone();
@@ -931,6 +931,28 @@ fn monitoring_contracts_share_snapshots_and_preserve_unavailable_values_and_auth
     ] {
         let mut invalid = snapshot.clone();
         *invalid.pointer_mut(pointer).unwrap() = value;
+        assert!(!snapshot_schema.is_valid(&invalid));
+    }
+    for stage in ["seal", "capacity"] {
+        let mut classified = snapshot.clone();
+        classified["disks"][0]["observation_failure"] = json!({"stage":stage,"code":"IO_ERROR"});
+        assert!(snapshot_schema.is_valid(&classified));
+    }
+    let mut missing = snapshot.clone();
+    missing["disks"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("observation_failure");
+    assert!(!snapshot_schema.is_valid(&missing));
+    for failure in [
+        json!({"stage":"unknown","code":"IO_ERROR"}),
+        json!({"stage":"capacity","code":"invalid code"}),
+        json!({"stage":"capacity"}),
+        json!({"code":"IO_ERROR"}),
+        json!({"stage":"capacity","code":"IO_ERROR","source":"/private/path"}),
+    ] {
+        let mut invalid = snapshot.clone();
+        invalid["disks"][0]["observation_failure"] = failure;
         assert!(!snapshot_schema.is_valid(&invalid));
     }
     let mut leaked_path = snapshot.clone();

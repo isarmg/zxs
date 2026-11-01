@@ -39,6 +39,7 @@ pub(super) struct MemoryStatus {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct DiskStatus {
+    observation_failure: Option<crate::backend_monitoring::DiskObservationIssue>,
     id: String,
     name: String,
     online: bool,
@@ -62,6 +63,7 @@ impl From<crate::DiskSample> for DiskStatus {
     fn from(sample: crate::DiskSample) -> Self {
         let crate::DiskSample {
             slot_id,
+            observation_failure,
             online,
             read_only,
             simulation,
@@ -73,6 +75,7 @@ impl From<crate::DiskSample> for DiskStatus {
             power_unavailable_reason,
         } = sample;
         Self {
+            observation_failure: observation_failure.as_deref().map(Into::into),
             id: slot_id.clone(),
             name: slot_id,
             online,

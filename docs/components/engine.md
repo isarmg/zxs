@@ -37,6 +37,8 @@
 
 初始化、重开和停服重配验证 held FD 的目录 device/inode 与严格 seal；不探测 mountinfo/sysfs、Btrfs UUID 或物理独立性。共享底层故障域由用户保证。真实文件读取、seal/成员证明、正文哈希和文件/目录同步不由身份代替。显式 `check`、成员 probe、操作/版本 health、磁盘状态及容量 observation 仍描述当前命名路径，不作写入准入。公开输入路径不根据前缀猜作盘内来源；内部复制显式携带来源 owner。资源与候选代际、冷准入目录身份要求、seal 时点、同步预算及外部路径边界见 [ADR 0007](../adr/0007-owned-disk-resources.md)。
 
+磁盘观察的 `sample()` 分开保存绑定/逻辑账本与容量 `Result`；失败保留 slot、`Seal / Capacity` 阶段和具体 source。seal 通过但容量读取失败时仍表示身份在线，容量未知；seal 失败仍可作为离线成员显示，不能误报主机挂载点容量。`disk_status()` 的既有 `Result` 在任一容量未知时返回首个类型化错误，而非成功返回 0；需要部分成员状态的消费者使用 `sample()`。成功的 0 字节样本与不可用不同。此观察不改变写入准入、held-root I/O、同步屏障或原有 metadata epoch 撤销条件；普通容量 syscall 错误不被扩大为 metadata 身份故障。
+
 持久化 `disk.json` 的 JSON 语法或 identity schema 解码失败携带 `DISK_IDENTITY_MISMATCH` 上下文，保留具体 JSON source。打开、读取和元数据字节上限失败继续保留原错误；此解码上下文不替代已有的实际身份比较或发布阶段错误。
 
 业务操作先在 State 克隆上组合修改；分支创建只登记冻结引用，不新建空文件。实际内容写入才准备 FULL 和固定路由副本。DirectoryBranch 保持稳定 ID/名称，DirectoryTree 保存不可变组合；文件修改或子项选择只增加子树并推进 head。PREPARE 不表示可见，ACCEPT → FINALIZE → PUBLICATION 及同步收据共同决定公开状态，恢复沿原候选继续。
@@ -154,3 +156,9 @@ cargo check --locked --offline -p storage-engine
 ### 读取资源异常析构
 
 读取租约析构只释放已登记的正计数；缺失或零计数会使该进程的租约登记表失败关闭，后续读取准入、purge 与拆分检查返回 `RecoveryRequired`，不把异常解释成无活跃读取。中毒登记表不恢复、不清空；析构记录异常且不二次 panic，正常业务仍拒绝使用中毒状态。历史范围快照独占的 SQLite 连接允许在析构时从中毒容器取出，仅用于关闭，不重用于查询；已有读取失败与关闭失败保留诊断。
+
+### 磁盘观测故障验证
+
+`cargo test -p storage-engine --lib engine::observations` 覆盖损坏 seal、未知/成功零容量区分及错误投影；零容量用 Linux nsfs 的实际 `fstatvfs` 成功样本，不伪装设备已满。独立错误测试位于同一测试模块，但默认忽略：先用 `cargo test -p storage-engine --lib --no-run` 构建，再将 Cargo 输出的测试二进制路径传给 `bash test/engine/unit/engine/observations/run-io-faults.sh <binary> <output-dir>`。runner 以进程局部 read interposer 注入 seal EACCES，以 strace 注入实际 fstatfs EIO，并检查 trace 的 INJECTED 证据；不修改生产业务函数或系统 ptrace 策略。仅在原本允许 ptrace 的 Linux CI/宿主运行；环境拒绝时明确记为未完成，不能算测试通过。容量 syscall 失败保留原 metadata epoch，seal 失败撤销旧 epoch；两者不是写入准入测试或物理掉盘验收。
+
+CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从本轮 Cargo JSON 中只选择唯一且 build-finished 成功的 storage-engine libtest，不按 target 文件名猜旧二进制；构建警告、丢失/重复 artifact、空测试、少/多注入命中或 ptrace 拒绝均失败，不降级跳过。runner 验证一次 seal EACCES 命中和两次容量 EIO 命中（sample 与 status 各一次），日志输出独立测试结果及 syscall trace。该入口需要宿主已有 `cc` 和 `strace`；机械负测试为 `python3 -m unittest discover -s test/ci -p test_disk_observation_io.py`，不执行真实 ptrace。

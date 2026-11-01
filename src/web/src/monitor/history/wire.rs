@@ -1,4 +1,5 @@
 //! Exact current telemetry response; the server crate cannot be linked into WASM.
+pub(super) use super::super::observations::DiskObservationIssue;
 use data_serialization::{Deserialize, Deserializer};
 
 #[derive(Deserialize)]
@@ -59,6 +60,8 @@ pub(super) struct Memory {
     reason = "Validate complete wire records before display projection"
 )]
 pub(super) struct Disk {
+    #[serialization(deserialize_with = "nullable")]
+    pub observation_failure: Option<DiskObservationIssue>,
     pub id: String,
     name: String,
     online: bool,

@@ -77,6 +77,11 @@ jobs:
       - name: Enable sandboxed Chrome for browser future runtime checks
         if: matrix.suite == 'foundation-language'
         run: bash .github/scripts/prepare-browser-contract.sh
+      - name: Install isolated disk observation tracing tool
+        if: matrix.suite == 'workspace'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y strace
       - name: Cache verified security scanner
         if: matrix.suite == 'security'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

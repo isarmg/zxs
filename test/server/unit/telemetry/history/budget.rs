@@ -77,6 +77,7 @@ fn oracle_prune(cache: &mut HistoryFixture, now: i64) {
 pub(super) fn sized_sample(at: i64, encoded_bytes: usize) -> Sample {
     let mut point = sample(at, None);
     point.status.disks.push(crate::telemetry::DiskStatus {
+        observation_failure: None,
         id: "P01".into(),
         name: String::new(),
         online: false,

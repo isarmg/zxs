@@ -3324,6 +3324,34 @@
                               null
                             ],
                             "description": "无功耗读数时给出原因；有实测功率时为null。不暴露物理设备或传感器路径。"
+                          },
+                          "observation_failure": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "stage": {
+                                    "type": "string",
+                                    "enum": [
+                                      "seal",
+                                      "capacity"
+                                    ]
+                                  },
+                                  "code": {
+                                    "$ref": "#/components/schemas/Error/properties/code"
+                                  }
+                                },
+                                "required": [
+                                  "stage",
+                                  "code"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ],
+                            "description": "成员封印或容量观测失败的安全分类；成功为null，不输出系统路径或原始错误消息。"
                           }
                         },
                         "required": [
@@ -3337,7 +3365,8 @@
                           "used_bytes",
                           "usage_percent",
                           "power_watts",
-                          "power_unavailable_reason"
+                          "power_unavailable_reason",
+                          "observation_failure"
                         ],
                         "additionalProperties": false,
                         "description": "容量来自受控成员目录所在文件系统的statvfs实际计数，采样失败为null；used_bytes为已用块字节数，区别于文件管理器磁盘入口的托管版本逻辑占用。不暴露系统绝对路径或物理设备标识。"

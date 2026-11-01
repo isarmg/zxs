@@ -2,6 +2,8 @@
 #[derive(Clone, Debug)]
 pub struct DiskSample {
     pub slot_id: String,
+    /// Internal diagnostic source; the telemetry boundary emits only stage and code.
+    pub observation_failure: Option<std::sync::Arc<storage_engine::DiskObservationFailure>>,
     pub online: bool,
     pub read_only: bool,
     pub simulation: bool,
@@ -40,6 +42,28 @@ impl<'de> data_serialization::Deserialize<'de> for PowerUnavailable {
             _ => Err(data_serialization::de::Error::custom(
                 "invalid power availability reason",
             )),
+        }
+    }
+}
+
+/// Safe telemetry classification, never paths or source messages.
+#[derive(Clone, Debug, data_serialization::Serialize, data_serialization::Deserialize)]
+#[serialization(
+    tag = "stage",
+    content = "code",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum DiskObservationIssue {
+    Seal(storage_contract::ErrorCode),
+    Capacity(storage_contract::ErrorCode),
+}
+
+impl From<&storage_engine::DiskObservationFailure> for DiskObservationIssue {
+    fn from(error: &storage_engine::DiskObservationFailure) -> Self {
+        match error.stage {
+            storage_engine::DiskObservationStage::Seal => Self::Seal(error.source.code()),
+            storage_engine::DiskObservationStage::Capacity => Self::Capacity(error.source.code()),
         }
     }
 }

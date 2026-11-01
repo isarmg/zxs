@@ -165,6 +165,17 @@ VFS 回调和工作线程依赖 `catch_unwind` 隔离 panic，因此模块以编
 
 模块文件生成在 `target/native/release/libsmb_vfs.so`，按运行宿主 `smbd -b` 输出的 `MODULESDIR/vfs/` 提供 `zxs.so`（受信任且认证用户不可写）。配置只写 `vfs objects = zxs`，当前宿主拒绝绝对模块路径。SDK 测试还需要链接该配置对应的 tevent/talloc 库。
 
+现有 `smb-sdk` CI 的无网络、无编译器 Debian runtime 门禁使用两个独立的
+合成非 root 账户：`zxs-engine-test` 运行真实引擎，`zxs-smb-test` 通过真实
+Samba 凭据登录。账户仅创建在一次性镜像内；引擎子进程清空附加组。
+测试维持服务 UID 拥有的私有目录 `0700` / socket `0600`、root 拥有且可遍历
+的父目录及空导出目录 `0555`，SO_PEERCRED 仍只允许 Samba 连接时的 UID 0。
+两个不同 UID 防止同账户访问私有目录意外掩盖 impersonation 问题。
+`system-samba.json` 将具体已有文件读取、新文件写入请求与 Samba `debug uid`
+日志的 effective UID 逐条关联；真实读回字节及核心发布／改名／删除、撤权检查
+独立断言，不能仅凭日志出现过某 UID 判为成功。此门禁不等同于目标机器的
+systemd、物理磁盘或客户端部署验收，也不修改宿主账户及安全配置。
+
 共享配置的基本形状如下。模块参数使用独立键，不能用逗号拼进 `vfs objects`：
 
 ```ini

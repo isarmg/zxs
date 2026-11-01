@@ -11,6 +11,10 @@ fn disk_sample(observation: DiskObservation) -> DiskSample {
         status: disk,
         capacity,
     } = observation;
+    let (capacity, observation_failure) = match capacity {
+        Ok(capacity) => (Some(capacity), None),
+        Err(error) => (None, Some(std::sync::Arc::new(error))),
+    };
     let (power_watts, power_unavailable_reason) = crate::telemetry::disk_power(
         disk.physical_device.as_deref(),
         disk.simulation,
@@ -21,6 +25,7 @@ fn disk_sample(observation: DiskObservation) -> DiskSample {
         .map(|capacity| capacity.2 as f64 / capacity.0 as f64 * 100.0);
     DiskSample {
         slot_id: disk.slot_id,
+        observation_failure,
         online: disk.online,
         read_only: disk.level != 1,
         simulation: disk.simulation,

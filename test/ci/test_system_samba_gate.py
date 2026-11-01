@@ -27,6 +27,32 @@ class SystemSambaGate(unittest.TestCase):
             self.assertEqual((root / "uploaded").read_bytes(), b"ok\n")
             self.assertFalse((root / "uploaded.new").exists())
 
+    def test_io_evidence_binds_each_request_to_its_own_nonroot_header(self):
+        def record(uid, request):
+            return f"[timestamp, 10, pid=123, effective({uid}, 21002), real(0, 0)] source\n  {request}\n"
+        read = "smbd_smb2_read: report.txt - fnum 1"
+        write = "smbd_smb2_write: upload.txt - fnum 2"
+        good = record(21002, read) + record(21002, write)
+        self.assertEqual(set(GATE.nonroot_io_evidence(good, 21002)), {"read-existing", "write-new"})
+        for bad in (record(0, read) + record(21002, write),
+                    record(21002, read) + record(0, write),
+                    record(21002, "unrelated") + "  " + read + "\n" + record(21002, write),
+                    good.replace("report.txt", "other.txt"), ""):
+            with self.subTest(log=bad), self.assertRaisesRegex(RuntimeError, "identity evidence"):
+                GATE.nonroot_io_evidence(bad, 21002)
+
+    def test_fixture_requires_independent_nonroot_engine_and_samba_user(self):
+        script = (ROOT / ".github/scripts/check-system-samba.py").read_text()
+        self.assertIn('user=engine_user.pw_uid, group=engine_user.pw_gid, extra_groups=[]', script)
+        self.assertIn('"ZXS_SMB_E2E_USER": smb_user.pw_name', script)
+        self.assertIn('valid users = {smb_user.pw_name}', script)
+        self.assertIn('assert_owner_mode(Path(ready["socket"]), engine_user.pw_uid, 0o600)', script)
+        self.assertIn('assert_owner_mode(work / "empty", 0, 0o555)', script)
+        self.assertNotIn('"--debug-stdout"', script)  # stdout omits the debug-uid header
+        fixture = (ROOT / "test/server/unit/smb_rpc/system_samba_tests.rs").read_text()
+        self.assertIn('allowed_uid: 0,', fixture)
+        self.assertIn('engine_uid, 0,', fixture)
+
     def test_debian_source_and_abi_are_exact_not_upstream_fallback(self):
         target = json.loads((ROOT / ".github/samba-debian-target.json").read_text())
         self.assertEqual((target["release"], target["architecture"], target["vfs_interface"]), ("13", "amd64", 50))
@@ -52,7 +78,7 @@ class SystemSambaGate(unittest.TestCase):
         self.assertIn('"NT_STATUS_ACCESS_DENIED" not in denial', script)
         self.assertIn('"--client-protection=encrypt"', script)
         self.assertIn('wait_file(session_ready, session, timeout=30)', script)
-        self.assertLess(script.index('wait_file(session_ready, session'), script.index('publish_marker(work, "uploaded")'))
+        self.assertLess(script.index('wait_file(session_ready, session'), script.index('publish_marker(engine_work, "uploaded")'))
         self.assertIn('session.communicate("ls\\nquit\\n", timeout=30)', script)
         self.assertIn('result["revoked_new_tree"]', script)
 

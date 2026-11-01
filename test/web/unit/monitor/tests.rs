@@ -238,13 +238,16 @@ fn disk_usage_preserves_physical_used_bytes_when_free_space_is_reserved() {
         "usage_percent":30.0
     }]});
     assert_eq!(metric.value(&snapshot), Some(30.0));
-    assert_eq!(metric.subtitle(&snapshot), "300 B / 1000 B");
+    assert_eq!(
+        metric.subtitle(&snapshot, &observations::DiskIssues::new()),
+        "300 B / 1000 B"
+    );
     snapshot["disks"][0]["usage_percent"] = Value::Null;
     assert_eq!(metric.value(&snapshot), Some(30.0));
     snapshot["disks"][0]["used_bytes"] = Value::Null;
     assert_eq!(metric.value(&snapshot), None);
     assert_eq!(
-        metric.subtitle(&snapshot),
+        metric.subtitle(&snapshot, &observations::DiskIssues::new()),
         format!("{} / 1000 B", t("不可用", "Unavailable"))
     );
 }
@@ -323,4 +326,60 @@ fn cancelled_superseded_history_completion_cannot_clear_current_loading_or_feedb
             assert!(s.monitor.history_cancellation.is_none());
         });
     });
+}
+
+#[test]
+fn disk_capacity_failure_is_visible_without_exposing_source_messages() {
+    let record: Value = json_codec::from_str(include_str!(
+        "../../../../test/server/fixtures/disk-observation-unavailable.json"
+    ))
+    .unwrap();
+    let snapshot = json_codec::json!({"disks":[record]});
+    let metric = Metric::Disk {
+        id: "P01".into(),
+        name: "Disk".into(),
+        power: false,
+    };
+    let mut model = Model::default();
+    accept_status_response(&mut model, snapshot);
+    assert!(model.failure.is_none());
+    assert!(metric.value(&model.snapshot).is_none());
+    assert_eq!(
+        metric.subtitle(&model.snapshot, &model.observation_issues),
+        t("容量观测失败", "Capacity observation failed")
+    );
+}
+
+#[test]
+fn invalid_live_observation_classification_clears_stale_snapshot_and_preserves_decode_source() {
+    let record: Value = json_codec::from_str(include_str!(
+        "../../../../test/server/fixtures/disk-observation-unavailable.json"
+    ))
+    .unwrap();
+    for field in ["stage", "code", "extra"] {
+        let mut model = Model::default();
+        let valid = json_codec::json!({"disks":[record.clone()]});
+        accept_status_response(&mut model, valid.clone());
+        assert!(model.failure.is_none());
+        let mut invalid = valid;
+        invalid["disks"][0]["observation_failure"][field] = Value::String("unknown".into());
+        accept_status_response(&mut model, invalid);
+        assert!(model.snapshot.is_null());
+        assert!(model.observation_issues.is_empty());
+        assert!(model.failure.is_some());
+        assert!(model.snapshot_decode_failure.is_some());
+    }
+}
+
+#[test]
+fn live_observation_boundary_requires_explicit_classification_and_unique_disk_ids() {
+    let null = json_codec::json!({"disks":[{"id":"P01","observation_failure":null}]});
+    assert_eq!(observations::decode(&null).unwrap()["P01"], None);
+    for invalid in [
+        json_codec::json!({"disks":[{"id":"P01"}]}),
+        json_codec::json!({"disks":[{"id":"","observation_failure":null}]}),
+        json_codec::json!({"disks":[{"id":"P01","observation_failure":null},{"id":"P01","observation_failure":null}]}),
+    ] {
+        assert!(observations::decode(&invalid).is_err());
+    }
 }

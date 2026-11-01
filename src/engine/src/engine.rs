@@ -22,7 +22,10 @@ pub use integrity_scrub::{
 };
 mod observations;
 mod operations;
-pub use observations::{DiskObservation, DiskObservationPlan, MetadataMemberProbe};
+pub use observations::{
+    DiskObservation, DiskObservationFailure, DiskObservationPlan, DiskObservationStage,
+    MetadataMemberProbe, ObservedDiskStatus,
+};
 pub use operations::{OperationReadObservation, OperationReadPlan, OperationRecord};
 pub(crate) mod provenance;
 mod publication;

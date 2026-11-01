@@ -1,5 +1,6 @@
 mod chart;
 mod history;
+mod observations;
 pub(crate) use history::Error as HistoryError;
 mod scrub;
 
@@ -22,6 +23,8 @@ const RANGES: [&str; 5] = ["1min", "30min", "1h", "24h", "1month"];
 pub(crate) struct Model {
     scrub: scrub::Model,
     pub snapshot: Value,
+    observation_issues: observations::DiskIssues,
+    snapshot_decode_failure: Option<std::sync::Arc<json_codec::Error>>,
     pub capacity: Option<WorkspaceCapacity>,
     pub capacity_loading: bool,
     pub capacity_failure: Option<Feedback>,
@@ -41,6 +44,8 @@ impl Default for Model {
         Self {
             scrub: scrub::Model::default(),
             snapshot: Value::Null,
+            observation_issues: Default::default(),
+            snapshot_decode_failure: None,
             capacity: None,
             capacity_loading: false,
             capacity_failure: None,
@@ -76,17 +81,37 @@ pub(crate) fn load(state: RwSignal<State>) {
             return;
         }
         match result {
-            Ok(value) => state.update(|s| {
-                s.monitor.snapshot = value;
-                s.monitor.loaded = true;
-                s.monitor.failure = None;
-            }),
+            Ok(value) => state.update(|s| accept_status_response(&mut s.monitor, value)),
             Err(error) if error.status == 401 => fail(state, error),
             Err(error) => state.update(|s| s.monitor.failure = Some(feedback(&error))),
         }
         state.update(|s| s.monitor.loading = false);
     });
 }
+fn accept_status_response(model: &mut Model, value: Value) {
+    match observations::decode(&value) {
+        Ok(issues) => {
+            model.snapshot = value;
+            model.observation_issues = issues;
+            model.snapshot_decode_failure = None;
+            model.loaded = true;
+            model.failure = None;
+        }
+        Err(source) => {
+            model.snapshot = Value::Null;
+            model.observation_issues.clear();
+            model.snapshot_decode_failure = Some(std::sync::Arc::new(source));
+            model.failure = Some(Feedback {
+                message: t(
+                    "磁盘观测响应格式无效。",
+                    "Invalid disk observation response.",
+                ),
+                request_id: None,
+            });
+        }
+    }
+}
+
 fn load_capacity(state: RwSignal<State>) {
     if state.with_untracked(|s| !s.session_active() || s.monitor.capacity_loading) {
         return;
@@ -349,8 +374,22 @@ impl Metric {
             .map(|value| format!("{value:.1}{}", if self.is_power() { " W" } else { "%" }))
             .unwrap_or_else(|| t("不可用", "Unavailable"))
     }
-    fn subtitle(&self, snapshot: &Value) -> String {
+    fn subtitle(&self, snapshot: &Value, issues: &observations::DiskIssues) -> String {
         let record = self.record(snapshot);
+        if let Self::Disk {
+            id, power: false, ..
+        } = self
+            && let Some(Some(issue)) = issues.get(id)
+        {
+            return match issue {
+                observations::DiskObservationIssue::Seal(_) => {
+                    t("磁盘身份观测失败", "Disk identity observation failed")
+                }
+                observations::DiskObservationIssue::Capacity(_) => {
+                    t("容量观测失败", "Capacity observation failed")
+                }
+            };
+        }
         match self {
             Self::Cpu => format!(
                 "{} {}",
@@ -442,7 +481,11 @@ fn metric_card(state: RwSignal<State>, metric: Metric) -> impl IntoView {
     let icon = metric.icon();
     let metric = StoredValue::new(metric);
     let subtitle = Memo::new(move |_| {
-        state.with(|s| metric.with_value(|metric| metric.subtitle(&s.monitor.snapshot)))
+        state.with(|s| {
+            metric.with_value(|metric| {
+                metric.subtitle(&s.monitor.snapshot, &s.monitor.observation_issues)
+            })
+        })
     });
     view! {
         <article class="zxs-content-panel zxs-metric-card zxs-frame zxs-frame--inset" data-metric=metric.get_value().key() aria-label=aria_label>

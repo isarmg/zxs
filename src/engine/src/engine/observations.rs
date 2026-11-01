@@ -42,9 +42,68 @@ pub struct DiskObservationPlan {
 
 /// One non-authoritative observation, never admission for a write.
 pub struct DiskObservation {
-    pub status: DiskStatus,
+    pub status: ObservedDiskStatus,
     /// Physical total, available and used bytes from the same status probe.
-    pub capacity: Option<(u64, u64, u64)>,
+    pub capacity: std::result::Result<(u64, u64, u64), DiskObservationFailure>,
+}
+
+/// Binding and logical accounting, independent of physical capacity availability.
+#[derive(Debug)]
+pub struct ObservedDiskStatus {
+    pub slot_id: String,
+    pub disk_id: String,
+    pub level: u32,
+    pub upstream_slot_id: Option<String>,
+    pub online: bool,
+    pub metadata_member: bool,
+    pub physical_device: Option<String>,
+    pub used_bytes: u64,
+    pub simulation: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiskObservationStage {
+    Seal,
+    Capacity,
+}
+
+/// A failed sample retains its phase and concrete cause, not a zero-byte sample.
+#[derive(Debug, error_definition::Error)]
+#[error("disk {slot_id} observation failed at {stage:?}: {source}")]
+pub struct DiskObservationFailure {
+    pub slot_id: String,
+    pub stage: DiskObservationStage,
+    #[source]
+    pub source: Box<Error>,
+}
+
+impl DiskObservation {
+    fn into_status(self) -> Result<DiskStatus> {
+        let capacity = self.capacity.map_err(Error::DiskObservation)?;
+        let ObservedDiskStatus {
+            slot_id,
+            disk_id,
+            level,
+            upstream_slot_id,
+            online,
+            metadata_member,
+            physical_device,
+            used_bytes,
+            simulation,
+        } = self.status;
+        Ok(DiskStatus {
+            slot_id,
+            disk_id,
+            level,
+            upstream_slot_id,
+            online,
+            metadata_member,
+            physical_device,
+            available_bytes: capacity.1,
+            used_bytes,
+            simulation,
+        })
+    }
 }
 
 impl Engine {
@@ -90,6 +149,8 @@ impl Engine {
         }
     }
 
+    /// Return complete statuses, or the first typed seal/capacity failure.
+    /// For partial availability use `prepare_disk_observation().sample()`.
     pub fn disk_status(&self) -> Result<Vec<DiskStatus>> {
         self.prepare_disk_observation().status()
     }
@@ -125,7 +186,11 @@ fn capacity(disk: &DiskConfig, seal: &DiskSeal) -> Result<(u64, u64, u64)> {
             "disk root changed during capacity observation",
         ));
     }
-    let stat = rustix::fs::fstatvfs(directory.directory()).map_err(std::io::Error::from)?;
+    filesystem_capacity(directory.directory())
+}
+
+fn filesystem_capacity(directory: &std::fs::File) -> Result<(u64, u64, u64)> {
+    let stat = rustix::fs::fstatvfs(directory).map_err(std::io::Error::from)?;
     let total = stat.f_blocks.saturating_mul(stat.f_frsize);
     let available = stat.f_bavail.saturating_mul(stat.f_frsize);
     let used = stat
@@ -137,12 +202,14 @@ fn capacity(disk: &DiskConfig, seal: &DiskSeal) -> Result<(u64, u64, u64)> {
 
 impl DiskObservationPlan {
     /// Observe managed-directory availability using the captured binding configuration.
+    ///
+    /// # Errors
+    /// Returns the first seal/capacity failure; an unknown capacity is not zero.
     pub fn status(&self) -> Result<Vec<DiskStatus>> {
-        Ok(self
-            .sample()
+        self.sample()
             .into_iter()
-            .map(|observation| observation.status)
-            .collect())
+            .map(DiskObservation::into_status)
+            .collect()
     }
 
     /// Sample each binding once; returned capacities are observations, not later resamples.
@@ -156,28 +223,37 @@ impl DiskObservationPlan {
                     self.metadata_integrity.observe(identity)
                 } else {
                     identity
-                }
-                .ok();
-                let capacity = seal.as_ref().and_then(|seal| {
-                    capacity(disk, seal)
-                        .inspect_err(|error| {
-                            if disk.metadata_member
-                                && error.code() == ErrorCode::DiskIdentityMismatch
-                            {
-                                self.metadata_integrity.fault(error);
-                            }
-                        })
-                        .ok()
-                });
-                let status = DiskStatus {
+                };
+                let online = seal.is_ok();
+                let capacity = seal
+                    .map_err(|source| DiskObservationFailure {
+                        slot_id: disk.slot_id.clone(),
+                        stage: DiskObservationStage::Seal,
+                        source: Box::new(source),
+                    })
+                    .and_then(|seal| {
+                        capacity(disk, &seal)
+                            .inspect_err(|error| {
+                                if disk.metadata_member
+                                    && error.code() == ErrorCode::DiskIdentityMismatch
+                                {
+                                    self.metadata_integrity.fault(error);
+                                }
+                            })
+                            .map_err(|source| DiskObservationFailure {
+                                slot_id: disk.slot_id.clone(),
+                                stage: DiskObservationStage::Capacity,
+                                source: Box::new(source),
+                            })
+                    });
+                let status = ObservedDiskStatus {
                     slot_id: disk.slot_id.clone(),
                     disk_id: disk.disk_id.clone(),
                     level: disk.level,
                     upstream_slot_id: disk.upstream_slot_id.clone(),
-                    online: seal.is_some(),
+                    online,
                     metadata_member: disk.metadata_member,
                     physical_device: None,
-                    available_bytes: capacity.map(|capacity| capacity.1).unwrap_or(0),
                     used_bytes: self.used_bytes.get(&disk.slot_id).copied().unwrap_or(0),
                     simulation: self.config.mode == Mode::Development,
                 };
