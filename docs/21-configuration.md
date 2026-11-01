@@ -30,7 +30,7 @@ Samba 配置由经版本验收的部署模板另行生成。设备清单通过�
 ```toml
 [server]
 mode = "single-writer"
-local_socket = "/run/zxs/service.sock"
+local_socket = "/zxs/run/service.sock"
 remote_transport = "https"
 http2 = true
 http3 = false

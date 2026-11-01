@@ -29,7 +29,7 @@ async fn unavailable_http_spool_isolates_only_upload_staging() {
         "invalid_inventory",
     ] {
         let root = crate::tests::private_tempdir();
-        let mut config = ServerConfig::loopback(root.path());
+        let mut config = ServerConfig::new(root.path());
         let _owner = match failure {
             "occupied" => {
                 std::fs::write(&config.spool_dir, b"keep this evidence").unwrap();
@@ -146,7 +146,7 @@ async fn rejected_spool_symlink_does_not_touch_its_target() {
         let target = root.path().join("target");
         std::fs::create_dir(&target).unwrap();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut config = ServerConfig::loopback(root.path());
+        let mut config = ServerConfig::new(root.path());
         symlink(&target, &config.spool_dir).unwrap();
         config.spool_dir = match suffix {
             "slash" => PathBuf::from(format!("{}/", config.spool_dir.display())),
@@ -184,7 +184,7 @@ async fn missing_or_rejected_web_assets_leave_management_apis_but_not_a_fake_ui(
                 file.set_len(64 * 1024 * 1024 + 1).unwrap();
             }
         }
-        let mut config = ServerConfig::loopback(root.path());
+        let mut config = ServerConfig::new(root.path());
         config.web_dir = Some(assets);
         let app = application_config(root.path(), config);
         assert_assets_unavailable(&app).await;
@@ -277,7 +277,7 @@ async fn rejected_asset_links_and_special_files_never_enable_the_static_file_ser
                 .unwrap(),
             }
         }
-        let mut config = ServerConfig::loopback(root.path());
+        let mut config = ServerConfig::new(root.path());
         config.web_dir = Some(match failure {
             "root_link_slash" => PathBuf::from(format!("{}/", assets.display())),
             "root_link_dot" => assets.join("."),
@@ -302,7 +302,7 @@ fn invalid_server_security_and_admission_configuration_still_fails_closed() {
         "upload_limit",
     ] {
         let root = crate::tests::private_tempdir();
-        let mut config = ServerConfig::loopback(root.path());
+        let mut config = ServerConfig::new(root.path());
         config.web_dir = Some(root.path().join("missing-web"));
         std::fs::write(&config.spool_dir, "unavailable").unwrap();
         match invalid {
@@ -339,7 +339,7 @@ async fn combined_auxiliary_failures_preserve_management_and_rejected_cache_targ
     std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o640)).unwrap();
     let cache = root.path().join("telemetry-cache");
     symlink(&target, &cache).unwrap();
-    let mut config = ServerConfig::loopback(root.path());
+    let mut config = ServerConfig::new(root.path());
     config.web_dir = Some(root.path().join("missing-web"));
     std::fs::write(&config.spool_dir, b"preserve spool evidence").unwrap();
     let app = application_config(root.path(), config.clone());

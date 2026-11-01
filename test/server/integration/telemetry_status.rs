@@ -60,7 +60,7 @@ async fn real_status_samples_host_and_registered_disks_only_for_the_authenticate
     ));
     let auth = AuthStore::initialize(&system, "admin", "monitor-test-password").unwrap();
     let auth = backend.protect_auth(auth).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     assert_eq!(
         request(&app, None, "/api/system/status", None).await.0,
         StatusCode::UNAUTHORIZED

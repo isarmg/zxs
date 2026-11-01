@@ -9,7 +9,7 @@ fn configured_external_origins_match_canonical_browser_origins() {
         ("https://[0:0:0:0:0:0:0:1]:443", "https://[::1]"),
         ("https://Example.COM:8443", "https://example.com:8443"),
     ] {
-        let mut config = ServerConfig::loopback(root.path());
+        let mut config = ServerConfig::new(root.path());
         config.external_origin = Some(configured.into());
         let config = config.admit().unwrap();
         let mut headers = HeaderMap::new();
@@ -26,7 +26,7 @@ fn configured_external_origins_match_canonical_browser_origins() {
 #[test]
 fn external_origin_normalization_preserves_scheme_host_and_port_boundaries() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = ServerConfig::loopback(root.path());
+    let mut config = ServerConfig::new(root.path());
     config.external_origin = Some("https://EXAMPLE.COM:443".into());
     let config = config.admit().unwrap();
     for origin in [
@@ -47,7 +47,7 @@ fn external_origin_normalization_preserves_scheme_host_and_port_boundaries() {
             "{origin}"
         );
     }
-    let mut config = ServerConfig::loopback(root.path());
+    let mut config = ServerConfig::new(root.path());
     config.external_origin = Some("https://example.com:8443".into());
     let config = config.admit().unwrap();
     let mut headers = HeaderMap::new();
@@ -154,7 +154,7 @@ fn source_limit_cannot_be_evaded_by_rotating_username_guesses() {
 }
 
 fn proxy_config() -> ServerConfig {
-    let mut config = ServerConfig::loopback(std::path::Path::new("/tmp/zxs-test"));
+    let mut config = ServerConfig::new(std::path::Path::new("/tmp/zxs-test"));
     config.external_origin = Some("https://storage.example.org".into());
     config.trusted_proxy_ips = vec!["127.0.0.1".parse().unwrap()];
     config
@@ -177,7 +177,7 @@ fn request_from(peer: &str, forwarded: Option<&str>) -> Request {
 
 #[test]
 fn forwarding_is_ignored_by_default_and_from_untrusted_peers() {
-    let default = ServerConfig::loopback(std::path::Path::new("/tmp/zxs-test"));
+    let default = ServerConfig::new(std::path::Path::new("/tmp/zxs-test"));
     assert_eq!(
         client_ip(
             &request_from("127.0.0.1:1234", Some("192.0.2.10")),
@@ -1926,12 +1926,10 @@ fn public_listener_configuration_preserves_explicit_loopback_choice() {
     let root = tempfile::tempdir().unwrap();
     let config = ServerConfig::new(root.path());
     assert_eq!(config.listen, "0.0.0.0:7400".parse().unwrap());
-    assert!(
-        ServerConfig::loopback(root.path())
-            .listen
-            .ip()
-            .is_loopback()
-    );
+    let mut local = config.clone();
+    local.listen = "127.0.0.1:7400".parse().unwrap();
+    assert!(local.listen.ip().is_loopback());
+    assert!(local.admit().is_ok());
     for listen in [
         "0.0.0.0:7400",
         "192.0.2.1:7400",

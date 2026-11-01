@@ -763,7 +763,7 @@ async fn telemetry_admission_survives_cancellation_without_consuming_management_
             .status()
     }
     let root = crate::tests::private_tempdir();
-    let config = crate::ServerConfig::loopback(root.path());
+    let config = crate::ServerConfig::new(root.path());
     config.prepare_spool().unwrap();
     let backend = Arc::new(MonitorBackend::default());
     let service = Telemetry::start(backend.clone(), &root.path().join("cache")).unwrap();
@@ -873,7 +873,7 @@ async fn rejected_symlink_cache_preserves_target_and_management_across_restarts(
         assert!(service.current().unwrap().memory.total_bytes.is_some());
         drop(service);
 
-        let mut config = crate::ServerConfig::loopback(root.path());
+        let mut config = crate::ServerConfig::new(root.path());
         config.web_dir = Some(web.clone());
         let app = crate::router(
             Arc::new(MonitorBackend::default()),

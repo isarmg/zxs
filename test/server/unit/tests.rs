@@ -694,7 +694,7 @@ impl Backend for TestBackend {
     }
 }
 pub(crate) fn application(root: &Path) -> Router {
-    application_config(root, ServerConfig::loopback(root))
+    application_config(root, ServerConfig::new(root))
 }
 fn application_config(root: &Path, config: ServerConfig) -> Router {
     std::fs::write(root.join("content"), b"0123456789").unwrap();
@@ -716,7 +716,7 @@ async fn static_assets_never_shadow_unknown_api_routes_or_their_error_envelope()
     std::fs::create_dir_all(assets.join("api")).unwrap();
     std::fs::write(assets.join("index.html"), b"<html>fixture</html>").unwrap();
     std::fs::write(assets.join("api/unknown"), b"must never be an API response").unwrap();
-    let mut config = ServerConfig::loopback(root.path());
+    let mut config = ServerConfig::new(root.path());
     config.web_dir = Some(assets);
     let app = application_config(root.path(), config);
     for path in ["/api", "/api/unknown", "/api/missing", "/missing.css"] {
@@ -772,7 +772,7 @@ fn router_prepares_a_fresh_nested_spool_before_monitor_cache_initialization() {
             path: root.path().join("content"),
         }),
         auth,
-        ServerConfig::loopback(&nested),
+        ServerConfig::new(&nested),
     );
     assert!(
         app.is_ok(),
@@ -794,7 +794,7 @@ fn an_unwritable_monitor_cache_does_not_prevent_the_business_router_starting() {
             path: root.path().join("content"),
         }),
         auth,
-        ServerConfig::loopback(root.path()),
+        ServerConfig::new(root.path()),
     );
     assert!(
         app.is_ok(),
@@ -994,7 +994,7 @@ async fn authentication_lock_wait_does_not_block_the_async_executor() {
             path: root.path().join("unused"),
         }),
         auth,
-        ServerConfig::loopback(root.path()),
+        ServerConfig::new(root.path()),
     )
     .unwrap();
     let login_app = app.clone();
@@ -1928,7 +1928,7 @@ fn upload_publication_keeps_its_claim(disconnect: bool) {
         let (started, started_rx) = tokio::sync::oneshot::channel();
         let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
         let release = Release(gate.clone());
-        let mut config = ServerConfig::loopback(root.path());
+        let mut config = ServerConfig::new(root.path());
         if !disconnect {
             config.http_transfer_limits.total_timeout = Duration::from_secs(3);
             config.http_transfer_limits.idle_timeout = Duration::from_secs(3);
@@ -2189,7 +2189,7 @@ fn public_router_rejects_invalid_static_origins_before_preparing_spool() {
         "https://example.com#fragment",
     ] {
         let root = private_tempdir();
-        let mut config = ServerConfig::loopback(root.path());
+        let mut config = ServerConfig::new(root.path());
         config.external_origin = Some(origin.into());
         let spool = config.spool_dir.clone();
         let auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
@@ -2215,7 +2215,7 @@ fn public_router_rejects_invalid_static_origins_before_preparing_spool() {
 #[tokio::test]
 async fn canonical_static_origin_drives_http_login_cookie_and_request_rejection() {
     let root = private_tempdir();
-    let mut config = ServerConfig::loopback(root.path());
+    let mut config = ServerConfig::new(root.path());
     config.external_origin = Some("https://EXAMPLE.COM:443".into());
     let app = application_config(root.path(), config);
     for (origin, expected) in [

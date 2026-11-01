@@ -53,7 +53,7 @@ fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
     let auth = backend
         .protect_auth(AuthStore::initialize(&system, "admin", "integration-test-password").unwrap())
         .unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     (
         root,
         app,
@@ -479,7 +479,7 @@ async fn typed_capabilities_are_public_and_keep_the_engine_upload_limit() {
     let (status, capabilities) = send(&app, None, "GET", "/api/capabilities", None).await;
     assert_eq!(status, StatusCode::OK);
     let core_limit = Config::development([root.path().join("disk")]).max_file_bytes;
-    let server_limit = ServerConfig::loopback(root.path()).max_upload_bytes;
+    let server_limit = ServerConfig::new(root.path()).max_upload_bytes;
     assert_eq!(
         capabilities["max_upload_bytes"],
         core_limit.min(server_limit).to_string()

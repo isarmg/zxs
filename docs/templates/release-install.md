@@ -71,6 +71,24 @@ chmod 755 "server-$VERSION/zxs"
 
 `zxs-materials-版本.tar.gz` 仅为非运行必需的许可证、来源资料、文档、示例配置和可选离线救援工具 `zxs-rescue`；不需要解压它才能运行 `zxs`，它也不是“单个二进制”的别名。保留、分发对应许可证/版权与来源资料。
 
+## `/zxs` 安装布局与 systemd
+
+校验完成后，由管理员将准备好的 `zxs` 安装为 `/zxs/zxs`，本版 `INSTALL.md` 保存为 `/zxs/INSTALL.md`。`/zxs` 与程序由 root 所有、服务账户不可写，可采用目录/程序 `0755`。建立专用 `zxs` 服务账户，并预建其所有、`0700` 的 `/zxs/data`、`/zxs/data/state`、`/zxs/data/management`、`/zxs/data/disks` 和示例盘根 `/zxs/data/disks/P01`。已有数据不自动搬迁，不要用安装步骤覆盖旧池或恢复材料。
+
+资料归档中的 `deploy/systemd/zxs.service` 使用以下启动布局：
+
+```ini
+WorkingDirectory=/zxs
+ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --listen 0.0.0.0:7400 --setup-disk P01=/zxs/data/disks/P01
+ReadWritePaths=/zxs/data /zxs/config /zxs/log /zxs/run /zxs/tmp /zxs/cache /zxs/home
+```
+
+使用内嵌 Web，不需要 `--web-dir`。默认直接 HTTP；部署者自行控制网络暴露和传输保护。需要 HTTPS 代理时再按实际地址配置 `--external-origin`，不填写未使用的示例域名。预建 `zxs:zxs` 所有、`0700` 的 `/zxs/config`、`/zxs/log`、`/zxs/run`、`/zxs/tmp`、`/zxs/cache` 和 `/zxs/home`。由管理员预建 `zxs:zxs` 所有、`0600` 的普通日志文件 `/zxs/log/zxs.log`（不得为符号链接）；systemd 打开该文件后将标准输出和错误追加到它；socket 位于 `/zxs/run`，临时文件通过 `TMPDIR` 等变量使用 `/zxs/tmp`，HOME 和 XDG 变量也统一指向树内。凭据、完整工作文件、SMB spool、索引和恢复记录仍放 `/zxs/data`，不能当作临时文件清理。日志需监测空间并在正常停服后归档，不自动删除。单元不创建 `/run`、`/var/lib`、`/var/log` 下的 ZXS 专用目录。
+
+Samba 的空导出目录采用 root 所有、`0555` 的 `/zxs/smb-export`，独立于所有 `0700` 私有目录；根 `/zxs` 为 `0755` 允许认证 Samba 用户遍历。系统服务注册文件、apt Samba、系统运行库和 VFS 模块仍使用发行版要求的系统目录；systemd 自身状态日志属于操作系统记录，ZXS 应用输出则写入上述日志文件。
+
+模板保留专用账户、只读系统目录和精确可写目录约束。安装者审阅完整单元及实际盘位后，再安装到系统单元目录、启用并启动；本安装材料不自动执行这些主机操作。正式启动前按附带部署说明安全预置 `bootstrap.key` 并完成 Web 初始化。
+
 ## 系统 Samba 与模块
 
 由管理员在 Debian 安装受支持的系统 `samba` 与必要运行库。读取 `VFS-BUILD.json` 的 `package_version`，并用 `dpkg-query -W -f='${Version}\n' samba` 核对实际版本；只有该精确版本的真实加载/客户端验收通过才构成支持。不要将 4.23 的旧模块或其他 Debian 版本模块装入当前宿主。

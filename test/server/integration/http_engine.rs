@@ -135,7 +135,7 @@ fn configured_application(root: &Path, config: Config) -> Router {
                 .unwrap(),
         )
         .unwrap();
-    storage_server::router(backend, auth, ServerConfig::loopback(&root.join("system"))).unwrap()
+    storage_server::router(backend, auth, ServerConfig::new(&root.join("system"))).unwrap()
 }
 
 async fn reopen_after_router_drop(system: &Path) -> Engine {
@@ -334,7 +334,7 @@ async fn self_password_change_is_csrf_protected_and_restored_from_pool_control_s
     let app = storage_server::router(
         backend,
         auth,
-        ServerConfig::loopback(&root.path().join("system")),
+        ServerConfig::new(&root.path().join("system")),
     )
     .unwrap();
     assert_eq!(
@@ -373,7 +373,7 @@ async fn maximum_password_login_and_change_accept_escaped_json_without_losing_bo
     let auth = backend
         .protect_auth(AuthStore::initialize(&system, "admin", &current_password).unwrap())
         .unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     // The login boundary must admit the same legal JSON encoding as a password
     // change, even when every decoded password byte uses a Unicode escape.
     let encoded_login = format!(
@@ -932,7 +932,7 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
     let app = storage_server::router(
         backend,
         auth,
-        ServerConfig::loopback(&root.path().join("system")),
+        ServerConfig::new(&root.path().join("system")),
     )
     .unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
@@ -1176,7 +1176,7 @@ async fn file_history_exposes_durable_content_edges_and_rechecks_authentication(
     let app = storage_server::router(
         backend,
         auth,
-        ServerConfig::loopback(&root.path().join("system")),
+        ServerConfig::new(&root.path().join("system")),
     )
     .unwrap();
     let session = login(&app, "admin", "integration-test-password").await;
@@ -1523,7 +1523,7 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
     let app = storage_server::router(
         backend,
         auth,
-        ServerConfig::loopback(&root.path().join("system")),
+        ServerConfig::new(&root.path().join("system")),
     )
     .unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
@@ -2625,7 +2625,7 @@ async fn operation_over_http(
     let auth = backend
         .protect_auth(AuthStore::open(system).unwrap())
         .unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     let outcome_path = format!("/api/operations/{operation}/outcome?unused=accepted");
     let outcome = success(&app, &token, "GET", &outcome_path, None).await;
@@ -4108,7 +4108,7 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
     let system = root.path().join("system");
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let admin = login(&app, "admin", "integration-test-password").await;
     let replay = success(&app, &admin, "PATCH", &route, Some(body)).await;
     for key in [
@@ -4466,7 +4466,7 @@ async fn engine_upload_generation_conflicts_reach_http_as_conflicts() {
     let app = storage_server::router(
         backend.clone(),
         auth,
-        ServerConfig::loopback(&root.path().join("system")),
+        ServerConfig::new(&root.path().join("system")),
     )
     .unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
@@ -5058,7 +5058,7 @@ async fn typed_file_branch_sources_keep_distinct_permanent_receipts() {
     let system = root.path().join("system");
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     for (body, created) in receipts {
         let replay = success(&app, &token, "POST", &route, Some(body)).await;
@@ -5193,7 +5193,7 @@ async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map(
     assert!(!engine.state().file_path_notes.contains_key(&node));
     let backend = Arc::new(EngineBackend::new(engine));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     let revoked = revoked_session(&app).await;
     for (method, route, clear, original) in receipts {
@@ -5373,7 +5373,7 @@ async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
     let system = root.path().join("system");
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     let revoked = login(&app, "admin", "integration-test-password").await;
     success(&app, &revoked, "POST", "/api/auth/logout", None).await;
@@ -5759,7 +5759,7 @@ async fn historical_prepare_preserves_history_admission_and_fresh_plan_contract(
     let system = root.path().join("system");
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
     let auth = backend.open_auth(&system).unwrap();
-    let reopened = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let reopened = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&reopened, "admin", "integration-test-password").await;
     assert_eq!(
         success(
@@ -5833,7 +5833,7 @@ async fn purge_prepare_preserves_history_priority_pins_and_sorted_fresh_plans() 
     let auth = backend
         .protect_auth(AuthStore::initialize(&system, "admin", "integration-test-password").unwrap())
         .unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     let route = format!("/api/history-trees/{}/purge-plans", repo.history_tree_id);
     let missing = "/api/history-trees/missing/purge-plans";
@@ -5946,7 +5946,7 @@ async fn purge_prepare_preserves_history_priority_pins_and_sorted_fresh_plans() 
     drop(app);
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     assert_eq!(
         success(
@@ -6010,7 +6010,7 @@ async fn split_prepare_preserves_admission_cut_rules_workspace_pins_and_plan_wir
     let auth = backend
         .protect_auth(AuthStore::initialize(&system, "admin", "integration-test-password").unwrap())
         .unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     let route = format!("/api/history-trees/{}/split-plans", repo.history_tree_id);
     let missing = "/api/history-trees/missing/split-plans";
@@ -6148,7 +6148,7 @@ async fn split_prepare_preserves_admission_cut_rules_workspace_pins_and_plan_wir
     drop(app);
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     assert_eq!(
         success(

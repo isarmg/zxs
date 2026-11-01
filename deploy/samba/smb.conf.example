@@ -14,11 +14,11 @@
 [zxs]
     # 预先准备 root 所有、认证 Unix 用户不可写的真实空目录，并让该用户可遍历父目录。
     # 不放入 ZXS 私有状态、socket、spool 或数据盘目录，也不放宽其权限。
-    path = /srv/zxs-smb/empty-export
+    path = /zxs/smb-export
     vfs objects = zxs
     # Only the socket is runtime state; ZXS retains SMB data separately under
     # its system-disk --management-root/smb-spool, never beside this socket.
-    zxs:socket = /run/zxs/smb.sock
+    zxs:socket = /zxs/run/smb.sock
     zxs:repository = repo_REPLACE_WITH_REPOSITORY_ID
     valid users = zxs-owner
     guest ok = no

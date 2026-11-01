@@ -790,7 +790,7 @@ fn fixture_for(
             auth: Mutex::new(None),
         }),
         auth,
-        ServerConfig::loopback(root),
+        ServerConfig::new(root),
     )
     .unwrap()
     .layer(http_routing::middleware::from_fn(
@@ -943,7 +943,7 @@ async fn management_status_remains_live_during_authentication_contention() {
         auth: Mutex::new(None),
     });
     let auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
-    let app = router(backend.clone(), auth, ServerConfig::loopback(root.path())).unwrap();
+    let app = router(backend.clone(), auth, ServerConfig::new(root.path())).unwrap();
     let auth = backend.auth.lock().unwrap().clone().unwrap();
     let held = Arc::new(tokio::sync::Semaphore::new(0));
     let (release, wait) = std::sync::mpsc::channel();
@@ -1388,7 +1388,7 @@ async fn assert_cancelled_job_keeps_auth(method: &str, path: &str, blocked: Bloc
     });
     let mut auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
     let token = auth.login("admin", "a-long-test-password").unwrap().token;
-    let app = router(backend.clone(), auth, ServerConfig::loopback(root.path())).unwrap();
+    let app = router(backend.clone(), auth, ServerConfig::new(root.path())).unwrap();
     let owner = backend.auth.lock().unwrap().take().unwrap();
     let weak = Arc::downgrade(&owner);
     drop(owner);
@@ -1466,7 +1466,7 @@ async fn completed_http_bodies_do_not_retain_auth_owner() {
         });
         let mut auth = AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
         let token = auth.login("admin", "a-long-test-password").unwrap().token;
-        let app = router(backend.clone(), auth, ServerConfig::loopback(root.path())).unwrap();
+        let app = router(backend.clone(), auth, ServerConfig::new(root.path())).unwrap();
         let owner = backend.auth.lock().unwrap().take().unwrap();
         let weak = Arc::downgrade(&owner);
         drop(owner);

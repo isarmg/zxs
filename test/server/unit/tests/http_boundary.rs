@@ -1011,7 +1011,7 @@ async fn blocking_task_panics_are_internal_errors_not_client_errors() {
             upload_admission_panics: false,
         }),
         auth,
-        ServerConfig::loopback(root.path()),
+        ServerConfig::new(root.path()),
     )
     .unwrap();
     let (token, _, _) = authenticated(&app).await;
@@ -1717,7 +1717,7 @@ async fn typed_upload_admission_and_publication_panics_are_internal_errors() {
                 upload_admission_panics,
             }),
             auth,
-            ServerConfig::loopback(root.path()),
+            ServerConfig::new(root.path()),
         )
         .unwrap();
         let (token, _, _) = authenticated(&app).await;

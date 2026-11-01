@@ -95,7 +95,7 @@ HTTP 与 SMB 共用完整段读取、BLAKE3 校验及同版本副本回退核心
 
 ## 本机 RPC 部署
 
-socket 使用服务进程拥有的 `0700` 运行目录，例如 `/run/zxs`，socket 权限为 `0600`。SMB 完整工作副本、操作证据和预算记录独立保存在系统盘 `--management-root/smb-spool`，不从 socket 路径推导；默认管理目录为 `--root/management`。管理目录必须持久保存，不能设在 `/run`、临时文件系统或版本安装目录。受信任嵌入调用通过 `SmbConfig.spool_dir` 显式提供同样持久的路径，没有另一个 SMB spool CLI 路径开关。
+socket 使用服务进程拥有的 `0700` 运行目录，例如 `/zxs/run`，socket 权限为 `0600`。SMB 完整工作副本、操作证据和预算记录独立保存在系统盘 `--management-root/smb-spool`，不从 socket 路径推导；默认管理目录为 `--root/management`。管理目录必须持久保存，不能设在 `/run`、临时文件系统或版本安装目录。受信任嵌入调用通过 `SmbConfig.spool_dir` 显式提供同样持久的路径，没有另一个 SMB spool CLI 路径开关。
 
 两个路径分别安全校验，缺失的私有组件按 `0700` 创建，整个路径不能包含符号链接。SMB spool 及其 `empty-directory` 也要求 `0700`。祖先只接受 root 或服务身份拥有、不可被其他用户替换的目录；标准 root-owned sticky `/tmp` 可作为安全父目录，但路径校验不等于持久介质保证，不能用于生产留存材料。非 sticky 的组/全局可写目录和外部用户所有的祖先会被拒绝，既有目录不会自动 chmod。创建暂存文件及发布恢复记录使用持有的目录描述符；Flush 提交前检查目录/源文件身份，并把原可写 FD 的长度和摘要绑定到核心复制结果，校验失败不会接受工作区文件或提交。摘要和复制均使用定位读取，不改变 Samba 客户端共享的 FD 游标。
 
@@ -178,9 +178,9 @@ VFS 回调和工作线程依赖 `catch_unwind` 隔离 panic，因此模块以编
     valid users = zxs-owner
     guest ok = no
     guest only = no
-    path = /srv/zxs-smb/empty-export
+    path = /zxs/smb-export
     vfs objects = zxs
-    zxs:socket = /run/zxs/smb.sock
+    zxs:socket = /zxs/run/smb.sock
     zxs:repository = repo_<32位小写十六进制>
     read only = no
     oplocks = no
@@ -196,7 +196,7 @@ VFS 回调和工作线程依赖 `catch_unwind` 隔离 panic，因此模块以编
     follow symlinks = no
 ```
 
-`path` 只能是部署者预先准备的真实空目录，不包含符号链接；该目录由 root 所有，认证 Samba Unix 用户可读取和遍历但不可写，例如空目录 `0555`、root 所有的父目录 `0755`。它须独立于 ZXS 系统状态、管理、socket、spool、数据盘及工作区目录，不能放在私有的 `/var/lib/zxs` 或 `/run/zxs` 下。Samba 的 root 身份桥接握手成功后，后续共享请求仍会切换到认证 Unix 用户并进入这个宿主目录；VFS 正文通过 RPC 读写不免除目录遍历权限。不要通过放宽私有目录权限或设置 `force user` 绕过此要求。
+`path` 只能是部署者预先准备的真实空目录，不包含符号链接；该目录由 root 所有，认证 Samba Unix 用户可读取和遍历但不可写，例如空目录 `0555`、root 所有的父目录 `0755`。它须独立于 ZXS 系统状态、管理、socket、spool、数据盘及工作区目录，不能放在私有的 `/zxs/data` 或 `/zxs/run` 下。Samba 的 root 身份桥接握手成功后，后续共享请求仍会切换到认证 Unix 用户并进入这个宿主目录；VFS 正文通过 RPC 读写不免除目录遍历权限。不要通过放宽私有目录权限或设置 `force user` 绕过此要求。
 
 上线前使用 `testparm` 检查配置，并验证生产用户认证、首次目录枚举和文件打开，以及 SMB 最低版本、签名、加密和可信 UID 链路；模块加载或握手成功不等于共享可用。
 

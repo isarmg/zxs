@@ -113,7 +113,7 @@ async fn plan_read_and_cancel_preserve_raw_shapes_and_permanent_replay() {
     let app = storage_server::router(
         backend,
         auth,
-        ServerConfig::loopback(&root.path().join("system")),
+        ServerConfig::new(&root.path().join("system")),
     )
     .unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
@@ -264,7 +264,7 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
                 AuthStore::initialize(&system, "admin", "integration-test-password").unwrap(),
             )
             .unwrap();
-        let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+        let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
         let token = login(&app, "admin", "integration-test-password").await;
         let operation = storage_contract::OperationId::generate();
         let path = format!("/api/plans/{}/commit", plan.plan_id);
@@ -321,7 +321,7 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
         drop(app);
         let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
         let auth = backend.open_auth(&system).unwrap();
-        let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+        let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
         let token = login(&app, "admin", "integration-test-password").await;
         let replay = success(&app, &token, "POST", &path, Some(body)).await;
         assert_eq!(replay["request_digest"], receipt["request_digest"]);

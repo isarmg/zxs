@@ -293,7 +293,7 @@ async fn web_purge_and_split_preview_digest_cancel_and_commit_use_real_engine() 
                 AuthStore::initialize(&system, "admin", "integration-test-password").unwrap(),
             )
             .unwrap();
-        let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+        let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
         let admin = login(&app, "admin", "integration-test-password").await;
         let input = fields(&[
             ("history", &repo.history_tree_id),

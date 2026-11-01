@@ -8,7 +8,7 @@ async fn entity_tag_precedes_modified_since_for_static_get_and_head() {
     std::fs::create_dir(&assets).unwrap();
     let current = b"<html>current asset</html>";
     std::fs::write(assets.join("index.html"), current).unwrap();
-    let mut config = ServerConfig::loopback(root.path());
+    let mut config = ServerConfig::new(root.path());
     config.web_dir = Some(assets);
     let app = application_config(root.path(), config);
     let initial = app
@@ -100,7 +100,7 @@ async fn static_head_ignores_range_while_get_retains_range_and_empty_file_rules(
     std::fs::create_dir(&assets).unwrap();
     std::fs::write(assets.join("index.html"), b"abcdef").unwrap();
     std::fs::write(assets.join("empty.txt"), []).unwrap();
-    let mut config = ServerConfig::loopback(root.path());
+    let mut config = ServerConfig::new(root.path());
     config.web_dir = Some(assets);
     let app = application_config(root.path(), config);
     for range in [

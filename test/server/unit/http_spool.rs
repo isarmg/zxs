@@ -639,7 +639,7 @@ async fn json_body(response: http_routing::response::Response) -> Value {
 #[tokio::test(flavor = "current_thread")]
 async fn stalled_real_inventory_keeps_management_responsive_and_uploads_pending() {
     let root = crate::tests::private_tempdir();
-    let mut config = ServerConfig::loopback(root.path());
+    let mut config = ServerConfig::new(root.path());
     config.http_spool_limits.bytes_total = 65536 + 7;
     config.http_spool_limits.bytes_per_account = 65536 + 7;
     config.prepare_spool().unwrap();
@@ -785,7 +785,7 @@ async fn stalled_real_inventory_keeps_management_responsive_and_uploads_pending(
 async fn failed_inventory_and_panicked_job_become_terminal_unavailable() {
     for failure in ["occupied", "unsafe_inventory", "locked", "panic"] {
         let root = crate::tests::private_tempdir();
-        let config = ServerConfig::loopback(root.path());
+        let config = ServerConfig::new(root.path());
         let owner = match failure {
             "occupied" => {
                 std::fs::write(&config.spool_dir, b"evidence").unwrap();
@@ -824,7 +824,7 @@ async fn failed_inventory_and_panicked_job_become_terminal_unavailable() {
 #[test]
 fn dropped_publisher_never_becomes_ready_and_runtime_joins_inventory() {
     let root = crate::tests::private_tempdir();
-    let config = ServerConfig::loopback(root.path());
+    let config = ServerConfig::new(root.path());
     let (state, startup) = HttpSpool::pending();
     let observed = state.clone();
     let (release, blocked) = std::sync::mpsc::channel();
@@ -869,7 +869,7 @@ fn dropped_publisher_never_becomes_ready_and_runtime_joins_inventory() {
         "pending",
         "dropped publisher must never install a late budget"
     );
-    let config = ServerConfig::loopback(root.path());
+    let config = ServerConfig::new(root.path());
     assert!(
         config.open_http_spool().is_some(),
         "unpublished completed inventory must release its lock"
@@ -879,7 +879,7 @@ fn dropped_publisher_never_becomes_ready_and_runtime_joins_inventory() {
 #[tokio::test]
 async fn dropping_unstarted_token_performs_no_inventory() {
     let root = crate::tests::private_tempdir();
-    let config = ServerConfig::loopback(root.path());
+    let config = ServerConfig::new(root.path());
     let (state, startup) = HttpSpool::pending();
     let future = startup.run(config.clone().admit().unwrap());
     drop(future);

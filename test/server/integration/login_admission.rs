@@ -25,7 +25,7 @@ fn application(root: &Path, proxy: bool) -> Router {
                 .unwrap(),
         )
         .unwrap();
-    let mut config = ServerConfig::loopback(&root.join("system"));
+    let mut config = ServerConfig::new(&root.join("system"));
     if proxy {
         config.external_origin = Some("https://storage.example.org".into());
         config.trusted_proxy_ips = vec!["127.0.0.1".parse().unwrap()];

@@ -1,17 +1,35 @@
 # Linux 服务部署审阅样例
 
-[zxs.service](../../../deploy/systemd/zxs.service) 是供部署前修改和审阅的 systemd 单元，没有安装、启用或启动。它默认监听 `0.0.0.0:7400` 的 HTTP，提供 API 和显式指定的 Web 静态目录，不限制非回环监听；网络可达范围由部署者管理。此样例配置 HTTPS 外部来源，使用时须配置对应的 TLS 反向代理；远程运维 CLI 已移除。`zxs.example.com`、程序路径和存储盘位路径必须换成实际配置。若直接通过 HTTP 访问服务器，应从样例 `ExecStart` 移除 `--external-origin https://zxs.example.com`，服务按实际请求 Host 校验同源；不要保留一个不使用的 HTTPS 来源。默认全接口监听不等于信任任意代理或关闭认证。
+[zxs.service](../../../deploy/systemd/zxs.service) 是供部署前审阅的 systemd 单元，没有安装、启用或启动。程序为 `/zxs/zxs`，使用发行 ELF 内嵌 Web；持久业务状态与示例存储目录在 `/zxs/data`，日志、缓存、配置和运行目录也统一放在 `/zxs` 下。默认直接提供 `0.0.0.0:7400` 的 HTTP，不限制非回环监听，也不预设 HTTPS 外部来源。浏览器使用实际服务器 IP 或主机名访问，服务仍校验精确同源、认证及权限。网络可达范围和明文传输风险由部署者管理；远程运维 CLI 已移除。
+
+需要 HTTPS 反向代理时，按实际域名增加 `--external-origin https://实际域名`；只有显式配置且与 TCP 对端精确匹配的代理 IP 才可提供单一、覆盖写入的 `X-Forwarded-For`。不要保留未使用的示例域名，也不要把任意远端转发头当作认证或同源证明。
 
 ## 部署前条件
 
-- 创建专用 `zxs` 服务账户；程序和 Web 发行件安装在其不可写的 `/opt/zxs` 下。`/var/lib/zxs`、受保护 socket 父目录及每个已登记盘根要求服务账户拥有的 `0700` 权限，文件默认 `0600`。首次初始化通过运行中的受保护 Web 引导执行，由服务独占初始化门控；操作员预先批准盘位与引导授权。不能把开发模式目录当作独立物理盘。
-- 存储目录及其文件系统由管理员准备；不限定 Btrfs、不要求独立挂载点、不核实物理设备独立性，共享底层故障域由用户自行保证。不要用 `RequiresMountsFor=` 或数据配置文件的启动前检查阻止管理服务启动。按真实配置调整 `ReadWritePaths=`，数据盘路径加 `-` 前缀允许缺失挂载点；已有池的路径替换或 seal 缺失不能当作新成员自动接入；核心核对 held FD 的 device/inode、根目录身份和登记 seal。首次登记普通目录不被物理关系规则拒绝。
+- 创建专用 `zxs` 服务账户。`/zxs` 与 `/zxs/zxs` 由 root 所有、服务账户不可写，目录和程序可采用 `0755`；`/zxs/INSTALL.md` 保存本版安装说明。预先建立 `/zxs/data`、`/zxs/data/state`、`/zxs/data/management`、`/zxs/data/disks` 和示例盘根 `/zxs/data/disks/P01`，均由 `zxs` 服务账户所有、权限 `0700`，文件默认 `0600`。模板不使用 `StateDirectory=`，因此不会自动创建或继续写 `/var/lib` 下的旧目录；不自动搬迁已有数据。首次初始化通过运行中的受保护 Web 引导执行，由服务独占初始化门控；操作员预先批准盘位与引导授权。不能把开发模式目录当作独立物理盘。
+- 存储目录及其文件系统由管理员准备；不限定 Btrfs、不要求独立挂载点、不核实物理设备独立性，共享底层故障域由用户自行保证。不要用 `RequiresMountsFor=` 或数据配置文件的启动前检查阻止管理服务启动。按真实配置调整 `ReadWritePaths=`，模板对 `/zxs/data` 开放写入，示例盘根位于其内；若另加该树以外的盘根，在其精确路径前加 `-` 允许挂载点缺失；已有池的路径替换或 seal 缺失不能当作新成员自动接入；核心核对 held FD 的 device/inode、根目录身份和登记 seal。首次登记普通目录不被物理关系规则拒绝。
 - 日常账户不能打开原始块设备或数据盘目录。部署者需要单独设置设备访问和自动挂载策略，关闭会把业务盘重新暴露给普通用户的桌面自动挂载流程。`PrivateMounts=yes` 不会自动撤销宿主机原有目录或设备权限。
 - SQLite 是可重建索引；不要只备份 SQLite。保护元数据、配置和凭据的恢复材料均按项目恢复流程处理。敏感内容不通过环境变量、命令行或 systemd 单元传入。
 
 单元以非特权账户运行，不授予挂载或原始块设备读写能力。`DevicePolicy=closed` 与只读系统目录限制设备和路径访问；业务文件 I/O 只写明确列出的目录。存储准入不再需要 mountinfo、sysfs 或设备 UUID 探测；硬件监测仍可能只读 `/sys`，缺传感器明确不可用。现有单元未因此新增特权或调整设备隔离配置。此样例不包含挂载辅助进程、AppArmor/SELinux 策略或硬件验收结果。
 
 检查单元语法可执行 `systemd-analyze verify deploy/systemd/zxs.service`；只有替换完示例路径、准备对应程序和挂载环境后，才可执行目标主机的实际启动验收。检查语法不能证明设备隔离、供电故障恢复或上线可用性。
+
+## `/zxs` 目录与日志
+
+由管理员预建以下目录；除程序、说明和 SMB 空导出目录外，均由 `zxs:zxs` 所有、权限 `0700`，文件默认 `0600`：
+
+- `/zxs/zxs`：root 所有、服务不可写的程序，`0755`；`/zxs/INSTALL.md` 为本版说明。
+- `/zxs/data`：持久业务数据、状态、管理凭据、HTTP/SMB spool 和可重建索引。
+- `/zxs/config`：部署配置文件；可选初始化方案可置于 `/zxs/config/layout.json`。
+- `/zxs/log`：预建 `zxs:zxs` 所有、`0600` 的普通日志文件 `/zxs/log/zxs.log`，不得为符号链接；systemd 打开该文件后将标准输出和标准错误追加写入。
+- `/zxs/run`：socket 等运行时对象，`XDG_RUNTIME_DIR` 指向此处。
+- `/zxs/tmp`：临时文件，`TMPDIR`、`TMP`、`TEMP` 指向此处。
+- `/zxs/cache`、`/zxs/home`：分别作为 XDG 缓存目录及服务 HOME，避免默认写入其他位置。
+
+`WorkingDirectory=/zxs`，XDG 配置、数据和状态变量均指向上述树内路径；只读程序目录不进入 `ReadWritePaths=`。日志不自动轮转或清空，部署者应监测空间并在正常停服后归档日志，再启动重新打开文件；不要把日志归档动作用于业务恢复材料。systemd 自身服务状态/故障日志仍属于操作系统管理记录，不是应用日志文件。
+
+系统服务注册文件仍须安装在 systemd 的单元目录，apt 管理的 Samba、运行库和 VFS 模块仍使用发行版目录；这些是系统组件，ZXS 自身程序、配置、数据、日志、缓存、临时文件和 socket 均在 `/zxs` 下。这里不自动修改目标主机。
 
 ## 可选 Samba 本机桥接
 
@@ -20,14 +38,14 @@
 ```ini
 [Service]
 ExecStart=
-ExecStart=/opt/zxs/bin/zxs --root /var/lib/zxs/state --management-root /var/lib/zxs/management --listen 0.0.0.0:7400 --external-origin https://zxs.example.com --web-dir /opt/zxs/web --setup-disk P01=/srv/zxs/disks/P01 --smb-socket /run/zxs/smb.sock --smb-peer-uid 0 --smb-user zxs-owner
+ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --listen 0.0.0.0:7400 --setup-disk P01=/zxs/data/disks/P01 --smb-socket /zxs/run/smb.sock --smb-peer-uid 0 --smb-user zxs-owner
 ```
 
-示例的 `0` 只适用于确认桥接在 Samba 可信 root 进程身份下连接的部署。该连接时机必须在目标 Samba 验证，不能放宽 socket 权限来适应未认证的进程。`/run/zxs` 及 socket 分别维持 `0700`、`0600`，`zxs-owner` 通过 Samba 独立凭据认证后绑定到唯一 ZXS 管理员；不接受 `Samba=ZXS` 映射、重复账户配置、匿名、guest 或 force-user 会话。Samba 配置须同时限制 `valid users` 并关闭所有 guest 路径，见[共享样例](../../../deploy/samba/smb.conf.example)。共享仓库拆分、恢复后必须显式重新绑定，不能自动接入迁移后的历史域。
+示例的 `0` 只适用于确认桥接在 Samba 可信 root 进程身份下连接的部署。该连接时机必须在目标 Samba 验证，不能放宽 socket 权限来适应未认证的进程。`/zxs/run` 及 socket 分别维持 `0700`、`0600`，`zxs-owner` 通过 Samba 独立凭据认证后绑定到唯一 ZXS 管理员；不接受 `Samba=ZXS` 映射、重复账户配置、匿名、guest 或 force-user 会话。Samba 配置须同时限制 `valid users` 并关闭所有 guest 路径，见[共享样例](../../../deploy/samba/smb.conf.example)。共享仓库拆分、恢复后必须显式重新绑定，不能自动接入迁移后的历史域。
 
-共享样例的 `/srv/zxs-smb/empty-export` 是另行预建、root 所有且认证 Unix 用户不可写的真实空目录，其父路径须允许该用户遍历；具体权限见 [Samba 部署说明](../../components/smb.md)。不能将它放入 `/var/lib/zxs`、`/run/zxs`、spool 或数据盘私有树，也不能为共享访问放宽现有 `0700`/`0600` 权限。这个宿主空目录与 SMB 业务正文存储、私有 spool 均无关。
+共享样例的 `/zxs/smb-export` 是另行预建、root 所有且认证 Unix 用户不可写的真实空目录，其父路径须允许该用户遍历；具体权限见 [Samba 部署说明](../../components/smb.md)。不能将它放入 `/zxs/data`、`/zxs/run`、spool 或数据盘私有树，也不能为共享访问放宽现有 `0700`/`0600` 权限。这个宿主空目录与 SMB 业务正文存储、私有 spool 均无关。
 
-SMB spool 与 socket 目录分离，守护进程固定使用 `--management-root/smb-spool`，本样例为 `/var/lib/zxs/management/smb-spool`。完整工作文件、未确认操作证据和预算记录都留在系统盘，不能放入 `RuntimeDirectory=`、`/run` 或临时文件系统；模板的 `/run/zxs` 只保存可丢弃的 socket 运行状态。现有 `ReadWritePaths=/var/lib/zxs ...` 已覆盖该持久目录，路径单独按服务身份及 `0700` 校验，不安全或无法盘点只停止 SMB，不阻止管理 HTTP。无需用 `RuntimeDirectoryPreserve=` 保存工作数据，该选项也不能使 `/run` 跨重启持久化。旧 socket 邻接 spool 不自动迁移，升级前的留存材料处理边界见[SMB 集成](../../components/smb.md#smb-local-rpc)。
+SMB spool 与 socket 目录分离，守护进程固定使用 `--management-root/smb-spool`，本样例为 `/zxs/data/management/smb-spool`。完整工作文件、未确认操作证据和预算记录留在持久数据树，不能放入 `/zxs/run` 或 `/zxs/tmp`；`/zxs/run` 仅保存 socket，虽然其路径位于持久文件系统，socket 仍属运行时对象，崩溃遗留须按下文检查身份后处理。单元不使用 `RuntimeDirectory=`、`StateDirectory=` 或 `LogsDirectory=`，不在 `/run`、`/var/lib` 或 `/var/log` 创建 ZXS 专用目录，也不自动迁移旧数据。现有 `ReadWritePaths=` 已覆盖上述私有目录，不安全或无法盘点的 spool 只停止 SMB，不阻止管理 HTTP。
 
 服务在启动状态 I/O 前注册 `SIGINT` 和 `SIGTERM`，模板使用 `SIGINT` 请求正常退出。服务观察并处理停止请求时关闭新请求准入，SMB 空闲连接随即关闭；已接纳的 HTTP 连接有五秒网络宽限，届满后断开仍未结束的客户端连接。五秒不是整个停服过程的期限：已经接纳的阻塞持久化、发布及管理工作仍须等待完成，不能因客户端断开就释放其许可、删除恢复证据或强行宣称失败。提前注册可保留启动期间收到的信号，但运行时分派是异步的，不承诺信号刚到达就阻止所有监听器打开；启动期或运行期的内核文件系统调用也不能被信号安全取消。
 
@@ -41,9 +59,9 @@ SMB spool 与 socket 目录分离，守护进程固定使用 `--management-root/
 
 监控历史缓存属于可重建的辅助状态。缓存无法打开时（包括缓存目录是被拒绝的符号链接）退回有界内存历史，不因此阻止 Web、登录、健康检查或实时监控。服务不会跟随该缓存目录符号链接、修改其目标权限或清理目标内容；修复前内存中的新历史不跨进程重启保留。不要通过放宽路径安全检查恢复缓存。
 
-Web 静态目录无效或缺少 `index.html` 时，页面返回 `503 WEB_ASSETS_UNAVAILABLE`，但管理 HTTP API 继续可用；HTTP 暂存在一次性后台任务中完整清点，期间 `auxiliary.http_uploads` 为 `pending`，上传和上传状态返回 `503 HTTP_UPLOADS_PENDING`，但不等待清点才开放管理 HTTP/Web。清点成功后为 `ready`，失败后为 `unavailable`；失败只阻止上传暂存，不阻止登录和管理，不自动循环重试或清空材料。通过 `GET /api/management/status` 的 `auxiliary.web_assets` 与 `auxiliary.http_uploads` 分别核对，不把 `/healthz` 成功视为全部能力正常。修复目录、权限或发行件后重启服务；不要清空暂存和恢复证据来掩盖故障。
+默认使用内嵌 Web，无需外置资源目录。显式配置 `--web-dir` 覆盖内嵌资源后，若 Web 静态目录无效或缺少 `index.html`，页面返回 `503 WEB_ASSETS_UNAVAILABLE`，但管理 HTTP API 继续可用；HTTP 暂存在一次性后台任务中完整清点，期间 `auxiliary.http_uploads` 为 `pending`，上传和上传状态返回 `503 HTTP_UPLOADS_PENDING`，但不等待清点才开放管理 HTTP/Web。清点成功后为 `ready`，失败后为 `unavailable`；失败只阻止上传暂存，不阻止登录和管理，不自动循环重试或清空材料。通过 `GET /api/management/status` 的 `auxiliary.web_assets` 与 `auxiliary.http_uploads` 分别核对，不把 `/healthz` 成功视为全部能力正常。修复目录、权限或发行件后重启服务；不要清空暂存和恢复证据来掩盖故障。
 
-`--web-dir` 及其所有祖先必须是真实目录，资源树也不能包含符号链接。升级时正常停服后，把参数直接改为新版本的 `public/` 实目录；不要使用 `current` 等符号链接切换 Web 版本，否则静态资源准入会拒绝并返回上述 503。
+可选的 `--web-dir` 及其所有祖先必须是真实目录，资源树也不能包含符号链接。升级时正常停服后，把参数直接改为新版本的 `public/` 实目录；不要使用 `current` 等符号链接切换 Web 版本，否则静态资源准入会拒绝并返回上述 503。
 
 生产启动前必须保持挂载目录身份和权限安全。`-` 路径选项只允许路径缺失，不代表空目录是一块有效磁盘；引擎仍验证登记身份。如果启动时目标缺失而被跳过，后来出现的挂载不能据此视为已经可见或可写；在宿主机恢复挂载后应重启服务，并在服务私有挂载命名空间中核对可见性、写权限和设备身份。此样例未做真实热插拔验收，也不自动挂载或格式化设备。
 
@@ -57,6 +75,6 @@ Web 静态目录无效或缺少 `index.html` 时，页面返回 `503 WEB_ASSETS_
 
 `--setup-disk` 与 `--setup-config` 的 ID 均为 1—64 个 ASCII 字母、数字、下划线或连字符，不是中文显示名或文件名；点号、空白及路径分隔符不允许。非法 ID 在启动参数检查时明确报错，不会启动后才从 Web 候选中消失。`PATH` 仍须为绝对路径；有效 ID 对应的盘或预设文件暂时不可用，不会因此阻止管理 HTTP 启动。
 
-高级初始拓扑可通过本机审查的私有配置文件预置：在服务参数中追加 `--setup-config layout=/etc/zxs/layout.json`，同时为配置内的每个磁盘声明 `--setup-disk`。配置文件由服务 UID 拥有、0400/0600、普通单链接文件；不得把凭据放进此配置。Web 只选择不透明方案 ID，不接受任意路径或 JSON。仅授权提交选定方案时读取文件，预置缺失/损坏不阻止 HTTP 启动。草稿生成与安全离线编辑见[救援配置子域](../../components/rescue.md)。
+高级初始拓扑可通过本机审查的私有配置文件预置：在服务参数中追加 `--setup-config layout=/zxs/config/layout.json`，同时为配置内的每个磁盘声明 `--setup-disk`。配置文件由服务 UID 拥有、0400/0600、普通单链接文件；不得把凭据放进此配置。Web 只选择不透明方案 ID，不接受任意路径或 JSON。仅授权提交选定方案时读取文件，预置缺失/损坏不阻止 HTTP 启动。草稿生成与安全离线编辑见[救援配置子域](../../components/rescue.md)。
 
 最低配置仅需系统盘加一个存储盘，不强制配置后续备份级别。单存储盘没有冗余，故障可能造成数据丢失；系统盘管理凭据与静态 Web 仍可用于诊断，不能据此宣称数据可恢复。要启用可选多盘链，在启动参数与 `ReadWritePaths=` 中逐个登记额外盘；物理独立性由用户保证，已有多成员池不能以丢盘为由自动降级仲裁。

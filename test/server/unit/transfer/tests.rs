@@ -1361,7 +1361,7 @@ fn cancelled_generation_retention_keeps_item_claim_and_upload_slot_until_worker_
     let mut auth =
         crate::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
     let token = auth.login("admin", "a-long-test-password").unwrap().token;
-    let mut config = crate::ServerConfig::loopback(root.path());
+    let mut config = crate::ServerConfig::new(root.path());
     config.http_transfer_limits.slots = 2;
     config.http_spool_limits.recovery_reserve_bytes = 1;
     let spool = config.spool_dir.clone();
@@ -1662,7 +1662,7 @@ async fn fragmented_upload_checkpoints_before_pending_and_verifies_retry_tail() 
     let mut auth =
         crate::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
     let token = auth.login("admin", "a-long-test-password").unwrap().token;
-    let mut config = crate::ServerConfig::loopback(root.path());
+    let mut config = crate::ServerConfig::new(root.path());
     config.http_spool_limits.recovery_reserve_bytes = 1;
     let spool = config.spool_dir.clone();
     let app = crate::router(Arc::new(RetainedGenerationBackend), auth, config).unwrap();
@@ -1742,7 +1742,7 @@ async fn upload_batching_ready_and_paced_measurement() {
     let mut auth =
         crate::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
     let token = auth.login("admin", "a-long-test-password").unwrap().token;
-    let mut config = crate::ServerConfig::loopback(root.path());
+    let mut config = crate::ServerConfig::new(root.path());
     config.http_spool_limits.recovery_reserve_bytes = 1;
     let spool = config.spool_dir.clone();
     let app = crate::router(Arc::new(RetainedGenerationBackend), auth, config).unwrap();
@@ -1842,7 +1842,7 @@ async fn typed_content_hash_header_rejects_noncanonical_values_before_staging() 
     let mut auth =
         crate::AuthStore::initialize(root.path(), "admin", "a-long-test-password").unwrap();
     let token = auth.login("admin", "a-long-test-password").unwrap().token;
-    let mut config = crate::ServerConfig::loopback(root.path());
+    let mut config = crate::ServerConfig::new(root.path());
     config.http_spool_limits.recovery_reserve_bytes = 1;
     let spool = config.spool_dir.clone();
     let app = crate::router(Arc::new(RetainedGenerationBackend), auth, config).unwrap();

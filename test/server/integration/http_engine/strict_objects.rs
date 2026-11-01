@@ -249,7 +249,7 @@ async fn namespace_batch_preserves_null_digest_and_replays_after_reopen() {
     let system = root.path().join("system");
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     let revoked = login(&app, "admin", "integration-test-password").await;
     success(&app, &revoked, "POST", "/api/auth/logout", None).await;

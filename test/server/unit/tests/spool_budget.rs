@@ -3,7 +3,7 @@ use crate::spool_budget::METADATA_ALLOWANCE;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn config(root: &Path, bytes: u64) -> ServerConfig {
-    let mut config = ServerConfig::loopback(root);
+    let mut config = ServerConfig::new(root);
     config.http_spool_limits = SpoolLimits {
         bytes_per_account: bytes,
         bytes_total: bytes,
@@ -528,7 +528,7 @@ async fn read_slots_remain_held_by_unconsumed_bodies() {
 #[tokio::test]
 async fn checksum_bodies_share_read_slots_and_expire_without_polling() {
     let root = crate::tests::private_tempdir();
-    let mut config = ServerConfig::loopback(root.path());
+    let mut config = ServerConfig::new(root.path());
     config.http_transfer_limits.idle_timeout = Duration::from_millis(100);
     let app = application_config(root.path(), config);
     let (token, _, _) = authenticated(&app).await;

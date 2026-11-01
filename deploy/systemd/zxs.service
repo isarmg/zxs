@@ -1,6 +1,6 @@
 [Unit]
 Description=ZXS Web management and storage daemon
-Documentation=file:/opt/zxs/README.md
+Documentation=file:/zxs/INSTALL.md
 After=local-fs.target network.target
 
 [Service]
@@ -8,14 +8,13 @@ Type=simple
 User=zxs
 Group=zxs
 UMask=0077
-StateDirectory=zxs
-StateDirectoryMode=0700
-# Runtime state contains sockets only. Retained SMB data belongs to
-# --management-root/smb-spool under the persistent StateDirectory.
-RuntimeDirectory=zxs
-RuntimeDirectoryMode=0700
-WorkingDirectory=/var/lib/zxs
-ExecStart=/opt/zxs/bin/zxs --root /var/lib/zxs/state --management-root /var/lib/zxs/management --listen 0.0.0.0:7400 --external-origin https://zxs.example.com --web-dir /opt/zxs/web --setup-disk P01=/srv/zxs/disks/P01
+# Pre-create all private directories below /zxs for the zxs service account.
+Environment=HOME=/zxs/home TMPDIR=/zxs/tmp TMP=/zxs/tmp TEMP=/zxs/tmp
+Environment=XDG_CACHE_HOME=/zxs/cache XDG_CONFIG_HOME=/zxs/config XDG_DATA_HOME=/zxs/data XDG_STATE_HOME=/zxs/data/state XDG_RUNTIME_DIR=/zxs/run
+StandardOutput=append:/zxs/log/zxs.log
+StandardError=append:/zxs/log/zxs.log
+WorkingDirectory=/zxs
+ExecStart=/zxs/zxs --root /zxs/data/state --management-root /zxs/data/management --listen 0.0.0.0:7400 --setup-disk P01=/zxs/data/disks/P01
 KillSignal=SIGINT
 # Do not kill admitted durability/recovery work during normal shutdown.
 # A stuck kernel I/O requires an explicit operator force-stop and crash recovery.
@@ -26,10 +25,9 @@ NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 PrivateMounts=yes
-PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/zxs /run/zxs -/srv/zxs/disks/P01
+ReadWritePaths=/zxs/data /zxs/config /zxs/log /zxs/run /zxs/tmp /zxs/cache /zxs/home
 DevicePolicy=closed
 ProtectKernelTunables=yes
 ProtectKernelModules=yes

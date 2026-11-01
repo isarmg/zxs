@@ -121,7 +121,7 @@ async fn missing_data_disks_leave_login_diagnostics_and_health_usable() {
     }
     drop(AuthStore::initialize_management(&management, "admin", "a-long-test-password").unwrap());
     let (backend, auth) = open_service(&data, &management).unwrap();
-    let app = router(backend.clone(), auth, ServerConfig::loopback(&management)).unwrap();
+    let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
     assert_eq!(
         request(&app, "/healthz", None, None).await.0,
         StatusCode::OK
@@ -205,7 +205,7 @@ async fn stale_legacy_credentials_do_not_open_management_when_engine_fails() {
     drop(AuthStore::initialize(&data, "admin", "a-long-test-password").unwrap());
     std::fs::write(data.join("config.json"), "corrupt").unwrap();
     let (backend, auth) = open_service(&data, &management).unwrap();
-    let app = router(backend, auth, ServerConfig::loopback(&management)).unwrap();
+    let app = router(backend, auth, ServerConfig::new(&management)).unwrap();
     assert_eq!(
         request(&app, "/healthz", None, None).await.0,
         StatusCode::OK
@@ -270,7 +270,7 @@ async fn blocked_replication_never_blocks_login_and_queued_sessions_revalidate()
         AuthStore::initialize_management(&management, "admin", "a-long-test-password").unwrap();
     drop(auth);
     let (backend, auth) = open_service(&data, &management).unwrap();
-    let app = router(backend.clone(), auth, ServerConfig::loopback(&management)).unwrap();
+    let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             if backend.management_status().state() == crate::StorageState::Ready {
@@ -359,7 +359,7 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
         std::fs::Permissions::from_mode(0o600),
     )
     .unwrap();
-    let app = router(backend.clone(), auth, ServerConfig::loopback(&management)).unwrap();
+    let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
     assert_eq!(
         request(&app, "/api/setup/status", None, None).await.0,
         StatusCode::UNAUTHORIZED
@@ -447,7 +447,7 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
         drop(backend);
         std::fs::remove_dir_all(root.path().join(ids[0])).unwrap();
         let (backend, auth) = open_service(&data, &management).unwrap();
-        let app = router(backend.clone(), auth, ServerConfig::loopback(&management)).unwrap();
+        let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
         let (code, login) = request(
             &app,
             "/api/auth/login",
@@ -492,7 +492,7 @@ async fn singleton_http_lifecycle_remains_authoritative_without_storage() {
     std::fs::write(data.join("config.json"), "broken").unwrap();
     drop(AuthStore::initialize_management(&management, "admin", "a-long-test-password").unwrap());
     let (backend, auth) = open_service(&data, &management).unwrap();
-    let mut config = ServerConfig::loopback(&management);
+    let mut config = ServerConfig::new(&management);
     let web = root.path().join("web");
     std::fs::create_dir(&web).unwrap();
     std::fs::write(web.join("index.html"), "management shell").unwrap();
@@ -777,7 +777,7 @@ async fn web_completion_requires_bound_pristine_pre_authority_setup_proof() {
             data.join("management-authority.json").exists(),
             authority_already_claimed
         );
-        let app = router(backend.clone(), auth, ServerConfig::loopback(&management)).unwrap();
+        let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
         for _ in 0..100 {
             if !backend.management_status().recovering() {
                 break;
@@ -971,7 +971,7 @@ async fn preset_web_setup_is_lazy_digest_bound_and_preserves_custom_configuratio
         std::fs::Permissions::from_mode(0o600),
     )
     .unwrap();
-    let app = router(backend.clone(), auth, ServerConfig::loopback(&management)).unwrap();
+    let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
     assert_eq!(
         request(&app, "/healthz", None, None).await.0,
         StatusCode::OK
@@ -1107,7 +1107,7 @@ async fn background_reopen_uses_local_workspace_limits_and_authenticated_capacit
         },
     )
     .unwrap();
-    let app = router(backend.clone(), auth, ServerConfig::loopback(&management)).unwrap();
+    let app = router(backend.clone(), auth, ServerConfig::new(&management)).unwrap();
     wait_for_ready(&backend).await;
     let (status, login) = request(
         &app,

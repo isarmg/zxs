@@ -656,12 +656,7 @@ async fn actual_http_controls_expose_baseline_progress_and_keep_check_unchanged(
         },
     )
     .unwrap();
-    let app = crate::router(
-        backend.clone(),
-        auth,
-        crate::ServerConfig::loopback(&management),
-    )
-    .unwrap();
+    let app = crate::router(backend.clone(), auth, crate::ServerConfig::new(&management)).unwrap();
     let deadline = Instant::now() + DEADLINE;
     while backend.inner.backend().is_err() {
         assert!(Instant::now() < deadline);

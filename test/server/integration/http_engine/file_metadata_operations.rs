@@ -252,7 +252,7 @@ async fn file_selection_replays_after_its_branch_is_merged_and_path_is_renamed()
     let system = root.path().join("system");
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     let revoked = revoked_session(&app).await;
     let before = history(&app, &token, file).await;
@@ -333,7 +333,7 @@ async fn metadata_mutation_replay_binds_location_after_rename_and_reopen() {
     let system = root.path().join("system");
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     let before = history(&app, &token, file).await;
     let events = success(&app, &token, "GET", "/api/events", None).await;
@@ -835,7 +835,7 @@ async fn contextual_branch_selection_preserves_current_file_when_target_body_is_
     }
     let backend = Arc::new(EngineBackend::new(engine));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     let route = format!("/api/file-manager/files/{file}/select");
     for contextual in [false, true] {
@@ -973,7 +973,7 @@ async fn file_merge_requires_explicit_consent_and_preserves_both_location_digest
         let system = root.path().join("system");
         let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
         let auth = backend.open_auth(&system).unwrap();
-        let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+        let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
         let token = login(&app, "admin", "integration-test-password").await;
         success(&app, &token, "POST", &route, Some(request)).await;
         assert_eq!(history(&app, &token, file).await, after);
@@ -1131,7 +1131,7 @@ async fn file_tag_batches_keep_static_policy_atomic_preflight_and_permanent_repl
         let system = root.path().join("system");
         let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
         let auth = backend.open_auth(&system).unwrap();
-        let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+        let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
         let token = login(&app, "admin", "integration-test-password").await;
         let revoked = revoked_session(&app).await;
         assert_eq!(
@@ -1243,7 +1243,7 @@ async fn typed_backup_routes_preserve_wire_admission_digest_and_permanent_receip
     let system = root.path().join("system");
     let backend = Arc::new(EngineBackend::new(reopen_after_router_drop(&system).await));
     let auth = backend.open_auth(&system).unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     let token = login(&app, "admin", "integration-test-password").await;
     let replay = success(&app, &token, "PUT", &route, Some(request.clone())).await;
     assert_eq!(replay["result"], original["result"]);

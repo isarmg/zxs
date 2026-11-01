@@ -91,7 +91,7 @@ async fn checksum_failure_status_survives_recovery_and_requires_new_generation_f
     let auth = backend
         .protect_auth(AuthStore::open(&system).unwrap())
         .unwrap();
-    let app = storage_server::router(backend, auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
     assert_eq!(
         success(&app, &token, "GET", &status_uri, None).await,
         before

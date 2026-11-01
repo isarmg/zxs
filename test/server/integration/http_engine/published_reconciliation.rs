@@ -60,8 +60,7 @@ async fn terminal_workspace_failure_keeps_http_receipt_queryable_and_writes_fenc
     let obstruction = obstruct_terminal_mirror(&mut engine, &workspace.workspace_id);
     let backend = Arc::new(EngineBackend::new(engine));
     let auth = backend.protect_auth(auth).unwrap();
-    let app =
-        storage_server::router(backend.clone(), auth, ServerConfig::loopback(&system)).unwrap();
+    let app = storage_server::router(backend.clone(), auth, ServerConfig::new(&system)).unwrap();
     let route = format!("/api/workspaces/{}/commit", workspace.workspace_id);
 
     // Invalid input still has its ordinary definite-rejection classification.

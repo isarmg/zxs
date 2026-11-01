@@ -1585,13 +1585,6 @@ impl ServerConfig {
             smb: None,
         }
     }
-    /// Explicit local-only configuration for callers that need loopback isolation.
-    pub fn loopback(root: &Path) -> Self {
-        Self {
-            listen: SocketAddr::from(([127, 0, 0, 1], 7400)),
-            ..Self::new(root)
-        }
-    }
     fn prepare_spool(&self) -> Result<(), ApiError> {
         platform_io::fs_safety::PrivateDirectory::create_trusted(&self.spool_dir)
             .map_err(crate::upload_fs_error)?;
