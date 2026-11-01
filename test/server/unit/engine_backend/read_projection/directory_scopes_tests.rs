@@ -90,7 +90,7 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
                 })
                 .as_ref(),
                 "owner",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         engine
@@ -104,7 +104,7 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
                 .as_ref(),
                 &storage_contract::BranchName::parse("frozen").unwrap(),
                 "owner",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -161,7 +161,7 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
             None,
             &storage_contract::BranchName::parse("later").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let full = DirectoryScopesResponse::from(full);

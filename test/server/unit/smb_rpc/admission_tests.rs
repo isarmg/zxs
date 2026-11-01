@@ -60,7 +60,7 @@ fn session_cap_is_shared_across_repositories_and_rejects_other_samba_names() {
                 name: storage_contract::RepositoryName::parse("second-share").unwrap(),
                 primary_slot_id: "P01".into(),
                 target_copies: 3,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap()
@@ -106,7 +106,7 @@ fn session_cap_is_shared_across_repositories_and_rejects_other_samba_names() {
 fn failed_repository_admission_does_not_leak_session_slots() {
     let (_temp, shared, _backend, _branch) = fixture();
     for _ in 0..=MAX_AUTHENTICATED_SESSIONS {
-        let (rejected, response) = connect(shared.clone(), "alice", &new_id("repo"));
+        let (rejected, response) = connect(shared.clone(), "alice", &new_id("repo").unwrap());
         assert!(
             matches!(response, Response::Error { code, .. } if code != storage_contract::ErrorCode::ResourceLimitExceeded)
         );

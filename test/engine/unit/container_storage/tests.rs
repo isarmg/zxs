@@ -30,7 +30,7 @@ fn version(state: &State, history: &str, file: &str, name: &str, bytes: &[u8]) -
     let (storage_name, created_at) = version_identity(state, file, name, &hash).unwrap();
     FileVersion {
         history_tree_id: history.into(),
-        version_id: new_id("ver"),
+        version_id: new_id("ver").unwrap(),
         file_id: file.into(),
         creation_primary_slot_id: "P01".into(),
         logical_size: bytes.len() as u64,
@@ -89,15 +89,15 @@ fn install_existing(directory: &Path, version: &FileVersion) -> Result<PathBuf> 
 }
 
 fn reserve(state: &mut State, version: &FileVersion) -> String {
-    let id = new_id("br");
+    let id = new_id("br").unwrap();
     state.branches.insert(
         id.clone(),
         Branch {
             branch_id: id.clone(),
             history_tree_id: version.history_tree_id.clone(),
             name: "draft".into(),
-            head_commit_id: new_id("commit"),
-            fork_commit_id: new_id("commit"),
+            head_commit_id: new_id("commit").unwrap(),
+            fork_commit_id: new_id("commit").unwrap(),
             branch_kind: storage_contract::BranchKind::File,
             file_id: Some(version.file_id.clone()),
             file_node_id: None,
@@ -138,8 +138,8 @@ fn with_version(version: &FileVersion) -> State {
 fn version_creation_time_requires_the_current_whole_second_utc_form() {
     let mut item = version(
         &State::default(),
-        &new_id("history"),
-        &new_id("file"),
+        &new_id("history").unwrap(),
+        &new_id("file").unwrap(),
         "file.txt",
         b"body",
     );
@@ -169,8 +169,8 @@ fn version_creation_time_requires_the_current_whole_second_utc_form() {
 fn current_version_requires_storage_name_and_creation_time() {
     let item = version(
         &State::default(),
-        &new_id("history"),
-        &new_id("file"),
+        &new_id("history").unwrap(),
+        &new_id("file").unwrap(),
         "file.txt",
         b"body",
     );
@@ -203,21 +203,24 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
     for legacy_name in ["pending-branches", "legacy"] {
         for bytes in [b"".as_slice(), b"preserve old bytes".as_slice()] {
             let temporary = tempfile::tempdir().unwrap();
-            let config = ValidatedConfig::try_from(Config::development([
-                temporary.path().join("p"),
-                temporary.path().join("b"),
-                temporary.path().join("c"),
-            ]))
+            let config = ValidatedConfig::try_from(
+                Config::development([
+                    temporary.path().join("p"),
+                    temporary.path().join("b"),
+                    temporary.path().join("c"),
+                ])
+                .unwrap(),
+            )
             .unwrap();
             drop(
                 Engine::initialize_validated(&temporary.path().join("system"), config.clone())
                     .unwrap(),
             );
-            let history_id = new_id("history");
+            let history_id = new_id("history").unwrap();
             let item = version(
                 &State::default(),
                 &history_id,
-                &new_id("file"),
+                &new_id("file").unwrap(),
                 "file.txt",
                 b"body",
             );
@@ -260,15 +263,18 @@ fn unsupported_legacy_containers_are_rejected_without_cleanup_or_migration() {
 #[test]
 fn inherited_references_update_cache_without_creating_files_and_follow_rename() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = ValidatedConfig::try_from(Config::development([
-        temporary.path().join("p"),
-        temporary.path().join("b"),
-        temporary.path().join("c"),
-    ]))
+    let config = ValidatedConfig::try_from(
+        Config::development([
+            temporary.path().join("p"),
+            temporary.path().join("b"),
+            temporary.path().join("c"),
+        ])
+        .unwrap(),
+    )
     .unwrap();
     drop(Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap());
-    let history_id = new_id("history");
-    let file = new_id("file");
+    let history_id = new_id("history").unwrap();
+    let file = new_id("file").unwrap();
     let item = version(
         &State::default(),
         &history_id,
@@ -332,15 +338,18 @@ fn inherited_references_update_cache_without_creating_files_and_follow_rename() 
 #[test]
 fn physical_move_preserves_one_body_and_old_version_identity_across_replay() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = ValidatedConfig::try_from(Config::development([
-        temporary.path().join("p"),
-        temporary.path().join("b"),
-        temporary.path().join("c"),
-    ]))
+    let config = ValidatedConfig::try_from(
+        Config::development([
+            temporary.path().join("p"),
+            temporary.path().join("b"),
+            temporary.path().join("c"),
+        ])
+        .unwrap(),
+    )
     .unwrap();
     drop(Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap());
-    let history_id = new_id("history");
-    let file = new_id("file");
+    let history_id = new_id("history").unwrap();
+    let file = new_id("file").unwrap();
     let item = version(
         &State::default(),
         &history_id,
@@ -393,11 +402,14 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
     for fault in ["after_finalize", "after_container_names"] {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("state");
-        let config = ValidatedConfig::try_from(Config::development([
-            temporary.path().join("p"),
-            temporary.path().join("b"),
-            temporary.path().join("c"),
-        ]))
+        let config = ValidatedConfig::try_from(
+            Config::development([
+                temporary.path().join("p"),
+                temporary.path().join("b"),
+                temporary.path().join("c"),
+            ])
+            .unwrap(),
+        )
         .unwrap();
         let mut engine = Engine::initialize_validated(&root, config.clone()).unwrap();
         let repo = engine
@@ -406,7 +418,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
                 "P01",
                 3,
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine
@@ -421,7 +433,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "alice".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -440,7 +452,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
                 &repo.repository_id,
                 Some(&name_policy::LookupPath::parse("a").unwrap()),
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap()
             .result["directory_branch_id"]
@@ -452,7 +464,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
                 &repo.repository_id,
                 Some(&name_policy::LookupPath::parse("b").unwrap()),
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap()
             .result["directory_branch_id"]
@@ -465,7 +477,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
                 Some(&name_policy::LookupPath::parse("a").unwrap()),
                 &storage_contract::BranchName::parse("retained").unwrap(),
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap()
             .result["directory_branch_id"]
@@ -510,7 +522,7 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
                 }),
             }],
         };
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         engine.inject_fault_once(fault);
         assert_eq!(
             engine
@@ -565,15 +577,18 @@ fn decided_cross_directory_move_recovers_both_views_and_one_physical_container()
 #[test]
 fn canonical_location_handles_reserved_looking_user_names_and_prefix_moves() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = ValidatedConfig::try_from(Config::development([
-        temporary.path().join("p"),
-        temporary.path().join("b"),
-        temporary.path().join("c"),
-    ]))
+    let config = ValidatedConfig::try_from(
+        Config::development([
+            temporary.path().join("p"),
+            temporary.path().join("b"),
+            temporary.path().join("c"),
+        ])
+        .unwrap(),
+    )
     .unwrap();
     drop(Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap());
-    let history_id = new_id("history");
-    let file = new_id("file");
+    let history_id = new_id("history").unwrap();
+    let file = new_id("file").unwrap();
     let item = version(
         &State::default(),
         &history_id,
@@ -607,16 +622,19 @@ fn canonical_location_handles_reserved_looking_user_names_and_prefix_moves() {
 #[test]
 fn new_name_admission_does_not_revalidate_published_projection_spelling() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = ValidatedConfig::try_from(Config::development([
-        temporary.path().join("p"),
-        temporary.path().join("b"),
-        temporary.path().join("c"),
-    ]))
+    let config = ValidatedConfig::try_from(
+        Config::development([
+            temporary.path().join("p"),
+            temporary.path().join("b"),
+            temporary.path().join("c"),
+        ])
+        .unwrap(),
+    )
     .unwrap();
     drop(Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap());
     let resources = Arc::new(DiskResources::open(&config, true).unwrap());
-    let history_id = new_id("history");
-    let file = new_id("file");
+    let history_id = new_id("history").unwrap();
+    let file = new_id("file").unwrap();
     let item = version(&State::default(), &history_id, &file, "file.txt", b"body");
     let history = config.disks[0].root.join("histories").join(&history_id);
     let directory = prepare(&history, &item, b"body");
@@ -672,7 +690,7 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
         .join(file)
         .join("namespace")
         .join(NAMESPACE_MARKER);
-    write_json(&marker, &new_id("file"), true).unwrap();
+    write_json(&marker, &new_id("file").unwrap(), true).unwrap();
     let evidence = fs::read(&marker).unwrap();
     assert!(matches!(
         prepare_names_inner(&config, &resources, &ProjectionTransition::new(&previous, &published, None).unwrap(), MAX_METADATA, true),
@@ -690,8 +708,8 @@ fn new_name_admission_does_not_revalidate_published_projection_spelling() {
 #[test]
 fn identity_counts_each_file_independently_with_required_numbered_names() {
     let mut state = State::default();
-    let file = new_id("file");
-    let history = new_id("history");
+    let file = new_id("file").unwrap();
+    let history = new_id("history").unwrap();
     let old = version(&state, &history, &file, "报告.txt", b"first");
     state.versions.insert(old.version_id.clone(), old);
     let next = version(&state, &history, &file, "报告.txt", b"next");
@@ -720,9 +738,15 @@ fn identity_counts_each_file_independently_with_required_numbered_names() {
     );
     assert_eq!(
         sequence(
-            version(&state, &history, &new_id("file"), "other.txt", b"other")
-                .storage_name
-                .as_str()
+            version(
+                &state,
+                &history,
+                &new_id("file").unwrap(),
+                "other.txt",
+                b"other"
+            )
+            .storage_name
+            .as_str()
         )
         .unwrap(),
         1
@@ -740,8 +764,8 @@ fn identity_counts_each_file_independently_with_required_numbered_names() {
 
 #[test]
 fn identity_preserves_number_width_and_exhaustion_without_global_sequence_coupling() {
-    let history = new_id("history");
-    let file = new_id("file");
+    let history = new_id("history").unwrap();
+    let file = new_id("file").unwrap();
     let original = version(&State::default(), &history, &file, "file.txt", b"old");
     let digest = original.content_hash.digest().to_hex();
     for (number, expected) in [
@@ -770,7 +794,13 @@ fn identity_preserves_number_width_and_exhaustion_without_global_sequence_coupli
     let error = version_identity(&state, &file, "file.txt", &blake3::hash(b"next")).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ResourceLimit);
     assert_eq!(error.message(), "file version sequence exhausted");
-    let other = version(&state, &history, &new_id("file"), "other.txt", b"other");
+    let other = version(
+        &state,
+        &history,
+        &new_id("file").unwrap(),
+        "other.txt",
+        b"other",
+    );
     assert_eq!(sequence(&other.storage_name).unwrap(), 1);
 }
 
@@ -788,8 +818,8 @@ fn raw_storage_sequence_parser_retains_format_errors() {
 #[test]
 fn installation_moves_one_ordinary_inode_and_missing_paths_remain_classifiable() {
     let temporary = tempfile::tempdir().unwrap();
-    let history_id = new_id("history");
-    let file = new_id("file");
+    let history_id = new_id("history").unwrap();
+    let file = new_id("file").unwrap();
     let history = temporary.path().join(&history_id);
     let item = version(
         &State::default(),
@@ -830,17 +860,20 @@ fn installation_moves_one_ordinary_inode_and_missing_paths_remain_classifiable()
 #[test]
 fn rename_and_note_projection_replays_without_changing_body_identity() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = ValidatedConfig::try_from(Config::development([
-        temporary.path().join("primary"),
-        temporary.path().join("backup"),
-        temporary.path().join("tertiary"),
-    ]))
+    let config = ValidatedConfig::try_from(
+        Config::development([
+            temporary.path().join("primary"),
+            temporary.path().join("backup"),
+            temporary.path().join("tertiary"),
+        ])
+        .unwrap(),
+    )
     .unwrap();
     let engine =
         Engine::initialize_validated(&temporary.path().join("state"), config.clone()).unwrap();
     drop(engine);
-    let history_id = new_id("history");
-    let file = new_id("file");
+    let history_id = new_id("history").unwrap();
+    let file = new_id("file").unwrap();
     let history = config.disks[0].root.join("histories").join(&history_id);
     let mut previous = State::default();
     let item = version(
@@ -875,7 +908,8 @@ fn rename_and_note_projection_replays_without_changing_body_identity() {
     next.file_notes.insert(file.clone(), "文件备注".into());
     next.version_notes
         .insert(item.version_id.clone(), "版本备注".into());
-    next.file_selections.insert(file.clone(), new_id("br"));
+    next.file_selections
+        .insert(file.clone(), new_id("br").unwrap());
     synchronize_names(&config, &previous, &next).unwrap();
     let renamed = content_path(&directory, &item).unwrap();
     assert!(renamed.to_str().unwrap().contains("/重命名.md/versions/"));
@@ -921,11 +955,14 @@ fn rename_and_note_projection_replays_without_changing_body_identity() {
 #[test]
 fn empty_name_projection_has_no_staging_file() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = ValidatedConfig::try_from(Config::development([
-        temporary.path().join("p"),
-        temporary.path().join("b"),
-        temporary.path().join("c"),
-    ]))
+    let config = ValidatedConfig::try_from(
+        Config::development([
+            temporary.path().join("p"),
+            temporary.path().join("b"),
+            temporary.path().join("c"),
+        ])
+        .unwrap(),
+    )
     .unwrap();
     let resources = Arc::new(DiskResources::open(&config, true).unwrap());
     let previous = State::default();
@@ -933,7 +970,7 @@ fn empty_name_projection_has_no_staging_file() {
     metadata_only.sequence = 1;
     metadata_only
         .file_notes
-        .insert(new_id("file"), "no physical container".into());
+        .insert(new_id("file").unwrap(), "no physical container".into());
     for next in [&previous, &metadata_only] {
         for historical in [false, true] {
             let prepared = prepare_names_inner(
@@ -960,7 +997,7 @@ fn capture_fixture() -> (State, String, String) {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("system"),
-        Config::development([temporary.path().join("disk")]),
+        Config::development([temporary.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -969,20 +1006,20 @@ fn capture_fixture() -> (State, String, String) {
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut state = engine.state().clone();
     let head = state.branches[&repo.main_branch_id].head_commit_id.clone();
-    let file = new_id("file");
+    let file = new_id("file").unwrap();
     state.commits.get_mut(&head).unwrap().entries = ["first.txt", "alias.txt"]
         .into_iter()
         .map(|name| Entry {
-            entry_id: new_id("entry"),
+            entry_id: new_id("entry").unwrap(),
             path: name_policy::PortablePath::parse(&(format!("folder/{name}"))).unwrap(),
             kind: NamespaceEntryKind::File,
             file_id: file.clone(),
-            version_id: new_id("ver"),
+            version_id: new_id("ver").unwrap(),
             size: 1,
         })
         .collect();
@@ -1033,7 +1070,7 @@ fn identity_preserves_generated_storage_name_limit() {
     name_policy::validate_path(&name).unwrap();
     let error = version_identity(
         &State::default(),
-        &new_id("file"),
+        &new_id("file").unwrap(),
         &name,
         &blake3::hash(b"body"),
     )
@@ -1060,13 +1097,13 @@ fn name_capture_exposes_missing_internal_main_branch() {
 fn copied_body_installs_owned_inode_but_existing_corrupt_target_is_rejected() {
     use std::os::unix::fs::PermissionsExt;
     let temporary = tempfile::tempdir().unwrap();
-    let history_id = new_id("history");
+    let history_id = new_id("history").unwrap();
     let history = temporary.path().join(&history_id);
     let bytes = b"a complete copied payload";
     let mut item = version(
         &State::default(),
         &history_id,
-        &new_id("file"),
+        &new_id("file").unwrap(),
         "body",
         bytes,
     );
@@ -1134,12 +1171,12 @@ fn copied_body_installs_owned_inode_but_existing_corrupt_target_is_rejected() {
 #[test]
 fn resumed_installation_verifies_external_prepared_body() {
     let temporary = tempfile::tempdir().unwrap();
-    let history_id = new_id("history");
+    let history_id = new_id("history").unwrap();
     let history = temporary.path().join(&history_id);
     let item = version(
         &State::default(),
         &history_id,
-        &new_id("file"),
+        &new_id("file").unwrap(),
         "body",
         b"original",
     );
@@ -1157,14 +1194,15 @@ fn resumed_installation_verifies_external_prepared_body() {
 fn verified_existing_fixture() -> (tempfile::TempDir, DiskConfig, FileVersion, PathBuf) {
     let temporary = tempfile::tempdir().unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([temporary.path().join("disk")])).unwrap();
+        ValidatedConfig::try_from(Config::development([temporary.path().join("disk")]).unwrap())
+            .unwrap();
     let disk = config.disks[0].clone();
-    let history = disk.root.join("histories").join(new_id("history"));
+    let history = disk.root.join("histories").join(new_id("history").unwrap());
     let bytes = b"verified existing body";
     let mut item = version(
         &State::default(),
         history.file_name().unwrap().to_str().unwrap(),
-        &new_id("file"),
+        &new_id("file").unwrap(),
         "body",
         bytes,
     );
@@ -1221,7 +1259,7 @@ fn rooted_container_lookup_keeps_nested_markers_and_body_on_the_held_disk() {
     let marker = moved
         .join(named.strip_prefix(&disk.root).unwrap())
         .join(OWNER_MARKER);
-    write_json(&marker, &new_id("file"), true).unwrap();
+    write_json(&marker, &new_id("file").unwrap(), true).unwrap();
     assert_eq!(
         content_path_at(&root, &directory, &item, &mut |_| Ok(()))
             .unwrap_err()
@@ -1407,15 +1445,16 @@ fn rooted_installation_moves_the_verified_inode_without_touching_replacement_roo
 fn prepared_names_apply_to_the_resource_captured_before_root_replacement() {
     let temporary = tempfile::tempdir().unwrap();
     let config =
-        ValidatedConfig::try_from(Config::development([temporary.path().join("disk")])).unwrap();
+        ValidatedConfig::try_from(Config::development([temporary.path().join("disk")]).unwrap())
+            .unwrap();
     drop(Engine::initialize_validated(&temporary.path().join("system"), config.clone()).unwrap());
     let resources = Arc::new(DiskResources::open(&config, true).unwrap());
     let disk = &config.disks[0];
-    let history_id = new_id("history");
+    let history_id = new_id("history").unwrap();
     let item = version(
         &State::default(),
         &history_id,
-        &new_id("file"),
+        &new_id("file").unwrap(),
         "body",
         b"original body",
     );

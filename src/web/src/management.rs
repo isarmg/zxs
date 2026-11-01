@@ -97,6 +97,25 @@ fn needs_disk_refresh(state: &State, was_readable: bool) -> bool {
         && (!was_readable || !state.files.disks_loaded)
 }
 
+fn accept_status(s: &mut State, value: &Value) -> bool {
+    let was_readable = s.management.storage.readable();
+    accept(&mut s.management, value);
+    invalidate_restored_disks(s, was_readable);
+    // A successful status check resolves the retry admission fence,
+    // not any outstanding data mutation's outcome.
+    s.management.retry_unknown = false;
+    let load_files = needs_disk_refresh(s, was_readable);
+    // The workspace already renders recovery controls above file pages. Keep
+    // active editor owners there: switching pages would destroy pending text.
+    if !s.management.storage.readable()
+        && s.files.history_editors == 0
+        && matches!(s.page, crate::ui::Page::Files | crate::ui::Page::Details)
+    {
+        s.page = crate::ui::Page::Health;
+    }
+    load_files
+}
+
 pub(crate) fn load(state: RwSignal<State>) {
     let Some((epoch, generation)) = state
         .try_update(|s| {
@@ -135,18 +154,7 @@ pub(crate) fn load(state: RwSignal<State>) {
             s.management.loading = false;
             match result {
                 Ok(value) => {
-                    let was_readable = s.management.storage.readable();
-                    accept(&mut s.management, &value);
-                    invalidate_restored_disks(s, was_readable);
-                    // A successful status check resolves the retry admission fence,
-                    // not any outstanding data mutation's outcome.
-                    s.management.retry_unknown = false;
-                    load_files = needs_disk_refresh(s, was_readable);
-                    if !s.management.storage.readable()
-                        && matches!(s.page, crate::ui::Page::Files | crate::ui::Page::Details)
-                    {
-                        s.page = crate::ui::Page::Health;
-                    }
+                    load_files = accept_status(s, &value);
                 }
                 Err(error) => {
                     s.management.storage = Storage::Unknown;

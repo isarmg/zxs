@@ -6,7 +6,7 @@ fn id(prefix: &str, number: usize) -> String {
 
 fn entry(file: usize, path: &str) -> Entry {
     Entry {
-        entry_id: new_id("entry"),
+        entry_id: new_id("entry").unwrap(),
         path: name_policy::PortablePath::parse(path).unwrap(),
         kind: NamespaceEntryKind::File,
         file_id: id("file", file),
@@ -77,7 +77,7 @@ fn fixture() -> State {
                 parent_commit_ids: Vec::new(),
                 tree_id: id("tree", number),
                 sequence: 0,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 author: "alice".into(),
                 message: String::new(),
                 entries: vec![entry(number, &format!("repo-{number}/original.txt"))],

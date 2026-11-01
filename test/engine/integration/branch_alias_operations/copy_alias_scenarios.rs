@@ -7,7 +7,7 @@ fn copied_file_branch_root_records_the_copy_actor_and_operation() {
     let source = pool.register("", "source");
     let target = pool.register("", "target");
     let untouched = pool.branch(&source);
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let request = DirectoryNamespaceBatch {
         kind: storage_contract::DirectoryBatchKind::Copy,
         items: vec![pool.mapping(&source, "source.txt", &target, "copy.txt")],
@@ -45,7 +45,7 @@ fn renamed_targets(pool: &mut Pool) -> (String, String) {
             )
             .unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let after = pool.register("", "after rename");
@@ -77,7 +77,7 @@ fn copied_file_aliases_keep_each_frozen_parent_and_destination_spelling() {
             kind: storage_contract::DirectoryBatchKind::Copy,
             items,
         };
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         let receipt = pool
             .engine
             .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", operation)
@@ -227,7 +227,7 @@ fn copied_alias_destination_collision_rejects_all_targets_without_mutation() {
                 &pool.repo.repository_id,
                 &request,
                 "admin",
-                storage_contract::OperationId::generate()
+                storage_contract::OperationId::generate().unwrap()
             )
             .unwrap_err()
             .code(),

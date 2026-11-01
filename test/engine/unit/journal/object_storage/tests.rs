@@ -6,6 +6,7 @@ fn config(temp: &tempfile::TempDir) -> Config {
         temp.path().join("b"),
         temp.path().join("c"),
     ])
+    .unwrap()
 }
 #[test]
 fn current_shards_preserve_hashes_and_reject_conflicting_bytes() {

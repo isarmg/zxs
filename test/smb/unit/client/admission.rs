@@ -216,7 +216,8 @@ fn namespace_timeout_preserves_original_operation_and_disconnects_every_clone() 
         "new".into(),
         None,
         false,
-    );
+    )
+    .unwrap();
     let Request::Namespace { operation_id, .. } = &request else {
         unreachable!()
     };

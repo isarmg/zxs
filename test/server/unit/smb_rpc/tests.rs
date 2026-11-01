@@ -180,7 +180,7 @@ impl Backend for LostCommitReply {
             self.inner.upload(
                 identity,
                 &workspace.workspace_id,
-                &new_id("entry"),
+                &new_id("entry").unwrap(),
                 &name_policy::PortablePath::parse("report.txt").unwrap(),
                 &crate::UploadSource::from_file(source.reopen().unwrap(), u64::MAX)?,
             )?;
@@ -188,7 +188,7 @@ impl Backend for LostCommitReply {
                 identity,
                 crate::CommitWorkspace {
                     workspace_id: workspace.workspace_id,
-                    operation_id: OperationId::generate(),
+                    operation_id: OperationId::generate().unwrap(),
                     expected_head: workspace.base_head,
                     fencing_token: workspace.fencing_token,
                     message: "concurrent update during SMB open".into(),
@@ -780,7 +780,8 @@ fn fixture_configure(
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     configure(&mut config);
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
@@ -789,7 +790,7 @@ fn fixture_configure(
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -801,7 +802,7 @@ fn fixture_configure(
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -945,7 +946,7 @@ fn select_pending_file(shared: &Shared, branch: &str) -> String {
                 source_version_id: entry["version_id"].as_str().unwrap().into(),
                 source_node_id: None,
                 name: storage_contract::BranchName::parse("draft").unwrap(),
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .and_then(|result| crate::operation_wire::operation_wire(result.into()))
@@ -958,7 +959,7 @@ fn select_pending_file(shared: &Shared, branch: &str) -> String {
                 file_id: file.clone(),
                 branch_id: created["result"]["branch_id"].as_str().unwrap().into(),
                 location: None,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap();
@@ -975,7 +976,7 @@ fn directory_fixture(shared: &Shared) -> (String, String, String) {
             identity,
             crate::tests::disk_directory_request(
                 json!({
-                    "slot_id":"P01","path":"资料","name":"draft","operation_id":new_id("op")
+                    "slot_id":"P01","path":"资料","name":"draft","operation_id":new_id("op").unwrap()
                 }),
                 crate::DiskDirectoryAction::Create,
             ),
@@ -1004,7 +1005,7 @@ fn select_directory(shared: &Shared, repository: &str, directory: &str) {
             crate::SelectDefaultDirectoryBranch {
                 repository_id: repository.into(),
                 directory_branch_id: directory.into(),
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap();
@@ -1092,7 +1093,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
         .clone();
     let register = |path: &str, name: &str| {
         shared.backend.mutate_disk_directory(identity, crate::tests::disk_directory_request(json!({
-        "slot_id":"P01","path":format!("资料/{path}"),"name":name,"operation_id":new_id("op")
+        "slot_id":"P01","path":format!("资料/{path}"),"name":name,"operation_id":new_id("op").unwrap()
     }),crate::DiskDirectoryAction::Create)).and_then(|result| crate::operation_wire::operation_wire(result.into())).unwrap()["result"]["directory_branch_id"].as_str().unwrap().to_owned()
     };
     let a_m = register("a", "m");
@@ -1101,7 +1102,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     let b_p = register("b", "p");
     for (path, name) in [("a", "m"), ("b", "l")] {
         shared.backend.mutate_disk_directory(identity, crate::tests::disk_directory_request(json!({
-            "slot_id":"P01","path":format!("资料/{path}"),"name":name,"operation_id":new_id("op")
+            "slot_id":"P01","path":format!("资料/{path}"),"name":name,"operation_id":new_id("op").unwrap()
         }),crate::DiskDirectoryAction::Select)).and_then(|result| crate::operation_wire::operation_wire(result.into())).unwrap();
     }
     let scope = |id: &str| {
@@ -1138,7 +1139,7 @@ fn namespace_move_transfers_only_selected_directory_views_and_keeps_read_handle(
     let _reader = File::from(fd.unwrap());
     client
         .dispatch(Request::Namespace {
-            operation_id: new_id("op"),
+            operation_id: new_id("op").unwrap(),
             kind: smb_protocol::protocol::NamespaceOperation::Rename,
             path: "a/report.txt".into(),
             destination: Some("b/report.txt".into()),
@@ -1209,13 +1210,13 @@ fn newly_created_ancestor_selection_fences_an_existing_create_handle() {
     shared
         .backend
         .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
-                "slot_id":"P01","path":"资料/future","name":"alternate","operation_id":new_id("op")
+                "slot_id":"P01","path":"资料/future","name":"alternate","operation_id":new_id("op").unwrap()
             }),crate::DiskDirectoryAction::Create)).and_then(|result| crate::operation_wire::operation_wire(result.into()))
         .unwrap();
     shared
         .backend
         .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
-                "slot_id":"P01","path":"资料/future","name":"alternate","operation_id":new_id("op")
+                "slot_id":"P01","path":"资料/future","name":"alternate","operation_id":new_id("op").unwrap()
             }),crate::DiskDirectoryAction::Select)).and_then(|result| crate::operation_wire::operation_wire(result.into()))
         .unwrap();
     file.write_all_at(b"keep", 0).unwrap();
@@ -1252,7 +1253,7 @@ fn nested_directory_switch_does_not_fence_an_unrelated_open_file() {
     shared
         .backend
         .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
-                "slot_id":"P01","path":"资料/nested","name":"alternate","operation_id":new_id("op")
+                "slot_id":"P01","path":"资料/nested","name":"alternate","operation_id":new_id("op").unwrap()
             }),crate::DiskDirectoryAction::Create)).and_then(|result| crate::operation_wire::operation_wire(result.into()))
         .unwrap();
     let mut one = session(shared.clone(), &branch);
@@ -1260,7 +1261,7 @@ fn nested_directory_switch_does_not_fence_an_unrelated_open_file() {
     shared
         .backend
         .mutate_disk_directory(&identity(&shared), crate::tests::disk_directory_request(json!({
-                "slot_id":"P01","path":"资料/nested","name":"alternate","operation_id":new_id("op")
+                "slot_id":"P01","path":"资料/nested","name":"alternate","operation_id":new_id("op").unwrap()
             }),crate::DiskDirectoryAction::Select)).and_then(|result| crate::operation_wire::operation_wire(result.into()))
         .unwrap();
     file.write_all_at(b"new", 0).unwrap();
@@ -1655,7 +1656,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
         .unwrap()
         .unwrap();
     two.dispatch(Request::Namespace {
-        operation_id: new_id("op"),
+        operation_id: new_id("op").unwrap(),
         kind: smb_protocol::protocol::NamespaceOperation::Rename,
         path: "report.txt".into(),
         destination: Some("REPORT.txt".into()),
@@ -1676,7 +1677,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     let file = File::from(fd.unwrap());
     assert_eq!(
         two.dispatch(Request::Namespace {
-            operation_id: new_id("op"),
+            operation_id: new_id("op").unwrap(),
             kind: smb_protocol::protocol::NamespaceOperation::Rename,
             path: "dir".into(),
             destination: Some("moved".into()),
@@ -1687,7 +1688,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
         storage_contract::ErrorCode::FileWriteBusy
     );
     two.dispatch(Request::Namespace {
-        operation_id: new_id("op"),
+        operation_id: new_id("op").unwrap(),
         kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
         path: "unrelated".into(),
         destination: None,
@@ -1709,7 +1710,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
     );
     assert_eq!(
         two.dispatch(Request::Namespace {
-            operation_id: new_id("op"),
+            operation_id: new_id("op").unwrap(),
             kind: smb_protocol::protocol::NamespaceOperation::Rename,
             path: "REPORT.txt".into(),
             destination: Some("unrelated".into()),
@@ -1720,7 +1721,7 @@ fn namespace_locks_cover_only_affected_paths_and_case_only_replace_preserves_ent
         storage_contract::ErrorCode::InvalidRequest
     );
     two.dispatch(Request::Namespace {
-        operation_id: new_id("op"),
+        operation_id: new_id("op").unwrap(),
         kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
         path: "after-failure".into(),
         destination: None,
@@ -1736,7 +1737,7 @@ fn listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories() 
     for path in ["Straße", "STRASSE/子目录", "Straße-other"] {
         session
             .dispatch(Request::Namespace {
-                operation_id: new_id("op"),
+                operation_id: new_id("op").unwrap(),
                 kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
                 path: path.into(),
                 destination: None,
@@ -1862,7 +1863,7 @@ fn external_same_file_change_rejects_rebase_and_preserves_work_bytes() {
             &one.identity,
             crate::CommitWorkspace {
                 workspace_id: workspace.workspace_id,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
                 message: "external app".into(),
@@ -2050,7 +2051,7 @@ fn writable_open_rejects_entry_changed_before_workspace_snapshot() {
         if missing {
             client
                 .dispatch(Request::Namespace {
-                    operation_id: new_id("op"),
+                    operation_id: new_id("op").unwrap(),
                     kind: smb_protocol::protocol::NamespaceOperation::Unlink,
                     path: "report.txt".into(),
                     destination: None,
@@ -2601,7 +2602,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
             "report.txt".into(),
             Some("é.txt".into()),
             false,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let original = session
@@ -2674,7 +2675,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
                 "new-e\u{301}".into(),
                 None,
                 false,
-                storage_contract::OperationId::generate()
+                storage_contract::OperationId::generate().unwrap()
             )
             .is_err()
     );
@@ -2685,7 +2686,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
                 "é.txt".into(),
                 Some("new-e\u{301}.txt".into()),
                 false,
-                storage_contract::OperationId::generate()
+                storage_contract::OperationId::generate().unwrap()
             )
             .is_err()
     );
@@ -2699,7 +2700,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
             "e\u{301}.txt".into(),
             Some("Å.txt".into()),
             false,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     session
@@ -2708,7 +2709,7 @@ fn canonical_equivalent_writable_open_binds_stored_display_path() {
             "A\u{30a}.txt".into(),
             None,
             false,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(session.entries().unwrap().is_empty());

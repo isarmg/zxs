@@ -15,7 +15,8 @@ async fn terminal_workspace_failure_keeps_http_receipt_queryable_and_writes_fenc
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&system, config).unwrap();
     let mut auth = AuthStore::initialize(&system, "admin", "integration-test-password").unwrap();
     let token = auth
@@ -26,7 +27,7 @@ async fn terminal_workspace_failure_keeps_http_receipt_queryable_and_writes_fenc
         .persist_auth_state(
             auth.snapshot().unwrap(),
             "system_auth",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let repo = engine
@@ -35,7 +36,7 @@ async fn terminal_workspace_failure_keeps_http_receipt_queryable_and_writes_fenc
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -47,7 +48,7 @@ async fn terminal_workspace_failure_keeps_http_receipt_queryable_and_writes_fenc
     let seal = engine
         .seal_workspace(&workspace.workspace_id, "admin")
         .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let body = prepare_commit(
         json_codec::to_value(seal).unwrap(),
         &workspace.workspace_id,

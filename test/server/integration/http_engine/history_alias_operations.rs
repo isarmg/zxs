@@ -8,7 +8,7 @@ async fn select_directory(app: &Router, token: &str, path: &str, name: &str) -> 
         token,
         "POST",
         "/api/file-manager/disks/P01/directory-select",
-        Some(json!({"path":path,"name":name,"operation_id":new_id("op")})),
+        Some(json!({"path":path,"name":name,"operation_id":new_id("op").unwrap()})),
     )
     .await
 }
@@ -36,10 +36,12 @@ async fn prepare_aliases(app: &Router, token: &str) -> (Value, Value) {
             token,
             "POST",
             "/api/file-manager/disks/P01/namespace-batch",
-            Some(json!({"kind":"move","operation_id":new_id("op"),"items":[{
-                "source":manager_batch_source(&source,"a/report.txt"),
-                "target":manager_batch_target(&target,destination)
-            }]})),
+            Some(
+                json!({"kind":"move","operation_id":new_id("op").unwrap(),"items":[{
+                    "source":manager_batch_source(&source,"a/report.txt"),
+                    "target":manager_batch_target(&target,destination)
+                }]}),
+            ),
         )
         .await;
     }

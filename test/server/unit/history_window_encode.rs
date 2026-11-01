@@ -289,7 +289,7 @@ fn every_collection_enforces_its_record_limit_before_encoding() {
         result_node_id: node_id(1),
         surviving_branch_id: branch_id(1),
         reused_node: true,
-        operation_id: OperationId::generate(),
+        operation_id: OperationId::generate().unwrap(),
         input_count: u64::MAX,
         parent_count: u64::MAX,
     };

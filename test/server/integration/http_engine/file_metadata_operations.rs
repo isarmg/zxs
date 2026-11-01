@@ -20,7 +20,7 @@ async fn scoped_and_retained_policies_require_the_backup_configuration_endpoint(
     let baseline = success(&app, &token, "GET", &format!("{route}?path=docs"), None).await;
     let configured = success(&app, &token, "PUT", &route, Some(json!({
         "path":"docs", "target_copies":2, "backup_prefixes":{"B01":"old"},
-        "expected_generation":"0", "expected_scope_id":baseline["scope"]["id"], "operation_id":new_id("op")
+        "expected_generation":"0", "expected_scope_id":baseline["scope"]["id"], "operation_id":new_id("op").unwrap()
     }))).await;
     let current = configured["result"]["policy"]["policy_id"]
         .as_str()
@@ -72,7 +72,7 @@ async fn scoped_and_retained_policies_require_the_backup_configuration_endpoint(
     .await;
     let changed = success(&app, &token, "PUT", &route, Some(json!({
         "path":"docs", "target_copies":3, "backup_prefixes":{"B01":"new","C01":"cold"},
-        "expected_generation":"1", "expected_scope_id":baseline["scope"]["id"], "operation_id":new_id("op")
+        "expected_generation":"1", "expected_scope_id":baseline["scope"]["id"], "operation_id":new_id("op").unwrap()
     }))).await;
     assert_eq!(changed["result"]["policy"]["policy_id"], current);
     assert_eq!(changed["result"]["file_count"], "1");
@@ -94,7 +94,7 @@ async fn scoped_and_retained_policies_require_the_backup_configuration_endpoint(
             &policy_route,
             Some(json!({
                 "repository_id":repo, "path_prefix":policy["path_prefix"], "target_copies":1,
-                "expected_generation":policy["generation"], "operation_id":new_id("op")
+                "expected_generation":policy["generation"], "operation_id":new_id("op").unwrap()
             })),
         )
         .await;
@@ -132,7 +132,7 @@ async fn scoped_and_retained_policies_require_the_backup_configuration_endpoint(
 }
 
 async fn branch(app: &Router, token: &str, file: &str, version: &str, name: &str) -> String {
-    success(app,token,"POST",&format!("/api/file-manager/files/{file}/branches"),Some(json!({"source_version_id":version,"source_node_id":version,"name":name,"operation_id":new_id("op")}))).await["result"]["branch_id"].as_str().unwrap().into()
+    success(app,token,"POST",&format!("/api/file-manager/files/{file}/branches"),Some(json!({"source_version_id":version,"source_node_id":version,"name":name,"operation_id":new_id("op").unwrap()}))).await["result"]["branch_id"].as_str().unwrap().into()
 }
 async fn select(app: &Router, token: &str, file: &str, branch: &str) {
     success(
@@ -140,7 +140,7 @@ async fn select(app: &Router, token: &str, file: &str, branch: &str) {
         token,
         "POST",
         &format!("/api/file-manager/files/{file}/select"),
-        Some(json!({"branch_id":branch,"operation_id":new_id("op")})),
+        Some(json!({"branch_id":branch,"operation_id":new_id("op").unwrap()})),
     )
     .await;
 }
@@ -177,15 +177,15 @@ async fn file_selection_replays_after_its_branch_is_merged_and_path_is_renamed()
     let route = format!("/api/file-manager/files/{file}/select");
     let unchanged = history(&app, &token, file).await;
     for body in [
-        json!({"branch_id":right,"repository_id":repo,"operation_id":new_id("op")}),
-        json!({"branch_id":right,"path":"report.txt","operation_id":new_id("op")}),
-        json!({"branch_id":right,"repository_id":null,"path":null,"operation_id":new_id("op")}),
-        json!({"branch_id":right,"repository_id":repo,"path":"","operation_id":new_id("op")}),
-        json!({"branch_id":right,"repository_id":repo,"path":"../report.txt","operation_id":new_id("op")}),
-        json!({"branch_id":right,"repository_id":repo,"path":"Cafe\u{301}","operation_id":new_id("op")}),
+        json!({"branch_id":right,"repository_id":repo,"operation_id":new_id("op").unwrap()}),
+        json!({"branch_id":right,"path":"report.txt","operation_id":new_id("op").unwrap()}),
+        json!({"branch_id":right,"repository_id":null,"path":null,"operation_id":new_id("op").unwrap()}),
+        json!({"branch_id":right,"repository_id":repo,"path":"","operation_id":new_id("op").unwrap()}),
+        json!({"branch_id":right,"repository_id":repo,"path":"../report.txt","operation_id":new_id("op").unwrap()}),
+        json!({"branch_id":right,"repository_id":repo,"path":"Cafe\u{301}","operation_id":new_id("op").unwrap()}),
         json!({"branch_id":right,"operation_id":"bad"}),
-        json!({"branch_id":right,"operation_id":new_id("op"),"file_id":"other"}),
-        json!({"branch_id":right,"operation_id":new_id("op"),"unknown":0}),
+        json!({"branch_id":right,"operation_id":new_id("op").unwrap(),"file_id":"other"}),
+        json!({"branch_id":right,"operation_id":new_id("op").unwrap(),"unknown":0}),
     ] {
         assert_eq!(
             send(&app, Some(&token), "POST", &route, Some(body)).await.0,
@@ -201,7 +201,7 @@ async fn file_selection_replays_after_its_branch_is_merged_and_path_is_renamed()
     );
     let mut selections = Vec::new();
     for scoped in [false, true] {
-        let mut request = json!({"branch_id":right,"operation_id":new_id("op")});
+        let mut request = json!({"branch_id":right,"operation_id":new_id("op").unwrap()});
         if scoped {
             request["repository_id"] = repo.into();
             request["path"] = "report.txt".into();
@@ -243,7 +243,7 @@ async fn file_selection_replays_after_its_branch_is_merged_and_path_is_renamed()
         &format!("/api/file-manager/files/{file}/merge"),
         Some(json!({
             "inputs":[{"branch_id":left,"expected_node_id":base},{"branch_id":right,"expected_node_id":base}],
-            "chosen_node_id":base,"surviving_branch_id":left,"confirmed":true,"operation_id":new_id("op")
+            "chosen_node_id":base,"surviving_branch_id":left,"confirmed":true,"operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -278,7 +278,7 @@ async fn file_selection_replays_after_its_branch_is_merged_and_path_is_renamed()
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(response["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
         let mut fresh = request;
-        fresh["operation_id"] = new_id("op").into();
+        fresh["operation_id"] = new_id("op").unwrap().into();
         if fresh.get("path").is_some() {
             fresh["path"] = "renamed.txt".into();
         }
@@ -311,14 +311,14 @@ async fn metadata_mutation_replay_binds_location_after_rename_and_reopen() {
     let tag_route = format!("/api/file-manager/files/{file}/tags");
     let tag_request = json!({
         "targets":[{"branch_id":left,"source_node_id":base,"expected_node_id":base}],
-        "add":["reviewed"],"remove":[],"repository_id":repo,"path":"report.txt","operation_id":new_id("op")
+        "add":["reviewed"],"remove":[],"repository_id":repo,"path":"report.txt","operation_id":new_id("op").unwrap()
     });
     let tagged = success(&app, &token, "POST", &tag_route, Some(tag_request.clone())).await;
     let merge_route = format!("/api/file-manager/files/{file}/merge");
     let merge_request = json!({
         "inputs":[{"branch_id":left,"expected_node_id":tagged["result"]["nodes"][0]["node_id"]},{"branch_id":right,"expected_node_id":base}],
         "chosen_node_id":base,"surviving_branch_id":left,"confirmed":true,
-        "repository_id":repo,"path":"report.txt","operation_id":new_id("op")
+        "repository_id":repo,"path":"report.txt","operation_id":new_id("op").unwrap()
     });
     let merged = success(
         &app,
@@ -363,7 +363,7 @@ async fn metadata_mutation_replay_binds_location_after_rename_and_reopen() {
         let mut path_changed = request.clone();
         path_changed["path"] = "renamed.txt".into();
         let mut repository_changed = request.clone();
-        repository_changed["repository_id"] = new_id("repo").into();
+        repository_changed["repository_id"] = new_id("repo").unwrap().into();
         let mut context_removed = request.clone();
         context_removed
             .as_object_mut()
@@ -409,7 +409,7 @@ async fn metadata_mutation_replay_binds_location_after_rename_and_reopen() {
             );
         }
         let mut fresh = request;
-        fresh["operation_id"] = new_id("op").into();
+        fresh["operation_id"] = new_id("op").unwrap().into();
         let (status, response) = send(&app, Some(&token), "POST", &route, Some(fresh)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(response["error"]["code"], "FILE_NOT_FOUND");
@@ -442,7 +442,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     let right = branch(&app, &token, file, base, "right").await;
     select(&app, &token, file, &left).await;
     let tag_route = format!("/api/file-manager/files/{file}/tags");
-    let tagged=success(&app,&token,"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":base,"expected_node_id":base}],"add":["已审核","work"],"remove":[],"operation_id":new_id("op")}))).await;
+    let tagged=success(&app,&token,"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":base,"expected_node_id":base}],"add":["已审核","work"],"remove":[],"operation_id":new_id("op").unwrap()}))).await;
     let tag_node = tagged["result"]["nodes"][0]["node_id"].as_str().unwrap();
     assert!(tag_node.starts_with("fmeta_"));
     let initial = history(&app, &token, file).await;
@@ -477,7 +477,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         &token,
         "PATCH",
         &format!("/api/file-manager/files/{file}/nodes/{tag_node}"),
-        Some(json!({"note":"独立标签备注","operation_id":new_id("op")})),
+        Some(json!({"note":"独立标签备注","operation_id":new_id("op").unwrap()})),
     )
     .await;
     manager_namespace(&app, &token, "rename", "report.txt", Some("renamed.txt")).await;
@@ -501,7 +501,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     )
     .await;
     assert_eq!(parents["parents"], json!([{"parent_node_id":path_node}]));
-    let historical=success(&app,&token,"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":tag_node,"expected_node_id":left_node}],"add":["归档"],"remove":["work"],"operation_id":new_id("op")}))).await;
+    let historical=success(&app,&token,"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":tag_node,"expected_node_id":left_node}],"add":["归档"],"remove":["work"],"operation_id":new_id("op").unwrap()}))).await;
     assert_eq!(historical["result"]["nodes"][0]["advanced"], false);
     assert_eq!(
         history(&app, &token, file).await["identity"]["context"]["current_node_id"],
@@ -509,7 +509,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
     );
     let before_invalid = history(&app, &token, file).await;
     for bad in [" bad".to_string(), "bad\nlabel".into(), "文".repeat(43)] {
-        assert_eq!(send(&app,Some(&token),"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":left_node,"expected_node_id":left_node}],"add":[bad],"remove":[],"operation_id":new_id("op")}))).await.0,StatusCode::BAD_REQUEST);
+        assert_eq!(send(&app,Some(&token),"POST",&tag_route,Some(json!({"targets":[{"branch_id":left,"source_node_id":left_node,"expected_node_id":left_node}],"add":[bad],"remove":[],"operation_id":new_id("op").unwrap()}))).await.0,StatusCode::BAD_REQUEST);
     }
     assert_eq!(history(&app, &token, file).await, before_invalid);
     select(&app, &token, file, &right).await;
@@ -519,7 +519,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
         .as_str()
         .unwrap();
     let merge_route = format!("/api/file-manager/files/{file}/merge");
-    let request = json!({"inputs":[{"branch_id":left,"expected_node_id":left_node},{"branch_id":right,"expected_node_id":right_node}],"chosen_node_id":tag_node,"surviving_branch_id":left,"confirmed":true,"repository_id":repo,"path":"renamed.txt","operation_id":new_id("op")});
+    let request = json!({"inputs":[{"branch_id":left,"expected_node_id":left_node},{"branch_id":right,"expected_node_id":right_node}],"chosen_node_id":tag_node,"surviving_branch_id":left,"confirmed":true,"repository_id":repo,"path":"renamed.txt","operation_id":new_id("op").unwrap()});
     let mut unconfirmed = request.clone();
     unconfirmed["confirmed"] = false.into();
     assert_eq!(
@@ -634,7 +634,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
             Some(&token),
             "POST",
             &format!("/api/file-manager/files/{file}/select"),
-            Some(json!({"branch_id":right,"operation_id":new_id("op")}))
+            Some(json!({"branch_id":right,"operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,
@@ -646,7 +646,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
             Some(&token),
             "PATCH",
             &format!("/api/file-manager/files/{file}/branches/{right}"),
-            Some(json!({"name":"forbidden label","operation_id":new_id("op")}))
+            Some(json!({"name":"forbidden label","operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,
@@ -665,7 +665,7 @@ async fn tags_and_file_merges_publish_reviewed_node_graphs_without_new_bodies() 
             Some(&session),
             "POST",
             &tag_route,
-            Some(json!({"targets":[],"add":[],"remove":[],"operation_id":new_id("op")}))
+            Some(json!({"targets":[],"add":[],"remove":[],"operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,
@@ -708,7 +708,7 @@ async fn scoped_backup_configuration_checks_scope_identity_generation_and_authen
     let before = success(&app, &token, "GET", &format!("{route}?path=docs"), None).await;
     assert!(before.get("can_manage").is_none());
     assert_eq!(before["generation"], "0");
-    let request = json!({"path":"docs","target_copies":3,"backup_prefixes":{"B01":"工作备份","C01":"archive/docs"},"expected_generation":"0","expected_scope_id":before["scope"]["id"],"operation_id":new_id("op")});
+    let request = json!({"path":"docs","target_copies":3,"backup_prefixes":{"B01":"工作备份","C01":"archive/docs"},"expected_generation":"0","expected_scope_id":before["scope"]["id"],"operation_id":new_id("op").unwrap()});
     let configured = success(&app, &token, "PUT", &route, Some(request.clone())).await;
     assert_eq!(
         success(&app, &token, "PUT", &route, Some(request.clone())).await["result"],
@@ -737,14 +737,14 @@ async fn scoped_backup_configuration_checks_scope_identity_generation_and_authen
         "archive/docs/nested/report.txt"
     );
     let mut stale = request.clone();
-    stale["operation_id"] = new_id("op").into();
+    stale["operation_id"] = new_id("op").unwrap().into();
     assert_eq!(
         send(&app, Some(&token), "PUT", &route, Some(stale)).await.0,
         StatusCode::CONFLICT
     );
     let mut wrong = request.clone();
-    wrong["operation_id"] = new_id("op").into();
-    wrong["expected_scope_id"] = new_id("entry").into();
+    wrong["operation_id"] = new_id("op").unwrap().into();
+    wrong["expected_scope_id"] = new_id("entry").unwrap().into();
     wrong["expected_generation"] = "1".into();
     assert_eq!(
         send(&app, Some(&token), "PUT", &route, Some(wrong)).await.0,
@@ -754,7 +754,7 @@ async fn scoped_backup_configuration_checks_scope_identity_generation_and_authen
         json!({"B01":"../bad","C01":"archive"}),
         json!({"B01":"missing C"}),
     ] {
-        assert_eq!(send(&app,Some(&token),"PUT",&route,Some(json!({"path":"docs","target_copies":3,"backup_prefixes":prefixes,"expected_generation":"1","expected_scope_id":before["scope"]["id"],"operation_id":new_id("op")}))).await.0,StatusCode::BAD_REQUEST);
+        assert_eq!(send(&app,Some(&token),"PUT",&route,Some(json!({"path":"docs","target_copies":3,"backup_prefixes":prefixes,"expected_generation":"1","expected_scope_id":before["scope"]["id"],"operation_id":new_id("op").unwrap()}))).await.0,StatusCode::BAD_REQUEST);
     }
     assert_eq!(
         success(&app, &token, "GET", &format!("{route}?path=docs"), None).await,
@@ -839,7 +839,7 @@ async fn contextual_branch_selection_preserves_current_file_when_target_body_is_
     let token = login(&app, "admin", "integration-test-password").await;
     let route = format!("/api/file-manager/files/{file}/select");
     for contextual in [false, true] {
-        let mut request = json!({"branch_id":original_branch,"operation_id":new_id("op")});
+        let mut request = json!({"branch_id":original_branch,"operation_id":new_id("op").unwrap()});
         if contextual {
             request["repository_id"] = repo.into();
             request["path"] = "report.txt".into();
@@ -885,7 +885,7 @@ async fn file_merge_requires_explicit_consent_and_preserves_both_location_digest
         let right = branch(&app, &token, file, base, "right").await;
         let route = format!("/api/file-manager/files/{file}/merge");
         let inputs = json!([{"branch_id":left,"expected_node_id":base},{"branch_id":right,"expected_node_id":base}]);
-        let mut request = json!({"inputs":inputs,"chosen_node_id":base,"surviving_branch_id":left,"confirmed":true,"operation_id":new_id("op")});
+        let mut request = json!({"inputs":inputs,"chosen_node_id":base,"surviving_branch_id":left,"confirmed":true,"operation_id":new_id("op").unwrap()});
         let location = if scoped {
             request["repository_id"] = repo.into();
             request["path"] = "report.txt".into();
@@ -1003,7 +1003,7 @@ async fn file_tag_batches_keep_static_policy_atomic_preflight_and_permanent_repl
         let route = format!("/api/file-manager/files/{file}/tags");
         let targets = json!([{"branch_id":left,"source_node_id":base,"expected_node_id":base},{"branch_id":right,"source_node_id":base,"expected_node_id":base}]);
         let mut request =
-            json!({"targets":targets,"add":["x"],"remove":[],"operation_id":new_id("op")});
+            json!({"targets":targets,"add":["x"],"remove":[],"operation_id":new_id("op").unwrap()});
         let location = if scoped {
             request["repository_id"] = repo.into();
             request["path"] = "report.txt".into();
@@ -1081,7 +1081,7 @@ async fn file_tag_batches_keep_static_policy_atomic_preflight_and_permanent_repl
             "POST",
             &route,
             Some(
-                json!({"targets":[targets[1]],"add":full,"remove":[],"operation_id":new_id("op")}),
+                json!({"targets":[targets[1]],"add":full,"remove":[],"operation_id":new_id("op").unwrap()}),
             ),
         )
         .await;
@@ -1125,7 +1125,7 @@ async fn file_tag_batches_keep_static_policy_atomic_preflight_and_permanent_repl
         );
         assert_eq!(history(&app, &token, file).await, after);
         let left_head = receipt["result"]["nodes"][0]["node_id"].as_str().unwrap();
-        success(&app,&token,"POST",&route,Some(json!({"targets":[{"branch_id":left,"source_node_id":left_head,"expected_node_id":left_head}],"add":["later"],"remove":["x"],"operation_id":new_id("op")}))).await;
+        success(&app,&token,"POST",&route,Some(json!({"targets":[{"branch_id":left,"source_node_id":left_head,"expected_node_id":left_head}],"add":["later"],"remove":["x"],"operation_id":new_id("op").unwrap()}))).await;
         let later = history(&app, &token, file).await;
         drop(app);
         let system = root.path().join("system");
@@ -1150,7 +1150,7 @@ async fn file_tag_batches_keep_static_policy_atomic_preflight_and_permanent_repl
             assert_eq!(replay[field], receipt[field], "{field}");
         }
         let mut fresh = request;
-        fresh["operation_id"] = new_id("op").into();
+        fresh["operation_id"] = new_id("op").unwrap().into();
         let (status, rejected) = send(&app, Some(&token), "POST", &route, Some(fresh)).await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(rejected["error"]["code"], "FILE_BRANCH_CONFLICT");
@@ -1186,7 +1186,7 @@ async fn typed_backup_routes_preserve_wire_admission_digest_and_permanent_receip
         )
         .await
     );
-    let operation = new_id("op");
+    let operation = new_id("op").unwrap();
     let request = json!({"target_copies":2,"backup_prefixes":{"B01":"backup"},"expected_generation":"0","expected_scope_id":before["scope"]["id"],"operation_id":operation});
     for (key, value, code) in [
         ("path", json!(null), "INVALID_REQUEST"),
@@ -1233,7 +1233,7 @@ async fn typed_backup_routes_preserve_wire_admission_digest_and_permanent_receip
         original["result"]
     );
     let mut newer = request.clone();
-    newer["operation_id"] = new_id("op").into();
+    newer["operation_id"] = new_id("op").unwrap().into();
     newer["expected_generation"] = "1".into();
     newer["backup_prefixes"] = json!({"B01":"new-backup"});
     success(&app, &token, "PUT", &route, Some(newer)).await;
@@ -1251,7 +1251,7 @@ async fn typed_backup_routes_preserve_wire_admission_digest_and_permanent_receip
     assert_eq!(replay["request_digest"], original["request_digest"]);
     assert_eq!(success(&app, &token, "GET", &route, None).await, after);
     let mut stale_new_operation = request;
-    stale_new_operation["operation_id"] = new_id("op").into();
+    stale_new_operation["operation_id"] = new_id("op").unwrap().into();
     let (status, rejected) =
         send(&app, Some(&token), "PUT", &route, Some(stale_new_operation)).await;
     assert_eq!(status, StatusCode::CONFLICT, "{rejected}");

@@ -16,7 +16,7 @@ fn typed_graph_shares_only_selected_payloads_and_preserves_the_frozen_legacy_res
             &old,
             &storage_contract::BranchName::parse("fork").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -26,7 +26,7 @@ fn typed_graph_shares_only_selected_payloads_and_preserves_the_frozen_legacy_res
             &repo.main_branch_id,
             &head,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let other = engine
@@ -35,7 +35,7 @@ fn typed_graph_shares_only_selected_payloads_and_preserves_the_frozen_legacy_res
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let other_head = &engine.state().branches[&other.main_branch_id].head_commit_id;

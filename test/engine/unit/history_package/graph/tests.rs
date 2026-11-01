@@ -85,7 +85,8 @@ fn encoded(
         temp.path().join("a"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let disk = &config.disks[0];
     let (hash, prepared) = prepare(manifest, maximum).unwrap();
     for object in prepared {
@@ -261,7 +262,8 @@ fn distributed_history_larger_than_real_reader_limit_roundtrips() {
         temp.path().join("a"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let disk = &config.disks[0];
     let (root_hash, prepared) = prepare(&manifest, MAX_METADATA).unwrap();
     let prepared_hashes = prepared
@@ -646,7 +648,7 @@ fn content_state_manifest_graph_preserves_string_bytes_and_rejects_unknown_value
 #[test]
 fn markerless_and_previous_domain_history_roots_are_rejected_without_rewriting() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("disk")]);
+    let config = Config::development([temp.path().join("disk")]).unwrap();
     let disk = &config.disks[0];
     let (_, current, _) = encoded(&manifest(), MAX_METADATA);
     for mutation in ["missing_marker", "unknown_marker", "previous_index_domain"] {

@@ -9,7 +9,8 @@ fn fixture() -> (tempfile::TempDir, AdmissionEngine) {
         temp.path().join("disk1"),
         temp.path().join("disk2"),
         temp.path().join("disk3"),
-    ]);
+    ])
+    .unwrap();
     let engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     (temp, AdmissionEngine::new(engine))
 }
@@ -45,7 +46,7 @@ fn publish(engine: &mut AdmissionEngine, value: Value) {
         .persist_auth_state(
             value,
             "system_auth",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
 }
@@ -121,7 +122,7 @@ fn listing_snapshot_tracks_business_changes_but_not_auth_publications() {
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(engine.listing_snapshot.get().is_none());
@@ -198,7 +199,7 @@ fn rejected_publication_drops_projection_and_revalidates_unchanged_authority() {
             .persist_auth_state(
                 json!(false),
                 "system_auth",
-                storage_contract::OperationId::generate()
+                storage_contract::OperationId::generate().unwrap()
             )
             .is_err()
     );
@@ -222,7 +223,7 @@ fn interrupted_revocation_is_revalidated_from_recovered_authority() {
             .persist_auth_state(
                 revoked,
                 "system_auth",
-                storage_contract::OperationId::generate()
+                storage_contract::OperationId::generate().unwrap()
             )
             .is_err()
     );
@@ -252,7 +253,12 @@ fn failed_degraded_recovery_does_not_keep_or_forge_an_admission_projection() {
     let before = engine.validations.load(Ordering::Relaxed);
     assert_eq!(
         engine
-            .commit_degraded_recovery(&new_id("recovery"), "missing-digest", "owner", false)
+            .commit_degraded_recovery(
+                &new_id("recovery").unwrap(),
+                "missing-digest",
+                "owner",
+                false
+            )
             .unwrap_err()
             .code(),
         storage_contract::ErrorCode::RecoveryPlanNotFound
@@ -293,7 +299,7 @@ fn backend_fixture() -> (
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = holder
@@ -305,7 +311,7 @@ fn backend_fixture() -> (
     holder
         .commit_workspace(storage_engine::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -589,7 +595,7 @@ fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() 
             crate::UpdateNote {
                 target: crate::NoteTarget::File(entry.file_id.clone()),
                 note: storage_contract::Note::parse("updated".into()).unwrap(),
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap();
@@ -626,7 +632,7 @@ fn backend_mutations_and_lazy_root_creation_invalidate_before_following_reads() 
             crate::CreateDiskDirectory {
                 slot_id: "P01".into(),
                 path: name_policy::PortablePath::parse("new-folder").unwrap(),
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap();

@@ -51,7 +51,7 @@ fn save(
     for (path, bytes) in files {
         engine.stage_bytes(&workspace.workspace_id, path, bytes)?;
     }
-    let operation_id = OperationId::generate();
+    let operation_id = OperationId::generate().unwrap();
     engine.commit_workspace(storage_contract::CommitRequest {
         workspace_id: workspace.workspace_id,
         operation_id,
@@ -563,9 +563,9 @@ fn main() -> Result<()> {
             std::fs::create_dir_all(root)?;
             let mut engine = Engine::initialize(
                 &state,
-                storage_contract::Config::development([root.join("d1")]),
+                storage_contract::Config::development([root.join("d1")]).unwrap(),
             )?;
-            let create_id = OperationId::generate();
+            let create_id = OperationId::generate().unwrap();
             let repo = engine.create_repository(
                 &storage_contract::RepositoryName::parse("Bench")?,
                 "P01",

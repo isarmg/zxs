@@ -9,7 +9,8 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
             root.path().join("p"),
             root.path().join("b"),
             root.path().join("c"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -18,7 +19,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     (root, engine, repo)
@@ -34,7 +35,7 @@ fn commit(engine: &mut Engine, workspace: Workspace) -> OperationResult {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -64,7 +65,7 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
                 &original.version_id,
                 &storage_contract::BranchName::parse("selected draft").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap()
             .branch_id
@@ -74,7 +75,7 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
                 &original.file_id,
                 &branch,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine
@@ -95,13 +96,13 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
         );
         let current = engine.state.commits[&workspace.base_head].clone();
         let mut changed = current.clone();
-        changed.commit_id = new_id("commit");
+        changed.commit_id = new_id("commit").unwrap();
         changed
             .entries
             .iter_mut()
             .find(|entry| entry.kind == NamespaceEntryKind::File)
             .unwrap()
-            .version_id = new_id("ver");
+            .version_id = new_id("ver").unwrap();
         std::sync::Arc::make_mut(&mut engine.state)
             .commits
             .insert(changed.commit_id.clone(), changed.clone());
@@ -111,7 +112,7 @@ fn inactive_selected_owner_cannot_receive_main_workspace_writes() {
                 &changed.commit_id,
                 &["report.txt".into()],
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap_err()
             .code(),
@@ -132,7 +133,7 @@ fn inherited_range_fences_selection_and_preserves_parent_bytes() {
             &original.version_id,
             &storage_contract::BranchName::parse("pending").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let pending = pending.result["branch_id"].as_str().unwrap().to_owned();
@@ -142,7 +143,7 @@ fn inherited_range_fences_selection_and_preserves_parent_bytes() {
             &original.file_id,
             &pending,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let old_workspace = engine
@@ -153,13 +154,13 @@ fn inherited_range_fences_selection_and_preserves_parent_bytes() {
             &original.file_id,
             &materialized_main,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let error = engine
         .stage_range(
             &old_workspace.workspace_id,
-            &new_id("entry"),
+            &new_id("entry").unwrap(),
             "report.txt",
             0,
             b"X",
@@ -184,7 +185,7 @@ fn inherited_range_fences_selection_and_preserves_parent_bytes() {
             &original.file_id,
             &pending,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -193,7 +194,7 @@ fn inherited_range_fences_selection_and_preserves_parent_bytes() {
     let staged = engine
         .stage_range(
             &workspace.workspace_id,
-            &new_id("entry"),
+            &new_id("entry").unwrap(),
             "report.txt",
             0,
             b"X",
@@ -228,7 +229,7 @@ fn selected_file_materialization_replaces_a_split_main_placeholder() {
             original.commit_id.as_ref().unwrap(),
             &storage_contract::BranchName::parse("pending full").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let plan = engine
@@ -238,7 +239,7 @@ fn selected_file_materialization_replaces_a_split_main_placeholder() {
         .commit_plan(
             &plan.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let repository = engine
@@ -261,7 +262,7 @@ fn selected_file_materialization_replaces_a_split_main_placeholder() {
             &source,
             &storage_contract::BranchName::parse("actual").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let branch = created.result["branch_id"].as_str().unwrap().to_owned();
@@ -270,7 +271,7 @@ fn selected_file_materialization_replaces_a_split_main_placeholder() {
             &placeholder.file_id,
             &branch,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &branch, b"written branch bytes");
@@ -313,7 +314,7 @@ fn historical_range_edits_keep_the_explicit_old_snapshot_as_their_base() {
     engine
         .stage_range(
             &workspace.workspace_id,
-            &new_id("entry"),
+            &new_id("entry").unwrap(),
             "report.txt",
             0,
             b"X",
@@ -337,7 +338,7 @@ fn historical_range_edits_keep_the_explicit_old_snapshot_as_their_base() {
         .commit_historical_save_plan(
             &plan.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let written = file(&engine, saved.branch_id.as_ref().unwrap());

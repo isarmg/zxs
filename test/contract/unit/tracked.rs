@@ -94,7 +94,7 @@ fn oversized_keys_and_bulk_mutation_have_bounded_tracking() {
 
 #[test]
 fn operation_map_insert_tracks_change_without_string_keys() {
-    let id = crate::OperationId::generate();
+    let id = crate::OperationId::generate().unwrap();
     let before = [(id, "owner".to_owned())]
         .into_iter()
         .collect::<TrackedOperations<_>>();
@@ -120,8 +120,8 @@ fn operation_map_insert_tracks_change_without_string_keys() {
 
 #[test]
 fn operation_write_sets_are_typed_bounded_and_branch_isolated() {
-    let id = crate::OperationId::generate();
-    let second = crate::OperationId::generate();
+    let id = crate::OperationId::generate().unwrap();
+    let second = crate::OperationId::generate().unwrap();
     let before = TrackedOperations::<String>::default();
     let mut next = before.clone();
     next.begin_tracking();

@@ -10,7 +10,8 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ]);
+        ])
+        .unwrap();
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
             .create_repository(
@@ -18,7 +19,7 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
                 "P01",
                 3,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let change = |kind: &str| {
@@ -34,7 +35,7 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
                 &repo.repository_id,
                 change("mkdir"),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let original = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
@@ -49,7 +50,7 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
                 &repo.repository_id,
                 change("delete"),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         engine
@@ -57,7 +58,7 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
                 &repo.repository_id,
                 change("mkdir"),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let replacement = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
@@ -68,7 +69,7 @@ fn stale_namespace_operations_preserve_recreated_same_name_directories() {
         let error = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id.clone(),
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -105,7 +106,8 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -114,7 +116,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let change = |kind: &str, path: &str, destination: Option<&str>| {
@@ -130,7 +132,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
             &repo.repository_id,
             change("mkdir", "Café/Å", None),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let original = engine.list_tree(&repo.main_branch_id).unwrap();
@@ -153,7 +155,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
             &repo.repository_id,
             change("rename", "Cafe\u{301}/A\u{30a}", Some("Café/가")),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let moved = engine.list_tree(&repo.main_branch_id).unwrap();
@@ -169,7 +171,7 @@ fn canonical_equivalent_directory_sources_keep_stored_parent_spelling() {
             &repo.repository_id,
             change("delete", "Cafe\u{301}/\u{1100}\u{1161}", None),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let remaining = engine.list_tree(&repo.main_branch_id).unwrap();
@@ -187,7 +189,8 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -196,7 +199,7 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let initial = engine
@@ -208,7 +211,7 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: initial.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: initial.base_head,
             fencing_token: initial.fencing_token,
@@ -241,7 +244,7 @@ fn canonical_equivalent_workspace_source_survives_reopen_before_commit() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

@@ -45,7 +45,7 @@ fn directory_cursor_freezes_its_commit_and_restart_captures_a_new_snapshot() {
             "new-directory".into(),
             None,
             false,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(page(&mut client, handle, false).entries.is_empty());
@@ -112,7 +112,7 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
             "original".into(),
             None,
             false,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let (opened, _) = session
@@ -125,7 +125,7 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
             "original".into(),
             Some("moved".into()),
             false,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     session
@@ -134,7 +134,7 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
             "original".into(),
             None,
             false,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     // The open descriptor keeps its snapshot, even before its first read.

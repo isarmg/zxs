@@ -16,7 +16,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -25,7 +25,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -37,7 +37,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -61,7 +61,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
             )
             .unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let context = engine
@@ -80,7 +80,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
             remove: &[],
             location: None,
             principal: "owner",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let before = json_codec::to_value(engine.state()).unwrap();
@@ -133,7 +133,7 @@ fn file_history_and_activity_emit_one_utc_form_without_changing_stored_facts() {
             None,
             &storage_contract::Note::parse("later note".into()).unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let pinned = json_codec::to_value(

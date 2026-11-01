@@ -29,7 +29,7 @@ async fn paginated_listing_rechecks_auth_and_rejects_changed_snapshots() {
         &token,
         "POST",
         &format!("/api/repositories/{repository}/directory-scopes"),
-        Some(json!({"path":"folder","operation_id":new_id("op")})),
+        Some(json!({"path":"folder","operation_id":new_id("op").unwrap()})),
     )
     .await;
     let first = success(

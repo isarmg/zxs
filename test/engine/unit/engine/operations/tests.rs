@@ -8,7 +8,8 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -16,7 +17,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     (root, engine, repo)
@@ -30,7 +31,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> OperationResult {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -97,7 +98,7 @@ fn operation_read_plan_blocks_purge_until_observation_finishes() {
             .commit_plan(
                 &purge.plan_id,
                 "owner",
-                storage_contract::OperationId::generate()
+                storage_contract::OperationId::generate().unwrap()
             )
             .unwrap_err()
             .code(),
@@ -119,7 +120,7 @@ fn operation_read_plan_blocks_purge_until_observation_finishes() {
         .commit_plan(
             &purge.plan_id,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let observed = engine.operation(original.operation_id).unwrap();
@@ -202,7 +203,7 @@ fn health_reverifies_each_replica_and_never_rewrites_publication_facts() {
 #[test]
 fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
     let (_root, mut engine, _repo) = fixture();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     engine.inject_fault_once("after_accept_1");
     assert!(
         engine
@@ -259,7 +260,7 @@ fn pending_receipt_reads_only_exact_operation_pages_and_owner_first() {
 #[test]
 fn pending_receipt_does_not_turn_corrupt_journals_into_not_found() {
     let (_root, mut engine, _repo) = fixture();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     engine.inject_fault_once("after_accept_1");
     assert!(
         engine
@@ -296,7 +297,7 @@ fn batch_health_owns_configuration_after_engine_drop_and_rechecks_member_identit
         let published = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "owner".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -340,7 +341,7 @@ fn pending_receipt_reports_checksum_valid_malformed_record_as_log_corruption() {
     use std::error::Error as _;
     let (_root, mut engine, repo) = fixture();
     let published = save(&mut engine, &repo.main_branch_id, b"published content");
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     engine.inject_fault_once("after_accept_1");
     assert!(
         engine
@@ -429,7 +430,7 @@ fn pending_receipt_reports_checksum_valid_malformed_record_as_log_corruption() {
 
 fn pending_fixture(accepts: usize) -> (tempfile::TempDir, Engine, OperationId) {
     let (root, mut engine, _repo) = fixture();
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     engine.inject_fault_once(&format!("after_accept_{accepts}"));
     assert!(
         engine
@@ -538,7 +539,7 @@ fn pending_receipt_uses_sufficient_healthy_evidence_despite_rejected_member() {
 #[test]
 fn pending_receipt_distinguishes_trusted_absence_from_unreadable_evidence() {
     let (_root, engine, _operation) = pending_fixture(1);
-    let absent = OperationId::generate();
+    let absent = OperationId::generate().unwrap();
     assert_eq!(
         engine.operation_record(absent).err().unwrap().code(),
         ErrorCode::OperationNotFound
@@ -592,7 +593,7 @@ fn purge_evidence_keeps_recovery_classification_and_does_not_delete_without_proo
     engine.inject_fault_once("after_purge_evidence");
     assert_eq!(
         engine
-            .commit_plan(&purge.plan_id, "owner", OperationId::generate())
+            .commit_plan(&purge.plan_id, "owner", OperationId::generate().unwrap())
             .unwrap_err()
             .code(),
         ErrorCode::InjectedFailure

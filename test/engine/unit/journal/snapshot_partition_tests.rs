@@ -6,7 +6,8 @@ fn fixture_disk() -> (tempfile::TempDir, Config) {
         temp.path().join("a"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     (temp, config)
 }
 fn event_state(count: usize) -> State {
@@ -110,10 +111,10 @@ fn current_snapshot_and_candidate_reject_old_and_unknown_shapes_without_rewritin
     value.as_object_mut().unwrap().remove("business_generation");
     assert!(json_codec::from_value::<Snapshot>(value).is_err());
     let candidate = Candidate {
-        pool_id: new_id("pool"),
+        pool_id: new_id("pool").unwrap(),
         sequence: 1,
-        transaction_id: new_id("tx"),
-        operation_id: storage_contract::OperationId::generate(),
+        transaction_id: new_id("tx").unwrap(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         request_digest: "a".repeat(64),
         previous_snapshot: None,
         snapshot_hash: prepared.hash,

@@ -6,7 +6,7 @@ use std::sync::Arc;
 fn indexed_engine(temp: &tempfile::TempDir, unrelated: usize) -> Engine {
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("p"), temp.path().join("b")]),
+        Config::development([temp.path().join("p"), temp.path().join("b")]).unwrap(),
     )
     .unwrap();
     let view = fixture();
@@ -275,7 +275,7 @@ fn actual_read_fixture() -> (tempfile::TempDir, Engine, HistoryWindowRequest) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("disk")]),
+        Config::development([temp.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -284,7 +284,7 @@ fn actual_read_fixture() -> (tempfile::TempDir, Engine, HistoryWindowRequest) {
             "P01",
             1,
             "admin",
-            crate::OperationId::generate(),
+            crate::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -300,7 +300,7 @@ fn actual_read_fixture() -> (tempfile::TempDir, Engine, HistoryWindowRequest) {
     engine
         .commit_workspace(crate::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: crate::OperationId::generate(),
+            operation_id: crate::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -585,7 +585,7 @@ fn actual_branch_fixture() -> (tempfile::TempDir, Engine, HistoryWindowRequest) 
             &version,
             &storage_contract::BranchName::parse("indexed alternate").unwrap(),
             "admin",
-            crate::OperationId::generate(),
+            crate::OperationId::generate().unwrap(),
         )
         .unwrap();
     (temp, engine, request)

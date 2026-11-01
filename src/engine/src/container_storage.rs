@@ -795,7 +795,7 @@ fn synchronize_location(
             &mut |_| Ok(()),
         )?
     {
-        let temporary_name = format!(".zxs-relocate-{}", new_id("req"));
+        let temporary_name = format!(".zxs-relocate-{}", new_id("req")?);
         let parent = root.directory(stable)?;
         rustix::fs::renameat_with(
             &parent,
@@ -820,7 +820,7 @@ fn synchronize_location(
     let target = namespace.join(location);
     if target != current {
         if target.starts_with(&current) || current.starts_with(&target) {
-            let temporary_name = format!(".zxs-relocate-{}", new_id("req"));
+            let temporary_name = format!(".zxs-relocate-{}", new_id("req")?);
             let source = root.directory(current.parent().expect("current container parent"))?;
             let destination = root.directory(stable)?;
             rustix::fs::renameat_with(

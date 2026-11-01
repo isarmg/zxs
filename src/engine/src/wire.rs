@@ -73,6 +73,7 @@ impl Engine {
             ));
         }
         let repository = self.repository_for_branch(&w.branch_id)?.clone();
+        let operation_id = OperationId::generate()?;
         // Once sealed, no uploader or namespace request can mutate this generation.
         w.state = WorkspaceState::Sealed;
         self.persist_workspace(&w)?;
@@ -90,7 +91,7 @@ impl Engine {
         }
         let sealed_manifest_hash = manifest_hash(&w)?;
         Ok(SealedWorkspace {
-            operation_id: OperationId::generate(),
+            operation_id,
             workspace_id: id.into(),
             repository_id: repository.repository_id,
             branch_id: w.branch_id,

@@ -48,11 +48,11 @@ fn location_lookup_preserves_case_identity_kind_and_repository_boundaries() {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("system"),
-        crate::Config::development([temporary.path().join("primary")]),
+        crate::Config::development([temporary.path().join("primary")]).unwrap(),
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "admin", OperationId::generate())
+        .create_disk_root("P01", "admin", OperationId::generate().unwrap())
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -65,7 +65,7 @@ fn location_lookup_preserves_case_identity_kind_and_repository_boundaries() {
     engine
         .commit_workspace(crate::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

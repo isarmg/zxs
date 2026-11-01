@@ -717,3 +717,64 @@ fn a_stale_inline_confirm_click_cannot_accept_a_new_equal_proposal() {
         assert_eq!(draft.value.get_untracked(), "é");
     });
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn health_fault_and_recovery_keep_the_registered_unknown_note_until_its_own_rejection() {
+    use crate::files::model::SaveStatus;
+    use task_dispatch::Executor;
+    init_native_effect_executor();
+    let root = Owner::new();
+    root.with(|| {
+        let mut initial = active_state();
+        initial.management.storage = crate::management::Storage::Ready;
+        initial.files.writable = true;
+        initial.files.selected = Some(crate::files::test_entries::entry(
+            json_codec::json!({"file_id":"file"}),
+        ));
+        initial.files.file_history = crate::files::history::tests::history(
+            json_codec::json!({"history_root":"original-root","note":"stored note"}),
+        );
+        let state = RwSignal::new(initial);
+        provide_context(state);
+        let draft = Draft::new(state, EditScope::History);
+        Executor::poll_local();
+        draft.start("exact unknown note 草稿".into());
+        draft.submit(|| Some("original".into()));
+        assert_eq!(actions::record_receipt(state, "original", json_codec::json!({})), SaveStatus::Unknown);
+        Executor::poll_local();
+        for storage in [
+            crate::management::Storage::Unavailable,
+            crate::management::Storage::RecoveryRequired,
+            crate::management::Storage::Ready,
+        ] {
+            state.update(|s| s.management.storage = storage);
+            Executor::poll_local();
+            assert_eq!(state.with_untracked(|s| s.files.history_editors), 1);
+            assert_eq!(draft.value.get_untracked(), "exact unknown note 草稿");
+            assert_eq!(draft.operation.get_untracked().as_deref(), Some("original"));
+            assert!(!state.with_untracked(actions::write_allowed));
+            draft.cancel_idle();
+            draft.submit(|| panic!("an unknown note must not issue a replacement write"));
+        }
+        actions::record_operation(state, FileOperation::rejected("unrelated"));
+        Executor::poll_local();
+        assert!(draft.pending());
+        // The current metadata outcome shape, not a bare status marker.
+        assert_eq!(actions::record_receipt(state, "original", json_codec::json!({
+            "operation_id":"original", "operation_kind":"file.metadata",
+            "request_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "state":"in_doubt", "commit_state":"ABORTED", "result":{}, "error":null,
+            "protection_at_publish":"NOT_APPLICABLE", "publication_sequence":"0"
+        })), SaveStatus::Rejected);
+        Executor::poll_local();
+        assert!(!draft.pending());
+        assert!(draft.editing.get_untracked());
+        assert_eq!(draft.value.get_untracked(), "exact unknown note 草稿");
+        assert_eq!(state.with_untracked(|s| s.files.history_editors), 1);
+        assert!(state.with_untracked(actions::write_allowed));
+        draft.cancel_idle();
+        assert_eq!(state.with_untracked(|s| s.files.history_editors), 0);
+    });
+    root.cleanup();
+}

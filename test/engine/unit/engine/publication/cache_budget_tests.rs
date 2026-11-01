@@ -8,7 +8,8 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
         temp.path().join("a"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine
         .create_repository(
@@ -16,7 +17,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -28,7 +29,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -46,7 +47,7 @@ fn cache_encoder_rejects_before_accept_and_reopens_cleanly() {
     storage_contract::validate_note(&note).unwrap();
     next.file_notes.insert(file, note);
     let mut result = next.operations.values().next().unwrap().clone();
-    result.operation_id = storage_contract::OperationId::generate();
+    result.operation_id = storage_contract::OperationId::generate().unwrap();
     result.sequence = next.sequence;
     next.operations.insert(result.operation_id, result.clone());
     let logs: Vec<_> = engine
@@ -105,7 +106,8 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         temp.path().join("a"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine
         .create_repository(
@@ -113,7 +115,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -125,7 +127,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -183,12 +185,12 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
         .unwrap();
     let original = next.commits[&next.branches[&repo.main_branch_id].head_commit_id].clone();
     let mut commit = original.clone();
-    commit.commit_id = new_id("commit");
+    commit.commit_id = new_id("commit").unwrap();
     commit.parent_commit_ids = vec![original.commit_id];
     commit.sequence = next.sequence;
     commit.kind = "content".into();
     commit.entries = vec![Entry {
-        entry_id: new_id("entry"),
+        entry_id: new_id("entry").unwrap(),
         path: name_policy::PortablePath::parse("renamed.txt").unwrap(),
         kind: NamespaceEntryKind::File,
         file_id: old_entry.file_id.clone(),
@@ -205,7 +207,7 @@ fn payload_cache_rejection_preserves_names_and_retries_installed_payloads() {
     next.file_locations
         .insert(old_entry.file_id.clone(), "renamed.txt".into());
     let mut result = next.operations.values().next().unwrap().clone();
-    result.operation_id = storage_contract::OperationId::generate();
+    result.operation_id = storage_contract::OperationId::generate().unwrap();
     result.sequence = next.sequence;
     next.operations.insert(result.operation_id, result.clone());
     let retry_pending = pending

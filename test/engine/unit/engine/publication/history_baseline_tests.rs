@@ -4,7 +4,7 @@ use std::sync::Arc;
 fn engine(root: &std::path::Path) -> Engine {
     let mut engine = Engine::initialize(
         &root.join("state"),
-        Config::development([root.join("a"), root.join("b"), root.join("c")]),
+        Config::development([root.join("a"), root.join("b"), root.join("c")]).unwrap(),
     )
     .unwrap();
     engine
@@ -13,7 +13,7 @@ fn engine(root: &std::path::Path) -> Engine {
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -38,7 +38,7 @@ fn save_capture_file(engine: &mut Engine) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -115,7 +115,7 @@ fn cold_planning_captures_admitted_missing_fields_before_the_business_closure() 
             .plan_new_mutation(
                 "auth.capture-test",
                 "alice",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
                 "capture-test".into(),
                 |_, next, _| {
                     assert_eq!(next.file_names[&file], "original.txt");
@@ -151,7 +151,7 @@ fn cold_owner_update_keeps_full_history_rejection_before_io_and_allows_retry() {
     drop(engine);
     let mut engine = Engine::open(&root).unwrap();
     assert!(engine.published_state_base.is_none());
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let plan = engine
         .planning_context()
         .plan_new_mutation(
@@ -229,7 +229,7 @@ fn cold_owner_update_preserves_corrupt_page_failure_and_exact_retry() {
     let path = object_path(&member, kind, &hash);
     let original = std::fs::read(&path).unwrap();
     std::fs::write(&path, b"{").unwrap();
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let body = json!({"auth":"cold page retry"});
     let sequence = engine.state.sequence;
     let error = engine
@@ -257,7 +257,7 @@ fn cold_owner_update_retains_first_prepare_io_cause_and_recovers_for_retry() {
     assert!(engine.published_state_base.is_none());
     let first = engine.members()[0].disk_id.clone();
     engine.journals.get_mut(&first).unwrap().fault = Some(crate::journal::JournalFault::Sync);
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let body = json!({"auth":"cold io retry"});
     let sequence = engine.state.sequence;
     let error = engine
@@ -311,7 +311,7 @@ fn history_baseline_requires_exact_state_allocation_snapshot_sequence_and_config
         .persist_auth_state(
             json!({"auth":"next"}),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(
@@ -347,7 +347,7 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
             .persist_auth_state(
                 json!({"auth":"prepared"}),
                 "alice",
-                storage_contract::OperationId::generate()
+                storage_contract::OperationId::generate().unwrap()
             )
             .is_err()
     );
@@ -361,7 +361,7 @@ fn preparation_and_indeterminate_failure_never_advance_the_baseline() {
         .persist_auth_state(
             json!({"auth":"accepted"}),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::InDoubt);
@@ -384,7 +384,7 @@ fn derived_index_failure_preserves_completed_member_authority_not_future_failure
     let index = engine.root.join("index.sqlite");
     std::fs::rename(&index, engine.root.join("saved-index.sqlite")).unwrap();
     std::fs::create_dir(&index).unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     engine
         .persist_auth_state(json!({"auth":"published"}), "alice", operation)
         .unwrap();
@@ -398,7 +398,11 @@ fn derived_index_failure_preserves_completed_member_authority_not_future_failure
         panic!("expected retained index failure");
     };
     engine
-        .persist_auth_state(json!({"auth":"later"}), "alice", OperationId::generate())
+        .persist_auth_state(
+            json!({"auth":"later"}),
+            "alice",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     let crate::IndexHealth::Unavailable(later) = engine.index_health() else {
         panic!("expected same unavailable index");
@@ -414,7 +418,7 @@ fn derived_index_failure_preserves_completed_member_authority_not_future_failure
         .persist_auth_state(
             json!({"auth":"uncertain"}),
             "alice",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::InDoubt);
@@ -433,7 +437,11 @@ fn old_writer_observer_revokes_every_later_receipt_without_reviving_an_old_epoch
     let mut engine = engine(temp.path());
     let old_observer = Arc::clone(&engine.metadata_integrity);
     engine
-        .persist_auth_state(json!({"auth":"second"}), "alice", OperationId::generate())
+        .persist_auth_state(
+            json!({"auth":"second"}),
+            "alice",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     let second = engine.published_state_base.clone().unwrap();
     assert!(second.matches(&engine.planning_context(), &config_hash(&engine)));
@@ -442,7 +450,11 @@ fn old_writer_observer_revokes_every_later_receipt_without_reviving_an_old_epoch
     // A new complete publication can establish its current dependencies again,
     // but does not detach the shared observer held by old read plans.
     engine
-        .persist_auth_state(json!({"auth":"third"}), "alice", OperationId::generate())
+        .persist_auth_state(
+            json!({"auth":"third"}),
+            "alice",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     let third = engine.published_state_base.clone().unwrap();
     assert!(third.matches(&engine.planning_context(), &config_hash(&engine)));
@@ -462,7 +474,11 @@ fn healthy_history_fallback_still_revokes_the_failed_member_publication_provenan
     let path = object_path(&member, "history-manifest", hash);
     std::fs::remove_file(&path).unwrap();
     engine
-        .persist_auth_state(json!({"auth":"fallback"}), "alice", OperationId::generate())
+        .persist_auth_state(
+            json!({"auth":"fallback"}),
+            "alice",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     assert!(
         path.is_file(),
@@ -477,7 +493,7 @@ fn healthy_history_fallback_still_revokes_the_failed_member_publication_provenan
         .persist_auth_state(
             json!({"auth":"readmitted"}),
             "alice",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(
@@ -529,7 +545,7 @@ fn exact_snapshot_reconstruction_reports_missing_sources_before_restoring_all_co
         .persist_auth_state(
             json!({"auth":"exact reconstruction"}),
             "alice",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(paths.iter().all(|path| path.is_file()));
@@ -626,7 +642,7 @@ fn index_read_failure_does_not_revoke_member_metadata_epoch() {
         .persist_auth_state(
             json!({"auth":"published"}),
             "alice",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(epoch.matches(&engine.metadata_integrity));

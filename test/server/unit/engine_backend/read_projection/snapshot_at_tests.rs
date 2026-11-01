@@ -51,7 +51,7 @@ fn shared_snapshot_preserves_tree_errors_and_current_identity_admission() {
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let foreign = engine.state().branches[&other.main_branch_id]
@@ -137,14 +137,14 @@ fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
             &cut,
             &storage_contract::BranchName::parse("Archive").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
         .archive_branch(
             &archived.branch_id,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let backend = EngineBackend::new(engine);
@@ -168,7 +168,7 @@ fn shared_snapshot_preserves_archived_reads_and_migrated_branch_rejection() {
             .commit_plan(
                 &plan.plan_id,
                 "owner",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -251,7 +251,7 @@ fn measure_shared_snapshot_against_publication_and_namespace_tree_round_trips() 
         engine
             .commit_workspace(storage_engine::CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "owner".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

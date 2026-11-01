@@ -10,12 +10,12 @@ fn typed_archive_preserves_raw_receipt_digest_and_resource_before_replay_order()
             &source,
             &storage_contract::BranchName::parse("side").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let generation = branch.generation;
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let request = |branch: &str, operation_id| crate::ArchiveBranch {
         branch_id: branch.into(),
         operation_id,
@@ -64,7 +64,7 @@ fn typed_archive_preserves_raw_receipt_digest_and_resource_before_replay_order()
                 &identity,
                 request(
                     &repo.main_branch_id,
-                    storage_contract::OperationId::generate()
+                    storage_contract::OperationId::generate().unwrap()
                 )
             )
             .unwrap_err()

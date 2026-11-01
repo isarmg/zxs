@@ -38,7 +38,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry) {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -47,7 +47,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry) {
             "P01",
             1,
             "owner",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -59,7 +59,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -153,7 +153,7 @@ fn writers_progress_while_both_history_projections_keep_one_generation() {
                     )
                     .unwrap(),
                     "owner",
-                    OperationId::generate(),
+                    OperationId::generate().unwrap(),
                 )
                 .unwrap();
             writer
@@ -162,7 +162,7 @@ fn writers_progress_while_both_history_projections_keep_one_generation() {
                     None,
                     &storage_contract::Note::parse("later note".into()).unwrap(),
                     "owner",
-                    OperationId::generate(),
+                    OperationId::generate().unwrap(),
                 )
                 .unwrap();
             assert!(writer.state().sequence > captured);
@@ -189,7 +189,7 @@ fn retained_file_history_preserves_aliases_merges_pending_sources_paths_and_tags
                 &entry.version_id,
                 &storage_contract::BranchName::parse(name).unwrap(),
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap()
             .result["branch_id"]
@@ -209,7 +209,7 @@ fn retained_file_history_preserves_aliases_merges_pending_sources_paths_and_tags
             remove: &[],
             location: None,
             principal: "owner",
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
         })
         .unwrap();
     let inputs = branches[..2]
@@ -227,7 +227,7 @@ fn retained_file_history_preserves_aliases_merges_pending_sources_paths_and_tags
             surviving_branch_id: &branches[0],
             location: None,
             principal: "owner",
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
         })
         .unwrap();
     engine
@@ -235,7 +235,7 @@ fn retained_file_history_preserves_aliases_merges_pending_sources_paths_and_tags
             &entry.file_id,
             &branches[2],
             "owner",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -248,7 +248,7 @@ fn retained_file_history_preserves_aliases_merges_pending_sources_paths_and_tags
             )
             .unwrap(),
             "owner",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let request = || crate::ReadFileHistory::parse(entry.file_id.clone(), None, None).unwrap();
@@ -290,7 +290,7 @@ fn retained_file_history_preserves_aliases_merges_pending_sources_paths_and_tags
                 None,
                 &storage_contract::Note::parse("later note".into()).unwrap(),
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
     });
@@ -365,7 +365,7 @@ fn scoped_file_history_rechecks_deleted_path_but_historical_file_remains_readabl
                 )
                 .unwrap(),
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         release.send(()).unwrap();
@@ -405,7 +405,7 @@ fn both_history_reads_recheck_actual_split_scope() {
                 .create_split_plan(&repo.history_tree_id, &cut, "owner")
                 .unwrap();
             writer
-                .commit_plan(&plan.plan_id, "owner", OperationId::generate())
+                .commit_plan(&plan.plan_id, "owner", OperationId::generate().unwrap())
                 .unwrap();
             drop(writer);
             release.send(()).unwrap();
@@ -420,14 +420,14 @@ fn both_history_reads_recheck_actual_split_scope() {
 fn replacement(root: &std::path::Path, auth: &AuthStore) -> Engine {
     let mut engine = Engine::initialize(
         &root.join("replacement-system"),
-        Config::development([root.join("replacement-disk")]),
+        Config::development([root.join("replacement-disk")]).unwrap(),
     )
     .unwrap();
     engine
         .persist_auth_state(
             auth.snapshot().unwrap(),
             "system_auth",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     engine

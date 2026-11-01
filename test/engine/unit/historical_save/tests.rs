@@ -6,7 +6,8 @@ fn historical_edits_materialize_only_written_files_without_changing_the_source_h
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -14,7 +15,7 @@ fn historical_edits_materialize_only_written_files_without_changing_the_source_h
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -33,7 +34,7 @@ fn historical_edits_materialize_only_written_files_without_changing_the_source_h
     let saved = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -54,7 +55,7 @@ fn historical_edits_materialize_only_written_files_without_changing_the_source_h
         .unwrap();
     let ordinary = engine.commit_workspace(CommitRequest {
         workspace_id: historical.workspace_id.clone(),
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: historical.base_head.clone(),
         fencing_token: historical.fencing_token,
@@ -76,7 +77,7 @@ fn historical_edits_materialize_only_written_files_without_changing_the_source_h
         )
         .unwrap();
     let sequence = engine.state.sequence;
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let saved = engine
         .commit_historical_save_plan(&plan.plan_id, "admin", operation)
         .unwrap();
@@ -135,7 +136,8 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -143,7 +145,7 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut commits = Vec::new();
@@ -157,7 +159,7 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
         let operation = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -177,7 +179,7 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
         .commit_plan(
             &purge.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let options = HistoricalSaveOptions {
@@ -197,7 +199,7 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
         .commit_historical_save_plan(
             &placeholder_plan.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(engine.state.versions.len(), version_count);
@@ -243,7 +245,7 @@ fn historical_placeholders_need_no_old_payload_and_written_replacements_material
         .commit_plan(
             &plan.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -258,7 +260,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("primary")]),
+        Config::development([root.path().join("primary")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -267,7 +269,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut commits = Vec::new();
@@ -282,7 +284,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
             engine
                 .commit_workspace(CommitRequest {
                     workspace_id: workspace.workspace_id,
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                     principal: "admin".into(),
                     expected_head: workspace.base_head,
                     fencing_token: workspace.fencing_token,
@@ -304,7 +306,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
         .commit_plan(
             &purge.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -350,7 +352,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
         .commit_historical_save_plan(
             &plan.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let commit = saved.commit_id.unwrap();
@@ -375,7 +377,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
             &commit,
             &storage_contract::BranchName::parse("ordinary copy").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(
@@ -400,7 +402,7 @@ fn historical_namespace_deletion_is_recorded_only_on_execution_and_never_inherit
         .commit_historical_save_plan(
             &copy.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(

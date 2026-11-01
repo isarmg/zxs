@@ -14,6 +14,6 @@ fn operation_lookup_keeps_not_found_mapping_and_parse_source() {
         assert_eq!(error.message, "operation not found");
         assert!(error.source().is_some());
     }
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     assert_eq!(operation_id(&operation.to_string()).unwrap(), operation);
 }

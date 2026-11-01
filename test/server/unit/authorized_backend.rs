@@ -2739,7 +2739,7 @@ fn recorded_commit(commit: &str) -> Arc<storage_contract::Commit> {
         parent_commit_ids: vec![],
         tree_id: "tree".into(),
         sequence: 1,
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         author: "author".into(),
         message: "snapshot fixture".into(),
         entries: vec![],

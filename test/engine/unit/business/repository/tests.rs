@@ -7,17 +7,22 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
     let mut config = Config::development([
         temporary.path().join("primary"),
         temporary.path().join("other-primary"),
-    ]);
+    ])
+    .unwrap();
     config.disks[1].slot_id = "P02".into();
     config.disks[1].level = 1;
     config.disks[1].upstream_slot_id = None;
     let mut engine = Engine::initialize(&root, config).unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let original = engine.create_disk_root("p01", "admin", operation).unwrap();
     let other = engine
-        .create_disk_root("P02", "admin", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P02",
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
-    let binding_operation = storage_contract::OperationId::generate();
+    let binding_operation = storage_contract::OperationId::generate().unwrap();
     engine
         .set_smb_binding(
             &original.repository_id,
@@ -60,14 +65,22 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
         );
         assert_eq!(
             engine
-                .create_disk_root("P01", "", storage_contract::OperationId::generate())
+                .create_disk_root(
+                    "P01",
+                    "",
+                    storage_contract::OperationId::generate().unwrap()
+                )
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::Unauthenticated
         );
         assert_eq!(
             engine
-                .create_disk_root("P02", "admin", storage_contract::OperationId::generate())
+                .create_disk_root(
+                    "P02",
+                    "admin",
+                    storage_contract::OperationId::generate().unwrap()
+                )
                 .unwrap(),
             other
         );
@@ -75,7 +88,11 @@ fn disk_root_creation_replay_checks_owner_input_and_returns_original_binding() {
         assert_ne!(current, original);
         assert_eq!(
             engine
-                .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
+                .create_disk_root(
+                    "P01",
+                    "admin",
+                    storage_contract::OperationId::generate().unwrap()
+                )
                 .unwrap(),
             current
         );
@@ -88,10 +105,10 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("primary")]),
+        Config::development([root.path().join("primary")]).unwrap(),
     )
     .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let original = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Replay").unwrap(),
@@ -109,7 +126,7 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
             &source,
             &storage_contract::BranchName::parse("side").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let old_state = engine.state().clone();
@@ -126,7 +143,7 @@ fn repository_creation_replay_returns_original_binding_after_changes_and_reopen(
             false,
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_ne!(
@@ -189,18 +206,27 @@ fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ]);
+        ])
+        .unwrap();
         config.disks.truncate(disks);
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
-            .create_disk_root("p01", "admin", storage_contract::OperationId::generate())
+            .create_disk_root(
+                "p01",
+                "admin",
+                storage_contract::OperationId::generate().unwrap(),
+            )
             .unwrap();
         assert!(repo.file_manager_root);
         assert_eq!(repo.primary_slot_id, "P01");
         assert_eq!(repo.target_copies, 1);
         assert_eq!(
             engine
-                .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
+                .create_disk_root(
+                    "P01",
+                    "admin",
+                    storage_contract::OperationId::generate().unwrap()
+                )
                 .unwrap()
                 .repository_id,
             repo.repository_id
@@ -211,7 +237,7 @@ fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
                 NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "Documents", None)
                     .unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine
@@ -227,7 +253,7 @@ fn disk_root_uses_one_explicit_primary_on_short_and_complete_routes() {
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -263,16 +289,21 @@ fn explicit_smb_binding_changes_advance_a_persistent_independent_revision() {
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     assert_eq!(repo.smb_binding_generation, 1);
     for (index, enabled) in [true, false, true].into_iter().enumerate() {
         let expected = engine.state().histories[&repo.history_tree_id].generation;
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         let first = engine
             .set_smb_binding(
                 &repo.repository_id,

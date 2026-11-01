@@ -358,7 +358,7 @@ fn operation_id_preserves_exact_wire_language_and_copy_representation() {
     for raw in ["null", "1", "{}", "[]"] {
         assert!(json_codec::from_str::<OperationId>(raw).is_err());
     }
-    let generated = OperationId::generate();
+    let generated = OperationId::generate().unwrap();
     assert_eq!(
         generated.to_string().parse::<OperationId>().unwrap(),
         generated
@@ -554,4 +554,47 @@ fn disk_observation_issue_and_nullable_status_are_strict_current_wire() {
     ] {
         assert!(json_codec::from_value::<DiskObservationIssue>(issue).is_err());
     }
+}
+
+#[test]
+fn identifier_entropy_success_retains_v4_variant_and_canonical_format() {
+    let generated = new_id("entry").unwrap();
+    validate_id(&generated, "entry").unwrap();
+    assert_eq!(&generated[18..19], "4");
+    assert!(matches!(
+        generated.as_bytes()[22],
+        b'8' | b'9' | b'a' | b'b'
+    ));
+    let operation = OperationId::generate().unwrap().to_string();
+    validate_id(&operation, "op").unwrap();
+    assert_eq!(&operation[15..16], "4");
+    assert!(matches!(
+        operation.as_bytes()[19],
+        b'8' | b'9' | b'a' | b'b'
+    ));
+}
+
+#[test]
+#[ignore = "isolated getrandom failure; run test/contract/entropy/entropy-io.sh"]
+fn entropy_fault_returns_typed_failure_without_panic_or_identity() {
+    use std::error::Error as _;
+    let marker = std::env::var_os("ZXS_TEST_ENTROPY_FAIL_FILE").expect("fault driver marker");
+    assert!(new_id("entry").is_ok());
+    std::fs::write(&marker, b"fail").unwrap();
+    for error in [
+        new_id("entry").unwrap_err(),
+        OperationId::generate().unwrap_err(),
+    ] {
+        assert!(
+            matches!(error, Error::IdentifierGeneration { source, .. } if source.raw_os_error() == Some(5))
+        );
+        assert!(error.source().is_some());
+    }
+    assert!(matches!(
+        Config::development(["/unused".into()]).unwrap_err(),
+        Error::IdentifierGeneration { .. }
+    ));
+    std::fs::remove_file(marker).unwrap();
+    assert!(new_id("entry").is_ok());
+    println!("\nZXS_ENTROPY_FAULT_COMPLETE");
 }

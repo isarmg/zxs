@@ -19,7 +19,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("state"),
-        Config::development([temporary.path().join("disk")]),
+        Config::development([temporary.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repository = create_repository(&mut engine, "retained");
@@ -33,7 +33,7 @@ fn create_repository(engine: &mut Engine, name: &str) -> Repository {
             "P01",
             1,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap()
 }
@@ -47,7 +47,7 @@ fn save(engine: &mut Engine, repository: &Repository, bytes: &[u8]) -> Saved {
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: OperationId::generate(),
+        operation_id: OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -265,7 +265,7 @@ fn legal_split_windows_use_first_commit_order_and_preserve_original_operation_id
             "admin",
         )
         .unwrap();
-    let split_operation = OperationId::generate();
+    let split_operation = OperationId::generate().unwrap();
     let split = engine
         .commit_plan(&plan.plan_id, "admin", split_operation)
         .unwrap();
@@ -389,7 +389,7 @@ fn history_read_retains_business_observation_without_pinning_authoritative_gener
             None,
             &Note::parse("changed elsewhere".into()).unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(!generation.ptr_eq(&Arc::downgrade(&engine.state)));
@@ -417,7 +417,7 @@ fn old_metadata_roots_survive_explicit_body_purge_and_cold_restart() {
             "admin",
         )
         .unwrap();
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let published = engine
         .commit_plan(&plan.plan_id, "admin", operation)
         .unwrap();

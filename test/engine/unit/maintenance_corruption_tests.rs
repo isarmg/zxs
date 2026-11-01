@@ -9,7 +9,8 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
             temporary.path().join("p"),
             temporary.path().join("b"),
             temporary.path().join("c"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -18,7 +19,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut commits = Vec::new();
@@ -33,7 +34,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String, String) {
             engine
                 .commit_workspace(CommitRequest {
                     workspace_id: workspace.workspace_id,
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                     principal: "admin".into(),
                     expected_head: workspace.base_head,
                     fencing_token: workspace.fencing_token,
@@ -186,21 +187,21 @@ fn snapshot_admission_rejects_broken_crossing_merge_endpoints() {
                 &prefix,
                 &storage_contract::BranchName::parse("prefix").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let _plan = engine
             .create_split_plan(&repo.history_tree_id, &cut, "admin")
             .unwrap();
         let mut link = MergeLink {
-            merge_link_id: new_id("link"),
+            merge_link_id: new_id("link").unwrap(),
             history_tree_id: repo.history_tree_id.clone(),
             source_branch_id: repo.main_branch_id.clone(),
             source_commit_id: cut,
             target_branch_id: outside.branch_id.clone(),
             target_commit_id: prefix.clone(),
             author: "admin".into(),
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         };
         match corruption {
             "prefix_branch" => link.target_branch_id = "missing".into(),
@@ -216,7 +217,7 @@ fn snapshot_admission_rejects_broken_crossing_merge_endpoints() {
             "foreign_commit" => {
                 // Keep the real prefix intact so this specifically tests link validation.
                 let mut foreign = engine.state.commits[&prefix].clone();
-                foreign.commit_id = new_id("commit");
+                foreign.commit_id = new_id("commit").unwrap();
                 foreign.history_tree_id = "foreign".into();
                 link.target_commit_id = foreign.commit_id.clone();
                 std::sync::Arc::make_mut(&mut engine.state)
@@ -274,7 +275,7 @@ fn split_generation_overflow_does_not_wrap_or_publish_migration() {
             .commit_plan(
                 &plan.plan_id,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap_err();
         assert_eq!(
@@ -291,9 +292,12 @@ fn split_generation_overflow_does_not_wrap_or_publish_migration() {
 fn absent_plan_is_not_found_below_an_existing_system_root() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("system");
-    let engine =
-        Engine::initialize(&root, Config::development([temporary.path().join("disk")])).unwrap();
-    let id = new_id("plan");
+    let engine = Engine::initialize(
+        &root,
+        Config::development([temporary.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
+    let id = new_id("plan").unwrap();
     assert_eq!(
         engine.plan(&id).unwrap_err().code(),
         storage_contract::ErrorCode::PlanNotFound
@@ -326,10 +330,12 @@ fn plan_lookup_preserves_io_corruption_limits_and_link_rejections() {
     ] {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("system");
-        let engine =
-            Engine::initialize(&root, Config::development([temporary.path().join("disk")]))
-                .unwrap();
-        let id = new_id("plan");
+        let engine = Engine::initialize(
+            &root,
+            Config::development([temporary.path().join("disk")]).unwrap(),
+        )
+        .unwrap();
+        let id = new_id("plan").unwrap();
         let plans = root.join("plans");
         private_dir(&plans).unwrap();
         let file = plans.join(format!("{id}.json"));
@@ -405,13 +411,16 @@ fn plan_lookup_preserves_io_corruption_limits_and_link_rejections() {
 fn plan_lookup_keeps_persisted_identity_and_digest_validation() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("system");
-    let mut engine =
-        Engine::initialize(&root, Config::development([temporary.path().join("disk")])).unwrap();
+    let mut engine = Engine::initialize(
+        &root,
+        Config::development([temporary.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
     let expected = engine
         .save_plan(
             "split",
             "admin",
-            json!({"history_tree_id":new_id("history")}),
+            json!({"history_tree_id":new_id("history").unwrap()}),
         )
         .unwrap();
     std::sync::Arc::make_mut(&mut engine.state)

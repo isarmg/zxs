@@ -55,6 +55,7 @@ case "${1:-}" in
     python3 .github/scripts/check-smb-budget-io.py
     python3 .github/scripts/check-engine-fault-io.py
     python3 .github/scripts/check-auth-fault-io.py
+    python3 .github/scripts/check-entropy-fault-io.py
     python3 .github/scripts/check-telemetry-enumeration-io.py
     python3 .github/scripts/check-disk-observation-io.py
     python3 .github/scripts/check-rescue-publication-io.py

@@ -18,7 +18,8 @@ impl Pool {
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ]);
+        ])
+        .unwrap();
         config.max_entries = 4;
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
@@ -27,7 +28,7 @@ impl Pool {
                 "P01",
                 3,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         Self {
@@ -44,7 +45,7 @@ impl Pool {
                 &self.repo.repository_id,
                 NamespaceOperation::parse(kind, path, None).unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -60,7 +61,7 @@ impl Pool {
         self.engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -82,7 +83,7 @@ impl Pool {
                 .as_ref(),
                 &storage_contract::BranchName::parse(name).unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap()
             .result["directory_branch_id"]
@@ -164,7 +165,7 @@ fn sibling_compositions() -> (Pool, String, String) {
 #[test]
 fn oversized_sibling_selection_preserves_state_journals_and_operation_id() {
     let (mut pool, _, _) = sibling_compositions();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let before = pool.state_bytes();
     let journals = pool.journals();
     assert_eq!(journals.len(), 3);
@@ -247,7 +248,7 @@ fn root_selection_replaces_the_tree_at_the_entry_limit_and_survives_restart() {
             &pool.repo.repository_id,
             &left_root,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -260,7 +261,7 @@ fn root_selection_replaces_the_tree_at_the_entry_limit_and_survives_restart() {
             None,
             &storage_contract::BranchName::parse("right-full").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(

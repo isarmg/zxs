@@ -211,7 +211,7 @@ fn prepare_write_rejects_expiry_after_same_generation_dirty_was_skipped() {
         // A spare engine lets the original release its filesystem ownership.
         let spare = Engine::initialize(
             &temp.path().join("expiry-spare-state"),
-            Config::development([temp.path().join("expiry-spare-disk")]),
+            Config::development([temp.path().join("expiry-spare-disk")]).unwrap(),
         )
         .unwrap();
         drop(std::mem::replace(engine, spare));

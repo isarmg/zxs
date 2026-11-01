@@ -4,11 +4,11 @@ use super::*;
 mod descendant_routes_tests;
 
 fn initialize_routes(root: &Path) -> (Engine, Repository) {
-    let mut config = Config::development([root.join("p"), root.join("b"), root.join("c")]);
+    let mut config = Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap();
     for (slot, level, upstream) in [("P02", 1, None), ("B02", 2, Some("P02"))] {
         config.disks.push(DiskConfig {
             slot_id: slot.into(),
-            disk_id: new_id("disk"),
+            disk_id: new_id("disk").unwrap(),
             root: root.join(slot),
             level,
             upstream_slot_id: upstream.map(str::to_owned),
@@ -24,7 +24,7 @@ fn initialize_routes(root: &Path) -> (Engine, Repository) {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     (engine, repo)
@@ -41,18 +41,18 @@ fn moved_to_shorter_route(root: &Path) -> (Engine, Repository, Entry) {
             backup_prefixes: &prefixes(&[("B01", "first"), ("C01", "cold")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     engine
         .update_placement_rule(PlacementRuleUpdate {
-            rule_id: &new_id("rule"),
+            rule_id: &new_id("rule").unwrap(),
             repository_id: &repo.repository_id,
             path_prefix: "moved.txt",
             primary_slot_id: "P02",
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     rename(&mut engine, &repo, "source.txt", "moved.txt");
@@ -86,13 +86,13 @@ fn child_with_changed_primary(root: &Path) -> (Engine, Repository, Entry) {
     let file = save(&mut engine, &repo, "docs/a.txt", b"original");
     engine
         .update_placement_rule(PlacementRuleUpdate {
-            rule_id: &new_id("rule"),
+            rule_id: &new_id("rule").unwrap(),
             repository_id: &repo.repository_id,
             path_prefix: "docs/a.txt",
             primary_slot_id: "P02",
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     (engine, repo, file)
@@ -129,7 +129,7 @@ fn directory_configuration_requires_child_future_placement_prefixes() {
             backup_prefixes: &prefixes(&[("B01", "first")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap_err();
     assert_eq!(
@@ -145,7 +145,7 @@ fn directory_configuration_requires_child_future_placement_prefixes() {
             backup_prefixes: &prefixes(&[("B01", "first"), ("B02", "second")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(
@@ -175,7 +175,7 @@ fn directory_routes_exclude_files_with_independent_backup_settings() {
             backup_prefixes: &BTreeMap::new(),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let read = engine
@@ -195,7 +195,7 @@ fn directory_routes_exclude_files_with_independent_backup_settings() {
             backup_prefixes: &prefixes(&[("B01", "first"), ("C01", "cold")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(engine.state.placements[&file.version_id].target_copies, 1);
@@ -237,7 +237,7 @@ fn moved_file_can_reduce_copy_count_to_fit_its_current_chain() {
                     backup_prefixes: &values,
                     expected_generation: 1,
                     principal: "admin",
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                 })
                 .unwrap_err()
                 .code(),
@@ -246,7 +246,7 @@ fn moved_file_can_reduce_copy_count_to_fit_its_current_chain() {
         assert_eq!(canonical_json(engine.state()).unwrap(), before);
     }
     let values = prefixes(&[("B01", "first"), ("B02", "second")]);
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let request = BackupConfigurationRequest {
         repository_id: &repo.repository_id,
         path: "moved.txt",
@@ -302,7 +302,7 @@ fn placement_rule_can_repair_a_moved_files_incomplete_current_route() {
             primary_slot_id: "P01",
             expected_generation: 1,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let written = save(&mut engine, &repo, "moved.txt", b"repaired primary");
@@ -316,7 +316,7 @@ fn placement_rule_can_repair_a_moved_files_incomplete_current_route() {
 fn path_policy_can_reduce_unsatisfiable_count_after_primary_rule_change() {
     let temp = tempfile::tempdir().unwrap();
     let (mut engine, repo) = initialize_routes(temp.path());
-    let policy = new_id("policy");
+    let policy = new_id("policy").unwrap();
     engine
         .update_protection_policy(ProtectionPolicyUpdate {
             policy_id: &policy,
@@ -325,18 +325,18 @@ fn path_policy_can_reduce_unsatisfiable_count_after_primary_rule_change() {
             target_copies: 3,
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     engine
         .update_placement_rule(PlacementRuleUpdate {
-            rule_id: &new_id("rule"),
+            rule_id: &new_id("rule").unwrap(),
             repository_id: &repo.repository_id,
             path_prefix: "",
             primary_slot_id: "P02",
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     engine
@@ -347,7 +347,7 @@ fn path_policy_can_reduce_unsatisfiable_count_after_primary_rule_change() {
             target_copies: 2,
             expected_generation: 1,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let written = save(&mut engine, &repo, "docs/new.txt", b"repaired count");

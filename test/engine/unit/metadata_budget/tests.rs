@@ -39,7 +39,8 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -47,7 +48,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     (temp, engine, repo)
@@ -71,7 +72,7 @@ fn metadata_graph_limit_rejects_before_any_new_payload_or_decision_and_keeps_pub
             &mut pending,
             crate::business::VersionBuild {
                 history: &repo.history_tree_id,
-                file_id: &new_id("file"),
+                file_id: &new_id("file").unwrap(),
                 path: &name_policy::PortablePath::parse("pending.txt").unwrap(),
                 source: &crate::engine::ReadSource::external(source.clone()),
                 primary: "P01",
@@ -82,10 +83,10 @@ fn metadata_graph_limit_rejects_before_any_new_payload_or_decision_and_keeps_pub
         )
         .unwrap();
     let mut commit = original.clone();
-    commit.commit_id = new_id("commit");
+    commit.commit_id = new_id("commit").unwrap();
     commit.parent_commit_ids = vec![original.commit_id];
     commit.entries.push(Entry {
-        entry_id: new_id("entry"),
+        entry_id: new_id("entry").unwrap(),
         path: name_policy::PortablePath::parse("pending.txt").unwrap(),
         kind: NamespaceEntryKind::File,
         file_id: version.file_id.clone(),
@@ -100,7 +101,7 @@ fn metadata_graph_limit_rejects_before_any_new_payload_or_decision_and_keeps_pub
         .head_commit_id = commit.commit_id.clone();
     next.commits.insert(commit.commit_id.clone(), commit);
     let mut result = next.operations.values().next().unwrap().clone();
-    result.operation_id = storage_contract::OperationId::generate();
+    result.operation_id = storage_contract::OperationId::generate().unwrap();
     result.sequence = next_slot;
     next.operations.insert(result.operation_id, result.clone());
     // Derive the exact successful boundary using the same serializer.
@@ -166,7 +167,7 @@ fn actual_publication_and_local_proofs_fit_the_exact_preflight_boundary() {
     let result = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -247,7 +248,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -505,7 +506,7 @@ fn metadata_only_package_and_purge_tombstone_combinations_are_preflighted() {
         .commit_plan(
             &plan.plan_id,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let disk = engine.members()[0].clone();

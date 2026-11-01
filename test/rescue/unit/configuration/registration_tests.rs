@@ -4,14 +4,14 @@ use std::{fs, path::PathBuf};
 use storage_engine::Engine;
 
 fn draft(root: &Path) -> Config {
-    Config::development([root.join("p"), root.join("b"), root.join("c")])
+    Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap()
 }
 
 fn registration(root: &Path, config: PathBuf) -> Command {
     Command::RegisterDisk {
         config,
         slot: "P02".into(),
-        disk_id: storage_engine::new_id("disk"),
+        disk_id: storage_engine::new_id("disk").unwrap(),
         path: root.join("additional"),
         level: 1,
         upstream: None,
@@ -303,7 +303,7 @@ fn registration_process(path: &Path, conflict: bool) {
 fn additional_disk(root: &Path) -> storage_engine::DiskConfig {
     storage_engine::DiskConfig {
         slot_id: "P02".into(),
-        disk_id: storage_engine::new_id("disk"),
+        disk_id: storage_engine::new_id("disk").unwrap(),
         root: root.join("additional"),
         level: 1,
         upstream_slot_id: None,

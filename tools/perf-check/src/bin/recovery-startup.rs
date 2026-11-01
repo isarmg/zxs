@@ -126,9 +126,9 @@ fn main() -> Result<()> {
         temp.path().join("primary"),
         temp.path().join("backup"),
         temp.path().join("tertiary"),
-    ]);
+    ])?;
     let mut engine = Engine::initialize(&root, config)?;
-    let oldest = OperationId::generate();
+    let oldest = OperationId::generate()?;
     let repo = engine.create_repository(
         &storage_engine::RepositoryName::parse("State sharing probe")?,
         "P01",
@@ -153,7 +153,7 @@ fn main() -> Result<()> {
         engine.stage_bytes(&w.workspace_id, &path, &bytes)?;
         let request = CommitRequest {
             workspace_id: w.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate()?,
             principal: "admin".into(),
             expected_head: w.base_head,
             fencing_token: w.fencing_token,

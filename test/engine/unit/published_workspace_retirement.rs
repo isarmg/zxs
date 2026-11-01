@@ -7,7 +7,7 @@ fn publish(engine: &mut Engine, branch: &str, payload: &[u8]) -> (CommitRequest,
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: OperationId::generate(),
+        operation_id: OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -171,7 +171,7 @@ fn unbound_terminal_records_cannot_bypass_quota_before_recovery_writes() {
             let mut workspace = engine.workspace(&request.workspace_id).unwrap();
             match corruption {
                 "actor" => request.principal = "foreign".into(),
-                "workspace" => request.workspace_id = new_id("ws"),
+                "workspace" => request.workspace_id = new_id("ws").unwrap(),
                 "action" => request.operation_id = unrelated,
                 "digest" => request.message = "unbound request".into(),
                 "fence" => workspace.fencing_token += 1,
@@ -287,7 +287,7 @@ fn recovery_source_search_reads_old_full_generations_from_cold_workspaces() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: cold.workspace_id.clone(),
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: cold.base_head,
             fencing_token: cold.fencing_token,
@@ -306,7 +306,7 @@ fn recovery_source_search_reads_old_full_generations_from_cold_workspaces() {
             b"only old FULL has these bytes",
         )
         .unwrap();
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     engine.inject_fault_once("after_accept_2");
     assert_eq!(
         engine
@@ -384,7 +384,7 @@ fn published_completion_with_upload_owner_or_unknown_material_stays_resident() {
                 engine
                     .prepare_upload(
                         &workspace.workspace_id,
-                        &new_id("entry"),
+                        &new_id("entry").unwrap(),
                         "later",
                         &source,
                         1,
@@ -404,7 +404,7 @@ fn published_completion_with_upload_owner_or_unknown_material_stays_resident() {
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id.clone(),
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -591,7 +591,7 @@ fn historical_workspace_commit_abort_and_restart_keep_published_evidence() {
     );
     assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
     assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 0);
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let published = engine
         .commit_historical_save_plan(&plan.plan_id, "admin", operation)
         .unwrap();
@@ -736,7 +736,7 @@ fn terminal_manifest_beyond_verified_publication_prefix_cannot_release_quota_or_
             .unwrap();
         let request = CommitRequest {
             workspace_id: pending.workspace_id.clone(),
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: pending.base_head,
             fencing_token: pending.fencing_token,

@@ -86,14 +86,14 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
         "P01",
         3,
         PRINCIPAL,
-        storage_engine::OperationId::generate(),
+        storage_engine::OperationId::generate().unwrap(),
     )?;
     for payload in PAYLOADS {
         let workspace = engine.create_workspace(&repository.main_branch_id, PRINCIPAL)?;
         engine.stage_bytes(&workspace.workspace_id, FILE, payload.as_bytes())?;
         engine.commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_engine::OperationId::generate(),
+            operation_id: storage_engine::OperationId::generate().unwrap(),
             principal: PRINCIPAL.into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -113,7 +113,7 @@ pub(super) fn seed_files(temporary: &tempfile::TempDir) -> Result<()> {
         &entry.version_id,
         &storage_engine::BranchName::parse(FILE_BRANCH)?,
         PRINCIPAL,
-        storage_engine::OperationId::generate(),
+        storage_engine::OperationId::generate().unwrap(),
     )?;
     // Reopen from disk before serving: an in-memory-only fixture is insufficient.
     drop(engine);

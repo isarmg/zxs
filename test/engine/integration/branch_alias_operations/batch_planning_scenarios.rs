@@ -11,7 +11,7 @@ fn initialize(pool: &mut Pool, path: &str) -> String {
             })
             .as_ref(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["directory_branch_id"]
@@ -85,7 +85,7 @@ fn frozen_batch_swap_preserves_identities_contexts_and_retry_receipt() {
             pool.mapping(&branch, "b.txt", &branch, "a.txt"),
         ],
     };
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let result = pool
         .engine
         .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", operation)
@@ -147,7 +147,7 @@ fn frozen_batch_nonparticipating_target_collision_is_atomic() {
                 &pool.repo.repository_id,
                 &request,
                 "admin",
-                storage_contract::OperationId::generate()
+                storage_contract::OperationId::generate().unwrap()
             )
             .unwrap_err()
             .code(),
@@ -184,7 +184,7 @@ fn frozen_batch_overlapping_active_scopes_reject_before_losing_an_item() {
         &pool.repo.repository_id,
         &request,
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     );
     match result {
         Err(error) => assert_eq!(
@@ -311,7 +311,7 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
                 &pool.repo.repository_id,
                 &duplicate,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap_err()
             .code(),
@@ -325,7 +325,7 @@ fn frozen_batch_deletes_distinct_same_directory_aliases_but_rejects_duplicate_so
         kind: storage_contract::DirectoryBatchKind::Delete,
         items: vec![first, second],
     };
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let receipt = pool
         .engine
         .directory_namespace_batch(&pool.repo.repository_id, &request, "admin", operation)

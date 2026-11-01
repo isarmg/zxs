@@ -38,7 +38,7 @@ fn system_clock_health_time_preserves_fraction_and_calendar_boundary() {
 
 #[test]
 fn serializing_a_completed_observation_preserves_its_exact_check_time() {
-    let operation_id = storage_contract::OperationId::generate();
+    let operation_id = storage_contract::OperationId::generate().unwrap();
     let observation = || OperationObservation {
         outcome: storage_contract::OperationOutcome {
             operation_id,

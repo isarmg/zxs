@@ -181,8 +181,8 @@ impl Engine {
                         "branch name already exists",
                     ));
                 }
-                let id = new_id("br");
-                let commit_id = new_id("commit");
+                let id = new_id("br")?;
+                let commit_id = new_id("commit")?;
                 let mut entries = source.entries.clone();
                 let pending_file_versions: std::collections::BTreeMap<String, String> = entries
                     .iter()
@@ -190,7 +190,7 @@ impl Engine {
                     .map(|entry| (entry.file_id.clone(), entry.version_id.clone()))
                     .collect();
                 for entry in &mut entries {
-                    entry.entry_id = new_id("entry");
+                    entry.entry_id = new_id("entry")?;
                 }
                 state.commits.insert(
                     commit_id.clone(),
@@ -200,7 +200,7 @@ impl Engine {
                         history_tree_id: source.history_tree_id.clone(),
                         kind: "branch_pending".into(),
                         parent_commit_ids: vec![source_commit.into()],
-                        tree_id: new_id("tree"),
+                        tree_id: new_id("tree")?,
                         sequence: state.sequence,
                         operation_id: operation,
                         author: principal.into(),
@@ -327,7 +327,7 @@ impl Engine {
                     ));
                 }
                 let link = MergeLink {
-                    merge_link_id: new_id("link"),
+                    merge_link_id: new_id("link")?,
                     history_tree_id: sb.history_tree_id.clone(),
                     source_branch_id: source_branch.into(),
                     source_commit_id: source_commit.into(),

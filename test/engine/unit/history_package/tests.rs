@@ -15,7 +15,7 @@ fn retained_policy_manifests_require_bindings_and_unique_current_scopes() {
             "P01",
             2,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"body");
@@ -33,13 +33,13 @@ fn retained_policy_manifests_require_bindings_and_unique_current_scopes() {
             backup_prefixes: &BTreeMap::from([("B01".into(), "backup".into())]),
             expected_generation: 0,
             principal: "alice",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let current = configured.result["policy"]["policy_id"].as_str().unwrap();
     let mut manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
     let mut retained = manifest.protection_policies[current].clone();
-    retained.policy_id = new_id("policy");
+    retained.policy_id = new_id("policy").unwrap();
     retained.inheritable = false;
     let id = retained.policy_id.clone();
     manifest.protection_policies.insert(id.clone(), retained);
@@ -62,7 +62,7 @@ fn retained_policy_manifests_require_bindings_and_unique_current_scopes() {
         .protection_policies
         .get_mut(&id)
         .unwrap()
-        .scope_file_id = Some(new_id("file"));
+        .scope_file_id = Some(new_id("file").unwrap());
     assert!(dangling.validate().is_err());
     manifest
         .protection_policies
@@ -75,7 +75,7 @@ fn retained_policy_manifests_require_bindings_and_unique_current_scopes() {
 fn initialize(root: &Path) -> Engine {
     Engine::initialize(
         &root.join("state"),
-        Config::development([root.join("p"), root.join("b"), root.join("c")]),
+        Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap(),
     )
     .unwrap()
 }
@@ -90,7 +90,7 @@ fn save_path(engine: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> Str
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -113,7 +113,7 @@ fn version_and_history_exports_follow_owned_roots_and_still_reject_damaged_seals
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"old complete bytes");
@@ -178,7 +178,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
                 "P01",
                 1,
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         if !path.is_empty() {
@@ -187,7 +187,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
                     &repo.repository_id,
                     NamespaceOperation::parse(NamespaceOperationKind::Mkdir, path, None).unwrap(),
                     "alice",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
         }
@@ -199,7 +199,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
                 backup_prefixes: &BTreeMap::from([("B01".into(), "chosen-backup".into())]),
                 expected_generation: 0,
                 principal: "alice",
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             })
             .unwrap();
         assert!(engine.state.versions.is_empty());
@@ -208,7 +208,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
             .export_history_package(&repo.history_tree_id, &package)
             .unwrap();
         let mut restored = initialize(&temp.path().join("restored"));
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         let receipt = restored
             .restore_history_package(&package, "P01", 2, "alice", operation)
             .unwrap();
@@ -262,7 +262,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
                 "P01",
                 1,
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let configuration = reduced
@@ -273,7 +273,8 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
 
         for (name, copies, renamed) in [("expanded", 3, false), ("renamed", 2, true)] {
             let root = temp.path().join(name);
-            let mut config = Config::development([root.join("p"), root.join("b"), root.join("c")]);
+            let mut config =
+                Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap();
             if renamed {
                 config.disks[1].slot_id = "OTHER".into();
                 config.disks[2].upstream_slot_id = Some("OTHER".into());
@@ -287,7 +288,7 @@ fn empty_configured_backup_scopes_export_and_restore_without_version_routes() {
                         "P01",
                         copies,
                         "alice",
-                        storage_contract::OperationId::generate()
+                        storage_contract::OperationId::generate().unwrap()
                     )
                     .unwrap_err()
                     .code(),
@@ -310,7 +311,7 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
                 "P01",
                 source_copies,
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         save(&mut engine, &repo.main_branch_id, b"observed route");
@@ -319,7 +320,7 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
                 &repo.repository_id,
                 NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "empty", None).unwrap(),
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         engine
@@ -333,7 +334,7 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
                 ]),
                 expected_generation: 0,
                 principal: "alice",
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             })
             .unwrap();
         let package = temp.path().join("package");
@@ -341,7 +342,8 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
             .export_history_package(&repo.history_tree_id, &package)
             .unwrap();
         let root = temp.path().join("restored");
-        let mut config = Config::development([root.join("p"), root.join("b"), root.join("c")]);
+        let mut config =
+            Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap();
         config.disks[1].slot_id = "C01".into();
         config.disks[2].slot_id = "B01".into();
         config.disks[2].upstream_slot_id = Some("C01".into());
@@ -352,7 +354,7 @@ fn restore_backup_prefixes_preserve_evidenced_positions_and_reject_identity_coll
             "P01",
             target_copies,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         );
         if source_copies == 2 {
             assert_eq!(
@@ -400,7 +402,7 @@ fn paged_pending_recovery_repairs_leaf_index_and_root_and_checkpoint_checks_them
                 "P01",
                 3,
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let mut next = engine.state().clone();
@@ -409,14 +411,14 @@ fn paged_pending_recovery_repairs_leaf_index_and_root_and_checkpoint_checks_them
         let mut parent = original.commit_id.clone();
         for _ in 0..160 {
             let mut commit = original.clone();
-            commit.commit_id = new_id("commit");
+            commit.commit_id = new_id("commit").unwrap();
             commit.parent_commit_ids = vec![parent];
             commit.sequence = next.sequence;
             parent = commit.commit_id.clone();
             next.commits.insert(commit.commit_id.clone(), commit);
         }
         let mut result = next.operations.values().next().unwrap().clone();
-        result.operation_id = storage_contract::OperationId::generate();
+        result.operation_id = storage_contract::OperationId::generate().unwrap();
         result.sequence = next.sequence;
         next.operations.insert(result.operation_id, result.clone());
         engine.inject_fault_once("after_accept_2");
@@ -475,7 +477,7 @@ fn paged_history_resolves_disjoint_replicas_without_read_repair() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"full retained bytes");
@@ -537,7 +539,7 @@ fn admitted_snapshot_binding_rejects_rehashed_different_and_invalid_histories() 
             "P01",
             3,
             "alice",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"body");
@@ -602,7 +604,7 @@ fn offline_package_authenticates_raw_leaf_before_graph_admission() {
             "P01",
             3,
             "alice",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"body");
@@ -625,7 +627,13 @@ fn offline_package_authenticates_raw_leaf_before_graph_admission() {
     let before = canonical_json(destination.state()).unwrap();
     assert_eq!(
         destination
-            .restore_history_package(&package, "P01", 3, "alice", OperationId::generate())
+            .restore_history_package(
+                &package,
+                "P01",
+                3,
+                "alice",
+                OperationId::generate().unwrap()
+            )
             .unwrap_err()
             .code(),
         ErrorCode::ObjectCorrupt
@@ -650,7 +658,7 @@ fn paged_package_missing_leaf_and_flat_proof_substitution_fail_closed() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"retained bytes");
@@ -727,7 +735,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -744,7 +752,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -757,7 +765,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             &repo.repository_id,
             Some(&name_policy::LookupPath::parse("folder/nested").unwrap()),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let created = engine
@@ -766,7 +774,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             Some(&name_policy::LookupPath::parse("folder").unwrap()),
             &storage_contract::BranchName::parse("draft").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let id = created.result["directory_branch_id"]
@@ -787,7 +795,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             Some(&name_policy::LookupPath::parse("folder").unwrap()),
             &storage_contract::BranchName::parse("draft").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -799,7 +807,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -826,7 +834,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             NamespaceOperation::parse(NamespaceOperationKind::Rename, "folder", Some("renamed"))
                 .unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(engine.state.file_path_nodes.len(), 2);
@@ -866,7 +874,7 @@ fn nested_directory_compositions_keep_frozen_paths_and_restore_after_rename() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -917,7 +925,11 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temporary.path().join("source"));
     let repo = engine
-        .create_disk_root("P01", "alice", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "alice",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     let save_path = |engine: &mut Engine, path: &str, bytes: &[u8]| {
         let workspace = engine
@@ -929,7 +941,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "alice".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -958,7 +970,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
                 .as_ref(),
                 &storage_contract::BranchName::parse(name).unwrap(),
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap()
             .result["directory_branch_id"]
@@ -975,7 +987,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             Some(&name_policy::LookupPath::parse("a").unwrap()),
             &storage_contract::BranchName::parse("m").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -984,7 +996,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             Some(&name_policy::LookupPath::parse("b").unwrap()),
             &storage_contract::BranchName::parse("l").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let request = DirectoryNamespaceBatch {
@@ -1008,7 +1020,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             &repo.repository_id,
             &request,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save_path(&mut engine, "b/f.txt", b"F2");
@@ -1024,7 +1036,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             Some(&name_policy::LookupPath::parse("a").unwrap()),
             &storage_contract::BranchName::parse("n").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let saved_root = engine.state.directory_selections[&repo.repository_id].clone();
@@ -1038,7 +1050,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             &repo.repository_id,
             &alternate,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -1046,7 +1058,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             &repo.repository_id,
             &saved_root,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -1079,7 +1091,7 @@ fn moved_file_aliases_restore_independent_path_contexts_and_one_physical_owner()
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(restored.state.file_contexts, manifest.file_contexts);
@@ -1130,7 +1142,11 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = initialize(&temporary.path().join("source"));
     let repo = engine
-        .create_disk_root("P01", "alice", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "alice",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     let save_path = |engine: &mut Engine, path: &str, bytes: &[u8]| {
         let workspace = engine
@@ -1142,7 +1158,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "alice".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -1174,7 +1190,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
                 )
                 .unwrap(),
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         assert_eq!(engine.state.versions.len(), versions);
@@ -1205,7 +1221,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
             &node,
             &storage_contract::Note::parse("目录改名，正文未变".into()).unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let body = engine.valid_replica(&old.version_id).unwrap().0;
@@ -1251,7 +1267,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
         .commit_plan(
             &plan.plan_id,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
@@ -1300,7 +1316,7 @@ fn rename_nodes_preserve_body_proofs_and_mixed_lineage_through_purge_export_and_
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -1334,7 +1350,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let original_commit = save(&mut engine, &repo.main_branch_id, b"frozen parent");
@@ -1345,21 +1361,21 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
             &original.version_id,
             &storage_contract::BranchName::parse("shared").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .branch_id
         .unwrap();
     save(&mut engine, &shared, b"shared branch advanced");
     let advanced = engine.list_tree(&shared).unwrap()[0].clone();
-    let first = new_id("dbr");
-    let second = new_id("dbr");
-    let first_tree = new_id("dtree");
+    let first = new_id("dbr").unwrap();
+    let second = new_id("dbr").unwrap();
+    let first_tree = new_id("dtree").unwrap();
     engine
         .mutate(
             "fixture.directory_compositions",
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
             json!({}),
             |_, state, _| {
                 let parent = DirectoryBranch {
@@ -1460,17 +1476,18 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
         .directory_branches
         .get_mut(&first)
         .unwrap()
-        .repository_id = new_id("repo");
+        .repository_id = new_id("repo").unwrap();
     bad(&invalid);
     let mut invalid = manifest.clone();
     invalid
         .directory_branches
         .get_mut(&first)
         .unwrap()
-        .commit_id = new_id("commit");
+        .commit_id = new_id("commit").unwrap();
     bad(&invalid);
     let mut invalid = manifest.clone();
-    invalid.directory_branches.get_mut(&first).unwrap().entries[0].version_id = new_id("ver");
+    invalid.directory_branches.get_mut(&first).unwrap().entries[0].version_id =
+        new_id("ver").unwrap();
     bad(&invalid);
     let mut invalid = manifest.clone();
     invalid
@@ -1498,7 +1515,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
     let mut invalid = manifest.clone();
     invalid
         .directory_selections
-        .insert(new_id("entry"), second.clone());
+        .insert(new_id("entry").unwrap(), second.clone());
     bad(&invalid);
     let mut invalid = manifest.clone();
     invalid
@@ -1512,7 +1529,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
         .directory_branches
         .get_mut(&second)
         .unwrap()
-        .head_tree_id = new_id("dtree");
+        .head_tree_id = new_id("dtree").unwrap();
     bad(&invalid);
     let mut invalid = manifest.clone();
     invalid
@@ -1525,7 +1542,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
     let mut invalid = manifest.clone();
     invalid
         .directory_selection_generations
-        .insert(new_id("entry"), 1);
+        .insert(new_id("entry").unwrap(), 1);
     bad(&invalid);
     let mut invalid_json = json_codec::to_value(&manifest).unwrap();
     assert_eq!(
@@ -1537,7 +1554,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
     let mut invalid = manifest.clone();
     invalid
         .file_locations
-        .insert(new_id("file"), "other.txt".into());
+        .insert(new_id("file").unwrap(), "other.txt".into());
     bad(&invalid);
     let mut invalid = manifest.clone();
     invalid
@@ -1547,10 +1564,12 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
     let mut invalid = manifest.clone();
     invalid
         .file_write_origins
-        .insert(original.file_id.clone(), new_id("dbr"));
+        .insert(original.file_id.clone(), new_id("dbr").unwrap());
     bad(&invalid);
     let mut invalid = manifest.clone();
-    invalid.file_selection_generations.insert(new_id("file"), 1);
+    invalid
+        .file_selection_generations
+        .insert(new_id("file").unwrap(), 1);
     bad(&invalid);
     let mut invalid = manifest.clone();
     invalid.file_contexts.insert(
@@ -1582,7 +1601,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
     let mut invalid = manifest.clone();
     invalid
         .directory_tree_selections
-        .insert(repo.repository_id.clone(), new_id("dtree"));
+        .insert(repo.repository_id.clone(), new_id("dtree").unwrap());
     bad(&invalid);
     let mut invalid = manifest.clone();
     invalid
@@ -1590,7 +1609,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
         .get_mut(&first_tree)
         .unwrap()
         .inherited_files
-        .insert(new_id("file"), first.clone());
+        .insert(new_id("file").unwrap(), first.clone());
     bad(&invalid);
     let mut invalid = manifest.clone();
     invalid
@@ -1599,7 +1618,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
         .unwrap()
         .directory_refs
         .insert(
-            new_id("entry"),
+            new_id("entry").unwrap(),
             DirectoryReference {
                 directory_branch_id: first.clone(),
                 tree_id: first_tree.clone(),
@@ -1621,7 +1640,7 @@ fn composed_directory_records_validate_and_restore_frozen_shared_file_references
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -1675,7 +1694,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"source bytes");
@@ -1687,7 +1706,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
             &file.version_id,
             &storage_contract::BranchName::parse("draft").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let branch = result.branch_id.unwrap();
@@ -1702,7 +1721,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
         .get_mut(&branch)
         .unwrap()
         .pending_file_versions
-        .insert(file.file_id.clone(), new_id("ver"));
+        .insert(file.file_id.clone(), new_id("ver").unwrap());
     assert_eq!(
         invalid.validate().unwrap_err().code(),
         storage_contract::ErrorCode::HistoryPackageInvalid
@@ -1718,7 +1737,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
         .get_mut(&pending_commit)
         .unwrap()
         .pending_file_versions
-        .insert(file.file_id.clone(), new_id("ver"));
+        .insert(file.file_id.clone(), new_id("ver").unwrap());
     assert_eq!(
         invalid.validate().unwrap_err().code(),
         storage_contract::ErrorCode::HistoryPackageInvalid
@@ -1745,7 +1764,7 @@ fn package_preserves_inherited_references_without_inventing_files_or_versions() 
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -1854,12 +1873,12 @@ fn inherited_metadata_replays_after_decision_without_preparing_payloads_or_stubs
                 "P01",
                 3,
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let source_commit = save(&mut engine, &repo.main_branch_id, b"published source");
         let file = engine.list_tree(&repo.main_branch_id).unwrap()[0].clone();
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         engine.inject_fault_once(point);
         assert_eq!(
             engine
@@ -1939,7 +1958,7 @@ fn split_package_restores_full_history_after_all_original_paths_are_removed() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let cut = save(&mut engine, &repository.main_branch_id, b"first full bytes");
@@ -1955,7 +1974,7 @@ fn split_package_restores_full_history_after_all_original_paths_are_removed() {
         .commit_plan(
             &plan.plan_id,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let history = split.history_tree_id.unwrap();
@@ -1975,7 +1994,7 @@ fn split_package_restores_full_history_after_all_original_paths_are_removed() {
     );
     let restored_root = temp.path().join("restored");
     let mut restored = initialize(&restored_root);
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let result = restored
         .restore_history_package(&package, "P01", 3, "rescuer", operation)
         .unwrap();
@@ -2146,7 +2165,7 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut source, &repo.main_branch_id, b"retained");
@@ -2161,7 +2180,7 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
         .commit_plan(
             &purge.plan_id,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let package = temp.path().join("package");
@@ -2211,7 +2230,7 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
                         "P01",
                         3,
                         "alice",
-                        storage_contract::OperationId::generate(),
+                        storage_contract::OperationId::generate().unwrap(),
                     )
                     .unwrap();
                 assert_eq!(restored.state.versions[&old], baseline.versions[&old]);
@@ -2232,7 +2251,7 @@ fn tombstoned_storage_identity_is_validated_before_restore_decision() {
                             "P01",
                             3,
                             "alice",
-                            storage_contract::OperationId::generate()
+                            storage_contract::OperationId::generate().unwrap()
                         )
                         .unwrap_err()
                         .code(),
@@ -2260,7 +2279,7 @@ fn package_preserves_purge_and_rejects_missing_bytes_or_unpublished_manifest() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"old");
@@ -2275,7 +2294,7 @@ fn package_preserves_purge_and_rejects_missing_bytes_or_unpublished_manifest() {
         .commit_plan(
             &purge.plan_id,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let package = temp.path().join("package");
@@ -2291,7 +2310,7 @@ fn package_preserves_purge_and_rejects_missing_bytes_or_unpublished_manifest() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -2334,7 +2353,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"original body");
@@ -2343,7 +2362,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             &repo.repository_id,
             None,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let entry = engine
@@ -2377,7 +2396,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             remove: &[],
             location: None,
             principal: "alice",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap()
         .result["nodes"][0]["node_id"]
@@ -2390,7 +2409,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             &tagged,
             &storage_contract::Note::parse("tag note".into()).unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let left = engine
@@ -2400,7 +2419,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             &tagged,
             &storage_contract::BranchName::parse("left").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["branch_id"]
@@ -2414,7 +2433,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             &tagged,
             &storage_contract::BranchName::parse("right").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["branch_id"]
@@ -2439,7 +2458,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             surviving_branch_id: &left,
             location: None,
             principal: "alice",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap()
         .result["node_id"]
@@ -2459,7 +2478,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             ]),
             expected_generation: 0,
             principal: "alice",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(canonical_json(&engine.state.versions).unwrap(), versions);
@@ -2491,7 +2510,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
         .commit_plan(
             &purge.plan_id,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let manifest = HistoryManifest::from_state(&engine.state, &repo.history_tree_id).unwrap();
@@ -2529,7 +2548,7 @@ fn metadata_merges_labels_and_backup_paths_export_restore_without_rewriting_full
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -2572,7 +2591,7 @@ fn history_notes_use_the_current_write_format_without_legacy_limits() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"note target");
@@ -2624,7 +2643,7 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save_path(
@@ -2659,7 +2678,7 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
         .as_array_mut()
         .unwrap();
     entries.push(json_codec::json!({
-        "entry_id":new_id("entry"), "path":"ghost", "name":"ghost",
+        "entry_id":new_id("entry").unwrap(), "path":"ghost", "name":"ghost",
         "lookup_key":"ghost", "kind":"unsupported", "file_id":"",
         "version_id":"", "size":"0"
     }));
@@ -2668,7 +2687,7 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
     let version = manifest.versions.values().next().unwrap();
     for case in ["entry_id", "file_id", "version_id", "directory_payload"] {
         let mut entry = Entry {
-            entry_id: new_id("entry"),
+            entry_id: new_id("entry").unwrap(),
             path: name_policy::PortablePath::parse("ghost").unwrap(),
             kind: NamespaceEntryKind::Directory,
             file_id: String::new(),
@@ -2689,8 +2708,8 @@ fn commit_namespace_envelope_rejects_malformed_entries() {
                 }
             }
             "directory_payload" => {
-                entry.file_id = new_id("file");
-                entry.version_id = new_id("ver");
+                entry.file_id = new_id("file").unwrap();
+                entry.version_id = new_id("ver").unwrap();
                 entry.size = 1;
             }
             _ => unreachable!(),
@@ -2716,7 +2735,7 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let root = engine.state().histories[&repo.history_tree_id]
@@ -2729,7 +2748,7 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
             &root,
             &storage_contract::BranchName::parse(&name).unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let directory = engine
@@ -2738,7 +2757,7 @@ fn history_branch_names_match_the_current_128_byte_write_limit() {
             None,
             &storage_contract::BranchName::parse(&name).unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let directory = directory.result["directory_branch_id"].as_str().unwrap();
@@ -2777,7 +2796,7 @@ fn namespace_deletion_facts_validate_without_snapshot_or_content_dependencies() 
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut manifest = HistoryManifest::from_state(engine.state(), &repo.history_tree_id).unwrap();
@@ -2850,7 +2869,7 @@ fn namespace_deletions_survive_export_restore_and_replay_without_operation_recor
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save_path(
@@ -2870,7 +2889,7 @@ fn namespace_deletions_survive_export_restore_and_replay_without_operation_recor
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "alice".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -2913,7 +2932,7 @@ fn namespace_deletions_survive_export_restore_and_replay_without_operation_recor
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -2941,7 +2960,7 @@ fn failed_workspace_namespace_sequence_does_not_publish_deletion_facts() {
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"still present");
@@ -2964,7 +2983,7 @@ fn failed_workspace_namespace_sequence_does_not_publish_deletion_facts() {
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "alice".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -2997,7 +3016,7 @@ fn net_zero_namespace_sequence_persists_deletion_once() {
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -3013,7 +3032,7 @@ fn net_zero_namespace_sequence_persists_deletion_once() {
     }
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "alice".into(),
         expected_head: workspace.base_head.clone(),
         fencing_token: workspace.fencing_token,
@@ -3052,7 +3071,7 @@ fn manifest_record_projection_is_scoped_shared_and_mutation_isolated() {
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let second = engine
@@ -3061,7 +3080,7 @@ fn manifest_record_projection_is_scoped_shared_and_mutation_isolated() {
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     for repo in [&first, &second] {
@@ -3076,7 +3095,7 @@ fn manifest_record_projection_is_scoped_shared_and_mutation_isolated() {
                 &repo.repository_id,
                 Some(&name_policy::LookupPath::parse("folder").unwrap()),
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -3191,7 +3210,7 @@ fn manifest_content_state_coverage_rejects_equal_length_wrong_version_keys() {
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"body");
@@ -3199,7 +3218,9 @@ fn manifest_content_state_coverage_rejects_equal_length_wrong_version_keys() {
     manifest.validate().unwrap();
     let version = manifest.versions.keys().next().unwrap().clone();
     let state = manifest.content_states.remove(&version).unwrap();
-    manifest.content_states.insert(new_id("ver"), state);
+    manifest
+        .content_states
+        .insert(new_id("ver").unwrap(), state);
     assert_eq!(
         manifest.validate().unwrap_err().code(),
         storage_contract::ErrorCode::HistoryPackageInvalid
@@ -3216,7 +3237,7 @@ fn failed_export_cleans_staging_without_overwriting_the_destination() {
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"body");
@@ -3252,7 +3273,7 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"original");
@@ -3270,7 +3291,7 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
                 &entry.version_id,
                 &storage_contract::BranchName::parse(name).unwrap(),
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap()
             .result["branch_id"]
@@ -3295,7 +3316,7 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
             surviving_branch_id: &branches[0],
             location: None,
             principal: "alice",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let first_merge = operation.result["merge_id"].as_str().unwrap().to_owned();
@@ -3307,8 +3328,8 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
     let first_node = baseline.file_branch_merges[&first_merge]
         .result_node_id
         .clone();
-    let second_node = new_id("fmeta");
-    let second_merge = new_id("fmerge");
+    let second_node = new_id("fmeta").unwrap();
+    let second_merge = new_id("fmerge").unwrap();
     let mut metadata = baseline.file_metadata_nodes[&first_node].clone();
     metadata.node_id = second_node.clone();
     baseline
@@ -3383,7 +3404,7 @@ fn rehashed_history_packages_reject_missing_and_cyclic_merge_sources() {
                 "P01",
                 1,
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap_err();
         assert_eq!(error.message(), expected);
@@ -3402,7 +3423,7 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &repo.main_branch_id, b"retained body");
@@ -3417,7 +3438,7 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
             &entry.version_id,
             &storage_contract::BranchName::parse("original branch").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let branch = engine
@@ -3434,7 +3455,7 @@ fn real_branch_rename_uses_precise_projection_and_matches_complete_graph_bytes()
             &branch.branch_id,
             &storage_contract::BranchName::parse("renamed branch").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let owners = crate::state_projection::DerivedOwners::from_state(&before);
@@ -3501,7 +3522,7 @@ fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() 
             "P01",
             2,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     for body in [
@@ -3526,7 +3547,7 @@ fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() 
             "fmeta_00000000000000000000000000000000",
             &storage_contract::BranchName::parse("missing node").unwrap(),
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::FileNodeNotFound);
@@ -3543,7 +3564,7 @@ fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() 
                 version,
                 &storage_contract::Note::parse(note.to_owned()).unwrap(),
                 "alice",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         precise(&before, engine.state(), &repo.history_tree_id);
@@ -3557,7 +3578,7 @@ fn real_save_metadata_and_backup_policy_writes_keep_general_projection_deltas() 
             backup_prefixes: &BTreeMap::from([("B01".into(), "owner-projection".into())]),
             expected_generation: 0,
             principal: "alice",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     precise(&before, engine.state(), &repo.history_tree_id);

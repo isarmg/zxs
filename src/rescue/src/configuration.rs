@@ -60,7 +60,7 @@ pub(crate) fn run(command: Command) -> Result<()> {
             disks,
             output,
         } => {
-            let mut config = Config::development(disks);
+            let mut config = Config::development(disks)?;
             if production {
                 config.mode = storage_engine::Mode::Production;
             }

@@ -46,7 +46,7 @@ pub(super) fn rebind(shared: &Shared, branch: &str, enabled: bool) {
                 branch,
                 enabled,
                 expected_history_generation: binding.history_generation,
-                operation: storage_contract::OperationId::generate(),
+                operation: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap();
@@ -338,7 +338,7 @@ fn disabled_and_reenabled_binding_cannot_revive_an_idle_authenticated_connection
     refused(
         &mut old,
         Request::Namespace {
-            operation_id: new_id("op"),
+            operation_id: new_id("op").unwrap(),
             kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
             path: "disabled".into(),
             destination: None,
@@ -511,7 +511,7 @@ fn live_writer_cannot_prepare_or_publish_after_disable_and_failed_close_retains_
                     branch: &branch,
                     enabled: false,
                     expected_history_generation: binding.history_generation,
-                    operation: storage_contract::OperationId::generate()
+                    operation: storage_contract::OperationId::generate().unwrap()
                 }
             )
             .unwrap_err()

@@ -119,17 +119,21 @@ class SuiteCoverageTests(unittest.TestCase):
         })
         self.assertEqual(calls.count(calls[9]), 1)
         self.assertEqual(calls[10], {
-            "tool": "python3", "args": [".github/scripts/check-telemetry-enumeration-io.py"],
+            "tool": "python3", "args": [".github/scripts/check-entropy-fault-io.py"],
         })
         self.assertEqual(calls.count(calls[10]), 1)
         self.assertEqual(calls[11], {
-            "tool": "python3", "args": [".github/scripts/check-disk-observation-io.py"],
+            "tool": "python3", "args": [".github/scripts/check-telemetry-enumeration-io.py"],
         })
         self.assertEqual(calls.count(calls[11]), 1)
         self.assertEqual(calls[12], {
-            "tool": "python3", "args": [".github/scripts/check-rescue-publication-io.py"],
+            "tool": "python3", "args": [".github/scripts/check-disk-observation-io.py"],
         })
         self.assertEqual(calls.count(calls[12]), 1)
+        self.assertEqual(calls[13], {
+            "tool": "python3", "args": [".github/scripts/check-rescue-publication-io.py"],
+        })
+        self.assertEqual(calls.count(calls[13]), 1)
 
     def test_history_io_rejects_successful_children_without_completion(self):
         root = Path(__file__).resolve().parents[2]

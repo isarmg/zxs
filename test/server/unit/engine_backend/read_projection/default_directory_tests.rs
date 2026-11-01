@@ -51,7 +51,7 @@ fn default_directory_metadata_is_frozen_and_retains_admission_and_wire() {
                 &repo.repository_id,
                 None,
                 "owner",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         engine
@@ -60,7 +60,7 @@ fn default_directory_metadata_is_frozen_and_retains_admission_and_wire() {
                 None,
                 &storage_contract::BranchName::parse("草稿").unwrap(),
                 "owner",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         legacy_wire(&engine, &repo)
@@ -80,7 +80,7 @@ fn default_directory_metadata_is_frozen_and_retains_admission_and_wire() {
             None,
             &storage_contract::BranchName::parse("later").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let missing = backend
@@ -136,12 +136,12 @@ fn typed_default_selection_retains_receipt_digest_and_admission_order() {
             &repo.repository_id,
             None,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let selected = engine.state().directory_selections[&repo.repository_id].clone();
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let command =
         |repository: &str, branch: &str, operation_id| crate::SelectDefaultDirectoryBranch {
             repository_id: repository.into(),
@@ -197,7 +197,7 @@ fn typed_default_selection_retains_receipt_digest_and_admission_order() {
                 command(
                     &repo.repository_id,
                     "missing-directory",
-                    storage_contract::OperationId::generate()
+                    storage_contract::OperationId::generate().unwrap()
                 )
             )
             .unwrap_err()
@@ -233,7 +233,7 @@ fn typed_directory_rename_keeps_canonical_receipts_and_cached_name_collision_pol
             &repo.repository_id,
             None,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let branch = engine.state().directory_selections[&repo.repository_id].clone();
@@ -243,7 +243,7 @@ fn typed_directory_rename_keeps_canonical_receipts_and_cached_name_collision_pol
             None,
             &storage_contract::BranchName::parse("Straße").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
@@ -261,12 +261,12 @@ fn typed_directory_rename_keeps_canonical_receipts_and_cached_name_collision_pol
                 &repo.repository_id,
                 &branch,
                 "STRASSE",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             ),
         )
         .unwrap_err();
     assert_eq!(collision.code, storage_contract::ErrorCode::NameCollision);
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let result = backend
         .rename_directory_branch(
             &identity,
@@ -328,7 +328,7 @@ fn typed_directory_rename_keeps_canonical_receipts_and_cached_name_collision_pol
                     &repo.repository_id,
                     "missing-branch",
                     "Café",
-                    storage_contract::OperationId::generate()
+                    storage_contract::OperationId::generate().unwrap()
                 )
             )
             .unwrap_err()
@@ -366,7 +366,7 @@ fn typed_scope_initialization_preserves_lookup_spelling_receipts_and_live_admiss
         b"content",
     );
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let command = |path: &str, operation_id| crate::InitializeDirectoryScope {
         repository_id: repo.repository_id.clone(),
         path: Some(name_policy::LookupPath::parse(path).unwrap()),
@@ -404,7 +404,10 @@ fn typed_scope_initialization_preserves_lookup_spelling_receipts_and_live_admiss
     let missing = backend
         .initialize_directory_scope(
             &identity,
-            command("missing", storage_contract::OperationId::generate()),
+            command(
+                "missing",
+                storage_contract::OperationId::generate().unwrap(),
+            ),
         )
         .unwrap_err();
     assert_eq!(missing.code, storage_contract::ErrorCode::DirectoryNotFound);

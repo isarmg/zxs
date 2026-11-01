@@ -81,7 +81,8 @@ fn published_body() -> (tempfile::TempDir, PathBuf, FileVersion) {
         temporary.path().join("primary"),
         temporary.path().join("backup"),
         temporary.path().join("third"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&temporary.path().join("system"), config.clone()).unwrap();
     let repository = engine
         .create_repository(
@@ -89,7 +90,7 @@ fn published_body() -> (tempfile::TempDir, PathBuf, FileVersion) {
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -101,7 +102,7 @@ fn published_body() -> (tempfile::TempDir, PathBuf, FileVersion) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -198,7 +199,8 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
         root.join("primary"),
         root.join("backup"),
         root.join("third"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root.join("system"), config.clone()).unwrap();
     let repository = engine
         .create_repository(
@@ -206,7 +208,7 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut saved = Vec::new();
@@ -220,7 +222,7 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
         let committed = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "owner".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -249,7 +251,7 @@ fn tombstoned_body(state: &str) -> (tempfile::TempDir, Engine, Config, FileVersi
         .commit_plan(
             &plan.plan_id,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(engine.state().content_states[old].as_str(), state);
@@ -291,7 +293,7 @@ fn offline_tombstones_bind_retained_version_metadata_and_directory() {
             let mut damaged = version.clone();
             match field {
                 "content_hash" => damaged.content_hash = "0".repeat(64).parse().unwrap(),
-                "history_tree_id" => damaged.history_tree_id = new_id("history"),
+                "history_tree_id" => damaged.history_tree_id = new_id("history").unwrap(),
                 _ => unreachable!(),
             }
             fs::write(
@@ -336,7 +338,7 @@ fn offline_tombstones_bind_retained_version_metadata_and_directory() {
         fs::remove_file(&tombstone_path).unwrap();
         fs::write(&tombstone_path, tombstone_bytes).unwrap();
 
-        let moved = directory.with_file_name(new_id("ver"));
+        let moved = directory.with_file_name(new_id("ver").unwrap());
         fs::rename(&directory, &moved).unwrap();
         assert_corrupt("directory");
         fs::rename(&moved, &directory).unwrap();
@@ -366,7 +368,8 @@ fn restored_tombstones_need_no_source_payload_proofs() {
             root.join("primary"),
             root.join("backup"),
             root.join("third"),
-        ]);
+        ])
+        .unwrap();
         let mut restored = Engine::initialize(&root.join("system"), config.clone()).unwrap();
         restored
             .restore_history_package(
@@ -374,7 +377,7 @@ fn restored_tombstones_need_no_source_payload_proofs() {
                 "P01",
                 3,
                 "owner",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         assert_eq!(

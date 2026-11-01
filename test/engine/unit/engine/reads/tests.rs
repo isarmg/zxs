@@ -7,7 +7,8 @@ fn fixture() -> (tempfile::TempDir, Engine, Workspace) {
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("t"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -15,7 +16,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Workspace) {
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -32,7 +33,7 @@ fn committed_fixture() -> (tempfile::TempDir, Engine, String) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -110,7 +111,7 @@ fn staging_and_detached_commit_use_the_admitted_disks_after_root_replacement() {
     engine
         .stage_bytes(&workspace.workspace_id, "second", b"new content")
         .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let prepared = engine
         .prepare_workspace_commit(
             CommitRequest {
@@ -159,7 +160,7 @@ fn detached_upload_keeps_its_admitted_workspace_directory_after_root_replacement
     let (temp, mut engine, workspace) = fixture();
     let source = temp.path().join("upload-source");
     fs::write(&source, b"detached content").unwrap();
-    let item = storage_contract::new_id("entry");
+    let item = storage_contract::new_id("entry").unwrap();
     let preparation = engine
         .prepare_upload(&workspace.workspace_id, &item, "detached", &source, 1)
         .unwrap();
@@ -213,7 +214,7 @@ fn caller_paths_and_staged_sources_keep_distinct_origins_after_root_replacement(
     let staged_external = engine
         .stage_file(&workspace.workspace_id, "external-stage", &input)
         .unwrap();
-    let item = new_id("entry");
+    let item = new_id("entry").unwrap();
     let upload = engine
         .prepare_upload(&workspace.workspace_id, &item, "external-upload", &input, 1)
         .unwrap();
@@ -239,7 +240,7 @@ fn caller_paths_and_staged_sources_keep_distinct_origins_after_root_replacement(
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -321,7 +322,7 @@ fn verified_replica_holds_checked_inode_and_rewinds_before_returning() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -423,7 +424,7 @@ fn partial_write_from_published_replica_keeps_verified_untouched_bytes() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -435,7 +436,14 @@ fn partial_write_from_published_replica_keeps_verified_untouched_bytes() {
         .create_workspace(&workspace.branch_id, "admin")
         .unwrap();
     let staged = engine
-        .stage_range(&next.workspace_id, &new_id("entry"), "body", 0, b"O", None)
+        .stage_range(
+            &next.workspace_id,
+            &new_id("entry").unwrap(),
+            "body",
+            0,
+            b"O",
+            None,
+        )
         .unwrap();
     assert_eq!(fs::read(staged.source_path).unwrap(), b"Original");
     assert!(engine.reads.lock().unwrap().counts().unwrap().is_empty());
@@ -447,7 +455,7 @@ fn copy_build_rejects_replacement_after_replica_verification_before_candidate_mu
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -472,7 +480,7 @@ fn copy_build_rejects_replacement_after_replica_verification_before_candidate_mu
                 &mut pending,
                 crate::business::VersionBuild {
                     history: &original.history_tree_id,
-                    file_id: &new_id("file"),
+                    file_id: &new_id("file").unwrap(),
                     path: &name_policy::PortablePath::parse("copy").unwrap(),
                     source: &source,
                     primary: &original.creation_primary_slot_id,
@@ -495,7 +503,7 @@ fn read_leases_release_once_across_plan_moves_and_engine_drop() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -618,7 +626,7 @@ fn accounting_exposes_dangling_internal_placement() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -638,7 +646,7 @@ fn commit_fixture() -> (tempfile::TempDir, Engine, FileVersion) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -780,7 +788,7 @@ fn prepare_rejects_source_growth_after_planning_without_installing_payload() {
         .plan_workspace_commit_inner(
             CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -869,7 +877,7 @@ fn version_health_fallback_observes_shared_membership_but_not_missing_local_bodi
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

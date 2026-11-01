@@ -5,11 +5,15 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let t = tempfile::tempdir().unwrap();
     let mut e = Engine::initialize(
         &t.path().join("system"),
-        Config::development([t.path().join("p"), t.path().join("b"), t.path().join("c")]),
+        Config::development([t.path().join("p"), t.path().join("b"), t.path().join("c")]).unwrap(),
     )
     .unwrap();
     let r = e
-        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     (t, e, r)
 }
@@ -18,7 +22,7 @@ fn save(e: &mut Engine, r: &Repository, path: &str, bytes: &[u8]) {
     e.stage_bytes(&w.workspace_id, path, bytes).unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id,
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -56,7 +60,7 @@ fn create(e: &mut Engine, r: &Repository, path: &str, name: &str) -> String {
         .as_ref(),
         &storage_contract::BranchName::parse(name).unwrap(),
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap()
     .result["directory_branch_id"]
@@ -75,7 +79,7 @@ fn select(e: &mut Engine, r: &Repository, path: &str, name: &str) {
         .as_ref(),
         &storage_contract::BranchName::parse(name).unwrap(),
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
 }
@@ -140,7 +144,7 @@ fn selecting_old_directory_restores_names_membership_and_hierarchy() {
         )
         .unwrap(),
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     save(&mut e, &r, "folder/nested/added.txt", b"added");
@@ -165,7 +169,7 @@ fn explicit_same_node_selection_changes_intent_once_and_fences_old_workspaces() 
         &file.file_id,
         &main,
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     assert!(e.state().directory_trees.len() > count);
@@ -181,7 +185,7 @@ fn explicit_same_node_selection_changes_intent_once_and_fences_old_workspaces() 
         &file.file_id,
         &main,
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     assert_eq!(e.state().directory_trees.len(), count);
@@ -245,7 +249,7 @@ fn batch_move_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
             &repo.repository_id,
             NamespaceOperation::parse(NamespaceOperationKind::Rename, "a", Some("source")).unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let older_nodes = engine.state().file_path_nodes.clone();
@@ -261,7 +265,7 @@ fn batch_move_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
             item(&engine, &source, "source/a.txt", Some((&target, "b/a.txt"))),
         ],
     };
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let receipt = engine
         .directory_namespace_batch(&repo.repository_id, &request, "admin", operation)
         .unwrap();
@@ -285,7 +289,7 @@ fn batch_move_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
             &repo.repository_id,
             NamespaceOperation::parse(NamespaceOperationKind::Rename, "b", Some("later")).unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(
@@ -330,7 +334,7 @@ fn move_transfers_following_but_retains_unselected_frozen_alias_and_identity() {
         kind: storage_contract::DirectoryBatchKind::Move,
         items: vec![item(&e, &m, "a/f.txt", Some((&l, "b/f.txt")))],
     };
-    let op = storage_contract::OperationId::generate();
+    let op = storage_contract::OperationId::generate().unwrap();
     let receipt = e
         .directory_namespace_batch(&r.repository_id, &request, "admin", op)
         .unwrap();
@@ -377,7 +381,7 @@ fn batch_move_recovery_keeps_source_and_target_in_one_decision() {
             kind: storage_contract::DirectoryBatchKind::Move,
             items: vec![item(&e, &m, "a/f.txt", Some((&l, "b/f.txt")))],
         };
-        let op = storage_contract::OperationId::generate();
+        let op = storage_contract::OperationId::generate().unwrap();
         e.inject_fault_once(fault);
         let error = e
             .directory_namespace_batch(&r.repository_id, &request, "admin", op)
@@ -441,7 +445,7 @@ fn batch_rejects_ambiguous_move_and_late_collision_without_any_branch_change() {
                     items,
                 },
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap_err();
         assert_eq!(error.code(), expected);
@@ -463,7 +467,7 @@ fn inherited_automatic_file_branch_name_is_utf8_safe_and_collision_free() {
         &first,
         &storage_contract::BranchName::parse("renamed").unwrap(),
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     create(&mut e, &r, "a", &name);
@@ -485,7 +489,7 @@ fn first_lazy_save_receipt_allows_the_same_writer_to_continue_but_fences_later_s
     e.stage_bytes(&w.workspace_id, "a/f.txt", b"own1").unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id.clone(),
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -523,7 +527,7 @@ fn a_directory_created_after_workspace_open_still_fences_new_file_staging() {
         &r.repository_id,
         NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "new", None).unwrap(),
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     create(&mut e, &r, "new", "draft");
@@ -579,7 +583,7 @@ fn content_save_with_equivalent_spelling_preserves_the_existing_display_path() {
             )
             .unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
         assert_eq!(entries(&e, &r)[lookup_path].version_id, current.version_id);
@@ -636,7 +640,7 @@ fn namespace_bookkeeping_uses_paths_and_keeps_the_first_match_in_unsorted_entrie
         &after,
         &[NamespaceOperation::parse(NamespaceOperationKind::Delete, "Gone.txt", None).unwrap()],
         "admin",
-        OperationId::generate(),
+        OperationId::generate().unwrap(),
     )
     .unwrap();
     assert_eq!(state.file_contexts.len(), 2);

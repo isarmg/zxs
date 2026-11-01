@@ -351,7 +351,7 @@ fn replacement_all_and_lost_lineage_are_conservative_but_control_state_is_indepe
         after.plans = Default::default();
         after
             .operation_principals
-            .insert(OperationId::generate(), "author".into());
+            .insert(OperationId::generate().unwrap(), "author".into());
     });
 }
 
@@ -363,7 +363,7 @@ fn save_oracle_file(engine: &mut Engine, branch: &str) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "oracle".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -410,7 +410,8 @@ fn assert_full_encoder_oracle(
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let oracle = &config.disks[..1];
     for object in full {
         object.store(oracle).unwrap();
@@ -436,7 +437,8 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let first = engine
         .create_repository(
@@ -444,7 +446,7 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
             "P01",
             1,
             "oracle",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let file = save_oracle_file(&mut engine, &first.main_branch_id);
@@ -454,7 +456,7 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
             "P01",
             1,
             "oracle",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save_oracle_file(&mut engine, &second.main_branch_id);
@@ -520,7 +522,7 @@ fn incremental_roots_and_every_graph_object_match_forced_full_encoder_bytes() {
             "P01",
             1,
             "oracle",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let new_state = engine.state().clone();
@@ -558,7 +560,8 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let history = before.histories.keys().next().unwrap();
     let hash = &roots.catalog_binding(history).unwrap().hash;
@@ -659,7 +662,7 @@ fn fallback_keeps_exact_root_and_never_overwrites_corrupt_or_unsafe_dependencies
 #[test]
 fn typed_operation_map_inserts_are_history_independent_with_exact_tracking() {
     let before = dependency_fixture();
-    let id = OperationId::generate();
+    let id = OperationId::generate().unwrap();
     assert_changes(&before, &[], |after| {
         after.operations.insert(
             id,

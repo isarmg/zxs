@@ -14,7 +14,8 @@ fn fixture() -> (
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -22,7 +23,7 @@ fn fixture() -> (
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let identity = crate::engine_backend::install_test_administrator(&mut engine, "owner");
@@ -33,8 +34,8 @@ fn fixture() -> (
 fn protection_commands_preserve_core_replay_and_transport_contract() {
     for is_policy in [true, false] {
         let (_root, mut engine, repo, owner) = fixture();
-        let operation = storage_contract::OperationId::generate();
-        let id = new_id(if is_policy { "policy" } else { "rule" });
+        let operation = storage_contract::OperationId::generate().unwrap();
+        let id = new_id(if is_policy { "policy" } else { "rule" }).unwrap();
         let original = if is_policy {
             engine
                 .update_protection_policy(storage_engine::ProtectionPolicyUpdate {
@@ -124,7 +125,7 @@ fn protection_commands_preserve_core_replay_and_transport_contract() {
                 &unadmitted_owner,
                 "",
                 1,
-                storage_contract::OperationId::generate()
+                storage_contract::OperationId::generate().unwrap()
             )
             .unwrap_err()
             .status,
@@ -134,7 +135,13 @@ fn protection_commands_preserve_core_replay_and_transport_contract() {
             backend.engine.lock().unwrap().state().operations[&operation].request_digest,
             original.request_digest
         );
-        let applied = execute(&owner, "", 1, storage_contract::OperationId::generate()).unwrap();
+        let applied = execute(
+            &owner,
+            "",
+            1,
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
         let record = if is_policy { "policy" } else { "rule" };
         assert_eq!(applied.result[record]["generation"], "2");
         let snapshot = if is_policy {
@@ -149,7 +156,13 @@ fn protection_commands_preserve_core_replay_and_transport_contract() {
             .unwrap()
         };
         assert_eq!(snapshot, applied.result[record]);
-        let stale = execute(&owner, "", 1, storage_contract::OperationId::generate()).unwrap_err();
+        let stale = execute(
+            &owner,
+            "",
+            1,
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap_err();
         assert_eq!(stale.code, storage_contract::ErrorCode::ConfigConflict);
         assert_eq!(stale.status, 409);
     }
@@ -252,7 +265,7 @@ fn workspace_ownership_and_session_admission_apply_to_typed_and_wire_paths() {
     };
     let result = Application::new(&mut engine, &intruder).commit_workspace(CommitWorkspace {
         workspace_id: workspace.workspace_id.clone(),
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         expected_head: workspace.base_head.clone(),
         fencing_token: workspace.fencing_token,
         message: String::new(),
@@ -327,7 +340,7 @@ fn typed_branch_rejects_cross_repository_source() {
             "P01",
             3,
             &owner.principal,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let source = engine.state().branches[&other.main_branch_id]
@@ -337,7 +350,7 @@ fn typed_branch_rejects_cross_repository_source() {
         repository_id: repo.repository_id,
         source_commit_id: source,
         name: storage_contract::BranchName::parse("Cross scope").unwrap(),
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
     });
     assert_eq!(
         result.unwrap_err().code,
@@ -349,7 +362,7 @@ fn typed_branch_rejects_cross_repository_source() {
 fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and_reopen() {
     let (root, engine, _, owner) = fixture();
     let mut backend = EngineBackend::new(engine);
-    let repository_operation = storage_contract::OperationId::generate();
+    let repository_operation = storage_contract::OperationId::generate().unwrap();
     let repository_request = |name: &str| crate::CreateRepository {
         name: storage_contract::RepositoryName::parse(name).unwrap(),
         primary_slot_id: "P01".into(),
@@ -366,7 +379,7 @@ fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and
     let source = backend.engine.lock().unwrap().state().histories[&created.history_tree_id]
         .root_commit_id
         .clone();
-    let operation_id = storage_contract::OperationId::generate();
+    let operation_id = storage_contract::OperationId::generate().unwrap();
     let branch_request = |name: &str| crate::CreateBranch {
         repository_id: created.repository_id.clone(),
         source_commit_id: source.clone(),
@@ -387,7 +400,7 @@ fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and
             &owner,
             crate::ArchiveBranch {
                 branch_id: branch["branch_id"].as_str().unwrap().into(),
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap();
@@ -399,7 +412,7 @@ fn creation_replays_keep_public_response_shapes_after_archive_binding_change_and
                 branch: &created.main_branch_id,
                 enabled: false,
                 expected_history_generation: 1,
-                operation: storage_contract::OperationId::generate(),
+                operation: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap();
@@ -456,7 +469,7 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
             &root_commit,
             &storage_contract::BranchName::parse("side").unwrap(),
             &owner.principal,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -468,7 +481,7 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
     let cut = engine
         .commit_workspace(storage_engine::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: owner.principal.clone(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -478,7 +491,7 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
         .unwrap()
         .commit_id
         .unwrap();
-    let operation_id = storage_contract::OperationId::generate();
+    let operation_id = storage_contract::OperationId::generate().unwrap();
     let command = || crate::CreateMergeLink {
         history_tree_id: repo.history_tree_id.clone(),
         source_branch_id: side.branch_id.clone(),
@@ -497,7 +510,7 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
         .commit_plan(
             &plan.plan_id,
             &owner.principal,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     drop(engine);
@@ -523,7 +536,7 @@ fn merge_link_retry_replays_original_scope_after_split_and_restart() {
         wrong_history.history_tree_id = split.history_tree_id.clone().unwrap();
         assert!(backend.create_merge_link(&owner, wrong_history).is_err());
         let mut new_request = command();
-        new_request.operation_id = storage_contract::OperationId::generate();
+        new_request.operation_id = storage_contract::OperationId::generate().unwrap();
         assert_eq!(
             backend
                 .create_merge_link(&owner, new_request)
@@ -547,7 +560,7 @@ fn upload_finalization_rechecks_completed_session_revocation() {
             .unwrap();
         let source = root.path().join("upload-source");
         std::fs::write(&source, b"prepared bytes").unwrap();
-        let item = new_id("entry");
+        let item = new_id("entry").unwrap();
         let backend = std::sync::Arc::new(EngineBackend::new(engine));
         let auth =
             crate::auth::AuthStore::initialize(root.path(), "owner", "integration-test-password")
@@ -609,7 +622,7 @@ fn commit_preparation_releases_engine_and_rechecks_completed_revocation() {
             engine
                 .stage_bytes(&workspace.workspace_id, "file.txt", b"commit bytes")
                 .unwrap();
-            let operation = storage_contract::OperationId::generate();
+            let operation = storage_contract::OperationId::generate().unwrap();
             let command = CommitWorkspace {
                 workspace_id: workspace.workspace_id.clone(),
                 operation_id: operation,
@@ -810,7 +823,7 @@ fn namespace_wire_carries_lookup_spelling_and_creation_spelling_into_commit() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: identity.principal,
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -879,7 +892,7 @@ fn typed_plan_commit_retains_published_failure_evidence_and_resumes_cleanup_on_r
         engine
             .commit_workspace(storage_engine::CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: owner.principal.clone(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -904,7 +917,7 @@ fn typed_plan_commit_retains_published_failure_evidence_and_resumes_cleanup_on_r
         .join(first)
         .join("purged.json");
     std::fs::create_dir(&blocker).unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let request = || {
         Ok(crate::CommitPlan {
             plan_id: plan.plan_id.clone(),

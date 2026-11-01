@@ -16,7 +16,7 @@ fn invalid_identities() -> Vec<Value> {
 fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
     let root = tempfile::tempdir().unwrap();
     let system = root.path().join("system");
-    let mut config = Config::development([root.path().join("disk")]);
+    let mut config = Config::development([root.path().join("disk")]).unwrap();
     config.max_workspaces = 1;
     let mut engine = Engine::initialize(&system, config).unwrap();
     let repository = engine
@@ -25,7 +25,7 @@ fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut commits = Vec::new();
@@ -39,7 +39,7 @@ fn fixture() -> (tempfile::TempDir, Router, String, String, String) {
         let result = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -263,7 +263,7 @@ async fn typed_namespace_boundary_rejects_bad_envelopes_before_staging() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo = success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Typed namespace","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let repo = success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Typed namespace","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
     let workspace = success(
         &app,
         &token,
@@ -384,7 +384,9 @@ async fn typed_write_session_keeps_strict_admission_and_exact_lease_wire() {
         .unwrap()
         .parse::<u64>()
         .unwrap();
-    let ttl = Config::development([root.path().join("disk")]).workspace_ttl_seconds;
+    let ttl = Config::development([root.path().join("disk")])
+        .unwrap()
+        .workspace_ttl_seconds;
     assert_eq!(
         session,
         json!({"write_session_id":workspace["workspace_id"],"workspace_id":workspace["workspace_id"],"branch_id":branch,"principal":"admin","fencing_token":workspace["fencing_token"],"expires_at":created.saturating_add(ttl).to_string(),"scope":"workspace","state":"open"})
@@ -478,7 +480,9 @@ async fn typed_capabilities_are_public_and_keep_the_engine_upload_limit() {
     let (root, app, _, _, _) = fixture();
     let (status, capabilities) = send(&app, None, "GET", "/api/capabilities", None).await;
     assert_eq!(status, StatusCode::OK);
-    let core_limit = Config::development([root.path().join("disk")]).max_file_bytes;
+    let core_limit = Config::development([root.path().join("disk")])
+        .unwrap()
+        .max_file_bytes;
     let server_limit = ServerConfig::new(root.path()).max_upload_bytes;
     assert_eq!(
         capabilities["max_upload_bytes"],
@@ -558,7 +562,7 @@ async fn contextual_content_uses_typed_lookup_and_preserves_ranges_and_error_ord
         assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
         assert_eq!(error["error"]["code"], code);
     }
-    let other=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Other","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let other=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Other","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
     let (status, error) = send(
         &app,
         Some(&token),
@@ -683,7 +687,7 @@ async fn typed_repository_list_preserves_order_fields_and_ignores_query_identity
     let initial = success(&app, &token, "GET", "/api/repositories", None).await;
     let mut expected = initial["repositories"].as_array().unwrap().clone();
     for name in ["Second", "Third"] {
-        let created=success(&app,&token,"POST","/api/repositories",Some(json!({"name":name,"primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+        let created=success(&app,&token,"POST","/api/repositories",Some(json!({"name":name,"primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
         expected.push(created);
     }
     expected.sort_by(|a, b| {
@@ -738,7 +742,7 @@ async fn typed_branch_snapshots_preserve_forks_list_order_and_missing_errors() {
         None,
     )
     .await;
-    let fork=success(&app,&token,"POST",&format!("/api/repositories/{repo}/branches"),Some(json!({"source_commit_id":old_commit,"name":"Historical fork","operation_id":new_id("op")}))).await;
+    let fork=success(&app,&token,"POST",&format!("/api/repositories/{repo}/branches"),Some(json!({"source_commit_id":old_commit,"name":"Historical fork","operation_id":new_id("op").unwrap()}))).await;
     let fork_id = fork["branch_id"].as_str().unwrap();
     assert_eq!(
         success(
@@ -922,11 +926,11 @@ async fn typed_history_graph_keeps_scope_sequence_order_and_raw_branch_shape() {
         "POST",
         &format!("/api/repositories/{repo}/branches"),
         Some(
-            json!({"source_commit_id":old_commit,"name":"Graph fork","operation_id":new_id("op")}),
+            json!({"source_commit_id":old_commit,"name":"Graph fork","operation_id":new_id("op").unwrap()}),
         ),
     )
     .await;
-    let other=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Other graph","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let other=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Other graph","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
     let graph = success(
         &app,
         &token,
@@ -1003,7 +1007,7 @@ async fn typed_smb_binding_http_preserves_wire_replay_and_error_priority() {
         status,
         json!({"repository_id":repository,"branch_id":branch,"enabled":true,"history_generation":"1"})
     );
-    let update = json!({"branch_id":branch,"enabled":false,"expected_history_generation":status["history_generation"],"operation_id":new_id("op")});
+    let update = json!({"branch_id":branch,"enabled":false,"expected_history_generation":status["history_generation"],"operation_id":new_id("op").unwrap()});
     let published = success(&app, &token, "PUT", &path, Some(update.clone())).await;
     let replay = success(&app, &token, "PUT", &path, Some(update.clone())).await;
     assert_eq!(published["operation_id"], replay["operation_id"]);
@@ -1181,9 +1185,9 @@ async fn typed_protection_http_keeps_replay_wire_and_static_boundary_errors() {
         } else {
             ("/api/primary-placement-rules", "rule", "rule_id")
         };
-        let id = new_id(kind);
+        let id = new_id(kind).unwrap();
         let path = format!("{prefix}/{id}");
-        let mut body = json!({"repository_id":repository,"path_prefix":"Folder","expected_generation":"0","operation_id":new_id("op")});
+        let mut body = json!({"repository_id":repository,"path_prefix":"Folder","expected_generation":"0","operation_id":new_id("op").unwrap()});
         body[if is_policy {
             "target_copies"
         } else {
@@ -1242,10 +1246,10 @@ async fn typed_protection_http_keeps_replay_wire_and_static_boundary_errors() {
         assert_eq!(error["error"]["code"], "INVALID_ID");
         let mut update = body.clone();
         update["expected_generation"] = json!("1");
-        update["operation_id"] = json!(new_id("op"));
+        update["operation_id"] = json!(new_id("op").unwrap());
         let applied = success(&app, &token, "PUT", &path, Some(update.clone())).await;
         assert_eq!(applied["result"][kind]["generation"], "2");
-        update["operation_id"] = json!(new_id("op"));
+        update["operation_id"] = json!(new_id("op").unwrap());
         let (status, error) = send(&app, Some(&token), "PUT", &path, Some(update)).await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(error["error"]["code"], "CONFIG_CONFLICT");
@@ -1302,7 +1306,7 @@ async fn typed_comparison_http_keeps_entry_wire_scope_and_identity_precedence() 
         .await,
         json!({"left":left,"right":left,"changes":[]})
     );
-    let other=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Comparison other","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let other=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Comparison other","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
     let branch = other["main_branch_id"].as_str().unwrap();
     let tree = success(
         &app,
@@ -1671,7 +1675,7 @@ async fn typed_default_directory_http_preserves_empty_and_initialized_views() {
         &token,
         "POST",
         &format!("/api/repositories/{repository}/directory-scopes"),
-        Some(json!({"path":"","operation_id":storage_contract::OperationId::generate()})),
+        Some(json!({"path":"","operation_id":storage_contract::OperationId::generate().unwrap()})),
     )
     .await;
     let after = success(&app, &token, "GET", &uri, None).await;
@@ -1928,14 +1932,14 @@ async fn typed_directory_rename_preserves_public_receipt_and_name_error_priority
         &token,
         "POST",
         &format!("/api/repositories/{repo}/directory-scopes"),
-        Some(json!({"path":"","operation_id":storage_contract::OperationId::generate()})),
+        Some(json!({"path":"","operation_id":storage_contract::OperationId::generate().unwrap()})),
     )
     .await;
     let directory = initialized["result"]["directory_branch_id"]
         .as_str()
         .unwrap();
     let uri = format!("/api/repositories/{repo}/directory-branches/{directory}");
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let body = json!({"name":"Café","operation_id":operation});
     let result = success(&app, &token, "PATCH", &uri, Some(body.clone())).await;
     assert_eq!(result["operation_kind"], "directory.branch.rename");
@@ -2003,7 +2007,7 @@ async fn typed_directory_rename_preserves_public_receipt_and_name_error_priority
             Some(&token),
             "PATCH",
             &format!("/api/repositories/{repo}/directory-branches/missing"),
-            Some(json!({"name":"Valid","operation_id":storage_contract::OperationId::generate()}))
+            Some(json!({"name":"Valid","operation_id":storage_contract::OperationId::generate().unwrap()}))
         )
         .await
         .0,
@@ -2028,7 +2032,7 @@ async fn typed_archive_http_keeps_raw_receipt_and_rejects_active_workspace() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Archive","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}))).await;
+    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Archive","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate().unwrap()}))).await;
     let repository = repo["repository_id"].as_str().unwrap();
     let history = repo["history_tree_id"].as_str().unwrap();
     let graph = success(
@@ -2039,7 +2043,7 @@ async fn typed_archive_http_keeps_raw_receipt_and_rejects_active_workspace() {
         None,
     )
     .await;
-    let side=success(&app,&token,"POST",&format!("/api/repositories/{repository}/branches"),Some(json!({"source_commit_id":graph["history"]["root_commit_id"],"name":"side","operation_id":storage_contract::OperationId::generate()}))).await;
+    let side=success(&app,&token,"POST",&format!("/api/repositories/{repository}/branches"),Some(json!({"source_commit_id":graph["history"]["root_commit_id"],"name":"side","operation_id":storage_contract::OperationId::generate().unwrap()}))).await;
     let branch = side["branch_id"].as_str().unwrap();
     let uri = format!("/api/branches/{branch}/archive");
     let workspace = success(
@@ -2055,7 +2059,7 @@ async fn typed_archive_http_keeps_raw_receipt_and_rejects_active_workspace() {
         Some(&token),
         "POST",
         &uri,
-        Some(json!({"operation_id":storage_contract::OperationId::generate()})),
+        Some(json!({"operation_id":storage_contract::OperationId::generate().unwrap()})),
     )
     .await;
     assert_eq!(busy.1["error"]["code"], "WORKSPACE_BUSY");
@@ -2070,7 +2074,7 @@ async fn typed_archive_http_keeps_raw_receipt_and_rejects_active_workspace() {
         Some(json!({})),
     )
     .await;
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let body = json!({"operation_id":operation});
     let receipt = success(&app, &token, "POST", &uri, Some(body.clone())).await;
     assert_eq!(receipt.as_object().unwrap().len(), 11);
@@ -2105,7 +2109,7 @@ async fn typed_archive_http_keeps_raw_receipt_and_rejects_active_workspace() {
         Some(&token),
         "POST",
         &main,
-        Some(json!({"operation_id":storage_contract::OperationId::generate()})),
+        Some(json!({"operation_id":storage_contract::OperationId::generate().unwrap()})),
     )
     .await;
     assert_eq!(protected.1["error"]["code"], "MAIN_BRANCH_REQUIRED");
@@ -2150,7 +2154,7 @@ async fn typed_branch_creation_keeps_receipt_snapshot_and_boundary_errors() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Creation","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}))).await;
+    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Creation","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate().unwrap()}))).await;
     let repository = repo["repository_id"].as_str().unwrap();
     let graph = success(
         &app,
@@ -2164,7 +2168,7 @@ async fn typed_branch_creation_keeps_receipt_snapshot_and_boundary_errors() {
     )
     .await;
     let uri = format!("/api/repositories/{repository}/branches");
-    let body = json!({"source_commit_id":graph["history"]["root_commit_id"],"name":"Café","operation_id":storage_contract::OperationId::generate()});
+    let body = json!({"source_commit_id":graph["history"]["root_commit_id"],"name":"Café","operation_id":storage_contract::OperationId::generate().unwrap()});
     let created = success(&app, &token, "POST", &uri, Some(body.clone())).await;
     assert_eq!(created["name"], "Café");
     assert_eq!(created["generation"], "1");
@@ -2182,7 +2186,7 @@ async fn typed_branch_creation_keeps_receipt_snapshot_and_boundary_errors() {
             "/api/branches/{}/archive",
             created["branch_id"].as_str().unwrap()
         ),
-        Some(json!({"operation_id":storage_contract::OperationId::generate()})),
+        Some(json!({"operation_id":storage_contract::OperationId::generate().unwrap()})),
     )
     .await;
     assert_eq!(
@@ -2229,7 +2233,7 @@ async fn typed_repository_creation_preserves_long_names_original_binding_and_rou
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     let uri = "/api/repositories";
-    let body = json!({"name":"R".repeat(200),"primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()});
+    let body = json!({"name":"R".repeat(200),"primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate().unwrap()});
     let created = success(&app, &token, "POST", uri, Some(body.clone())).await;
     assert_eq!(created["name"], body["name"]);
     assert_eq!(created["target_copies"], 3);
@@ -2240,7 +2244,7 @@ async fn typed_repository_creation_preserves_long_names_original_binding_and_rou
         "/api/repositories/{}/smb-binding",
         created["repository_id"].as_str().unwrap()
     );
-    success(&app,&token,"PUT",&binding,Some(json!({"branch_id":created["main_branch_id"],"enabled":false,"expected_history_generation":"1","operation_id":storage_contract::OperationId::generate()}))).await;
+    success(&app,&token,"PUT",&binding,Some(json!({"branch_id":created["main_branch_id"],"enabled":false,"expected_history_generation":"1","operation_id":storage_contract::OperationId::generate().unwrap()}))).await;
     assert_eq!(
         success(&app, &token, "POST", uri, Some(body.clone())).await,
         created
@@ -2289,14 +2293,14 @@ async fn typed_merge_link_http_reuses_graph_wire_and_permanent_receipt() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Links","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}))).await;
+    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Links","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate().unwrap()}))).await;
     let history = repo["history_tree_id"].as_str().unwrap();
     let graph_uri = format!("/api/history-trees/{history}/graph");
     let graph = success(&app, &token, "GET", &graph_uri, None).await;
     let root_commit = graph["history"]["root_commit_id"].clone();
-    let side=success(&app,&token,"POST",&format!("/api/repositories/{}/branches",repo["repository_id"].as_str().unwrap()),Some(json!({"name":"side","source_commit_id":root_commit,"operation_id":storage_contract::OperationId::generate()}))).await;
+    let side=success(&app,&token,"POST",&format!("/api/repositories/{}/branches",repo["repository_id"].as_str().unwrap()),Some(json!({"name":"side","source_commit_id":root_commit,"operation_id":storage_contract::OperationId::generate().unwrap()}))).await;
     let uri = format!("/api/history-trees/{history}/merge-links");
-    let body = json!({"source_branch_id":side["branch_id"],"source_commit_id":side["head_commit_id"],"target_branch_id":repo["main_branch_id"],"target_commit_id":root_commit,"operation_id":storage_contract::OperationId::generate()});
+    let body = json!({"source_branch_id":side["branch_id"],"source_commit_id":side["head_commit_id"],"target_branch_id":repo["main_branch_id"],"target_commit_id":root_commit,"operation_id":storage_contract::OperationId::generate().unwrap()});
     let created = success(&app, &token, "POST", &uri, Some(body.clone())).await;
     assert_eq!(created.as_object().unwrap().len(), 8);
     assert_eq!(created["history_tree_id"], history);
@@ -2323,7 +2327,7 @@ async fn typed_merge_link_http_reuses_graph_wire_and_permanent_receipt() {
             .1["error"]["code"],
         "IDEMPOTENCY_KEY_REUSED"
     );
-    conflict["operation_id"] = json!(storage_contract::OperationId::generate());
+    conflict["operation_id"] = json!(storage_contract::OperationId::generate().unwrap());
     assert_eq!(
         send(&app, Some(&token), "POST", &uri, Some(conflict))
             .await

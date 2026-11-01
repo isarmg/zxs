@@ -10,7 +10,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -48,7 +48,8 @@ fn fixture_with_members(
         temporary.path().join("p"),
         temporary.path().join("b"),
         temporary.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
         disk.metadata_member = member;
     }
@@ -59,7 +60,7 @@ fn fixture_with_members(
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let cut = save(&mut engine, &repo.main_branch_id, b"old body");
@@ -104,7 +105,7 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
                 .unwrap()
         };
         let (blocker, payloads) = blocked_cleanup(&engine, &first);
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         assert_eq!(
             engine
                 .commit_plan(&plan.plan_id, "admin", operation)
@@ -126,7 +127,10 @@ fn published_maintenance_retry_finishes_cleanup_without_republishing() {
         let published = canonical_json(engine.state()).unwrap();
 
         // A receipt collision must never gain permission to run cleanup.
-        for (id, actor) in [(new_id("plan"), "admin"), (plan.plan_id.clone(), "other")] {
+        for (id, actor) in [
+            (new_id("plan").unwrap(), "admin"),
+            (plan.plan_id.clone(), "other"),
+        ] {
             assert_eq!(
                 engine
                     .commit_plan(&id, actor, operation)
@@ -178,7 +182,7 @@ fn purge_retry_preserves_active_workspace_and_respects_detached_preparation() {
         .create_purge_plan(&repo.history_tree_id, vec![first.clone()], "admin")
         .unwrap();
     let (blocker, payloads) = blocked_cleanup(&engine, &first);
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     assert!(
         engine
             .commit_plan(&plan.plan_id, "admin", operation)
@@ -196,7 +200,7 @@ fn purge_retry_preserves_active_workspace_and_respects_detached_preparation() {
         .prepare_workspace_commit(
             CommitRequest {
                 workspace_id: workspace.workspace_id.clone(),
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -248,7 +252,7 @@ fn purge_publishes_tombstones_and_unlinks_only_on_the_owned_roots() {
         fs::set_permissions(&disk.root, fs::Permissions::from_mode(0o700)).unwrap();
         fs::write(disk.root.join("replacement-only"), b"not admitted").unwrap();
     }
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let result = engine
         .commit_plan(&plan.plan_id, "admin", operation)
         .unwrap();
@@ -294,7 +298,7 @@ fn cleanup_skips_a_damaged_payload_only_target_until_its_seal_is_restored() {
         .create_purge_plan(&repo.history_tree_id, vec![first.clone()], "admin")
         .unwrap();
     let (blocker, payloads) = blocked_cleanup(&engine, &first);
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     assert!(
         engine
             .commit_plan(&plan.plan_id, "admin", operation)
@@ -341,7 +345,7 @@ fn cleanup_rechecks_a_target_seal_after_publication_evidence_admission() {
         .create_purge_plan(&repo.history_tree_id, vec![first.clone()], "admin")
         .unwrap();
     let (blocker, payloads) = blocked_cleanup(&engine, &first);
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     assert!(
         engine
             .commit_plan(&plan.plan_id, "admin", operation)

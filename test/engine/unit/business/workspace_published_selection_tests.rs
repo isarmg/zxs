@@ -6,7 +6,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("system"),
-        Config::development([temporary.path().join("primary")]),
+        Config::development([temporary.path().join("primary")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -15,7 +15,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     (temporary, engine, repo)
@@ -29,7 +29,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> Workspace {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id.clone(),
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -78,7 +78,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
                 &source.version_id,
                 &storage_contract::BranchName::parse("same version draft").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap()
             .branch_id
@@ -89,7 +89,7 @@ fn published_new_file_context_fences_same_version_branch_switch() {
                 &source.file_id,
                 &draft,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let selected = engine.list_tree(&repo.main_branch_id).unwrap().remove(0);
@@ -148,7 +148,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
             &source.version_id,
             &storage_contract::BranchName::parse("first write").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .branch_id
@@ -158,7 +158,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
             &source.file_id,
             &draft,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut completed = first;
@@ -197,7 +197,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
             &current.version_id,
             &storage_contract::BranchName::parse("round trip").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .branch_id
@@ -208,7 +208,7 @@ fn published_workspace_uses_post_save_context_and_fences_selection_round_trips()
                 &current.file_id,
                 selected,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -259,7 +259,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
             operation_id: body
                 .as_ref()
                 .map(|body| body["operation_id"].as_str().unwrap().parse().unwrap())
-                .unwrap_or_else(storage_contract::OperationId::generate),
+                .unwrap_or_else(|| storage_contract::OperationId::generate().unwrap()),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -328,7 +328,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
                 &source.version_id,
                 &storage_contract::BranchName::parse("later draft").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap()
             .branch_id
@@ -338,7 +338,7 @@ fn recovery_refreshes_both_precompletion_mirrors_from_original_publication() {
                 &source.file_id,
                 &draft,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         assert_ne!(
@@ -403,7 +403,7 @@ fn published_workspace_completion_errors_keep_receipt_source_and_write_fence() {
             .unwrap();
         let request = CommitRequest {
             workspace_id: workspace.workspace_id.clone(),
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -558,7 +558,7 @@ fn native_workspace_completion_requires_bound_terminal_fence_not_global_readines
         ErrorCode::PermissionDenied
     );
     let mut absent = request.clone();
-    absent.operation_id = OperationId::generate();
+    absent.operation_id = OperationId::generate().unwrap();
     assert_eq!(
         engine
             .native_workspace_commit_completed(&absent)
@@ -597,7 +597,7 @@ fn native_workspace_completion_requires_bound_terminal_fence_not_global_readines
     ] {
         let mut changed = request.clone();
         match field {
-            "operation" => changed.operation_id = OperationId::generate(),
+            "operation" => changed.operation_id = OperationId::generate().unwrap(),
             "workspace" => changed.workspace_id = "other-workspace".into(),
             "principal" => changed.principal = "other-actor".into(),
             "base" => changed.expected_head = "other-base".into(),

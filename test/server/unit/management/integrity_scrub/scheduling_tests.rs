@@ -29,7 +29,7 @@ fn publish_payload(fixture: &Fixture, payload: &[u8]) -> PathBuf {
         engine
             .commit_workspace(storage_engine::CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

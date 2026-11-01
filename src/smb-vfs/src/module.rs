@@ -968,7 +968,7 @@ unsafe extern "C" fn mkdirat(
                 path,
                 None,
                 false,
-            ))?;
+            )?)?;
         Ok(0)
     })
 }
@@ -1020,7 +1020,7 @@ unsafe extern "C" fn renameat(
                 path,
                 destination,
                 replace,
-            ))?;
+            )?)?;
         Ok(0)
     })
 }

@@ -241,14 +241,14 @@ pub fn namespace_request(
     path: String,
     destination: Option<String>,
     replace: bool,
-) -> Request<storage_contract::OperationId> {
-    Request::Namespace {
-        operation_id: storage_contract::OperationId::generate(),
+) -> io::Result<Request<storage_contract::OperationId>> {
+    Ok(Request::Namespace {
+        operation_id: storage_contract::OperationId::generate().map_err(io::Error::other)?,
         kind,
         path,
         destination,
         replace,
-    }
+    })
 }
 
 /// Preserve unlinkat's target-kind contract across the RPC boundary.
@@ -260,7 +260,7 @@ pub fn remove_request(
     if flags & !libc::AT_REMOVEDIR != 0 {
         return Err(io::Error::from_raw_os_error(libc::EINVAL));
     }
-    Ok(namespace_request(
+    namespace_request(
         if flags & libc::AT_REMOVEDIR != 0 {
             NamespaceOperation::Rmdir
         } else {
@@ -269,7 +269,7 @@ pub fn remove_request(
         path,
         None,
         false,
-    ))
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

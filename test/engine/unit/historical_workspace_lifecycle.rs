@@ -50,7 +50,7 @@ fn empty_historical_abort_retires_but_unpublished_payload_and_plan_stay_retained
         .unwrap();
     assert_eq!(engine.workspace_capacity("admin").principal.records.used, 0);
     assert_eq!(engine.workspace_capacity("admin").principal.cold_records, 1);
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     assert_eq!(
         engine
             .commit_historical_save_plan(&empty_plan.plan_id, "admin", operation)
@@ -110,7 +110,7 @@ fn historical_retirement_binds_original_operation_actor_plan_and_frozen_manifest
     let repo = repository(&mut engine, 1);
     let workspace = historical(&mut engine, &repo, "bound");
     let plan = plan(&mut engine, &repo, &workspace, "bound");
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let published = engine
         .commit_historical_save_plan(&plan.plan_id, "admin", operation)
         .unwrap();
@@ -128,7 +128,7 @@ fn historical_retirement_binds_original_operation_actor_plan_and_frozen_manifest
             "source" => forged.base_head = published.commit_id.clone().unwrap(),
             "branch" => forged.branch_id = published.branch_id.clone().unwrap(),
             "manifest" => forged.files.clear(),
-            "workspace" => forged.workspace_id = new_id("workspace"),
+            "workspace" => forged.workspace_id = new_id("workspace").unwrap(),
             _ => unreachable!(),
         }
         assert_eq!(
@@ -199,7 +199,7 @@ fn incomplete_historical_publication_and_local_completed_plan_cannot_bypass_quot
         let workspace = historical(&mut engine, &repo, "pending");
         let mut plan = plan(&mut engine, &repo, &workspace, "unproven");
         let prefix = engine.state().sequence;
-        let operation = OperationId::generate();
+        let operation = OperationId::generate().unwrap();
         if point != "local_plan" {
             engine.inject_fault_once(point);
             let error = engine
@@ -314,7 +314,7 @@ fn recovery_reads_old_full_generations_from_cold_historical_workspaces() {
         .unwrap();
     assert_ne!(old.source_path, current.source_path);
     let saved_plan = plan(&mut engine, &repo, &cold, "cold");
-    let saved_id = OperationId::generate();
+    let saved_id = OperationId::generate().unwrap();
     let saved = engine
         .commit_historical_save_plan(&saved_plan.plan_id, "admin", saved_id)
         .unwrap();
@@ -328,7 +328,7 @@ fn recovery_reads_old_full_generations_from_cold_historical_workspaces() {
         )
         .unwrap();
     let pending_plan = plan(&mut engine, &repo, &pending, "recovered");
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     engine.inject_fault_once("after_accept_2");
     assert_eq!(
         engine
@@ -403,7 +403,7 @@ fn historical_completion_mirror_failure_preserves_published_result_and_resident_
     let sealed = fs::read(&path).unwrap();
     fs::remove_file(&path).unwrap();
     fs::create_dir(&path).unwrap();
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let error = engine
         .commit_historical_save_plan(&plan.plan_id, "admin", operation)
         .unwrap_err();
@@ -465,14 +465,14 @@ fn upload_owner_keeps_historical_completion_resident_until_terminal_reconciliati
     let owner = engine
         .prepare_upload(
             &workspace.workspace_id,
-            &new_id("entry"),
+            &new_id("entry").unwrap(),
             "pending",
             &source,
             1,
         )
         .unwrap();
     let plan = plan(&mut engine, &repo, &workspace, "owner held");
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let published = engine
         .commit_historical_save_plan(&plan.plan_id, "admin", operation)
         .unwrap();
@@ -514,7 +514,7 @@ fn historical_retirement_keeps_unknown_and_unconfirmed_directory_material_reside
             .unwrap()
             .join(name);
         fs::write(&primary, b"unconfirmed evidence").unwrap();
-        let operation = OperationId::generate();
+        let operation = OperationId::generate().unwrap();
         let result = engine
             .commit_historical_save_plan(&plan.plan_id, "admin", operation)
             .unwrap();

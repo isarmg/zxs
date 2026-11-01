@@ -55,7 +55,7 @@ fn save(engine: &mut Engine, repo: &Repository, files: &[(&str, &[u8])]) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -67,7 +67,8 @@ fn save(engine: &mut Engine, repo: &Repository, files: &[(&str, &[u8])]) {
 
 fn fixture() -> Fixture {
     let root = crate::tests::private_tempdir();
-    let config = Config::development([root.path().join("primary"), root.path().join("backup")]);
+    let config =
+        Config::development([root.path().join("primary"), root.path().join("backup")]).unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -75,7 +76,7 @@ fn fixture() -> Fixture {
             "P01",
             2,
             "owner",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     save(
@@ -173,7 +174,7 @@ fn writers_finish_during_backup_scan_and_changed_pages_never_project_old_indices
                             )
                             .unwrap(),
                             "owner",
-                            OperationId::generate(),
+                            OperationId::generate().unwrap(),
                         )
                         .unwrap();
                     assert_eq!(
@@ -188,7 +189,7 @@ fn writers_finish_during_backup_scan_and_changed_pages_never_project_old_indices
                             None,
                             &storage_contract::Note::parse("changed".into()).unwrap(),
                             "owner",
-                            OperationId::generate(),
+                            OperationId::generate().unwrap(),
                         )
                         .unwrap();
                     assert_eq!(
@@ -243,7 +244,7 @@ fn revoked_identity_wins_over_a_changed_backup_listing_without_projecting_rows()
                 )
                 .unwrap(),
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         auth.logout(&token).unwrap();
@@ -269,7 +270,7 @@ fn configure(engine: &mut Engine, repo: &Repository, path: &str, prefix: &str) {
             backup_prefixes: &BTreeMap::from([("B01".into(), prefix.into())]),
             expected_generation: previous.generation,
             principal: "owner",
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
         })
         .unwrap();
 }
@@ -284,7 +285,7 @@ fn revoked_identity_wins_over_global_backup_conflict_discovered_during_scan() {
                 "P01",
                 2,
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         save(engine, &other, &[("beta.txt", b"independent body")]);
@@ -396,7 +397,7 @@ fn reopen(backend: &EngineBackend, root: &std::path::Path) {
     let spare_root = crate::tests::private_tempdir();
     let spare = Engine::initialize(
         &spare_root.path().join("system"),
-        Config::development([spare_root.path().join("primary")]),
+        Config::development([spare_root.path().join("primary")]).unwrap(),
     )
     .unwrap();
     backend.test_with_engine_locked(|engine| {
@@ -491,7 +492,7 @@ async fn canceled_backup_listing_retains_only_required_records_auth_and_slot_unt
     };
     let spare = Engine::initialize(
         &root.path().join("replacement-system"),
-        Config::development([root.path().join("replacement-primary")]),
+        Config::development([root.path().join("replacement-primary")]).unwrap(),
     )
     .unwrap();
     let auth = Arc::new(Mutex::new(auth));

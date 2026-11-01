@@ -56,8 +56,9 @@ fn recovery_commands_report_returned_engine_seal_failure_once_before_command_rej
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("system");
     let disks = ["a", "b", "c"].map(|name| directory.path().join(name));
-    let mut engine = Engine::initialize(&root, Config::development(disks.clone())).unwrap();
-    let operation = OperationId::generate();
+    let mut engine =
+        Engine::initialize(&root, Config::development(disks.clone()).unwrap()).unwrap();
+    let operation = OperationId::generate().unwrap();
     engine
         .create_repository(
             &RepositoryName::parse("unsealed").unwrap(),
@@ -92,7 +93,7 @@ fn recovery_commands_report_returned_engine_seal_failure_once_before_command_rej
         ],
         vec![
             "recovery-commit".to_owned(),
-            storage_engine::new_id("recovery"),
+            storage_engine::new_id("recovery").unwrap(),
             "--digest".into(),
             "unused".into(),
             "--accept-permanent-loss".into(),
@@ -166,7 +167,7 @@ fn rescue_restores_from_two_old_members_without_management_commands() {
     let disks = ["a", "b", "c"].map(|slot| directory.path().join(slot));
     let mut engine = storage_engine::Engine::initialize(
         &original,
-        storage_engine::Config::development(disks.clone()),
+        storage_engine::Config::development(disks.clone()).unwrap(),
     )
     .unwrap();
     let baseline = engine.config().clone();
@@ -176,7 +177,7 @@ fn rescue_restores_from_two_old_members_without_management_commands() {
             "P01",
             3,
             "admin",
-            storage_engine::OperationId::generate(),
+            storage_engine::OperationId::generate().unwrap(),
         )
         .unwrap();
     let backend = std::sync::Arc::new(EngineBackend::new(engine));
@@ -246,7 +247,7 @@ fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
     let target = directory.path().join("target");
     let initialize = |root: &std::path::Path, prefix: &str| {
         let disks = ["a", "b", "c"].map(|slot| directory.path().join(format!("{prefix}-{slot}")));
-        Engine::initialize(root, Config::development(disks)).unwrap()
+        Engine::initialize(root, Config::development(disks).unwrap()).unwrap()
     };
     let mut engine = initialize(&source, "source");
     let repository = engine
@@ -255,7 +256,7 @@ fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
             "P01",
             3,
             "admin",
-            storage_engine::OperationId::generate(),
+            storage_engine::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -271,7 +272,7 @@ fn history_package_round_trip_preserves_checks_and_refuses_overwrite() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_engine::OperationId::generate(),
+            operation_id: storage_engine::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -386,7 +387,7 @@ fn configuration_commands_edit_only_an_uninitialized_draft() {
         .args(["configuration", "register-disk", "--config"])
         .arg(&output)
         .args(["--slot", "P02", "--disk-id"])
-        .arg(storage_engine::new_id("disk"))
+        .arg(storage_engine::new_id("disk").unwrap())
         .arg("--path")
         .arg(&additional)
         .args(["--level", "1"])
@@ -511,14 +512,15 @@ fn scrub_is_a_real_exclusive_offline_consumer_with_explicit_partial_failure() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("system");
     let disks = ["a", "b", "c"].map(|name| directory.path().join(name));
-    let mut engine = Engine::initialize(&root, Config::development(disks.clone())).unwrap();
+    let mut engine =
+        Engine::initialize(&root, Config::development(disks.clone()).unwrap()).unwrap();
     engine
         .create_repository(
             &RepositoryName::parse("scrub-fixture").unwrap(),
             "P01",
             3,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let invoke = || {

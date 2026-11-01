@@ -68,7 +68,7 @@ impl Engine {
                 let reused = heads.iter().any(|head| head==chosen_node);
                 let mut parents = heads.iter().cloned().collect::<BTreeSet<_>>();
                 parents.insert(chosen_node.into());
-                let result = if reused { chosen_node.to_owned() } else { new_id("fmeta") };
+                let result = if reused { chosen_node.to_owned() } else { new_id("fmeta")? };
                 let edges = if reused {
                     parents.into_iter().filter(|parent| parent!=&result && !reaches(state,parent,&result)).collect::<Vec<_>>()
                 } else { parents.into_iter().collect::<Vec<_>>() };
@@ -80,7 +80,7 @@ impl Engine {
                         operation_id:operation,author:principal.into(),sequence:state.sequence,created_at:now()?,
                     });
                 }
-                let merge_id = new_id("fmerge");
+                let merge_id = new_id("fmerge")?;
                 state.file_branch_merges.insert(merge_id.clone(), FileBranchMerge {
                     merge_id:merge_id.clone(),history_tree_id:body.history_tree_id.clone(),file_id:file.into(),
                     input_branch_ids:inputs.iter().map(|input|input.branch_id.clone()).collect(),input_node_ids:heads,

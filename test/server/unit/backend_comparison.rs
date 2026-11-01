@@ -9,7 +9,7 @@ fn commit(id: &str, entries: Vec<Entry>) -> Arc<storage_contract::Commit> {
         parent_commit_ids: vec![],
         tree_id: "tree".into(),
         sequence: 1,
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         author: "owner".into(),
         message: "".into(),
         entries,

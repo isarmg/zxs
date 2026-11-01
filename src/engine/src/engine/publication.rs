@@ -726,7 +726,7 @@ fn repair_local_proof<T: data_serialization::Serialize>(
     let name = format!(
         "{}-{}",
         path.file_name().expect("proof name").to_string_lossy(),
-        new_id("req")
+        new_id("req")?
     );
     rustix::fs::renameat_with(
         &source,
@@ -1022,7 +1022,7 @@ impl crate::engine::PlanningContext<'_> {
         let candidate = Candidate {
             pool_id: self.config.pool_id.clone(),
             sequence: next.sequence,
-            transaction_id: new_id("tx"),
+            transaction_id: new_id("tx")?,
             operation_id: result.operation_id,
             request_digest: result.request_digest.clone(),
             previous_snapshot: self.snapshot.clone(),
@@ -1205,7 +1205,7 @@ impl crate::engine::PlanningContext<'_> {
                     let staging = disk
                         .root
                         .join("staging")
-                        .join(OperationId::generate().to_string());
+                        .join(OperationId::generate()?.to_string());
                     root.private_dir(&staging.join("content"))?;
                     let target = staging.join("content").join(&p.version.creation_name);
                     let copied = verified_full_copy_at(

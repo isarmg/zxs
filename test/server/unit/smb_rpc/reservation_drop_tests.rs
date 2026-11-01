@@ -3,8 +3,8 @@ use super::*;
 #[test]
 fn reservation_drop_preserves_poison_and_other_owners() {
     let (_temp, shared, _backend, _branch) = super::super::tests::fixture();
-    let operation_id = OperationId::generate();
-    let other = OperationId::generate();
+    let operation_id = OperationId::generate().unwrap();
+    let other = OperationId::generate().unwrap();
     let reservation = OperationReservation::acquire(&shared, operation_id).unwrap();
     shared.namespace_operations.lock().unwrap().insert(other);
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -25,7 +25,7 @@ fn reservation_drop_preserves_poison_and_other_owners() {
     );
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            OperationReservation::acquire(&shared, OperationId::generate())
+            OperationReservation::acquire(&shared, OperationId::generate().unwrap())
         }))
         .is_err()
     );
@@ -34,8 +34,8 @@ fn reservation_drop_preserves_poison_and_other_owners() {
 #[test]
 fn reservation_drop_releases_only_its_operation() {
     let (_temp, shared, _backend, _branch) = super::super::tests::fixture();
-    let operation_id = OperationId::generate();
-    let other = OperationId::generate();
+    let operation_id = OperationId::generate().unwrap();
+    let other = OperationId::generate().unwrap();
     let reservation = OperationReservation::acquire(&shared, operation_id).unwrap();
     shared.namespace_operations.lock().unwrap().insert(other);
     drop(reservation);

@@ -37,7 +37,8 @@ fn fixture() -> (
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -45,7 +46,7 @@ fn fixture() -> (
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
@@ -119,7 +120,7 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let foreign = &engine.state().branches[&other.main_branch_id].head_commit_id;
@@ -348,7 +349,7 @@ fn save_projection_file(engine: &mut Engine, branch: &str, path: &str, body: &[u
     engine
         .commit_workspace(storage_engine::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -445,7 +446,7 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
             &original.version_id,
             &storage_contract::BranchName::parse("pending-view").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let pending = created.result["branch_id"].as_str().unwrap().to_owned();
@@ -454,7 +455,7 @@ fn pending_main_file_and_historical_branch_sources_match_previous_response() {
             &original.file_id,
             &pending,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let old_pending = engine.state().branches[&pending].head_commit_id.clone();
@@ -520,7 +521,7 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
             Some(&name_policy::LookupPath::parse("folder").unwrap()),
             &storage_contract::BranchName::parse("inherited-view").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -529,7 +530,7 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
             Some(&name_policy::LookupPath::parse("folder").unwrap()),
             &storage_contract::BranchName::parse("inherited-view").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let head = engine.state().branches[&repo.main_branch_id]
@@ -890,7 +891,7 @@ fn namespace_reads_preserve_migrated_branch_error() {
         .commit_plan(
             &plan.plan_id,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let backend = EngineBackend::new(engine);
@@ -1060,7 +1061,7 @@ fn typed_resolve_preserves_directory_absence_and_missing_entry_errors() {
     engine
         .commit_workspace(storage_engine::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

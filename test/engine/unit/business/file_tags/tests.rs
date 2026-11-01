@@ -8,11 +8,16 @@ fn setup() -> (tempfile::TempDir, Engine, Repository) {
             root.path().join("p"),
             root.path().join("b"),
             root.path().join("c"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     (root, engine, repo)
 }
@@ -22,7 +27,7 @@ fn save(engine: &mut Engine, branch: &str, path: &str, bytes: &[u8]) -> Entry {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: w.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: w.base_head,
             fencing_token: w.fencing_token,
@@ -61,7 +66,7 @@ fn edit(
             remove: &remove.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
             location: None,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap()
         .result["nodes"][0]["node_id"]
@@ -117,7 +122,7 @@ fn labels_inherit_across_content_path_events_and_recovery_without_new_bodies() {
         )
         .unwrap(),
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     let path = e
@@ -177,7 +182,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
     let first = save(&mut e, &r.main_branch_id, "a.txt", b"A");
     let branch = e.file_context(&r.repository_id, "a.txt").unwrap().branch_id;
     let mut t = target(&e, &branch, &first.version_id);
-    let op = storage_contract::OperationId::generate();
+    let op = storage_contract::OperationId::generate().unwrap();
     let add = vec!["one".into()];
     let receipt = e
         .update_file_node_tags(crate::FileNodeTagsUpdateRequest {
@@ -233,7 +238,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
             remove: &[],
             location: None,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate()
+            operation_id: storage_contract::OperationId::generate().unwrap()
         })
         .unwrap_err()
         .code(),
@@ -253,7 +258,7 @@ fn stale_and_over_capacity_batches_are_atomic_and_retry_is_idempotent() {
             remove: &[],
             location: None,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate()
+            operation_id: storage_contract::OperationId::generate().unwrap()
         })
         .unwrap_err()
         .code(),
@@ -275,7 +280,7 @@ fn pending_file_labels_preserve_first_write_and_batches_keep_branch_snapshots_in
             &file.version_id,
             &storage_contract::BranchName::parse("review").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["branch_id"]
@@ -286,7 +291,7 @@ fn pending_file_labels_preserve_first_write_and_batches_keep_branch_snapshots_in
         &file.file_id,
         &pending,
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     let tagged = edit(
@@ -337,7 +342,7 @@ fn pending_file_labels_preserve_first_write_and_batches_keep_branch_snapshots_in
             remove: &[],
             location: None,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(receipt.result["nodes"].as_array().unwrap().len(), 2);

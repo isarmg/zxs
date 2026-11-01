@@ -8,7 +8,7 @@ fn decode(body: Value) -> Result<CreateFileBranch, ApiError> {
 }
 #[test]
 fn file_branch_source_variants_keep_absence_distinct_from_invalid_explicit_nodes() {
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let version =
         decode(json!({"source_version_id":"version","name":"Café","operation_id":operation}))
             .unwrap();

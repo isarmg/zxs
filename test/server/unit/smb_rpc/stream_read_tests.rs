@@ -159,7 +159,7 @@ fn large_fixture() -> (Fixture, Arc<Shared>, String, usize, Vec<PathBuf>) {
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 principal: "alice".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

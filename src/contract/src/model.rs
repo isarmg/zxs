@@ -101,7 +101,7 @@ fn default_max_retained_workspace_metadata_bytes_per_principal() -> u64 {
 impl Config {
     /// Build a development draft with one primary and optional ordered backup tiers.
     /// Validate the draft before use; an empty iterator is not a valid pool.
-    pub fn development(disks: impl IntoIterator<Item = PathBuf>) -> Self {
+    pub fn development(disks: impl IntoIterator<Item = PathBuf>) -> crate::Result<Self> {
         fn slot(index: usize) -> String {
             match index {
                 0 => "P01".into(),
@@ -110,23 +110,25 @@ impl Config {
                 _ => format!("D{:02}", index + 1),
             }
         }
-        Self {
-            pool_id: crate::new_id("pool"),
+        Ok(Self {
+            pool_id: crate::new_id("pool")?,
             mode: Mode::Development,
             disks: disks
                 .into_iter()
                 .enumerate()
-                .map(|(i, root)| DiskConfig {
-                    slot_id: slot(i),
-                    disk_id: crate::new_id("disk"),
-                    root,
-                    level: i as u32 + 1,
-                    upstream_slot_id: i.checked_sub(1).map(slot),
-                    metadata_member: true,
-                    binding_generation: 1,
-                    capacity_bytes: None,
+                .map(|(i, root)| {
+                    Ok(DiskConfig {
+                        slot_id: slot(i),
+                        disk_id: crate::new_id("disk")?,
+                        root,
+                        level: i as u32 + 1,
+                        upstream_slot_id: i.checked_sub(1).map(slot),
+                        metadata_member: true,
+                        binding_generation: 1,
+                        capacity_bytes: None,
+                    })
                 })
-                .collect(),
+                .collect::<crate::Result<_>>()?,
             checksum_chunk_bytes: 262144,
             max_file_bytes: 1 << 40,
             max_workspace_bytes: 1 << 40,
@@ -139,7 +141,7 @@ impl Config {
             max_entries: 100_000,
             metadata_reserve_bytes: 64 << 20,
             workspace_ttl_seconds: 86_400,
-        }
+        })
     }
 
     /// Recovery/admission majority of the configured membership, never the

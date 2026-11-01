@@ -4,11 +4,15 @@ fn setup() -> (tempfile::TempDir, Engine, Repository) {
     let t = tempfile::tempdir().unwrap();
     let mut e = Engine::initialize(
         &t.path().join("system"),
-        Config::development([t.path().join("p"), t.path().join("b"), t.path().join("c")]),
+        Config::development([t.path().join("p"), t.path().join("b"), t.path().join("c")]).unwrap(),
     )
     .unwrap();
     let r = e
-        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     (t, e, r)
 }
@@ -17,7 +21,7 @@ fn save(e: &mut Engine, r: &Repository, path: &str, data: &[u8]) {
     e.stage_bytes(&w.workspace_id, path, data).unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id,
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -38,7 +42,7 @@ fn rename(e: &mut Engine, r: &Repository, from: &str, to: &str) -> OperationResu
         &r.repository_id,
         NamespaceOperation::parse(NamespaceOperationKind::Rename, from, Some(to)).unwrap(),
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap()
 }
@@ -49,7 +53,7 @@ fn path_node_receipts_are_ordered_isolated_and_replayed_after_later_renames() {
     save(&mut engine, &repo, "folder/z.txt", b"Z");
     save(&mut engine, &repo, "folder/a.txt", b"A");
     rename(&mut engine, &repo, "folder", "first");
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let change =
         NamespaceOperation::parse(NamespaceOperationKind::Rename, "first", Some("second")).unwrap();
     let receipt = engine
@@ -99,7 +103,7 @@ fn workspace_path_node_receipt_is_exact_ordered_and_replayed_after_restart() {
                 .unwrap(),
         )
         .unwrap();
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
         operation_id: operation,
@@ -156,7 +160,7 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
         &r.repository_id,
         NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "folder/empty", None).unwrap(),
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     let old = entries(&e, &r);
@@ -169,7 +173,7 @@ fn folder_and_file_rename_append_path_nodes_reusing_bodies_then_write_follows_th
             Some(&name_policy::LookupPath::parse("folder").unwrap()),
             &storage_contract::BranchName::parse("untouched").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["directory_branch_id"]
@@ -274,7 +278,7 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
         &node,
         &storage_contract::Note::parse("rename note".into()).unwrap(),
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     assert_eq!(e.state().directory_trees.len(), trees);
@@ -286,7 +290,7 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
             &node,
             &storage_contract::BranchName::parse("from rename").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["branch_id"]
@@ -299,7 +303,7 @@ fn path_node_note_and_new_branch_are_metadata_and_preserve_the_named_source_node
         &file.file_id,
         &branch,
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -327,7 +331,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
             &original.version_id,
             &storage_contract::BranchName::parse("other").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["branch_id"]
@@ -340,7 +344,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
         &original.file_id,
         &branch,
         "admin",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     save(&mut e, &r, "a.txt", b"available body");
@@ -355,7 +359,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
             &original.file_id,
             &original_branch,
             "admin",
-            storage_contract::OperationId::generate()
+            storage_contract::OperationId::generate().unwrap()
         )
         .unwrap_err()
         .code(),
@@ -368,7 +372,7 @@ fn contextual_selection_rejects_unavailable_owned_content_without_publication() 
             &original.file_id,
             &original_branch,
             "admin",
-            storage_contract::OperationId::generate()
+            storage_contract::OperationId::generate().unwrap()
         )
         .unwrap_err()
         .code(),
@@ -392,7 +396,7 @@ fn pending_selection_preserves_frozen_source_even_when_source_replicas_are_missi
             &source.version_id,
             &storage_contract::BranchName::parse("pending").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["branch_id"]
@@ -408,7 +412,7 @@ fn pending_selection_preserves_frozen_source_even_when_source_replicas_are_missi
         }
     }
     let path = name_policy::PortablePath::parse("file.txt").unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let selected = engine
         .select_file_branch_at(
             &repo.repository_id,
@@ -424,7 +428,7 @@ fn pending_selection_preserves_frozen_source_even_when_source_replicas_are_missi
             &source.file_id,
             &pending,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -471,7 +475,7 @@ fn file_merge_requires_readable_chosen_body_but_receipt_replay_does_not() {
                     &source.version_id,
                     &storage_contract::BranchName::parse(name).unwrap(),
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap()
                 .result["branch_id"]
@@ -486,7 +490,7 @@ fn file_merge_requires_readable_chosen_body_but_receipt_replay_does_not() {
                 expected_node_id: source.version_id.clone(),
             })
             .collect::<Vec<_>>();
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         let request = |operation_id| crate::FileBranchMergeRequest {
             file_id: &source.file_id,
             inputs: &inputs,
@@ -513,7 +517,7 @@ fn file_merge_requires_readable_chosen_body_but_receipt_replay_does_not() {
         let before = crate::canonical_json(engine.state()).unwrap();
         assert_eq!(
             engine
-                .merge_file_branches(request(storage_contract::OperationId::generate()))
+                .merge_file_branches(request(storage_contract::OperationId::generate().unwrap()))
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::ContentUnavailable

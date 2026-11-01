@@ -69,7 +69,7 @@ fn select_same_version_draft(shared: &Shared, branch: &str, path: &str) -> Entry
                 source_version_id: entry.version_id.clone(),
                 source_node_id: None,
                 name: storage_contract::BranchName::parse("same version draft").unwrap(),
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .and_then(|result| crate::operation_wire::operation_wire(result.into()))
@@ -83,7 +83,7 @@ fn select_same_version_draft(shared: &Shared, branch: &str, path: &str) -> Entry
                 file_id: entry.file_id.clone(),
                 branch_id: created["result"]["branch_id"].as_str().unwrap().into(),
                 location: None,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap();

@@ -300,10 +300,10 @@ fn typed_phases_survive_normal_publication_and_recovery() {
     let root = temp.path().join("state");
     let mut engine = Engine::initialize(
         &root,
-        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))),
+        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap(),
     )
     .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     engine
         .create_repository(
             &storage_contract::RepositoryName::parse("typed phases").unwrap(),

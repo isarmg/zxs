@@ -208,7 +208,7 @@ fn runtime_record_limits_preserve_terminal_evidence_anchors_and_restore_retry() 
     engine
         .commit_workspace(CommitRequest {
             workspace_id: third.workspace_id.clone(),
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "writer".into(),
             expected_head: third.base_head,
             fencing_token: third.fencing_token,

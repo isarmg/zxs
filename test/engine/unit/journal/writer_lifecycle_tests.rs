@@ -3,6 +3,7 @@ use std::error::Error as _;
 
 fn disk(temp: &tempfile::TempDir) -> DiskConfig {
     let disk = Config::development([temp.path().join("disk")])
+        .unwrap()
         .disks
         .remove(0);
     private_dir(log_path(&disk).parent().unwrap()).unwrap();
@@ -158,7 +159,7 @@ fn failed_write_or_sync_requires_explicit_recovery_before_retry() {
 fn real_enospc_blocks_engine_before_first_prepare_and_preserves_publication() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
-    let config = Config::development([temp.path().join("disk")]);
+    let config = Config::development([temp.path().join("disk")]).unwrap();
     let disk = config.disks[0].clone();
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine.journals.get_mut(&disk.disk_id).unwrap().file = std::fs::OpenOptions::new()
@@ -171,7 +172,7 @@ fn real_enospc_blocks_engine_before_first_prepare_and_preserves_publication() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert!(error.source().is_some());
@@ -187,7 +188,7 @@ fn real_enospc_blocks_engine_before_first_prepare_and_preserves_publication() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(scan(&disk).unwrap().records.len(), 4);
@@ -197,7 +198,8 @@ fn real_enospc_blocks_engine_before_first_prepare_and_preserves_publication() {
 fn full_recovery_keeps_historical_receipts_and_wire_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
-    let config = Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}"))));
+    let config =
+        Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     for i in 0..6 {
         engine
@@ -206,7 +208,7 @@ fn full_recovery_keeps_historical_receipts_and_wire_bytes() {
                 "P01",
                 1,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -275,7 +277,7 @@ fn full_recovery_keeps_historical_receipts_and_wire_bytes() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     drop(recovered);
@@ -287,9 +289,9 @@ fn prepare_io_failure_requires_reopen_and_retry_keeps_operation_identity() {
     for fault in [JournalFault::PartialWrite, JournalFault::Sync] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
-        let config = Config::development([temp.path().join("disk")]);
+        let config = Config::development([temp.path().join("disk")]).unwrap();
         let mut engine = Engine::initialize(&root, config).unwrap();
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         engine.inject_journal_fault_once("P01", fault).unwrap();
         assert!(
             engine
@@ -351,7 +353,7 @@ fn prepare_io_failure_requires_reopen_and_retry_keeps_operation_identity() {
 fn recovery_modes_preserve_evidence_or_repair_the_same_torn_tail() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
-    let config = Config::development([temp.path().join("disk")]);
+    let config = Config::development([temp.path().join("disk")]).unwrap();
     let disk = config.disks[0].clone();
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
@@ -360,7 +362,7 @@ fn recovery_modes_preserve_evidence_or_repair_the_same_torn_tail() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     drop(engine);
@@ -388,7 +390,7 @@ fn recovery_modes_preserve_evidence_or_repair_the_same_torn_tail() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(!scan(&disk).unwrap().torn_tail);
@@ -400,7 +402,7 @@ fn leftover_created_leaf_requires_both_opening_durability_fences() {
     for fault in [OpeningFault::FileSync, OpeningFault::DirectorySync] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
-        let config = Config::development([temp.path().join("disk")]);
+        let config = Config::development([temp.path().join("disk")]).unwrap();
         let disk = config.disks[0].clone();
         drop(Engine::initialize(&root, config).unwrap());
         let path = log_path(&disk);
@@ -429,7 +431,7 @@ fn leftover_created_leaf_requires_both_opening_durability_fences() {
                 "P01",
                 1,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         drop(recovered);

@@ -44,7 +44,8 @@ fn engine(temp: &tempfile::TempDir) -> Engine {
             temp.path().join("p"),
             temp.path().join("b"),
             temp.path().join("t"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap()
 }
@@ -783,7 +784,7 @@ fn publication_survives_disabled_marker_view_and_reopen_recovers() {
     );
     assert!(engine.indexed_file_history("absent").is_none());
     assert!(!index_ready(&engine));
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let repository = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("published").unwrap(),
@@ -827,7 +828,8 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
         temp.path().join("primary"),
         temp.path().join("backup"),
         temp.path().join("tertiary"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root, config).unwrap();
     engine
         .create_repository(
@@ -835,7 +837,7 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let path = root.join("index.sqlite");
@@ -845,7 +847,7 @@ fn published_evidence_survives_index_failure_and_reopen_rebuilds() {
         &path,
         "CREATE TRIGGER fail_write BEFORE INSERT ON current_state BEGIN SELECT RAISE(ABORT,'injected projection failure');END;",
     );
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let repository = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("second").unwrap(),
@@ -930,7 +932,7 @@ fn startup_rebuilds_a_corrupt_disposable_database_from_durable_evidence() {
                 "P01",
                 1,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let root = engine.root.clone();
@@ -1089,7 +1091,7 @@ fn runtime_linked_cache_falls_back_and_preserves_publication_without_touching_ta
             assert!(engine.indexed_file_history("file").is_none());
             assert_eq!(engine.file_history("file").unwrap(), scan(&engine, "file"));
             assert!(!index_ready(&engine));
-            let operation = storage_contract::OperationId::generate();
+            let operation = storage_contract::OperationId::generate().unwrap();
             let repository = engine
                 .create_repository(
                     &storage_contract::RepositoryName::parse("published").unwrap(),
@@ -1207,7 +1209,7 @@ fn publications_reuse_admitted_worker_and_full_commit_policy() {
                 "P01",
                 1,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let mut proof = engine.history_query_proof.lock().unwrap();
@@ -1275,7 +1277,7 @@ fn replaced_database_identity_disables_index_and_preserves_publication() {
     let replacement = temp.path().join("replacement.sqlite");
     project(&replacement, None, engine.state()).unwrap();
     std::fs::rename(&replacement, &path).unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let repository = engine
         .create_repository(
             &storage_contract::RepositoryName::parse("published").unwrap(),

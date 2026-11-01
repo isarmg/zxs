@@ -15,7 +15,7 @@ fn save(
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -61,11 +61,15 @@ fn file_history_matches_preprojection_graph_json() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "owner",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     // Both sequence-tied initial commits carry the same message, so random
     // commit IDs cannot make the graph fixture nondeterministic.
@@ -92,7 +96,7 @@ fn file_history_matches_preprojection_graph_json() {
             remove: &[],
             location: None,
             principal: "owner",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap()
         .result["nodes"][0]["node_id"]
@@ -109,7 +113,7 @@ fn file_history_matches_preprojection_graph_json() {
             )
             .unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let renamed = engine
@@ -202,7 +206,7 @@ fn history_propagates_projection_error_instead_of_inventing_empty_graph() {
     let root = crate::tests::private_tempdir();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let versions = [projected_version("missing", 10)];
@@ -223,11 +227,15 @@ fn display_order_retains_full_typed_sequences_and_id_ties() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "owner",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     let first = save(
         &mut engine,
@@ -287,11 +295,15 @@ fn typed_history_owns_only_projection_and_keeps_detached_files_readable() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "owner",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     let entry = save(
         &mut engine,
@@ -320,7 +332,7 @@ fn typed_history_owns_only_projection_and_keeps_detached_files_readable() {
             )
             .unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let detached = super::super::FileHistoryRead::capture(&engine, request())

@@ -17,7 +17,8 @@ fn io_source(failure: &RecoverySealFailure) -> &std::io::Error {
 fn member_seal_failures_keep_each_identity_and_reset_on_the_next_recovery() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
-    let config = Config::development((0..5).map(|i| temp.path().join(format!("disk-{i}"))));
+    let config =
+        Config::development((0..5).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
     drop(Engine::initialize(&root, config.clone()).unwrap());
     let mut engine =
         Engine::prepare_workspace_recovery(root, config.clone().try_into().unwrap()).unwrap();
@@ -80,9 +81,10 @@ fn missing_publication_seal_keeps_the_verified_prefix_and_candidate_cause() {
     for mode in [RecoveryMode::CompletePending, RecoveryMode::PreservePending] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("system");
-        let config = Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}"))));
+        let config =
+            Config::development((0..3).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
         let mut engine = Engine::initialize(&root, config.clone()).unwrap();
-        let first = OperationId::generate();
+        let first = OperationId::generate().unwrap();
         engine
             .create_repository(
                 &RepositoryName::parse("first").unwrap(),
@@ -94,7 +96,7 @@ fn missing_publication_seal_keeps_the_verified_prefix_and_candidate_cause() {
             .unwrap();
         let expected = canonical_json(engine.state()).unwrap();
         let receipt = canonical_json(&engine.operation(first).unwrap()).unwrap();
-        let second = OperationId::generate();
+        let second = OperationId::generate().unwrap();
         engine
             .create_repository(
                 &RepositoryName::parse("second").unwrap(),
@@ -176,7 +178,7 @@ fn warning_aggregate_keeps_permission_source_alongside_both_checkpoint_causes() 
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("disk")]),
+        Config::development([temp.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let disk = &engine.config.disks[0];

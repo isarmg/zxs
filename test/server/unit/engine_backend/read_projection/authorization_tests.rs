@@ -219,7 +219,7 @@ fn narrow_authorization_rechecks_identity_sessions_and_binding_before_branch_err
             .persist_auth_state(
                 revoked,
                 "system_auth",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         assert_equal(&bound, input.clone());
@@ -239,7 +239,7 @@ fn narrow_authorization_rechecks_identity_sessions_and_binding_before_branch_err
         .persist_auth_state(
             snapshot,
             "system_auth",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     auth.logout(&token).unwrap();
@@ -281,7 +281,7 @@ fn narrow_authorization_after_held_lock_binding_change_rechecks_current_generati
         true,
         generation,
         "owner",
-        storage_contract::OperationId::generate(),
+        storage_contract::OperationId::generate().unwrap(),
     )
     .unwrap();
     drop(held);

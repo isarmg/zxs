@@ -2,7 +2,9 @@
 
 # 存储服务端（storage-server）
 
-Axum HTTP 服务、持久会话认证及受保护的 Samba 本机桥接。业务变更经过 `storage-engine::Engine`，HTTP 层不直接修改数据盘内容。
+Axum HTTP 服务、持久会话认证及受保护的 Samba 本机桥接。业务变更经过 `storage-engine::Engine`，HTTP 层不直接修改数据盘内容。错误关联 ID 独立于系统熵，仅提供进程内关联；业务 ID 的熵失败保留来源并映射 500，详见[错误封套](../15-api-and-errors.md#s15-04)。
+
+根 `test/contract/entropy/entropy-io.sh` 仅对隔离测试子进程注入 libc `getrandom` 的 EIO（包括部分写入后失败），不修改系统安全设置或正在运行的服务。`.github/scripts/check-entropy-fault-io.py` 从成功 Cargo 构建中选取当次 contract、engine、server libtest，并要求精确测试及完成标记；覆盖错误来源、未发布状态、seal 持久化前拒绝、幂等重放和不依赖熵的 HTTP 错误封套。
 
 默认与无 `core` 构建都依赖 `platform-io` 的 Linux amd64 编译期准入；认证、
 spool、管理及初始化恢复直接使用 Unix 权限与链接检查，不保留非 Unix

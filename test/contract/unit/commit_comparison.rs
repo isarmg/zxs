@@ -19,7 +19,7 @@ fn commit(id: &str, entries: Vec<Entry>) -> Arc<Commit> {
         parent_commit_ids: vec![],
         tree_id: "tree".into(),
         sequence: 17,
-        operation_id: OperationId::generate(),
+        operation_id: OperationId::generate().unwrap(),
         author: "author".into(),
         message: "".into(),
         entries,

@@ -10,7 +10,8 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
             temp.path().join("a"),
             temp.path().join("b"),
             temp.path().join("c"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -19,7 +20,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
             "P01",
             3,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     (temp, engine, repository)
@@ -35,7 +36,7 @@ fn save(engine: &mut Engine, repository: &Repository, bytes: &[u8]) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -172,7 +173,7 @@ fn retained_historical_page_missing_is_found_even_when_current_snapshot_is_compl
             None,
             &Note::parse("old note".into()).unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let old_page = page(&engine, "file_notes");
@@ -182,7 +183,7 @@ fn retained_historical_page_missing_is_found_even_when_current_snapshot_is_compl
             None,
             &Note::parse("new note".into()).unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_ne!(old_page, page(&engine, "file_notes"));
@@ -279,7 +280,7 @@ fn pending_branch_missing_source_stays_selectable_after_payload_only_scrub_failu
             &id,
             &BranchName::parse("pending").unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap()
         .branch_id
@@ -295,7 +296,7 @@ fn pending_branch_missing_source_stays_selectable_after_payload_only_scrub_failu
         "pending branch has no invented own version"
     );
     engine
-        .select_file_branch(&file, &pending, "admin", OperationId::generate())
+        .select_file_branch(&file, &pending, "admin", OperationId::generate().unwrap())
         .unwrap();
 }
 
@@ -308,7 +309,7 @@ fn purged_payloads_require_no_body_but_present_tombstones_must_authenticate() {
         .create_purge_plan(&repository.history_tree_id, vec![old.clone()], "admin")
         .unwrap();
     engine
-        .commit_plan(&purge.plan_id, "admin", OperationId::generate())
+        .commit_plan(&purge.plan_id, "admin", OperationId::generate().unwrap())
         .unwrap();
     let report = scrub(&mut engine);
     assert!(report.is_healthy(), "{report:?}");
@@ -446,7 +447,7 @@ fn detached_preparation_is_rejected_before_scan_and_releases_admission_on_drop()
         .prepare_workspace_commit(
             CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -473,7 +474,7 @@ fn root_name_replacement_cannot_redirect_scrub_metadata_or_payload_reads() {
         .create_purge_plan(&repository.history_tree_id, vec![old], "admin")
         .unwrap();
     engine
-        .commit_plan(&purge.plan_id, "admin", OperationId::generate())
+        .commit_plan(&purge.plan_id, "admin", OperationId::generate().unwrap())
         .unwrap();
     let plan = engine.prepare_integrity_scrub().unwrap();
     for disk in &engine.config.disks {
@@ -575,7 +576,7 @@ fn admitted_sparse_available_content_state_is_a_required_copy_not_a_panic() {
         .mutate(
             "fixture.sparse",
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
             json_codec::json!({}),
             |_, state, _| {
                 state.content_states.remove(&id);
@@ -747,7 +748,7 @@ fn offlock_scan_allows_real_concurrent_publication_and_stops_at_captured_frontie
                 None,
                 &Note::parse("concurrent".into()).unwrap(),
                 "admin",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         assert!(current.state.sequence > baseline);
@@ -774,7 +775,7 @@ fn offlock_purge_before_batch_is_superseded_not_metadata_corruption() {
         .unwrap();
     let plan = engine.prepare_integrity_scrub().unwrap();
     engine
-        .commit_plan(&purge.plan_id, "admin", OperationId::generate())
+        .commit_plan(&purge.plan_id, "admin", OperationId::generate().unwrap())
         .unwrap();
     let outcome = plan.run(
         &IntegrityScrubCancellation::new(),
@@ -823,7 +824,7 @@ fn offlock_active_batch_pins_real_purge_until_cancellation_drains_it() {
             if active && !attempted {
                 attempted = true;
                 let error = current
-                    .commit_plan(&purge.plan_id, "admin", OperationId::generate())
+                    .commit_plan(&purge.plan_id, "admin", OperationId::generate().unwrap())
                     .unwrap_err();
                 assert_eq!(error.code(), ErrorCode::ContentPinned);
                 assert!(old_path.exists());
@@ -844,7 +845,7 @@ fn offlock_active_batch_pins_real_purge_until_cancellation_drains_it() {
         "cancel returns only after the batch drops"
     );
     engine
-        .commit_plan(&purge.plan_id, "admin", OperationId::generate())
+        .commit_plan(&purge.plan_id, "admin", OperationId::generate().unwrap())
         .unwrap();
     assert!(
         !old_path.exists(),
@@ -885,7 +886,7 @@ fn offlock_held_body_survives_actual_container_rename_during_proof_reads() {
                         )
                         .unwrap(),
                         "admin",
-                        OperationId::generate(),
+                        OperationId::generate().unwrap(),
                     )
                     .unwrap();
                 renamed = true;
@@ -1054,7 +1055,7 @@ fn offlock_callback_cannot_substitute_an_equal_body_from_a_different_version() {
             "P01",
             3,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let new = save(&mut engine, &other_repository, b"same body");
@@ -1135,7 +1136,7 @@ fn move_fixture_into_namespace(engine: &mut Engine, repository: &Repository) {
             )
             .unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
 }
@@ -1398,7 +1399,7 @@ fn finish_does_not_certify_a_writer_that_became_uncertain_after_probe() {
                 "P01",
                 3,
                 "admin",
-                OperationId::generate()
+                OperationId::generate().unwrap()
             )
             .is_err()
     );
@@ -1417,7 +1418,7 @@ fn empty_admitted_journal_frontier_still_probes_unexplained_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("disk")]),
+        Config::development([temp.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let run = || {
@@ -1556,7 +1557,7 @@ fn old_read_plan_member_identity_failure_revokes_the_current_writer_after_fallba
         .persist_auth_state(
             json_codec::json!({"auth":"new publication"}),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let epoch = engine.metadata_integrity.capture();
@@ -1581,7 +1582,7 @@ fn old_read_plan_shared_membership_failure_revokes_current_provenance_on_healthy
         .persist_auth_state(
             json_codec::json!({"auth":"newer"}),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let epoch = engine.metadata_integrity.capture();
@@ -1775,7 +1776,7 @@ fn scheduled_real_purge_supersession_revokes_before_finish_without_a_metadata_fa
     let epoch = engine.metadata_integrity.capture();
     let plan = engine.prepare_scheduled_integrity_scrub(&owner).unwrap();
     engine
-        .commit_plan(&purge.plan_id, "admin", OperationId::generate())
+        .commit_plan(&purge.plan_id, "admin", OperationId::generate().unwrap())
         .unwrap();
     assert!(engine.has_current_integrity_scrub_coverage());
     let mut superseded = false;

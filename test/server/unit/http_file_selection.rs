@@ -8,7 +8,7 @@ fn decode(body: Value) -> Result<SelectFileBranch, ApiError> {
 }
 #[test]
 fn selection_context_is_absent_or_a_complete_parsed_pair() {
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let bare = decode(json!({"branch_id":"branch","operation_id":operation})).unwrap();
     assert!(bare.location.is_none());
     assert_eq!(bare.file_id, "file");

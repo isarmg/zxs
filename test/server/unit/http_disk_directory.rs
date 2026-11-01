@@ -8,7 +8,7 @@ fn decode(body: Value, action: DiskDirectoryAction) -> Result<MutateDiskDirector
 }
 #[test]
 fn directory_commands_parse_optional_root_and_keep_static_error_priority() {
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     for action in [DiskDirectoryAction::Create, DiskDirectoryAction::Select] {
         let root = decode(json!({"name":"Side","operation_id":operation}), action).unwrap();
         assert!(root.path.is_none());

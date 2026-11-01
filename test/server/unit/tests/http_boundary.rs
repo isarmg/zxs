@@ -31,7 +31,7 @@ async fn contract_input_routes_keep_exact_error_envelopes() {
     let root = crate::tests::private_tempdir();
     let app = application(root.path());
     let (token, _, _) = authenticated(&app).await;
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let invalid_id = || "bad".parse::<storage_contract::OperationId>().unwrap_err();
     let long_name = "x".repeat(129);
     let invalid_note = || storage_contract::Note::parse(long_name.clone()).unwrap_err();
@@ -1832,4 +1832,63 @@ async fn authenticated_content_preconditions_use_router_before_static_validation
             }
         }
     }
+}
+
+#[tokio::test]
+async fn identifier_entropy_failure_is_server_error_with_independent_diagnostic_id() {
+    use std::error::Error as _;
+    let error = ApiError::contract_input(storage_contract::Error::IdentifierGeneration {
+        source: system_entropy::Error::UNSUPPORTED,
+        retryable: false,
+    });
+    assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(error.code, storage_contract::ErrorCode::InternalError);
+    assert!(error.source().is_some());
+    let first_id = error.request_id.clone();
+    storage_contract::validate_id(&first_id, "req").unwrap();
+    let second = ApiError::invalid("another rejected request");
+    assert_ne!(first_id, second.request_id);
+    let response = error.into_response();
+    let value = assert_error(
+        response,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "INTERNAL_ERROR",
+        true,
+    )
+    .await;
+    assert_eq!(value["error"]["request_id"], first_id);
+    assert_eq!(value["error"]["message"], "identifier generation failed");
+}
+
+#[tokio::test]
+#[ignore = "isolated getrandom failure; run test/contract/entropy/entropy-io.sh"]
+async fn entropy_fault_error_response_does_not_request_entropy() {
+    let marker = std::env::var_os("ZXS_TEST_ENTROPY_FAIL_FILE").expect("fault driver marker");
+    storage_contract::new_id("entry").unwrap();
+    std::fs::write(&marker, b"fail").unwrap();
+    let source = storage_contract::new_id("entry").unwrap_err();
+    assert!(
+        matches!(source, storage_contract::Error::IdentifierGeneration { source, .. } if source.raw_os_error() == Some(5))
+    );
+    let error = ApiError::contract_input(source);
+    assert!(error.source.is_some());
+    let first_id = error.request_id.clone();
+    assert_error(
+        error.into_response(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "INTERNAL_ERROR",
+        true,
+    )
+    .await;
+    let ordinary_rejection = ApiError::invalid("invalid request");
+    assert_ne!(first_id, ordinary_rejection.request_id);
+    assert_error(
+        ordinary_rejection.into_response(),
+        StatusCode::BAD_REQUEST,
+        "INVALID_REQUEST",
+        false,
+    )
+    .await;
+    std::fs::remove_file(marker).unwrap();
+    println!("\nZXS_ENTROPY_FAULT_COMPLETE");
 }

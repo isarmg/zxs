@@ -6,7 +6,7 @@ fn typed_scope_read_and_bounded_selection_do_not_change_state() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
@@ -16,7 +16,7 @@ fn typed_scope_read_and_bounded_selection_do_not_change_state() {
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -24,7 +24,7 @@ fn typed_scope_read_and_bounded_selection_do_not_change_state() {
             &repo.repository_id,
             None,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let before = json_codec::to_value(engine.state()).unwrap();

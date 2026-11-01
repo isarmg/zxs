@@ -12,3 +12,7 @@ json-codec.workspace = true
 error-definition.workspace = true
 blake3.workspace = true
 uuid.workspace = true
+system-entropy.workspace = true
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+system-entropy = { workspace = true, features = ["wasm_js"] }

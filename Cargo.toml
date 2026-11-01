@@ -50,6 +50,7 @@ rust-version = "1.99"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+system-entropy = { version = "0.4", path = "src/foundation/cryptography/system-entropy", features = ["std"] }
 url-encoding = { path = "src/foundation/networking/url-encoding", default-features = false, features = ["std", "parser"] }
 date-time = { version = "0.3.55", path = "src/foundation/core-types/date-time" }
 authentication = { path = "src/auth" }

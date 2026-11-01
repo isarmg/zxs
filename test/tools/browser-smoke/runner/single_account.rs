@@ -120,7 +120,7 @@ pub(super) fn run(browser: &Browser, password: &str) -> Result<()> {
     {
         return Err("repository still exposes a multi-account permission model".into());
     }
-    if session.request("PUT", &format!("/api/repositories/{id}/grants"), Some(json!({"grants":{"read":[],"write":[],"manage":[]},"operation_id":storage_engine::new_id("op")})))?.0 != 404 {
+    if session.request("PUT", &format!("/api/repositories/{id}/grants"), Some(json!({"grants":{"read":[],"write":[],"manage":[]},"operation_id":storage_engine::new_id("op").unwrap()})))?.0 != 404 {
         return Err("retired repository ACL route still exists".into());
     }
     let (status, _) = http(

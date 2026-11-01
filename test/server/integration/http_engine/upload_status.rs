@@ -46,7 +46,7 @@ async fn checksum_failure_status_survives_recovery_and_requires_new_generation_f
         "/api/repositories",
         Some(json!({
             "name":"Status", "primary_slot_id":"P01", "target_copies":3,
-            "operation_id":new_id("op")
+            "operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -61,7 +61,7 @@ async fn checksum_failure_status_survives_recovery_and_requires_new_generation_f
     )
     .await;
     let ws = workspace["workspace_id"].as_str().unwrap();
-    let item = new_id("entry");
+    let item = new_id("entry").unwrap();
     let base = format!("/api/workspaces/{ws}/files/{item}");
     let content_uri = format!("{base}/content?path=private-name.txt");
     let status_uri = format!("{base}/upload-status");

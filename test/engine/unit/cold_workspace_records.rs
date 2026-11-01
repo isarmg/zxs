@@ -43,13 +43,18 @@ fn cold_full_manifest_keeps_opened_file_selection_context_and_fencing() {
             &source.version_id,
             &BranchName::parse("same bytes").unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap()
         .branch_id
         .unwrap();
     engine
-        .select_file_branch(&source.file_id, &draft, "admin", OperationId::generate())
+        .select_file_branch(
+            &source.file_id,
+            &draft,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     assert_eq!(
         engine
@@ -74,7 +79,7 @@ fn a_stray_primary_manifest_cannot_replace_the_authoritative_copy_for_cold_admis
     let other = f.temp.path().join("other-primary");
     f.config.disks.push(DiskConfig {
         slot_id: "P02".into(),
-        disk_id: new_id("disk"),
+        disk_id: new_id("disk").unwrap(),
         root: other.clone(),
         level: 1,
         upstream_slot_id: None,
@@ -357,7 +362,7 @@ fn abort_does_not_evict_an_upload_or_detached_preparation_owner() {
             let plan = engine
                 .prepare_upload(
                     &workspace.workspace_id,
-                    &new_id("entry"),
+                    &new_id("entry").unwrap(),
                     "file",
                     &source,
                     1,
@@ -373,7 +378,7 @@ fn abort_does_not_evict_an_upload_or_detached_preparation_owner() {
                 .prepare_workspace_commit(
                     CommitRequest {
                         workspace_id: workspace.workspace_id.clone(),
-                        operation_id: OperationId::generate(),
+                        operation_id: OperationId::generate().unwrap(),
                         principal: "admin".into(),
                         expected_head: workspace.base_head,
                         fencing_token: workspace.fencing_token,
@@ -442,7 +447,7 @@ fn commit_request_evidence_keeps_an_empty_abort_resident() {
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id.clone(),
-        operation_id: OperationId::generate(),
+        operation_id: OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,

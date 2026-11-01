@@ -2,16 +2,16 @@ use super::*;
 
 fn entry(path: &str, kind: NamespaceEntryKind) -> Entry {
     Entry {
-        entry_id: new_id("entry"),
+        entry_id: new_id("entry").unwrap(),
         path: name_policy::PortablePath::parse(path).unwrap(),
         kind,
         file_id: if kind == NamespaceEntryKind::File {
-            new_id("file")
+            new_id("file").unwrap()
         } else {
             String::new()
         },
         version_id: if kind == NamespaceEntryKind::File {
-            new_id("ver")
+            new_id("ver").unwrap()
         } else {
             String::new()
         },

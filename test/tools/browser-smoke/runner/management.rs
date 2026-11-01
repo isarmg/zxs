@@ -731,12 +731,13 @@ fn write_preset(fixture: &SetupFixture) -> Result<(storage_engine::Config, std::
         fixture.disks["candidate-0"].clone(),
         fixture.disks["candidate-1"].clone(),
         fixture.disks["candidate-2"].clone(),
-    ]);
+    ])
+    .unwrap();
     let mut fourth = config.disks[2].clone();
     fourth.slot_id = "D01".into();
     fourth.level = 4;
     fourth.upstream_slot_id = Some("C01".into());
-    fourth.disk_id = storage_engine::new_id("disk");
+    fourth.disk_id = storage_engine::new_id("disk").unwrap();
     fourth.root = fixture.disks["candidate-3"].clone();
     fourth.metadata_member = false;
     config.disks.push(fourth);

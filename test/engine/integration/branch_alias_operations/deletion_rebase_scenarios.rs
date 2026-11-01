@@ -16,7 +16,7 @@ fn active_frozen_batch_deletion_records_live_rebased_path_exactly_once() {
             )
             .unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(pool.branch(&frozen).path, "Straße");

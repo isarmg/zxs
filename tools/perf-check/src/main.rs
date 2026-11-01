@@ -16,7 +16,7 @@ fn save(engine: &mut Engine, branch: &str, bytes: &[u8]) -> Result<()> {
     engine.stage_bytes(&w.workspace_id, "sample.bin", bytes)?;
     engine.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id,
-        operation_id: storage_engine::OperationId::generate(),
+        operation_id: storage_engine::OperationId::generate()?,
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -154,14 +154,14 @@ fn main() -> Result<()> {
         temp.path().join("primary"),
         temp.path().join("backup"),
         temp.path().join("tertiary"),
-    ]);
+    ])?;
     let mut engine = Engine::initialize(&root, config)?;
     let repo = engine.create_repository(
         &storage_engine::RepositoryName::parse("Architecture probe")?,
         "P01",
         3,
         "admin",
-        storage_engine::OperationId::generate(),
+        storage_engine::OperationId::generate()?,
     )?;
     let branch = repo.main_branch_id;
     let mut checkpoints = vec![1, history / 4, history / 2, history];

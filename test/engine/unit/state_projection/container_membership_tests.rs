@@ -614,7 +614,7 @@ fn cold_unknown_write_sets_keep_the_full_after_rebuild() {
 fn directory_commit(id: &str, history: &str, directories: &[&str]) -> storage_contract::Commit {
     record(json!({
         "commit_id":id, "history_tree_id":history, "kind":"save", "parent_commit_ids":[],
-        "tree_id":"tree", "sequence":"1", "operation_id":storage_contract::OperationId::generate(),
+        "tree_id":"tree", "sequence":"1", "operation_id":storage_contract::OperationId::generate().unwrap(),
         "author":"alice", "message":"fixture", "entries":directories.iter().map(|entry| json!({
             "entry_id":entry, "path":entry, "name":entry, "lookup_key":entry,
             "kind":"directory", "file_id":"", "version_id":"", "size":"0"

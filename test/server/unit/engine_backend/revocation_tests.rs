@@ -721,7 +721,8 @@ impl Fixture {
             root.path().join("primary"),
             root.path().join("secondary"),
             root.path().join("tertiary"),
-        ]);
+        ])
+        .unwrap();
         let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
         let repo = engine
             .create_repository(
@@ -729,7 +730,7 @@ impl Fixture {
                 "P01",
                 3,
                 "owner",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine
@@ -738,7 +739,7 @@ impl Fixture {
         engine
             .stage_bytes(&workspace.workspace_id, "file.txt", b"published")
             .unwrap();
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
@@ -951,7 +952,7 @@ impl Request {
                         backup_prefixes: std::collections::BTreeMap::new(),
                         expected_generation: 0,
                         expected_scope_id: "missing".into(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -962,7 +963,7 @@ impl Request {
                     identity,
                     Ok(crate::CancelPlan {
                         plan_id: "missing".into(),
-                        operation_id: Ok(storage_contract::OperationId::generate()),
+                        operation_id: Ok(storage_contract::OperationId::generate().unwrap()),
                     }),
                 )
                 .map(|_| ()),
@@ -972,7 +973,7 @@ impl Request {
                     Ok(crate::CommitPlan {
                         plan_id: "missing".into(),
                         plan_digest: "digest".into(),
-                        operation_id: Ok(storage_contract::OperationId::generate()),
+                        operation_id: Ok(storage_contract::OperationId::generate().unwrap()),
                     }),
                 )
                 .map(|_| ()),
@@ -985,7 +986,7 @@ impl Request {
                             kind: storage_contract::DirectoryBatchKind::Delete,
                             items: vec![],
                         },
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -996,7 +997,7 @@ impl Request {
                         file_id: "missing".into(),
                         branch_id: "missing".into(),
                         location: None,
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1010,7 +1011,7 @@ impl Request {
                             repository_id: "repository".into(),
                             path: name_policy::PortablePath::parse("Café/file.txt").unwrap(),
                         }),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1020,7 +1021,7 @@ impl Request {
                     crate::UpdateNote {
                         target: crate::NoteTarget::File("file".into()),
                         note: storage_contract::Note::parse("".into()).unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1030,7 +1031,7 @@ impl Request {
                     crate::UpdateNote {
                         target: crate::NoteTarget::Version("version".into()),
                         note: storage_contract::Note::parse("".into()).unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1043,7 +1044,7 @@ impl Request {
                             node: "node".into(),
                         },
                         note: storage_contract::Note::parse("".into()).unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1054,7 +1055,7 @@ impl Request {
                         file_id: "missing".into(),
                         branch_id: "missing".into(),
                         name: storage_contract::BranchName::parse("Side").unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1066,7 +1067,7 @@ impl Request {
                         source_version_id: "missing".into(),
                         source_node_id: None,
                         name: storage_contract::BranchName::parse("Side").unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1078,7 +1079,7 @@ impl Request {
                         source_version_id: "missing".into(),
                         source_node_id: Some("missing".into()),
                         name: storage_contract::BranchName::parse("Side").unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1095,7 +1096,7 @@ impl Request {
                         surviving_branch_id: "branch".into(),
                         confirmed: true,
                         location: None,
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1115,7 +1116,7 @@ impl Request {
                             repository_id: "repo".into(),
                             path: "file.txt".into(),
                         }),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1132,7 +1133,7 @@ impl Request {
                         add: vec!["added".into()],
                         remove: vec!["removed".into()],
                         location: None,
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1152,7 +1153,7 @@ impl Request {
                             repository_id: "repo".into(),
                             path: "file.txt".into(),
                         }),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1162,7 +1163,7 @@ impl Request {
                     crate::CreateDiskDirectory {
                         slot_id: "P01".into(),
                         path: name_policy::PortablePath::parse("Café/folder").unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1233,7 +1234,7 @@ impl Request {
                     identity,
                     crate::CommitWorkspace {
                         workspace_id: workspace.clone(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                         expected_head: fixture.workspace.base_head.clone(),
                         fencing_token: fixture.workspace.fencing_token,
                         message: String::new(),
@@ -1246,11 +1247,11 @@ impl Request {
                     identity,
                     crate::UpdatePlacementRule {
                         repository_id: fixture.repo.repository_id.clone(),
-                        rule_id: new_id("rule"),
+                        rule_id: new_id("rule").unwrap(),
                         path_prefix: String::new(),
                         primary_slot_id: "P01".into(),
                         expected_generation: 0,
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1262,7 +1263,7 @@ impl Request {
                             .unwrap(),
                         primary_slot_id: "P01".into(),
                         target_copies: 3,
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1377,7 +1378,7 @@ impl Request {
                         branch: &fixture.repo.main_branch_id,
                         enabled: false,
                         expected_history_generation: 1,
-                        operation: storage_contract::OperationId::generate(),
+                        operation: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1390,11 +1391,11 @@ impl Request {
                     identity,
                     crate::UpdateProtectionPolicy {
                         repository_id: fixture.repo.repository_id.clone(),
-                        policy_id: new_id("policy"),
+                        policy_id: new_id("policy").unwrap(),
                         path_prefix: String::new(),
                         target_copies: 3,
                         expected_generation: 0,
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1416,7 +1417,7 @@ impl Request {
                 let request = crate::SelectDefaultDirectoryBranch {
                     repository_id: "missing-repository".into(),
                     directory_branch_id: "missing-directory".into(),
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                 };
                 backend
                     .select_default_directory_branch(identity, request)
@@ -1451,7 +1452,7 @@ impl Request {
                     repository_id: "missing-repository".into(),
                     directory_branch_id: "missing-directory".into(),
                     name: storage_contract::BranchName::parse("renamed").unwrap(),
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                 };
                 backend
                     .rename_directory_branch(identity, request)
@@ -1460,7 +1461,7 @@ impl Request {
             Self::ArchiveBranch => {
                 let request = crate::ArchiveBranch {
                     branch_id: "missing-branch".into(),
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                 };
                 backend.archive_branch(identity, request).map(|_| ())
             }
@@ -1471,7 +1472,7 @@ impl Request {
                         repository_id: "missing".into(),
                         source_commit_id: "missing".into(),
                         name: storage_contract::BranchName::parse("Side").unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1484,7 +1485,7 @@ impl Request {
                         source_commit_id: "missing".into(),
                         target_branch_id: "missing".into(),
                         target_commit_id: "missing".into(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1494,7 +1495,7 @@ impl Request {
                     crate::InitializeDirectoryScope {
                         repository_id: "missing".into(),
                         path: None,
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                     },
                 )
                 .map(|_| ()),
@@ -1505,7 +1506,7 @@ impl Request {
                         slot_id: "missing".into(),
                         path: None,
                         name: storage_contract::BranchName::parse("Side").unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                         action: crate::DiskDirectoryAction::Create,
                     },
                 )
@@ -1517,7 +1518,7 @@ impl Request {
                         slot_id: "missing".into(),
                         path: None,
                         name: storage_contract::BranchName::parse("Side").unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                         action: crate::DiskDirectoryAction::Select,
                     },
                 )
@@ -2107,7 +2108,7 @@ fn both_upload_adapters_bind_the_copied_snapshot_before_acceptance() {
     for explicit_generation in [false, true] {
         let fixture = Fixture::new(true);
         let before = fixture.snapshot();
-        let item = new_id("entry");
+        let item = new_id("entry").unwrap();
         let source =
             crate::UploadSource::from_file(std::fs::File::open(&fixture.source).unwrap(), u64::MAX)
                 .unwrap();

@@ -11,7 +11,8 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
             temp.path().join("a"),
             temp.path().join("b"),
             temp.path().join("c"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -20,7 +21,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     (temp, engine, repository)
@@ -34,7 +35,7 @@ fn save(engine: &mut Engine, branch: &str, content: &[u8]) -> String {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -142,7 +143,7 @@ fn purged_state_reopens_with_one_damaged_and_one_offline_metadata_member() {
             .commit_plan(
                 &purge.plan_id,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let root = engine.root.clone();
@@ -206,7 +207,7 @@ fn migrated_content_does_not_consume_live_payload_budget() {
         .commit_plan(
             &split.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(

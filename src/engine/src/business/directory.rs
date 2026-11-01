@@ -359,7 +359,10 @@ fn snapshot_source(
         }
         None
     };
-    let id = previous.unwrap_or_else(|| new_id("dbr"));
+    let id = match previous {
+        Some(id) => id,
+        None => new_id("dbr")?,
+    };
     // One operation can touch several siblings. Publish a single consolidated
     // node for this scope, and no node for a byte-for-byte identical view.
     if let Some(old) = parent_tree_id
@@ -374,7 +377,7 @@ fn snapshot_source(
     {
         return Ok(id);
     }
-    let tree_id = new_id("dtree");
+    let tree_id = new_id("dtree")?;
     state.directory_trees.insert(
         tree_id.clone(),
         DirectoryTree {
@@ -1107,7 +1110,7 @@ pub(crate) fn select_change(
         .directory_tree_selections
         .insert(selected.directory_id.clone(), selected.head_tree_id.clone());
     let pending = snapshot_pending(state, &entries);
-    let commit_id = new_id("commit");
+    let commit_id = new_id("commit")?;
     state.commits.insert(
         commit_id.clone(),
         Commit {
@@ -1116,7 +1119,7 @@ pub(crate) fn select_change(
             history_tree_id: repo.history_tree_id.clone(),
             kind: "directory_selection".into(),
             parent_commit_ids: vec![previous.commit_id],
-            tree_id: new_id("tree"),
+            tree_id: new_id("tree")?,
             sequence: state.sequence,
             operation_id: operation,
             author: principal.into(),
@@ -1270,7 +1273,7 @@ impl Engine {
                     ));
                 }
                 let (parent, tree) = selected_tree(state, &directory_id)?;
-                let id = new_id("dbr");
+                let id = new_id("dbr")?;
                 let inherited_files = tree
                     .file_branches
                     .keys()

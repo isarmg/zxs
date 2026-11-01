@@ -5,7 +5,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("system"),
-        Config::development([temporary.path().join("primary")]),
+        Config::development([temporary.path().join("primary")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -14,7 +14,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -28,7 +28,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -70,7 +70,7 @@ fn generation_first_conflict(state: &State, workspace: &Workspace, path: &str) -
 
 fn directory(path: &str) -> Entry {
     Entry {
-        entry_id: new_id("entry"),
+        entry_id: new_id("entry").unwrap(),
         path: name_policy::PortablePath::parse(path).unwrap(),
         kind: NamespaceEntryKind::Directory,
         file_id: String::new(),
@@ -87,7 +87,7 @@ fn directory_generation_checks_match_both_views_roots_and_component_boundaries()
         .unwrap();
     let mut state = engine.state().clone();
     let mut current = state.commits[&workspace.base_head].clone();
-    current.commit_id = new_id("commit");
+    current.commit_id = new_id("commit").unwrap();
     let old = directory("Old");
     let future = directory("Future");
     state
@@ -108,13 +108,17 @@ fn directory_generation_checks_match_both_views_roots_and_component_boundaries()
         .iter()
         .map(|entry| entry.entry_id.clone())
         .collect::<Vec<_>>();
-    ids.extend([future.entry_id, repo.repository_id.clone(), new_id("entry")]);
+    ids.extend([
+        future.entry_id,
+        repo.repository_id.clone(),
+        new_id("entry").unwrap(),
+    ]);
     // Retain all roots in the same history, not merely the main-branch owner.
     for same_history in [true, false] {
         let mut other = repo.clone();
-        other.repository_id = new_id("repo");
+        other.repository_id = new_id("repo").unwrap();
         if !same_history {
-            other.history_tree_id = new_id("history");
+            other.history_tree_id = new_id("history").unwrap();
         }
         ids.push(other.repository_id.clone());
         state
@@ -191,7 +195,7 @@ fn empty_generations_still_validate_workspace_references_in_order() {
                     .branches
                     .get_mut(&workspace.branch_id)
                     .unwrap()
-                    .head_commit_id = new_id("commit");
+                    .head_commit_id = new_id("commit").unwrap();
                 "current namespace missing"
             }
         };
@@ -208,7 +212,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
             &repo.repository_id,
             None,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -217,7 +221,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
             Some(&name_policy::LookupPath::parse("Folder").unwrap()),
             &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -229,7 +233,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -238,7 +242,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
             None,
             &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -247,7 +251,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
             None,
             &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -263,7 +267,7 @@ fn directory_round_trip_fences_ancestors_but_not_siblings_or_other_repositories(
                 Some(&name_policy::LookupPath::parse("Folder").unwrap()),
                 &storage_contract::BranchName::parse(selection).unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -300,7 +304,7 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
                     Some(&name_policy::LookupPath::parse("Folder").unwrap()),
                     &storage_contract::BranchName::parse("draft").unwrap(),
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
             engine
@@ -309,7 +313,7 @@ fn workspace_capture_matches_path_lookup_for_bootstrap_and_inherited_contexts() 
                     Some(&name_policy::LookupPath::parse("Folder").unwrap()),
                     &storage_contract::BranchName::parse("draft").unwrap(),
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
         }
@@ -375,7 +379,7 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
                     Some(&name_policy::LookupPath::parse("Folder").unwrap()),
                     &storage_contract::BranchName::parse("draft").unwrap(),
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
             engine
@@ -384,7 +388,7 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
                     Some(&name_policy::LookupPath::parse("Folder").unwrap()),
                     &storage_contract::BranchName::parse("draft").unwrap(),
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
         }
@@ -407,7 +411,7 @@ fn workspace_namespace_plan_keeps_frozen_source_across_preparatory_commits() {
             .plan_workspace_commit_inner(
                 CommitRequest {
                     workspace_id: workspace.workspace_id,
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                     principal: "admin".into(),
                     expected_head: workspace.base_head.clone(),
                     fencing_token: workspace.fencing_token,
@@ -474,7 +478,7 @@ fn workspace_first_writes_clear_only_written_pending_file_identities() {
             &source,
             &storage_contract::BranchName::parse("pending").unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(repository::main_for_branch(engine.state(), &branch.branch_id).is_none());
@@ -499,7 +503,7 @@ fn workspace_first_writes_clear_only_written_pending_file_identities() {
         .plan_workspace_commit_inner(
             CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

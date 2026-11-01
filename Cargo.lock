@@ -1320,6 +1320,7 @@ dependencies = [
  "error-definition",
  "json-codec",
  "name-policy",
+ "system-entropy",
  "uuid",
 ]
 
@@ -1389,6 +1390,7 @@ dependencies = [
  "storage-contract",
  "storage-engine",
  "sysinfo",
+ "system-entropy",
  "tempfile",
  "tokio",
  "tower-http",
@@ -1456,7 +1458,9 @@ name = "system-entropy"
 version = "0.4.3"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
+ "wasm-bindgen",
 ]
 
 [[package]]

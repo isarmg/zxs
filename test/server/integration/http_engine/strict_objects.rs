@@ -37,7 +37,7 @@ async fn namespace_batch_requires_named_nested_objects_before_mutation() {
         json!({"source":source_array,"target":target}),
         json!({"source":source,"target":target_array}),
     ] {
-        let operation = new_id("op");
+        let operation = new_id("op").unwrap();
         let (status, rejected) = send(
             &app,
             Some(&token),
@@ -59,7 +59,7 @@ async fn namespace_batch_requires_named_nested_objects_before_mutation() {
     ] {
         let (status, rejected) = send(
             &app, Some(&token), "POST", route,
-            Some(json!({"kind":kind,"items":[{"source":source,"target":target}],"operation_id":new_id("op")})),
+            Some(json!({"kind":kind,"items":[{"source":source,"target":target}],"operation_id":new_id("op").unwrap()})),
         ).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
         assert_eq!(rejected["error"]["code"], "INVALID_REQUEST");
@@ -73,7 +73,7 @@ async fn namespace_batch_requires_named_nested_objects_before_mutation() {
         route,
         Some(
             json!({"kind":"rename","items":[{"source":source,"target":target}],
-            "operation_id":new_id("op")}),
+            "operation_id":new_id("op").unwrap()}),
         ),
     )
     .await;
@@ -201,7 +201,7 @@ async fn namespace_batch_preserves_null_digest_and_replays_after_reopen() {
     let before = manager_scope(&app, &token, repo, &branch).await;
     let source = manager_batch_source(&before, "report.txt");
     let route = "/api/file-manager/disks/P01/namespace-batch";
-    let operation = new_id("op");
+    let operation = new_id("op").unwrap();
     let request = json!({"kind":"delete","items":[{"source":source}],"operation_id":operation});
     for (key, value, code) in [
         ("items", None, "INVALID_REQUEST"),
@@ -231,9 +231,9 @@ async fn namespace_batch_preserves_null_digest_and_replays_after_reopen() {
         assert_eq!(manager_scope(&app, &token, repo, &branch).await, before);
     }
     for invalid in [
-        json!({"kind":"rename","items":[{"source":source}],"operation_id":new_id("op")}),
-        json!({"kind":"delete","items":[{"source":source,"target":manager_batch_target(&before,"else.txt")}],"operation_id":new_id("op")}),
-        json!({"kind":"delete","items":[{"source":{"directory_branch_id":branch,"expected_tree_id":before["head_tree_id"],"entry_id":source["entry_id"],"path":"../report.txt"}}],"operation_id":new_id("op")}),
+        json!({"kind":"rename","items":[{"source":source}],"operation_id":new_id("op").unwrap()}),
+        json!({"kind":"delete","items":[{"source":source,"target":manager_batch_target(&before,"else.txt")}],"operation_id":new_id("op").unwrap()}),
+        json!({"kind":"delete","items":[{"source":{"directory_branch_id":branch,"expected_tree_id":before["head_tree_id"],"entry_id":source["entry_id"],"path":"../report.txt"}}],"operation_id":new_id("op").unwrap()}),
     ] {
         let (status, rejected) = send(&app, Some(&token), "POST", route, Some(invalid)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
@@ -243,7 +243,7 @@ async fn namespace_batch_preserves_null_digest_and_replays_after_reopen() {
     let canonical = json!({"kind":"delete","items":[{"source":source,"target":null}]});
     assert_eq!(original["request_digest"], storage_contract::object_hash("request", &json!({"kind":"directory.namespace.batch","principal":"admin","body":{"repository_id":repo,"request":canonical}})).unwrap());
     let after_delete = manager_scope(&app, &token, repo, &branch).await;
-    success(&app,&token,"POST",route,Some(json!({"kind":"rename","operation_id":new_id("op"),"items":[{"source":manager_batch_source(&after_delete,"stay.txt"),"target":manager_batch_target(&after_delete,"later.txt")}]}))).await;
+    success(&app,&token,"POST",route,Some(json!({"kind":"rename","operation_id":new_id("op").unwrap(),"items":[{"source":manager_batch_source(&after_delete,"stay.txt"),"target":manager_batch_target(&after_delete,"later.txt")}]}))).await;
     let later = manager_scope(&app, &token, repo, &branch).await;
     drop(app);
     let system = root.path().join("system");
@@ -291,7 +291,7 @@ async fn namespace_batch_preserves_null_digest_and_replays_after_reopen() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(rejected["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
     let mut fresh = request;
-    fresh["operation_id"] = new_id("op").into();
+    fresh["operation_id"] = new_id("op").unwrap().into();
     let (status, rejected) = send(&app, Some(&token), "POST", route, Some(fresh)).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(rejected["error"]["code"], "DIRECTORY_BRANCH_CONFLICT");

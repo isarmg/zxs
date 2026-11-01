@@ -14,7 +14,8 @@ use storage_engine::{BackupConfigurationRequest, CommitRequest, Engine};
 
 fn initialize(maximum: usize) -> (tempfile::TempDir, Engine) {
     let root = crate::tests::private_tempdir();
-    let mut config = Config::development([root.path().join("primary"), root.path().join("backup")]);
+    let mut config =
+        Config::development([root.path().join("primary"), root.path().join("backup")]).unwrap();
     config.max_entries = maximum;
     let engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     (root, engine)
@@ -27,7 +28,7 @@ fn repository(engine: &mut Engine, name: &str) -> Repository {
             "P01",
             2,
             "owner",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap()
 }
@@ -42,7 +43,7 @@ fn save(engine: &mut Engine, repo: &Repository, path: &str, body: &[u8]) -> Entr
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -70,7 +71,7 @@ fn configure(engine: &mut Engine, repo: &Repository, path: &str, prefix: &str) {
             backup_prefixes: &BTreeMap::from([("B01".into(), prefix.into())]),
             expected_generation: previous.generation,
             principal: "owner",
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
         })
         .unwrap();
 }
@@ -187,7 +188,7 @@ fn backend_backup_listing_preserves_fixed_prefix_history_and_filtered_selection(
                 &repo.repository_id,
                 NamespaceOperation::parse(kind, path, destination).unwrap(),
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
     }

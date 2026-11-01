@@ -9,7 +9,7 @@ fn decode(body: Value) -> Result<RenameFileBranch, ApiError> {
 }
 #[test]
 fn branch_rename_parses_once_and_preserves_operation_before_name_error_priority() {
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let parsed = decode(json!({"name":"Café","operation_id":operation})).unwrap();
     assert_eq!(parsed.file_id, "file");
     assert_eq!(parsed.branch_id, "branch");
@@ -61,7 +61,7 @@ fn branch_rename_parses_once_and_preserves_operation_before_name_error_priority(
 #[test]
 fn branch_rename_preserves_contract_error_details_and_sources() {
     let error = decode(
-        json!({"name":"x".repeat(129),"operation_id":storage_contract::OperationId::generate()}),
+        json!({"name":"x".repeat(129),"operation_id":storage_contract::OperationId::generate().unwrap()}),
     )
     .err()
     .unwrap();

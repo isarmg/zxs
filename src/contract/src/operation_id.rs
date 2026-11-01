@@ -8,8 +8,8 @@ pub struct OperationId(uuid::Uuid);
 
 impl OperationId {
     /// Generate a UUID v4 identity directly in its domain representation.
-    pub fn generate() -> Self {
-        Self(uuid::Uuid::new_v4())
+    pub fn generate() -> crate::Result<Self> {
+        Ok(Self(crate::random_uuid()?))
     }
 }
 

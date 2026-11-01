@@ -10,7 +10,7 @@ fn decode(body: Value) -> Result<SelectDefaultDirectoryBranch, ApiError> {
 }
 #[test]
 fn selection_ingress_binds_path_and_parses_operation_once() {
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let valid = json!({"directory_branch_id":"directory", "operation_id":operation});
     let parsed = decode(valid.clone()).unwrap();
     assert_eq!(parsed.repository_id, "repository");
@@ -57,7 +57,7 @@ fn decode_rename(body: Value) -> Result<crate::RenameDirectoryBranch, ApiError> 
 }
 #[test]
 fn rename_ingress_binds_both_paths_and_keeps_operation_before_name_policy() {
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let command = decode_rename(json!({"name":"Café","operation_id":operation})).unwrap();
     assert_eq!(command.repository_id, "repository");
     assert_eq!(command.directory_branch_id, "directory");

@@ -14,7 +14,8 @@ fn fixture_with_members(metadata_members: [bool; 3], copies: u32) -> (tempfile::
         temp.path().join("a"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
         disk.metadata_member = member;
     }
@@ -25,7 +26,7 @@ fn fixture_with_members(metadata_members: [bool; 3], copies: u32) -> (tempfile::
             "P01",
             copies,
             "alice",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     (temp, engine)
@@ -51,7 +52,7 @@ fn unobserved_required_seal_changes_during_prepare_reject_before_accept() {
                     .prepare_workspace_commit(
                         CommitRequest {
                             workspace_id: workspace.workspace_id,
-                            operation_id: OperationId::generate(),
+                            operation_id: OperationId::generate().unwrap(),
                             principal: "alice".into(),
                             expected_head: workspace.base_head,
                             fencing_token: workspace.fencing_token,
@@ -146,7 +147,7 @@ fn prepare_auth(engine: &Engine) -> DetachedPublication {
         .plan_new_mutation(
             "auth.control-state",
             "alice",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
             digest.clone(),
             |_, next, _| {
                 next.control_auth = Some(value);
@@ -279,7 +280,7 @@ fn try_prepare_history_change(engine: &Engine) -> Result<DetachedPublication> {
         .plan_new_mutation(
             "history.rename-test",
             "alice",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
             digest,
             |_, next, _| {
                 next.branches.get_mut(&branch_id).unwrap().name = name;
@@ -566,7 +567,7 @@ fn a_new_encoded_same_hash_still_compares_every_required_member_and_cannot_mint_
     let sequence = engine.state.sequence;
     let slot = engine.next_slot;
     let error = engine
-        .persist_auth_state(value, "alice", OperationId::generate())
+        .persist_auth_state(value, "alice", OperationId::generate().unwrap())
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::ObjectCollision);
     assert_eq!(engine.state.sequence, sequence);
@@ -599,7 +600,7 @@ fn real_detached_workspace_carries_the_original_owner_without_keeping_it_alive()
         .prepare_workspace_commit(
             CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 principal: "alice".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

@@ -54,7 +54,8 @@ async fn real_status_samples_host_and_registered_disks_only_for_the_authenticate
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let backend = Arc::new(EngineBackend::new(
         Engine::initialize(&system, config).unwrap(),
     ));

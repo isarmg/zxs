@@ -22,7 +22,8 @@ fn replicated_metadata_matches_original_bytes_and_hash_with_less_serialization()
         temp.path().join("primary"),
         temp.path().join("backup"),
         temp.path().join("tertiary"),
-    ]);
+    ])
+    .unwrap();
     let value = CountedValue {
         value: json_codec::json!({"z": "18446744073709551615", "名字": [true, null, "data"], "a": 1}),
         serializations: Cell::new(0),
@@ -41,7 +42,8 @@ fn replicated_metadata_matches_original_bytes_and_hash_with_less_serialization()
         temp.path().join("new-primary"),
         temp.path().join("new-backup"),
         temp.path().join("new-tertiary"),
-    ]);
+    ])
+    .unwrap();
     let hash =
         store_object_replicas_bounded(&config.disks, "state-page", &value, MAX_METADATA).unwrap();
     assert_eq!(hash, original_hash);
@@ -79,7 +81,8 @@ fn prepared_metadata_serializes_only_at_preflight_and_reuses_exact_bytes() {
         temp.path().join("one"),
         temp.path().join("two"),
         temp.path().join("three"),
-    ]);
+    ])
+    .unwrap();
     let value = CountedValue {
         value: json_codec::json!({"retained": ["history", "events", "idempotency"]}),
         serializations: Cell::new(0),
@@ -116,7 +119,8 @@ fn prepared_publication_objects_encode_once_across_individual_held_member_stores
         temp.path().join("one"),
         temp.path().join("two"),
         temp.path().join("three"),
-    ]);
+    ])
+    .unwrap();
     let engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     for kind in ["candidate", "publication"] {
         let value = CountedValue {
@@ -166,7 +170,8 @@ fn replicated_metadata_rejects_oversize_before_creating_any_object() {
         temp.path().join("primary"),
         temp.path().join("backup"),
         temp.path().join("tertiary"),
-    ]);
+    ])
+    .unwrap();
     let value = json_codec::json!({"content": "bounded"});
     let bytes = canonical_json(&value).unwrap();
     let error = store_object_replicas_bounded(&config.disks, "snapshot", &value, bytes.len() - 1)

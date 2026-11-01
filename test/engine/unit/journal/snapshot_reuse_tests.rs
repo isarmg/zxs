@@ -7,7 +7,8 @@ fn fixture(count: usize) -> (tempfile::TempDir, Config, State, PreparedSnapshot)
         temp.path().join("a"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let state = State {
         sequence: 7,
         file_notes: (0..count)

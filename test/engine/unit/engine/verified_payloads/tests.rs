@@ -45,7 +45,8 @@ fn fixture_with_payload_and_members(
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("t"),
-    ]);
+    ])
+    .unwrap();
     for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
         disk.metadata_member = member;
     }
@@ -56,7 +57,7 @@ fn fixture_with_payload_and_members(
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -74,7 +75,7 @@ fn fixture_with_payload_and_members(
     let result = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -85,7 +86,7 @@ fn fixture_with_payload_and_members(
     let candidate = Candidate {
         pool_id: engine.config.pool_id.clone(),
         sequence: engine.state.sequence,
-        transaction_id: new_id("tx"),
+        transaction_id: new_id("tx").unwrap(),
         operation_id: result.operation_id,
         request_digest: result.request_digest,
         previous_snapshot: None,
@@ -273,7 +274,7 @@ fn old_payload_proof_identity_fault_revokes_the_current_writer_after_a_later_pub
         .persist_auth_state(
             json_codec::json!({"auth": "later publication"}),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let current_epoch = engine.metadata_integrity.capture();
@@ -865,7 +866,7 @@ fn new_publication_state(engine: &Engine, candidate: &Candidate) -> (State, Oper
     let mut next = engine.state().clone();
     next.sequence = engine.next_slot;
     let mut result = next.operations[&candidate.operation_id].clone();
-    result.operation_id = storage_contract::OperationId::generate();
+    result.operation_id = storage_contract::OperationId::generate().unwrap();
     result.sequence = next.sequence;
     next.operations.insert(result.operation_id, result.clone());
     (next, result)
@@ -1084,7 +1085,7 @@ fn ordered_proofs_reject_version_slot_hash_and_count_mismatches() {
         match change {
             "version_order" => changed.versions.swap(0, 1),
             "slot_order" => changed.versions[0].placement.route_slot_ids.swap(0, 1),
-            "version_id" => changed.versions[0].version.version_id = new_id("ver"),
+            "version_id" => changed.versions[0].version.version_id = new_id("ver").unwrap(),
             "version_hash" => {
                 changed.versions[0].version.content_hash = "0".repeat(64).parse().unwrap();
             }

@@ -17,7 +17,7 @@ async fn configure(app: &Router, token: &str, repo: &str, path: &str, b: &str, c
         .finish();
     let old = success(app, token, "GET", &format!("{route}?{query}"), None).await;
     success(app,token,"PUT",&route,Some(json!({"path":path,"target_copies":3,"backup_prefixes":{"B01":b,"C01":c},
-        "expected_scope_id":old["scope"]["id"],"expected_generation":old["generation"],"operation_id":new_id("op")}))).await
+        "expected_scope_id":old["scope"]["id"],"expected_generation":old["generation"],"operation_id":new_id("op").unwrap()}))).await
 }
 fn read_only_listing(value: &Value) {
     assert_eq!(value["backup"], true);
@@ -99,7 +99,7 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
     )
     .await;
     let workspace_id = workspace["workspace_id"].as_str().unwrap();
-    let item_id = new_id("entry");
+    let item_id = new_id("entry").unwrap();
     upload(
         &app,
         &admin,
@@ -226,7 +226,7 @@ async fn user_backup_prefixes_keep_fixed_paths_and_slot_versions_after_primary_r
         ),
         (
             "directory-branches",
-            json!({"path":"WorkBackup/nested","name":"forbidden","operation_id":new_id("op")}),
+            json!({"path":"WorkBackup/nested","name":"forbidden","operation_id":new_id("op").unwrap()}),
         ),
         (
             "namespace-batch",
@@ -295,7 +295,7 @@ async fn backup_path_collisions_are_rejected_for_every_session_without_overwriti
     let repo = primary["context"]["repository_id"].as_str().unwrap();
     let public_version = primary["entries"][0]["version_id"].as_str().unwrap();
     configure(&app, &admin, repo, "docs", "WorkBackup/nested", "冷备份").await;
-    let private=success(&app,&admin,"POST","/api/repositories",Some(json!({"name":"Private","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op")}))).await;
+    let private=success(&app,&admin,"POST","/api/repositories",Some(json!({"name":"Private","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op").unwrap()}))).await;
     let private_repo = private["repository_id"].as_str().unwrap();
     manager_upload(
         &app,
@@ -416,11 +416,12 @@ async fn administrator_discovers_historical_primary_routes_and_all_required_back
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     for (slot, level, parent) in [("P02", 1, None), ("B02", 2, Some("P02"))] {
         config.disks.push(storage_contract::DiskConfig {
             slot_id: slot.into(),
-            disk_id: new_id("disk"),
+            disk_id: new_id("disk").unwrap(),
             root: root.path().join(slot),
             level,
             upstream_slot_id: parent.map(str::to_owned),
@@ -431,15 +432,15 @@ async fn administrator_discovers_historical_primary_routes_and_all_required_back
     }
     let app = configured_application(root.path(), config);
     let admin = login(&app, "admin", "integration-test-password").await;
-    let repo=success(&app,&admin,"POST","/api/repositories",Some(json!({"name":"Mixed","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let repo=success(&app,&admin,"POST","/api/repositories",Some(json!({"name":"Mixed","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
     let id = repo["repository_id"].as_str().unwrap();
     manager_upload(&app, &admin, "Mixed/a.txt", b"first primary").await;
     let first = listing(&app, &admin, "P01", "Mixed").await["entries"][0]["version_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    success(&app,&admin,"PUT",&format!("/api/primary-placement-rules/{}",new_id("rule")),Some(json!({"repository_id":id,
-        "path_prefix":"a.txt","primary_slot_id":"P02","expected_generation":"0","operation_id":new_id("op")}))).await;
+    success(&app,&admin,"PUT",&format!("/api/primary-placement-rules/{}",new_id("rule").unwrap()),Some(json!({"repository_id":id,
+        "path_prefix":"a.txt","primary_slot_id":"P02","expected_generation":"0","operation_id":new_id("op").unwrap()}))).await;
     manager_upload(&app, &admin, "Mixed/a.txt", b"second primary").await;
     let second = listing(&app, &admin, "P01", "Mixed").await["entries"][0]["version_id"]
         .as_str()
@@ -454,15 +455,15 @@ async fn administrator_discovers_historical_primary_routes_and_all_required_back
     assert_eq!(before["backup_slot_ids"], json!(["B01", "B02", "C01"]));
     assert_eq!(before["max_copies"], 2);
     let body = json!({"path":"a.txt","target_copies":2,"backup_prefixes":{"B02":"second"},"expected_scope_id":before["scope"]["id"],
-        "expected_generation":"0","operation_id":new_id("op")});
+        "expected_generation":"0","operation_id":new_id("op").unwrap()});
     let (status, error) = send(&app, Some(&admin), "PUT", &route, Some(body)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error["error"]["code"], "BACKUP_PREFIX_REQUIRED");
     success(&app,&admin,"PUT",&route,Some(json!({"path":"a.txt","target_copies":2,"backup_prefixes":{"B01":"first","B02":"second"},
-        "expected_scope_id":before["scope"]["id"],"expected_generation":"0","operation_id":new_id("op")}))).await;
+        "expected_scope_id":before["scope"]["id"],"expected_generation":"0","operation_id":new_id("op").unwrap()}))).await;
     // Another history on the same primary contributes a distinct C01 route;
     // the sole administrator sees both histories without per-account filtering.
-    success(&app,&admin,"POST","/api/repositories",Some(json!({"name":"Hidden","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op")}))).await;
+    success(&app,&admin,"POST","/api/repositories",Some(json!({"name":"Hidden","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op").unwrap()}))).await;
     manager_upload(&app, &admin, "Hidden/secret.txt", b"not admitted").await;
 
     let session = login(&app, "admin", "integration-test-password").await;

@@ -40,7 +40,7 @@ fn publish_namespace(
             identity,
             crate::CommitWorkspace {
                 workspace_id: workspace.workspace_id,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
                 message: "concurrent namespace fixture".into(),
@@ -728,7 +728,7 @@ fn namespace_preconditions_use_workspace_base_after_concurrent_head_changes() {
             namespace_operations: Mutex::new(BTreeSet::new()),
         });
         let mut session = session(shared, &branch);
-        let operation_id = new_id("op");
+        let operation_id = new_id("op").unwrap();
         let error = session
             .dispatch(Request::Namespace {
                 operation_id: operation_id.clone(),
@@ -832,7 +832,7 @@ fn publication_comparison_uses_entry_identity_in_renamed_commit() {
             &session.identity,
             crate::CommitWorkspace {
                 workspace_id: workspace.workspace_id,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
                 message: "rename identity fixture".into(),

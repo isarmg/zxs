@@ -236,7 +236,7 @@ fn committed_file_context_receipt_fits_exact_reserved_metadata_budget() {
     crate::disk::write_json(&f.root.join("config.json"), &e.config, true).unwrap();
     e.commit_workspace(CommitRequest {
         workspace_id: w.workspace_id.clone(),
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: w.base_head,
         fencing_token: w.fencing_token,
@@ -290,7 +290,7 @@ fn zero_byte_generations_consume_retained_entry_budget_without_extra_artifacts()
     let w = e.create_workspace(&repo.main_branch_id, "admin").unwrap();
     let source = f.temp.path().join("empty");
     fs::write(&source, b"").unwrap();
-    let item = new_id("entry");
+    let item = new_id("entry").unwrap();
     let first = e
         .stage_upload(&w.workspace_id, &item, "empty", &source, 1)
         .unwrap();

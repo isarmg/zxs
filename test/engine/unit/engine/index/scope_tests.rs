@@ -159,7 +159,7 @@ fn commit_with_entries() -> Commit {
         parent_commit_ids: vec![],
         tree_id: "tree".into(),
         sequence: 1,
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         author: "author".into(),
         message: String::new(),
         entries: vec![entry.clone(), entry],
@@ -459,7 +459,7 @@ fn file_merge(id: &str, file: &str, history: &str) -> FileBranchMerge {
         surviving_branch_id: "branch".into(),
         reused_node: true,
         parent_node_ids: vec![],
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         sequence: 1,
     }
 }

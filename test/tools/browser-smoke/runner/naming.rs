@@ -11,7 +11,7 @@ fn enter(browser: &Browser, label: (&str, &str), selector: &str, value: &str) ->
 
 fn no_write(browser: &Browser, expected: usize) -> Result<()> {
     if browser.script("return window.__zxsNaming.writes.length")? != json!(expected) {
-        return Err("a name was submitted before explicit confirmation".into());
+        return Err("a naming mutation was submitted before explicit confirmation".into());
     }
     Ok(())
 }
@@ -150,19 +150,44 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 if browser.script("return window.__zxsNaming.writes.length===4&&window.__zxsNaming.writes[3].body.name==='é'&&!document.querySelector('.zxs-branch-name').disabled")? == true { Ok(()) } else { Err("branch confirmation request missing".into()) }
             })?;
             browser.keys(&branch, "\u{e00c}")?;
+            println!(
+                "PASS inline NFC/Hangul focus, cancellation and explicit folder/branch confirmation"
+            );
             let checkbox=browser.element("xpath", "//tr[.//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']]//input[@type='checkbox']")?;
             browser.click(&checkbox)?;
             browser.click(&browser.button("Rename", "重命名")?)?;
-            wait_for("batch source scope loaded", || {
-                if browser.script("const input=document.querySelector('.zxs-batch-entry input');return input&&!input.disabled")? == true { Ok(()) } else { Err("batch scope not ready".into()) }
+            // Seeded file commits do not register a directory composition. The
+            // earlier branch-name POST was deliberately rejected, so register
+            // the source through the real UI before asking for a rename.
+            browser.click(&browser.button(
+                "Register source folder branch records",
+                "登记源目录分支记录",
+            )?)?;
+            wait_for("registered and selected batch source scope", || {
+                let scope = browser.script(r#"
+                    const editor=document.querySelector('.zxs-batch-editor');
+                    const sources=[...editor.querySelectorAll('.zxs-batch-scopes input')];
+                    const input=editor.querySelector('.zxs-batch-entry input');
+                    return {ready:input&&!input.disabled&&sources.length===1&&sources[0].checked&&!sources[0].disabled,
+                        sources:sources.length,error:editor.querySelector('.zxs-inline-error').textContent};
+                "#)?;
+                if scope["ready"] == true {
+                    Ok(())
+                } else {
+                    Err(format!("registered source scope is not ready: {scope}").into())
+                }
             })?;
+            no_write(browser, 4)?;
+            println!(
+                "PASS real source-scope registration and selected-entry read before batch NFC review"
+            );
             browser.script("const input=document.querySelector('.zxs-batch-entry input');input.value='e\\u0301';input.dispatchEvent(new Event('input',{bubbles:true}));return true")?;
             browser.click(&browser.button("Apply selected operation", "执行所选操作")?)?;
             browser.button("Confirm NFC name", "确认使用 NFC 名称")?;
             no_write(browser, 4)?;
             browser.click(&browser.button("Confirm NFC name", "确认使用 NFC 名称")?)?;
             wait_for("batch submits only the confirmed target name", || {
-                if browser.script("const p=window.__zxsNaming.writes;return p.length===5&&p[4].body.items.every(item=>item.target.path.endsWith('/é'))&&!document.querySelector('.zxs-batch-entry input').disabled")? == true { Ok(()) } else { Err("batch confirmation request missing".into()) }
+                if browser.script("const p=window.__zxsNaming.writes;return p.length===5&&p[4].body.items.length===1&&p[4].body.items[0].source.path==='browser-smoke.txt'&&p[4].body.items[0].target.path==='é'&&!document.querySelector('.zxs-batch-entry input').disabled")? == true { Ok(()) } else { Err("batch confirmation request missing".into()) }
             })?;
             browser.click(&browser.button("Cancel", "取消")?)?;
             browser.click(&checkbox)?;

@@ -19,7 +19,8 @@ fn fixture_with_members(
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     for (disk, member) in config.disks.iter_mut().zip(metadata_members) {
         disk.metadata_member = member;
     }
@@ -30,7 +31,7 @@ fn fixture_with_members(
             "P01",
             3,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     if retained > 0 {
@@ -40,14 +41,14 @@ fn fixture_with_members(
         let mut parent = original.commit_id.clone();
         for _ in 0..retained {
             let mut commit = original.clone();
-            commit.commit_id = new_id("commit");
+            commit.commit_id = new_id("commit").unwrap();
             commit.parent_commit_ids = vec![parent];
             commit.sequence = next.sequence;
             parent = commit.commit_id.clone();
             next.commits.insert(commit.commit_id.clone(), commit);
         }
         let mut result = next.operations.values().next().unwrap().clone();
-        result.operation_id = storage_contract::OperationId::generate();
+        result.operation_id = storage_contract::OperationId::generate().unwrap();
         result.sequence = next.sequence;
         next.operations.insert(result.operation_id, result.clone());
         engine.persist(next, Vec::new(), result).unwrap();
@@ -69,7 +70,7 @@ fn fixture_with_members(
             b"retained full bytes",
         )
         .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     engine.inject_fault_once(point);
     assert!(
         engine
@@ -539,7 +540,7 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
             path
         } else {
             // Admit the directory identity so the failure comes from the manifest.
-            let path = root.join("workspaces").join(new_id("ws"));
+            let path = root.join("workspaces").join(new_id("ws").unwrap());
             fs::create_dir_all(&path).unwrap();
             fs::write(path.join("workspace.json"), b"{}").unwrap();
             path
@@ -613,7 +614,7 @@ fn degraded_publication_stays_read_only_when_local_reconciliation_fails() {
                     "P01",
                     3,
                     "alice",
-                    storage_contract::OperationId::generate()
+                    storage_contract::OperationId::generate().unwrap()
                 )
                 .unwrap_err()
                 .code(),
@@ -858,7 +859,7 @@ fn prepare_only_failure_reserves_its_slot_and_is_not_an_indeterminate_operation(
     let result = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "alice".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

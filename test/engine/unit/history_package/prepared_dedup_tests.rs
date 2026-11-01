@@ -56,7 +56,8 @@ fn real_histories_share_one_empty_page_and_rebuild_exact_roots() {
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     for name in ["first", "second", "third"] {
         engine
@@ -65,7 +66,7 @@ fn real_histories_share_one_empty_page_and_rebuild_exact_roots() {
                 "P01",
                 1,
                 "dedup-test",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -94,7 +95,8 @@ fn real_histories_share_one_empty_page_and_rebuild_exact_roots() {
         temp.path().join("fresh-one"),
         temp.path().join("fresh-two"),
         temp.path().join("fresh-three"),
-    ]);
+    ])
+    .unwrap();
     install_and_check_roots(&objects, &targets.disks);
     let (reused_roots, reused) =
         prepare_history_manifests_incremental(state, state, &roots, &targets.disks, MAX_METADATA)
@@ -130,7 +132,8 @@ fn failed_member_and_later_invocations_do_not_cache_installation() {
         temp.path().join("one"),
         temp.path().join("two"),
         temp.path().join("three"),
-    ]);
+    ])
+    .unwrap();
     let plan = || {
         unique_prepared_objects(vec![
             object("state-page", json!({})),
@@ -175,7 +178,8 @@ fn existing_object_syncs_in_isolated_child() {
         .unwrap()
         .parse()
         .unwrap();
-    let config = Config::development([root.join("one"), root.join("two"), root.join("three")]);
+    let config =
+        Config::development([root.join("one"), root.join("two"), root.join("three")]).unwrap();
     let plan = || {
         unique_prepared_objects(vec![
             object("state-page", json!({})),

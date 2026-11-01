@@ -7,7 +7,7 @@ fn mkdir(engine: &mut Engine, repo: &Repository, path: &str) {
             NamespaceOperation::parse(storage_contract::NamespaceOperationKind::Mkdir, path, None)
                 .unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
 }
@@ -15,13 +15,13 @@ fn mkdir(engine: &mut Engine, repo: &Repository, path: &str) {
 fn place(engine: &mut Engine, repo: &Repository, path: &str) {
     engine
         .update_placement_rule(PlacementRuleUpdate {
-            rule_id: &new_id("rule"),
+            rule_id: &new_id("rule").unwrap(),
             repository_id: &repo.repository_id,
             path_prefix: path,
             primary_slot_id: "P02",
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
 }
@@ -41,7 +41,7 @@ fn configure(
         backup_prefixes: &prefixes(values),
         expected_generation: generation,
         principal: "admin",
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
     })
 }
 
@@ -242,7 +242,7 @@ fn sibling_prefixes_and_other_repositories_do_not_add_parent_routes() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     place(&mut engine, &other, "docs/empty");
@@ -278,13 +278,13 @@ fn shadowed_ancestor_placement_does_not_add_a_phantom_route() {
     place(&mut engine, &repo, "docs");
     engine
         .update_placement_rule(PlacementRuleUpdate {
-            rule_id: &new_id("rule"),
+            rule_id: &new_id("rule").unwrap(),
             repository_id: &repo.repository_id,
             path_prefix: "docs/selected",
             primary_slot_id: "P01",
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let read = engine

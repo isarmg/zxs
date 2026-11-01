@@ -71,14 +71,14 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
                     .repositories
                     .get_mut(&repo.repository_id)
                     .unwrap()
-                    .repository_id = new_id("repo")
+                    .repository_id = new_id("repo").unwrap()
             }
             HistoryKey => {
                 state
                     .histories
                     .get_mut(&repo.history_tree_id)
                     .unwrap()
-                    .history_tree_id = new_id("history")
+                    .history_tree_id = new_id("history").unwrap()
             }
             MissingRepository => {
                 state.repositories.remove(&repo.repository_id);
@@ -91,17 +91,18 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
                     .repositories
                     .get_mut(&repo.repository_id)
                     .unwrap()
-                    .main_branch_id = new_id("br")
+                    .main_branch_id = new_id("br").unwrap()
             }
             MissingHead => {
                 state
                     .branches
                     .get_mut(&repo.main_branch_id)
                     .unwrap()
-                    .head_commit_id = new_id("commit")
+                    .head_commit_id = new_id("commit").unwrap()
             }
             MissingParent => {
-                state.commits.get_mut(&head).unwrap().parent_commit_ids = vec![new_id("commit")]
+                state.commits.get_mut(&head).unwrap().parent_commit_ids =
+                    vec![new_id("commit").unwrap()]
             }
             Cycle => state.commits.get_mut(&head).unwrap().parent_commit_ids = vec![head.clone()],
             MultipleParents => {
@@ -110,15 +111,15 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
             }
             OrphanCommit => {
                 let mut commit = state.commits[&head].clone();
-                commit.commit_id = new_id("commit");
-                commit.history_tree_id = new_id("history");
+                commit.commit_id = new_id("commit").unwrap();
+                commit.history_tree_id = new_id("history").unwrap();
                 state.commits.insert(commit.commit_id.clone(), commit);
             }
             OrphanVersion => {
                 let mut orphan = state.versions[&version].clone();
-                orphan.version_id = new_id("ver");
-                orphan.file_id = new_id("file");
-                orphan.history_tree_id = new_id("history");
+                orphan.version_id = new_id("ver").unwrap();
+                orphan.file_id = new_id("file").unwrap();
+                orphan.history_tree_id = new_id("history").unwrap();
                 let mut placement = state.placements[&version].clone();
                 placement.version_id = orphan.version_id.clone();
                 state
@@ -132,21 +133,25 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
             OrphanContentState => {
                 state
                     .content_states
-                    .insert(new_id("ver"), ContentState::Available);
+                    .insert(new_id("ver").unwrap(), ContentState::Available);
             }
             MissingPlacement => {
                 state.placements.remove(&version);
             }
             OrphanFileSelection => {
-                state.file_selections.insert(new_id("file"), new_id("br"));
+                state
+                    .file_selections
+                    .insert(new_id("file").unwrap(), new_id("br").unwrap());
             }
             OrphanFileNote => {
-                state.file_notes.insert(new_id("file"), "note".into());
+                state
+                    .file_notes
+                    .insert(new_id("file").unwrap(), "note".into());
             }
             OrphanDirectorySelection => {
                 state
                     .directory_selections
-                    .insert(new_id("entry"), new_id("dbr"));
+                    .insert(new_id("entry").unwrap(), new_id("dbr").unwrap());
             }
             OrphanContext => {
                 let context = FileContext {
@@ -157,10 +162,12 @@ fn stored_snapshots_reject_broken_reference_closure_before_engine_admission() {
                 };
                 state
                     .file_contexts
-                    .insert(format!("{}/file.txt", new_id("repo")), context);
+                    .insert(format!("{}/file.txt", new_id("repo").unwrap()), context);
             }
             OrphanVersionNote => {
-                state.version_notes.insert(new_id("ver"), "note".into());
+                state
+                    .version_notes
+                    .insert(new_id("ver").unwrap(), "note".into());
             }
         }
         // The malformed graph has valid object hashes: this exercises reference
@@ -209,22 +216,22 @@ fn merge_ancestry_still_rejects_user_supplied_foreign_or_missing_endpoints() {
     let error = engine
         .add_merge_link(
             &repo.main_branch_id,
-            &new_id("commit"),
+            &new_id("commit").unwrap(),
             &repo.main_branch_id,
             &head,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::CommitNotFound);
     let error = engine
         .add_merge_link(
-            &new_id("br"),
+            &new_id("br").unwrap(),
             &head,
             &repo.main_branch_id,
             &head,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::BranchNotFound);
@@ -242,7 +249,7 @@ fn stored_snapshot_rejects_file_identity_reused_across_histories() {
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     save(&mut engine, &second.main_branch_id, "second.txt", b"second");

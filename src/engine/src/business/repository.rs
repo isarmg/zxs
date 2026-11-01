@@ -199,10 +199,10 @@ impl Engine {
                         "repository name already exists",
                     ));
                 }
-                let repo_id = new_id("repo");
-                let history_id = new_id("history");
-                let branch_id = new_id("br");
-                let commit_id = new_id("commit");
+                let repo_id = new_id("repo")?;
+                let history_id = new_id("history")?;
+                let branch_id = new_id("br")?;
+                let commit_id = new_id("commit")?;
                 let repository = Repository {
                     repository_id: repo_id.clone(),
                     smb_enabled: true,
@@ -252,7 +252,7 @@ impl Engine {
                         history_tree_id: history_id.clone(),
                         kind: "root".into(),
                         parent_commit_ids: Vec::new(),
-                        tree_id: new_id("tree"),
+                        tree_id: new_id("tree")?,
                         sequence: state.sequence,
                         operation_id: operation,
                         author: principal.into(),

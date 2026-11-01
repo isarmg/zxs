@@ -17,7 +17,7 @@ fn decode(body: Value, route: NoteRoute) -> Result<UpdateNote, ApiError> {
 }
 #[test]
 fn note_routes_distinguish_clear_from_missing_null_and_preserve_error_order() {
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     for route in [NoteRoute::File, NoteRoute::Version, NoteRoute::Node] {
         for value in ["", "  ", "Cafe\u{301}"] {
             let command = decode(json!({"note":value,"operation_id":operation}), route).unwrap();
@@ -57,7 +57,7 @@ fn note_routes_distinguish_clear_from_missing_null_and_preserve_error_order() {
 fn note_routes_preserve_contract_error_details_and_sources() {
     for route in [NoteRoute::File, NoteRoute::Version, NoteRoute::Node] {
         let error = decode(
-            json!({"note":"x".repeat(129),"operation_id":storage_contract::OperationId::generate()}),
+            json!({"note":"x".repeat(129),"operation_id":storage_contract::OperationId::generate().unwrap()}),
             route,
         ).err().unwrap();
         crate::tests::assert_contract_input(

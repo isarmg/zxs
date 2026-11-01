@@ -26,14 +26,14 @@ impl Fixture {
         let old_session = source_auth.login("admin", PASSWORD).unwrap().token;
         let mut engine = storage_engine::Engine::initialize(
             &source,
-            storage_contract::Config::development(vec![disk.clone()]),
+            storage_contract::Config::development(vec![disk.clone()]).unwrap(),
         )
         .unwrap();
         engine
             .persist_auth_state(
                 source_auth.snapshot().unwrap(),
                 "system_auth",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         drop(engine);

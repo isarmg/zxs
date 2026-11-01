@@ -9,7 +9,8 @@ fn historical_completion_rejects_invalid_persisted_fence_instead_of_leaving_work
         temp.path().join("primary"),
         temp.path().join("backup"),
         temp.path().join("tertiary"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -17,7 +18,7 @@ fn historical_completion_rejects_invalid_persisted_fence_instead_of_leaving_work
             "P01",
             1,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let head = engine.state.branches[&repo.main_branch_id]
@@ -44,7 +45,7 @@ fn historical_completion_rejects_invalid_persisted_fence_instead_of_leaving_work
         .unwrap();
     let sealed = engine.workspace(&workspace.workspace_id).unwrap();
     engine
-        .commit_historical_save_plan(&plan.plan_id, "admin", OperationId::generate())
+        .commit_historical_save_plan(&plan.plan_id, "admin", OperationId::generate().unwrap())
         .unwrap();
     let mut recovered = sealed.clone();
     assert!(engine.reconcile_workspace_receipt(&mut recovered).unwrap());
@@ -244,7 +245,8 @@ fn workspace_scan_reads_the_admitted_private_base_after_path_replacement() {
 fn workspace_fixture(disks: usize) -> (tempfile::TempDir, Engine, Workspace) {
     let temp = tempfile::tempdir().unwrap();
     let config =
-        Config::development((0..disks).map(|index| temp.path().join(format!("disk-{index}"))));
+        Config::development((0..disks).map(|index| temp.path().join(format!("disk-{index}"))))
+            .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -252,7 +254,7 @@ fn workspace_fixture(disks: usize) -> (tempfile::TempDir, Engine, Workspace) {
             "P01",
             1,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine

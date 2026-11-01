@@ -248,7 +248,7 @@ impl UploadPreparation {
         }
         let scratch = self
             .directory
-            .join(format!(".zxs-upload-{}.prepared", new_id("req")));
+            .join(format!(".zxs-upload-{}.prepared", new_id("req")?));
         let mut prepared = PreparedUpload {
             plan: self,
             size: 0,
@@ -508,7 +508,7 @@ impl Engine {
                 )
             })?;
         let w = Workspace {
-            workspace_id: new_id("ws"),
+            workspace_id: new_id("ws")?,
             purpose: WorkspacePurpose::Normal,
             branch_id: branch_id.into(),
             principal: principal.into(),
@@ -580,8 +580,8 @@ impl Engine {
             .files
             .values()
             .find(|f| f.path.key() == path.key())
-            .map(|f| f.item_id.clone())
-            .unwrap_or_else(|| new_id("entry"));
+            .map(|f| Ok(f.item_id.clone()))
+            .unwrap_or_else(|| new_id("entry"))?;
         self.stage_file_as_parsed(workspace, &item, &path, source)
     }
     pub fn stage_file_as(
@@ -1350,7 +1350,7 @@ impl crate::engine::PlanningContext<'_> {
             crate::container_storage::version_identity(state, file_id, path, &digest)?;
         let version = FileVersion {
             history_tree_id: history.into(),
-            version_id: new_id("ver"),
+            version_id: new_id("ver")?,
             file_id: file_id.into(),
             creation_primary_slot_id: primary.into(),
             logical_size: size,
@@ -1532,7 +1532,7 @@ impl crate::engine::PlanningContext<'_> {
                         }
                     }
                 }
-                let commit_id = new_id("commit");
+                let commit_id = new_id("commit")?;
                 let mut written_files = std::collections::BTreeSet::new();
                 let mut written_paths = Vec::new();
                 for file in w.files.values() {
@@ -1542,7 +1542,7 @@ impl crate::engine::PlanningContext<'_> {
                     let location = existing.as_ref().map(|entry| entry.location()).unwrap_or(&file.path);
                     let path = location.as_str();
                     written_paths.push(path.to_owned());
-                    let file_id = existing.as_ref().map(|entry| entry.file_id.clone()).unwrap_or_else(|| new_id("file"));
+                    let file_id = match existing.as_ref() { Some(entry) => entry.file_id.clone(), None => new_id("file")? };
                     super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,request.operation_id)?;
                     let file_context=directory::branch_context_at_key(state,&w.branch_id,location.key());
                     let pending_source = file_context.as_ref().and_then(|c|state.branches.get(&c.branch_id)).and_then(|b|b.pending_file_versions.get(&file_id)).cloned()
@@ -1603,7 +1603,7 @@ impl crate::engine::PlanningContext<'_> {
                     namespace_deletions: namespace::deletion_record(deleted, now()?),
                     commit_id: commit_id.clone(), history_tree_id: branch.history_tree_id.clone(),
                     kind: "content".into(), parent_commit_ids: vec![current.commit_id.clone()],
-                    tree_id: new_id("tree"), sequence: state.sequence, operation_id: request.operation_id,
+                    tree_id: new_id("tree")?, sequence: state.sequence, operation_id: request.operation_id,
                     author: request.principal.clone(), message: request.message.clone(), entries, pending_file_versions: snapshot_pending, provenance: None,
                 });
                 let target = state.branches.get_mut(&w.branch_id).expect("branch checked");

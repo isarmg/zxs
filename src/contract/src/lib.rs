@@ -50,8 +50,18 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 mod error;
 pub use error::{Error, ErrorCode};
-pub fn new_id(prefix: &str) -> String {
-    format!("{prefix}_{}", uuid::Uuid::new_v4().simple())
+/// Generate a UUID v4 identifier, preserving an operating-system entropy failure.
+pub fn new_id(prefix: &str) -> Result<String> {
+    Ok(format!("{prefix}_{}", random_uuid()?.simple()))
+}
+
+fn random_uuid() -> Result<uuid::Uuid> {
+    let mut bytes = [0; 16];
+    system_entropy::fill(&mut bytes).map_err(|source| Error::IdentifierGeneration {
+        source,
+        retryable: false,
+    })?;
+    Ok(uuid::Builder::from_random_bytes(bytes).into_uuid())
 }
 pub fn validate_id(value: &str, prefix: &str) -> Result<()> {
     let valid = value

@@ -399,7 +399,7 @@ fn repeated_normal_daemon_stops_release_same_address_and_socket() {
     drop(
         storage_engine::Engine::initialize(
             &root,
-            storage_contract::Config::development([directory.path().join("disk")]),
+            storage_contract::Config::development([directory.path().join("disk")]).unwrap(),
         )
         .unwrap(),
     );

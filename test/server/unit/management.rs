@@ -16,11 +16,11 @@ fn managed_readiness_exposes_real_index_failure_without_rejecting_published_oper
     let management = root.path().join("management");
     let mut engine = storage_engine::Engine::initialize(
         &data,
-        storage_contract::Config::development([root.path().join("disk")]),
+        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let before = engine.state().sequence;
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let index = data.join("index.sqlite");
     let projected_before = projection_failure::fail_projection(&index);
     engine
@@ -113,7 +113,7 @@ async fn missing_data_disks_leave_login_diagnostics_and_health_usable() {
     drop(
         storage_engine::Engine::initialize(
             &data,
-            storage_contract::Config::development(disks.clone()),
+            storage_contract::Config::development(disks.clone()).unwrap(),
         )
         .unwrap(),
     );
@@ -169,7 +169,7 @@ async fn missing_data_disks_leave_login_diagnostics_and_health_usable() {
         Some(token),
         Some(json!({
             "name":"Unavailable", "primary_slot_id":"P01", "target_copies":3,
-            "operation_id":storage_contract::OperationId::generate()
+            "operation_id":storage_contract::OperationId::generate().unwrap()
         })),
     )
     .await;
@@ -263,7 +263,8 @@ async fn blocked_replication_never_blocks_login_and_queued_sessions_revalidate()
                 root.path().join("d1"),
                 root.path().join("d2"),
                 root.path().join("d3"),
-            ]),
+            ])
+            .unwrap(),
         )
         .unwrap(),
     );
@@ -445,7 +446,7 @@ async fn exercise_web_setup(ids: &[&str], remove_data_disk: bool) {
     )
     .await;
     let token = login["token"].as_str().unwrap();
-    let (code, repository) = request(&app, "/api/repositories", Some(token), Some(json!({"name":"single-copy","primary_slot_id":"P01","target_copies":1,"operation_id":storage_contract::new_id("op")}))).await;
+    let (code, repository) = request(&app, "/api/repositories", Some(token), Some(json!({"name":"single-copy","primary_slot_id":"P01","target_copies":1,"operation_id":storage_contract::new_id("op").unwrap()}))).await;
     assert_eq!(code, StatusCode::OK, "{repository:?}");
     if remove_data_disk {
         drop(app);
@@ -573,7 +574,8 @@ fn managed_admission_never_falls_back_to_stale_disaster_recovery_identity() {
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let backend = Arc::new(crate::engine_backend::EngineBackend::new(engine));
@@ -617,7 +619,8 @@ fn stale_readiness_retry_waits_for_existing_engine_holders() {
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let held = std::sync::Arc::new(crate::engine_backend::EngineBackend::new(engine));
@@ -656,7 +659,7 @@ fn completed_disk_observation_releases_engine_before_retry() {
     let detached = root.path().join("detached-disk");
     let mut engine = storage_engine::Engine::initialize(
         &data,
-        storage_contract::Config::development([disk.clone()]),
+        storage_contract::Config::development([disk.clone()]).unwrap(),
     )
     .unwrap();
     let auth =
@@ -665,7 +668,7 @@ fn completed_disk_observation_releases_engine_before_retry() {
         .persist_auth_state(
             auth.snapshot().unwrap(),
             "system_auth",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     drop(auth);
@@ -768,7 +771,8 @@ async fn web_completion_requires_bound_pristine_pre_authority_setup_proof() {
                         disks["one"].clone(),
                         disks["two"].clone(),
                         disks["three"].clone(),
-                    ]),
+                    ])
+                    .unwrap(),
                 )
                 .unwrap(),
             );
@@ -942,12 +946,13 @@ async fn preset_web_setup_is_lazy_digest_bound_and_preserves_custom_configuratio
         disks["one"].clone(),
         disks["two"].clone(),
         disks["three"].clone(),
-    ]);
+    ])
+    .unwrap();
     let mut extra = config.disks[2].clone();
     extra.slot_id = "D01".into();
     extra.level = 4;
     extra.upstream_slot_id = Some("C01".into());
-    extra.disk_id = storage_contract::new_id("disk");
+    extra.disk_id = storage_contract::new_id("disk").unwrap();
     extra.root = disks["four"].clone();
     extra.metadata_member = false;
     config.disks.push(extra);
@@ -1085,7 +1090,7 @@ async fn background_reopen_uses_local_workspace_limits_and_authenticated_capacit
     let root = tempfile::tempdir().unwrap();
     let data = root.path().join("pool");
     let management = root.path().join("management");
-    let mut config = storage_engine::Config::development([root.path().join("disk")]);
+    let mut config = storage_engine::Config::development([root.path().join("disk")]).unwrap();
     config.max_retained_workspaces = 1;
     config.max_retained_workspaces_per_principal = 1;
     let mut engine = storage_engine::Engine::initialize(&data, config.clone()).unwrap();
@@ -1095,7 +1100,7 @@ async fn background_reopen_uses_local_workspace_limits_and_authenticated_capacit
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -1203,7 +1208,7 @@ fn below_baseline_runtime_limits_fail_in_background_without_blocking_management(
     drop(
         storage_engine::Engine::initialize(
             &data,
-            storage_engine::Config::development([root.path().join("disk")]),
+            storage_engine::Config::development([root.path().join("disk")]).unwrap(),
         )
         .unwrap(),
     );

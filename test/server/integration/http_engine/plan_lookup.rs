@@ -7,18 +7,18 @@ async fn absent_plan_returns_not_found_without_publishing_an_operation() {
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     let baseline = success(&app, &token, "GET", "/api/events", None).await;
-    let plan = new_id("plan");
+    let plan = new_id("plan").unwrap();
     for (method, suffix, body) in [
         ("GET", "", None),
         (
             "POST",
             "/cancel",
-            Some(json!({"operation_id":new_id("op")})),
+            Some(json!({"operation_id":new_id("op").unwrap()})),
         ),
         (
             "POST",
             "/commit",
-            Some(json!({"operation_id":new_id("op"),"plan_digest":"0".repeat(64)})),
+            Some(json!({"operation_id":new_id("op").unwrap(),"plan_digest":"0".repeat(64)})),
         ),
     ] {
         let (status, rejected) = send(
@@ -45,7 +45,7 @@ async fn plan_read_and_cancel_preserve_raw_shapes_and_permanent_replay() {
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     let repo = success(&app, &token, "POST", "/api/repositories", Some(json!({
-        "name":"Plan HTTP", "primary_slot_id":"P01", "target_copies":1, "operation_id":new_id("op")
+        "name":"Plan HTTP", "primary_slot_id":"P01", "target_copies":1, "operation_id":new_id("op").unwrap()
     }))).await;
     let branch = success(
         &app,
@@ -64,7 +64,7 @@ async fn plan_read_and_cancel_preserve_raw_shapes_and_permanent_replay() {
         plan
     );
     let cancel = format!("{path}/cancel");
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let body = json!({"operation_id":operation});
     for (invalid, code) in [
         (
@@ -74,7 +74,7 @@ async fn plan_read_and_cancel_preserve_raw_shapes_and_permanent_replay() {
         (json!({"operation_id":"bad"}), "INVALID_ID"),
         (json!({}), "INVALID_REQUEST"),
         (
-            json!({"operation_id":operation,"plan_id":new_id("plan")}),
+            json!({"operation_id":operation,"plan_id":new_id("plan").unwrap()}),
             "INVALID_REQUEST",
         ),
     ] {
@@ -100,7 +100,7 @@ async fn plan_read_and_cancel_preserve_raw_shapes_and_permanent_replay() {
         Some(&token),
         "POST",
         &cancel,
-        Some(json!({"operation_id":new_id("op")})),
+        Some(json!({"operation_id":new_id("op").unwrap()})),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
@@ -129,7 +129,7 @@ async fn cancel_preserves_missing_plan_before_operation_errors_but_after_unknown
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let path = format!("/api/plans/{}/cancel", new_id("plan"));
+    let path = format!("/api/plans/{}/cancel", new_id("plan").unwrap());
     for body in [
         json!({}),
         json!({"operation_id":"bad"}),
@@ -156,7 +156,7 @@ async fn commit_preserves_required_fields_before_lookup_and_format_errors_after_
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let path = format!("/api/plans/{}/commit", new_id("plan"));
+    let path = format!("/api/plans/{}/commit", new_id("plan").unwrap());
     for (body, expected) in [
         (json!({}), "INVALID_REQUEST"),
         (
@@ -196,7 +196,8 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
                 root.path().join("d1"),
                 root.path().join("d2"),
                 root.path().join("d3"),
-            ]),
+            ])
+            .unwrap(),
         )
         .unwrap();
         let repo = engine
@@ -205,7 +206,7 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
                 "P01",
                 3,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let save = |engine: &mut Engine, bytes: &[u8]| {
@@ -218,7 +219,7 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
             engine
                 .commit_workspace(CommitRequest {
                     workspace_id: workspace.workspace_id,
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                     principal: "admin".into(),
                     expected_head: workspace.base_head,
                     fencing_token: workspace.fencing_token,
@@ -266,7 +267,7 @@ async fn committed_purge_and_split_http_retry_resume_cleanup_before_returning_re
             .unwrap();
         let app = storage_server::router(backend, auth, ServerConfig::new(&system)).unwrap();
         let token = login(&app, "admin", "integration-test-password").await;
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         let path = format!("/api/plans/{}/commit", plan.plan_id);
         let body = json!({"operation_id":operation,"plan_digest":plan.digest});
         for wrong in [

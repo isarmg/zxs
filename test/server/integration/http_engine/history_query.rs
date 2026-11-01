@@ -265,7 +265,7 @@ async fn history_window_roots_change_with_metadata_but_not_authentication() {
         &token,
         "POST",
         &format!("/api/file-manager/files/{file}/metadata"),
-        Some(json!({"note":"changed history metadata","operation_id":new_id("op")})),
+        Some(json!({"note":"changed history metadata","operation_id":new_id("op").unwrap()})),
     )
     .await;
     let current = success(&app, &session, "GET", &endpoint(file, &[]), None).await;

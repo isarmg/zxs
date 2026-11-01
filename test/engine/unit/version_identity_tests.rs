@@ -18,7 +18,7 @@ fn version_builds_advance_inside_one_candidate_and_discard_with_that_candidate()
     let fixture = Fixture::new();
     let mut engine = fixture.initialize();
     let repo = repository(&mut engine, 1);
-    let file = new_id("file");
+    let file = new_id("file").unwrap();
     let path = name_policy::PortablePath::parse("file.txt").unwrap();
     let source = fixture.temp.path().join("source");
     fs::write(&source, b"body").unwrap();
@@ -83,7 +83,7 @@ fn purged_versions_remain_numbered_after_reopen_and_replay() {
         .commit_plan(
             &purge.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let old = engine.state.versions[&first.version_id].clone();
@@ -105,7 +105,7 @@ fn purged_versions_remain_numbered_after_reopen_and_replay() {
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -150,7 +150,7 @@ fn mixed_split_and_package_restore_preserve_the_numbering_basis() {
         .commit_plan(
             &purge.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let old_versions = engine.state.versions.clone();
@@ -161,7 +161,7 @@ fn mixed_split_and_package_restore_preserve_the_numbering_basis() {
         .commit_plan(
             &split.plan_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let history = result.history_tree_id.unwrap();
@@ -221,7 +221,7 @@ fn mixed_split_and_package_restore_preserve_the_numbering_basis() {
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     for (id, version) in &imported {

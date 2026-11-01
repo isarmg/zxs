@@ -631,7 +631,7 @@ impl Engine {
                     }
                 }
                 let policy = ProtectionPolicy {
-                    policy_id: previous.as_ref().map(|policy| policy.policy_id.clone()).unwrap_or_else(|| new_id("policy")),
+                    policy_id: match previous.as_ref() { Some(policy) => policy.policy_id.clone(), None => new_id("policy")? },
                     repository_id: repository.into(), path_prefix: scope.path.clone(), target_copies: copies,
                     inheritable: true,
                     scope_directory_id: (scope.kind == NamespaceEntryKind::Directory).then_some(scope.id.clone()),
@@ -645,7 +645,7 @@ impl Engine {
                         .map(|(file, _)| file.clone()).collect::<Vec<_>>();
                     if !detached.is_empty() {
                         let mut retained = previous;
-                        retained.policy_id = new_id("policy");
+                        retained.policy_id = new_id("policy")?;
                         retained.inheritable = false;
                         for file in detached {
                             state.file_backup_policies.insert(file, retained.policy_id.clone());

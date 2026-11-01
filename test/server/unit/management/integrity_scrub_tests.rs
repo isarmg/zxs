@@ -28,16 +28,18 @@ impl Fixture {
         let directory = tempfile::tempdir().unwrap();
         let data = directory.path().join("system");
         let management = directory.path().join("management");
-        let mut engine =
-            Engine::initialize(&data, Config::development([directory.path().join("disk")]))
-                .unwrap();
+        let mut engine = Engine::initialize(
+            &data,
+            Config::development([directory.path().join("disk")]).unwrap(),
+        )
+        .unwrap();
         engine
             .create_repository(
                 &RepositoryName::parse("scrub-fixture").unwrap(),
                 "P01",
                 1,
                 "admin",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         drop(AuthStore::initialize_management(&management, "admin", PASSWORD).unwrap());
@@ -141,7 +143,7 @@ fn terminal_diagnostics_keep_real_read_totals_and_the_running_clock() {
         engine
             .commit_workspace(storage_engine::CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -445,7 +447,7 @@ fn completed_success_is_not_refreshed_by_writes_and_expires_from_scan_start() {
                 name: RepositoryName::parse("after-scrub").unwrap(),
                 primary_slot_id: "P01".into(),
                 target_copies: 1,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
             },
         )
         .unwrap();
@@ -645,7 +647,13 @@ async fn actual_http_controls_expose_baseline_progress_and_keep_check_unchanged(
     let directory = tempfile::tempdir().unwrap();
     let data = directory.path().join("system");
     let management = directory.path().join("management");
-    drop(Engine::initialize(&data, Config::development([directory.path().join("disk")])).unwrap());
+    drop(
+        Engine::initialize(
+            &data,
+            Config::development([directory.path().join("disk")]).unwrap(),
+        )
+        .unwrap(),
+    );
     drop(AuthStore::initialize_management(&management, "admin", PASSWORD).unwrap());
     let (backend, auth) = super::super::open_service_with_options(
         &data,
@@ -1004,7 +1012,7 @@ fn local_proof_failure_keeps_shared_graph_coverage_distinct_from_full_health() {
         engine
             .commit_workspace(storage_engine::CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -1045,7 +1053,7 @@ fn local_proof_failure_keeps_shared_graph_coverage_distinct_from_full_health() {
                 name: RepositoryName::parse("unrelated-after-proof-fault").unwrap(),
                 primary_slot_id: "P01".into(),
                 target_copies: 1,
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
             },
         )
         .expect("local proof health failure must not fence unrelated writes");

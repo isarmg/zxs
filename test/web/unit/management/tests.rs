@@ -207,3 +207,39 @@ fn an_already_ready_retry_response_retains_refresh_demand_for_the_following_stat
     assert_eq!(state.files.disks_generation, 1);
     assert!(needs_disk_refresh(&state, was_readable));
 }
+
+#[test]
+fn automatic_health_navigation_preserves_registered_editors_and_unknown_operations() {
+    for page in [crate::ui::Page::Files, crate::ui::Page::Details] {
+        for storage in ["unavailable", "recovery_required"] {
+            let mut state = State {
+                authenticated: true,
+                page,
+                ..Default::default()
+            };
+            state.management.storage = Storage::Ready;
+            state.files.history_editors = 1;
+            state
+                .files
+                .operations
+                .push(crate::files::FileOperation::unknown("original"));
+            let response = json!({"authentication":"ready","storage":{
+                "state":storage,"retryable":true,"recovering":false
+            }});
+            assert!(!accept_status(&mut state, &response));
+            assert_eq!(
+                state.page, page,
+                "automatic navigation must not dispose the draft owner"
+            );
+            assert_eq!(state.files.history_editors, 1);
+            assert!(state.management.retryable);
+            assert!(!state.management.storage.writable());
+            assert!(crate::files::pending(&state));
+            assert_eq!(state.files.operations[0].id(), "original");
+            // Once the editor is explicitly closed, ordinary automatic health navigation remains.
+            state.files.history_editors = 0;
+            accept_status(&mut state, &response);
+            assert_eq!(state.page, crate::ui::Page::Health);
+        }
+    }
+}

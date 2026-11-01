@@ -624,13 +624,13 @@ impl Engine {
             ));
         }
         let mut plan = RecoveryPlan {
-            recovery_id: new_id("recovery"),
+            recovery_id: new_id("recovery")?,
             digest: String::new(),
             operation_id: operation,
             candidate_hash: hash.clone(),
             principal: principal.into(),
             reason: reason.into(),
-            isolation_generation: new_id("fence"),
+            isolation_generation: new_id("fence")?,
             sequence: candidate.sequence,
             version_protection,
             loss_details,

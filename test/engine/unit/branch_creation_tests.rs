@@ -30,7 +30,7 @@ fn fresh_branch_matches_complete_receipt_and_canonical_shape() {
             .map(|entry| (entry.file_id.clone(), entry.version_id.clone()))
             .collect::<std::collections::BTreeMap<_, _>>();
         let name = BranchName::parse("Café").unwrap();
-        let operation = OperationId::generate();
+        let operation = OperationId::generate().unwrap();
         let created = engine
             .create_branch(&source, &name, "admin", operation)
             .unwrap();
@@ -114,7 +114,7 @@ fn branch_replay_rejects_damaged_receipt_with_json_source_not_live_fallback() {
         .root_commit_id
         .clone();
     let name = BranchName::parse("side").unwrap();
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let created = engine
         .create_branch(&source, &name, "admin", operation)
         .unwrap();
@@ -162,7 +162,7 @@ fn branch_creation_keeps_receipt_and_new_write_error_priority() {
         .root_commit_id
         .clone();
     let name = BranchName::parse("side").unwrap();
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let original = engine
         .create_branch(&source, &name, "admin", operation)
         .unwrap();
@@ -207,14 +207,14 @@ fn branch_creation_keeps_receipt_and_new_write_error_priority() {
             &source[..],
             "side",
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
             ErrorCode::RecoveryRequired,
         ),
         (
             "missing",
             "side",
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
             ErrorCode::RecoveryRequired,
         ),
     ] {
@@ -229,14 +229,14 @@ fn branch_creation_keeps_receipt_and_new_write_error_priority() {
     engine.blocked = false;
     assert_eq!(
         engine
-            .create_branch("missing", &name, "admin", OperationId::generate())
+            .create_branch("missing", &name, "admin", OperationId::generate().unwrap())
             .unwrap_err()
             .code(),
         ErrorCode::CommitNotFound
     );
     assert_eq!(
         engine
-            .create_branch(&source, &name, "admin", OperationId::generate())
+            .create_branch(&source, &name, "admin", OperationId::generate().unwrap())
             .unwrap_err()
             .code(),
         ErrorCode::NameCollision
@@ -261,7 +261,7 @@ fn fresh_branch_is_not_returned_before_publication_and_recovery_replays_once() {
             .commit_id
             .unwrap();
         let name = BranchName::parse("side").unwrap();
-        let operation = OperationId::generate();
+        let operation = OperationId::generate().unwrap();
         let branches = engine.state().branches.len();
         let operations = engine.state().operations.len();
         let before = canonical_json(engine.state()).unwrap();
@@ -333,7 +333,7 @@ fn failed_receipt_candidate_keeps_published_values_and_sibling_snapshot_isolated
     let published = engine.state().clone();
     let sibling = published.clone();
     let before = canonical_json(&published).unwrap();
-    let rejected_id = OperationId::generate();
+    let rejected_id = OperationId::generate().unwrap();
     let result = engine.plan_mutation_digest(
         "test.receipt-isolation",
         "admin",
@@ -381,7 +381,7 @@ fn failed_receipt_candidate_keeps_published_values_and_sibling_snapshot_isolated
             &source,
             &BranchName::parse("after rejection").unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -401,7 +401,7 @@ fn old_branch_receipt_replays_after_later_writes_and_restart_without_new_events(
         .root_commit_id
         .clone();
     let name = BranchName::parse("original").unwrap();
-    let old_id = OperationId::generate();
+    let old_id = OperationId::generate().unwrap();
     let original = engine
         .create_branch(&source, &name, "admin", old_id)
         .unwrap();
@@ -414,7 +414,7 @@ fn old_branch_receipt_replays_after_later_writes_and_restart_without_new_events(
                 &source,
                 &BranchName::parse(&format!("later {ordinal}")).unwrap(),
                 "admin",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         assert_eq!(

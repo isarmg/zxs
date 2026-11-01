@@ -10,7 +10,13 @@ use storage_engine::{
 fn pool() -> tempfile::TempDir {
     let temporary = tempfile::tempdir().unwrap();
     let disks = ["P01", "B01", "C01"].map(|slot| temporary.path().join(slot));
-    drop(Engine::initialize(&temporary.path().join("pool"), Config::development(disks)).unwrap());
+    drop(
+        Engine::initialize(
+            &temporary.path().join("pool"),
+            Config::development(disks).unwrap(),
+        )
+        .unwrap(),
+    );
     temporary
 }
 

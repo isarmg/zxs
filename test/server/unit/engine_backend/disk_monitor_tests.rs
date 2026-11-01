@@ -54,7 +54,8 @@ fn unmounted_member_capacity_is_unknown_in_management_payload() {
         temporary.path().join("d1"),
         temporary.path().join("d2"),
         temporary.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let engine =
         storage_engine::Engine::initialize(&temporary.path().join("system"), config.clone())
             .unwrap();

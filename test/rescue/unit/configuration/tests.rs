@@ -4,7 +4,7 @@ fn registration(root: &Path, config: std::path::PathBuf) -> Command {
     Command::RegisterDisk {
         config,
         slot: "D01".into(),
-        disk_id: storage_engine::new_id("disk"),
+        disk_id: storage_engine::new_id("disk").unwrap(),
         path: root.join("fourth"),
         level: 1,
         upstream: None,
@@ -18,7 +18,8 @@ fn registering_a_disk_keeps_an_exact_backup_and_atomically_replaces_the_draft() 
         root.path().join("p"),
         root.path().join("b"),
         root.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let path = root.path().join("config.json");
     let original = json_codec::to_vec(&draft).unwrap();
     private_io::write_new(&path, &original).unwrap();
@@ -38,13 +39,14 @@ fn different_configuration_extensions_keep_independent_registration_backups() {
         root.path().join("p"),
         root.path().join("b"),
         root.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let first = root.path().join("config.json");
     let second = root.path().join("config.draft");
     let original = json_codec::to_vec(&draft).unwrap();
     private_io::write_new(&first, &original).unwrap();
     let mut other = draft.clone();
-    other.pool_id = storage_engine::new_id("pool");
+    other.pool_id = storage_engine::new_id("pool").unwrap();
     let other_original = json_codec::to_vec(&other).unwrap();
     private_io::write_new(&second, &other_original).unwrap();
     run(registration(root.path(), first)).unwrap();
@@ -86,7 +88,8 @@ fn oversized_backup_name_fails_without_changing_the_draft() {
         root.path().join("p"),
         root.path().join("b"),
         root.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let path = root.path().join("c".repeat(250));
     let original = json_codec::to_vec(&draft).unwrap();
     private_io::write_new(&path, &original).unwrap();
@@ -104,7 +107,8 @@ fn non_utf8_registration_path_is_rejected_before_any_write() {
         root.path().join("p"),
         root.path().join("b"),
         root.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let path = root
         .path()
         .join(std::ffi::OsString::from_vec(b"config-\xff.json".to_vec()));
@@ -123,7 +127,8 @@ fn repeated_registration_keeps_the_immediately_previous_draft() {
         root.path().join("p"),
         root.path().join("b"),
         root.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let path = root.path().join("config.json");
     private_io::write_new(&path, &json_codec::to_vec(&draft).unwrap()).unwrap();
     run(registration(root.path(), path.clone())).unwrap();
@@ -147,7 +152,8 @@ fn invalid_upstream_level_is_an_error_and_never_modifies_the_draft() {
         root.path().join("p"),
         root.path().join("b"),
         root.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     draft.disks[0].level = u32::MAX;
     let path = root.path().join("config.json");
     let original = json_codec::to_vec(&draft).unwrap();

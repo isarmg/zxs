@@ -13,7 +13,8 @@ fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
         temp.path().join("a"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     for n in 0..6 {
         engine
@@ -22,7 +23,7 @@ fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
                 "P01",
                 3,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -153,7 +154,7 @@ fn cold_replay_reuses_member_specific_receipts_across_decision_slots() {
                 "P01",
                 3,
                 "admin",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -239,7 +240,7 @@ fn save_file(engine: &mut Engine, branch: &str, name: &str, bytes: &[u8]) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -413,7 +414,7 @@ fn missing_local_publication_proof_falls_back_and_repairs() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -525,7 +526,7 @@ fn sealed_suffix_replays_only_new_decision_and_refreshes_checkpoint() {
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let expected = canonical_json(engine.state()).unwrap();

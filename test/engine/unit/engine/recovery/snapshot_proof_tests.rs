@@ -10,7 +10,8 @@ fn retained_snapshot_mismatch_rejects_before_repair_or_visible_state_change() {
             Config::development([
                 temporary.path().join("member-a"),
                 temporary.path().join("member-b"),
-            ]),
+            ])
+            .unwrap(),
         )
         .unwrap();
         for name in ["first", "second"] {
@@ -20,7 +21,7 @@ fn retained_snapshot_mismatch_rejects_before_repair_or_visible_state_change() {
                     "P01",
                     1,
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
         }

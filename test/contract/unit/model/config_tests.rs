@@ -3,7 +3,8 @@ use super::*;
 #[test]
 fn development_supports_one_disk_and_optional_backup_tiers() {
     for count in 1..=6 {
-        let config = Config::development((0..count).map(|i| PathBuf::from(format!("/disk/{i}"))));
+        let config =
+            Config::development((0..count).map(|i| PathBuf::from(format!("/disk/{i}")))).unwrap();
         assert_eq!(config.disks.len(), count);
         assert_eq!(config.metadata_quorum(), count / 2 + 1);
         for (index, disk) in config.disks.iter().enumerate() {
@@ -19,7 +20,8 @@ fn development_supports_one_disk_and_optional_backup_tiers() {
 
 #[test]
 fn recovery_quorum_uses_configured_metadata_members_not_data_disk_count() {
-    let mut config = Config::development((0..5).map(|i| PathBuf::from(format!("/disk/{i}"))));
+    let mut config =
+        Config::development((0..5).map(|i| PathBuf::from(format!("/disk/{i}")))).unwrap();
     config.disks[3].metadata_member = false;
     config.disks[4].metadata_member = false;
     assert_eq!(config.metadata_quorum(), 2);

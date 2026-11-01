@@ -39,6 +39,7 @@ mod lifecycle;
 mod management;
 mod metadata;
 mod naming;
+mod note_recovery;
 mod server_launcher;
 mod session_delivery;
 use metadata::{assert_metadata_only, metadata_edit, open_fixture_directory};
@@ -323,6 +324,7 @@ fn exercise(
     session_delivery::finish(current_history, true)?;
     history_windows::run(browser)?;
     assert_metadata_only(browser)?;
+    note_recovery::run(browser)?;
     metadata_edit(browser)?;
     browser.click(&browser.button("History", "历史记录")?)?;
     wait_for("seeded file in activity history", || {

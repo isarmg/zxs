@@ -218,7 +218,7 @@ fn published_fixture() -> (tempfile::TempDir, Engine, Repository) {
     let temporary = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temporary.path().join("system"),
-        Config::development([temporary.path().join("primary")]),
+        Config::development([temporary.path().join("primary")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -227,7 +227,7 @@ fn published_fixture() -> (tempfile::TempDir, Engine, Repository) {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -241,7 +241,7 @@ fn published_fixture() -> (tempfile::TempDir, Engine, Repository) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -295,7 +295,7 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
             NamespaceOperation::parse(NamespaceOperationKind::Rename, "STRASSE", Some("Moved"))
                 .unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let renamed = engine
@@ -318,7 +318,7 @@ fn published_and_reopened_trees_preserve_unicode_identity_and_historical_lookup(
             &repo.repository_id,
             NamespaceOperation::parse(NamespaceOperationKind::Mkdir, "MOVED", None).unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert_eq!(collision.code(), storage_contract::ErrorCode::NameCollision);
@@ -355,7 +355,7 @@ fn publication_rejects_bad_keys_unsorted_entries_and_normalized_collisions() {
         .clone();
     let before = canonical_json(engine.state()).unwrap();
     for corruption in ["order", "duplicate", "folded_duplicate"] {
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         let result = engine.mutate(
             "test.invalid.namespace",
             "admin",
@@ -408,7 +408,7 @@ fn query_views_keep_missing_foreign_and_migrated_branch_errors() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let foreign = engine.state().branches[&other.main_branch_id]

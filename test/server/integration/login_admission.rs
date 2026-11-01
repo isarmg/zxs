@@ -15,7 +15,7 @@ use storage_server::{ServerConfig, auth::AuthStore, engine_backend::EngineBacken
 fn application(root: &Path, proxy: bool) -> Router {
     let engine = Engine::initialize(
         &root.join("system"),
-        Config::development([root.join("d1"), root.join("d2"), root.join("d3")]),
+        Config::development([root.join("d1"), root.join("d2"), root.join("d3")]).unwrap(),
     )
     .unwrap();
     let backend = Arc::new(EngineBackend::new(engine));

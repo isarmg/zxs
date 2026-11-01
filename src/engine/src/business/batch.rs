@@ -196,7 +196,7 @@ fn save_inactive(
             .cloned(),
     );
     validate_entries(&mut entries, maximum)?;
-    let commit_id = new_id("commit");
+    let commit_id = new_id("commit")?;
     let repo = state
         .repositories
         .get(&branch.repository_id)
@@ -214,7 +214,7 @@ fn save_inactive(
             history_tree_id: repo.history_tree_id.clone(),
             kind: "directory_namespace".into(),
             parent_commit_ids: vec![previous.commit_id],
-            tree_id: new_id("tree"),
+            tree_id: new_id("tree")?,
             sequence: state.sequence,
             operation_id: operation,
             author: principal.into(),
@@ -224,7 +224,7 @@ fn save_inactive(
             provenance: None,
         },
     );
-    let tree_id = new_id("dtree");
+    let tree_id = new_id("dtree")?;
     state.directory_trees.insert(
         tree_id.clone(),
         DirectoryTree {
@@ -608,7 +608,7 @@ fn apply(
                     if let Some(previous) = directory_copies.get(&key) {
                         moved.entry_id = previous.clone();
                     } else {
-                        moved.entry_id = new_id("entry");
+                        moved.entry_id = new_id("entry")?;
                         directory_copies.insert(key, moved.entry_id.clone());
                     }
                 } else {
@@ -632,7 +632,7 @@ fn apply(
                         moved.version_id = existing.version_id.clone();
                         moved.size = existing.size;
                     } else {
-                        let new_file = new_id("file");
+                        let new_file = new_id("file")?;
                         let (source_path, original) = engine.valid_replica(&member.version_id)?;
                         let (primary, count) =
                             engine.new_file_placement(repository, moved.path())?;
@@ -651,7 +651,7 @@ fn apply(
                             },
                             &original,
                         )?;
-                        moved.entry_id = new_id("entry");
+                        moved.entry_id = new_id("entry")?;
                         moved.file_id = new_file;
                         moved.version_id = version.version_id;
                         moved.size = version.logical_size;
@@ -874,7 +874,7 @@ fn apply(
         })
         .collect::<Result<Vec<_>>>()?;
     let commit_id = if !active.is_empty() {
-        let id = new_id("commit");
+        let id = new_id("commit")?;
         let pending = directory::snapshot_pending(state, &entries);
         state.commits.insert(
             id.clone(),
@@ -884,7 +884,7 @@ fn apply(
                 history_tree_id: repo.history_tree_id.clone(),
                 kind: "namespace_batch".into(),
                 parent_commit_ids: vec![previous.commit_id],
-                tree_id: new_id("tree"),
+                tree_id: new_id("tree")?,
                 sequence: state.sequence,
                 operation_id: operation,
                 author: principal.into(),

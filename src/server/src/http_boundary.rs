@@ -104,7 +104,7 @@ impl ApiError {
             message: message.into(),
             retryable: (status.is_server_error() && status != StatusCode::NOT_IMPLEMENTED)
                 || status == StatusCode::TOO_MANY_REQUESTS,
-            request_id: storage_contract::new_id("req"),
+            request_id: diagnostic_request_id(),
         }
     }
     pub fn invalid(message: impl Into<String>) -> Self {
@@ -119,12 +119,13 @@ impl ApiError {
         Self::invalid(source.to_string()).with_source(source)
     }
     pub(crate) fn contract_input(source: storage_contract::Error) -> Self {
-        Self::new(
-            StatusCode::BAD_REQUEST,
-            source.code(),
-            source.message().into_owned(),
-        )
-        .with_source(source)
+        let status = match &source {
+            storage_contract::Error::IdentifierGeneration { .. } => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+            _ => StatusCode::BAD_REQUEST,
+        };
+        Self::new(status, source.code(), source.message().into_owned()).with_source(source)
     }
     pub(crate) fn with_source(mut self, source: impl Into<ApiErrorSource>) -> Self {
         self.source = Some(Box::new(source.into()));
@@ -326,4 +327,22 @@ pub(crate) async fn method_not_allowed() -> ApiError {
 
 pub(crate) fn is_api_path(path: &str) -> bool {
     path == "/api" || path.starts_with("/api/")
+}
+
+/// Diagnostic correlation only: unique within this server process, never an
+/// operation identity, credential or randomness fallback.
+fn diagnostic_request_id() -> String {
+    static NEXT: std::sync::Mutex<u128> = std::sync::Mutex::new(0);
+    let id = {
+        let mut next = NEXT
+            .lock()
+            .expect("invariant: diagnostic counter has no panicking work");
+        // Even one response per nanosecond cannot exhaust this space during
+        // any physical process lifetime. Never silently wrap the counter.
+        *next = next
+            .checked_add(1)
+            .expect("invariant: fewer than 2^128 responses per process");
+        *next
+    };
+    format!("req_{id:032x}")
 }

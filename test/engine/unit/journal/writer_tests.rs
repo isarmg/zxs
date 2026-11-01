@@ -5,7 +5,7 @@ use std::sync::Mutex;
 fn serialized_engine_mutations_preserve_one_verified_hash_chain() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
-    let config = Config::development([temp.path().join("disk")]);
+    let config = Config::development([temp.path().join("disk")]).unwrap();
     let disk = config.disks[0].clone();
     let engine = Mutex::new(Engine::initialize(&root, config).unwrap());
     assert_eq!(
@@ -25,7 +25,7 @@ fn serialized_engine_mutations_preserve_one_verified_hash_chain() {
                         "P01",
                         1,
                         "admin",
-                        storage_contract::OperationId::generate(),
+                        storage_contract::OperationId::generate().unwrap(),
                     )
                     .unwrap();
             });
@@ -49,7 +49,7 @@ fn serialized_engine_mutations_preserve_one_verified_hash_chain() {
 fn detached_preparation_retains_writer_ownership_without_appending() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
-    let config = Config::development([temp.path().join("disk")]);
+    let config = Config::development([temp.path().join("disk")]).unwrap();
     let disk = config.disks[0].clone();
     let mut engine = Engine::initialize(&root, config).unwrap();
     let repo = engine
@@ -58,7 +58,7 @@ fn detached_preparation_retains_writer_ownership_without_appending() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -71,7 +71,7 @@ fn detached_preparation_retains_writer_ownership_without_appending() {
         .prepare_workspace_commit(
             CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

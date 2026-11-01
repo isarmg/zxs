@@ -94,5 +94,5 @@ struct Writer {
 }
 
 fn contract(error: storage_contract::Error) -> ApiError {
-    ApiError::invalid_source(error)
+    ApiError::contract_input(error)
 }

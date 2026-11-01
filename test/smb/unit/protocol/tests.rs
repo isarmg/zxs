@@ -30,7 +30,7 @@ fn namespace_requests_require_a_preallocated_identity_on_the_wire() {
         NamespaceOperation::Unlink,
         NamespaceOperation::Rmdir,
     ] {
-        let request = namespace_request(kind, "entry".into(), None, false);
+        let request = namespace_request(kind, "entry".into(), None, false).unwrap();
         let value = json_codec::to_value(&request).unwrap();
         storage_contract::validate_id(value["operation_id"].as_str().unwrap(), "op").unwrap();
         let mut missing = value;
@@ -433,7 +433,8 @@ fn samba_username_is_one_exact_name_not_a_mapping() {
 
 #[test]
 fn namespace_and_open_kind_reject_unknown_wire_states() {
-    let request = namespace_request(NamespaceOperation::Mkdir, "entry".into(), None, false);
+    let request =
+        namespace_request(NamespaceOperation::Mkdir, "entry".into(), None, false).unwrap();
     let mut value = json_codec::to_value(request).unwrap();
     value["kind"] = "future_operation".into();
     assert!(json_codec::from_value::<Request>(value).is_err());
@@ -453,12 +454,9 @@ fn protocol_error_codes_require_known_string_identities() {
         let value = json_codec::json!({"status":"error", "code":code, "message":"failure", "retryable":false, "operation_id":null});
         assert!(json_codec::from_value::<Response>(value).is_err());
     }
-    let mut request = json_codec::to_value(namespace_request(
-        NamespaceOperation::Mkdir,
-        "entry".into(),
-        None,
-        false,
-    ))
+    let mut request = json_codec::to_value(
+        namespace_request(NamespaceOperation::Mkdir, "entry".into(), None, false).unwrap(),
+    )
     .unwrap();
     request["kind"] = json_codec::json!({"mkdir":null});
     assert!(json_codec::from_value::<Request>(request).is_err());

@@ -44,7 +44,7 @@ fn missing_credentials_do_not_admit_even_a_named_administrator() {
     let root = crate::tests::private_tempdir();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]),
+        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let backend = EngineBackend::new(engine);
@@ -115,7 +115,7 @@ fn a_valid_singleton_admits_its_owner_but_not_arbitrary_callers() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]),
+        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
@@ -136,7 +136,7 @@ fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]),
+        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let owner = install_test_administrator(&mut engine, "owner");
@@ -146,7 +146,7 @@ fn workspace_authorization_borrows_records_and_preserves_owner_checks() {
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -211,8 +211,11 @@ fn typed_upload_admission_preserves_owner_state_expiry_and_size_precedence() {
     let root = crate::tests::private_tempdir();
     let system = root.path().join("system");
     let disk = root.path().join("disk");
-    let mut engine =
-        Engine::initialize(&system, storage_engine::Config::development([disk.clone()])).unwrap();
+    let mut engine = Engine::initialize(
+        &system,
+        storage_engine::Config::development([disk.clone()]).unwrap(),
+    )
+    .unwrap();
     let owner = install_test_administrator(&mut engine, "owner");
     let repository = engine
         .create_repository(
@@ -220,7 +223,7 @@ fn typed_upload_admission_preserves_owner_state_expiry_and_size_precedence() {
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut expired = engine
@@ -296,7 +299,7 @@ fn typed_workspace_status_distinguishes_admission_errors_from_absent_items() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]),
+        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let owner = install_test_administrator(&mut engine, "owner");
@@ -306,7 +309,7 @@ fn typed_workspace_status_distinguishes_admission_errors_from_absent_items() {
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let owned = engine
@@ -409,7 +412,7 @@ fn typed_plan_cancel_keeps_owner_and_receipt_ordering() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        storage_engine::Config::development([root.path().join("disk")]),
+        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "admin");
@@ -419,7 +422,7 @@ fn typed_plan_cancel_keeps_owner_and_receipt_ordering() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let source = engine
@@ -451,7 +454,7 @@ fn typed_plan_cancel_keeps_owner_and_receipt_ordering() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(engine.state().business_generation > own.expected_sequence);
@@ -519,14 +522,14 @@ fn typed_plan_cancel_keeps_owner_and_receipt_ordering() {
                 Ok(crate::CommitPlan {
                     plan_id: own.plan_id.clone(),
                     plan_digest: own.digest.clone(),
-                    operation_id: Ok(storage_contract::OperationId::generate()),
+                    operation_id: Ok(storage_contract::OperationId::generate().unwrap()),
                 })
             )
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::PlanStale
     );
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let request = || {
         Ok(crate::CancelPlan {
             plan_id: own.plan_id.clone(),
@@ -572,7 +575,7 @@ fn typed_plan_cancel_keeps_owner_and_receipt_ordering() {
                 &identity,
                 Ok(crate::CancelPlan {
                     plan_id: own.plan_id,
-                    operation_id: Ok(storage_contract::OperationId::generate())
+                    operation_id: Ok(storage_contract::OperationId::generate().unwrap())
                 })
             )
             .unwrap_err()
@@ -587,7 +590,7 @@ fn typed_plan_disk_integrity_precedes_cancel_operation_errors_after_reopen() {
     let system = root.path().join("system");
     let mut engine = Engine::initialize(
         &system,
-        storage_engine::Config::development([root.path().join("disk")]),
+        storage_engine::Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "admin");
@@ -597,7 +600,7 @@ fn typed_plan_disk_integrity_precedes_cancel_operation_errors_after_reopen() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let source = engine
@@ -623,9 +626,9 @@ fn typed_plan_disk_integrity_precedes_cancel_operation_errors_after_reopen() {
     drop(engine);
     let path = system.join("plans").join(format!("{}.json", plan.plan_id));
     let mut altered_input = plan.clone();
-    altered_input.input["history_tree_id"] = storage_engine::new_id("history").into();
+    altered_input.input["history_tree_id"] = storage_engine::new_id("history").unwrap().into();
     let mut altered_identity = plan.clone();
-    altered_identity.plan_id = storage_engine::new_id("plan");
+    altered_identity.plan_id = storage_engine::new_id("plan").unwrap();
     let mut missing_history = altered_input.clone();
     missing_history.digest = storage_contract::object_hash("plan", &missing_history.input).unwrap();
     for (altered, expected) in [

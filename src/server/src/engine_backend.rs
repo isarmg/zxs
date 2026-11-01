@@ -102,7 +102,7 @@ impl EngineBackend {
             .persist_auth_state(
                 snapshot,
                 "system_auth",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().map_err(ApiError::contract_input)?,
             )
             .map_err(error)
     }
@@ -133,7 +133,7 @@ impl EngineBackend {
                 .persist_auth_state(
                     snapshot,
                     "system_auth",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().map_err(ApiError::contract_input)?,
                 )
                 .map_err(error)
         }))?;
@@ -163,7 +163,7 @@ fn install_test_administrator(engine: &mut Engine, username: &str) -> Identity {
         .persist_auth_state(
             auth.snapshot().unwrap(),
             "system_auth",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     identity

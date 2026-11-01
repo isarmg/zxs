@@ -11,7 +11,8 @@ fn pending() -> (tempfile::TempDir, PathBuf, Config, String, OperationId) {
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root, config.clone()).unwrap();
     let repo = engine
         .create_repository(
@@ -19,7 +20,7 @@ fn pending() -> (tempfile::TempDir, PathBuf, Config, String, OperationId) {
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -28,7 +29,7 @@ fn pending() -> (tempfile::TempDir, PathBuf, Config, String, OperationId) {
     engine
         .stage_bytes(&workspace.workspace_id, "a", b"verified original bytes")
         .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     engine.inject_fault_once("after_accept_2");
     assert_eq!(
         engine

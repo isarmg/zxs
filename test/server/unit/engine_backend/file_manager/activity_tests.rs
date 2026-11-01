@@ -177,7 +177,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -186,7 +186,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -200,7 +200,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
             )
             .unwrap();
     }
-    let operation_id = storage_contract::OperationId::generate();
+    let operation_id = storage_contract::OperationId::generate().unwrap();
     let published = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
@@ -244,7 +244,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
     let restored_root = crate::tests::private_tempdir();
     let mut restored = Engine::initialize(
         &restored_root.path().join("system"),
-        Config::development([restored_root.path().join("disk")]),
+        Config::development([restored_root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     restored
@@ -253,7 +253,7 @@ fn restored_deletion_activity_uses_committed_time_without_receipts_or_content() 
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(!restored.state().operations.contains_key(&operation_id));

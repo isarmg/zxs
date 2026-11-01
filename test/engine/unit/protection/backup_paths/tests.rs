@@ -8,7 +8,7 @@ mod retained_tests;
 mod route_changes_tests;
 
 fn initialize(root: &Path, copies: u32, capacity: Option<u64>) -> (Engine, Repository) {
-    let mut config = Config::development([root.join("p"), root.join("b"), root.join("c")]);
+    let mut config = Config::development([root.join("p"), root.join("b"), root.join("c")]).unwrap();
     for disk in &mut config.disks {
         disk.capacity_bytes = capacity;
     }
@@ -19,7 +19,7 @@ fn initialize(root: &Path, copies: u32, capacity: Option<u64>) -> (Engine, Repos
             "P01",
             copies,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     (engine, repo)
@@ -34,7 +34,7 @@ fn save(engine: &mut Engine, repo: &Repository, path: &str, bytes: &[u8]) -> Ent
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -88,7 +88,7 @@ fn rename(engine: &mut Engine, repo: &Repository, path: &str, destination: &str)
             )
             .unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
 }
@@ -110,7 +110,7 @@ fn backup_paths_backfill_all_versions_and_survive_primary_moves_and_new_writes()
             backup_prefixes: &prefixes(&[("B01", "我的存档"), ("C01", "异地/材料")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(configured.result["version_count"], "2");
@@ -169,7 +169,7 @@ fn backup_paths_backfill_all_versions_and_survive_primary_moves_and_new_writes()
             backup_prefixes: &prefixes(&[("B01", "重新配置"), ("C01", "冷存档")]),
             expected_generation: 1,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert!(
@@ -198,7 +198,7 @@ fn parent_configuration_keeps_explicit_children_and_empty_directories_inherit() 
             backup_prefixes: &prefixes(&[("B01", "child"), ("C01", "child-cold")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let child_policy = engine.state.file_backup_policies[&child.file_id].clone();
@@ -210,7 +210,7 @@ fn parent_configuration_keeps_explicit_children_and_empty_directories_inherit() 
             backup_prefixes: &prefixes(&[("B01", "parent")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(configured.result["file_count"], "1");
@@ -240,7 +240,7 @@ fn parent_configuration_keeps_explicit_children_and_empty_directories_inherit() 
             )
             .unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     engine
@@ -251,7 +251,7 @@ fn parent_configuration_keeps_explicit_children_and_empty_directories_inherit() 
             backup_prefixes: &prefixes(&[("B01", "future")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let future = save(&mut engine, &repo, "empty/new.txt", b"future");
@@ -277,7 +277,7 @@ fn prefix_changes_reuse_verified_payloads_at_capacity_and_failures_are_atomic() 
             backup_prefixes: &config,
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(
@@ -327,7 +327,7 @@ fn prefix_changes_reuse_verified_payloads_at_capacity_and_failures_are_atomic() 
                     backup_prefixes: &prefixes,
                     expected_generation: generation,
                     principal: "admin",
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                 })
                 .unwrap_err()
                 .code(),
@@ -354,7 +354,7 @@ fn backup_projection_recovers_without_copying_or_renaming_primary() {
             .unwrap()
             .ino();
         let config = prefixes(&[("B01", "recovery-one"), ("C01", "recovery-two")]);
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         engine.inject_fault_once(fault);
         assert_eq!(
             engine
@@ -406,10 +406,11 @@ fn arbitrary_fixed_route_copy_count_and_independent_prefixes_are_supported() {
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     config.disks.push(DiskConfig {
         slot_id: "D01".into(),
-        disk_id: new_id("disk"),
+        disk_id: new_id("disk").unwrap(),
         root: temp.path().join("d"),
         level: 4,
         upstream_slot_id: Some("C01".into()),
@@ -424,7 +425,7 @@ fn arbitrary_fixed_route_copy_count_and_independent_prefixes_are_supported() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let file = save(&mut engine, &repo, "a.txt", b"four copies");
@@ -436,7 +437,7 @@ fn arbitrary_fixed_route_copy_count_and_independent_prefixes_are_supported() {
             backup_prefixes: &prefixes(&[("B01", "one"), ("C01", "two"), ("D01", "three")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(
@@ -463,7 +464,7 @@ fn empty_extensions_use_sparse_current_state_and_policy_encoding() {
         canonical_json(&recovered).unwrap(),
         canonical_json(&state).unwrap()
     );
-    let minimal = json!({"policy_id":new_id("policy"),"repository_id":new_id("repo"),"path_prefix":"docs","target_copies":2,"inheritable":true,"generation":"1"});
+    let minimal = json!({"policy_id":new_id("policy").unwrap(),"repository_id":new_id("repo").unwrap(),"path_prefix":"docs","target_copies":2,"inheritable":true,"generation":"1"});
     let policy: ProtectionPolicy = json_codec::from_value(minimal.clone()).unwrap();
     assert_eq!(
         canonical_json(&policy).unwrap(),
@@ -478,11 +479,12 @@ fn configuration_exposes_all_historical_primary_chains_before_collecting_prefixe
         temp.path().join("p"),
         temp.path().join("b"),
         temp.path().join("c"),
-    ]);
+    ])
+    .unwrap();
     for (slot, level, upstream) in [("P02", 1, None), ("B02", 2, Some("P02"))] {
         config.disks.push(DiskConfig {
             slot_id: slot.into(),
-            disk_id: new_id("disk"),
+            disk_id: new_id("disk").unwrap(),
             root: temp.path().join(slot),
             level,
             upstream_slot_id: upstream.map(str::to_owned),
@@ -498,19 +500,19 @@ fn configuration_exposes_all_historical_primary_chains_before_collecting_prefixe
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let first = save(&mut engine, &repo, "a.txt", b"first route");
     engine
         .update_placement_rule(crate::PlacementRuleUpdate {
-            rule_id: &new_id("rule"),
+            rule_id: &new_id("rule").unwrap(),
             repository_id: &repo.repository_id,
             path_prefix: "a.txt",
             primary_slot_id: "P02",
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let second = save(&mut engine, &repo, "a.txt", b"second route");
@@ -536,7 +538,7 @@ fn configuration_exposes_all_historical_primary_chains_before_collecting_prefixe
                 backup_prefixes: &prefixes(&[("B02", "second")]),
                 expected_generation: 0,
                 principal: "admin",
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             })
             .unwrap_err()
             .code(),
@@ -551,7 +553,7 @@ fn configuration_exposes_all_historical_primary_chains_before_collecting_prefixe
             backup_prefixes: &prefixes(&[("B01", "first"), ("B02", "second")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(
@@ -589,7 +591,7 @@ fn top_level_backup_policy_overrides_root_regardless_of_policy_id_order() {
                 )
                 .unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         // Seed deterministic IDs through the public policy API, then upgrade
@@ -611,7 +613,7 @@ fn top_level_backup_policy_overrides_root_regardless_of_policy_id_order() {
                     target_copies: copies,
                     expected_generation: 0,
                     principal: "admin",
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                 })
                 .unwrap();
             engine
@@ -622,7 +624,7 @@ fn top_level_backup_policy_overrides_root_regardless_of_policy_id_order() {
                     backup_prefixes: &backup_prefixes,
                     expected_generation: 1,
                     principal: "admin",
-                    operation_id: storage_contract::OperationId::generate(),
+                    operation_id: storage_contract::OperationId::generate().unwrap(),
                 })
                 .unwrap();
         }
@@ -686,7 +688,7 @@ fn one_copy_scoped_policy_binds_new_files_and_survives_moves_and_reopen() {
             )
             .unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let configured = engine
@@ -697,7 +699,7 @@ fn one_copy_scoped_policy_binds_new_files_and_survives_moves_and_reopen() {
             backup_prefixes: &BTreeMap::new(),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let policy_id = configured.result["policy"]["policy_id"].as_str().unwrap();
@@ -709,7 +711,7 @@ fn one_copy_scoped_policy_binds_new_files_and_survives_moves_and_reopen() {
             backup_prefixes: &prefixes(&[("B01", "destination-backup")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let after = save(
@@ -771,13 +773,13 @@ fn path_only_protection_policy_follows_the_path_for_future_versions() {
     let (mut engine, repo) = initialize(temp.path(), 2, None);
     engine
         .update_protection_policy(crate::ProtectionPolicyUpdate {
-            policy_id: &new_id("policy"),
+            policy_id: &new_id("policy").unwrap(),
             repository_id: &repo.repository_id,
             path_prefix: "source",
             target_copies: 1,
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let original = save(&mut engine, &repo, "source/file.txt", b"first");
@@ -819,7 +821,7 @@ fn admission_rejects_missing_namespace_or_bound_policy_before_copy_selection() {
             backup_prefixes: &prefixes(&[("B01", "one"), ("C01", "two")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let state = engine.state().clone();
@@ -854,7 +856,7 @@ fn admission_rejects_missing_namespace_or_bound_policy_before_copy_selection() {
                     .protection_policies
                     .get_mut(&id)
                     .unwrap()
-                    .repository_id = new_id("repo");
+                    .repository_id = new_id("repo").unwrap();
             }
             _ => unreachable!(),
         }
@@ -881,7 +883,7 @@ fn removed_scope_is_absent_but_its_retained_file_binding_still_applies() {
             backup_prefixes: &prefixes(&[("B01", "one"), ("C01", "two")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     engine
@@ -894,7 +896,7 @@ fn removed_scope_is_absent_but_its_retained_file_binding_still_applies() {
             )
             .unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let state = engine.state();
@@ -927,7 +929,7 @@ fn public_placement_query_does_not_inherit_another_repositories_file_policy() {
             backup_prefixes: &prefixes(&[("B01", "one"), ("C01", "two")]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
         })
         .unwrap();
     let other = engine
@@ -936,7 +938,7 @@ fn public_placement_query_does_not_inherit_another_repositories_file_policy() {
             "P01",
             2,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(

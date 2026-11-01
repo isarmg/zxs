@@ -267,7 +267,7 @@ impl Engine {
             ));
         }
         let workspace = Workspace {
-            workspace_id: new_id("ws"),
+            workspace_id: new_id("ws")?,
             purpose: WorkspacePurpose::HistoricalBranch,
             branch_id: branch.into(),
             principal: principal.into(),
@@ -353,12 +353,20 @@ impl Engine {
                     "historical workspace is outside the selected repository",
                 ));
             }
-            self.seal_workspace(id, principal)?;
-            Some(self.workspace(id)?)
+            Some(workspace)
         } else {
             None
         };
+        // Namespace planning may allocate parent entry IDs. Complete it and
+        // the plan identity before sealing durable workspace state.
         let (entries, _) = final_entries(&source, workspace.as_ref(), self.config.max_entries)?;
+        let plan_id = new_id("plan")?;
+        let workspace = workspace
+            .map(|workspace| {
+                self.seal_workspace(&workspace.workspace_id, principal)?;
+                self.workspace(&workspace.workspace_id)
+            })
+            .transpose()?;
         let mut per_slot = BTreeMap::<String, u64>::new();
         let mut total = 0u64;
         let mut count = 0usize;
@@ -419,7 +427,7 @@ impl Engine {
         }
         let input = json!({"history_tree_id":history,"source_commit_id":source.commit_id,"name":options.name,"workspace_id":options.workspace_id,"sealed_manifest_hash":workspace.as_ref().map(workspace_manifest_hash).transpose()?,"workspace_fencing_token":workspace.as_ref().map(|workspace|workspace.fencing_token.to_string()),"expected_topology_generation":self.state.topology_generation.to_string(),"primary_slot_id":options.primary_slot_id,"target_copies":options.target_copies,"branch_creation":"placeholder-until-write","placeholder_files":entries.iter().filter(|entry|entry.kind == NamespaceEntryKind::File&&!entry.version_id.starts_with("staged:")).count(),"full_copy_bytes":total.to_string(),"full_copy_files":count,"required_bytes_by_slot":per_slot.iter().map(|(slot,bytes)|(slot.clone(),bytes.to_string())).collect::<BTreeMap<_,_>>()});
         let plan = Plan {
-            plan_id: new_id("plan"),
+            plan_id,
             kind: "historical_save".into(),
             principal: principal.into(),
             expected_sequence: self.state.business_generation,
@@ -542,12 +550,12 @@ impl Engine {
                     .cloned()
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::CommitNotFound, "historical source no longer exists"))?;
                 let (mut entries, deleted) = final_entries(&source, workspace.as_ref(), engine.config.max_entries)?;
-                let branch_id = new_id("br");
-                let commit_id = new_id("commit");
+                let branch_id = new_id("br")?;
+                let commit_id = new_id("commit")?;
                 let mut copied = 0usize;
                 let mut pending_file_versions = BTreeMap::new();
                 for entry in &mut entries {
-                    entry.entry_id = new_id("entry");
+                    entry.entry_id = new_id("entry")?;
                     if entry.kind != NamespaceEntryKind::File {
                         continue;
                     }
@@ -562,7 +570,7 @@ impl Engine {
                             continue;
                         };
                     if entry.file_id.starts_with("new-file:") {
-                        entry.file_id = new_id("file");
+                        entry.file_id = new_id("file")?;
                     }
                     let (primary, copies) = match (&primary_override, copies_override) {
                         (Some(primary), Some(copies)) => (primary.clone(), copies),
@@ -583,7 +591,7 @@ impl Engine {
                     namespace_deletions: deletion_record(deleted, now()?),
                     commit_id: commit_id.clone(), history_tree_id: history.clone(),
                     kind: "historical_save".into(), parent_commit_ids: vec![source_id.clone()],
-                    tree_id: new_id("tree"), sequence: state.sequence, operation_id: operation,
+                    tree_id: new_id("tree")?, sequence: state.sequence, operation_id: operation,
                     author: principal.into(), message: format!("Save written content to historical branch {name}"),
                     entries, pending_file_versions: pending_file_versions.clone(), provenance: Some(source_id.clone()),
                 });

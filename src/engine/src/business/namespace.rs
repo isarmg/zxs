@@ -81,7 +81,7 @@ pub(crate) fn ensure_parents(
             }
         } else {
             entries.push(Entry {
-                entry_id: new_id("entry"),
+                entry_id: new_id("entry")?,
                 path,
                 kind: NamespaceEntryKind::Directory,
                 file_id: String::new(),
@@ -177,7 +177,7 @@ pub(crate) fn apply_namespace(
             }
             ensure_parents(entries, path)?;
             entries.push(Entry {
-                entry_id: new_id("entry"),
+                entry_id: new_id("entry")?,
                 path: path.clone(),
                 kind: NamespaceEntryKind::Directory,
                 file_id: String::new(),

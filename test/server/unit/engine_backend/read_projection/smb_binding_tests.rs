@@ -7,7 +7,7 @@ fn typed_smb_binding_keeps_canonical_receipt_and_distinct_generations() {
     let before = backend
         .smb_binding_status(&identity, &repo.repository_id)
         .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let update = |enabled, generation, operation| crate::UpdateSmbBinding {
         repository: &repo.repository_id,
         branch: &repo.main_branch_id,
@@ -82,7 +82,7 @@ fn typed_smb_binding_keeps_canonical_receipt_and_distinct_generations() {
                 update(
                     true,
                     before.history_generation + 2,
-                    storage_contract::OperationId::generate()
+                    storage_contract::OperationId::generate().unwrap()
                 )
             )
             .unwrap_err()
@@ -130,7 +130,7 @@ fn typed_smb_binding_preserves_repository_priority_and_workspace_rejection() {
         branch: &repo.main_branch_id,
         enabled: false,
         expected_history_generation: status.history_generation,
-        operation: storage_contract::OperationId::generate(),
+        operation: storage_contract::OperationId::generate().unwrap(),
     };
     assert_eq!(
         backend
@@ -152,7 +152,7 @@ fn typed_smb_binding_preserves_repository_priority_and_workspace_rejection() {
     backend
         .abort_workspace(&identity, &workspace.workspace_id)
         .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     backend
         .update_smb_binding(
             &identity,

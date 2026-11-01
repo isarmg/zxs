@@ -9,7 +9,8 @@ fn poisoned_scope_snapshot_closes_connection_during_unwind() {
             temp.path().join("p"),
             temp.path().join("b"),
             temp.path().join("t"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let path = temp.path().join("state/index.sqlite");

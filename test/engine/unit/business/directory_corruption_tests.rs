@@ -9,11 +9,16 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String) {
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -24,7 +29,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -38,7 +43,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, String) {
             Some(&name_policy::LookupPath::parse("folder").unwrap()),
             &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["directory_branch_id"]
@@ -119,7 +124,7 @@ fn missing_directory_selection_references_return_errors_without_publication() {
                 Some(&name_policy::LookupPath::parse("folder").unwrap()),
                 &storage_contract::BranchName::parse("draft").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
         }));
         if matches!(corruption, "branch" | "commit") {
@@ -163,7 +168,7 @@ fn missing_baseline_branch_or_tree_cannot_initialize_or_fork() {
                 &repo.repository_id,
                 Some(&name_policy::LookupPath::parse("folder").unwrap()),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap_err();
         assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
@@ -173,7 +178,7 @@ fn missing_baseline_branch_or_tree_cannot_initialize_or_fork() {
                 Some(&name_policy::LookupPath::parse("folder").unwrap()),
                 &storage_contract::BranchName::parse("another").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap_err();
         assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
@@ -190,7 +195,7 @@ fn unchanged_selection_still_rejects_unavailable_file_branch() {
             Some(&name_policy::LookupPath::parse("folder").unwrap()),
             &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let file_branch = engine.state.directory_branches[&selected]
@@ -209,7 +214,7 @@ fn unchanged_selection_still_rejects_unavailable_file_branch() {
             Some(&name_policy::LookupPath::parse("folder").unwrap()),
             &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert_eq!(

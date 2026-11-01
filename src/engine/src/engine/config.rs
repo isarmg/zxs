@@ -14,7 +14,7 @@ use std::{
 ///
 /// ```compile_fail
 /// use storage_engine::{Config, ValidatedConfig};
-/// let mut config = ValidatedConfig::try_from(Config::development(["/disk".into()])).unwrap();
+/// let mut config = ValidatedConfig::try_from(Config::development(["/disk".into()]).unwrap()).unwrap();
 /// config.disks.clear();
 /// ```
 #[derive(Clone, Debug, Deserialize)]

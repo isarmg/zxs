@@ -4,7 +4,7 @@ use super::*;
 fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");
-    let mut config = Config::development([temp.path().join("primary")]);
+    let mut config = Config::development([temp.path().join("primary")]).unwrap();
     config.max_retained_workspaces = 1;
     config.max_retained_workspaces_per_principal = 1;
     let limits = RetainedWorkspaceLimits {
@@ -22,7 +22,7 @@ fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
             "P01",
             1,
             "alice",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     for (principal, abort) in [("alice", true), ("bob", true), ("bob", false)] {
@@ -47,7 +47,7 @@ fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
         .unwrap();
     let request = CommitRequest {
         workspace_id: target.workspace_id.clone(),
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "alice".into(),
         expected_head: target.base_head,
         fencing_token: target.fencing_token,
@@ -135,7 +135,7 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("primary")]),
+        Config::development([temp.path().join("primary")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -144,7 +144,7 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut commits = Vec::new();
@@ -158,7 +158,7 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
         let result = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -186,7 +186,7 @@ fn shared_state_stays_frozen_across_cancelled_preparation_and_plan_writes() {
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -261,7 +261,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("primary")]),
+        Config::development([temp.path().join("primary")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -270,7 +270,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -282,7 +282,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -295,7 +295,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
             &repo.repository_id,
             Some(&name_policy::LookupPath::parse("nested").unwrap()),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let frozen = Arc::clone(&engine.state);
@@ -334,7 +334,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
         assert!(next.directory_trees.remove_discard("candidate-only-tree"));
         assert!(next.versions.remove_discard("candidate-only-version"));
     };
-    let failed_operation = storage_contract::OperationId::generate();
+    let failed_operation = storage_contract::OperationId::generate().unwrap();
     let failed = engine.plan_mutation_digest(
         "test.record_isolation",
         "admin",
@@ -356,7 +356,7 @@ fn plan_only_record_mutations_and_abandoned_candidates_leave_published_state_unc
     assert!(Arc::ptr_eq(&frozen, &engine.state));
     assert!(!engine.state.operations.contains_key(&failed_operation));
 
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let planned = engine
         .plan_mutation_digest(
             "test.record_isolation",
@@ -398,7 +398,7 @@ fn plan_failed_change_can_abandon_a_temporarily_missing_main_head() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("primary")]),
+        Config::development([temp.path().join("primary")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -407,13 +407,13 @@ fn plan_failed_change_can_abandon_a_temporarily_missing_main_head() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let frozen = Arc::clone(&engine.state);
     let before = canonical_json(frozen.as_ref()).unwrap();
     let head = frozen.branches[&repo.main_branch_id].head_commit_id.clone();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let result = engine.plan_mutation_digest(
         "test.abandon_head",
         "admin",
@@ -443,7 +443,7 @@ fn plan_successful_change_must_restore_main_head_before_returning() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("primary")]),
+        Config::development([temp.path().join("primary")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -452,7 +452,7 @@ fn plan_successful_change_must_restore_main_head_before_returning() {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let head = engine.state.branches[&repo.main_branch_id]
@@ -462,7 +462,7 @@ fn plan_successful_change_must_restore_main_head_before_returning() {
         .plan_mutation_digest(
             "test.broken_head",
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
             json_codec::json!({}),
             None,
             |_, next, _| {
@@ -477,13 +477,16 @@ fn plan_successful_change_must_restore_main_head_before_returning() {
 fn wire_envelope_errors_precede_missing_workspace_lookup() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("system");
-    let mut engine =
-        Engine::initialize(&root, Config::development([temp.path().join("disk")])).unwrap();
+    let mut engine = Engine::initialize(
+        &root,
+        Config::development([temp.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
     let mut request = CommitRequest {
-        workspace_id: new_id("ws"),
-        operation_id: storage_contract::OperationId::generate(),
+        workspace_id: new_id("ws").unwrap(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "alice".into(),
-        expected_head: new_id("commit"),
+        expected_head: new_id("commit").unwrap(),
         fencing_token: 1,
         message: String::new(),
         request_digest: None,
@@ -517,7 +520,7 @@ fn wire_envelope_errors_precede_missing_workspace_lookup() {
             .code(),
         ErrorCode::WorkspaceNotFound
     );
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     engine
         .create_repository(
             &storage_contract::RepositoryName::parse("repo").unwrap(),
@@ -548,7 +551,7 @@ fn public_preparation_fences_registration_and_finish_rechecks_live_receipt() {
         let root = tempfile::tempdir().unwrap();
         let mut engine = Engine::initialize(
             &root.path().join("system"),
-            Config::development([root.path().join("disk")]),
+            Config::development([root.path().join("disk")]).unwrap(),
         )
         .unwrap();
         let repo = engine
@@ -557,7 +560,7 @@ fn public_preparation_fences_registration_and_finish_rechecks_live_receipt() {
                 "P01",
                 1,
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine

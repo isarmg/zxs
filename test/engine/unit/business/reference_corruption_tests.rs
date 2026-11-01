@@ -9,11 +9,16 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry, String) {
             temporary.path().join("primary"),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "admin", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "admin")
@@ -24,7 +29,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry, String) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -44,7 +49,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry, String) {
             &entry.version_id,
             &storage_contract::BranchName::parse("draft").unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["branch_id"]
@@ -96,14 +101,14 @@ fn file_selection_exposes_broken_admitted_heads_without_publication() {
                         &entry.file_id,
                         &branch,
                         "admin",
-                        storage_contract::OperationId::generate(),
+                        storage_contract::OperationId::generate().unwrap(),
                     )
                 } else {
                     engine.select_file_branch(
                         &entry.file_id,
                         &branch,
                         "admin",
-                        storage_contract::OperationId::generate(),
+                        storage_contract::OperationId::generate().unwrap(),
                     )
                 }
             }));
@@ -176,7 +181,7 @@ fn batch_rejects_missing_references_without_publication() {
                 Some(&name_policy::LookupPath::parse("folder").unwrap()),
                 &storage_contract::BranchName::parse("draft").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let branch_id = result.result["directory_branch_id"]
@@ -245,7 +250,7 @@ fn batch_rejects_missing_references_without_publication() {
                 &repo.repository_id,
                 &request,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
         }));
         if matches!(missing, "main_branch" | "main_head") {
@@ -296,7 +301,7 @@ fn file_node_publication_exposes_missing_admitted_main_without_leaking_new_nodes
                 remove: &[],
                 location: None,
                 principal: "admin",
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             })
         }));
         assert!(result.is_err(), "{missing}: admitted root must exist");
@@ -319,7 +324,7 @@ fn file_node_publication_requires_frozen_path_contexts_without_publication() {
                 Some(&name_policy::LookupPath::parse("folder").unwrap()),
                 &storage_contract::BranchName::parse("pending").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let directory = result.result["directory_branch_id"].as_str().unwrap();
@@ -347,7 +352,7 @@ fn file_node_publication_requires_frozen_path_contexts_without_publication() {
         let before = canonical_json(engine.state()).unwrap();
         let sequence = engine.state.sequence;
         let slot = engine.next_slot;
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         let error = engine
             .update_file_node_tags(crate::FileNodeTagsUpdateRequest {
                 file_id: &entry.file_id,
@@ -390,7 +395,7 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
                 .file_node_id = Some("missing".into());
             "missing".to_owned()
         } else {
-            let node = new_id("fnode");
+            let node = new_id("fnode").unwrap();
             let history_tree_id = engine.state.branches[&branch].history_tree_id.clone();
             let sequence = engine.state.sequence;
             std::sync::Arc::make_mut(&mut engine.state)
@@ -408,7 +413,7 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
                         previous_path: entry.path.into_string(),
                         sequence,
                         created_at: now().unwrap(),
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                         author: "admin".into(),
                     },
                 );
@@ -441,7 +446,7 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
                 remove: &[],
                 location: None,
                 principal: "admin",
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             })
             .unwrap_err();
         assert!(
@@ -460,7 +465,7 @@ fn missing_file_nodes_and_bodies_return_errors_without_publication() {
                 &head,
                 &storage_contract::BranchName::parse("broken source").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap_err();
         assert_eq!(
@@ -504,7 +509,7 @@ fn exhausted_branch_generations_reject_metadata_mutations_atomically() {
             .unwrap()
             .generation = u64::MAX;
         let before = canonical_json(engine.state()).unwrap();
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         let result = match action {
             "select" => engine.select_file_branch(&entry.file_id, &draft, "admin", operation),
             "select_at" => engine.select_file_branch_at(
@@ -601,7 +606,7 @@ fn exhausted_workspace_generations_reject_candidate_without_publication() {
         let error = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -664,7 +669,7 @@ fn exhausted_main_generation_rejects_active_namespace_batch() {
             &repo.repository_id,
             &request,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
@@ -681,7 +686,7 @@ fn frozen_directory_compositions_reject_missing_path_contexts() {
                 Some(&name_policy::LookupPath::parse("folder").unwrap()),
                 &storage_contract::BranchName::parse("draft").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let id = branch.result["directory_branch_id"].as_str().unwrap();
@@ -709,7 +714,7 @@ fn frozen_directory_compositions_reject_missing_path_contexts() {
                     Some(&name_policy::LookupPath::parse("folder").unwrap()),
                     &storage_contract::BranchName::parse("second").unwrap(),
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap_err()
         } else {
@@ -719,7 +724,7 @@ fn frozen_directory_compositions_reject_missing_path_contexts() {
                     Some(&name_policy::LookupPath::parse("folder").unwrap()),
                     &storage_contract::BranchName::parse("draft").unwrap(),
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap_err()
         };

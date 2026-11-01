@@ -8,7 +8,8 @@ fn missing_member_with_empty_mountpoint_never_reports_host_capacity() {
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
     let plan = engine.prepare_disk_observation();
     let member = &config.disks[0];
@@ -34,7 +35,8 @@ fn observation_owns_snapshot_and_probes_without_engine() {
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let plan = engine.prepare_disk_observation();
     let expected = engine.disk_status().unwrap();
@@ -69,7 +71,8 @@ fn accounting_snapshot_preserves_purge_and_duplicate_route_semantics() {
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -77,7 +80,7 @@ fn accounting_snapshot_preserves_purge_and_duplicate_route_semantics() {
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -91,7 +94,7 @@ fn accounting_snapshot_preserves_purge_and_duplicate_route_semantics() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -141,7 +144,8 @@ fn observation_exposes_dangling_internal_placement() {
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -150,7 +154,7 @@ fn observation_exposes_dangling_internal_placement() {
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -162,7 +166,7 @@ fn observation_exposes_dangling_internal_placement() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -180,7 +184,7 @@ fn observation_exposes_dangling_internal_placement() {
 #[test]
 fn metadata_probe_observes_current_identity_without_engine_or_capacity_accounting() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([root.path().join("member")]);
+    let config = Config::development([root.path().join("member")]).unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
     let probe = engine.prepare_metadata_member_probe();
     drop(engine);
@@ -210,7 +214,8 @@ fn metadata_probe_observes_current_identity_without_engine_or_capacity_accountin
 #[test]
 fn metadata_probe_ignores_nonmembers_and_unrelated_historical_placements() {
     let root = tempfile::tempdir().unwrap();
-    let mut config = Config::development([root.path().join("member"), root.path().join("backup")]);
+    let mut config =
+        Config::development([root.path().join("member"), root.path().join("backup")]).unwrap();
     config.disks[1].metadata_member = false;
     let mut engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
     // Deliberately dangling internal sentinels: observing identity must not touch
@@ -239,7 +244,7 @@ fn metadata_probe_ignores_nonmembers_and_unrelated_historical_placements() {
 #[test]
 fn corrupt_seal_retains_decode_source_and_revokes_epoch() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([root.path().join("member")]);
+    let config = Config::development([root.path().join("member")]).unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
     let epoch = engine.metadata_integrity.capture();
     let plan = engine.prepare_disk_observation();
@@ -262,7 +267,7 @@ fn zero_capacity_is_a_successful_sample_not_an_unavailable_status() {
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("member")]),
+        Config::development([root.path().join("member")]).unwrap(),
     )
     .unwrap();
     let mut observed = engine.prepare_disk_observation().sample().pop().unwrap();
@@ -281,7 +286,7 @@ fn capacity_syscall_failure_preserves_source_without_revoking_metadata_epoch() {
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("member")]),
+        Config::development([root.path().join("member")]).unwrap(),
     )
     .unwrap();
     let epoch = engine.metadata_integrity.capture();
@@ -310,7 +315,7 @@ fn capacity_syscall_failure_preserves_source_without_revoking_metadata_epoch() {
 #[ignore = "run alone with observations/read_error.c compiled as LD_PRELOAD"]
 fn seal_permission_failure_preserves_source_and_revokes_epoch() {
     let root = tempfile::tempdir().unwrap();
-    let config = Config::development([root.path().join("member")]);
+    let config = Config::development([root.path().join("member")]).unwrap();
     let engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
     let epoch = engine.metadata_integrity.capture();
     std::fs::write(config.disks[0].root.join("observation-read-error"), b"").unwrap();
@@ -335,7 +340,7 @@ fn capacity_failure_conversion_retains_stage_and_source_not_zero() {
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("member")]),
+        Config::development([root.path().join("member")]).unwrap(),
     )
     .unwrap();
     let mut observed = engine.prepare_disk_observation().sample().pop().unwrap();

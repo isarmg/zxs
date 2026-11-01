@@ -229,6 +229,7 @@ impl Session {
             &path,
         )?;
         let new_workspace = if needs_workspace {
+            let operation_id = OperationId::generate().map_err(ApiError::contract_input)?;
             let workspace = self.workspace()?;
             let validate = (|| {
                 let lookup = name_policy::LookupPath::from(&path);
@@ -268,7 +269,7 @@ impl Session {
                 }
                 return Err(error);
             }
-            Some(workspace)
+            Some((workspace, operation_id))
         } else {
             if let Some(Handle::Write(writer)) = self.handles.get(&handle) {
                 self.shared.backend.authorize_upload(
@@ -282,10 +283,10 @@ impl Session {
         let Some(Handle::Write(writer)) = self.handles.get_mut(&handle) else {
             return Err(ApiError::forbidden());
         };
-        if let Some(workspace) = new_workspace {
+        if let Some((workspace, operation_id)) = new_workspace {
             writer.workspace = workspace;
             writer.committed = false;
-            writer.operation_id = OperationId::generate();
+            writer.operation_id = operation_id;
             recovery_record(writer, &self.identity.principal, &self.branch)?;
         }
         if writer.file.metadata().map_err(ApiError::io)?.len() > self.max_file_bytes {

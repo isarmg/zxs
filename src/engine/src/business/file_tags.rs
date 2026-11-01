@@ -119,7 +119,7 @@ impl Engine {
                         results.push(json!({"branch_id":target.branch_id,"source_node_id":target.source_node_id,"node_id":target.source_node_id,"tags":tags,"no_change":true,"advanced":false}));
                         continue;
                     }
-                    let node = new_id("fmeta");
+                    let node = new_id("fmeta")?;
                     state.file_metadata_nodes.insert(node.clone(),FileMetadataNode {
                         node_id:node.clone(),history_tree_id:history,file_id:file.into(),version_id:version,
                         parent_node_ids:vec![target.source_node_id.clone()],branch_id:target.branch_id.clone(),

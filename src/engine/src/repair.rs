@@ -184,7 +184,7 @@ impl Engine {
                 let root = &owner.root;
                 let quarantine = disk.root.join("quarantine");
                 root.private_dir(&quarantine)?;
-                let name = format!("{}-repair-{}", version.version_id, new_id("req"));
+                let name = format!("{}-repair-{}", version.version_id, new_id("req")?);
                 let bundle = quarantine.join(&name);
                 root.private_dir(&bundle)?;
                 let content = crate::container_storage::content_path_at(

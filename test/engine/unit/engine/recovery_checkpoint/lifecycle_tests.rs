@@ -30,7 +30,7 @@ fn two_generations(
     workspace: &Workspace,
     source: &Path,
 ) -> (String, [StagedFile; 2]) {
-    let item = new_id("entry");
+    let item = new_id("entry").unwrap();
     std::fs::write(source, b"old!").unwrap();
     let old = engine
         .stage_upload(&workspace.workspace_id, &item, "file", source, 1)
@@ -69,7 +69,8 @@ impl LifecycleFixture {
             temp.path().join("a"),
             temp.path().join("b"),
             temp.path().join("c"),
-        ]);
+        ])
+        .unwrap();
         config.max_retained_workspaces = 1;
         config.max_retained_workspaces_per_principal = 1;
         config.max_file_bytes = 4;
@@ -82,7 +83,7 @@ impl LifecycleFixture {
                 "P01",
                 3,
                 "admin",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         drop(engine);
@@ -109,7 +110,7 @@ impl LifecycleFixture {
                 "admin",
             )
             .unwrap();
-        let historical_operation = OperationId::generate();
+        let historical_operation = OperationId::generate().unwrap();
         let historical_result = engine
             .commit_historical_save_plan(&historical_plan.plan_id, "admin", historical_operation)
             .unwrap();
@@ -255,7 +256,7 @@ fn exercise_lifecycle(recovery: RecoveryPath) {
     assert_budget_rejections(&fixture, &mut engine);
     let request = CommitRequest {
         workspace_id: fixture.pending.workspace_id.clone(),
-        operation_id: OperationId::generate(),
+        operation_id: OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: fixture.pending.base_head.clone(),
         fencing_token: fixture.pending.fencing_token,

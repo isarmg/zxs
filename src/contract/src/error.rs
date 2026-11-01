@@ -266,6 +266,12 @@ impl std::fmt::Display for ErrorCode {
 
 #[derive(Debug, error_definition::Error)]
 pub enum Error {
+    #[error("identifier generation failed: {source}")]
+    IdentifierGeneration {
+        #[source]
+        source: system_entropy::Error,
+        retryable: bool,
+    },
     #[error("{}: {source}", ErrorCode::from(source))]
     Name {
         #[source]
@@ -314,7 +320,8 @@ impl Error {
     }
     pub fn retryable(mut self) -> Self {
         match &mut self {
-            Self::Name { retryable, .. }
+            Self::IdentifierGeneration { retryable, .. }
+            | Self::Name { retryable, .. }
             | Self::Message { retryable, .. }
             | Self::Io { retryable, .. }
             | Self::Json { retryable, .. }
@@ -324,7 +331,8 @@ impl Error {
     }
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::Name { retryable, .. }
+            Self::IdentifierGeneration { retryable, .. }
+            | Self::Name { retryable, .. }
             | Self::Message { retryable, .. }
             | Self::Io { retryable, .. }
             | Self::Json { retryable, .. }
@@ -333,6 +341,7 @@ impl Error {
     }
     pub fn code(&self) -> ErrorCode {
         match self {
+            Self::IdentifierGeneration { .. } => ErrorCode::InternalError,
             Self::Message { code, .. } => *code,
             Self::Name { source, .. } => source.into(),
             Self::Io { source, .. } => io_code(source),
@@ -342,6 +351,7 @@ impl Error {
     }
     pub fn message(&self) -> std::borrow::Cow<'_, str> {
         match self {
+            Self::IdentifierGeneration { .. } => "identifier generation failed".into(),
             Self::Message { message, .. } => message.as_str().into(),
             Self::Name { source, .. } => source.to_string().into(),
             Self::Io { source, .. } => source.to_string().into(),

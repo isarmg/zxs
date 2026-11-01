@@ -11,14 +11,14 @@ fn typed_creation_binds_digest_and_checks_scope_before_receipt() {
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let outside = engine.state().histories[&other.history_tree_id]
         .root_commit_id
         .clone();
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let request = |repository: &str, source: &str, name: &str, operation_id| crate::CreateBranch {
         repository_id: repository.into(),
         source_commit_id: source.into(),
@@ -65,7 +65,7 @@ fn typed_creation_binds_digest_and_checks_scope_before_receipt() {
                     &repo.repository_id,
                     &source,
                     "CAFÉ",
-                    storage_contract::OperationId::generate()
+                    storage_contract::OperationId::generate().unwrap()
                 )
             )
             .unwrap_err()
@@ -96,7 +96,7 @@ fn typed_creation_binds_digest_and_checks_scope_before_receipt() {
             &identity,
             crate::ArchiveBranch {
                 branch_id: created.branch_id.clone(),
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap();

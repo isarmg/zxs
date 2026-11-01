@@ -451,7 +451,7 @@ fn build(arguments: &Arguments, reporter: &mut Reporter) -> BenchResult<(Engine,
     );
     let mut engine = Engine::initialize(
         &arguments.pool.join("system"),
-        Config::development([arguments.pool.join("disk")]),
+        Config::development([arguments.pool.join("disk")])?,
     )?;
     let repo = engine.create_repository(
         &RepositoryName::parse(REPOSITORY_NAME)?,

@@ -15,7 +15,7 @@ fn path_policy(
         target_copies: copies,
         expected_generation: generation,
         principal: "admin",
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
     })
 }
 
@@ -39,7 +39,7 @@ fn configure_scope(
             backup_prefixes: &values,
             expected_generation: generation,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap()
         .result["policy"]["policy_id"]
@@ -60,7 +60,7 @@ fn generic_policy_collisions_follow_the_current_directory_or_file_scope_path() {
         let scoped = configure_scope(&mut engine, &repo, source, 2, 0);
         rename(&mut engine, &repo, source, destination);
 
-        let generic = new_id("policy");
+        let generic = new_id("policy").unwrap();
         let before = canonical_json(engine.state()).unwrap();
         let error = path_policy(
             &mut engine,
@@ -115,7 +115,7 @@ fn renamed_stable_scope_wins_equal_depth_in_either_creation_and_id_order() {
             }
             let single = save(&mut engine, &repo, "source/single.txt", b"single");
             let single_policy = configure_scope(&mut engine, &repo, "source/single.txt", 1, 0);
-            let child_policy = new_id("policy");
+            let child_policy = new_id("policy").unwrap();
             path_policy(&mut engine, &repo, &child_policy, "renamed/child", 3, 0).unwrap();
             rename(&mut engine, &repo, "source", "renamed");
 
@@ -173,7 +173,7 @@ fn root_scope_adopts_existing_path_rule_and_rejects_parallel_rules() {
     for generic_first in [false, true] {
         let temp = tempfile::tempdir().unwrap();
         let (mut engine, repo) = initialize(temp.path(), 1, None);
-        let generic = new_id("policy");
+        let generic = new_id("policy").unwrap();
         if generic_first {
             path_policy(&mut engine, &repo, &generic, "", 1, 0).unwrap();
         }
@@ -182,7 +182,8 @@ fn root_scope_adopts_existing_path_rule_and_rejects_parallel_rules() {
             assert_eq!(scoped, generic);
         }
         assert_eq!(engine.state.protection_policies.len(), 1);
-        let error = path_policy(&mut engine, &repo, &new_id("policy"), "", 1, 0).unwrap_err();
+        let error =
+            path_policy(&mut engine, &repo, &new_id("policy").unwrap(), "", 1, 0).unwrap_err();
         assert_eq!(error.code(), storage_contract::ErrorCode::NameCollision);
         let read = engine
             .backup_configuration(&repo.repository_id, "")
@@ -207,7 +208,7 @@ fn exact_path_rule_does_not_hide_effective_file_binding_or_retained_settings() {
     let (mut engine, repo) = initialize(temp.path(), 1, None);
     let file = save(&mut engine, &repo, "source/file.txt", b"before");
     let source_policy = configure_scope(&mut engine, &repo, "source", 1, 0);
-    let path_policy_id = new_id("policy");
+    let path_policy_id = new_id("policy").unwrap();
     path_policy(&mut engine, &repo, &path_policy_id, "moved.txt", 3, 0).unwrap();
     rename(&mut engine, &repo, "source/file.txt", "moved.txt");
     for retained in [false, true] {

@@ -10,11 +10,11 @@ fn typed_merge_link_keeps_receipt_binding_and_scope_admission() {
             &head,
             &storage_contract::BranchName::parse("side").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let request =
         |history: &str, source: &str, target_commit: &str, operation_id| crate::CreateMergeLink {
             history_tree_id: history.into(),
@@ -68,7 +68,7 @@ fn typed_merge_link_keeps_receipt_binding_and_scope_admission() {
                     &repo.history_tree_id,
                     "missing",
                     &head,
-                    storage_contract::OperationId::generate()
+                    storage_contract::OperationId::generate().unwrap()
                 )
             )
             .unwrap_err()

@@ -530,7 +530,7 @@ fn full_copy_checked(
     max_bytes: u64,
     expected: Option<&FileVersion>,
 ) -> std::result::Result<(u64, ContentHash, ChecksumManifest, File), CopyFailure> {
-    let temporary = format!(".zxs-full-{}", new_id("req"));
+    let temporary = format!(".zxs-full-{}", new_id("req")?);
     let mut target = File::from(
         rustix::fs::openat(
             directory,

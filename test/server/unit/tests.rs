@@ -856,7 +856,7 @@ async fn cookie_mutations_require_csrf_and_foreign_origins_are_rejected() {
                 .header("cookie", &cookie)
                 .header("host", "127.0.0.1:7400")
                 .header("origin", "http://127.0.0.1:7400")
-                .body(Body::from(json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}).to_string()))
+                .body(Body::from(json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate().unwrap()}).to_string()))
                 .unwrap(),
         )
         .await
@@ -872,7 +872,7 @@ async fn cookie_mutations_require_csrf_and_foreign_origins_are_rejected() {
                 .header("x-csrf-token", csrf)
                 .header("host", "127.0.0.1:7400")
                 .header("origin", "http://127.0.0.1:7400")
-                .body(Body::from(json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate()}).to_string()))
+                .body(Body::from(json!({"name":"Repository","primary_slot_id":"P01","target_copies":3,"operation_id":storage_contract::OperationId::generate().unwrap()}).to_string()))
                 .unwrap(),
         )
         .await

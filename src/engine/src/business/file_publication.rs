@@ -55,7 +55,7 @@ pub(crate) fn advance_branch_node(
     } else {
         previous.pending_file_versions.clone()
     };
-    let id = new_id("commit");
+    let id = new_id("commit")?;
     state.commits.insert(
         id.clone(),
         Commit {
@@ -64,7 +64,7 @@ pub(crate) fn advance_branch_node(
             history_tree_id: previous.history_tree_id,
             kind: "file_metadata".into(),
             parent_commit_ids: vec![current.commit_id.clone()],
-            tree_id: new_id("tree"),
+            tree_id: new_id("tree")?,
             sequence: state.sequence,
             operation_id: operation,
             author: principal.into(),
@@ -242,7 +242,7 @@ impl Publication<'_> {
                     .cloned(),
             );
             validate_entries(&mut full, self.maximum)?;
-            let id = new_id("commit");
+            let id = new_id("commit")?;
             let pending = full
                 .iter()
                 .filter(|entry| entry.kind == NamespaceEntryKind::File)
@@ -266,7 +266,7 @@ impl Publication<'_> {
                     history_tree_id: previous.history_tree_id.clone(),
                     kind: "file_node_publication".into(),
                     parent_commit_ids: vec![previous.commit_id.clone()],
-                    tree_id: new_id("tree"),
+                    tree_id: new_id("tree")?,
                     sequence: state.sequence,
                     operation_id: self.operation,
                     author: self.principal.into(),
@@ -276,7 +276,7 @@ impl Publication<'_> {
                     provenance: None,
                 },
             );
-            tree.tree_id = new_id("dtree");
+            tree.tree_id = new_id("dtree")?;
             tree.parent_tree_id = Some(tree_id.into());
             tree.commit_id = id;
             tree.sequence = state.sequence;
@@ -441,7 +441,7 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
     }
     if !changed_paths.is_empty() {
         validate_entries(&mut entries, maximum)?;
-        let id = new_id("commit");
+        let id = new_id("commit")?;
         let pending = directory::snapshot_pending(state, &entries);
         state.commits.insert(
             id.clone(),
@@ -451,7 +451,7 @@ pub(crate) fn publish_node(state: &mut State, input: NodePublication<'_>) -> Res
                 history_tree_id: repo.history_tree_id.clone(),
                 kind: "file_node_publication".into(),
                 parent_commit_ids: vec![previous.commit_id.clone()],
-                tree_id: new_id("tree"),
+                tree_id: new_id("tree")?,
                 sequence: state.sequence,
                 operation_id: operation,
                 author: principal.into(),

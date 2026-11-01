@@ -36,7 +36,8 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine =
         AdmissionEngine::new(Engine::initialize(&root.path().join("system"), config).unwrap());
     let repo = engine
@@ -45,7 +46,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -66,7 +67,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -95,7 +96,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         assert_eq!(filtered["total_entries"], "1");
         assert_eq!(filtered["selected_entry"], *selected);
         let mut missing = query.clone();
-        missing["query"]["selected_entry_id"] = new_id("entry").into();
+        missing["query"]["selected_entry_id"] = new_id("entry").unwrap().into();
         assert!(listing_json(&engine, &missing).unwrap()["selected_entry"].is_null());
         let mut malformed = query;
         malformed["query"]
@@ -116,7 +117,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
             &repo.repository_id,
             None,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let initial =
@@ -159,7 +160,7 @@ fn actual_primary_and_backup_projection_is_page_bounded_and_selected_is_independ
         (engine.state().sequence, engine.state().operations.len()),
         before
     );
-    let stale = selection(new_id("tree"), "zeta.txt").unwrap();
+    let stale = selection(new_id("tree").unwrap(), "zeta.txt").unwrap();
     assert_eq!(
         crate::engine_backend::directory_selection::read(&engine, &stale)
             .err()
@@ -183,7 +184,7 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("d1")]),
+        Config::development([root.path().join("d1")]).unwrap(),
     )
     .unwrap();
     let mut engine = AdmissionEngine::new(engine);
@@ -193,7 +194,7 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -206,7 +207,7 @@ fn selected_display_path_may_include_a_repository_prefix_beyond_stored_path_limi
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -231,7 +232,7 @@ fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_with
     let root = tempfile::tempdir().unwrap();
     let engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("d1")]),
+        Config::development([root.path().join("d1")]).unwrap(),
     )
     .unwrap();
     let mut engine = AdmissionEngine::new(engine);
@@ -246,7 +247,7 @@ fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_with
                 "P01",
                 1,
                 "owner",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
     }
@@ -275,7 +276,7 @@ fn virtual_root_snapshots_outlive_engine_and_generation_invalidates_cursors_with
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let stale = listing_json(
@@ -317,7 +318,8 @@ fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_c
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let mut engine = AdmissionEngine::new(engine);
@@ -327,7 +329,7 @@ fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_c
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -339,7 +341,7 @@ fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_c
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -358,7 +360,7 @@ fn backup_deleted_file_retains_historical_namespace_without_fabricated_current_c
             )
             .unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let listing = listing_json(

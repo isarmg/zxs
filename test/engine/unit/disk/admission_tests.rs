@@ -63,7 +63,7 @@ fn cold_seal_identity_uses_the_opened_root_after_named_root_rebinding() {
     let address = temporary.path().join("member");
     private_dir(&address).unwrap();
     fs::write(address.join("object"), b"held bytes").unwrap();
-    let mut config = Config::development([address.clone()]);
+    let mut config = Config::development([address.clone()]).unwrap();
     config.mode = Mode::Production;
     let config = ValidatedConfig::try_from(config).unwrap();
     let disk = &config.disks[0];
@@ -177,7 +177,8 @@ fn cold_directory_admission_keeps_held_identity_after_mount_replacement() {
             fs::write(address.join("object"), b"held bytes").unwrap();
             let root = DiskRoot::open(&address).unwrap();
             let held_directory = root.directory(&address).unwrap();
-            let config = ValidatedConfig::try_from(Config::development([address.clone()])).unwrap();
+            let config =
+                ValidatedConfig::try_from(Config::development([address.clone()]).unwrap()).unwrap();
             let held_seal = identity_at(&config, &config.disks[0], &held_directory).unwrap();
             let status = Command::new("/usr/bin/umount")
                 .arg("--lazy")

@@ -393,7 +393,8 @@ fn unavailable_unrelated_member_does_not_block_survivor_checks_or_restore_select
         f.service.disks["one"].clone(),
         f.service.disks["two"].clone(),
         f.service.disks["three"].clone(),
-    ]);
+    ])
+    .unwrap();
     drop(Engine::initialize(&f.service.data_root, config).unwrap());
     fs::rename(
         &f.service.disks["three"],
@@ -533,7 +534,8 @@ fn completion_cannot_reset_old_pool_or_partial_authority_or_changed_data() {
                 f.service.disks["one"].clone(),
                 f.service.disks["two"].clone(),
                 f.service.disks["three"].clone(),
-            ]),
+            ])
+            .unwrap(),
         )
         .unwrap(),
     );
@@ -620,11 +622,12 @@ fn preset_fixture() -> (Fixture, Config, PathBuf) {
         f.service.disks["one"].clone(),
         f.service.disks["two"].clone(),
         f.service.disks["three"].clone(),
-    ]);
+    ])
+    .unwrap();
     let mut fourth = config.disks[2].clone();
     fourth.root = extra;
     fourth.slot_id = "D01".into();
-    fourth.disk_id = storage_engine::new_id("disk");
+    fourth.disk_id = storage_engine::new_id("disk").unwrap();
     fourth.level = 4;
     fourth.upstream_slot_id = Some("C01".into());
     fourth.metadata_member = false;
@@ -924,7 +927,8 @@ fn restore_single_member_uses_original_membership_not_survivor_count() {
                     ids.iter()
                         .map(|id| f.service.disks[*id].clone())
                         .collect::<Vec<_>>(),
-                ),
+                )
+                .unwrap(),
             )
             .unwrap(),
         );
@@ -1072,7 +1076,7 @@ fn recoverable_fixture() -> Fixture {
     let mut f = fixture_with_disks(&["one"]);
     let mut engine = Engine::initialize(
         &f.service.data_root,
-        Config::development(vec![f.service.disks["one"].clone()]),
+        Config::development(vec![f.service.disks["one"].clone()]).unwrap(),
     )
     .unwrap();
     engine
@@ -1086,7 +1090,7 @@ fn recoverable_fixture() -> Fixture {
             .snapshot()
             .unwrap(),
             "system_auth",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     drop(engine);
@@ -1290,7 +1294,7 @@ fn runtime_workspace_limits_below_selected_setup_baseline_do_not_publish_intent(
 #[test]
 fn initialization_and_bound_completion_keep_runtime_workspace_limits_out_of_config() {
     let mut f = fixture();
-    let baseline = Config::development(f.service.disks.values().cloned());
+    let baseline = Config::development(f.service.disks.values().cloned()).unwrap();
     let limits = raised_workspace_limits(&baseline);
     f.service = f.service.with_workspace_limits(Some(limits)).unwrap();
     let error = f

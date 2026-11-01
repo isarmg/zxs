@@ -7,7 +7,8 @@ use storage_engine::{BackupConfigurationRequest, CommitRequest, ProtectionPolicy
 
 fn initialize(maximum: usize) -> (tempfile::TempDir, AdmissionEngine) {
     let root = crate::tests::private_tempdir();
-    let mut config = Config::development([root.path().join("primary"), root.path().join("backup")]);
+    let mut config =
+        Config::development([root.path().join("primary"), root.path().join("backup")]).unwrap();
     config.max_entries = maximum;
     let engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     (root, AdmissionEngine::new(engine))
@@ -20,7 +21,7 @@ fn repository(engine: &mut AdmissionEngine, name: &str) -> Repository {
             "P01",
             2,
             "owner",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap()
 }
@@ -35,7 +36,7 @@ fn save(engine: &mut AdmissionEngine, repo: &Repository, path: &str, body: &[u8]
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -63,7 +64,7 @@ fn configure(engine: &mut AdmissionEngine, repo: &Repository, path: &str, prefix
             backup_prefixes: &BTreeMap::from([("B01".into(), prefix.into())]),
             expected_generation: previous.generation,
             principal: "owner",
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
         })
         .unwrap();
 }
@@ -80,7 +81,7 @@ fn namespace(
             &repo.repository_id,
             storage_contract::NamespaceOperation::parse(kind, path, destination).unwrap(),
             "owner",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
 }
@@ -187,7 +188,7 @@ fn canonical_owner_wins_over_frozen_aliases_in_either_namespace_order() {
                 Some(&scope),
                 &frozen,
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         namespace(
@@ -203,7 +204,7 @@ fn canonical_owner_wins_over_frozen_aliases_in_either_namespace_order() {
                 Some(&scope),
                 &frozen,
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         assert_eq!(engine.state().file_locations[&original.file_id], owner_path);
@@ -248,7 +249,7 @@ fn current_slot_version_precedes_newer_history_and_retains_pending_context() {
             &first.version_id,
             &BranchName::parse("older pending").unwrap(),
             "owner",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["branch_id"]
@@ -258,7 +259,12 @@ fn current_slot_version_precedes_newer_history_and_retains_pending_context() {
     let newest = save(&mut engine, &repo, "report.txt", b"newer body");
     assert_ne!(first.version_id, newest.version_id);
     engine
-        .select_file_branch(&first.file_id, &pending, "owner", OperationId::generate())
+        .select_file_branch(
+            &first.file_id,
+            &pending,
+            "owner",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     let current = listing(&engine, "P01/Files", &[]).unwrap();
     let row = &current["entries"][0];
@@ -294,13 +300,13 @@ fn newest_available_backup_version_overlays_a_primary_only_current_entry() {
     let available = save(&mut engine, &repo, "report.txt", b"backup body");
     engine
         .update_protection_policy(ProtectionPolicyUpdate {
-            policy_id: &storage_engine::new_id("policy"),
+            policy_id: &storage_engine::new_id("policy").unwrap(),
             repository_id: &repo.repository_id,
             path_prefix: "",
             target_copies: 1,
             expected_generation: 0,
             principal: "owner",
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
         })
         .unwrap();
     let primary = save(&mut engine, &repo, "report.txt", b"primary only body");

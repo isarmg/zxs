@@ -1,7 +1,7 @@
 use super::*;
 #[test]
 fn repository_creation_preserves_contract_error_details_and_sources() {
-    let mut body = json_codec::json!({"name":"../bad","primary_slot_id":"P01","target_copies":1,"operation_id":storage_contract::OperationId::generate()});
+    let mut body = json_codec::json!({"name":"../bad","primary_slot_id":"P01","target_copies":1,"operation_id":storage_contract::OperationId::generate().unwrap()});
     crate::tests::assert_contract_input(
         &parse(body.as_object().unwrap().clone()).err().unwrap(),
         &storage_contract::RepositoryName::parse("../bad").unwrap_err(),

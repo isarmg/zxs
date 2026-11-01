@@ -12,7 +12,7 @@ fn bounded_selection_freezes_only_requested_facts_and_rechecks_current_baselines
             &repo.repository_id,
             None,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let branch = engine.state().directory_branches
@@ -90,7 +90,7 @@ fn bounded_selection_freezes_only_requested_facts_and_rechecks_current_baselines
             &branch.directory_branch_id,
             &storage_contract::BranchName::parse("renamed").unwrap(),
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let response = DirectorySelectionResponse::from(snapshot);

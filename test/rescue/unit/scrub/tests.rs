@@ -11,7 +11,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, Engine) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("system");
     let disk = directory.path().join("disk");
-    let engine = Engine::initialize(&root, Config::development([disk])).unwrap();
+    let engine = Engine::initialize(&root, Config::development([disk]).unwrap()).unwrap();
     (directory, root, engine)
 }
 

@@ -20,7 +20,8 @@ fn upload_retry_recovers_published_bytes_after_manifest_failure() {
             primary.clone(),
             temporary.path().join("backup"),
             temporary.path().join("tertiary"),
-        ]);
+        ])
+        .unwrap();
         config.max_file_bytes = 4;
         config.max_workspace_bytes = 4;
         let mut engine = Engine::initialize(&root, config).unwrap();
@@ -30,13 +31,13 @@ fn upload_retry_recovers_published_bytes_after_manifest_failure() {
                 "P01",
                 1,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")
             .unwrap();
-        let item = new_id("entry");
+        let item = new_id("entry").unwrap();
         let source = temporary.path().join("source");
         fs::write(&source, b"data").unwrap();
         let data = primary
@@ -111,7 +112,13 @@ fn upload_retry_recovers_published_bytes_after_manifest_failure() {
         );
         assert_eq!(
             engine
-                .stage_upload(&workspace.workspace_id, &new_id("entry"), "b", &source, 1)
+                .stage_upload(
+                    &workspace.workspace_id,
+                    &new_id("entry").unwrap(),
+                    "b",
+                    &source,
+                    1
+                )
                 .unwrap_err()
                 .code(),
             storage_contract::ErrorCode::ResourceLimit
@@ -137,7 +144,8 @@ fn same_generation_retry_rejects_missing_or_corrupt_retained_bytes() {
                     temporary.path().join("primary"),
                     temporary.path().join("backup"),
                     temporary.path().join("tertiary"),
-                ]),
+                ])
+                .unwrap(),
             )
             .unwrap();
             let repo = engine
@@ -146,13 +154,13 @@ fn same_generation_retry_rejects_missing_or_corrupt_retained_bytes() {
                     "P01",
                     1,
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
             let workspace = engine
                 .create_workspace(&repo.main_branch_id, "admin")
                 .unwrap();
-            let item = new_id("entry");
+            let item = new_id("entry").unwrap();
             let source = temporary.path().join("source");
             fs::write(&source, b"data").unwrap();
             let staged = engine
@@ -195,7 +203,8 @@ fn same_generation_retry_revalidates_held_target_before_acknowledging() {
                 temporary.path().join("primary"),
                 temporary.path().join("backup"),
                 temporary.path().join("tertiary"),
-            ]),
+            ])
+            .unwrap(),
         )
         .unwrap();
         let repo = engine
@@ -204,13 +213,13 @@ fn same_generation_retry_revalidates_held_target_before_acknowledging() {
                 "P01",
                 1,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")
             .unwrap();
-        let item = new_id("entry");
+        let item = new_id("entry").unwrap();
         let source = temporary.path().join("source");
         fs::write(&source, b"data").unwrap();
         let staged = engine
@@ -255,7 +264,8 @@ fn detached_upload_keeps_writer_locks_until_cancelled() {
                 primary.clone(),
                 temporary.path().join("backup"),
                 temporary.path().join("tertiary"),
-            ]),
+            ])
+            .unwrap(),
         )
         .unwrap();
         let repo = engine
@@ -264,7 +274,7 @@ fn detached_upload_keeps_writer_locks_until_cancelled() {
                 "P01",
                 1,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine
@@ -273,7 +283,13 @@ fn detached_upload_keeps_writer_locks_until_cancelled() {
         let source = temporary.path().join("source");
         fs::write(&source, b"data").unwrap();
         let preparation = engine
-            .prepare_upload(&workspace.workspace_id, &new_id("entry"), "a", &source, 1)
+            .prepare_upload(
+                &workspace.workspace_id,
+                &new_id("entry").unwrap(),
+                "a",
+                &source,
+                1,
+            )
             .unwrap();
         drop(engine);
         if execute {
@@ -323,20 +339,21 @@ fn first_upload_revalidates_prepared_bytes_before_acknowledging() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("system");
         let primary = temporary.path().join("primary");
-        let mut engine = Engine::initialize(&root, Config::development([primary.clone()])).unwrap();
+        let mut engine =
+            Engine::initialize(&root, Config::development([primary.clone()]).unwrap()).unwrap();
         let repo = engine
             .create_repository(
                 &storage_contract::RepositoryName::parse("Prepared upload").unwrap(),
                 "P01",
                 1,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine
             .create_workspace(&repo.main_branch_id, "admin")
             .unwrap();
-        let item = new_id("entry");
+        let item = new_id("entry").unwrap();
         let source = temporary.path().join("source");
         fs::write(&source, b"data").unwrap();
         let prepared = engine
@@ -393,7 +410,7 @@ fn interrupted_copy_temporaries_consume_workspace_bytes_and_generation_slots() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("system");
         let primary = temporary.path().join("primary");
-        let mut config = Config::development([primary.clone()]);
+        let mut config = Config::development([primary.clone()]).unwrap();
         config.max_file_bytes = 4;
         config.max_workspace_bytes = if count_limit { 8 } else { 4 };
         config.max_entries = if count_limit { 1 } else { 8 };
@@ -404,7 +421,7 @@ fn interrupted_copy_temporaries_consume_workspace_bytes_and_generation_slots() {
                 "P01",
                 1,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine
@@ -413,14 +430,14 @@ fn interrupted_copy_temporaries_consume_workspace_bytes_and_generation_slots() {
         let directory = primary
             .join("staging/workspaces")
             .join(&workspace.workspace_id);
-        let crash = directory.join(format!(".zxs-full-{}", new_id("req")));
+        let crash = directory.join(format!(".zxs-full-{}", new_id("req").unwrap()));
         fs::write(&crash, b"old!").unwrap();
         // Similar names and temporaries outside this workspace are not its
         // retained upload evidence; admission must not recursively charge them.
-        let unrelated = directory.join(format!(".zxs-fullish-{}", new_id("req")));
+        let unrelated = directory.join(format!(".zxs-fullish-{}", new_id("req").unwrap()));
         let outside = primary
             .join("staging")
-            .join(format!(".zxs-full-{}", new_id("req")));
+            .join(format!(".zxs-full-{}", new_id("req").unwrap()));
         fs::write(&unrelated, b"unrelated data").unwrap();
         fs::write(&outside, b"another workspace's data").unwrap();
         for reopen in [false, true] {

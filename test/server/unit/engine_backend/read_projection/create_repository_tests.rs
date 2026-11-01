@@ -3,7 +3,7 @@ use super::*;
 fn typed_repository_creation_keeps_route_before_receipt_and_original_binding() {
     let (root, engine, _, _) = fixture();
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let request = |name: &str, slot: &str, copies, operation_id| crate::CreateRepository {
         name: storage_contract::RepositoryName::parse(name).unwrap(),
         primary_slot_id: slot.into(),
@@ -50,7 +50,12 @@ fn typed_repository_creation_keeps_route_before_receipt_and_original_binding() {
         backend
             .create_repository(
                 &identity,
-                request("CAFÉ", "P01", 3, storage_contract::OperationId::generate())
+                request(
+                    "CAFÉ",
+                    "P01",
+                    3,
+                    storage_contract::OperationId::generate().unwrap()
+                )
             )
             .unwrap_err()
             .code,
@@ -64,7 +69,7 @@ fn typed_repository_creation_keeps_route_before_receipt_and_original_binding() {
                 branch: &created.main_branch_id,
                 enabled: false,
                 expected_history_generation: 1,
-                operation: storage_contract::OperationId::generate(),
+                operation: storage_contract::OperationId::generate().unwrap(),
             },
         )
         .unwrap();

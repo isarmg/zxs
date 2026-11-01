@@ -84,7 +84,7 @@ impl NamespaceDraft {
                 }
             } else {
                 self.replace(Entry {
-                    entry_id: new_id("entry"),
+                    entry_id: new_id("entry")?,
                     path,
                     kind: NamespaceEntryKind::Directory,
                     file_id: String::new(),

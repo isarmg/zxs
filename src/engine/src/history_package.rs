@@ -828,7 +828,7 @@ impl Engine {
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
         private_dir(parent)?;
-        let staging = parent.join(format!(".zxs-history-{}", new_id("req")));
+        let staging = parent.join(format!(".zxs-history-{}", new_id("req")?));
         private_dir(&staging)?;
         let result = (|| {
             for (id, version) in &manifest.versions {

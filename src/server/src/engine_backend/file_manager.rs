@@ -187,7 +187,7 @@ fn resolve<'a>(
         .create_disk_root(
             slot,
             &identity.principal,
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().map_err(ApiError::contract_input)?,
         )
         .map_err(error)?;
     Ok((repo, value))

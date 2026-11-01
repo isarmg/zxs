@@ -7,7 +7,8 @@ fn saved() -> (tempfile::TempDir, Engine, String, CommitRequest) {
         temp.path().join("primary"),
         temp.path().join("backup"),
         temp.path().join("tertiary"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -15,7 +16,7 @@ fn saved() -> (tempfile::TempDir, Engine, String, CommitRequest) {
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -26,7 +27,7 @@ fn saved() -> (tempfile::TempDir, Engine, String, CommitRequest) {
         .unwrap();
     let request = CommitRequest {
         workspace_id: workspace.workspace_id,
-        operation_id: storage_contract::OperationId::generate(),
+        operation_id: storage_contract::OperationId::generate().unwrap(),
         principal: "admin".into(),
         expected_head: workspace.base_head,
         fencing_token: workspace.fencing_token,
@@ -481,7 +482,7 @@ fn workspace_mirrors_never_select_newest_or_first_conflicting_manifest() {
                 }
                 "fence" => workspace.fencing_token += 50,
                 "state" => workspace.state = storage_contract::WorkspaceState::Aborted,
-                "identity" => workspace.workspace_id = new_id("ws"),
+                "identity" => workspace.workspace_id = new_id("ws").unwrap(),
                 _ => unreachable!(),
             }
             let root = engine.root().to_owned();
@@ -623,8 +624,8 @@ fn degraded_committed_workspace_requires_authoritative_receipt_binding() {
         let mut workspace = engine.workspace(&request.workspace_id).unwrap();
         match field {
             "owner" => workspace.principal = "not-the-published-owner".into(),
-            "branch" => workspace.branch_id = new_id("branch"),
-            "base" => workspace.base_head = new_id("commit"),
+            "branch" => workspace.branch_id = new_id("branch").unwrap(),
+            "base" => workspace.base_head = new_id("commit").unwrap(),
             "fence" => workspace.fencing_token += 50,
             _ => unreachable!(),
         }
@@ -648,7 +649,8 @@ fn historical_workspace_mirror_recovery_uses_published_plan() {
             temp.path().join("primary"),
             temp.path().join("backup"),
             temp.path().join("tertiary"),
-        ]);
+        ])
+        .unwrap();
         let mut engine = Engine::initialize(&temp.path().join("system"), config).unwrap();
         let repo = engine
             .create_repository(
@@ -656,7 +658,7 @@ fn historical_workspace_mirror_recovery_uses_published_plan() {
                 "P01",
                 1,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let head = engine.state().branches[&repo.main_branch_id]
@@ -681,7 +683,7 @@ fn historical_workspace_mirror_recovery_uses_published_plan() {
                 "admin",
             )
             .unwrap();
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         let receipt = engine
             .commit_historical_save_plan(&plan.plan_id, "admin", operation)
             .unwrap();
@@ -746,7 +748,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
             let before = engine.workspace(&workspace.workspace_id).unwrap();
             let request = CommitRequest {
                 workspace_id: workspace.workspace_id.clone(),
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -773,7 +775,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
                     &entry.version_id,
                     &storage_contract::BranchName::parse("later selection").unwrap(),
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
             engine
@@ -781,7 +783,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
                     &entry.file_id,
                     alternative.result["branch_id"].as_str().unwrap(),
                     "admin",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
             if forged {
@@ -789,7 +791,7 @@ fn partial_workspace_completion_uses_original_published_file_contexts() {
                     .selected_file_contexts
                     .get_mut(&format!("{repository}/first-file"))
                     .unwrap()
-                    .branch_id = new_id("branch");
+                    .branch_id = new_id("branch").unwrap();
             }
             let paths =
                 request_paths(&engine, &request).map(|path| path.with_file_name("workspace.json"));

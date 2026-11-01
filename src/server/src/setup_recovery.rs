@@ -520,7 +520,7 @@ impl SetupRecovery {
         if request.mode == Mode::Development && !self.allow_development {
             return Err(ApiError::forbidden());
         }
-        let mut config = Config::development(paths);
+        let mut config = Config::development(paths).map_err(ApiError::contract_input)?;
         config.mode = request.mode;
         let config = ValidatedConfig::try_from(config).map_err(engine_error)?;
         self.initialize_config(

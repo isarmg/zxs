@@ -47,7 +47,7 @@ fn proof_digest_does_not_hash_the_omitted_optional_field_projection() {
 fn fixture() -> (tempfile::TempDir, Engine, FileVersion, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let config = Config::development([temp.path().join("disk")]);
+    let config = Config::development([temp.path().join("disk")]).unwrap();
     let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -55,7 +55,7 @@ fn fixture() -> (tempfile::TempDir, Engine, FileVersion, PathBuf) {
             "P01",
             1,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -67,7 +67,7 @@ fn fixture() -> (tempfile::TempDir, Engine, FileVersion, PathBuf) {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn cancel_parses_once_but_preserves_operation_error_for_plan_admission() {
-    let operation_id = storage_contract::OperationId::generate();
+    let operation_id = storage_contract::OperationId::generate().unwrap();
     let body = json_codec::json!({"plan_id":"plan","operation_id":operation_id});
     let parsed = parse(body.as_object().unwrap().clone()).unwrap();
     assert_eq!(parsed.plan_id, "plan");
@@ -74,7 +74,7 @@ fn plan_projection_preserves_raw_wire_and_large_sequence() {
 
 #[test]
 fn commit_required_text_precedes_unknown_fields_and_operation_format_is_deferred() {
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let body =
         json_codec::json!({"plan_id":"plan","operation_id":operation,"plan_digest":"digest"});
     let parsed = parse_commit(body.as_object().unwrap().clone()).unwrap();

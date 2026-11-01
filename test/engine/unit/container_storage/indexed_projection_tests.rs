@@ -241,11 +241,14 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let temporary = tempfile::tempdir().unwrap();
-        let config = ValidatedConfig::try_from(Config::development([
-            temporary.path().join("p"),
-            temporary.path().join("b"),
-            temporary.path().join("c"),
-        ]))
+        let config = ValidatedConfig::try_from(
+            Config::development([
+                temporary.path().join("p"),
+                temporary.path().join("b"),
+                temporary.path().join("c"),
+            ])
+            .unwrap(),
+        )
         .unwrap();
         drop(
             Engine::initialize_validated(&temporary.path().join("system"), config.clone()).unwrap(),
@@ -332,7 +335,7 @@ impl Fixture {
             branch_id: id("br", 1),
             kind: FileMetadataKind::Tags,
             tags: BTreeSet::from(["blue".into(), "重要".into()]),
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             author: "author".into(),
             sequence: 10,
             created_at: 10,
@@ -353,7 +356,7 @@ impl Fixture {
                 branch_id: id("br", 1),
                 path: format!("new-{number}.txt"),
                 previous_path: "seed.txt".into(),
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 author: "author".into(),
                 sequence,
                 created_at: sequence,
@@ -378,7 +381,7 @@ impl Fixture {
                 surviving_branch_id: id("br", 1),
                 reused_node: true,
                 parent_node_ids: vec![id("ver", 1), id("fpath", number)],
-                operation_id: OperationId::generate(),
+                operation_id: OperationId::generate().unwrap(),
                 sequence: number,
             };
             state

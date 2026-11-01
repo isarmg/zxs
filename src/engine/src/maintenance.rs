@@ -146,7 +146,7 @@ impl Engine {
     }
     fn save_plan(&mut self, kind: &str, principal: &str, input: json_codec::Value) -> Result<Plan> {
         let plan = Plan {
-            plan_id: new_id("plan"),
+            plan_id: new_id("plan")?,
             kind: kind.into(),
             principal: principal.into(),
             expected_sequence: self.state.business_generation,
@@ -651,32 +651,33 @@ impl Engine {
                     return Err(Error::new(storage_contract::ErrorCode::ContentPinned, "split input has an active read lease"));
                 }
                 drop(reads);
-                let history_id = new_id("history");
-                let repository_id = new_id("repo");
-                let commit_map = commits.iter().map(|c| (c.commit_id.clone(), new_id("commit")))
-                    .collect::<BTreeMap<_,_>>();
+                let history_id = new_id("history")?;
+                let repository_id = new_id("repo")?;
+                let commit_map = commits.iter().map(|c| Ok((c.commit_id.clone(), new_id("commit")?)))
+                    .collect::<Result<BTreeMap<_,_>>>()?;
                 // Map identities once for the whole history, rather than once per snapshot.
                 let entry_map = commits.iter().flat_map(|c| &c.entries)
                     .map(|e| e.entry_id.clone()).collect::<BTreeSet<_>>().into_iter()
-                    .map(|id| (id, new_id("entry"))).collect::<BTreeMap<_,_>>();
+                    .map(|id| Ok((id, new_id("entry")?))).collect::<Result<BTreeMap<_,_>>>()?;
                 let file_map = commits.iter().flat_map(|c| &c.entries).filter(|e| e.kind == NamespaceEntryKind::File)
                     .map(|e| e.file_id.clone()).collect::<BTreeSet<_>>().into_iter()
-                    .map(|id| (id, new_id("file"))).collect::<BTreeMap<_,_>>();
+                    .map(|id| Ok((id, new_id("file")?))).collect::<Result<BTreeMap<_,_>>>()?;
                 let source_branches = state.branches.values().filter(|branch| branch.history_tree_id == history)
                     .cloned().collect::<Vec<_>>();
                 let moved = source_branches.iter().filter(|b| selected.contains(&b.head_commit_id))
                     .map(|b| b.branch_id.clone()).collect::<BTreeSet<_>>();
                 let links = state.merge_links.values().filter(|link| link.history_tree_id == history)
                     .cloned().collect::<Vec<_>>();
-                let mut branch_map = moved.iter().map(|id| (id.clone(), new_id("br")))
-                    .collect::<BTreeMap<_,_>>();
+                let mut branch_map = moved.iter().map(|id| Ok((id.clone(), new_id("br")?)))
+                    .collect::<Result<BTreeMap<_,_>>>()?;
                 // A link may name a branch whose current HEAD is outside the cut.
                 // Preserve that branch's local identity with an archived endpoint stub.
                 for link in &links {
                     for (branch, commit) in [(&link.source_branch_id, &link.source_commit_id),
                         (&link.target_branch_id, &link.target_commit_id)] {
-                        if selected.contains(commit) {
-                            branch_map.entry(branch.clone()).or_insert_with(|| new_id("br"));
+                        if selected.contains(commit)
+                            && let std::collections::btree_map::Entry::Vacant(entry) = branch_map.entry(branch.clone()) {
+                            entry.insert(new_id("br")?);
                         }
                     }
                 }
@@ -693,7 +694,7 @@ impl Engine {
                             .expect("invariant: file mappings cover the selected entries");
                         let new = if state.content_states.get(&old.version_id).is_some_and(|s| *s == ContentState::Purged) {
                             let mut new = old.clone();
-                            new.version_id = new_id("ver");
+                            new.version_id = new_id("ver")?;
                             new.file_id = file_id.clone();
                             new.history_tree_id = history_id.clone();
                             new.source_version_ids.clear();
@@ -729,7 +730,7 @@ impl Engine {
                             .ok_or_else(|| Error::new(storage_contract::ErrorCode::SplitInvalid, "selected closure has an external parent")))
                             .collect::<Result<_>>()?
                     };
-                    new.tree_id = new_id("tree");
+                    new.tree_id = new_id("tree")?;
                     if commit.commit_id == cut { new.kind = "split_root".into(); }
                     new.provenance = Some(commit.commit_id.clone());
                     for entry in &mut new.entries {
@@ -802,8 +803,9 @@ impl Engine {
                 let new_main = original.main_branch_id.as_ref().filter(|id| active.contains(*id))
                     .and_then(|id| branch_map.get(id)).cloned()
                     .or_else(|| active.iter().find_map(|id| branch_map.get(id).cloned()))
-                    .unwrap_or_else(|| {
-                        let id = new_id("br");
+                    .map(Ok)
+                    .unwrap_or_else(|| -> Result<String> {
+                        let id = new_id("br")?;
                         let mut name = "main".to_owned();
                         let mut suffix = 2;
                         while state.branches.values().any(|branch| branch.history_tree_id == history_id
@@ -818,8 +820,8 @@ impl Engine {
                             head_commit_id: commit_map[cut].clone(), fork_commit_id: commit_map[cut].clone(),
                             branch_kind: storage_contract::BranchKind::Full, file_id: None, file_node_id:None, pending_file_versions, generation: 1, state: BranchState::Active,
                         });
-                        id
-                    });
+                        Ok(id)
+                    })?;
                 state.histories.insert(history_id.clone(), HistoryTree {
                     history_tree_id: history_id.clone(), repository_id: repository_id.clone(),
                     root_commit_id: commit_map[cut].clone(), main_branch_id: Some(new_main.clone()),
@@ -844,13 +846,13 @@ impl Engine {
                 new_repo.smb_binding_generation = 1;
                 new_repo.file_manager_root = false;
                 loop {
-                    new_repo.name = format!("拆分-{}", &new_id("repo")[5..13]);
+                    new_repo.name = format!("拆分-{}", &new_id("repo")?[5..13]);
                     if !state.repositories.values().any(|r| name_policy::lookup_key(&r.name) == name_policy::lookup_key(&new_repo.name)) { break; }
                 }
                 state.repositories.insert(repository_id.clone(), new_repo);
                 let rules = state.placement_rules.values().filter(|p| p.repository_id == original.repository_id).cloned().collect::<Vec<_>>();
                 for mut rule in rules {
-                    rule.rule_id = new_id("rule"); rule.repository_id = repository_id.clone(); rule.generation = 1;
+                    rule.rule_id = new_id("rule")?; rule.repository_id = repository_id.clone(); rule.generation = 1;
                     state.placement_rules.insert(rule.rule_id.clone(), rule);
                 }
                 let policies = state.protection_policies.values().filter(|p| p.repository_id == original.repository_id).cloned().collect::<Vec<_>>();
@@ -867,7 +869,7 @@ impl Engine {
                         if mapped.is_none(){policy.inheritable=false;}
                         policy.scope_directory_id=mapped;
                     }
-                    policy.policy_id = new_id("policy"); policy.repository_id = repository_id.clone(); policy.generation = 1;
+                    policy.policy_id = new_id("policy")?; policy.repository_id = repository_id.clone(); policy.generation = 1;
                     policy_map.insert(old,policy.policy_id.clone());
                     state.protection_policies.insert(policy.policy_id.clone(), policy);
                 }
@@ -895,8 +897,8 @@ impl Engine {
                 }
                 crate::protection::prune_retained_policies(state, &original.repository_id);
                 // The cut edge and each crossing merge edge are explicit audit boundaries.
-                insert_boundary(state, BoundaryInput { history, commit: &prefix_head, branch: None, relation: "split_out", external_history: &history_id, external_commit: &commit_map[cut], source_link: None });
-                insert_boundary(state, BoundaryInput { history: &history_id, commit: &commit_map[cut], branch: None, relation: "split_origin", external_history: history, external_commit: &prefix_head, source_link: None });
+                insert_boundary(state, BoundaryInput { history, commit: &prefix_head, branch: None, relation: "split_out", external_history: &history_id, external_commit: &commit_map[cut], source_link: None })?;
+                insert_boundary(state, BoundaryInput { history: &history_id, commit: &commit_map[cut], branch: None, relation: "split_origin", external_history: history, external_commit: &prefix_head, source_link: None })?;
                 for link in links {
                     let source = selected.contains(&link.source_commit_id);
                     let target = selected.contains(&link.target_commit_id);
@@ -904,7 +906,7 @@ impl Engine {
                     state.merge_links.remove(&link.merge_link_id);
                     if source && target {
                         let mut new = link.clone();
-                        new.merge_link_id = new_id("link"); new.history_tree_id = history_id.clone();
+                        new.merge_link_id = new_id("link")?; new.history_tree_id = history_id.clone();
                         new.source_commit_id = commit_map[&link.source_commit_id].clone();
                         new.target_commit_id = commit_map[&link.target_commit_id].clone();
                         new.source_branch_id = branch_map[&link.source_branch_id].clone();
@@ -916,8 +918,8 @@ impl Engine {
                         } else {
                             (&link.source_commit_id, &link.source_branch_id, &link.target_commit_id, &link.target_branch_id, "merge_target_migrated")
                         };
-                        insert_boundary(state, BoundaryInput { history, commit: local_commit, branch: Some(local_branch.clone()), relation, external_history: &history_id, external_commit: &commit_map[external_commit], source_link: Some(link.merge_link_id.clone()) });
-                        insert_boundary(state, BoundaryInput { history: &history_id, commit: &commit_map[external_commit], branch: Some(branch_map[moved_branch].clone()), relation: "merge_external", external_history: history, external_commit: local_commit, source_link: Some(link.merge_link_id) });
+                        insert_boundary(state, BoundaryInput { history, commit: local_commit, branch: Some(local_branch.clone()), relation, external_history: &history_id, external_commit: &commit_map[external_commit], source_link: Some(link.merge_link_id.clone()) })?;
+                        insert_boundary(state, BoundaryInput { history: &history_id, commit: &commit_map[external_commit], branch: Some(branch_map[moved_branch].clone()), relation: "merge_external", external_history: history, external_commit: local_commit, source_link: Some(link.merge_link_id) })?;
                     }
                 }
                 // Existing audit boundaries whose local endpoint moved follow that endpoint.
@@ -976,7 +978,7 @@ fn remap_pending_versions(
         .collect()
 }
 
-fn insert_boundary(state: &mut State, input: BoundaryInput<'_>) {
+fn insert_boundary(state: &mut State, input: BoundaryInput<'_>) -> Result<()> {
     let BoundaryInput {
         history,
         commit,
@@ -986,7 +988,7 @@ fn insert_boundary(state: &mut State, input: BoundaryInput<'_>) {
         external_commit,
         source_link,
     } = input;
-    let id = new_id("boundary");
+    let id = new_id("boundary")?;
     state.history_boundaries.insert(
         id.clone(),
         HistoryBoundary {
@@ -1000,6 +1002,7 @@ fn insert_boundary(state: &mut State, input: BoundaryInput<'_>) {
             source_merge_link_id: source_link,
         },
     );
+    Ok(())
 }
 
 #[cfg(test)]

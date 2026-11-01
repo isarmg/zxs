@@ -154,7 +154,7 @@ fn rpc_namespace_returns_published_receipt_and_does_not_replay_after_index_failu
     use super::projection_failure::{fail_projection, projection_sequence, receipt_outcome};
     let (temp, shared, backend, branch) = fixture();
     let (mut wire, worker) = connect(shared.clone());
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let request = || Request::Namespace {
         operation_id: operation.to_string(),
         kind: smb_protocol::protocol::NamespaceOperation::Rename,
@@ -221,7 +221,7 @@ fn unlink_and_rmdir_preserve_targets_of_the_wrong_kind() {
     let mut session = session(shared, &branch);
     session
         .dispatch(Request::Namespace {
-            operation_id: new_id("op"),
+            operation_id: new_id("op").unwrap(),
             kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
             path: "empty".into(),
             destination: None,
@@ -242,7 +242,7 @@ fn unlink_and_rmdir_preserve_targets_of_the_wrong_kind() {
     ] {
         let error = session
             .dispatch(Request::Namespace {
-                operation_id: new_id("op"),
+                operation_id: new_id("op").unwrap(),
                 kind,
                 path: path.into(),
                 destination: None,
@@ -911,7 +911,7 @@ fn namespace_submission_errors_retain_original_operation_without_abort() {
         let error = call(
             &mut client,
             Request::Namespace {
-                operation_id: new_id("op"),
+                operation_id: new_id("op").unwrap(),
                 kind: smb_protocol::protocol::NamespaceOperation::Rename,
                 path: "report.txt".into(),
                 destination: Some("renamed.txt".into()),
@@ -1006,7 +1006,7 @@ fn uncertain_namespace_dispatch_never_aborts_its_workspace() {
         let mut session = session(shared, &branch);
         let error = session
             .dispatch(Request::Namespace {
-                operation_id: new_id("op"),
+                operation_id: new_id("op").unwrap(),
                 kind: smb_protocol::protocol::NamespaceOperation::Rename,
                 path: "report.txt".into(),
                 destination: Some("renamed.txt".into()),
@@ -1067,7 +1067,7 @@ fn legacy_untyped_delete_cannot_remove_files_or_directories() {
         if path == "empty" {
             session
                 .dispatch(Request::Namespace {
-                    operation_id: new_id("op"),
+                    operation_id: new_id("op").unwrap(),
                     kind: smb_protocol::protocol::NamespaceOperation::Mkdir,
                     path: path.into(),
                     destination: None,
@@ -1076,7 +1076,7 @@ fn legacy_untyped_delete_cannot_remove_files_or_directories() {
                 .unwrap();
         }
         let result = json_codec::from_value::<Request>(json!({
-            "op":"namespace", "operation_id":new_id("op"), "kind":"delete", "path":path,
+            "op":"namespace", "operation_id":new_id("op").unwrap(), "kind":"delete", "path":path,
             "destination":null, "replace":false
         }));
         assert!(
@@ -1104,7 +1104,7 @@ fn typed_removal_succeeds_and_successful_namespace_records_are_cleaned() {
     ] {
         session
             .dispatch(Request::Namespace {
-                operation_id: new_id("op"),
+                operation_id: new_id("op").unwrap(),
                 kind,
                 path: path.into(),
                 destination: None,
@@ -1183,7 +1183,7 @@ fn malformed_namespace_requests_are_rejected_before_creating_workspaces() {
         assert!(
             session
                 .dispatch(Request::Namespace {
-                    operation_id: new_id("op"),
+                    operation_id: new_id("op").unwrap(),
                     kind,
                     path: path.into(),
                     destination: destination.map(str::to_owned),
@@ -1913,7 +1913,7 @@ fn preparation_and_record_sync_failures_keep_unresolved_recovery_evidence() {
                 namespace_operations: Mutex::new(BTreeSet::new()),
             });
             let mut session = session(shared, &branch);
-            let operation_id = new_id("op");
+            let operation_id = new_id("op").unwrap();
             if failure.is_none() {
                 super::super::namespace::fail_next_record_sync(directory_sync);
             }
@@ -1990,7 +1990,7 @@ fn dropped_successful_rpc_frame_keeps_the_client_allocated_operation_queryable()
         // Deliberately discard the actual successful RPC frame and disconnect.
     });
     let mut client = FrameStream::new(client).unwrap();
-    let operation_id = new_id("op");
+    let operation_id = new_id("op").unwrap();
     client
         .send(
             &Request::<String>::Namespace {
@@ -2041,7 +2041,7 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
         assert_eq!(error.code, storage_contract::ErrorCode::InvalidRequest);
         assert!(error.operation_id.is_none());
     }
-    let retained_operation = new_id("op");
+    let retained_operation = new_id("op").unwrap();
     let record = shared
         .spool
         .join(format!("{retained_operation}.namespace.json"));
@@ -2057,7 +2057,7 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
         fs::read(record).unwrap(),
         b"existing evidence must not be altered"
     );
-    let active_operation = OperationId::generate();
+    let active_operation = OperationId::generate().unwrap();
     shared
         .namespace_operations
         .lock()
@@ -2086,7 +2086,7 @@ fn namespace_identity_validation_and_replay_admission_precede_workspace_creation
     assert!(session.writer_locks.is_empty());
     assert!(shared.namespace_operations.lock().unwrap().is_empty());
 
-    let published_operation = new_id("op");
+    let published_operation = new_id("op").unwrap();
     session
         .dispatch(request(published_operation.clone()))
         .unwrap();

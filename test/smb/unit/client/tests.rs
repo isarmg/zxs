@@ -77,7 +77,8 @@ fn namespace_transport_failure_retains_identity_and_disconnects_every_clone() {
             "new".into(),
             None,
             false,
-        );
+        )
+        .unwrap();
         let Request::Namespace { operation_id, .. } = &request else {
             unreachable!()
         };

@@ -9,11 +9,15 @@ fn history_context_preserves_projection_and_current_admission() {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repo = engine
-        .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
+        .create_disk_root(
+            "P01",
+            "owner",
+            storage_contract::OperationId::generate().unwrap(),
+        )
         .unwrap();
     let workspace = engine
         .create_workspace(&repo.main_branch_id, "owner")
@@ -24,7 +28,7 @@ fn history_context_preserves_projection_and_current_admission() {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -86,7 +90,7 @@ fn history_context_preserves_projection_and_current_admission() {
         );
     }
     for query in [
-        json!({"repository_id":new_id("repo"),"path":"report.txt"}),
+        json!({"repository_id":new_id("repo").unwrap(),"path":"report.txt"}),
         json!({"repository_id":repo.repository_id,"path":"missing.txt"}),
     ] {
         let error = read(json!({"file_id":entry.file_id,"query":query})).unwrap_err();

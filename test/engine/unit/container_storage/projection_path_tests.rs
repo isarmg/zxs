@@ -16,7 +16,8 @@ impl Fixture {
             temporary.path().join("p"),
             temporary.path().join("b"),
             temporary.path().join("c"),
-        ]);
+        ])
+        .unwrap();
         let mut engine = Engine::initialize(&root, config).unwrap();
         let repo = engine
             .create_repository(
@@ -24,7 +25,7 @@ impl Fixture {
                 "P01",
                 3,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         Self {
@@ -43,7 +44,7 @@ impl Fixture {
             .stage_bytes(&workspace.workspace_id, path, b"preserved body")?;
         self.engine.commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -62,7 +63,7 @@ impl Fixture {
             )
             .unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
     }
 
@@ -77,7 +78,7 @@ impl Fixture {
             ]),
             expected_generation: 0,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
     }
 
@@ -229,7 +230,7 @@ fn rejected_save_retains_workspace_without_installing_replicas() {
         .engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id.clone(),
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,

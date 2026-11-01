@@ -8,7 +8,7 @@ fn decode(body: Value) -> Result<InitializeDirectoryScope, ApiError> {
 }
 #[test]
 fn initialization_parses_root_and_canonical_path_once() {
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let root = decode(json!({"path":"","operation_id":operation})).unwrap();
     assert!(root.path.is_none());
     assert_eq!(root.repository_id, "repository");

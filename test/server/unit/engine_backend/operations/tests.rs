@@ -27,7 +27,8 @@ fn fixture() -> OperationFixture {
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     let repo = engine
         .create_repository(
@@ -35,7 +36,7 @@ fn fixture() -> OperationFixture {
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -48,7 +49,7 @@ fn fixture() -> OperationFixture {
             b"fully verified content",
         )
         .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
@@ -93,14 +94,14 @@ fn unauthorized_operations_never_start_payload_observation() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         backend
-            .operation(&identity, OperationId::generate())
+            .operation(&identity, OperationId::generate().unwrap())
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::OperationNotFound
     );
     // Account admission does not waive durable operation ownership. This is a
     // storage fixture owned by another principal, not a second login account.
-    let foreign_operation = storage_contract::OperationId::generate();
+    let foreign_operation = storage_contract::OperationId::generate().unwrap();
     backend
         .engine
         .lock()
@@ -275,7 +276,7 @@ fn operation_observation_preserves_publication_wire_facts() {
 fn pending_owner_discovery_failure_is_not_a_missing_operation_response() {
     use std::error::Error as _;
     let (_root, backend, _auth, _token, identity, _published) = fixture();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     {
         let mut engine = backend.engine.lock().unwrap();
         engine.inject_fault_once("after_accept_1");
@@ -373,7 +374,7 @@ fn published_outcome_survives_observation_clock_representation_failure() {
 #[test]
 fn outcome_lookup_rechecks_current_identity_and_owner() {
     let (_root, backend, mut auth, token, identity, operation_id) = fixture();
-    let foreign_operation = storage_contract::OperationId::generate();
+    let foreign_operation = storage_contract::OperationId::generate().unwrap();
     backend
         .engine
         .lock()
@@ -395,7 +396,7 @@ fn outcome_lookup_rechecks_current_identity_and_owner() {
     );
     assert_eq!(
         backend
-            .operation_outcome(&identity, OperationId::generate())
+            .operation_outcome(&identity, OperationId::generate().unwrap())
             .unwrap_err()
             .code,
         storage_contract::ErrorCode::OperationNotFound
@@ -413,7 +414,7 @@ fn outcome_lookup_rechecks_current_identity_and_owner() {
 #[test]
 fn metadata_without_a_published_commit_scope_is_explicitly_not_observed() {
     let (_root, backend, _auth, _token, identity, _published) = fixture();
-    let operation_id = OperationId::generate();
+    let operation_id = OperationId::generate().unwrap();
     {
         let mut engine = backend.engine.lock().unwrap();
         let file_id = engine
@@ -448,7 +449,7 @@ fn metadata_without_a_published_commit_scope_is_explicitly_not_observed() {
 #[test]
 fn accepted_pending_operation_has_an_outcome_and_no_checked_health() {
     let (_root, backend, _auth, _token, identity, published) = fixture();
-    let operation_id = OperationId::generate();
+    let operation_id = OperationId::generate().unwrap();
     {
         let mut engine = backend.engine.lock().unwrap();
         let branch = engine
@@ -499,7 +500,7 @@ fn accepted_pending_operation_has_an_outcome_and_no_checked_health() {
 #[test]
 fn foreign_pending_owner_is_rejected_by_both_operation_projections() {
     let (_root, backend, _auth, _token, identity, _published) = fixture();
-    let operation_id = OperationId::generate();
+    let operation_id = OperationId::generate().unwrap();
     {
         let mut engine = backend.engine.lock().unwrap();
         engine.inject_fault_once("after_accept_1");

@@ -8,7 +8,7 @@ fn decode(body: Value) -> Result<ArchiveBranch, ApiError> {
 }
 #[test]
 fn archive_ingress_preserves_field_unknown_and_operation_error_order() {
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let parsed = decode(json!({"operation_id":operation})).unwrap();
     assert_eq!(parsed.branch_id, "branch");
     assert_eq!(parsed.operation_id, operation);

@@ -110,7 +110,7 @@ async fn native_client_receives_published_content_receipt_when_projection_update
         &app,
         &token,
         workspace_id,
-        &new_id("entry"),
+        &new_id("entry").unwrap(),
         workspace["relative_path"].as_str().unwrap(),
         b"published despite unavailable projection",
     )
@@ -128,7 +128,7 @@ async fn native_client_receives_published_content_receipt_when_projection_update
             .await
             .unwrap();
     });
-    let operation = new_id("op");
+    let operation = new_id("op").unwrap();
     let request = client
         .prepare_commit(
             workspace_id,

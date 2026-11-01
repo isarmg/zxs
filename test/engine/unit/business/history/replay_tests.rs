@@ -5,7 +5,7 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("primary")]),
+        Config::development([root.path().join("primary")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -14,7 +14,7 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let source_workspace = engine
@@ -31,7 +31,7 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
     let source = engine
         .commit_workspace(CommitRequest {
             workspace_id: source_workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: source_workspace.base_head,
             fencing_token: source_workspace.fencing_token,
@@ -41,7 +41,7 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
         .unwrap()
         .commit_id
         .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let original = engine
         .create_branch(
             &source,
@@ -61,7 +61,7 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -73,7 +73,7 @@ fn branch_creation_replay_returns_original_record_after_writes_archive_and_reope
         .archive_branch(
             &original.branch_id,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_ne!(engine.state().branches[&original.branch_id], original);
@@ -127,7 +127,8 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
                 root.path().join("p"),
                 root.path().join("b"),
                 root.path().join("c"),
-            ]),
+            ])
+            .unwrap(),
         )
         .unwrap();
         let repo = engine
@@ -136,7 +137,7 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
                 "P01",
                 3,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let root_commit = engine.state().histories[&repo.history_tree_id]
@@ -151,7 +152,7 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
         let cut = engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -166,10 +167,10 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
                 if crossing { &root_commit } else { &cut },
                 &storage_contract::BranchName::parse("side").unwrap(),
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         let original = engine
             .add_merge_link(
                 &side.branch_id,
@@ -187,7 +188,7 @@ fn merge_link_retry_keeps_original_result_after_split_and_restart() {
             .commit_plan(
                 &plan.plan_id,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         assert!(

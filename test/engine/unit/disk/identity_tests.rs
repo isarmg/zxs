@@ -57,7 +57,7 @@ fn assert_identity_json_error(error: &Error) {
 #[test]
 fn invalid_identity_bytes_keep_json_sources_at_disk_read_boundaries() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([temporary.path().join("member")]);
+    let config = Config::development([temporary.path().join("member")]).unwrap();
     let system = temporary.path().join("system");
     drop(Engine::initialize(&system, config.clone()).unwrap());
     let config = ValidatedConfig::try_from(config).unwrap();
@@ -69,8 +69,12 @@ fn invalid_identity_bytes_keep_json_sources_at_disk_read_boundaries() {
         assert_identity_json_error(&validate_seal(&config, disk).unwrap_err());
         assert_identity_json_error(&offline_check(&disk.root).unwrap_err());
         assert_identity_json_error(
-            &offline_export(&disk.root, &new_id("ver"), &temporary.path().join("export"))
-                .unwrap_err(),
+            &offline_export(
+                &disk.root,
+                &new_id("ver").unwrap(),
+                &temporary.path().join("export"),
+            )
+            .unwrap_err(),
         );
         assert_identity_json_error(&Engine::open(&system).err().unwrap());
         assert_identity_json_error(
@@ -91,7 +95,7 @@ fn invalid_identity_bytes_keep_json_sources_at_disk_read_boundaries() {
 #[test]
 fn invalid_identity_bytes_cannot_publish_state_or_append_journals() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([temporary.path().join("member")]);
+    let config = Config::development([temporary.path().join("member")]).unwrap();
     let system = temporary.path().join("system");
     let mut engine = Engine::initialize(&system, config.clone()).unwrap();
     engine
@@ -100,7 +104,7 @@ fn invalid_identity_bytes_cannot_publish_state_or_append_journals() {
             "P01",
             1,
             "owner",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let path = config.disks[0].root.join("disk.json");
@@ -112,7 +116,7 @@ fn invalid_identity_bytes_cannot_publish_state_or_append_journals() {
             .iter()
             .map(|disk| fs::read(crate::journal::log_path(disk)).unwrap())
             .collect::<Vec<_>>();
-        let operation = OperationId::generate();
+        let operation = OperationId::generate().unwrap();
         fs::write(&path, &bytes).unwrap();
         let error = engine
             .create_repository(
@@ -141,7 +145,7 @@ fn invalid_identity_bytes_cannot_publish_state_or_append_journals() {
         assert_eq!(engine.state(), &before);
         assert!(!engine.state().operations.contains_key(&operation));
     }
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     engine
         .create_repository(
             &RepositoryName::parse("after-reopen").unwrap(),
@@ -157,7 +161,7 @@ fn invalid_identity_bytes_cannot_publish_state_or_append_journals() {
 #[test]
 fn identity_reads_preserve_open_errors_and_metadata_limits() {
     let temporary = tempfile::tempdir().unwrap();
-    let config = Config::development([temporary.path().join("member")]);
+    let config = Config::development([temporary.path().join("member")]).unwrap();
     let system = temporary.path().join("system");
     drop(Engine::initialize(&system, config.clone()).unwrap());
     let config = ValidatedConfig::try_from(config).unwrap();
@@ -194,7 +198,7 @@ fn identity_reads_preserve_open_errors_and_metadata_limits() {
 #[test]
 fn production_directory_seal_rejects_changed_device_inode_and_root_without_rewriting() {
     let temporary = tempfile::tempdir().unwrap();
-    let mut config = Config::development([temporary.path().join("member")]);
+    let mut config = Config::development([temporary.path().join("member")]).unwrap();
     config.mode = Mode::Production;
     let system = temporary.path().join("system");
     drop(Engine::initialize(&system, config.clone()).unwrap());

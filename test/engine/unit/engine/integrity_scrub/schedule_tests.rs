@@ -5,7 +5,7 @@ fn fixture() -> (tempfile::TempDir, Engine) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("system"),
-        Config::development([temp.path().join("disk")]),
+        Config::development([temp.path().join("disk")]).unwrap(),
     )
     .unwrap();
     engine
@@ -14,7 +14,7 @@ fn fixture() -> (tempfile::TempDir, Engine) {
             "P01",
             1,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     (temp, engine)
@@ -90,7 +90,7 @@ fn publication_does_not_refresh_the_scan_start_or_the_next_schedule_deadline() {
         .persist_auth_state(
             json_codec::json!({"auth":"later"}),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(engine.state.sequence > sequence);

@@ -22,7 +22,7 @@ fn fork(state: &State) -> State {
 #[test]
 fn incremental_history_dependencies_stay_on_the_admitted_roots_after_rebinding() {
     let temp = tempfile::tempdir().unwrap();
-    let config = Config::development([temp.path().join("a"), temp.path().join("b")]);
+    let config = Config::development([temp.path().join("a"), temp.path().join("b")]).unwrap();
     for disk in &config.disks {
         private_dir(&disk.root).unwrap();
     }
@@ -248,7 +248,8 @@ fn incremental_history_roots_equal_full_oracle_and_reuse_checks_existing_bytes()
         temp.path().join("one"),
         temp.path().join("two"),
         temp.path().join("three"),
-    ]);
+    ])
+    .unwrap();
     let before = fixture();
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let mut next = fork(&before);
@@ -332,7 +333,8 @@ fn reconstruction_never_overwrites_corruption_unsafe_targets_or_changes_bound_ro
         temp.path().join("one"),
         temp.path().join("two"),
         temp.path().join("three"),
-    ]);
+    ])
+    .unwrap();
     let before = fixture();
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let hash = &roots
@@ -595,7 +597,8 @@ fn branch_value_updates_preserve_full_graph_bytes_and_rebuild_unavailable_old_ro
             temp.path().join("one"),
             temp.path().join("two"),
             temp.path().join("three"),
-        ]);
+        ])
+        .unwrap();
         let before = fixture();
         let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
         let branch = before
@@ -677,7 +680,8 @@ fn unknown_branch_mutation_and_cold_state_retain_complete_manifest_admission() {
         temp.path().join("one"),
         temp.path().join("two"),
         temp.path().join("three"),
-    ]);
+    ])
+    .unwrap();
     let before = fixture();
     let roots = store_history_manifests_bounded(&config.disks, &before, MAX_METADATA).unwrap();
     let branch = before

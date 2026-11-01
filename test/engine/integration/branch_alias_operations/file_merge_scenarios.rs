@@ -10,7 +10,7 @@ fn fork(pool: &mut Pool, file: &str, node: &str, name: &str) -> String {
             node,
             &storage_contract::BranchName::parse(name).unwrap(),
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap()
         .result["branch_id"]
@@ -26,7 +26,7 @@ fn choose(pool: &mut Pool, file: &str, branch: &str, path: &str) {
             file,
             branch,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
 }
@@ -65,7 +65,7 @@ fn adopting_an_arbitrary_third_node_creates_one_metadata_node_and_only_participa
     let old_involved = p.branch(&involved).head_tree_id;
     let versions = p.engine.state().versions.len();
     let request = inputs(&p, &[&left, &right]);
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let receipt = p
         .engine
         .merge_file_branches(storage_engine::FileBranchMergeRequest {
@@ -171,7 +171,7 @@ fn reused_ancestor_head_omits_cycle_edges_and_stale_merges_publish_nothing() {
                 surviving_branch_id: &left,
                 location: None,
                 principal: "admin",
-                operation_id: storage_contract::OperationId::generate()
+                operation_id: storage_contract::OperationId::generate().unwrap()
             })
             .unwrap_err()
             .code(),
@@ -190,7 +190,7 @@ fn reused_ancestor_head_omits_cycle_edges_and_stale_merges_publish_nothing() {
             surviving_branch_id: &left,
             location: None,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(result.result["node_id"], ancestor);
@@ -244,7 +244,7 @@ fn merge_preserves_an_unselected_alias_context_of_the_same_stable_file() {
             surviving_branch_id: &selected,
             location: None,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(
@@ -284,7 +284,7 @@ fn historical_alias_ownership_follows_a_later_owner_merge_without_moving_its_fro
             surviving_branch_id: &a,
             location: None,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     p.engine
@@ -295,7 +295,7 @@ fn historical_alias_ownership_follows_a_later_owner_merge_without_moving_its_fro
             surviving_branch_id: &c,
             location: None,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_eq!(p.engine.state().file_branch_aliases[&a], c);
@@ -336,7 +336,7 @@ fn a_frozen_parent_derives_its_own_changed_child_without_following_the_childs_ne
             surviving_branch_id: &left,
             location: None,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let next = p.branch(&parent);
@@ -391,7 +391,7 @@ fn renamed_branch_receipt_replays_after_merge_but_new_alias_mutations_are_read_o
     let left = fork(&mut p, &base.file_id, &base.version_id, "left");
     let right = fork(&mut p, &base.file_id, &base.version_id, "right");
     let name = storage_contract::BranchName::parse("Reviewed").unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let renamed = p
         .engine
         .rename_file_branch(&base.file_id, &right, &name, "admin", operation)
@@ -405,7 +405,7 @@ fn renamed_branch_receipt_replays_after_merge_but_new_alias_mutations_are_read_o
             surviving_branch_id: &left,
             location: None,
             principal: "admin",
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
         })
         .unwrap();
     let before = p.engine.state().clone();
@@ -422,7 +422,7 @@ fn renamed_branch_receipt_replays_after_merge_but_new_alias_mutations_are_read_o
             &right,
             &name,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::BranchNotActive);

@@ -10,7 +10,8 @@ fn historical_publications_release_resident_quota_keep_original_ids_and_restore_
         temp.path().join("d1"),
         temp.path().join("d2"),
         temp.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     config.max_retained_workspaces = 1;
     config.max_retained_workspaces_per_principal = 1;
     let disks: Vec<_> = config.disks.iter().map(|disk| disk.root.clone()).collect();
@@ -21,7 +22,7 @@ fn historical_publications_release_resident_quota_keep_original_ids_and_restore_
             "P01",
             3,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let source = engine.state().branches[&repo.main_branch_id]
@@ -51,7 +52,7 @@ fn historical_publications_release_resident_quota_keep_original_ids_and_restore_
             )
             .unwrap();
         assert_eq!(engine.workspace_capacity("admin").principal.records.used, 1);
-        let operation = OperationId::generate();
+        let operation = OperationId::generate().unwrap();
         let result = engine
             .commit_historical_save_plan(&plan.plan_id, "admin", operation)
             .unwrap();
@@ -150,7 +151,7 @@ fn historical_publications_release_resident_quota_keep_original_ids_and_restore_
             ErrorCode::IdempotencyKeyReused
         );
         assert_eq!(fs::read(path).unwrap(), payload.as_bytes());
-        let new_id = OperationId::generate();
+        let new_id = OperationId::generate().unwrap();
         assert_eq!(
             engine
                 .commit_historical_save_plan(&plan, "admin", new_id)
@@ -177,7 +178,8 @@ fn cold_historical_manifests_still_exhaust_metadata_bytes_without_blocking_origi
         temp.path().join("d1"),
         temp.path().join("d2"),
         temp.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     config.max_retained_workspace_metadata_bytes = 4096;
     config.max_retained_workspace_metadata_bytes_per_principal = 4096;
     let mut engine = Engine::initialize(&root, config).unwrap();
@@ -187,7 +189,7 @@ fn cold_historical_manifests_still_exhaust_metadata_bytes_without_blocking_origi
             "P01",
             1,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let source = engine.state().branches[&repo.main_branch_id]
@@ -212,7 +214,7 @@ fn cold_historical_manifests_still_exhaust_metadata_bytes_without_blocking_origi
             "admin",
         )
         .unwrap();
-    let operation = OperationId::generate();
+    let operation = OperationId::generate().unwrap();
     let result = engine
         .commit_historical_save_plan(&plan.plan_id, "admin", operation)
         .unwrap();

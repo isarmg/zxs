@@ -5,7 +5,7 @@ fn actual() -> (tempfile::TempDir, Engine, HistoryFileId, HistoryVersionId) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        crate::Config::development([temp.path().join("disk")]),
+        crate::Config::development([temp.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repository = engine
@@ -14,7 +14,7 @@ fn actual() -> (tempfile::TempDir, Engine, HistoryFileId, HistoryVersionId) {
             "P01",
             1,
             "admin",
-            crate::OperationId::generate(),
+            crate::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -26,7 +26,7 @@ fn actual() -> (tempfile::TempDir, Engine, HistoryFileId, HistoryVersionId) {
     engine
         .commit_workspace(crate::CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: crate::OperationId::generate(),
+            operation_id: crate::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -205,7 +205,12 @@ fn captured_window_does_not_retain_namespace_placement_or_policy_tables() {
     let (_temp, mut engine, file, _) = actual();
     let repository = engine.state.repositories.keys().next().unwrap().clone();
     engine
-        .initialize_directory_scope(&repository, None, "admin", crate::OperationId::generate())
+        .initialize_directory_scope(
+            &repository,
+            None,
+            "admin",
+            crate::OperationId::generate().unwrap(),
+        )
         .unwrap();
     assert!(!engine.state.directory_trees.is_empty());
     assert!(!engine.state.placements.is_empty());

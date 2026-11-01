@@ -665,7 +665,9 @@ fn connect(shared: Arc<Shared>) -> (Client, JoinHandle<()>) {
         .unwrap()[0]
         .repository_id
         .clone();
-    let socket = shared.spool.join(format!("{}.sock", new_id("rpc")));
+    let socket = shared
+        .spool
+        .join(format!("{}.sock", new_id("rpc").unwrap()));
     let listener = UnixListener::bind(&socket).unwrap();
     let worker = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();

@@ -123,7 +123,7 @@ async fn success(
     value
 }
 fn application(root: &Path) -> Router {
-    let config = Config::development([root.join("d1"), root.join("d2"), root.join("d3")]);
+    let config = Config::development([root.join("d1"), root.join("d2"), root.join("d3")]).unwrap();
     configured_application(root, config)
 }
 fn configured_application(root: &Path, config: Config) -> Router {
@@ -167,7 +167,8 @@ async fn pool_upload_limit_is_checked_before_creating_spooled_bytes() {
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     config.max_file_bytes = 16;
     let app = configured_application(root.path(), config);
     let token = login(&app, "admin", "integration-test-password").await;
@@ -178,7 +179,7 @@ async fn pool_upload_limit_is_checked_before_creating_spooled_bytes() {
         "/api/repositories",
         Some(json!({
             "name":"Small limit", "primary_slot_id":"P01", "target_copies":1,
-            "operation_id":new_id("op")
+            "operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -198,7 +199,7 @@ async fn pool_upload_limit_is_checked_before_creating_spooled_bytes() {
                 .uri(format!(
                     "/api/workspaces/{}/files/{}/content?path=large.txt",
                     workspace["workspace_id"].as_str().unwrap(),
-                    new_id("entry")
+                    new_id("entry").unwrap()
                 ))
                 .header("authorization", format!("Bearer {token}"))
                 .header("x-zxs-logical-size", bytes.len().to_string())
@@ -364,7 +365,8 @@ async fn maximum_password_login_and_change_accept_escaped_json_without_losing_bo
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let current_password = "\\".repeat(1024);
     let new_password = "\"".repeat(1024);
     let backend = Arc::new(EngineBackend::new(
@@ -576,7 +578,7 @@ async fn manager_upload(app: &Router, token: &str, path: &str, bytes: &[u8]) -> 
         app,
         token,
         id,
-        &new_id("entry"),
+        &new_id("entry").unwrap(),
         workspace["relative_path"].as_str().unwrap(),
         bytes,
     )
@@ -758,7 +760,7 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
             Some(&revoked),
             "POST",
             &format!("/api/file-manager/files/{file}/metadata"),
-            Some(json!({"note":"cannot edit","operation_id":new_id("op")}))
+            Some(json!({"note":"cannot edit","operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,
@@ -781,7 +783,7 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
                 &token,
                 "POST",
                 &endpoint,
-                Some(json!({"note":note,"operation_id":new_id("op")})),
+                Some(json!({"note":note,"operation_id":new_id("op").unwrap()})),
             )
             .await;
             assert_eq!(saved["result"]["note"], note);
@@ -801,7 +803,7 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
                     Some(&token),
                     "POST",
                     &endpoint,
-                    Some(json!({"note":note,"operation_id":new_id("op")}))
+                    Some(json!({"note":note,"operation_id":new_id("op").unwrap()}))
                 )
                 .await
                 .0,
@@ -809,7 +811,8 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
             );
         }
     }
-    let metadata = json!({"note":"container note, second line","operation_id":new_id("op")});
+    let metadata =
+        json!({"note":"container note, second line","operation_id":new_id("op").unwrap()});
     let saved = success(
         &app,
         &token,
@@ -834,7 +837,7 @@ async fn file_notes_are_authorized_bounded_persistent_and_download_uses_current_
         &token,
         "POST",
         &format!("/api/file-manager/versions/{version}/metadata"),
-        Some(json!({"note":"historical note","operation_id":new_id("op")})),
+        Some(json!({"note":"historical note","operation_id":new_id("op").unwrap()})),
     )
     .await;
     manager_namespace(
@@ -989,7 +992,7 @@ async fn file_history_exposes_durable_content_edges_and_rechecks_authentication(
         &admin,
         "POST",
         &format!("/api/file-manager/files/{file}/branches"),
-        Some(json!({"source_version_id":original,"name":"from-first","operation_id":new_id("op")})),
+        Some(json!({"source_version_id":original,"name":"from-first","operation_id":new_id("op").unwrap()})),
     )
     .await;
     let branch_id = branch["result"]["branch_id"].as_str().unwrap();
@@ -1012,7 +1015,7 @@ async fn file_history_exposes_durable_content_edges_and_rechecks_authentication(
         &admin,
         "POST",
         &format!("/api/file-manager/files/{file}/select"),
-        Some(json!({"branch_id":branch_id,"operation_id":new_id("op")})),
+        Some(json!({"branch_id":branch_id,"operation_id":new_id("op").unwrap()})),
     )
     .await;
     manager_upload(&app, &admin, "tree.txt", b"new branch content").await;
@@ -1143,11 +1146,11 @@ async fn file_history_exposes_durable_content_edges_and_rechecks_authentication(
     for (path, body) in [
         (
             format!("/api/file-manager/files/{file}/metadata"),
-            json!({"note":"forbidden","operation_id":new_id("op")}),
+            json!({"note":"forbidden","operation_id":new_id("op").unwrap()}),
         ),
         (
             format!("/api/file-manager/files/{file}/branches"),
-            json!({"source_version_id":original,"name":"forbidden","operation_id":new_id("op")}),
+            json!({"source_version_id":original,"name":"forbidden","operation_id":new_id("op").unwrap()}),
         ),
     ] {
         assert_eq!(
@@ -1241,7 +1244,7 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
             .unwrap()
             .is_empty()
     );
-    let mkdir = json!({"kind":"mkdir","path":"documents","operation_id":new_id("op")});
+    let mkdir = json!({"kind":"mkdir","path":"documents","operation_id":new_id("op").unwrap()});
     let first = success(
         &app,
         &token,
@@ -1282,7 +1285,7 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
         Some(json!({
             "path":"", "target_copies":3, "backup_prefixes":{"B01":"P01","C01":"P01"},
             "expected_scope_id":backup["scope"]["id"], "expected_generation":backup["generation"],
-            "operation_id":new_id("op")
+            "operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -1302,8 +1305,7 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
     let one = files.iter().find(|e| e["name"] == "one.txt").unwrap();
     let two = files.iter().find(|e| e["name"] == "two.txt").unwrap();
     let file = one["file_id"].as_str().unwrap();
-    let create_body =
-        json!({"source_version_id":one["version_id"],"name":"draft","operation_id":new_id("op")});
+    let create_body = json!({"source_version_id":one["version_id"],"name":"draft","operation_id":new_id("op").unwrap()});
     let create_path = format!("/api/file-manager/files/{file}/branches");
     let branch = success(
         &app,
@@ -1399,7 +1401,7 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
         &app,
         &token,
         stale_id,
-        &new_id("entry"),
+        &new_id("entry").unwrap(),
         "documents/one.txt",
         b"preserved stale workspace bytes",
     )
@@ -1409,7 +1411,7 @@ async fn file_manager_exposes_disk_directories_and_independent_file_branches() {
         &token,
         "POST",
         &format!("/api/file-manager/files/{file}/select"),
-        Some(json!({"branch_id":branch_id,"operation_id":new_id("op")})),
+        Some(json!({"branch_id":branch_id,"operation_id":new_id("op").unwrap()})),
     )
     .await;
     let mut stale_commit = success(
@@ -1768,7 +1770,7 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         .find(|e| e["name"] == "outside.txt")
         .unwrap()["version_id"]
         .clone();
-    let body = json!({"path":"folder","name":"draft","operation_id":new_id("op")});
+    let body = json!({"path":"folder","name":"draft","operation_id":new_id("op").unwrap()});
     let created = success(
         &app,
         &token,
@@ -1816,7 +1818,7 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         &token,
         "POST",
         "/api/file-manager/disks/P01/directory-select",
-        Some(json!({"path":"folder","name":"draft","operation_id":new_id("op")})),
+        Some(json!({"path":"folder","name":"draft","operation_id":new_id("op").unwrap()})),
     )
     .await;
     let listing = success(
@@ -2051,7 +2053,7 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
         "POST",
         "/api/file-manager/disks/P01/directory-select",
         Some(json!({
-            "path":"folder","name":"main","operation_id":new_id("op")
+            "path":"folder","name":"main","operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -2086,13 +2088,15 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
             Some(&token),
             "POST",
             "/api/file-manager/disks/B01/directory-branches",
-            Some(json!({"path":"P01/folder","name":"readonly","operation_id":new_id("op")}))
+            Some(
+                json!({"path":"P01/folder","name":"readonly","operation_id":new_id("op").unwrap()})
+            )
         )
         .await
         .0,
         StatusCode::FORBIDDEN
     );
-    success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Earlier collection","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op")}))).await;
+    success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Earlier collection","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op").unwrap()}))).await;
     let listing = success(
         &app,
         &token,
@@ -2108,7 +2112,7 @@ async fn directory_branches_compose_shared_files_and_refuse_partial_selection() 
             Some(&token),
             "POST",
             "/api/file-manager/disks/P01/directory-branches",
-            Some(json!({"path":"","name":"root partial forbidden","operation_id":new_id("op")}))
+            Some(json!({"path":"","name":"root partial forbidden","operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,
@@ -2121,7 +2125,7 @@ async fn durable_http_save_seals_the_real_manifest_and_keeps_original_publicatio
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"HTTP repository","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op")}))).await;
+    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"HTTP repository","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op").unwrap()}))).await;
     let branch = repo["main_branch_id"].as_str().unwrap();
     let workspace = success(
         &app,
@@ -2140,7 +2144,7 @@ async fn durable_http_save_seals_the_real_manifest_and_keeps_original_publicatio
         Some(json!({"kind":"mkdir","path":"documents","destination":null})),
     )
     .await;
-    let item = new_id("entry");
+    let item = new_id("entry").unwrap();
     let bytes = b"a complete independent full file";
     upload(&app, &token, ws, &item, "documents/file.txt", bytes).await;
     let captured = success(&app, &token, "GET", &format!("/api/workspaces/{ws}"), None).await;
@@ -2153,7 +2157,7 @@ async fn durable_http_save_seals_the_real_manifest_and_keeps_original_publicatio
         "GET",
         &format!(
             "/api/workspaces/{ws}/files/{}/upload-status",
-            new_id("entry")
+            new_id("entry").unwrap()
         ),
         None,
     )
@@ -2166,7 +2170,7 @@ async fn durable_http_save_seals_the_real_manifest_and_keeps_original_publicatio
         "GET",
         &format!(
             "/api/workspaces/{}/files/{item}/upload-status",
-            new_id("workspace")
+            new_id("workspace").unwrap()
         ),
         None,
     )
@@ -2321,7 +2325,7 @@ async fn durable_http_save_seals_the_real_manifest_and_keeps_original_publicatio
     }
     for method in ["GET", "HEAD"] {
         for path in [
-            format!("/api/versions/{}/content", new_id("version")),
+            format!("/api/versions/{}/content", new_id("version").unwrap()),
             format!(
                 "/api/versions/{version}/content?repository_id=missing&path=documents/file.txt"
             ),
@@ -2391,7 +2395,7 @@ async fn authentication_applies_to_direct_content_graph_and_write_paths() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let admin = login(&app, "admin", "integration-test-password").await;
-    let repo = success(&app, &admin, "POST", "/api/repositories", Some(json!({"name":"Private","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let repo = success(&app, &admin, "POST", "/api/repositories", Some(json!({"name":"Private","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
     manager_upload(&app, &admin, "Private/body.txt", b"authenticated content").await;
     let listing = success(
         &app,
@@ -2463,7 +2467,7 @@ async fn historical_plan_publishes_atomically_and_management_rules_use_generatio
         "/api/repositories",
         Some(json!({
             "name":"Historical HTTP", "primary_slot_id":"P01", "target_copies":1,
-            "operation_id":new_id("op")
+            "operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -2479,24 +2483,24 @@ async fn historical_plan_publishes_atomically_and_management_rules_use_generatio
     )
     .await;
     let source = original["head_commit_id"].as_str().unwrap();
-    let policy = new_id("policy");
+    let policy = new_id("policy").unwrap();
     let policy_path = format!("/api/policies/{policy}");
     let policy_body = json!({"repository_id":repository,"path_prefix":"","target_copies":3,
-        "expected_generation":"0","operation_id":new_id("op")});
+        "expected_generation":"0","operation_id":new_id("op").unwrap()});
     success(&app, &token, "PUT", &policy_path, Some(policy_body.clone())).await;
     assert_eq!(
         success(&app, &token, "GET", &policy_path, None).await["target_copies"],
         3
     );
     let mut stale = policy_body;
-    stale["operation_id"] = new_id("op").into();
+    stale["operation_id"] = new_id("op").unwrap().into();
     assert_eq!(
         send(&app, Some(&token), "PUT", &policy_path, Some(stale))
             .await
             .0,
         StatusCode::CONFLICT
     );
-    let rule = new_id("rule");
+    let rule = new_id("rule").unwrap();
     let rule_path = format!("/api/primary-placement-rules/{rule}");
     success(
         &app,
@@ -2505,7 +2509,7 @@ async fn historical_plan_publishes_atomically_and_management_rules_use_generatio
         &rule_path,
         Some(json!({
             "repository_id":repository,"path_prefix":"","primary_slot_id":"P01",
-            "expected_generation":"0","operation_id":new_id("op")
+            "expected_generation":"0","operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -2528,7 +2532,7 @@ async fn historical_plan_publishes_atomically_and_management_rules_use_generatio
         &app,
         &token,
         ws,
-        &new_id("entry"),
+        &new_id("entry").unwrap(),
         "historical.txt",
         b"atomic historical full save",
     )
@@ -2545,7 +2549,7 @@ async fn historical_plan_publishes_atomically_and_management_rules_use_generatio
     )
     .await;
     let plan_id = plan["plan_id"].as_str().unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let body = json!({"plan_digest":plan["digest"],"operation_id":operation});
     let result = success(
         &app,
@@ -2601,7 +2605,7 @@ async fn historical_plan_publishes_atomically_and_management_rules_use_generatio
     let binding = success(&app, &token, "GET", &binding_path, None).await;
     success(&app, &token, "PUT", &binding_path, Some(json!({
         "branch_id":independent,"enabled":true,"expected_history_generation":binding["history_generation"],
-        "operation_id":new_id("op")
+        "operation_id":new_id("op").unwrap()
     }))).await;
     assert_eq!(
         success(&app, &token, "GET", &binding_path, None).await["branch_id"],
@@ -2704,7 +2708,7 @@ fn seed_engine_authority(engine: &mut Engine, system: &Path) {
         .persist_auth_state(
             auth.snapshot().unwrap(),
             "system_auth",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
 }
@@ -2756,7 +2760,8 @@ async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavail
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&system, config).unwrap();
     seed_engine_authority(&mut engine, &system);
     let repo = engine
@@ -2765,7 +2770,7 @@ async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavail
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -2785,7 +2790,7 @@ async fn recovered_permanent_loss_returns_degraded_save_wire_with_frozen_unavail
             b"separately retained full payload",
         )
         .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     engine.inject_fault_once("after_accept_2");
     assert!(
         engine
@@ -2890,7 +2895,8 @@ async fn damage_after_normal_publication_keeps_original_target_met_in_save_wire(
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let mut engine = Engine::initialize(&root.path().join("system"), config).unwrap();
     seed_engine_authority(&mut engine, &root.path().join("system"));
     let repo = engine
@@ -2899,7 +2905,7 @@ async fn damage_after_normal_publication_keeps_original_target_met_in_save_wire(
             "P01",
             3,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -2912,7 +2918,7 @@ async fn damage_after_normal_publication_keeps_original_target_met_in_save_wire(
             b"normal full protected publication",
         )
         .unwrap();
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let saved = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
@@ -3010,7 +3016,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         "POST",
         "/api/file-manager/disks/P01/directory-branches",
         Some(json!({
-            "path":"","name":"frozen","operation_id":new_id("op")
+            "path":"","name":"frozen","operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -3047,7 +3053,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         success(&app, &session, "GET", &api, None).await["namespace_branch_id"],
         namespace
     );
-    let selection_operation = new_id("op");
+    let selection_operation = new_id("op").unwrap();
     let selected = success(
         &app,
         &session,
@@ -3083,8 +3089,8 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
     assert_eq!(changed.0, StatusCode::CONFLICT);
     assert_eq!(changed.1["error"]["code"], "IDEMPOTENCY_KEY_REUSED");
     for body in [
-        json!({"repository_id":"other","directory_branch_id":frozen,"operation_id":new_id("op")}),
-        json!({"directory_branch_id":frozen,"operation_id":new_id("op"),"principal":"forged"}),
+        json!({"repository_id":"other","directory_branch_id":frozen,"operation_id":new_id("op").unwrap()}),
+        json!({"directory_branch_id":frozen,"operation_id":new_id("op").unwrap(),"principal":"forged"}),
     ] {
         let invalid = send(&app, Some(&session), "PUT", &api, Some(body)).await;
         assert_eq!(invalid.0, StatusCode::BAD_REQUEST);
@@ -3134,7 +3140,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         "PUT",
         &api,
         Some(json!({
-            "directory_branch_id":frozen,"operation_id":new_id("op")
+            "directory_branch_id":frozen,"operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -3194,7 +3200,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         Some(&session),
         "PUT",
         &api,
-        Some(json!({"directory_branch_id":nested_id,"operation_id":new_id("op")})),
+        Some(json!({"directory_branch_id":nested_id,"operation_id":new_id("op").unwrap()})),
     )
     .await;
     assert_eq!(wrong_scope.1["error"]["code"], "DIRECTORY_BRANCH_SCOPE");
@@ -3237,7 +3243,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         &session,
         "PUT",
         &api,
-        Some(json!({"directory_branch_id":frozen,"operation_id":new_id("op")})),
+        Some(json!({"directory_branch_id":frozen,"operation_id":new_id("op").unwrap()})),
     )
     .await;
 
@@ -3248,7 +3254,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         "PATCH",
         &rename_api,
         Some(json!({
-            "name":"saved view","operation_id":new_id("op")
+            "name":"saved view","operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -3287,7 +3293,7 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
         "PATCH",
         &rename_api,
         Some(json!({
-            "name":"x".repeat(129),"operation_id":new_id("op")
+            "name":"x".repeat(129),"operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -3306,14 +3312,14 @@ async fn default_directory_branch_is_shared_authorized_and_persistent() {
             Some(&session),
             "PUT",
             &api,
-            Some(json!({"directory_branch_id":frozen,"operation_id":new_id("op")}))
+            Some(json!({"directory_branch_id":frozen,"operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,
         StatusCode::UNAUTHORIZED
     );
     let empty = success(&app, &admin, "POST", "/api/repositories", Some(json!({
-        "name":"Empty view","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op")
+        "name":"Empty view","primary_slot_id":"P01","target_copies":3,"operation_id":new_id("op").unwrap()
     }))).await;
     let empty_id = empty["repository_id"].as_str().unwrap();
     let empty_default = success(
@@ -3421,7 +3427,7 @@ async fn manager_namespace_request(
         };
         item["target"] = manager_batch_target(scope, &relative);
     }
-    json!({"kind":kind,"operation_id":new_id("op"),"items":[item]})
+    json!({"kind":kind,"operation_id":new_id("op").unwrap(),"items":[item]})
 }
 
 async fn manager_namespace(
@@ -3451,7 +3457,8 @@ async fn destructive_namespace_requires_identity_and_rejects_stale_path_aba() {
     let entries_route = "/api/file-manager/disks/P01/entries";
     let original = success(&app, &token, "GET", entries_route, None).await;
     for kind in ["rename", "delete", "delete_tree"] {
-        let mut request = json!({"kind":kind,"path":"report.txt","operation_id":new_id("op")});
+        let mut request =
+            json!({"kind":kind,"path":"report.txt","operation_id":new_id("op").unwrap()});
         if kind == "rename" {
             request["destination"] = json!("renamed.txt");
         }
@@ -3533,7 +3540,7 @@ async fn manager_directory_branch(app: &Router, token: &str, path: &str, name: &
         "POST",
         "/api/file-manager/disks/P01/directory-branches",
         Some(json!({
-            "path":path,"name":name,"operation_id":new_id("op")
+            "path":path,"name":name,"operation_id":new_id("op").unwrap()
         })),
     )
     .await["result"]["directory_branch_id"]
@@ -3615,7 +3622,7 @@ async fn branch_namespace_batch_preserves_unselected_views_and_is_idempotent() {
         None,
     )
     .await;
-    let request = json!({"kind":"move","operation_id":new_id("op"),"items":[
+    let request = json!({"kind":"move","operation_id":new_id("op").unwrap(),"items":[
         {"source":manager_batch_source(&m,"a/report.txt"),"target":manager_batch_target(&l,"b/report.txt")},
         {"source":manager_batch_source(&n,"a/report.txt"),"target":manager_batch_target(&p,"b/report.txt")}
     ]});
@@ -3675,7 +3682,7 @@ async fn branch_namespace_batch_preserves_unselected_views_and_is_idempotent() {
 
     let l = manager_scope(&app, &token, repo, &b_l).await;
     let p = manager_scope(&app, &token, repo, &b_p).await;
-    let copied=success(&app,&token,"POST",route,Some(json!({"kind":"copy","operation_id":new_id("op"),"items":[
+    let copied=success(&app,&token,"POST",route,Some(json!({"kind":"copy","operation_id":new_id("op").unwrap(),"items":[
         {"source":manager_batch_source(&l,"b/report.txt"),"target":manager_batch_target(&l,"b/copy.txt")},
         {"source":manager_batch_source(&p,"b/report.txt"),"target":manager_batch_target(&p,"b/copy.txt")}
     ]}))).await;
@@ -3706,7 +3713,7 @@ async fn branch_namespace_batch_preserves_unselected_views_and_is_idempotent() {
     );
     let copy_version = copy_l["version_id"].clone();
 
-    success(&app,&token,"POST",route,Some(json!({"kind":"rename","operation_id":new_id("op"),"items":[
+    success(&app,&token,"POST",route,Some(json!({"kind":"rename","operation_id":new_id("op").unwrap(),"items":[
         {"source":manager_batch_source(&l,"b/copy.txt"),"target":manager_batch_target(&l,"b/客户报告.txt")},
         {"source":manager_batch_source(&p,"b/copy.txt"),"target":manager_batch_target(&p,"b/客户报告.txt")}
     ]}))).await;
@@ -3725,9 +3732,11 @@ async fn branch_namespace_batch_preserves_unselected_views_and_is_idempotent() {
         &token,
         "POST",
         route,
-        Some(json!({"kind":"delete","operation_id":new_id("op"),"items":[
-            {"source":manager_batch_source(&l,"b/客户报告.txt")}
-        ]})),
+        Some(
+            json!({"kind":"delete","operation_id":new_id("op").unwrap(),"items":[
+                {"source":manager_batch_source(&l,"b/客户报告.txt")}
+            ]}),
+        ),
     )
     .await;
     assert!(
@@ -3754,10 +3763,12 @@ async fn branch_namespace_batch_preserves_unselected_views_and_is_idempotent() {
         Some(&token),
         "POST",
         route,
-        Some(json!({"kind":"delete","operation_id":new_id("op"),"items":[
-            {"source":manager_batch_source(&p,"b/客户报告.txt")},
-            {"source":manager_batch_source(&m,"a/report.txt")}
-        ]})),
+        Some(
+            json!({"kind":"delete","operation_id":new_id("op").unwrap(),"items":[
+                {"source":manager_batch_source(&p,"b/客户报告.txt")},
+                {"source":manager_batch_source(&m,"a/report.txt")}
+            ]}),
+        ),
     )
     .await;
     assert_eq!(conflict.0, StatusCode::CONFLICT);
@@ -3801,9 +3812,11 @@ async fn branch_namespace_batch_preserves_unselected_views_and_is_idempotent() {
         Some(&session),
         "POST",
         route,
-        Some(json!({"kind":"delete","operation_id":new_id("op"),"items":[
-            {"source":manager_batch_source(&visible,"b/客户报告.txt")}
-        ]})),
+        Some(
+            json!({"kind":"delete","operation_id":new_id("op").unwrap(),"items":[
+                {"source":manager_batch_source(&visible,"b/客户报告.txt")}
+            ]}),
+        ),
     )
     .await;
     assert_eq!(denied.0, StatusCode::UNAUTHORIZED);
@@ -3859,7 +3872,7 @@ async fn moved_file_aliases_keep_independent_path_contexts_for_history_and_write
     let l = manager_directory_branch(&app, &token, "b", "l").await;
     let m0 = manager_scope(&app, &token, repo, &m).await;
     let l0 = manager_scope(&app, &token, repo, &l).await;
-    success(&app,&token,"POST","/api/file-manager/disks/P01/namespace-batch",Some(json!({"kind":"move","operation_id":new_id("op"),"items":[{
+    success(&app,&token,"POST","/api/file-manager/disks/P01/namespace-batch",Some(json!({"kind":"move","operation_id":new_id("op").unwrap(),"items":[{
         "source":manager_batch_source(&m0,"a/report.txt"),"target":manager_batch_target(&l0,"b/report.txt")
     }]}))).await;
     for (path, name) in [("a", "n"), ("b", "l")] {
@@ -3868,7 +3881,7 @@ async fn moved_file_aliases_keep_independent_path_contexts_for_history_and_write
             &token,
             "POST",
             "/api/file-manager/disks/P01/directory-select",
-            Some(json!({"path":path,"name":name,"operation_id":new_id("op")})),
+            Some(json!({"path":path,"name":name,"operation_id":new_id("op").unwrap()})),
         )
         .await;
     }
@@ -3936,7 +3949,7 @@ async fn moved_file_aliases_keep_independent_path_contexts_for_history_and_write
         b"written in b"
     );
     success(&app,&token,"POST",&format!("/api/file-manager/files/{file}/select"),Some(json!({
-        "repository_id":repo,"path":"a/report.txt","branch_id":b["identity"]["context"]["selected_branch_id"],"operation_id":new_id("op")
+        "repository_id":repo,"path":"a/report.txt","branch_id":b["identity"]["context"]["selected_branch_id"],"operation_id":new_id("op").unwrap()
     }))).await;
     assert_eq!(
         success(&app, &token, "GET", &history_route("a/report.txt"), None).await["context"]["content"]
@@ -3961,7 +3974,7 @@ async fn moved_file_aliases_keep_independent_path_contexts_for_history_and_write
         StatusCode::NOT_FOUND
     );
     let a_scope = manager_scope(&app, &token, repo, &n).await;
-    success(&app,&token,"POST","/api/file-manager/disks/P01/namespace-batch",Some(json!({"kind":"rename","operation_id":new_id("op"),"items":[{
+    success(&app,&token,"POST","/api/file-manager/disks/P01/namespace-batch",Some(json!({"kind":"rename","operation_id":new_id("op").unwrap(),"items":[{
         "source":manager_batch_source(&a_scope,"a/report.txt"),"target":manager_batch_target(&a_scope,"a/archive.txt")
     }]}))).await;
     for (path, name) in [
@@ -4031,7 +4044,7 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
         .unwrap();
     let id = file["file_id"].as_str().unwrap();
     let repo = listing["context"]["repository_id"].as_str().unwrap();
-    let created=success(&app,&admin,"POST",&format!("/api/file-manager/files/{id}/branches"),Some(json!({"source_version_id":file["version_id"],"name":"draft","operation_id":new_id("op")}))).await;
+    let created=success(&app,&admin,"POST",&format!("/api/file-manager/files/{id}/branches"),Some(json!({"source_version_id":file["version_id"],"name":"draft","operation_id":new_id("op").unwrap()}))).await;
     let branch = created["result"]["branch_id"].as_str().unwrap();
     let route = format!("/api/file-manager/files/{id}/branches/{branch}");
     let scopes = success(
@@ -4051,7 +4064,7 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
     )
     .await;
     let before_versions = history_versions(&app, &admin, id, &before, None).await;
-    let body = json!({"name":"客户主稿","operation_id":new_id("op")});
+    let body = json!({"name":"客户主稿","operation_id":new_id("op").unwrap()});
     let result = success(&app, &admin, "PATCH", &route, Some(body.clone())).await;
     assert_eq!(result["result"]["name"], "客户主稿");
     assert_eq!(result["operation_kind"], "file.branch.rename");
@@ -4111,7 +4124,7 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
         Some(&admin),
         "PATCH",
         &route,
-        Some(json!({"name":"MAIN","operation_id":new_id("op")})),
+        Some(json!({"name":"MAIN","operation_id":new_id("op").unwrap()})),
     )
     .await;
     assert_eq!(collision.0, StatusCode::CONFLICT);
@@ -4122,7 +4135,7 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
             Some(&admin),
             "PATCH",
             &route,
-            Some(json!({"name":"文".repeat(43),"operation_id":new_id("op")}))
+            Some(json!({"name":"文".repeat(43),"operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,
@@ -4130,14 +4143,14 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
     );
 
     for invalid in [
-        json!({"name":"x".repeat(129),"operation_id":new_id("op")}),
-        json!({"name":"bad\nname","operation_id":new_id("op")}),
-        json!({"name":"Cafe\u{301}","operation_id":new_id("op")}),
+        json!({"name":"x".repeat(129),"operation_id":new_id("op").unwrap()}),
+        json!({"name":"bad\nname","operation_id":new_id("op").unwrap()}),
+        json!({"name":"Cafe\u{301}","operation_id":new_id("op").unwrap()}),
         json!({"name":"Side","operation_id":"bad"}),
-        json!({"name":"Side","operation_id":new_id("op"),"unknown":0}),
-        json!({"name":"Side","operation_id":new_id("op"),"file_id":"other"}),
-        json!({"name":"Side","operation_id":new_id("op"),"branch_id":"other"}),
-        json!({"operation_id":new_id("op")}),
+        json!({"name":"Side","operation_id":new_id("op").unwrap(),"unknown":0}),
+        json!({"name":"Side","operation_id":new_id("op").unwrap(),"file_id":"other"}),
+        json!({"name":"Side","operation_id":new_id("op").unwrap(),"branch_id":"other"}),
+        json!({"operation_id":new_id("op").unwrap()}),
     ] {
         assert_eq!(
             send(&app, Some(&admin), "PATCH", &route, Some(invalid))
@@ -4186,7 +4199,7 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
         &admin,
         "PATCH",
         &route,
-        Some(json!({"name":"客户主稿","operation_id":new_id("op")})),
+        Some(json!({"name":"客户主稿","operation_id":new_id("op").unwrap()})),
     )
     .await;
     assert_eq!(unchanged["result"]["no_change"], true);
@@ -4195,7 +4208,7 @@ async fn public_file_branch_label_patch_preserves_content_and_directory_nodes() 
         &admin,
         "PATCH",
         &route,
-        Some(json!({"name":"New label","operation_id":new_id("op")})),
+        Some(json!({"name":"New label","operation_id":new_id("op").unwrap()})),
     )
     .await;
     drop(app);
@@ -4355,7 +4368,7 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
         &admin,
         "PATCH",
         &note_route,
-        Some(json!({"note":"路径改名备注","operation_id":new_id("op")})),
+        Some(json!({"note":"路径改名备注","operation_id":new_id("op").unwrap()})),
     )
     .await;
     success(
@@ -4363,7 +4376,7 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
         &admin,
         "POST",
         &format!("/api/file-manager/versions/{body}/metadata"),
-        Some(json!({"note":"正文备注","operation_id":new_id("op")})),
+        Some(json!({"note":"正文备注","operation_id":new_id("op").unwrap()})),
     )
     .await;
     let noted = success(&app, &admin, "GET", &history_route, None).await;
@@ -4404,7 +4417,7 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
                 Some(&admin),
                 "PATCH",
                 &note_route,
-                Some(json!({"note":invalid,"operation_id":new_id("op")}))
+                Some(json!({"note":invalid,"operation_id":new_id("op").unwrap()}))
             )
             .await
             .0,
@@ -4418,15 +4431,15 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
             Some(&admin),
             "PATCH",
             &wrong_note,
-            Some(json!({"note":"wrong file","operation_id":new_id("op")}))
+            Some(json!({"note":"wrong file","operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,
         StatusCode::NOT_FOUND
     );
     let branch_route = format!("/api/file-manager/files/{file}/branches");
-    assert_eq!(send(&app,Some(&admin),"POST",&branch_route,Some(json!({"source_version_id":body,"source_node_id":two_node,"name":"foreign","operation_id":new_id("op")}))).await.0,StatusCode::NOT_FOUND);
-    let branch=success(&app,&admin,"POST",&branch_route,Some(json!({"source_version_id":body,"source_node_id":node,"name":"from-path","operation_id":new_id("op")}))).await;
+    assert_eq!(send(&app,Some(&admin),"POST",&branch_route,Some(json!({"source_version_id":body,"source_node_id":two_node,"name":"foreign","operation_id":new_id("op").unwrap()}))).await.0,StatusCode::NOT_FOUND);
+    let branch=success(&app,&admin,"POST",&branch_route,Some(json!({"source_version_id":body,"source_node_id":node,"name":"from-path","operation_id":new_id("op").unwrap()}))).await;
     let branch_id = branch["result"]["branch_id"].as_str().unwrap();
     let registered = success(&app, &admin, "GET", &history_route, None).await;
     assert_eq!(registered["nodes"].as_array().unwrap().len(), 2);
@@ -4446,7 +4459,7 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
             .iter()
             .any(|branch| branch["branch_id"] == branch_id && branch["node_id"] == node)
     );
-    success(&app,&admin,"POST",&format!("/api/file-manager/files/{file}/select"),Some(json!({"repository_id":repo,"path":"archive/one.txt","branch_id":branch_id,"operation_id":new_id("op")}))).await;
+    success(&app,&admin,"POST",&format!("/api/file-manager/files/{file}/select"),Some(json!({"repository_id":repo,"path":"archive/one.txt","branch_id":branch_id,"operation_id":new_id("op").unwrap()}))).await;
     assert_eq!(
         success(&app, &admin, "GET", &history_route, None).await["identity"]["context"]["current_node_id"],
         node
@@ -4499,8 +4512,8 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
         version_bytes(&app, &admin, current_body).await,
         b"new body after path node"
     );
-    success(&app,&admin,"POST",&branch_route,Some(json!({"source_version_id":current_body,"source_node_id":current_body,"name":"content-source","operation_id":new_id("op")}))).await;
-    assert_eq!(send(&app,Some(&admin),"POST",&branch_route,Some(json!({"source_version_id":current_body,"source_node_id":node,"name":"mismatched-body","operation_id":new_id("op")}))).await.0,StatusCode::NOT_FOUND);
+    success(&app,&admin,"POST",&branch_route,Some(json!({"source_version_id":current_body,"source_node_id":current_body,"name":"content-source","operation_id":new_id("op").unwrap()}))).await;
+    assert_eq!(send(&app,Some(&admin),"POST",&branch_route,Some(json!({"source_version_id":current_body,"source_node_id":node,"name":"mismatched-body","operation_id":new_id("op").unwrap()}))).await.0,StatusCode::NOT_FOUND);
 
     let session = login(&app, "admin", "integration-test-password").await;
     let revoked = revoked_session(&app).await;
@@ -4510,7 +4523,7 @@ async fn rename_nodes_reuse_bodies_and_preserve_graph_parents_notes_and_branch_s
             Some(&revoked),
             "PATCH",
             &note_route,
-            Some(json!({"note":"denied","operation_id":new_id("op")}))
+            Some(json!({"note":"denied","operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,
@@ -4543,7 +4556,8 @@ async fn engine_upload_generation_conflicts_reach_http_as_conflicts() {
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     let backend = Arc::new(EngineBackend::new(
         Engine::initialize(&root.path().join("system"), config).unwrap(),
     ));
@@ -4571,7 +4585,7 @@ async fn engine_upload_generation_conflicts_reach_http_as_conflicts() {
         "/api/repositories",
         Some(json!({
             "name":"Cross-entry uploads", "primary_slot_id":"P01", "target_copies":1,
-            "operation_id":new_id("op")
+            "operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -4586,7 +4600,7 @@ async fn engine_upload_generation_conflicts_reach_http_as_conflicts() {
     )
     .await;
     let ws = workspace["workspace_id"].as_str().unwrap();
-    let item = new_id("entry");
+    let item = new_id("entry").unwrap();
     let source = root.path().join("source");
     std::fs::write(&source, b"original").unwrap();
     // A different adapter can stage directly in the engine without HTTP spool
@@ -4655,7 +4669,7 @@ async fn interrupted_new_upload_generation_reports_its_own_durable_progress() {
         "/api/repositories",
         Some(json!({
             "name":"Upload generations", "primary_slot_id":"P01", "target_copies":3,
-            "operation_id":new_id("op")
+            "operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -4670,7 +4684,7 @@ async fn interrupted_new_upload_generation_reports_its_own_durable_progress() {
     )
     .await;
     let ws = workspace["workspace_id"].as_str().unwrap();
-    let item = new_id("entry");
+    let item = new_id("entry").unwrap();
     upload(&app, &token, ws, &item, "file.txt", b"original").await;
     let bytes = b"replacement bytes";
     for complete in [false, true] {
@@ -4763,7 +4777,7 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
         "/api/repositories",
         Some(json!({
             "name":"Root scope", "primary_slot_id":"P01", "target_copies":3,
-            "operation_id":new_id("op")
+            "operation_id":new_id("op").unwrap()
         })),
     )
     .await;
@@ -4777,7 +4791,7 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
         Some(json!(12)),
         Some(json!("../outside")),
     ] {
-        let mut body = json!({"operation_id":new_id("op")});
+        let mut body = json!({"operation_id":new_id("op").unwrap()});
         if let Some(path) = path {
             body["path"] = path;
         }
@@ -4788,7 +4802,7 @@ async fn directory_scope_initialization_accepts_root_but_requires_a_string_path(
             StatusCode::BAD_REQUEST
         );
     }
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     let initialized = success(
         &app,
         &token,
@@ -4849,7 +4863,8 @@ async fn workspace_capacity_is_live_for_the_single_administrator() {
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     config.max_retained_workspaces = 1;
     config.max_retained_workspaces_per_principal = 1;
     let app = configured_application(root.path(), config);
@@ -4863,7 +4878,7 @@ async fn workspace_capacity_is_live_for_the_single_administrator() {
     assert_eq!(before["global"]["records"]["used"], "0");
     assert_eq!(before["principal"]["records"]["used"], "0");
     assert_eq!(before["warning"], "ok");
-    let repo = success(&app, &admin, "POST", "/api/repositories", Some(json!({"name":"Capacity","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let repo = success(&app, &admin, "POST", "/api/repositories", Some(json!({"name":"Capacity","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
     success(
         &app,
         &admin,
@@ -4912,7 +4927,7 @@ async fn removed_account_and_grant_routes_cannot_create_a_second_identity() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo = success(&app, &token, "POST", "/api/repositories", Some(json!({"name":"Single identity","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let repo = success(&app, &token, "POST", "/api/repositories", Some(json!({"name":"Single identity","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
     for admin in [false, true] {
         assert_eq!(send(&app, Some(&token), "POST", "/api/admin/accounts", Some(json!({"username":"second-account","password":"second-account-password","admin":admin,"repositories":[],"disabled":false}))).await.0, StatusCode::NOT_FOUND);
     }
@@ -4922,7 +4937,7 @@ async fn removed_account_and_grant_routes_cannot_create_a_second_identity() {
             .0,
         StatusCode::NOT_FOUND
     );
-    assert_eq!(send(&app, Some(&token), "PUT", &format!("/api/repositories/{}/grants", repo["repository_id"].as_str().unwrap()), Some(json!({"grants":{"read":["second-account"],"write":["second-account"],"manage":["second-account"]},"operation_id":new_id("op")}))).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(send(&app, Some(&token), "PUT", &format!("/api/repositories/{}/grants", repo["repository_id"].as_str().unwrap()), Some(json!({"grants":{"read":["second-account"],"write":["second-account"],"manage":["second-account"]},"operation_id":new_id("op").unwrap()}))).await.0, StatusCode::NOT_FOUND);
     assert_eq!(
         send(
             &app,
@@ -4973,7 +4988,7 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
     let before = manager_disk_files(root.path());
-    let operation = storage_contract::OperationId::generate();
+    let operation = storage_contract::OperationId::generate().unwrap();
     for route in ["directory-branches", "directory-select"] {
         let endpoint = format!("/api/file-manager/disks/P01/{route}");
         for body in [
@@ -5044,7 +5059,7 @@ async fn typed_disk_directory_rejects_raw_errors_before_lazy_root_and_keeps_repl
         &token,
         "POST",
         "/api/file-manager/disks/P01/directory-select",
-        Some(json!({"name":"SIDE","operation_id":storage_contract::OperationId::generate()})),
+        Some(json!({"name":"SIDE","operation_id":storage_contract::OperationId::generate().unwrap()})),
     )
     .await;
     assert_eq!(
@@ -5090,7 +5105,7 @@ async fn typed_file_branch_sources_keep_distinct_permanent_receipts() {
     )
     .await;
     for node in [Value::Null, json!(""), json!(false), json!([])] {
-        assert_eq!(send(&app,Some(&token),"POST",&route,Some(json!({"source_version_id":version,"source_node_id":node,"name":"Side","operation_id":new_id("op")}))).await.0,StatusCode::BAD_REQUEST);
+        assert_eq!(send(&app,Some(&token),"POST",&route,Some(json!({"source_version_id":version,"source_node_id":node,"name":"Side","operation_id":new_id("op").unwrap()}))).await.0,StatusCode::BAD_REQUEST);
         assert_eq!(
             success(
                 &app,
@@ -5105,7 +5120,8 @@ async fn typed_file_branch_sources_keep_distinct_permanent_receipts() {
     }
     let mut receipts = Vec::new();
     for (name, node) in [("Version source", None), ("Node source", Some(version))] {
-        let mut body = json!({"source_version_id":version,"name":name,"operation_id":new_id("op")});
+        let mut body =
+            json!({"source_version_id":version,"name":name,"operation_id":new_id("op").unwrap()});
         let mut canonical = json!({"file_id":file,"source_version_id":version,"name":name});
         if let Some(node) = node {
             body["source_node_id"] = node.into();
@@ -5227,21 +5243,21 @@ async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map(
             &token,
             method,
             &route,
-            Some(json!({"note":note,"operation_id":new_id("op")})),
+            Some(json!({"note":note,"operation_id":new_id("op").unwrap()})),
         )
         .await;
         assert_eq!(written["result"]["note"], note);
         let before = success(&app, &token, "GET", &history_route, None).await;
-        let mut mismatch = json!({"note":"","operation_id":new_id("op")});
+        let mut mismatch = json!({"note":"","operation_id":new_id("op").unwrap()});
         mismatch[id_key] = "other".into();
         for invalid in [
-            json!({"operation_id":new_id("op")}),
-            json!({"note":null,"operation_id":new_id("op")}),
-            json!({"note":false,"operation_id":new_id("op")}),
-            json!({"note":"x".repeat(129),"operation_id":new_id("op")}),
-            json!({"note":"bad\ntext","operation_id":new_id("op")}),
+            json!({"operation_id":new_id("op").unwrap()}),
+            json!({"note":null,"operation_id":new_id("op").unwrap()}),
+            json!({"note":false,"operation_id":new_id("op").unwrap()}),
+            json!({"note":"x".repeat(129),"operation_id":new_id("op").unwrap()}),
+            json!({"note":"bad\ntext","operation_id":new_id("op").unwrap()}),
             json!({"note":"","operation_id":"bad"}),
-            json!({"note":"","operation_id":new_id("op"),"unknown":0}),
+            json!({"note":"","operation_id":new_id("op").unwrap(),"unknown":0}),
             mismatch,
         ] {
             assert_eq!(
@@ -5261,7 +5277,7 @@ async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map(
                 .0,
             StatusCode::UNAUTHORIZED
         );
-        let clear = json!({"note":"","operation_id":new_id("op")});
+        let clear = json!({"note":"","operation_id":new_id("op").unwrap()});
         let cleared = success(&app, &token, method, &route, Some(clear.clone())).await;
         assert_eq!(cleared["result"]["note"], "");
         assert_eq!(
@@ -5296,7 +5312,7 @@ async fn typed_notes_reject_absence_and_null_but_clear_and_replay_each_real_map(
             &token,
             method,
             &route,
-            Some(json!({"note":"later","operation_id":new_id("op")})),
+            Some(json!({"note":"later","operation_id":new_id("op").unwrap()})),
         )
         .await;
         assert_eq!(
@@ -5331,13 +5347,13 @@ async fn disk_mkdir_rejects_raw_mutations_before_any_lazy_root_or_disk_write() {
         let app = application(root.path());
         let token = login(&app, "admin", "integration-test-password").await;
         if existing {
-            success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+            success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
             success(
                 &app,
                 &token,
                 "POST",
                 "/api/file-manager/disks/P01/namespace",
-                Some(json!({"kind":"mkdir","path":"Existing/folder","operation_id":new_id("op")})),
+                Some(json!({"kind":"mkdir","path":"Existing/folder","operation_id":new_id("op").unwrap()})),
             )
             .await;
         }
@@ -5350,7 +5366,7 @@ async fn disk_mkdir_rejects_raw_mutations_before_any_lazy_root_or_disk_write() {
         let events = success(&app, &token, "GET", "/api/events", None).await;
         let bytes = manager_disk_files(root.path());
         let route = "/api/file-manager/disks/P01/namespace";
-        let operation = new_id("op");
+        let operation = new_id("op").unwrap();
         for body in [
             json!({"kind":"unknown","path":path,"operation_id":operation}),
             json!({"kind":"mkdir","path":path}),
@@ -5391,7 +5407,8 @@ async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
         root.path().join("d1"),
         root.path().join("d2"),
         root.path().join("d3"),
-    ]);
+    ])
+    .unwrap();
     config.max_entries = 1;
     let app = configured_application(root.path(), config);
     let token = login(&app, "admin", "integration-test-password").await;
@@ -5402,13 +5419,13 @@ async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
         Some(&token),
         "POST",
         route,
-        Some(json!({"kind":"mkdir","path":"one/two","operation_id":new_id("op")})),
+        Some(json!({"kind":"mkdir","path":"one/two","operation_id":new_id("op").unwrap()})),
     )
     .await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(rejected["error"]["code"], "RESOURCE_LIMIT_EXCEEDED");
     assert_eq!(manager_disk_files(root.path()), before);
-    let used = new_id("op");
+    let used = new_id("op").unwrap();
     success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":used}))).await;
     let before = manager_disk_files(root.path());
     let (status, rejected) = send(
@@ -5429,7 +5446,7 @@ async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
                 Some(&token),
                 "POST",
                 route,
-                Some(json!({"kind":"mkdir","path":path,"operation_id":new_id("op")}))
+                Some(json!({"kind":"mkdir","path":path,"operation_id":new_id("op").unwrap()}))
             )
             .await
             .0,
@@ -5439,7 +5456,7 @@ async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
     }
     let mut receipts = Vec::new();
     for (display, relative) in [("Existing/Café", "Café"), ("root-folder", "root-folder")] {
-        let request = json!({"kind":"mkdir","path":display,"operation_id":new_id("op")});
+        let request = json!({"kind":"mkdir","path":display,"operation_id":new_id("op").unwrap()});
         let receipt = success(&app, &token, "POST", route, Some(request.clone())).await;
         let entries = success(
             &app,
@@ -5479,7 +5496,7 @@ async fn disk_mkdir_keeps_pre_root_admission_and_resolved_receipts() {
         Some(&token),
         "POST",
         "/api/file-manager/disks/B01/namespace",
-        Some(json!({"kind":"mkdir","path":"fresh","operation_id":new_id("op")})),
+        Some(json!({"kind":"mkdir","path":"fresh","operation_id":new_id("op").unwrap()})),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -5536,7 +5553,7 @@ async fn disk_write_sessions_parse_before_lazy_root_and_remain_fresh_workspaces(
         json!({"path":"file.txt","branch_id":123}),
         json!({"path":"file.txt","branch_id":""}),
         json!({"path":"file.txt","branch_id":"bad"}),
-        json!({"path":"file.txt","operation_id":new_id("op")}),
+        json!({"path":"file.txt","operation_id":new_id("op").unwrap()}),
         json!({"path":"file.txt","unknown":true}),
         json!({"path":"file.txt","slot_id":"other"}),
     ] {
@@ -5561,7 +5578,7 @@ async fn disk_write_sessions_parse_before_lazy_root_and_remain_fresh_workspaces(
         Some(&token),
         "POST",
         route,
-        Some(json!({"path":"file.txt","branch_id":new_id("br")})),
+        Some(json!({"path":"file.txt","branch_id":new_id("br").unwrap()})),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -5590,7 +5607,7 @@ async fn disk_write_sessions_parse_before_lazy_root_and_remain_fresh_workspaces(
         manager_disk_files(root.path()) == bytes,
         "backup request created a root"
     );
-    success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Existing","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
     let bytes = manager_disk_files(root.path());
     assert_eq!(
         send(
@@ -5681,7 +5698,7 @@ async fn disk_write_session_tracks_inherited_selection_and_merged_aliases() {
             &token,
             "POST",
             &format!("/api/file-manager/files/{file}/branches"),
-            Some(json!({"name":name,"source_version_id":version,"operation_id":new_id("op")})),
+            Some(json!({"name":name,"source_version_id":version,"operation_id":new_id("op").unwrap()})),
         )
         .await;
         branches.push(branch["result"]["branch_id"].as_str().unwrap().to_owned());
@@ -5692,7 +5709,7 @@ async fn disk_write_session_tracks_inherited_selection_and_merged_aliases() {
         &token,
         "POST",
         &format!("/api/file-manager/files/{file}/select"),
-        Some(json!({"branch_id":right,"operation_id":new_id("op")})),
+        Some(json!({"branch_id":right,"operation_id":new_id("op").unwrap()})),
     )
     .await;
     let frozen = manager_directory_branch(&app, &token, "", "frozen").await;
@@ -5702,7 +5719,7 @@ async fn disk_write_session_tracks_inherited_selection_and_merged_aliases() {
         &token,
         "PUT",
         &format!("/api/repositories/{repo}/default-branch"),
-        Some(json!({"directory_branch_id":frozen,"operation_id":new_id("op")})),
+        Some(json!({"directory_branch_id":frozen,"operation_id":new_id("op").unwrap()})),
     )
     .await;
     let route = "/api/file-manager/disks/P01/write-sessions";
@@ -5738,7 +5755,7 @@ async fn disk_write_session_tracks_inherited_selection_and_merged_aliases() {
         Some(json!({})),
     )
     .await;
-    success(&app,&token,"POST",&format!("/api/file-manager/files/{file}/merge"),Some(json!({"inputs":[{"branch_id":left,"expected_node_id":version},{"branch_id":right,"expected_node_id":version}],"chosen_node_id":version,"surviving_branch_id":left,"confirmed":true,"operation_id":new_id("op")}))).await;
+    success(&app,&token,"POST",&format!("/api/file-manager/files/{file}/merge"),Some(json!({"inputs":[{"branch_id":left,"expected_node_id":version},{"branch_id":right,"expected_node_id":version}],"chosen_node_id":version,"surviving_branch_id":left,"confirmed":true,"operation_id":new_id("op").unwrap()}))).await;
     let (status, rejected) = send(
         &app,
         Some(&token),
@@ -5768,7 +5785,7 @@ async fn historical_prepare_preserves_history_admission_and_fresh_plan_contract(
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
-    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Prepare","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op")}))).await;
+    let repo=success(&app,&token,"POST","/api/repositories",Some(json!({"name":"Prepare","primary_slot_id":"P01","target_copies":1,"operation_id":new_id("op").unwrap()}))).await;
     let history = repo["history_tree_id"].as_str().unwrap();
     let branch = repo["main_branch_id"].as_str().unwrap();
     let head = success(
@@ -5801,7 +5818,10 @@ async fn historical_prepare_preserves_history_admission_and_fresh_plan_contract(
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(error["error"]["code"], "INVALID_REQUEST");
     }
-    for body in [json!({"operation_id":new_id("op")}), json!({"unknown":1})] {
+    for body in [
+        json!({"operation_id":new_id("op").unwrap()}),
+        json!({"unknown":1}),
+    ] {
         assert_eq!(
             send(&app, Some(&token), "POST", missing, Some(body))
                 .await
@@ -5878,7 +5898,8 @@ async fn purge_prepare_preserves_history_priority_pins_and_sorted_fresh_plans() 
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -5887,7 +5908,7 @@ async fn purge_prepare_preserves_history_priority_pins_and_sorted_fresh_plans() 
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let mut versions = Vec::new();
@@ -5905,7 +5926,7 @@ async fn purge_prepare_preserves_history_priority_pins_and_sorted_fresh_plans() 
         engine
             .commit_workspace(CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "admin".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,
@@ -6017,7 +6038,7 @@ async fn purge_prepare_preserves_history_priority_pins_and_sorted_fresh_plans() 
             Some(&token),
             "POST",
             missing,
-            Some(json!({"operation_id":new_id("op")}))
+            Some(json!({"operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,
@@ -6066,7 +6087,8 @@ async fn split_prepare_preserves_admission_cut_rules_workspace_pins_and_plan_wir
             root.path().join("d1"),
             root.path().join("d2"),
             root.path().join("d3"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -6075,7 +6097,7 @@ async fn split_prepare_preserves_admission_cut_rules_workspace_pins_and_plan_wir
             "P01",
             1,
             "admin",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let root_commit = engine.state().branches[&repo.main_branch_id]
@@ -6090,7 +6112,7 @@ async fn split_prepare_preserves_admission_cut_rules_workspace_pins_and_plan_wir
     let cut = engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -6219,7 +6241,7 @@ async fn split_prepare_preserves_admission_cut_rules_workspace_pins_and_plan_wir
             Some(&token),
             "POST",
             missing,
-            Some(json!({"operation_id":new_id("op")}))
+            Some(json!({"operation_id":new_id("op").unwrap()}))
         )
         .await
         .0,

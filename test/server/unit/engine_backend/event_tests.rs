@@ -57,8 +57,11 @@ fn poll(backend: &EngineBackend, identity: &Identity, after: u64) -> Result<Valu
 fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("system");
-    let mut engine =
-        Engine::initialize(&root, Config::development([temporary.path().join("disk")])).unwrap();
+    let mut engine = Engine::initialize(
+        &root,
+        Config::development([temporary.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
     let baseline = engine.state().sequence;
     let backend = EngineBackend::new(engine);
@@ -78,7 +81,7 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
                 "P01",
                 1,
                 "owner",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let first = engine.state().sequence;
@@ -88,7 +91,7 @@ fn event_cursor_preserves_singleton_visibility_progress_and_recovery_order() {
                 "P01",
                 1,
                 "owner",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         (first, engine.state().sequence)
@@ -169,7 +172,7 @@ fn typed_event_page_is_frozen_and_serializes_without_the_engine_lock() {
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let identity = install_test_administrator(&mut engine, "owner");
@@ -179,7 +182,7 @@ fn typed_event_page_is_frozen_and_serializes_without_the_engine_lock() {
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let expected = json!({"events":engine.state().events,"next_cursor":engine.state().events.iter().next_back().unwrap().sequence.to_string()});
@@ -194,7 +197,7 @@ fn typed_event_page_is_frozen_and_serializes_without_the_engine_lock() {
             "P01",
             1,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     struct Probe<'a>(

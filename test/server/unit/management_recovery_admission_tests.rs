@@ -51,12 +51,13 @@ impl Fixture {
         ]);
         let auth = AuthStore::initialize_management(&management, "admin", PASSWORD).unwrap();
         let mut engine =
-            Engine::initialize(&data, Config::development(disks.values().cloned())).unwrap();
+            Engine::initialize(&data, Config::development(disks.values().cloned()).unwrap())
+                .unwrap();
         engine
             .persist_auth_state(
                 auth.snapshot().unwrap(),
                 "system_auth",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let repo = engine
@@ -65,7 +66,7 @@ impl Fixture {
                 "P01",
                 3,
                 "admin",
-                storage_contract::OperationId::generate(),
+                storage_contract::OperationId::generate().unwrap(),
             )
             .unwrap();
         let workspace = engine
@@ -88,7 +89,7 @@ impl Fixture {
                     .join(&workspace.workspace_id)
             )
         );
-        let operation = storage_contract::OperationId::generate();
+        let operation = storage_contract::OperationId::generate().unwrap();
         engine.inject_fault_once("after_accept_2");
         assert!(
             engine

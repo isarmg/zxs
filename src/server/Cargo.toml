@@ -45,6 +45,7 @@ tempfile.workspace = true
 service-stack = { version = "0.5", features = ["util"], path = "../foundation/networking/service-stack"}
 
 [dev-dependencies]
+system-entropy.workspace = true
 # Cross-entry publication regressions use the real SQLite fault and native client.
 sqlite-access.workspace = true
 storage-client.workspace = true

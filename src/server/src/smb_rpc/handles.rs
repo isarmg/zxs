@@ -125,6 +125,7 @@ impl Session {
             None => smb_protocol::protocol::FileMtime::Unpublished {},
         };
         let (handle, fd, size, workspace_id) = if writable {
+            let operation_id = OperationId::generate().map_err(ApiError::contract_input)?;
             self.reserve_paths(&[path.as_str()])?;
             let mut pending_workspace = None;
             let mut pending_source = None;
@@ -160,9 +161,12 @@ impl Session {
                 use platform_io::fs_safety::{EntryName, PayloadOpenMode, PrivateDirectory};
                 let directory = PrivateDirectory::open_trusted(&self.shared.spool)
                     .map_err(crate::upload_fs_error)?;
-                let name =
-                    EntryName::new(format!("{}-{}", workspace.workspace_id, new_id("upload")))
-                        .map_err(crate::upload_fs_error)?;
+                let name = EntryName::new(format!(
+                    "{}-{}",
+                    workspace.workspace_id,
+                    new_id("upload").map_err(ApiError::contract_input)?
+                ))
+                .map_err(crate::upload_fs_error)?;
                 let mut file = directory
                     .open_payload(&name, PayloadOpenMode::CreateNew)
                     .map_err(crate::upload_fs_error)?;
@@ -203,7 +207,7 @@ impl Session {
                 if existing.is_none() {
                     // Allocate the future entry identity in this unpublished
                     // workspace so the SMB file id remains stable at first save.
-                    entry_id = new_id("entry");
+                    entry_id = new_id("entry").map_err(ApiError::contract_input)?;
                     let staged = self.shared.backend.upload(
                         &self.identity,
                         &workspace.workspace_id,
@@ -230,7 +234,7 @@ impl Session {
                     workspace,
                     dirty: existing.is_none() || truncate,
                     committed: false,
-                    operation_id: OperationId::generate(),
+                    operation_id,
                     write_through,
                 };
                 if let Err(error) = writer.file.sync_all().map_err(ApiError::io).and_then(|()| {

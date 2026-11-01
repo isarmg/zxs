@@ -16,7 +16,7 @@ fn snapshot_lookup_preserves_frozen_identity_equivalent_spelling_and_absence() {
             "P01",
             3,
             "owner",
-            storage_contract::OperationId::generate(),
+            storage_contract::OperationId::generate().unwrap(),
         )
         .unwrap();
     let foreign = engine.state().branches[&other.main_branch_id]
@@ -122,7 +122,7 @@ fn measure_snapshot_lookup_against_tree_round_trip() {
         engine
             .commit_workspace(storage_engine::CommitRequest {
                 workspace_id: workspace.workspace_id,
-                operation_id: storage_contract::OperationId::generate(),
+                operation_id: storage_contract::OperationId::generate().unwrap(),
                 principal: "owner".into(),
                 expected_head: workspace.base_head,
                 fencing_token: workspace.fencing_token,

@@ -68,7 +68,7 @@ pub(crate) fn rename_node(
     source_node(state, &old.file_id, &old.version_id, &parent)?;
     let advance_head =
         file_nodes::branch_head(state, &context.branch_id).is_ok_and(|head| head == parent);
-    let node_id = new_id("fnode");
+    let node_id = new_id("fnode")?;
     state.file_path_nodes.insert(
         node_id.clone(),
         FilePathNode {

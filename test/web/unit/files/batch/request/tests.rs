@@ -1268,3 +1268,40 @@ fn queued_confirmation_cannot_consume_a_replacement_proposal_with_equal_text() {
     assert!(accept_displayed_name(&mut draft));
     assert_eq!(draft.names[&key], "é");
 }
+
+#[test]
+fn batch_nfc_review_requires_a_selected_source_even_when_inputs_are_editable() {
+    let mut draft = draft(Kind::Rename);
+    // Match the browser fixture: a file at the repository root, not a disk path.
+    let chosen = file("f", "browser-smoke.txt", "F1");
+    draft.repository_path.clear();
+    draft.entries = vec![listed(chosen.clone())];
+    draft.sources = vec![scope(branch("m", "", vec![chosen]))];
+    draft.selected_sources = BTreeSet::from(["m".into()]);
+    draft.names.clear();
+    let key = entry_key(&draft.entries[0]);
+    draft.names.insert(key.clone(), "e\u{301}".into());
+    let selected = std::mem::take(&mut draft.selected_sources);
+    let sources = std::mem::take(&mut draft.sources);
+    // A resolved but unregistered/unchecked scope leaves the text input enabled.
+    // Apply must reject that scope, not offer a candidate for an unbound write.
+    assert!(draft.source_resolved && !draft.loading);
+    assert!(matches!(request(&draft), Err(Error::Scope(_))));
+    assert!(draft.name_error.is_none());
+    assert_eq!(draft.names[&key], "e\u{301}");
+
+    draft.sources = sources;
+    draft.selected_sources = selected;
+    let (entry, original) = propose_first_name(&mut draft);
+    assert_eq!(entry, key);
+    assert_eq!(original, "e\u{301}");
+    assert_eq!(
+        draft.name_error.as_ref().unwrap().error.candidate(),
+        Some("é")
+    );
+    assert!(accept_displayed_name(&mut draft));
+    let body = request(&draft).unwrap();
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(body["items"][0]["source"]["path"], "browser-smoke.txt");
+    assert_eq!(body["items"][0]["target"]["path"], "é");
+}

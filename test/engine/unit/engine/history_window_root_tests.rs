@@ -9,7 +9,7 @@ fn fixture() -> (tempfile::TempDir, Engine, Repository, Entry) {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(
         &temp.path().join("state"),
-        Config::development([temp.path().join("disk")]),
+        Config::development([temp.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repository = repository(&mut engine, "target");
@@ -24,7 +24,7 @@ fn repository(engine: &mut Engine, name: &str) -> Repository {
             "P01",
             1,
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap()
 }
@@ -39,7 +39,7 @@ fn save(engine: &mut Engine, repository: &Repository, bytes: &[u8]) -> Entry {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -149,7 +149,7 @@ fn unrelated_history_publications_do_not_change_the_target_history_root() {
             None,
             &storage_contract::Note::parse("unrelated metadata".into()).unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert!(engine.state().sequence > sequence);
@@ -180,7 +180,7 @@ fn file_and_version_notes_change_the_root_without_new_content_or_history_generat
                 version,
                 &storage_contract::Note::parse("note only".into()).unwrap(),
                 "admin",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         let current = observed_root(&engine, history);
@@ -203,7 +203,7 @@ fn tags_and_pending_file_branch_selection_each_change_the_exact_root() {
             &file.version_id,
             &storage_contract::BranchName::parse("pending alternate").unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap()
         .branch_id
@@ -227,7 +227,7 @@ fn tags_and_pending_file_branch_selection_each_change_the_exact_root() {
             remove: &[],
             location: None,
             principal: "admin",
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
         })
         .unwrap();
     assert_ne!(observed_root(&engine, history), original);
@@ -235,7 +235,12 @@ fn tags_and_pending_file_branch_selection_each_change_the_exact_root() {
 
     let before_selection = observed_root(&engine, history);
     engine
-        .select_file_branch(&file.file_id, &branch, "admin", OperationId::generate())
+        .select_file_branch(
+            &file.file_id,
+            &branch,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
         .unwrap();
     assert_ne!(observed_root(&engine, history), before_selection);
     assert_eq!(engine.state.versions.len(), bodies);
@@ -377,7 +382,7 @@ fn recheck_accepts_unrelated_history_changes_and_rejects_a_changed_target_note()
             None,
             &storage_contract::Note::parse("unrelated note".into()).unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     engine.recheck_history_window(&read).unwrap();
@@ -393,7 +398,7 @@ fn recheck_accepts_unrelated_history_changes_and_rejects_a_changed_target_note()
             None,
             &storage_contract::Note::parse("target note changed".into()).unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -423,7 +428,7 @@ fn explicit_history_location_resolves_its_exact_path_and_rejects_other_files_and
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "admin".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -616,7 +621,7 @@ fn history_root_binding_requires_the_same_immutable_state_allocation() {
 fn absent_history_is_not_reported_as_an_empty_or_default_root() {
     let (_temp, engine, _repository, _file) = fixture();
     let view = engine.metadata_view();
-    let error = view.history_root(&new_id("history")).unwrap_err();
+    let error = view.history_root(&new_id("history").unwrap()).unwrap_err();
     assert_eq!(error.code(), ErrorCode::HistoryNotFound);
 }
 
@@ -633,7 +638,7 @@ fn indeterminate_publication_keeps_the_old_root_until_verified_cold_recovery() {
             None,
             &storage_contract::Note::parse("accepted pending note".into()).unwrap(),
             "admin",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap_err();
     assert_eq!(error.code(), ErrorCode::InDoubt);

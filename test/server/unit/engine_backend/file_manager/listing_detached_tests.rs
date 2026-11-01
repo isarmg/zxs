@@ -46,7 +46,7 @@ fn fixture() -> Fixture {
     let root = crate::tests::private_tempdir();
     let mut engine = Engine::initialize(
         &root.path().join("system"),
-        Config::development([root.path().join("disk")]),
+        Config::development([root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     let repo = engine
@@ -55,7 +55,7 @@ fn fixture() -> Fixture {
             "P01",
             1,
             "owner",
-            OperationId::generate(),
+            OperationId::generate().unwrap(),
         )
         .unwrap();
     let workspace = engine
@@ -75,7 +75,7 @@ fn fixture() -> Fixture {
     engine
         .commit_workspace(CommitRequest {
             workspace_id: workspace.workspace_id,
-            operation_id: OperationId::generate(),
+            operation_id: OperationId::generate().unwrap(),
             principal: "owner".into(),
             expected_head: workspace.base_head,
             fencing_token: workspace.fencing_token,
@@ -149,7 +149,7 @@ fn writers_finish_during_primary_scan_and_changed_pages_never_project_old_indice
                         )
                         .unwrap(),
                         "owner",
-                        OperationId::generate(),
+                        OperationId::generate().unwrap(),
                     )
                     .unwrap();
             } else {
@@ -166,7 +166,7 @@ fn writers_finish_during_primary_scan_and_changed_pages_never_project_old_indice
                         None,
                         &storage_contract::Note::parse("changed".into()).unwrap(),
                         "owner",
-                        OperationId::generate(),
+                        OperationId::generate().unwrap(),
                     )
                     .unwrap();
             }
@@ -212,7 +212,7 @@ fn revoked_identity_wins_over_a_changed_primary_listing() {
                 )
                 .unwrap(),
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         auth.logout(&token).unwrap();
@@ -279,7 +279,7 @@ fn reopen(backend: &EngineBackend, root: &std::path::Path) {
     let spare_root = crate::tests::private_tempdir();
     let spare = Engine::initialize(
         &spare_root.path().join("system"),
-        Config::development([spare_root.path().join("disk")]),
+        Config::development([spare_root.path().join("disk")]).unwrap(),
     )
     .unwrap();
     backend.test_with_engine_locked(|engine| {
@@ -357,7 +357,7 @@ fn primary_capture_keeps_cursor_error_precedence_before_disk_and_directory_error
                 )
                 .unwrap(),
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
     });
@@ -384,14 +384,19 @@ fn primary_scan_preserves_virtual_root_recursive_counts_unicode_and_directory_ch
     let (_root, backend, _auth, _token, identity, repo) = fixture();
     backend.test_with_engine_locked(|engine| {
         engine
-            .initialize_directory_scope(&repo.repository_id, None, "owner", OperationId::generate())
+            .initialize_directory_scope(
+                &repo.repository_id,
+                None,
+                "owner",
+                OperationId::generate().unwrap(),
+            )
             .unwrap();
         engine
             .initialize_directory_scope(
                 &repo.repository_id,
                 Some(&name_policy::LookupPath::parse("Café").unwrap()),
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
     });
@@ -444,7 +449,7 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
                 "P01",
                 1,
                 "owner",
-                OperationId::generate(),
+                OperationId::generate().unwrap(),
             )
             .unwrap();
         let head = &engine.state().branches[&other.main_branch_id].head_commit_id;
@@ -455,7 +460,7 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
     });
     let spare = Engine::initialize(
         &root.path().join("replacement-system"),
-        Config::development([root.path().join("replacement-disk")]),
+        Config::development([root.path().join("replacement-disk")]).unwrap(),
     )
     .unwrap();
     let auth = Arc::new(Mutex::new(auth));

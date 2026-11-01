@@ -292,8 +292,8 @@ fn sparse_branch_and_commit_canonical_bytes_omit_empty_pending_maps() {
     );
     let mut created = branch;
     created.pending_file_versions.insert(
-        storage_contract::new_id("file"),
-        storage_contract::new_id("ver"),
+        storage_contract::new_id("file").unwrap(),
+        storage_contract::new_id("ver").unwrap(),
     );
     let encoded = storage_contract::canonical_json(&created).unwrap();
     let decoded: storage_contract::Branch = storage_contract::decode_strict(&encoded).unwrap();
@@ -457,20 +457,23 @@ fn inherited_file_manager_projection_distinguishes_visible_parent_from_own_conte
     api["$defs"]["entry_projection"] = item;
     api["$ref"] = "#/$defs/entry_projection".into();
     let schema = validator(&api).unwrap();
-    let source = storage_contract::new_id("ver");
+    let source = storage_contract::new_id("ver").unwrap();
     let inherited = json!({
         "entry_id":"entry-example","name":"a.txt","path":"a.txt","kind":"file",
-        "container":true,"size":"12","file_id":storage_contract::new_id("file"),
+        "container":true,"size":"12","file_id":storage_contract::new_id("file").unwrap(),
         "version_id":source,"own_version_id":null,"inherited":true,"materialized":false,
         "content_state":"PENDING","visible_content_state":"AVAILABLE",
-        "source_version_id":source,"selected_branch_id":storage_contract::new_id("br")
+        "source_version_id":source,"selected_branch_id":storage_contract::new_id("br").unwrap()
     });
     let accepts = |value: &Value| schema.is_valid(value) && validate_content_view(value).is_ok();
     assert!(accepts(&inherited));
     for (field, value) in [
         ("version_id", Value::Null),
         ("version_id", json!("")),
-        ("version_id", json!(storage_contract::new_id("ver"))),
+        (
+            "version_id",
+            json!(storage_contract::new_id("ver").unwrap()),
+        ),
         ("own_version_id", json!(source)),
         ("inherited", json!(false)),
         ("source_version_id", Value::Null),
@@ -482,7 +485,7 @@ fn inherited_file_manager_projection_distinguishes_visible_parent_from_own_conte
         assert!(!accepts(&invalid), "invalid inherited {field}");
     }
     let mut written = inherited.clone();
-    let own = storage_contract::new_id("ver");
+    let own = storage_contract::new_id("ver").unwrap();
     written["materialized"] = true.into();
     written["inherited"] = false.into();
     written["version_id"] = own.clone().into();
@@ -493,7 +496,7 @@ fn inherited_file_manager_projection_distinguishes_visible_parent_from_own_conte
     // A genuinely written zero-byte FULL is valid and distinguishable.
     assert!(accepts(&written));
     let mut wrong_own = written.clone();
-    wrong_own["own_version_id"] = storage_contract::new_id("ver").into();
+    wrong_own["own_version_id"] = storage_contract::new_id("ver").unwrap().into();
     assert!(!accepts(&wrong_own));
     let mut wrong_state = written.clone();
     wrong_state["visible_content_state"] = "PURGED".into();
@@ -522,7 +525,7 @@ fn inherited_file_manager_projection_distinguishes_visible_parent_from_own_conte
     let creation_schema = validator(&api).unwrap();
     let creation = json!({
         "file_id":inherited["file_id"],"branch_id":inherited["selected_branch_id"],
-        "commit_id":storage_contract::new_id("commit"),"history_tree_id":storage_contract::new_id("history"),
+        "commit_id":storage_contract::new_id("commit").unwrap(),"history_tree_id":storage_contract::new_id("history").unwrap(),
         "copied_files":"0","placeholder_files":"1","materialized":false,"selected":false,
         "inherited":true,"own_version_id":null,"version_id":source,
         "source_version_id":source,"content_state":"PENDING"
@@ -531,7 +534,7 @@ fn inherited_file_manager_projection_distinguishes_visible_parent_from_own_conte
     let mut rewritten_receipt = creation.clone();
     rewritten_receipt["materialized"] = true.into();
     rewritten_receipt["inherited"] = false.into();
-    rewritten_receipt["own_version_id"] = storage_contract::new_id("ver").into();
+    rewritten_receipt["own_version_id"] = storage_contract::new_id("ver").unwrap().into();
     assert!(!creation_schema.is_valid(&rewritten_receipt));
     api["$ref"] = "#/$defs/directory_branch_creation".into();
     let directory_branch_schema = validator(&api).unwrap();
@@ -675,9 +678,9 @@ fn directory_batch_contract_requires_frozen_explicit_mappings() {
     let mut api = read(&path).unwrap();
     api["$ref"]="#/paths/~1api~1file-manager~1disks~1%7Bslot%7D~1namespace-batch/post/requestBody/content/application~1json/schema".into();
     let schema = validator(&api).unwrap();
-    let source = json!({"directory_branch_id":storage_contract::new_id("dbr"),"expected_tree_id":storage_contract::new_id("dtree"),"path":"a/report.txt","entry_id":storage_contract::new_id("entry")});
-    let target = json!({"directory_branch_id":storage_contract::new_id("dbr"),"expected_tree_id":storage_contract::new_id("dtree"),"path":"b/report.txt"});
-    let valid = json!({"kind":"move","operation_id":storage_contract::new_id("op"),"items":[{"source":source,"target":target}]});
+    let source = json!({"directory_branch_id":storage_contract::new_id("dbr").unwrap(),"expected_tree_id":storage_contract::new_id("dtree").unwrap(),"path":"a/report.txt","entry_id":storage_contract::new_id("entry").unwrap()});
+    let target = json!({"directory_branch_id":storage_contract::new_id("dbr").unwrap(),"expected_tree_id":storage_contract::new_id("dtree").unwrap(),"path":"b/report.txt"});
+    let valid = json!({"kind":"move","operation_id":storage_contract::new_id("op").unwrap(),"items":[{"source":source,"target":target}]});
     assert!(schema.is_valid(&valid));
     for kind in ["copy", "rename"] {
         let mut body = valid.clone();
@@ -774,12 +777,12 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
         ]);
         validator(&document).unwrap()
     };
-    let file = storage_contract::new_id("file");
-    let branch = storage_contract::new_id("br");
-    let other = storage_contract::new_id("br");
-    let version = storage_contract::new_id("ver");
-    let meta = storage_contract::new_id("fmeta");
-    let operation = storage_contract::new_id("op");
+    let file = storage_contract::new_id("file").unwrap();
+    let branch = storage_contract::new_id("br").unwrap();
+    let other = storage_contract::new_id("br").unwrap();
+    let version = storage_contract::new_id("ver").unwrap();
+    let meta = storage_contract::new_id("fmeta").unwrap();
+    let operation = storage_contract::new_id("op").unwrap();
     let merge = request_schema("/api/file-manager/files/{file}/merge", "post");
     let body = json!({"inputs":[{"branch_id":branch,"expected_node_id":version},{"branch_id":other,"expected_node_id":meta}],"chosen_node_id":meta,"surviving_branch_id":branch,"confirmed":true,"operation_id":operation});
     assert!(merge.is_valid(&body));
@@ -801,7 +804,7 @@ fn file_merge_tags_and_scope_backups_require_explicit_reviewed_baselines() {
     invalid["inputs"] = json!([body["inputs"][0]]);
     assert!(!merge.is_valid(&invalid));
     invalid = body;
-    invalid["repository_id"] = storage_contract::new_id("repo").into();
+    invalid["repository_id"] = storage_contract::new_id("repo").unwrap().into();
     assert!(!merge.is_valid(&invalid));
     let tags = request_schema("/api/file-manager/files/{file}/tags", "post");
     let body = json!({"targets":[{"branch_id":branch,"source_node_id":version,"expected_node_id":meta}],"add":["审核"],"remove":[],"operation_id":operation});
@@ -1072,7 +1075,7 @@ fn configuration_fixture() -> (Value, Value) {
 #[test]
 fn resource_projection_keeps_current_fields_and_rejects_obsolete_limits() {
     let (schema, base) = configuration_fixture();
-    let draft = storage_contract::Config::development(std::iter::empty::<PathBuf>());
+    let draft = storage_contract::Config::development(std::iter::empty::<PathBuf>()).unwrap();
     assert_eq!(
         base["resource_limits"]["max_workspaces"],
         json!(draft.max_workspaces)

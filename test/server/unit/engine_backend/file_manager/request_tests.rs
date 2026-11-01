@@ -55,7 +55,8 @@ fn valid_creation_and_upload_still_create_the_lazy_root() {
                 root.path().join("one"),
                 root.path().join("two"),
                 root.path().join("three"),
-            ]),
+            ])
+            .unwrap(),
         )
         .unwrap();
         let identity = Identity {
@@ -65,10 +66,10 @@ fn valid_creation_and_upload_still_create_the_lazy_root() {
         };
         match creation {
             Creation::Namespace => {
-                mkdir_fixture(&mut engine,&identity,json!({"slot_id":"P01","kind":"mkdir","path":"folder","operation_id":storage_engine::new_id("op")})).unwrap();
+                mkdir_fixture(&mut engine,&identity,json!({"slot_id":"P01","kind":"mkdir","path":"folder","operation_id":storage_engine::new_id("op").unwrap()})).unwrap();
             }
             Creation::DirectoryBranch => {
-                directory_mutation(&mut engine,&identity,crate::DiskDirectoryAction::Create,json!({"slot_id":"P01","name":"branch","operation_id":storage_engine::new_id("op")})).unwrap();
+                directory_mutation(&mut engine,&identity,crate::DiskDirectoryAction::Create,json!({"slot_id":"P01","name":"branch","operation_id":storage_engine::new_id("op").unwrap()})).unwrap();
             }
             Creation::Upload => {
                 write_session(
@@ -106,7 +107,8 @@ fn baseline_name_and_used_operation_are_rejected_before_root_initialization() {
             disks.join("one"),
             disks.join("two"),
             disks.join("three"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let identity = Identity {
@@ -116,12 +118,12 @@ fn baseline_name_and_used_operation_are_rejected_before_root_initialization() {
     };
     for name in ["main", "MAIN"] {
         let before = disk_files(&disks);
-        let error = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create, json!({"slot_id":"P01","path":"","name":name,"operation_id":storage_engine::new_id("op")})).unwrap_err();
+        let error = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create, json!({"slot_id":"P01","path":"","name":name,"operation_id":storage_engine::new_id("op").unwrap()})).unwrap_err();
         assert_eq!(error.code, storage_contract::ErrorCode::NameCollision);
         assert_eq!(engine.state().sequence, 0);
         assert_eq!(disk_files(&disks), before);
     }
-    let used = storage_contract::OperationId::generate();
+    let used = storage_contract::OperationId::generate().unwrap();
     engine
         .create_repository(
             &storage_contract::RepositoryName::parse("Existing").unwrap(),
@@ -156,7 +158,8 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
             root.path().join("one"),
             root.path().join("two"),
             root.path().join("three"),
-        ]),
+        ])
+        .unwrap(),
     )
     .unwrap();
     let identity = Identity {
@@ -164,9 +167,9 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
         smb_binding: None,
         principal: "owner".into(),
     };
-    mkdir_fixture(&mut engine,&identity,json!({"slot_id":"P01","kind":"mkdir","path":"target","operation_id":storage_engine::new_id("op")})).unwrap();
+    mkdir_fixture(&mut engine,&identity,json!({"slot_id":"P01","kind":"mkdir","path":"target","operation_id":storage_engine::new_id("op").unwrap()})).unwrap();
     let frozen = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create,
-        json!({"slot_id":"P01","path":"target","name":"frozen","operation_id":storage_engine::new_id("op")})).unwrap();
+        json!({"slot_id":"P01","path":"target","name":"frozen","operation_id":storage_engine::new_id("op").unwrap()})).unwrap();
     let old_branch = frozen["result"]["directory_branch_id"]
         .as_str()
         .unwrap()
@@ -196,7 +199,7 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
     Application::new(&mut engine, &identity)
         .namespace_batch(crate::NamespaceBatch {
             slot_id: "P01".into(),
-            operation_id: storage_contract::OperationId::generate(),
+            operation_id: storage_contract::OperationId::generate().unwrap(),
             request: storage_contract::DirectoryNamespaceBatch {
                 kind: storage_contract::DirectoryBatchKind::Rename,
                 items: vec![storage_contract::DirectoryNamespaceItem {
@@ -221,8 +224,8 @@ fn destination_scope_reads_disambiguate_reused_directory_paths_by_identity() {
             },
         })
         .unwrap();
-    mkdir_fixture(&mut engine,&identity, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op"),"kind":"mkdir","path":"target"})).unwrap();
-    let fresh = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op"),"path":"target","name":"fresh"})).unwrap();
+    mkdir_fixture(&mut engine,&identity, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op").unwrap(),"kind":"mkdir","path":"target"})).unwrap();
+    let fresh = directory_mutation(&mut engine, &identity, crate::DiskDirectoryAction::Create, json!({"slot_id":"P01","operation_id":storage_engine::new_id("op").unwrap(),"path":"target","name":"fresh"})).unwrap();
     let fresh_branch = fresh["result"]["directory_branch_id"].as_str().unwrap();
     let all = scope_response(&engine, &repo, crate::DirectoryBranchFilter::All).unwrap();
     let cached_matches = all["directory_branches"]
@@ -290,7 +293,8 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     disks.join("one"),
                     disks.join("two"),
                     disks.join("three"),
-                ]),
+                ])
+                .unwrap(),
             )
             .unwrap();
             let mut engine = AdmissionEngine::new(engine);
@@ -301,13 +305,17 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                         "P01",
                         1,
                         "owner",
-                        storage_contract::OperationId::generate(),
+                        storage_contract::OperationId::generate().unwrap(),
                     )
                     .unwrap()
             };
             let named = named_first.then(|| create_named(&mut engine));
             let root = engine
-                .create_disk_root("P01", "owner", storage_contract::OperationId::generate())
+                .create_disk_root(
+                    "P01",
+                    "owner",
+                    storage_contract::OperationId::generate().unwrap(),
+                )
                 .unwrap();
             let mut paths = vec![format!("{root_name}-other")];
             if root_is_file {
@@ -320,7 +328,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 engine
                     .commit_workspace(storage_engine::CommitRequest {
                         workspace_id: workspace.workspace_id,
-                        operation_id: storage_contract::OperationId::generate(),
+                        operation_id: storage_contract::OperationId::generate().unwrap(),
                         principal: "owner".into(),
                         expected_head: workspace.base_head,
                         fencing_token: workspace.fencing_token,
@@ -342,7 +350,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                         )
                         .unwrap(),
                         "owner",
-                        storage_contract::OperationId::generate(),
+                        storage_contract::OperationId::generate().unwrap(),
                     )
                     .unwrap();
             }
@@ -357,7 +365,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     )
                     .unwrap(),
                     "owner",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
             let identity = Identity {
@@ -388,7 +396,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 );
             }
             for failure in [
-                mkdir_fixture(&mut engine,&identity,json!({"slot_id":"P01","kind":"mkdir","path":format!("{root_name}/new-directory"),"operation_id":storage_engine::new_id("op")})).unwrap_err(),
+                mkdir_fixture(&mut engine,&identity,json!({"slot_id":"P01","kind":"mkdir","path":format!("{root_name}/new-directory"),"operation_id":storage_engine::new_id("op").unwrap()})).unwrap_err(),
                 write_session(&mut engine,&identity,crate::CreateDiskWriteSession {slot_id:"P01".into(),path:name_policy::PortablePath::parse(&format!("{root_name}/new-file.txt")).unwrap(),branch_id:None}).unwrap_err(),
             ] {
                 assert_eq!(
@@ -406,7 +414,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                 crate::DiskDirectoryAction::Create,
                 crate::DiskDirectoryAction::Select,
             ] {
-                let failure = directory_mutation(&mut engine,&identity,action,json!({"slot_id":"P01","path":root_name,"name":"main","operation_id":storage_engine::new_id("op")})).unwrap_err();
+                let failure = directory_mutation(&mut engine,&identity,action,json!({"slot_id":"P01","path":root_name,"name":"main","operation_id":storage_engine::new_id("op").unwrap()})).unwrap_err();
                 assert_eq!(
                     (failure.status, failure.code),
                     (
@@ -449,7 +457,7 @@ fn ambiguous_primary_disk_paths_never_choose_a_repository_or_create_work() {
                     )
                     .unwrap(),
                     "owner",
-                    storage_contract::OperationId::generate(),
+                    storage_contract::OperationId::generate().unwrap(),
                 )
                 .unwrap();
             let listing = super::listing_integration_tests::listing_json(

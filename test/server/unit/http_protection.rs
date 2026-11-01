@@ -4,10 +4,10 @@ use storage_contract::new_id;
 
 #[test]
 fn protection_commands_validate_wire_types_and_unknown_fields() {
-    let policy = json!({"policy_id":new_id("policy"),"repository_id":new_id("repo"),
-            "path_prefix":"","target_copies":3,"expected_generation":"0","operation_id":new_id("op")});
-    let rule = json!({"rule_id":new_id("rule"),"repository_id":new_id("repo"),
-            "path_prefix":"","primary_slot_id":"P01","expected_generation":"0","operation_id":new_id("op")});
+    let policy = json!({"policy_id":new_id("policy").unwrap(),"repository_id":new_id("repo").unwrap(),
+            "path_prefix":"","target_copies":3,"expected_generation":"0","operation_id":new_id("op").unwrap()});
+    let rule = json!({"rule_id":new_id("rule").unwrap(),"repository_id":new_id("repo").unwrap(),
+            "path_prefix":"","primary_slot_id":"P01","expected_generation":"0","operation_id":new_id("op").unwrap()});
     for (is_policy, valid) in [(true, policy), (false, rule)] {
         let decode = |value: json_codec::Value| {
             if is_policy {

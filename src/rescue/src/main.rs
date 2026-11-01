@@ -212,7 +212,10 @@ fn run(args: Args) -> Result<()> {
                 let mut engine =
                     Engine::open_with_workspace_limits(&root, retained_workspace_limits)?;
                 report_recovery_warnings(&mut engine);
-                let operation = operation_id.unwrap_or_else(OperationId::generate);
+                let operation = match operation_id {
+                    Some(id) => id,
+                    None => OperationId::generate()?,
+                };
                 let restored = engine.restore_history_package(
                     &package,
                     &primary_slot,
