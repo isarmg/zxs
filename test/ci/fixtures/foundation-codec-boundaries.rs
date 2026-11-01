@@ -73,6 +73,75 @@ fn wasm_parser_rejects_bad_magic_and_version() {
             .is_err()
     );
 }
+
+fn assert_wasm_locals_size_hint_bounds(bytes: &[u8]) {
+    let locals = || {
+        wasmparser::FunctionBody::new(wasmparser::BinaryReader::new(bytes, 37))
+            .get_locals_reader()
+            .unwrap()
+            .into_iter()
+    };
+    let items = locals().count();
+    for consumed in 0..=items {
+        let mut remaining = locals();
+        for _ in 0..consumed {
+            assert!(remaining.next().is_some());
+        }
+        let (lower, upper) = remaining.size_hint();
+        let actual = remaining.count();
+        assert!(
+            lower <= actual,
+            "lower {lower} exceeds {actual} remaining items"
+        );
+        assert!(upper.is_some_and(|upper| actual <= upper));
+    }
+}
+
+#[test]
+fn wasm_locals_size_hint_bounds_valid_progress() {
+    for bytes in [&[0][..], &[2, 1, 0x7f, 2, 0x7e, 0x0b][..]] {
+        assert_wasm_locals_size_hint_bounds(bytes);
+    }
+}
+
+#[test]
+fn wasm_locals_size_hint_bounds_error_termination() {
+    for bytes in [&[5, 1, 0x7f][..], &[0xff, 0xff, 0xff, 0xff, 0x0f][..]] {
+        assert_wasm_locals_size_hint_bounds(bytes);
+    }
+}
+
+#[test]
+fn wasm_locals_iteration_preserves_numeric_error_and_operator_position() {
+    let overflow = [2, 0xff, 0xff, 0xff, 0xff, 0x0f, 0x7f, 1, 0x7f];
+    let mut locals = wasmparser::FunctionBody::new(wasmparser::BinaryReader::new(&overflow, 37))
+        .get_locals_reader()
+        .unwrap()
+        .into_iter();
+    assert_eq!(
+        locals.next().unwrap().unwrap(),
+        (u32::MAX, wasmparser::ValType::I32)
+    );
+    let error = locals.next().unwrap().unwrap_err();
+    assert_eq!(error.message(), "too many locals");
+    assert_eq!(error.offset(), 45);
+    assert!(locals.next().is_none());
+
+    let body = [1, 2, 0x7f, 0x0b];
+    let mut locals = wasmparser::FunctionBody::new(wasmparser::BinaryReader::new(&body, 37))
+        .get_locals_reader()
+        .unwrap()
+        .into_iter();
+    assert_eq!(
+        locals.next().unwrap().unwrap(),
+        (2, wasmparser::ValType::I32)
+    );
+    assert!(locals.next().is_none());
+    let mut operators = locals.into_binary_reader_for_operators();
+    assert_eq!(operators.read_u8().unwrap(), 0x0b);
+    assert!(operators.eof());
+}
+
 #[test]
 fn dwarf_reader_decodes_leb_and_reports_truncation() {
     use gimli::{EndianSlice, LittleEndian, Reader};

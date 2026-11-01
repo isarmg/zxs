@@ -35,6 +35,9 @@
           "dwarf_reader_decodes_leb_and_reports_truncation",
           "subtle_equality_and_selection_preserve_each_branch_value",
           "wasm_encoder_output_is_valid_and_exports_the_expected_function",
+          "wasm_locals_iteration_preserves_numeric_error_and_operator_position",
+          "wasm_locals_size_hint_bounds_error_termination",
+          "wasm_locals_size_hint_bounds_valid_progress",
           "wasm_parser_rejects_bad_magic_and_version"
         ]
       }

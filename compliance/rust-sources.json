@@ -102026,7 +102026,7 @@
       "version": "0.245.1"
     },
     "src/foundation/web-runtime/wasmparser": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 清理独立演示：移除 1 个独立示例程序及专属输入（1068 字节）；保留文档编译、真实测试及性能基准输入。 规范一致性：导出项对本地 ExternalKind 使用穷尽匹配；保持现有接受集合和 FuncExact 拒绝路径。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 清理独立演示：移除 1 个独立示例程序及专属输入（1068 字节）；保留文档编译、真实测试及性能基准输入。 规范一致性：导出项对本地 ExternalKind 使用穷尽匹配；保持现有接受集合和 FuncExact 拒绝路径。 修正 LocalsIterator 长度提示：依据剩余声明和终止错误状态提供有效上下界；保留 next、原始解析错误、偏移及数值边界检查。",
       "description": "A simple event-driven library for parsing WebAssembly binary files.",
       "directory": "src/foundation/web-runtime/wasmparser",
       "files_sha256": {
@@ -102057,7 +102057,7 @@
         "src/readers/component/types.rs": "457937f8370f423673edde76bedb3d0ed79b91ecf04ecb41cfb77b884d7bf4d1",
         "src/readers/core.rs": "f77e1eb46e1d05abeabb9be2bd7bdd66acadfc4c651912f2a67b7e5f7d29d041",
         "src/readers/core/branch_hinting.rs": "29210720e08e3a558fd96ac857038c9b87732a265ff1bfbd7f0bf3312ea3e949",
-        "src/readers/core/code.rs": "96b4f12b666576100bfa9807e087792ec96b4d315317475180c086f18fe86b4d",
+        "src/readers/core/code.rs": "6e8d56659c1e49fd206f755ebd25ef4fd3f11824fd8b1a158f905dd302d8f12b",
         "src/readers/core/coredumps.rs": "75c1c5ad6a85cb90bc39eb4b22b22a512f5ee98b363565f7262c1c176a10bbef",
         "src/readers/core/custom.rs": "f3c965fcd044576a2c0f3ee87c78e4f9f345ce87899a76d609e5a8709f5d7d9e",
         "src/readers/core/data.rs": "da78898a19accca90f05ee762cf3388c0f8a40a3d60cb78acaa3f0eb71a0cb3c",
