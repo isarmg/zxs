@@ -17,6 +17,26 @@ use std::{
     path::Path,
 };
 
+fn namespace_scope_matches(current: &[Entry], base: &[Entry], key: &str) -> bool {
+    fn binding(entry: &Entry) -> (&str, &str, NamespaceEntryKind, &str, &str) {
+        (
+            entry.entry_id.as_str(),
+            entry.file_id.as_str(),
+            entry.kind,
+            entry.path(),
+            entry.version_id.as_str(),
+        )
+    }
+    let prefix = format!("{key}/");
+    let selected =
+        |entry: &&Entry| entry.lookup_key() == key || entry.lookup_key().starts_with(&prefix);
+    current
+        .iter()
+        .filter(selected)
+        .map(binding)
+        .eq(base.iter().filter(selected).map(binding))
+}
+
 fn upload_fingerprint_file(input: std::fs::File, maximum: u64) -> Result<(u64, ContentHash)> {
     let mut digest = blake3::Hasher::new();
     let mut size = 0u64;
@@ -1519,15 +1539,10 @@ impl crate::engine::PlanningContext<'_> {
                     for operation in &w.namespace_operations {
                         validate_directory_selection_key(state, &w, operation.key())?;
                         if let Some(destination) = &operation.destination() { validate_directory_selection_key(state, &w, destination.key())?; }
-                        let key = operation.key().to_owned();
-                        let prefix = format!("{key}/");
                         // A same-name replacement is not the entry this workspace
                         // opened. In particular, every directory has an empty
                         // version_id, so path/content alone cannot fence it.
-                        let selected = |entries: &[Entry]| entries.iter()
-                            .filter(|entry| entry.lookup_key() == key || entry.lookup_key().starts_with(&prefix))
-                            .map(|entry| (entry.entry_id.clone(), entry.file_id.clone(), entry.kind, entry.path().to_owned(), entry.version_id.clone())).collect::<Vec<_>>();
-                        if selected(&current.entries) != selected(&base.entries) {
+                        if !namespace_scope_matches(&current.entries, &base.entries, operation.key()) {
                             return Err(Error::new(storage_contract::ErrorCode::NamespaceConflict, "namespace changed after the workspace began"));
                         }
                     }
@@ -1583,14 +1598,22 @@ impl crate::engine::PlanningContext<'_> {
                     let location = location.clone();
                     let entry = Entry { entry_id: existing.as_ref().map(|entry| entry.entry_id.clone()).unwrap_or_else(|| file.item_id.clone()), path: location, kind: NamespaceEntryKind::File, file_id: file_id.clone(), version_id: version.version_id, size: version.logical_size };
                     draft.replace(entry);
-                    state.file_locations.entry(file_id.clone()).or_insert_with(||path.to_owned());
-                    state.file_names.entry(file_id.clone()).or_insert_with(||path.rsplit('/').next().unwrap_or("").into());
+                    if !state.file_locations.contains_key(&file_id) {
+                        state.file_locations.insert(file_id.clone(), path.to_owned());
+                    }
+                    if !state.file_names.contains_key(&file_id) {
+                        state.file_names.insert(file_id.clone(), path.rsplit('/').next().unwrap_or("").into());
+                    }
                     written_files.insert(file_id);
                 }
                 let mut entries = draft.into_entries();
                 let renamed_directories=directory::prepare_renamed_directories(state,&repo.repository_id,&current.entries,&w.namespace_operations)?;
                 let deleted = apply_workspace_namespace(&mut entries, &current.entries, &w.namespace_operations)?;
-                super::directory::namespace_locations(state,&repo.repository_id,&current.entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
+                // Without namespace operations every old identity/path remains live.
+                // Keep already-prepared raw contexts in place instead of rebuilding them.
+                if !w.namespace_operations.is_empty() {
+                    super::directory::namespace_locations(state,&repo.repository_id,&current.entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
+                }
                 validate_entries(&mut entries, engine.config.max_entries)?;
                 if entries == current.entries && deleted.is_empty() {
                     return Ok(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}));
@@ -1634,3 +1657,7 @@ impl crate::engine::PlanningContext<'_> {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/business/workspace_hot_path_tests.rs"]
+mod hot_path_tests;

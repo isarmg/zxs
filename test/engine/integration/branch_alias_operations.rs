@@ -14,6 +14,8 @@ mod copy_alias_scenarios;
 mod deletion_rebase_scenarios;
 #[path = "branch_alias_operations/file_merge_scenarios.rs"]
 mod file_merge_scenarios;
+#[path = "branch_alias_operations/workspace_content_scenarios.rs"]
+mod workspace_content_scenarios;
 
 struct Pool {
     _temporary: tempfile::TempDir,

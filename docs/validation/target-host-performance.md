@@ -11,7 +11,9 @@
 `f22ae18af224ae013eb33a363f183aa811266b9e`，tree
 `4aba68098e489e7bace517e41d8857ef90216827`。
 工作分支为 `codex/target-host-performance-20261101`；未使用或修改环境自带的 `zxs-linux`。
-产品 `src/`、根清单、锁文件、配置和持久化/协议均未改动；新 Rust 文件仅为独立测量入口。
+初始基线中产品 `src/`、根清单、锁文件、配置和持久化/协议均未改动。
+后续仅修改 `business/workspace.rs` 的局部 CPU/分配路径，见下方工作区比较；
+新增测量入口与产品行为变更分别提交，配置、格式和同步协议保持。
 Foundation 依赖仅通过已发布产品接口正常构建使用，不进行依赖源码审改。
 随后仅 fetch 核实新的 `origin/main=d08e30707d9e6606798bfa264f894e95ca0ba143`；
 没有将其合入本分支或重新测量，本文数据全部绑定上述 f22 基线与明确的工具补丁。
@@ -144,15 +146,96 @@ clone3 17 次。mkdirat 的 4232 次错误是原始计数，不解释为性能�
 旧依赖复用路径的性能。源码已有受该许可约束的依赖复用实现；编号性能/恢复文档中仍有
 未启用的旧描述，需按实际入口与许可状态核对，不据旧文字重做优化或删除读验。
 
+<a id="workspace-allocation"></a>
+
+## 工作区分配优化与完整场景比较
+
+产品范围仅为 `src/engine/src/business/workspace.rs`：冲突比较借用原来相同的五个字段并
+保留迭代顺序；物理名称/位置已有键避免进入会触发 COW 的 `entry`；空命名空间列表时，
+在 workspace 调用点跳过上下文重放。此时内容替换保留旧 entry/file/display-path 身份，
+新增文件只追加，旧 file_id 全部仍存活。此前的继承首次写入及 node_id 更新照常执行，
+通用 `directory::namespace_locations` 不变，所有写准入、所有者、fencing、基线和发布阶段保留。
+变化不使整个提交成为 O(delta)，当前 entries 草稿、最终完整验证和其他 State 成本仍存在。
+
+独立 `namespace-costs` 以一次批量提交建立 16/128 个 128B 文件，三份复制；分别测
+空保存、覆盖一个文件、新建一个文件、覆盖四个文件、目录改名/删除和两种冲突拒绝。
+夹具、竞争提交、正文/恢复/收据 oracle 与被测 capture/execute/finish 分开。
+32 格全部退出 0、来源稳定、完整输出与全部正确性断言通过；两版相同探针源码 SHA-256 为
+`c1438c0f8863a09e396484018ac5b6d1b47bda14c73f0d6be56cb7a66a319608`。
+
+| namespace-costs 构建 | 来源 | 二进制 SHA-256 |
+| --- | --- | --- |
+| baseline | `983b5cc1` + 归档工具补丁，产品仍为 f22 | `96b945cb17cfb64545fbfc35985aacac902c0a4069afad9bd0b3c3843e61ac18` |
+| candidate | `98ad8767` + 归档 workspace/测试补丁 | `6789ea70a54f09f951bfda15fed0ef45eb28e133b821d112eb1ccc6030ec0d8b` |
+
+target/profile/特性与初始 release 相同，storage-engine 无 fault-injection；构建收据及准确
+source.patch 在归档。前后 scratch 与实际 fixture 绝对路径等长，每档新进程和新池。
+下面是 **execute 阶段 Rust 全局分配请求次数**，每格一次，不是整机内存或生产吞吐：
+
+| 场景 | 16 文件：前 → 后 | 128 文件：前 → 后 |
+| --- | ---: | ---: |
+| empty | 16918 → 16599 | 55575 → 41248 |
+| content-one | 35734 → 34987 | 127646 → 122308 |
+| content-new | 33098 → 32904 | 151009 → 148146 |
+| content-four | 63766 → 63070 | 161949 → 154177 |
+| rename | 90961 → 90886 | 695461 → 694333 |
+| delete | 19612 → 19465 | 58127 → 57007 |
+| rename-conflict | 494 → 353 | 2552 → 1509 |
+| delete-conflict | 490 → 349 | 2548 → 1505 |
+
+128 文件 empty 的 execute 请求字节为 10962864 → 9959879，三阶段总请求次数为
+66411 → 52084；两种 128 文件冲突各减少 1043 次、139035 请求字节。
+逐阶段 System GlobalAlloc 观察器只计成功的 Rust alloc/alloc_zeroed/realloc；realloc 计完整
+新请求大小，不扣释放。原生 SQLite malloc、mmap 和线程栈不在其中，另有 wait4 RSS。
+分立 Relaxed 快照可纳入边界后台分配；请求字节是累计流量，不是存活/峰值内存。
+
+三阶段总请求次数有 15/16 格下降，128 文件 rename 为 950633 → 950967（+334 次，
++2622 字节）；不能把 execute 的下降扩展为所有提交总成本下降。不同 UUID 图分布、
+后台线程及同步等待仍影响样本。没有阶段峰值 RSS 或目标主机内存节省的结论。
+
+### 墙钟负观察及少量交替复核
+
+首轮 16 文件 empty 三阶段为 130.42 → 257.14ms，128 文件 content-new 为
+937.15 → 1115.76ms。保留这两个慢样本，再各做三对 AB/BA/AB，共 12 轮；
+使用原冻结 bits，不重编译或改变检出。每轮单独保留真正 binary build source 的原始收据/
+补丁及 SHA，与当前 operator checkout 分列，没有把候选检出冒称旧二进制构建来源。
+中性固定宽度输出名和实际 TMPDIR 等长，12 轮的正文/收据/重启/完整性断言均通过。
+
+| 三次每版，三阶段总时间 ms | baseline 中位数 [min,max] | candidate 中位数 [min,max] |
+| --- | ---: | ---: |
+| 16 文件 empty | 142.232 [122.020,220.720] | 150.919 [136.887,201.136] |
+| 128 文件 content-new | 1086.009 [1009.214,1108.034] | 1120.162 [1047.989,1160.853] |
+
+对应 execute 中位数为 96.077 → 93.813ms、985.057 → 1029.685ms。
+16 文件 empty 的三次 execute 请求次数稳定为 16918 → 16599；128 文件新增的
+三阶段总请求次数范围为 172025..172330 → 169794..170091。
+复核没有复现首轮成倍变慢，但总中位数仍分别高约 6.1%/3.1%，样本范围重叠。
+保留候选的依据是局部分配和重复工作减少；不宣称延迟加速，也不排除较小延迟回归。
+这些少量云样本不能构造 P95/P99 或目标硬件达标结论。
+
+### 正确性与静态验证
+
+在同一冻结产品/测试源码、明确 x86_64 target 下：7 个新增私有 hot_path_tests、
+15 个 composition_tests、35 个 branch_alias_operations、26 个 workspace_commit_replay、
+3 个 workspace_namespace_preconditions 通过，共 86 项。新增组合覆盖继承 alias 首次写入、
+另一明确分支 alias、未选冻结目录、物理名称、永久重试和重启后两份 FULL。
+测试 profile 未优化，含 cfg(test)/既有 fault-injection，与无 hook release 测量分列。
+
+两个既有 ignored 未执行：`unreadable_workspace_request_is_not_a_missing_mirror` 需要真实
+无绕过能力的 EACCES 进程；`workspace_evidence_io_failure_is_not_absence_or_corrupt_mirror`
+需要专用 LD_PRELOAD I/O 故障 harness。未计为通过，没有改系统权限或凭据来运行它们。
+产品库与新探针严格 Clippy、指定 edition rustfmt、Python 语法及 diff 检查通过。
+没有运行完整 workspace、Foundation 审改、真实 Samba/SDK 或物理掉电验收。
+
+新增原始目录为 `namespace/` 与 `frozen-pairs/`，含全量 stdout/stderr、请求计数、
+独立来源校验器、配对 runner、原始收据/补丁及逐轮 operator/binary 来源证明。
+
 ## 待所有权分配的候选与排除项
 
 下面仅为独立设计与实验入口，没有实施产品行为变更，也没有 before/after 收益声明：
 
 | 文件与行为 | 预期减少 | 实现前所需验证 |
 | --- | --- | --- |
-| `business/workspace.rs` 的命名空间冲突比较改为相同字段的借用有序迭代比较 | 两组临时 Vec 与命中项字符串克隆，过滤仍线性 | 同名目录重建、Unicode、顺序/字段差分、冲突错误顺序 |
-| 同文件 `file_locations/file_names` 已有键避免无效 `entry` 可变访问 | 未变字段的整表 COW 和 dirty 编码 | 缺失/已有/别名、State 与规范字节、写集 oracle |
-| `business/directory.rs::namespace_locations` 的空 namespace changes 路径 | 可能避免旧上下文全量克隆/移除/重建 | 保留普通内容保存、新文件、继承/缺省 context 和别名的完整差分 |
 | `engine/publication.rs::run_payload_groups` 单组使用现有 worker | 一次 spawn/join 和临时线程栈 | 单组 panic/error、文件/路由顺序、多组 join/上限及真实保存占比 |
 | `history_window/query_indexed.rs` 复用同冻结观察内已有 owner witness | 一次版本成员流扫描；候选实际认证保留 | 损坏回退、取消、旧快照、跨发布、独立窗口 oracle |
 | `file_manager/listing.rs` 与 `directory_scopes.rs` 使用已准入排序定位子树/身份 | 无关命名空间扫描；目录分支扫描/排序仍保留 | Unicode 前缀、分页/计数/选中项、目录身份与授权重查 |
