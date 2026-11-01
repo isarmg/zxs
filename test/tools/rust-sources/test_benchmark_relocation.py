@@ -240,23 +240,37 @@ class BenchmarkRelocation(unittest.TestCase):
                             with self.assertRaises((ValueError, OSError)):
                                 current_fixture_bytes(ROOT, self.layout, self.receipt)
 
-    def historical_install_view(self, fixture=None):
+    def historical_install_view(self, fixture=None, date_time_fixture=None):
         # Only this install scenario needs the exact prior snapshot. Ordinary
         # verification above deliberately keeps current source and manifest edits.
-        fixture = fixture or ROOT / 'test/tools/rust-sources/fixtures/benchmark-install-schema.zip'
-        with zipfile.ZipFile(fixture) as archive:
+        fixtures = ROOT / 'test/tools/rust-sources/fixtures'
+        fixture = fixture or fixtures / 'benchmark-install-schema.zip'
+        date_time_fixture = date_time_fixture or fixtures / 'benchmark-install-date-time.zip'
+        # Snapshots retain logical installation paths, before the later layout
+        # move. Each archive supplies only its owner's changed historical files;
+        # every restored byte still has to match the immutable receipt below.
+        with (zipfile.ZipFile(fixture) as schema_archive,
+              zipfile.ZipFile(date_time_fixture) as date_time_archive):
+            archives = {'src/foundation/schema-validation': schema_archive,
+                        'src/foundation/date-time': date_time_archive}
             for item in self.receipt['packages']:
                 directory = item['directory']
-                expected = item['proposed_files_sha256']
-                current = manage.files(self.root / directory)
-                for relative in current.keys() - expected.keys():
-                    (self.root / directory / relative).unlink()
-                for relative, sha in expected.items():
-                    if current.get(relative) == sha:
+                archive = archives[directory]
+                expected = {directory + '/' + p: sha
+                            for p, sha in item['proposed_files_sha256'].items()}
+                owner = item['proposed_external_tests']
+                expected.update((row['path'], row['sha256']) for row in owner['files'])
+                current = {}
+                for root in [directory, *owner['roots']]:
+                    current.update((root + '/' + p, sha)
+                                   for p, sha in manage.files(self.root / root).items())
+                for name in current.keys() - expected.keys():
+                    (self.root / name).unlink()
+                for name, sha in expected.items():
+                    if current.get(name) == sha:
                         continue
-                    name = directory + '/' + relative
                     edit = self.layout.edits.get(name) if self.layout else None
-                    if (edit and current.get(relative) == edit['after_sha256']
+                    if (edit and current.get(name) == edit['after_sha256']
                             and edit['before_sha256'] == sha):
                         data = self.layout.project_bytes(name, (self.root / name).read_bytes())
                     else:
@@ -266,7 +280,10 @@ class BenchmarkRelocation(unittest.TestCase):
                     path = self.root / name
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(data)
-                self.assertEqual(manage.files(self.root / directory), expected)
+                self.assertEqual(manage.files(self.root / directory), item['proposed_files_sha256'])
+                external = {root + '/' + p: sha for root in owner['roots']
+                            for p, sha in manage.files(self.root / root).items()}
+                self.assertEqual(external, {row['path']: row['sha256'] for row in owner['files']})
 
     def test_historical_install_fixture_rejects_changed_bytes(self):
         fixture = ROOT / 'test/tools/rust-sources/fixtures/benchmark-install-schema.zip'
@@ -278,6 +295,40 @@ class BenchmarkRelocation(unittest.TestCase):
                 archive.writestr(name, b'tampered' if index == 0 else original.read(name))
         with self.assertRaises(AssertionError):
             self.historical_install_view(changed)
+
+    def test_historical_date_time_fixture_rejects_changed_bytes(self):
+        fixture = ROOT / 'test/tools/rust-sources/fixtures/benchmark-install-date-time.zip'
+        changed = self.root / 'changed-date-time-fixture.zip'
+        with zipfile.ZipFile(fixture) as original:
+            for target in original.namelist():
+                with self.subTest(path=target):
+                    (self.root / target).write_bytes(b'require historical restoration')
+                    with zipfile.ZipFile(changed, 'w') as archive:
+                        for name in original.namelist():
+                            archive.writestr(name, b'tampered' if name == target else original.read(name))
+                    with self.assertRaises(AssertionError):
+                        self.historical_install_view(date_time_fixture=changed)
+
+    def test_historical_install_restores_missing_date_time_source(self):
+        path = self.root / 'src/foundation/date-time/src/parsing/combinator/mod.rs'
+        path.unlink()
+        self.historical_install_view()
+        self.assertTrue(path.is_file())
+
+    def test_historical_install_removes_current_only_source(self):
+        path = self.root / 'src/foundation/date-time/src/current_only.rs'
+        path.write_bytes(b'ordinary later source addition')
+        self.historical_install_view()
+        self.assertFalse(path.exists())
+
+    def test_historical_install_restores_external_test_inventory(self):
+        root = self.root / 'test/foundation/date-time'
+        path = root / 'later_regression.rs'
+        path.write_bytes(b'ordinary later test addition')
+        retained = root / 'unit/src/format_description/well_known/iso8601/adt_hack/tests_165.rs'
+        retained.write_bytes(b'changed current test')
+        self.historical_install_view()
+        self.assertFalse(path.exists())
 
     def test_unrelated_catalog_changes_allow_installation(self):
         self.historical_install_view()
