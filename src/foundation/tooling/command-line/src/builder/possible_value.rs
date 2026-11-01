@@ -42,7 +42,7 @@ use crate::util::eq_ignore_case;
 pub struct PossibleValue {
     name: Str,
     help: Option<StyledStr>,
-    aliases: Vec<Str>, // (name, visible)
+    aliases: Vec<Str>, // Hidden aliases.
     hide: bool,
 }
 

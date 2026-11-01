@@ -1,6 +1,6 @@
+use crate::Service;
 use crate::ServiceExt;
 use crate::{layer_fn, LayerFn};
-use crate::Service;
 
 use sync_wrapper::SyncWrapper;
 
@@ -57,7 +57,8 @@ pub struct BoxService<T, U, E> {
 type BoxFuture<T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send>>;
 
 impl<T, U, E> BoxService<T, U, E> {
-    #[allow(missing_docs)]
+    /// Boxes the service and each response future while preserving the request,
+    /// response, and error types.
     pub fn new<S>(inner: S) -> Self
     where
         S: Service<T, Response = U, Error = E> + Send + 'static,
@@ -104,4 +105,7 @@ impl<T, U, E> fmt::Debug for BoxService<T, U, E> {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/service-stack/functions/src/util/boxed/sync/is_sync_106.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/service-stack/functions/src/util/boxed/sync/is_sync_106.rs"
+));

@@ -59,7 +59,11 @@ impl<'a> FromReader<'a> for Export<'a> {
                         "Exact type is not allowed in the exports",
                     );
                 }
-                x => x,
+                kind @ (ExternalKind::Func
+                | ExternalKind::Table
+                | ExternalKind::Memory
+                | ExternalKind::Global
+                | ExternalKind::Tag) => kind,
             },
             index: reader.read_var_u32()?,
         })
