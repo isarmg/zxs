@@ -53,10 +53,23 @@ def generate(live, work):
     lines+=['}','#[test] fn keyed_personalized_truncated_vectors() {']
     for a,m in [('b',64),('s',32)]:
      for size in [1,16,m]:
-      for kl in [1,m//2,m]:
+      for kl in [0,1,m//2,m]:
        for sl in [0,1,m//4]:
         key=bytes(range(kl));salt=bytes(range(sl));pers=bytes(range(m//4));data=bytes(range(255));out=getattr(hashlib,'blake2'+a)(data,digest_size=size,key=key,salt=salt,person=pers).digest()
         lines.append('{let mut h=blake2::Blake2'+a+'Mac::<U'+str(size)+'>::new_with_salt_and_personal('+arr(key)+','+arr(salt)+','+arr(pers)+').unwrap();h.update('+arr(data)+');assert_eq!(&h.finalize_fixed()[..],'+arr(out)+');}')
+    lines+=['}','#[test] fn empty_key_message_boundaries() {']
+    for a,m,block in [('b',64,128),('s',32,64)]:
+     for size in [1,16,m]:
+      for n in [0,1,block-1,block,block+1,2*block+1]:
+       data=bytes((i*37+11)%256 for i in range(n))
+       for personalized in [False,True]:
+        salt=bytes(range(m//4)) if personalized else b''
+        pers=bytes(reversed(range(m//4))) if personalized else b''
+        out=getattr(hashlib,'blake2'+a)(data,digest_size=size,key=b'',salt=salt,person=pers).digest()
+        ty='blake2::Blake2'+a+'Mac::<U'+str(size)+'>'
+        lines.append('{let mut h='+ty+'::new_with_salt_and_personal(&[],'+arr(salt)+','+arr(pers)+').unwrap();h.update('+arr(data)+');assert_eq!(&h.finalize_fixed()[..],'+arr(out)+');}')
+        if not personalized:
+         lines.append('{let mut h='+ty+'::new_from_slice(&[]).unwrap();h.update('+arr(data)+');assert_eq!(&h.finalize_fixed()[..],'+arr(out)+');}')
     lines+=['}']
     generated='\n'.join(lines)
     assert len(generated.encode()) < 1048576
@@ -67,4 +80,4 @@ def generate(live, work):
      s=(live/f'test/foundation/argon2/tests/{name}.rs').read_text().replace('use hex_literal::hex;','')
      s=re.sub(r'hex!\(\s*"([0-9a-fA-F\s]+)"\s*\)',lambda m:arr(bytes.fromhex(m[1]))[1:],s)
      (a/f'tests/{name}.rs').write_text(s)
-    return {'upstream_vectors':sum(counts.values()),'independent_vectors':1152+54}
+    return {'upstream_vectors':sum(counts.values()),'independent_vectors':1152+72+72}

@@ -116,6 +116,11 @@ impl Params {
 
         // Note: we don't need to check `MAX_M_COST`, since it's `u32::MAX`
 
+        if p_cost > Params::MAX_P_COST {
+            return Err(Error::ThreadsTooMany);
+        }
+
+        // The validated parallelism bounds this product below u32::MAX.
         if m_cost < p_cost * 8 {
             return Err(Error::MemoryTooLittle);
         }
@@ -128,10 +133,6 @@ impl Params {
 
         if p_cost < Params::MIN_P_COST {
             return Err(Error::ThreadsTooFew);
-        }
-
-        if p_cost > Params::MAX_P_COST {
-            return Err(Error::ThreadsTooMany);
         }
 
         if let Some(len) = output_len {

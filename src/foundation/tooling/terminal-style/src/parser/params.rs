@@ -116,7 +116,8 @@ impl<'a> Iterator for ParamsIter<'a> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.params.len() - self.index;
-        (remaining, Some(remaining))
+        // Each yielded group consumes at least one parameter slot.
+        (usize::from(remaining > 0), Some(remaining))
     }
 }
 

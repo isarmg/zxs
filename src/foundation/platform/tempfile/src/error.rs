@@ -15,7 +15,7 @@ impl fmt::Display for PathError {
 
 impl error::Error for PathError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        self.err.source()
+        Some(&self.err)
     }
 }
 
@@ -43,3 +43,7 @@ impl<T> IoResultExt<T> for Result<T, io::Error> {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/foundation/tempfile/unit/src/error/tests.rs"]
+mod tests;

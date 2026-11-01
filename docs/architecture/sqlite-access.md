@@ -42,6 +42,8 @@ async fn sqlite_example() -> Result<(), sqlite_access::Error> {
 
 `&mut *transaction` 是事务内真实连接的借用。`commit()` / `rollback()` 消耗事务，嵌套 `begin()` 使用 savepoint；未完成事务在 drop 时启动回滚。`fetch_one` 无行时返回 `RowNotFound`，允许不存在时使用 `fetch_optional`。需要确定工作线程与文件句柄已关闭时应显式 `.close().await`，包括产品错误清理路径，不能仅靠 drop 后立即移动数据库文件。完整错误路径可参考上述平台实现。
 
+行按所有权跨线程传递，保留 `Send`；`SqliteRow` 不提供 `Sync`。SQLite 值转换与借用缓存具有内部状态，共享行引用不能用于并发解码。`busy_timeout` 在创建工作线程和打开数据库前检查整毫秒是否超过 `i32::MAX`，越界返回 `InvalidArgument`，不创建文件。启用 `sqlite-preupdate-hook` 时，替换、显式移除和关闭连接均释放其闭包捕获资源。
+
 <a id="module-boundaries"></a>
 
 ## 模块边界

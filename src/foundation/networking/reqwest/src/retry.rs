@@ -226,6 +226,11 @@ impl<B> service_stack::retry::Policy<Req, http::Response<B>, crate::Error> for P
         req: &mut Req,
         result: &mut crate::Result<http::Response<B>>,
     ) -> Option<Self::Future> {
+        // Scope the retry decision and its budget before classifying the result.
+        // A later clone_request refusal does not prevent the saved request replay.
+        if !self.scope.applies_to(req) {
+            return None;
+        }
         match self.classifier.classify(req, result) {
             classify::Action::Success => {
                 log::trace!("shouldn't retry!");
@@ -248,9 +253,6 @@ impl<B> service_stack::retry::Policy<Req, http::Response<B>, crate::Error> for P
     }
 
     fn clone_request(&mut self, req: &Req) -> Option<Req> {
-        if self.retry_cnt > 0 && !self.scope.applies_to(req) {
-            return None;
-        }
         if self.retry_cnt >= self.max_retries_per_request {
             log::trace!("max_retries_per_request hit");
             return None;

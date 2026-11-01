@@ -40,16 +40,12 @@ pub enum Level {
 impl std::str::FromStr for Level {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.contains(Level::Error.as_str()) {
-            Ok(Level::Error)
-        } else if s.contains(Level::Warning.as_str()) {
-            Ok(Level::Warning)
-        } else if s.contains(Level::Note.as_str()) {
-            Ok(Level::Note)
-        } else if s.contains(Level::Help.as_str()) {
-            Ok(Level::Help)
-        } else {
-            Err(())
+        match s {
+            "error" => Ok(Level::Error),
+            "warning" => Ok(Level::Warning),
+            "note" => Ok(Level::Note),
+            "help" => Ok(Level::Help),
+            _ => Err(()),
         }
     }
 }
@@ -284,6 +280,10 @@ impl From<rust_syntax::parse::Error> for Diagnostic {
         diag.unwrap_or_else(|| error.span().error(error.to_string()))
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/foundation/proc-macro2-diagnostics/unit/diagnostic_tests.rs"]
+mod tests;
 
 #[cfg(nightly_diagnostics)]
 impl From<Diagnostic> for proc_macro::Diagnostic {

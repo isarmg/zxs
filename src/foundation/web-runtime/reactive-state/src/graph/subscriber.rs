@@ -22,11 +22,11 @@ struct ObserverState {
 pub struct Observer;
 
 #[derive(Debug)]
-struct SetObserverOnDrop(Option<AnySubscriber>);
+struct SetObserverOnDrop(Option<ObserverState>);
 
 impl Drop for SetObserverOnDrop {
     fn drop(&mut self) {
-        Observer::set(self.0.take());
+        OBSERVER.with_borrow_mut(|observer| *observer = self.0.take());
     }
 }
 
@@ -51,18 +51,7 @@ impl Observer {
     }
 
     fn take() -> SetObserverOnDrop {
-        SetObserverOnDrop(
-            OBSERVER.with_borrow_mut(Option::take).map(|o| o.subscriber),
-        )
-    }
-
-    fn set(observer: Option<AnySubscriber>) {
-        OBSERVER.with_borrow_mut(|o| {
-            *o = observer.map(|subscriber| ObserverState {
-                subscriber,
-                untracked: false,
-            })
-        });
+        SetObserverOnDrop(OBSERVER.with_borrow_mut(Option::take))
     }
 
     fn replace(observer: Option<AnySubscriber>) -> SetObserverOnDrop {
@@ -76,8 +65,7 @@ impl Observer {
                             untracked: false,
                         }),
                     )
-                })
-                .map(|o| o.subscriber),
+                }),
         )
     }
 
@@ -92,8 +80,7 @@ impl Observer {
                             untracked: true,
                         }),
                     )
-                })
-                .map(|o| o.subscriber),
+                }),
         )
     }
 }
@@ -266,3 +253,9 @@ impl PartialEq for AnySubscriber {
 }
 
 impl Eq for AnySubscriber {}
+
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/reactive-state/unit/src/graph/subscriber_scope.rs"
+));

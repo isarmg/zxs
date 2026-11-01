@@ -317,6 +317,8 @@ impl SqliteConnectOptions {
     /// returning a busy timeout error.
     ///
     /// The default busy timeout is 5 seconds.
+    /// Connecting returns [`crate::Error::InvalidArgument`] if the whole-millisecond
+    /// value exceeds [`i32::MAX`], the limit of SQLite's native timeout API.
     pub fn busy_timeout(mut self, timeout: Duration) -> Self {
         self.busy_timeout = timeout;
         self

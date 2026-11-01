@@ -3213,6 +3213,18 @@
         ]
       }
     },
+    "standalone:proc-macro2-diagnostics": {
+      "features": [
+        "nightly"
+      ],
+      "subject": "proc-macro2-diagnostics",
+      "targets": {
+        "lib": [
+          "diagnostic::tests::diagnostic_levels_require_exact_names",
+          "diagnostic::tests::ordinary_error_labels_survive_diagnostic_conversion"
+        ]
+      }
+    },
     "standalone:shared-value": {
       "features": [],
       "subject": "shared-value",
@@ -4145,6 +4157,19 @@
           "rwlock::tests::test_rwlock_try_write",
           "rwlock::tests::test_rwlock_unsized",
           "rwlock::tests::test_upgrade_downgrade"
+        ]
+      }
+    },
+    "unit:tempfile": {
+      "features": [
+        "default",
+        "system-entropy"
+      ],
+      "subject": "tempfile",
+      "targets": {
+        "lib": [
+          "error::tests::nested_path_contexts_preserve_error_chain",
+          "error::tests::path_context_preserves_original_io_error"
         ]
       }
     },

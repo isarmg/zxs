@@ -43,7 +43,8 @@ impl From<Arc<str>> for TextProp {
 }
 
 impl From<SharedValue<'static, str>> for TextProp {
-    fn from(s: SharedValue<'static, str>) -> Self {
+    fn from(mut s: SharedValue<'static, str>) -> Self {
+        s.upgrade_inplace();
         TextProp(Arc::new(move || s.clone()))
     }
 }

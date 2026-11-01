@@ -52062,8 +52062,8 @@
   },
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "cf85f72fb40b8d9a90ac77d7a6df9a6d1c649a00bba9f6636901721e6d5c9d98",
-    "compliance/external-tests/foundation.json": "a4f53e9155bef82562af92319b06cdd9fd7009b05912ca4a947873ee2b8a0f0a",
-    "compliance/external-tests/integrated.json": "dea8c0d3ae9b85a70985b4278f586836c450f7261f03829338025c564e872737",
+    "compliance/external-tests/foundation.json": "6bf9a218569d6e49fc8fb41a4a7a913b81e78284ad7280b86233b283753c20e9",
+    "compliance/external-tests/integrated.json": "a6384dbea9c2e0c9bc6600af0627bffdcf2f9c789599fb70c4ba77c26aa257ef",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -52316,9 +52316,9 @@
       ]
     },
     "src/foundation/code-generation/proc-macro2-diagnostics": {
-      "bytes": 15076,
+      "bytes": 16000,
       "directory": "src/foundation/code-generation/proc-macro2-diagnostics",
-      "file_count": 16,
+      "file_count": 17,
       "files": [
         {
           "path": "test/foundation/proc-macro2-diagnostics/tests/main.rs",
@@ -52415,6 +52415,13 @@
           "sha256": "e5a0e79cdae4fabb87ba1b3f92f039f9069ec3c4ebbca3c7f44a6c3138460387",
           "source": "src/foundation/proc-macro2-diagnostics/tests/stable/fail/warning.stderr",
           "source_sha256_before": "e5a0e79cdae4fabb87ba1b3f92f039f9069ec3c4ebbca3c7f44a6c3138460387"
+        },
+        {
+          "path": "test/foundation/proc-macro2-diagnostics/unit/diagnostic_tests.rs",
+          "sha256": "ec617ba7176912d77b664df6e801fb233bd04b0c55a4ba4117f64bba2fc040be",
+          "source": "test/foundation/proc-macro2-diagnostics/unit/diagnostic_tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "ec617ba7176912d77b664df6e801fb233bd04b0c55a4ba4117f64bba2fc040be"
         }
       ],
       "origin_directory": "vendor/rust/proc-macro2-diagnostics-0.11.0",
@@ -60913,9 +60920,9 @@
       ]
     },
     "src/foundation/core-types/date-time": {
-      "bytes": 708745,
+      "bytes": 712955,
       "directory": "src/foundation/core-types/date-time",
-      "file_count": 73,
+      "file_count": 74,
       "files": [
         {
           "origin_directory": "vendor/rust/time-0.3.55",
@@ -61291,7 +61298,7 @@
         {
           "origin_directory": "vendor/rust/time-0.3.55",
           "path": "test/foundation/date-time/unit/src/format_description/well_known/iso8601/adt_hack/tests_165.rs",
-          "sha256": "160fdc8797ce9eb0ce7f0656701d0a209c7d31a63993a6ebc741fc4ad87c3740",
+          "sha256": "56b360bd9031fe2b61bd499e2b72a0bcefc6ae864405925acb12299679be749e",
           "source": "src/foundation/time/src/format_description/well_known/iso8601/adt_hack.rs",
           "source_sha256_before": "2f62bdeccf0ba4cdbeb69f6b55be56cb1084565bc4889d6f48140c8e1bc034de"
         },
@@ -61427,6 +61434,13 @@
           "sha256": "b7cf85cc69af3b891d78803f2862e7b18b674b1d3e27c139f830f41be689ffe9",
           "source": "src/foundation/time/benchmarks/weekday.rs",
           "source_sha256_before": "b7cf85cc69af3b891d78803f2862e7b18b674b1d3e27c139f830f41be689ffe9"
+        },
+        {
+          "path": "test/foundation/date-time/unit/src/parsing/combinator/tests.rs",
+          "sha256": "120006edcb27c061ebf14c0717be5996db9b18c9dbebf9742c4a555804a78a26",
+          "source": "test/foundation/date-time/unit/src/parsing/combinator/tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "120006edcb27c061ebf14c0717be5996db9b18c9dbebf9742c4a555804a78a26"
         }
       ],
       "origin_directory": "vendor/rust/time-0.3.55",
@@ -74051,9 +74065,9 @@
       ]
     },
     "src/foundation/platform/tempfile": {
-      "bytes": 38544,
+      "bytes": 39940,
       "directory": "src/foundation/platform/tempfile",
-      "file_count": 5,
+      "file_count": 6,
       "files": [
         {
           "path": "test/foundation/tempfile/tests/env.rs",
@@ -74084,6 +74098,13 @@
           "sha256": "f3c3db1e577c3100d49c09d1f49567c04cb5992743441b4172cd15847444d5f1",
           "source": "src/foundation/tempfile/tests/tempfile.rs",
           "source_sha256_before": "f3c3db1e577c3100d49c09d1f49567c04cb5992743441b4172cd15847444d5f1"
+        },
+        {
+          "path": "test/foundation/tempfile/unit/src/error/tests.rs",
+          "sha256": "1ab789c519dcae5df888474643e7848dfd2841b87e3506caed640864d471bfa4",
+          "source": "test/foundation/tempfile/unit/src/error/tests.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "1ab789c519dcae5df888474643e7848dfd2841b87e3506caed640864d471bfa4"
         }
       ],
       "origin_directory": "vendor/rust/tempfile-3.27.0",
@@ -76942,7 +76963,7 @@
       ]
     },
     "src/foundation/tooling/cc": {
-      "bytes": 31477,
+      "bytes": 33713,
       "directory": "src/foundation/tooling/cc",
       "file_count": 8,
       "files": [
@@ -76966,7 +76987,7 @@
         },
         {
           "path": "test/foundation/cc/unit/src/lib/tests_5632.rs",
-          "sha256": "05e50b50cc34337287c012d941e81129957f86a054bc1097d0438ff29722a039",
+          "sha256": "558e94d3ed6f4bd6e8f57ff0cb4d8df7d8b03fb1261480508c43b6594317346c",
           "source": "src/foundation/cc/src/lib.rs",
           "source_sha256_before": "f7a6eff54efe2d223b7a338262b9dbdf8ebeeb7acb75fd455b2928dd6c5d221a"
         },
@@ -77567,7 +77588,7 @@
       ]
     },
     "src/foundation/tooling/terminal-style": {
-      "bytes": 40223,
+      "bytes": 42211,
       "directory": "src/foundation/tooling/terminal-style",
       "file_count": 16,
       "files": [
@@ -77630,7 +77651,7 @@
         {
           "origin_directory": "vendor/rust/anstream-1.0.0",
           "path": "test/foundation/terminal-style/anstream/unit/src/adapter/strip/test_369.rs",
-          "sha256": "b2e95af85f9358b810deb703c745bf443d35ae9b9d7fd5cda3b93b31b2118657",
+          "sha256": "a17dcbf1f042e70fac6f3bfe75e85e2bfaed38166ef708d804e55a6e8cd540a6",
           "source": "src/foundation/anstream/src/adapter/strip.rs",
           "source_sha256_before": "642375f9dc5836eb5aa6eba7be849a84786d22764d470672bf1f646061254c1c"
         },
@@ -77651,7 +77672,7 @@
         {
           "origin_directory": "vendor/rust/anstream-1.0.0",
           "path": "test/foundation/terminal-style/anstream/unit/src/strip/test_172.rs",
-          "sha256": "814f8bfd838533962e5c614afbc665af134e7dd398f885380a2aef12dacf735a",
+          "sha256": "71e1b710599b548149e9c7991e940f238ced369dea956d00681aceb7d04bd14a",
           "source": "src/foundation/anstream/src/strip.rs",
           "source_sha256_before": "0268bdc9155fc91bd7e92337c5e3ba96999780b46fab311b00922c7a3047233c"
         },
@@ -77788,9 +77809,9 @@
       ]
     },
     "src/foundation/web-runtime/reactive-state": {
-      "bytes": 63826,
+      "bytes": 65930,
       "directory": "src/foundation/web-runtime/reactive-state",
-      "file_count": 12,
+      "file_count": 13,
       "files": [
         {
           "path": "test/foundation/reactive-state/tests/async_derived.rs",
@@ -77865,6 +77886,13 @@
           "sha256": "701f53982a474ad3a4e1771dd1bbedc4891afc3dd178bd89929f3bba6b1c3762",
           "source": "src/foundation/reactive_graph/src/owner.rs",
           "source_sha256_before": "50236f8bdf6764ff2587ccd78c3b2fd37902411f65ed4b422495003474667c48"
+        },
+        {
+          "path": "test/foundation/reactive-state/unit/src/graph/subscriber_scope.rs",
+          "sha256": "f6b56a46dda3183ddc7c93598c0256879056fe4aa6dddfb5d65a4cedcbfba446",
+          "source": "test/foundation/reactive-state/unit/src/graph/subscriber_scope.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "f6b56a46dda3183ddc7c93598c0256879056fe4aa6dddfb5d65a4cedcbfba446"
         }
       ],
       "origin_directory": "vendor/web/dependencies/reactive_graph-0.2.16",
@@ -79100,7 +79128,7 @@
       ]
     },
     "src/interface": {
-      "bytes": 62629,
+      "bytes": 63776,
       "directory": "src/interface",
       "file_count": 17,
       "files": [
@@ -79118,7 +79146,7 @@
         },
         {
           "path": "test/interface/integration/reactive_state.rs",
-          "sha256": "ae124c27d0f24337426365ae95b40292c38ec8a87fa797e2c400bc36314a3404",
+          "sha256": "5a85744f7022edae1895379e106db336e67814a388e218c0a07f3f96a33635da",
           "source": "src/interface/tests/reactive_state.rs",
           "source_sha256_before": "0e62e3fc9d568ca2e902b8a01a1add3440c7800963f35a9146cf4a5ba5413663"
         },
@@ -79712,7 +79740,7 @@
       "version": "0.1.24"
     },
     {
-      "changes": "Leptos CSR 内核整合进共享界面，统一生命周期及 ForSnapshot 键控快照更新；删除未声明 islands/tracing/nightly/shadow-dom 死分支、空模块、无效构建探测及未使用直接依赖；常规 DOM Portal 保留，use_shadow=true 显式拒绝；详见 docs/components/interface.md；独立包已删除，算法与业务组件合并。；退出等待与未确认退出期间关闭新的业务写入和内容交付准入，保留凭据仅供撤销重试；界面 children/View/attribute interceptor 迁移到 CSR 模板 hydration 约束，删除通用 SSR 代理与仅用于服务端输出的 view marker。；同步撤销未使用 MathML 转发入口，保留现有 DOM、字体、几何、事件和浏览器兼容路径。",
+      "changes": "Leptos CSR 内核整合进共享界面，统一生命周期及 ForSnapshot 键控快照更新；删除未声明 islands/tracing/nightly/shadow-dom 死分支、空模块、无效构建探测及未使用直接依赖；常规 DOM Portal 保留，use_shadow=true 显式拒绝；详见 docs/components/interface.md；独立包已删除，算法与业务组件合并。；退出等待与未确认退出期间关闭新的业务写入和内容交付准入，保留凭据仅供撤销重试；界面 children/View/attribute interceptor 迁移到 CSR 模板 hydration 约束，删除通用 SSR 代理与仅用于服务端输出的 view marker。；同步撤销未使用 MathML 转发入口，保留现有 DOM、字体、几何、事件和浏览器兼容路径。 2026-11-01：TextProp接收Owned SharedValue时一次升级为共享字符串，保留Borrowed/Counted表示。",
       "description": "Project-specific browser CSR runtime",
       "directory": "src/interface",
       "files_sha256": {
@@ -79752,7 +79780,7 @@
         "src/show_let.rs": "7051b187c6b8a1c8932fba741661258ba9a9bb6cbce02b487b55a223f1c74f36",
         "src/startup.rs": "3a725887bdb1ece400a25030d295000e9389642ed703f3b9292d10064ac3f013",
         "src/tasks.rs": "b57faafda47e096dcb86d4631b6c3f66030034973a35052b3785d4f4bbd4eb69",
-        "src/text_prop.rs": "d9a34d8f9a34b0e1c7c230273d3566ad670a731a479f6413b1230bfed53d6c63",
+        "src/text_prop.rs": "41b583cfc284bdba674b3b283599609e9591c4d50995e7460af129d44f8ddb3d",
         "src/theme.rs": "7e354645ee340b17999f3e5780b6b0dbc39cf8456e484440adead2d6e2dab7cb"
       },
       "license": "license-file: README.md",
@@ -79841,7 +79869,7 @@
         "src/buffered.rs": "329cfa2f230c97eb9f6dbb7c48d4e6f599fe59568a9af528f9451c1804759984",
         "src/consts.rs": "03edc1d4697a6074c9389202324444f27625ef11f17d34cc86b83d0dda920e79",
         "src/lib.rs": "751d91d97fbe74e226bd769fcaf771a0955259dca0966fe3103fe8e0ebf55a46",
-        "src/macros.rs": "fb094835a032540296ca9752334734caa33c23372282d90036cba4ddadc8c2bf",
+        "src/macros.rs": "72d341dd1bd49c60acf1f6d5b9b0bd7e4580ce47c6ca08fa71f7bec326cfa558",
         "src/simd.rs": "79d6d11d14664c908c2f6a2120c23e8de0e0422b610a8b838aa95ba469ef43fc",
         "src/simd/simd_opt.rs": "b254d82005e288f1d07531ef71b2468be0bc70ae9bdba1b46001acac4db283fe",
         "src/simd/simd_opt/u32x4.rs": "f87ab763a2f7a60e0192c9eb16df3fd172f7e1747cd26e081b5e7f074701b13c",
@@ -79905,7 +79933,7 @@
         "src/buffer/mod.rs": "145b50bc75a4602d950d3beb20577fb1624ab9baba0d50a4e32390d677cf65b9",
         "src/buffer/read.rs": "790b7bc1d6e87c0ee797b41e18aa3c394aa561c3074047c72590b33c9cee0f8d",
         "src/buffer/sealed.rs": "7ad84c528060c27e148e568dc4934ab7704259bdf0c41f1ab59043255d53da3f",
-        "src/common_types/hazmat.rs": "c65eef0eb7b1e319da25e540c6b9e30b7d6d810dd96de41233b203000247672c",
+        "src/common_types/hazmat.rs": "cf58308c75b8124ad80d9b89798562edc270c591454d65bed25bda3f33ca7291",
         "src/common_types/mod.rs": "7eee006e30859f8f67215685bdbe57249c9575d1be490fe5f86c3f516c1b3379",
         "src/hash/block_api.rs": "a04f0c9c3cb3645e3a4b17210117662e6b000d138dc81511d9828b256cf92925",
         "src/hash/block_api/ct_variable.rs": "573c0d4ce780b33fb1219b03bfad71a8f2a030b6c1349de5362777798c2197ee",
@@ -79958,7 +79986,7 @@
         "src/buffer/mod.rs": "145b50bc75a4602d950d3beb20577fb1624ab9baba0d50a4e32390d677cf65b9",
         "src/buffer/read.rs": "790b7bc1d6e87c0ee797b41e18aa3c394aa561c3074047c72590b33c9cee0f8d",
         "src/buffer/sealed.rs": "7ad84c528060c27e148e568dc4934ab7704259bdf0c41f1ab59043255d53da3f",
-        "src/common_types/hazmat.rs": "c65eef0eb7b1e319da25e540c6b9e30b7d6d810dd96de41233b203000247672c",
+        "src/common_types/hazmat.rs": "cf58308c75b8124ad80d9b89798562edc270c591454d65bed25bda3f33ca7291",
         "src/common_types/mod.rs": "7eee006e30859f8f67215685bdbe57249c9575d1be490fe5f86c3f516c1b3379",
         "src/hash/block_api.rs": "a04f0c9c3cb3645e3a4b17210117662e6b000d138dc81511d9828b256cf92925",
         "src/hash/block_api/ct_variable.rs": "573c0d4ce780b33fb1219b03bfad71a8f2a030b6c1349de5362777798c2197ee",
@@ -81023,7 +81051,7 @@
         "src/query_engine/query_builder.rs": "5e5fea0179a0d1853bc07fac1484ac0e4aebd5868e15ed4ba2e8340460bda028",
         "src/query_engine/query_scalar.rs": "0486fb9d6acb2e674d87916225f98bd31146e2ef810be264890592f1455a57bd",
         "src/query_engine/raw_sql.rs": "4b16e0bbec6c9c7e779da021363bd88e8339468bdd96760ed8442aa8960816da",
-        "src/query_engine/row.rs": "bb368aae51becc81fc44905c3ef25b93c934bbab7f0dce718ef670b3316d0777",
+        "src/query_engine/row.rs": "3736bc1087b0c55e9995eaba8840f24ad1fd6d00685b0dd3108aab24f2f9480f",
         "src/query_engine/rt.rs": "933b2887fb3f268a99183fd5edc86c2e84d9d5f53bff4d5ac5193323605d7a13",
         "src/query_engine/sql_str.rs": "57550e4bc95deb464b520dfbf0287fd6214c4f8167383c9c8b512793c75f7832",
         "src/query_engine/statement.rs": "26463cdbf8de36428d2d8b4feb458f9819d10bc23029ca4f3cee8a84609aac26",
@@ -81041,13 +81069,13 @@
         "src/sqlite/connection/collation.rs": "da0ce0c599bedf658ce7e700fadfb7547effc1aa08155c77ce3ac462ac06bcb9",
         "src/sqlite/connection/describe.rs": "4245e6b8bce8fec1764529ecca126870e84ee8d3fe0340e0fa4149236e72896d",
         "src/sqlite/connection/deserialize.rs": "fd133b892b08b6e7f33f97754fc13122ef3600fc1063206dcdae2b604c96dec2",
-        "src/sqlite/connection/establish.rs": "d8bac82d207a3f0f65eaae75fe8cfcb7474037877dc0455392281c741daed9f8",
+        "src/sqlite/connection/establish.rs": "be7eff266ccb3a54c6c3420d4768b08c0c4a72cfb17fb063a57680bf858f2072",
         "src/sqlite/connection/execute.rs": "354978ee91f8ce05c69db7065bc8a93a7af9417a1196d1677808dcca7d7f4b9d",
         "src/sqlite/connection/executor.rs": "1584255c5671b195a494f638b5f70734072de48c52a740e4e8593002245ed461",
         "src/sqlite/connection/explain.rs": "d6c6363d31ba76c937d105b3a3be2fdadf22fd8f76e579b6e8c2ea46cf00b743",
         "src/sqlite/connection/handle.rs": "c4e6ff9c952df23df7daf88e6a3aee05aa02f5ab9e83783fdaa79b96fcbdda16",
         "src/sqlite/connection/intmap.rs": "8bab4e1d38cf98ddbc463ac4ace1c4d4cfd34cda1a8e56ea71fcb674e3f25508",
-        "src/sqlite/connection/mod.rs": "24e591bcb217371e09a76a000a645c98bab4deb1dfd6ea214e3887c410c392ce",
+        "src/sqlite/connection/mod.rs": "ebc18c8f45dd799ce85bbd68e05e1a26f168b1a25a885b3ebbe4df09c8363c40",
         "src/sqlite/connection/plan_logger.rs": "925488b3b90d28efc43c3ae48bf1a3d4b44f24c79f2e4e70616122bfc0a2524b",
         "src/sqlite/connection/preupdate_hook.rs": "844d6818491115a46aadbc3b03b3bfcf4a5eba4f4d56bbafa456bbb141bfaf36",
         "src/sqlite/connection/worker.rs": "48d469327eb98d1f7650b4923625b1130880ef9236690d7da6eab53804547615",
@@ -81058,12 +81086,12 @@
         "src/sqlite/options/connect.rs": "ca60280f50335db1de28cebc5194d8fbcd27a828241e9eac3034d18ce3b493d4",
         "src/sqlite/options/journal_mode.rs": "e2621add6bf0f97d2a2c8aab5e896e168bbb2d3fa15a25d6665c6aba467fc8aa",
         "src/sqlite/options/locking_mode.rs": "b488fa79f83fd6196316f4a1cdfd8da963bb7199eb1934ec45789f315b1e16e0",
-        "src/sqlite/options/mod.rs": "da944b2653ed59f4db5e3f28c0a926d2425df3f4cb205796ece59221f832b99f",
+        "src/sqlite/options/mod.rs": "4d23d9c1505a8aaa6fe96deae72451fc448dc9231f72a82d1d3ced2e6e36c23e",
         "src/sqlite/options/parse.rs": "0dc4c58ae663ef61d4c8c09fc7d9f25a378d92afd7b033a49491e0c594d63059",
         "src/sqlite/options/synchronous.rs": "b0760eac136041e2fd25c0f8c4fd8161d515c168dd0e7a1b153d5cb7c2c3f13a",
         "src/sqlite/query_result.rs": "9cff47b8f77ea6502d1e965e07574a756807b34c01144865a00236151f26d1c5",
         "src/sqlite/regexp.rs": "cafb99545b889d5788e51a6bc04dbe33a672d9c88b295b2765187a3c2b6646a8",
-        "src/sqlite/row.rs": "18a99c72cbdd0972f289c913abaac742ec4a4b006c31f28d2dce0f9d4f517b06",
+        "src/sqlite/row.rs": "8413fa572bb591e626b681139a8ad64c6a43ebf3dd9ada129ce0c25aa858d7c1",
         "src/sqlite/statement/handle.rs": "5df0e3ea553ee078d3e135da244b7f399b0141efa4bf0d29ab69aef14b75b1bb",
         "src/sqlite/statement/mod.rs": "820fada55ca2ba949f10ccb61c4164c42dd305523523e4f797e88fb8fde7972c",
         "src/sqlite/statement/unlock_notify.rs": "2ae2f66a9f0147c7de8f19315ebc68c29a39b339056c932f592b3b7db40a750c",
@@ -81146,7 +81174,7 @@
         "src/query_engine/query_builder.rs": "5e5fea0179a0d1853bc07fac1484ac0e4aebd5868e15ed4ba2e8340460bda028",
         "src/query_engine/query_scalar.rs": "0486fb9d6acb2e674d87916225f98bd31146e2ef810be264890592f1455a57bd",
         "src/query_engine/raw_sql.rs": "4b16e0bbec6c9c7e779da021363bd88e8339468bdd96760ed8442aa8960816da",
-        "src/query_engine/row.rs": "bb368aae51becc81fc44905c3ef25b93c934bbab7f0dce718ef670b3316d0777",
+        "src/query_engine/row.rs": "3736bc1087b0c55e9995eaba8840f24ad1fd6d00685b0dd3108aab24f2f9480f",
         "src/query_engine/rt.rs": "933b2887fb3f268a99183fd5edc86c2e84d9d5f53bff4d5ac5193323605d7a13",
         "src/query_engine/sql_str.rs": "57550e4bc95deb464b520dfbf0287fd6214c4f8167383c9c8b512793c75f7832",
         "src/query_engine/statement.rs": "26463cdbf8de36428d2d8b4feb458f9819d10bc23029ca4f3cee8a84609aac26",
@@ -81164,13 +81192,13 @@
         "src/sqlite/connection/collation.rs": "da0ce0c599bedf658ce7e700fadfb7547effc1aa08155c77ce3ac462ac06bcb9",
         "src/sqlite/connection/describe.rs": "4245e6b8bce8fec1764529ecca126870e84ee8d3fe0340e0fa4149236e72896d",
         "src/sqlite/connection/deserialize.rs": "fd133b892b08b6e7f33f97754fc13122ef3600fc1063206dcdae2b604c96dec2",
-        "src/sqlite/connection/establish.rs": "d8bac82d207a3f0f65eaae75fe8cfcb7474037877dc0455392281c741daed9f8",
+        "src/sqlite/connection/establish.rs": "be7eff266ccb3a54c6c3420d4768b08c0c4a72cfb17fb063a57680bf858f2072",
         "src/sqlite/connection/execute.rs": "354978ee91f8ce05c69db7065bc8a93a7af9417a1196d1677808dcca7d7f4b9d",
         "src/sqlite/connection/executor.rs": "1584255c5671b195a494f638b5f70734072de48c52a740e4e8593002245ed461",
         "src/sqlite/connection/explain.rs": "d6c6363d31ba76c937d105b3a3be2fdadf22fd8f76e579b6e8c2ea46cf00b743",
         "src/sqlite/connection/handle.rs": "c4e6ff9c952df23df7daf88e6a3aee05aa02f5ab9e83783fdaa79b96fcbdda16",
         "src/sqlite/connection/intmap.rs": "8bab4e1d38cf98ddbc463ac4ace1c4d4cfd34cda1a8e56ea71fcb674e3f25508",
-        "src/sqlite/connection/mod.rs": "24e591bcb217371e09a76a000a645c98bab4deb1dfd6ea214e3887c410c392ce",
+        "src/sqlite/connection/mod.rs": "ebc18c8f45dd799ce85bbd68e05e1a26f168b1a25a885b3ebbe4df09c8363c40",
         "src/sqlite/connection/plan_logger.rs": "925488b3b90d28efc43c3ae48bf1a3d4b44f24c79f2e4e70616122bfc0a2524b",
         "src/sqlite/connection/preupdate_hook.rs": "844d6818491115a46aadbc3b03b3bfcf4a5eba4f4d56bbafa456bbb141bfaf36",
         "src/sqlite/connection/worker.rs": "48d469327eb98d1f7650b4923625b1130880ef9236690d7da6eab53804547615",
@@ -81181,12 +81209,12 @@
         "src/sqlite/options/connect.rs": "ca60280f50335db1de28cebc5194d8fbcd27a828241e9eac3034d18ce3b493d4",
         "src/sqlite/options/journal_mode.rs": "e2621add6bf0f97d2a2c8aab5e896e168bbb2d3fa15a25d6665c6aba467fc8aa",
         "src/sqlite/options/locking_mode.rs": "b488fa79f83fd6196316f4a1cdfd8da963bb7199eb1934ec45789f315b1e16e0",
-        "src/sqlite/options/mod.rs": "da944b2653ed59f4db5e3f28c0a926d2425df3f4cb205796ece59221f832b99f",
+        "src/sqlite/options/mod.rs": "4d23d9c1505a8aaa6fe96deae72451fc448dc9231f72a82d1d3ced2e6e36c23e",
         "src/sqlite/options/parse.rs": "0dc4c58ae663ef61d4c8c09fc7d9f25a378d92afd7b033a49491e0c594d63059",
         "src/sqlite/options/synchronous.rs": "b0760eac136041e2fd25c0f8c4fd8161d515c168dd0e7a1b153d5cb7c2c3f13a",
         "src/sqlite/query_result.rs": "9cff47b8f77ea6502d1e965e07574a756807b34c01144865a00236151f26d1c5",
         "src/sqlite/regexp.rs": "cafb99545b889d5788e51a6bc04dbe33a672d9c88b295b2765187a3c2b6646a8",
-        "src/sqlite/row.rs": "18a99c72cbdd0972f289c913abaac742ec4a4b006c31f28d2dce0f9d4f517b06",
+        "src/sqlite/row.rs": "8413fa572bb591e626b681139a8ad64c6a43ebf3dd9ada129ce0c25aa858d7c1",
         "src/sqlite/statement/handle.rs": "5df0e3ea553ee078d3e135da244b7f399b0141efa4bf0d29ab69aef14b75b1bb",
         "src/sqlite/statement/mod.rs": "820fada55ca2ba949f10ccb61c4164c42dd305523523e4f797e88fb8fde7972c",
         "src/sqlite/statement/unlock_notify.rs": "2ae2f66a9f0147c7de8f19315ebc68c29a39b339056c932f592b3b7db40a750c",
@@ -86247,12 +86275,12 @@
         "src/num_conv.rs": "0fd9920af37cae0bb19aaa986bf78a0e746707b2f095fd01773f03b5e43019bd",
         "src/num_fmt.rs": "773a8143c79a634a15db4d267f7c9dc9a74f6b8848b51c6ef369d5dbff8155a7",
         "src/offset_date_time.rs": "9b3b4136eabf33114445ff1efddfc5ca80a220a9e795cb0d04f4502e61d94f71",
-        "src/parsing/combinator/mod.rs": "4595c3aff7f94959d74068bc631426b4bf9cd31054c1c12a04015ba454c4c8e7",
+        "src/parsing/combinator/mod.rs": "a2d2f1704b3b0d45e96b3eaf6f58614d86090254e8a8f098519f641bd6b4b8e2",
         "src/parsing/combinator/rfc/iso8601.rs": "de1a0cd20c42fba2c2cece007c9db24724510cab2ad2eb57dc568031dd280083",
         "src/parsing/combinator/rfc/mod.rs": "f30b75d248f5ae92c27646d504703f5489185afb76c998cc4375437b3d15c822",
         "src/parsing/combinator/rfc/rfc2234.rs": "229cf74e6e9ac31d69e33938e2847fdee8ae5940d90a7ac5e1ccf3726723afb1",
         "src/parsing/combinator/rfc/rfc2822.rs": "b88a90378c720b9815d8c6057666d48ae885894dd38a7d111b62b90dc129df38",
-        "src/parsing/component.rs": "64c9391618df5e08290f2482445ccaa0aedfa09b265b7b62e6446a9e6df08c73",
+        "src/parsing/component.rs": "e121138f36ab6a52bdc2bf9cbee731873c96896c4b72db044f2e929536609b22",
         "src/parsing/iso8601.rs": "8acaad6159e46b9fa1882626fcd69ae4841ce4e2b4df04a1030f5c35b43e7beb",
         "src/parsing/mod.rs": "4374cb14af00dc6dc85eaa24b1c579b6f9f5118d47716e6c6f23fb1c2280b6fa",
         "src/parsing/parsable.rs": "30bd06a47d7a9d6d30756f27d094feda3f0b9cb397bd160b9472dee85da3d503",
@@ -86374,12 +86402,12 @@
         "src/num_conv.rs": "0fd9920af37cae0bb19aaa986bf78a0e746707b2f095fd01773f03b5e43019bd",
         "src/num_fmt.rs": "773a8143c79a634a15db4d267f7c9dc9a74f6b8848b51c6ef369d5dbff8155a7",
         "src/offset_date_time.rs": "9b3b4136eabf33114445ff1efddfc5ca80a220a9e795cb0d04f4502e61d94f71",
-        "src/parsing/combinator/mod.rs": "4595c3aff7f94959d74068bc631426b4bf9cd31054c1c12a04015ba454c4c8e7",
+        "src/parsing/combinator/mod.rs": "a2d2f1704b3b0d45e96b3eaf6f58614d86090254e8a8f098519f641bd6b4b8e2",
         "src/parsing/combinator/rfc/iso8601.rs": "de1a0cd20c42fba2c2cece007c9db24724510cab2ad2eb57dc568031dd280083",
         "src/parsing/combinator/rfc/mod.rs": "f30b75d248f5ae92c27646d504703f5489185afb76c998cc4375437b3d15c822",
         "src/parsing/combinator/rfc/rfc2234.rs": "229cf74e6e9ac31d69e33938e2847fdee8ae5940d90a7ac5e1ccf3726723afb1",
         "src/parsing/combinator/rfc/rfc2822.rs": "b88a90378c720b9815d8c6057666d48ae885894dd38a7d111b62b90dc129df38",
-        "src/parsing/component.rs": "64c9391618df5e08290f2482445ccaa0aedfa09b265b7b62e6446a9e6df08c73",
+        "src/parsing/component.rs": "e121138f36ab6a52bdc2bf9cbee731873c96896c4b72db044f2e929536609b22",
         "src/parsing/iso8601.rs": "8acaad6159e46b9fa1882626fcd69ae4841ce4e2b4df04a1030f5c35b43e7beb",
         "src/parsing/mod.rs": "4374cb14af00dc6dc85eaa24b1c579b6f9f5118d47716e6c6f23fb1c2280b6fa",
         "src/parsing/parsable.rs": "30bd06a47d7a9d6d30756f27d094feda3f0b9cb397bd160b9472dee85da3d503",
@@ -86501,12 +86529,12 @@
         "src/num_conv.rs": "0fd9920af37cae0bb19aaa986bf78a0e746707b2f095fd01773f03b5e43019bd",
         "src/num_fmt.rs": "773a8143c79a634a15db4d267f7c9dc9a74f6b8848b51c6ef369d5dbff8155a7",
         "src/offset_date_time.rs": "9b3b4136eabf33114445ff1efddfc5ca80a220a9e795cb0d04f4502e61d94f71",
-        "src/parsing/combinator/mod.rs": "4595c3aff7f94959d74068bc631426b4bf9cd31054c1c12a04015ba454c4c8e7",
+        "src/parsing/combinator/mod.rs": "a2d2f1704b3b0d45e96b3eaf6f58614d86090254e8a8f098519f641bd6b4b8e2",
         "src/parsing/combinator/rfc/iso8601.rs": "de1a0cd20c42fba2c2cece007c9db24724510cab2ad2eb57dc568031dd280083",
         "src/parsing/combinator/rfc/mod.rs": "f30b75d248f5ae92c27646d504703f5489185afb76c998cc4375437b3d15c822",
         "src/parsing/combinator/rfc/rfc2234.rs": "229cf74e6e9ac31d69e33938e2847fdee8ae5940d90a7ac5e1ccf3726723afb1",
         "src/parsing/combinator/rfc/rfc2822.rs": "b88a90378c720b9815d8c6057666d48ae885894dd38a7d111b62b90dc129df38",
-        "src/parsing/component.rs": "64c9391618df5e08290f2482445ccaa0aedfa09b265b7b62e6446a9e6df08c73",
+        "src/parsing/component.rs": "e121138f36ab6a52bdc2bf9cbee731873c96896c4b72db044f2e929536609b22",
         "src/parsing/iso8601.rs": "8acaad6159e46b9fa1882626fcd69ae4841ce4e2b4df04a1030f5c35b43e7beb",
         "src/parsing/mod.rs": "4374cb14af00dc6dc85eaa24b1c579b6f9f5118d47716e6c6f23fb1c2280b6fa",
         "src/parsing/parsable.rs": "30bd06a47d7a9d6d30756f27d094feda3f0b9cb397bd160b9472dee85da3d503",
@@ -86628,12 +86656,12 @@
         "src/num_conv.rs": "0fd9920af37cae0bb19aaa986bf78a0e746707b2f095fd01773f03b5e43019bd",
         "src/num_fmt.rs": "773a8143c79a634a15db4d267f7c9dc9a74f6b8848b51c6ef369d5dbff8155a7",
         "src/offset_date_time.rs": "9b3b4136eabf33114445ff1efddfc5ca80a220a9e795cb0d04f4502e61d94f71",
-        "src/parsing/combinator/mod.rs": "4595c3aff7f94959d74068bc631426b4bf9cd31054c1c12a04015ba454c4c8e7",
+        "src/parsing/combinator/mod.rs": "a2d2f1704b3b0d45e96b3eaf6f58614d86090254e8a8f098519f641bd6b4b8e2",
         "src/parsing/combinator/rfc/iso8601.rs": "de1a0cd20c42fba2c2cece007c9db24724510cab2ad2eb57dc568031dd280083",
         "src/parsing/combinator/rfc/mod.rs": "f30b75d248f5ae92c27646d504703f5489185afb76c998cc4375437b3d15c822",
         "src/parsing/combinator/rfc/rfc2234.rs": "229cf74e6e9ac31d69e33938e2847fdee8ae5940d90a7ac5e1ccf3726723afb1",
         "src/parsing/combinator/rfc/rfc2822.rs": "b88a90378c720b9815d8c6057666d48ae885894dd38a7d111b62b90dc129df38",
-        "src/parsing/component.rs": "64c9391618df5e08290f2482445ccaa0aedfa09b265b7b62e6446a9e6df08c73",
+        "src/parsing/component.rs": "e121138f36ab6a52bdc2bf9cbee731873c96896c4b72db044f2e929536609b22",
         "src/parsing/iso8601.rs": "8acaad6159e46b9fa1882626fcd69ae4841ce4e2b4df04a1030f5c35b43e7beb",
         "src/parsing/mod.rs": "4374cb14af00dc6dc85eaa24b1c579b6f9f5118d47716e6c6f23fb1c2280b6fa",
         "src/parsing/parsable.rs": "30bd06a47d7a9d6d30756f27d094feda3f0b9cb397bd160b9472dee85da3d503",
@@ -86686,15 +86714,15 @@
         "src/lib.rs": "b87e6514a3616eaa83e506cdd56ea9d4ca40e50f4a84fccf694e5274300b1ed2",
         "src/macros.rs": "0c90b45626fe8331d5b3326abb831f4ba6e04bcc975b1b9c01e465715050caa2",
         "src/output/adapter/mod.rs": "6d34ac324cbbc51c7f3d3750e0cf277491c90af87deaf07c100457681a28a7e3",
-        "src/output/adapter/strip.rs": "dccad6216bf35afaf067466c9be01ea49d9458602b6a319c8112b687b59dce1b",
+        "src/output/adapter/strip.rs": "dbaa9ea9328b44e9d5ce24e9b5e6658e95e7195b1cd55914954c2934f7430e4a",
         "src/output/auto.rs": "cc77defd75b9585808c616beafe39f59e4f449ddd133550719b62d844aecec2f",
         "src/output/buffer.rs": "e8da130c918a47b922e1a467496747f1af14840551af79d79774d5645b165d59",
         "src/output/fmt.rs": "cc11b005c4559843bd908a57958a13c8d0922fae6aff5261f3583c90e60da73c",
         "src/output/mod.rs": "cccecdbe39d49c6b51dcc1969b420c445ff7f9d5f499a8e1ecae4385f4b89cda",
         "src/output/stream.rs": "f0a1b6d80a3c494627aece88c9f2d0876917725e80aca268ebc16a56de95475e",
-        "src/output/strip.rs": "b65e4086a0442507515aeb6aed2247d946b146bd4285237b27db5296b2d7eac1",
+        "src/output/strip.rs": "97319c3505aa7f67d2bab53e7bf670b0aea969e7b35451505e9481a9520f9335",
         "src/parser/mod.rs": "d65de0b9de746270254e2a322e6bf0627779e3230642b637089c066033dde5d2",
-        "src/parser/params.rs": "8cfef4e2ab1961ca2d9f210da553fc6ac64bb6dbd03321f0ee7d6089ab45389c",
+        "src/parser/params.rs": "19d99b8df66ad79188c7a2e6808bffdada606775e1d7916d2931cf90dfd15263",
         "src/parser/state/definitions.rs": "92425427cc6b1c015c618f9e75732eedcd444ea023db23de7dc4fa00e604395e",
         "src/parser/state/mod.rs": "e4af6f0293d0514fb456cc3591f2a10e6590716175abd46c0cd88d55d74e128e",
         "src/parser/state/table.rs": "673b7e9242c5248efc076086cc6923578ec2f059c0c26da21363528e20e4285c",
@@ -86740,15 +86768,15 @@
         "src/lib.rs": "b87e6514a3616eaa83e506cdd56ea9d4ca40e50f4a84fccf694e5274300b1ed2",
         "src/macros.rs": "0c90b45626fe8331d5b3326abb831f4ba6e04bcc975b1b9c01e465715050caa2",
         "src/output/adapter/mod.rs": "6d34ac324cbbc51c7f3d3750e0cf277491c90af87deaf07c100457681a28a7e3",
-        "src/output/adapter/strip.rs": "dccad6216bf35afaf067466c9be01ea49d9458602b6a319c8112b687b59dce1b",
+        "src/output/adapter/strip.rs": "dbaa9ea9328b44e9d5ce24e9b5e6658e95e7195b1cd55914954c2934f7430e4a",
         "src/output/auto.rs": "cc77defd75b9585808c616beafe39f59e4f449ddd133550719b62d844aecec2f",
         "src/output/buffer.rs": "e8da130c918a47b922e1a467496747f1af14840551af79d79774d5645b165d59",
         "src/output/fmt.rs": "cc11b005c4559843bd908a57958a13c8d0922fae6aff5261f3583c90e60da73c",
         "src/output/mod.rs": "cccecdbe39d49c6b51dcc1969b420c445ff7f9d5f499a8e1ecae4385f4b89cda",
         "src/output/stream.rs": "f0a1b6d80a3c494627aece88c9f2d0876917725e80aca268ebc16a56de95475e",
-        "src/output/strip.rs": "b65e4086a0442507515aeb6aed2247d946b146bd4285237b27db5296b2d7eac1",
+        "src/output/strip.rs": "97319c3505aa7f67d2bab53e7bf670b0aea969e7b35451505e9481a9520f9335",
         "src/parser/mod.rs": "d65de0b9de746270254e2a322e6bf0627779e3230642b637089c066033dde5d2",
-        "src/parser/params.rs": "8cfef4e2ab1961ca2d9f210da553fc6ac64bb6dbd03321f0ee7d6089ab45389c",
+        "src/parser/params.rs": "19d99b8df66ad79188c7a2e6808bffdada606775e1d7916d2931cf90dfd15263",
         "src/parser/state/definitions.rs": "92425427cc6b1c015c618f9e75732eedcd444ea023db23de7dc4fa00e604395e",
         "src/parser/state/mod.rs": "e4af6f0293d0514fb456cc3591f2a10e6590716175abd46c0cd88d55d74e128e",
         "src/parser/state/table.rs": "673b7e9242c5248efc076086cc6923578ec2f059c0c26da21363528e20e4285c",
@@ -86794,15 +86822,15 @@
         "src/lib.rs": "b87e6514a3616eaa83e506cdd56ea9d4ca40e50f4a84fccf694e5274300b1ed2",
         "src/macros.rs": "0c90b45626fe8331d5b3326abb831f4ba6e04bcc975b1b9c01e465715050caa2",
         "src/output/adapter/mod.rs": "6d34ac324cbbc51c7f3d3750e0cf277491c90af87deaf07c100457681a28a7e3",
-        "src/output/adapter/strip.rs": "dccad6216bf35afaf067466c9be01ea49d9458602b6a319c8112b687b59dce1b",
+        "src/output/adapter/strip.rs": "dbaa9ea9328b44e9d5ce24e9b5e6658e95e7195b1cd55914954c2934f7430e4a",
         "src/output/auto.rs": "cc77defd75b9585808c616beafe39f59e4f449ddd133550719b62d844aecec2f",
         "src/output/buffer.rs": "e8da130c918a47b922e1a467496747f1af14840551af79d79774d5645b165d59",
         "src/output/fmt.rs": "cc11b005c4559843bd908a57958a13c8d0922fae6aff5261f3583c90e60da73c",
         "src/output/mod.rs": "cccecdbe39d49c6b51dcc1969b420c445ff7f9d5f499a8e1ecae4385f4b89cda",
         "src/output/stream.rs": "f0a1b6d80a3c494627aece88c9f2d0876917725e80aca268ebc16a56de95475e",
-        "src/output/strip.rs": "b65e4086a0442507515aeb6aed2247d946b146bd4285237b27db5296b2d7eac1",
+        "src/output/strip.rs": "97319c3505aa7f67d2bab53e7bf670b0aea969e7b35451505e9481a9520f9335",
         "src/parser/mod.rs": "d65de0b9de746270254e2a322e6bf0627779e3230642b637089c066033dde5d2",
-        "src/parser/params.rs": "8cfef4e2ab1961ca2d9f210da553fc6ac64bb6dbd03321f0ee7d6089ab45389c",
+        "src/parser/params.rs": "19d99b8df66ad79188c7a2e6808bffdada606775e1d7916d2931cf90dfd15263",
         "src/parser/state/definitions.rs": "92425427cc6b1c015c618f9e75732eedcd444ea023db23de7dc4fa00e604395e",
         "src/parser/state/mod.rs": "e4af6f0293d0514fb456cc3591f2a10e6590716175abd46c0cd88d55d74e128e",
         "src/parser/state/table.rs": "673b7e9242c5248efc076086cc6923578ec2f059c0c26da21363528e20e4285c",
@@ -86848,15 +86876,15 @@
         "src/lib.rs": "b87e6514a3616eaa83e506cdd56ea9d4ca40e50f4a84fccf694e5274300b1ed2",
         "src/macros.rs": "0c90b45626fe8331d5b3326abb831f4ba6e04bcc975b1b9c01e465715050caa2",
         "src/output/adapter/mod.rs": "6d34ac324cbbc51c7f3d3750e0cf277491c90af87deaf07c100457681a28a7e3",
-        "src/output/adapter/strip.rs": "dccad6216bf35afaf067466c9be01ea49d9458602b6a319c8112b687b59dce1b",
+        "src/output/adapter/strip.rs": "dbaa9ea9328b44e9d5ce24e9b5e6658e95e7195b1cd55914954c2934f7430e4a",
         "src/output/auto.rs": "cc77defd75b9585808c616beafe39f59e4f449ddd133550719b62d844aecec2f",
         "src/output/buffer.rs": "e8da130c918a47b922e1a467496747f1af14840551af79d79774d5645b165d59",
         "src/output/fmt.rs": "cc11b005c4559843bd908a57958a13c8d0922fae6aff5261f3583c90e60da73c",
         "src/output/mod.rs": "cccecdbe39d49c6b51dcc1969b420c445ff7f9d5f499a8e1ecae4385f4b89cda",
         "src/output/stream.rs": "f0a1b6d80a3c494627aece88c9f2d0876917725e80aca268ebc16a56de95475e",
-        "src/output/strip.rs": "b65e4086a0442507515aeb6aed2247d946b146bd4285237b27db5296b2d7eac1",
+        "src/output/strip.rs": "97319c3505aa7f67d2bab53e7bf670b0aea969e7b35451505e9481a9520f9335",
         "src/parser/mod.rs": "d65de0b9de746270254e2a322e6bf0627779e3230642b637089c066033dde5d2",
-        "src/parser/params.rs": "8cfef4e2ab1961ca2d9f210da553fc6ac64bb6dbd03321f0ee7d6089ab45389c",
+        "src/parser/params.rs": "19d99b8df66ad79188c7a2e6808bffdada606775e1d7916d2931cf90dfd15263",
         "src/parser/state/definitions.rs": "92425427cc6b1c015c618f9e75732eedcd444ea023db23de7dc4fa00e604395e",
         "src/parser/state/mod.rs": "e4af6f0293d0514fb456cc3591f2a10e6590716175abd46c0cd88d55d74e128e",
         "src/parser/state/table.rs": "673b7e9242c5248efc076086cc6923578ec2f059c0c26da21363528e20e4285c",
@@ -88127,7 +88155,7 @@
         "options/mod.rs": "95f1b4aa28af4791d9197b155d02c152618dd34b9db66e629fa32354f0056298",
         "parse.rs": "fce3616e0464aa7414888e5d00d4df18c83bb3034a1c807d36a07a3c586e475a",
         "regex_set.rs": "d8995adb9e5cecc2d738e662a62d5081150bf967cb67e1206070e22b7265578a",
-        "src/cexpr/expr.rs": "99b9568801b11b94ba165329c6dcc4ff83058a5a235f03a8d54bd7d08d11169a",
+        "src/cexpr/expr.rs": "e64d82e71f39aa65a2c1aa0698e5a35eedd152447af4844583a63248541e1c1d",
         "src/cexpr/literal.rs": "2c0f3ed1e972f99c533f174bf467878fe25a444165586fec270dae4214e9f310",
         "src/cexpr/mod.rs": "477faf5812214fd11e9be4ff86aaf8c6b9f566a0578893bb80b394e8afa7468b",
         "src/cexpr/parser.rs": "36d45471c0c2e25b0fb50bab549cb5b03e624ea0bce79ef0a07f03c5fea4318d",
@@ -88746,15 +88774,15 @@
         "src/lib.rs": "b87e6514a3616eaa83e506cdd56ea9d4ca40e50f4a84fccf694e5274300b1ed2",
         "src/macros.rs": "0c90b45626fe8331d5b3326abb831f4ba6e04bcc975b1b9c01e465715050caa2",
         "src/output/adapter/mod.rs": "6d34ac324cbbc51c7f3d3750e0cf277491c90af87deaf07c100457681a28a7e3",
-        "src/output/adapter/strip.rs": "dccad6216bf35afaf067466c9be01ea49d9458602b6a319c8112b687b59dce1b",
+        "src/output/adapter/strip.rs": "dbaa9ea9328b44e9d5ce24e9b5e6658e95e7195b1cd55914954c2934f7430e4a",
         "src/output/auto.rs": "cc77defd75b9585808c616beafe39f59e4f449ddd133550719b62d844aecec2f",
         "src/output/buffer.rs": "e8da130c918a47b922e1a467496747f1af14840551af79d79774d5645b165d59",
         "src/output/fmt.rs": "cc11b005c4559843bd908a57958a13c8d0922fae6aff5261f3583c90e60da73c",
         "src/output/mod.rs": "cccecdbe39d49c6b51dcc1969b420c445ff7f9d5f499a8e1ecae4385f4b89cda",
         "src/output/stream.rs": "f0a1b6d80a3c494627aece88c9f2d0876917725e80aca268ebc16a56de95475e",
-        "src/output/strip.rs": "b65e4086a0442507515aeb6aed2247d946b146bd4285237b27db5296b2d7eac1",
+        "src/output/strip.rs": "97319c3505aa7f67d2bab53e7bf670b0aea969e7b35451505e9481a9520f9335",
         "src/parser/mod.rs": "d65de0b9de746270254e2a322e6bf0627779e3230642b637089c066033dde5d2",
-        "src/parser/params.rs": "8cfef4e2ab1961ca2d9f210da553fc6ac64bb6dbd03321f0ee7d6089ab45389c",
+        "src/parser/params.rs": "19d99b8df66ad79188c7a2e6808bffdada606775e1d7916d2931cf90dfd15263",
         "src/parser/state/definitions.rs": "92425427cc6b1c015c618f9e75732eedcd444ea023db23de7dc4fa00e604395e",
         "src/parser/state/mod.rs": "e4af6f0293d0514fb456cc3591f2a10e6590716175abd46c0cd88d55d74e128e",
         "src/parser/state/table.rs": "673b7e9242c5248efc076086cc6923578ec2f059c0c26da21363528e20e4285c",
@@ -89387,13 +89415,13 @@
       "version": "1.0.107"
     },
     "src/foundation/code-generation/proc-macro2-diagnostics": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-11-01：诊断等级精确匹配，普通错误标签不被吞掉。",
       "description": "Diagnostics for proc-macro2.",
       "directory": "src/foundation/code-generation/proc-macro2-diagnostics",
       "files_sha256": {
         "Cargo.toml": "7aebabb61de99051b62716624280d21614a750b35c5308c2ca10caec7f2af702",
         "build.rs": "e704c88bd641917d2fa77cd55cbd0fcb15f3db3bd11f2fdb451db07783e12052",
-        "src/diagnostic.rs": "15efa4a9bc7edcbfe7da8ac82a9d3388600c9a5ca3d9dee0798e4c0cfde5e9fa",
+        "src/diagnostic.rs": "d660c8c0f8d07c3317b4908c8eb69bcc1f8a36d0fc67b7cb2dc01d27b62a72a4",
         "src/ext.rs": "1502116a76b25c17b5b4c063dc4fb742dc7266a564a75eec36a68a706089ea3e",
         "src/lib.rs": "edc6a0f7c66ab9c1e7b6daacbe8c67b718c0eae6e5dcc02b62e6d533163e72f7",
         "src/line.rs": "44fc6986476fa9c3dfc78da0dc49d0732582b5ea5078bfcde01fbc8e4b9b0aeb"
@@ -90162,13 +90190,13 @@
       "version": "1.0.3"
     },
     "src/foundation/collections/erased": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-11-01：ErasedMut获取的引用绑定本次wrapper借用，编译拒绝重复可变或共享/可变别名。",
       "description": "Erase the type of a reference or box, retaining the lifetime.",
       "directory": "src/foundation/collections/erased",
       "files_sha256": {
         "Cargo.toml": "bb17f08d943792fb31df7206e82935c2b31f4e6e445f5183b965cc62512c8613",
         "src/erased_box.rs": "cdd44799807bc784f4fb3e44b31b43eccb42942781f3fad12aeaf31809b5b44e",
-        "src/erased_mut_ref.rs": "f743db148f53f07fd1fa9372046ff1a108cc24fc4e50f469114ff50b1ce3ba8e",
+        "src/erased_mut_ref.rs": "ce29c303d758cfba3d793b3896e53a96d2ccfc4a8d0f69e4152391e7830c129c",
         "src/erased_ref.rs": "9711d3813d3a1ff49d55d5b1a80bc87d9ff6cb9f3e2761c67834792c782da4e8",
         "src/lib.rs": "747d61d68d4e9d28b7d8d4b3a22a17a6f92e0661227b24fe73cec53b1ed0ffbd"
       },
@@ -93463,7 +93491,7 @@
       "version": "0.8.12"
     },
     "src/foundation/core-types/date-time": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 2026-11-01：固定9位小数秒安全拒绝非法字节；保留Period严格小写准入；no_std单元测试显式导入测试std。",
       "description": "Date and time library. Fully interoperable with the standard library. Mostly compatible with #![no_std].",
       "directory": "src/foundation/core-types/date-time",
       "files_sha256": {
@@ -93543,12 +93571,12 @@
         "src/num_conv.rs": "0fd9920af37cae0bb19aaa986bf78a0e746707b2f095fd01773f03b5e43019bd",
         "src/num_fmt.rs": "773a8143c79a634a15db4d267f7c9dc9a74f6b8848b51c6ef369d5dbff8155a7",
         "src/offset_date_time.rs": "9b3b4136eabf33114445ff1efddfc5ca80a220a9e795cb0d04f4502e61d94f71",
-        "src/parsing/combinator/mod.rs": "4595c3aff7f94959d74068bc631426b4bf9cd31054c1c12a04015ba454c4c8e7",
+        "src/parsing/combinator/mod.rs": "a2d2f1704b3b0d45e96b3eaf6f58614d86090254e8a8f098519f641bd6b4b8e2",
         "src/parsing/combinator/rfc/iso8601.rs": "de1a0cd20c42fba2c2cece007c9db24724510cab2ad2eb57dc568031dd280083",
         "src/parsing/combinator/rfc/mod.rs": "f30b75d248f5ae92c27646d504703f5489185afb76c998cc4375437b3d15c822",
         "src/parsing/combinator/rfc/rfc2234.rs": "229cf74e6e9ac31d69e33938e2847fdee8ae5940d90a7ac5e1ccf3726723afb1",
         "src/parsing/combinator/rfc/rfc2822.rs": "b88a90378c720b9815d8c6057666d48ae885894dd38a7d111b62b90dc129df38",
-        "src/parsing/component.rs": "64c9391618df5e08290f2482445ccaa0aedfa09b265b7b62e6446a9e6df08c73",
+        "src/parsing/component.rs": "e121138f36ab6a52bdc2bf9cbee731873c96896c4b72db044f2e929536609b22",
         "src/parsing/iso8601.rs": "8acaad6159e46b9fa1882626fcd69ae4841ce4e2b4df04a1030f5c35b43e7beb",
         "src/parsing/mod.rs": "4374cb14af00dc6dc85eaa24b1c579b6f9f5118d47716e6c6f23fb1c2280b6fa",
         "src/parsing/parsable.rs": "30bd06a47d7a9d6d30756f27d094feda3f0b9cb397bd160b9472dee85da3d503",
@@ -94182,7 +94210,7 @@
       "version": "1.0.23"
     },
     "src/foundation/cryptography/argon2": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-11-01：先验证并行度上界再计算内存下限；调用者内存只借用一次贯穿填充和终结。",
       "description": "Pure Rust implementation of the Argon2 password hashing function with support\nfor the Argon2d, Argon2i, and Argon2id algorithmic variants",
       "directory": "src/foundation/cryptography/argon2",
       "files_sha256": {
@@ -94191,8 +94219,8 @@
         "src/blake2b_long.rs": "d8aa7c7f5d4c76b7cb9024d68beeebf3684def925ba8f03c09369b4bf048658b",
         "src/block.rs": "08b0c81b9d273f08047a27175520513eab08015a1b7ea887272a533237bae8f7",
         "src/error.rs": "be431ea75ef7161ad919737c3d129e2d2fdc26c16100d7edd2af5154f8603b73",
-        "src/lib.rs": "26da05df34216344919398cad3d65114556fd543884bc94ad5e5f1abfced3bdf",
-        "src/params.rs": "d16ccddb8ad992f5393b61c4a58822c5f03dbe069e5dc167e81a1c3ee4f247ed",
+        "src/lib.rs": "a42a3d2a2145df88b9efc294e090c44cd5f7a24ceaa509343cf3b122046abd6e",
+        "src/params.rs": "4389bc015d2c71c42dc8f725fa3d47a2d15e85f249632428be90fcf28410f2ff",
         "src/version.rs": "f6d0cadcfc094d4050b2075384795da1415d2d1490f90d9dd52c4c395245f6e9"
       },
       "license": "MIT OR Apache-2.0",
@@ -94265,7 +94293,7 @@
       "version": "1.8.3"
     },
     "src/foundation/cryptography/blake2": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 2026-11-01：空密钥不注入密钥块；reset区分空密钥与非空全零密钥，保留独立hashlib向量。",
       "description": "BLAKE2 hash functions",
       "directory": "src/foundation/cryptography/blake2",
       "files_sha256": {
@@ -94275,7 +94303,7 @@
         "src/buffered.rs": "329cfa2f230c97eb9f6dbb7c48d4e6f599fe59568a9af528f9451c1804759984",
         "src/consts.rs": "03edc1d4697a6074c9389202324444f27625ef11f17d34cc86b83d0dda920e79",
         "src/lib.rs": "751d91d97fbe74e226bd769fcaf771a0955259dca0966fe3103fe8e0ebf55a46",
-        "src/macros.rs": "fb094835a032540296ca9752334734caa33c23372282d90036cba4ddadc8c2bf",
+        "src/macros.rs": "72d341dd1bd49c60acf1f6d5b9b0bd7e4580ce47c6ca08fa71f7bec326cfa558",
         "src/simd.rs": "79d6d11d14664c908c2f6a2120c23e8de0e0422b610a8b838aa95ba469ef43fc",
         "src/simd/simd_opt.rs": "b254d82005e288f1d07531ef71b2468be0bc70ae9bdba1b46001acac4db283fe",
         "src/simd/simd_opt/u32x4.rs": "f87ab763a2f7a60e0192c9eb16df3fd172f7e1747cd26e081b5e7f074701b13c",
@@ -94523,7 +94551,7 @@
       "version": "0.4.2"
     },
     "src/foundation/cryptography/cryptographic-core": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；当前逐文件摘要记录本地实现差异。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；当前逐文件摘要记录本地实现差异。 2026-11-01：u128数组状态按每元素16字节小端序列化。",
       "description": "Traits for cryptographic hash functions and message authentication codes",
       "directory": "src/foundation/cryptography/cryptographic-core",
       "files_sha256": {
@@ -94531,7 +94559,7 @@
         "src/buffer/mod.rs": "145b50bc75a4602d950d3beb20577fb1624ab9baba0d50a4e32390d677cf65b9",
         "src/buffer/read.rs": "790b7bc1d6e87c0ee797b41e18aa3c394aa561c3074047c72590b33c9cee0f8d",
         "src/buffer/sealed.rs": "7ad84c528060c27e148e568dc4934ab7704259bdf0c41f1ab59043255d53da3f",
-        "src/common_types/hazmat.rs": "c65eef0eb7b1e319da25e540c6b9e30b7d6d810dd96de41233b203000247672c",
+        "src/common_types/hazmat.rs": "cf58308c75b8124ad80d9b89798562edc270c591454d65bed25bda3f33ca7291",
         "src/common_types/mod.rs": "7eee006e30859f8f67215685bdbe57249c9575d1be490fe5f86c3f516c1b3379",
         "src/hash/block_api.rs": "a04f0c9c3cb3645e3a4b17210117662e6b000d138dc81511d9828b256cf92925",
         "src/hash/block_api/ct_variable.rs": "573c0d4ce780b33fb1219b03bfad71a8f2a030b6c1349de5362777798c2197ee",
@@ -95947,7 +95975,7 @@
       "version": "1.0.229"
     },
     "src/foundation/data-storage/sqlite-access": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 1 个独立示例程序及专属输入（3010 字节）；保留文档编译、真实测试及性能基准输入。 2026-10-21：SQLite 专用收窄；完整移除 Migrator/Any/跨运行时/TLS/TOML 配置 API、实现与休眠边；分离行诊断和查询计划日志，保持池、事务、查询及 SQLite 文件格式。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 1 个独立示例程序及专属输入（3010 字节）；保留文档编译、真实测试及性能基准输入。 2026-10-21：SQLite 专用收窄；完整移除 Migrator/Any/跨运行时/TLS/TOML 配置 API、实现与休眠边；分离行诊断和查询计划日志，保持池、事务、查询及 SQLite 文件格式。 2026-11-01：关闭时释放preupdate hook；打开前验证忙等待毫秒范围；移除SqliteRow不成立的Sync承诺，保留所有权Send。",
       "description": "🧰 The Rust SQL Toolkit. An async, pure Rust SQL crate featuring compile-time checked queries without a DSL. Supports PostgreSQL, MySQL, and SQLite.",
       "directory": "src/foundation/data-storage/sqlite-access",
       "files_sha256": {
@@ -95985,7 +96013,7 @@
         "src/query_engine/query_builder.rs": "5e5fea0179a0d1853bc07fac1484ac0e4aebd5868e15ed4ba2e8340460bda028",
         "src/query_engine/query_scalar.rs": "0486fb9d6acb2e674d87916225f98bd31146e2ef810be264890592f1455a57bd",
         "src/query_engine/raw_sql.rs": "4b16e0bbec6c9c7e779da021363bd88e8339468bdd96760ed8442aa8960816da",
-        "src/query_engine/row.rs": "bb368aae51becc81fc44905c3ef25b93c934bbab7f0dce718ef670b3316d0777",
+        "src/query_engine/row.rs": "3736bc1087b0c55e9995eaba8840f24ad1fd6d00685b0dd3108aab24f2f9480f",
         "src/query_engine/rt.rs": "933b2887fb3f268a99183fd5edc86c2e84d9d5f53bff4d5ac5193323605d7a13",
         "src/query_engine/sql_str.rs": "57550e4bc95deb464b520dfbf0287fd6214c4f8167383c9c8b512793c75f7832",
         "src/query_engine/statement.rs": "26463cdbf8de36428d2d8b4feb458f9819d10bc23029ca4f3cee8a84609aac26",
@@ -96003,13 +96031,13 @@
         "src/sqlite/connection/collation.rs": "da0ce0c599bedf658ce7e700fadfb7547effc1aa08155c77ce3ac462ac06bcb9",
         "src/sqlite/connection/describe.rs": "4245e6b8bce8fec1764529ecca126870e84ee8d3fe0340e0fa4149236e72896d",
         "src/sqlite/connection/deserialize.rs": "fd133b892b08b6e7f33f97754fc13122ef3600fc1063206dcdae2b604c96dec2",
-        "src/sqlite/connection/establish.rs": "d8bac82d207a3f0f65eaae75fe8cfcb7474037877dc0455392281c741daed9f8",
+        "src/sqlite/connection/establish.rs": "be7eff266ccb3a54c6c3420d4768b08c0c4a72cfb17fb063a57680bf858f2072",
         "src/sqlite/connection/execute.rs": "354978ee91f8ce05c69db7065bc8a93a7af9417a1196d1677808dcca7d7f4b9d",
         "src/sqlite/connection/executor.rs": "1584255c5671b195a494f638b5f70734072de48c52a740e4e8593002245ed461",
         "src/sqlite/connection/explain.rs": "d6c6363d31ba76c937d105b3a3be2fdadf22fd8f76e579b6e8c2ea46cf00b743",
         "src/sqlite/connection/handle.rs": "c4e6ff9c952df23df7daf88e6a3aee05aa02f5ab9e83783fdaa79b96fcbdda16",
         "src/sqlite/connection/intmap.rs": "8bab4e1d38cf98ddbc463ac4ace1c4d4cfd34cda1a8e56ea71fcb674e3f25508",
-        "src/sqlite/connection/mod.rs": "24e591bcb217371e09a76a000a645c98bab4deb1dfd6ea214e3887c410c392ce",
+        "src/sqlite/connection/mod.rs": "ebc18c8f45dd799ce85bbd68e05e1a26f168b1a25a885b3ebbe4df09c8363c40",
         "src/sqlite/connection/plan_logger.rs": "925488b3b90d28efc43c3ae48bf1a3d4b44f24c79f2e4e70616122bfc0a2524b",
         "src/sqlite/connection/preupdate_hook.rs": "844d6818491115a46aadbc3b03b3bfcf4a5eba4f4d56bbafa456bbb141bfaf36",
         "src/sqlite/connection/worker.rs": "48d469327eb98d1f7650b4923625b1130880ef9236690d7da6eab53804547615",
@@ -96020,12 +96048,12 @@
         "src/sqlite/options/connect.rs": "ca60280f50335db1de28cebc5194d8fbcd27a828241e9eac3034d18ce3b493d4",
         "src/sqlite/options/journal_mode.rs": "e2621add6bf0f97d2a2c8aab5e896e168bbb2d3fa15a25d6665c6aba467fc8aa",
         "src/sqlite/options/locking_mode.rs": "b488fa79f83fd6196316f4a1cdfd8da963bb7199eb1934ec45789f315b1e16e0",
-        "src/sqlite/options/mod.rs": "da944b2653ed59f4db5e3f28c0a926d2425df3f4cb205796ece59221f832b99f",
+        "src/sqlite/options/mod.rs": "4d23d9c1505a8aaa6fe96deae72451fc448dc9231f72a82d1d3ced2e6e36c23e",
         "src/sqlite/options/parse.rs": "0dc4c58ae663ef61d4c8c09fc7d9f25a378d92afd7b033a49491e0c594d63059",
         "src/sqlite/options/synchronous.rs": "b0760eac136041e2fd25c0f8c4fd8161d515c168dd0e7a1b153d5cb7c2c3f13a",
         "src/sqlite/query_result.rs": "9cff47b8f77ea6502d1e965e07574a756807b34c01144865a00236151f26d1c5",
         "src/sqlite/regexp.rs": "cafb99545b889d5788e51a6bc04dbe33a672d9c88b295b2765187a3c2b6646a8",
-        "src/sqlite/row.rs": "18a99c72cbdd0972f289c913abaac742ec4a4b006c31f28d2dce0f9d4f517b06",
+        "src/sqlite/row.rs": "8413fa572bb591e626b681139a8ad64c6a43ebf3dd9ada129ce0c25aa858d7c1",
         "src/sqlite/statement/handle.rs": "5df0e3ea553ee078d3e135da244b7f399b0141efa4bf0d29ab69aef14b75b1bb",
         "src/sqlite/statement/mod.rs": "820fada55ca2ba949f10ccb61c4164c42dd305523523e4f797e88fb8fde7972c",
         "src/sqlite/statement/unlock_notify.rs": "2ae2f66a9f0147c7de8f19315ebc68c29a39b339056c932f592b3b7db40a750c",
@@ -96967,13 +96995,13 @@
       "version": "1.1.0"
     },
     "src/foundation/networking/http-range-header": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-11-01：临时边界排序后检查相邻重叠，保留原输出顺序、反转错误优先级与整数边界。",
       "description": "No-dep range header parser",
       "directory": "src/foundation/networking/http-range-header",
       "files_sha256": {
         "Cargo.toml": "f5d385a4172ac0d3eead3153c0090193dc2e6370dc0c22aab5b7f172cf35b79b",
         "benches/benchmark.rs": "e550b14a8f3931c8f05d17a76df19e9d93aae8c408cac58b83d81aa719cbc107",
-        "src/lib.rs": "cd0ff5bce30863e848d26fbeec18ef3b46e28af229a29757d3789211e88413e6"
+        "src/lib.rs": "1b96fded3569348479ec023173df6335c12a1216f4e5fc87412df43db1410eb0"
       },
       "license": "MIT",
       "license_materials": [
@@ -97493,7 +97521,7 @@
       "version": "2.0.5"
     },
     "src/foundation/networking/reqwest": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 2026-10-20：限定实际原生 HTTP 闭包：保留 Rustls、JSON 与流式传输；移除未使用浏览器后端及能力分支，删除四条失去用途的可选依赖边；浏览器由独立 Fetch 传输负责。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 2026-10-20：限定实际原生 HTTP 闭包：保留 Rustls、JSON 与流式传输；移除未使用浏览器后端及能力分支，删除四条失去用途的可选依赖边；浏览器由独立 Fetch 传输负责。 2026-11-01：重试scope在分类和预算操作前准入，避免scope外首次重放。",
       "description": "higher level HTTP client library",
       "directory": "src/foundation/networking/reqwest",
       "files_sha256": {
@@ -97515,7 +97543,7 @@
         "src/proxy.rs": "1bc5bd033a319424a810799507c4f4155c97410f83b5e7c3263dbeb7f09587fa",
         "src/redirect.rs": "1ad42943ee4cbd259e237dd2f363a27e2958dd70d1db6f3dfbd4fe3bc96745e5",
         "src/response.rs": "fd8e7887cbba2fd4099bdbdee476c77b4244c08a77aaa7c0c50e3f64f824839c",
-        "src/retry.rs": "b5f963b48e69947e667bc46ae1bab53b3c556be3e109fe7592e45ce15487249f",
+        "src/retry.rs": "e1eb41e2faac474382c3f9c5a2205b1123b9d8dabb63702d5a160d8dcab3cb92",
         "src/tls.rs": "30795cfc1cdff36d24d2c8e69e7186b35777ffe5fc17a581d487fce83424f704",
         "src/util.rs": "91bc9a319dd8ccddcd1499de8fda8262880ba8ed7f6a4669ce3d7aefd4ad424e"
       },
@@ -98999,7 +99027,7 @@
       "version": "0.39.6"
     },
     "src/foundation/platform/tempfile": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；当前逐文件摘要记录本地实现差异。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；当前逐文件摘要记录本地实现差异。 2026-11-01：路径上下文source保留原始io::Error及errno和嵌套因果链。",
       "description": "A library for managing temporary files and directories.",
       "directory": "src/foundation/platform/tempfile",
       "files_sha256": {
@@ -99009,7 +99037,7 @@
         "src/dir/imp/unix.rs": "fd1f2162b5fd741f6395c8ef0b34c2430fe9ffb1414bc381c17d5193828e3806",
         "src/dir/mod.rs": "d144325a6528a9a6e7c78a42e0eec42ee401c3b834ef5851376323725756f219",
         "src/env.rs": "c4af61bd8edea07f769adac3746d1b0d804fc95269f9c7c3e2c9a69d174b8b46",
-        "src/error.rs": "cc7d8eace0fff11cb342158d2885d5637bfb14b24ef30755e808554772039c5f",
+        "src/error.rs": "e5749f7ef3060ab603d31cab2c09cb435defbb41c27ffeda566eea49d49ac941",
         "src/file/imp/mod.rs": "09a9e287ffd0c6bfa6750608bd52b2c747885412312c5ccddf37e31b9a8ebb8d",
         "src/file/imp/other.rs": "9efa22cc67555bef747e1870e8deb74c3d57b4c0fed751b34f81eeff910b5a88",
         "src/file/imp/unix.rs": "cc39f94cb6cb87b36cf7603a75429d64ecc4ad1a2076a765e5aba2b11771d0f7",
@@ -100477,7 +100505,7 @@
       "version": "1.5.1"
     },
     "src/foundation/tooling/bindgen": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-21：实际消费者标准库整合与依赖去重；详见 docs/reports/foundation-sqlite-cloud-20261021.md，原始身份和法律材料保留。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-21：实际消费者标准库整合与依赖去重；详见 docs/reports/foundation-sqlite-cloud-20261021.md，原始身份和法律材料保留。 2026-11-01：C表达式整数零除和零余数转既有Invalid解析错误，不在clang回调中panic。",
       "description": "Automatically generates Rust FFI bindings to C and C++ libraries.",
       "directory": "src/foundation/tooling/bindgen",
       "files_sha256": {
@@ -100537,7 +100565,7 @@
         "options/mod.rs": "95f1b4aa28af4791d9197b155d02c152618dd34b9db66e629fa32354f0056298",
         "parse.rs": "fce3616e0464aa7414888e5d00d4df18c83bb3034a1c807d36a07a3c586e475a",
         "regex_set.rs": "d8995adb9e5cecc2d738e662a62d5081150bf967cb67e1206070e22b7265578a",
-        "src/cexpr/expr.rs": "99b9568801b11b94ba165329c6dcc4ff83058a5a235f03a8d54bd7d08d11169a",
+        "src/cexpr/expr.rs": "e64d82e71f39aa65a2c1aa0698e5a35eedd152447af4844583a63248541e1c1d",
         "src/cexpr/literal.rs": "2c0f3ed1e972f99c533f174bf467878fe25a444165586fec270dae4214e9f310",
         "src/cexpr/mod.rs": "477faf5812214fd11e9be4ff86aaf8c6b9f566a0578893bb80b394e8afa7468b",
         "src/cexpr/parser.rs": "36d45471c0c2e25b0fb50bab549cb5b03e624ea0bce79ef0a07f03c5fea4318d",
@@ -100568,7 +100596,7 @@
       "version": "0.72.1"
     },
     "src/foundation/tooling/cc": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-11-01：shell转义FLAGS遇未闭合引号或尾随反斜杠返回带变量名的具体错误。",
       "description": "A build-time dependency for Cargo build scripts to assist in invoking the native\nC compiler to compile native C code into a static archive to be linked into Rust\ncode.",
       "directory": "src/foundation/tooling/cc",
       "files_sha256": {
@@ -100578,7 +100606,7 @@
         "src/detect_compiler_family.c": "97ca4b021495611e828becea6187add37414186a16dfedd26c2947cbce6e8b2f",
         "src/detect_cpp_stdlib.cpp": "b2ef811b2eaec1bfa305241d3a2ba26ed4c9898dc3a5a076a4ec6fcab8410540",
         "src/flags.rs": "b5530368172e3cb2d61dec25c3836f2d62554b72ab6448018a5378e518f9f663",
-        "src/lib.rs": "ad44ea26d14592e82fe0f06a29807d146622a6615b9dbf0c5fed2f9ee7a10521",
+        "src/lib.rs": "730f5039b9db281eea0174bcf43f10be48c7262f847f1d024351117ee0935002",
         "src/logger.rs": "b0738f7610acf508b019e0baa91988f5e987b09483a10a47a1a34507b50c6a92",
         "src/parallel/async_executor.rs": "c9e67e2cead83878f4587e21fae5b8d5aa05a4651901e7b3b59636f947a5846f",
         "src/parallel/command_runner.rs": "c8ef0a0676a7a680caa7f9bdf7b6be0373a713631c16cf7678acec4a46187627",
@@ -101105,7 +101133,7 @@
       "version": "2.0.1"
     },
     "src/foundation/tooling/terminal-style": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 清理独立演示：移除 1 个独立示例程序及专属输入（4463 字节）；保留文档编译、真实测试及性能基准输入。",
+      "changes": "Rust 发布包保留；经审阅的本地修补见后述说明，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 清理独立演示：移除 1 个独立示例程序及专属输入（4463 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-01：短写重放已消费前缀；无正文分块保留控制序列末态；参数组size_hint保持合法上下界。",
       "description": "ANSI text styling",
       "directory": "src/foundation/tooling/terminal-style",
       "files_sha256": {
@@ -101116,15 +101144,15 @@
         "src/lib.rs": "b87e6514a3616eaa83e506cdd56ea9d4ca40e50f4a84fccf694e5274300b1ed2",
         "src/macros.rs": "0c90b45626fe8331d5b3326abb831f4ba6e04bcc975b1b9c01e465715050caa2",
         "src/output/adapter/mod.rs": "6d34ac324cbbc51c7f3d3750e0cf277491c90af87deaf07c100457681a28a7e3",
-        "src/output/adapter/strip.rs": "dccad6216bf35afaf067466c9be01ea49d9458602b6a319c8112b687b59dce1b",
+        "src/output/adapter/strip.rs": "dbaa9ea9328b44e9d5ce24e9b5e6658e95e7195b1cd55914954c2934f7430e4a",
         "src/output/auto.rs": "cc77defd75b9585808c616beafe39f59e4f449ddd133550719b62d844aecec2f",
         "src/output/buffer.rs": "e8da130c918a47b922e1a467496747f1af14840551af79d79774d5645b165d59",
         "src/output/fmt.rs": "cc11b005c4559843bd908a57958a13c8d0922fae6aff5261f3583c90e60da73c",
         "src/output/mod.rs": "cccecdbe39d49c6b51dcc1969b420c445ff7f9d5f499a8e1ecae4385f4b89cda",
         "src/output/stream.rs": "f0a1b6d80a3c494627aece88c9f2d0876917725e80aca268ebc16a56de95475e",
-        "src/output/strip.rs": "b65e4086a0442507515aeb6aed2247d946b146bd4285237b27db5296b2d7eac1",
+        "src/output/strip.rs": "97319c3505aa7f67d2bab53e7bf670b0aea969e7b35451505e9481a9520f9335",
         "src/parser/mod.rs": "d65de0b9de746270254e2a322e6bf0627779e3230642b637089c066033dde5d2",
-        "src/parser/params.rs": "8cfef4e2ab1961ca2d9f210da553fc6ac64bb6dbd03321f0ee7d6089ab45389c",
+        "src/parser/params.rs": "19d99b8df66ad79188c7a2e6808bffdada606775e1d7916d2931cf90dfd15263",
         "src/parser/state/definitions.rs": "92425427cc6b1c015c618f9e75732eedcd444ea023db23de7dc4fa00e604395e",
         "src/parser/state/mod.rs": "e4af6f0293d0514fb456cc3591f2a10e6590716175abd46c0cd88d55d74e128e",
         "src/parser/state/table.rs": "673b7e9242c5248efc076086cc6923578ec2f059c0c26da21363528e20e4285c",
@@ -101353,7 +101381,7 @@
       "version": "0.3.106"
     },
     "src/foundation/web-runtime/reactive-state": {
-      "changes": "Leptos 族内部 path 依赖、本地 workspace 边界；部分包以 pastey 替代停止维护的 paste；逐文件差异见 compliance/provenance/shared/vendor/web/dependencies/patches.json；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。",
+      "changes": "Leptos 族内部 path 依赖、本地 workspace 边界；部分包以 pastey 替代停止维护的 paste；逐文件差异见 compliance/provenance/shared/vendor/web/dependencies/patches.json；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 2026-11-01：observer RAII完整恢复subscriber和untracked状态，包含嵌套与unwind回归。",
       "description": "A fine-grained reactive graph for building user interfaces.",
       "directory": "src/foundation/web-runtime/reactive-state",
       "files_sha256": {
@@ -101385,7 +101413,7 @@
         "src/graph/node.rs": "a9de4be297d6fcbc2f9b5c3344132b1f85f01d9870ef5adb7ce7ca1ebe46cc6e",
         "src/graph/sets.rs": "18f078064f78eddbe8bd267c13f2ad38450ec57d30582024a0cb01c3153c262a",
         "src/graph/source.rs": "1bdf56f425c2b15885a9dc3ff19fa07beae7f7fafe204b41cbd8b358164b4f8b",
-        "src/graph/subscriber.rs": "479fb6bfeda874dd8a8c51b3dbe385e955f06845f05310751e696ce236a21306",
+        "src/graph/subscriber.rs": "0b88396a20609d2d3cf5716780d27221f4ba336ce5a790195ab9a01a46503437",
         "src/into_reactive_value.rs": "b15d83836de13ff8ec1ee5bb27c04a7a8a0d3caffdad07f583fa8a91d85ed8d5",
         "src/lib.rs": "7f909de4a9a9e022d1d2cbabb5637b7eb341242c124b3e549f6dc61f32fd1342",
         "src/owner.rs": "ad0942a33a3403453717a536f59b82e90da5474041378339ac4e27c8810b022b",
@@ -101469,13 +101497,13 @@
       "version": "0.1.9"
     },
     "src/foundation/web-runtime/view-renderer": {
-      "changes": "Leptos 族内部 path 依赖、本地 workspace 边界；部分包以 pastey 替代停止维护的 paste；逐文件差异见 compliance/provenance/shared/vendor/web/dependencies/patches.json；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 2026-10-21：实际消费者标准库整合与依赖去重；详见 docs/reports/foundation-sqlite-cloud-20261021.md，原始身份和法律材料保留。；CSR 内核保留 ToTemplate/RenderHtml 浏览器克隆与 hydration，删除服务端字符串/流式 HTML、异步服务端解析、SSR/服务端 hydration/islands/分支标记及未支持的 testing/sledgehammer/reactive_stores/error-hook 表面；事件/指令/属性直接持有浏览器值，移除序列化 key 和休眠宏标记；保留 client Suspend 的 owner/abort 生命周期。模板 void 元素真实浏览器回归发现旧缺陷并修复。；真实模板夹具同时修复 void 标签生成占位兄弟节点，以及动态 style hydration 沿用服务端已有样式假设的问题；样式恢复统一复用 build。；修复既有 bool 模板 hydration 将 false 属性也置为存在的问题，复用正常 build 并补 disabled/checked/required 往返浏览器断言；撤销未使用 nightly/Static 文本属性及构建通道探测，不扩大未转义静态输出的支持范围。；按实际 WASM MIR、维护源码及浏览器夹具收窄为 42 个 HTML、17 个 SVG、55 个预定义属性及 10 个事件描述符；撤销 MathML、闲置 SVG use 和内联事件属性，保留 Custom/typed target、模板、原始 DOM/inert/SVG 命名空间；直接 Web API 特性从 116 收窄至 49。详见 tools/rust-sources/web-scope.json 与本轮报告。",
+      "changes": "Leptos 族内部 path 依赖、本地 workspace 边界；部分包以 pastey 替代停止维护的 paste；逐文件差异见 compliance/provenance/shared/vendor/web/dependencies/patches.json；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 2026-10-21：实际消费者标准库整合与依赖去重；详见 docs/reports/foundation-sqlite-cloud-20261021.md，原始身份和法律材料保留。；CSR 内核保留 ToTemplate/RenderHtml 浏览器克隆与 hydration，删除服务端字符串/流式 HTML、异步服务端解析、SSR/服务端 hydration/islands/分支标记及未支持的 testing/sledgehammer/reactive_stores/error-hook 表面；事件/指令/属性直接持有浏览器值，移除序列化 key 和休眠宏标记；保留 client Suspend 的 owner/abort 生命周期。模板 void 元素真实浏览器回归发现旧缺陷并修复。；真实模板夹具同时修复 void 标签生成占位兄弟节点，以及动态 style hydration 沿用服务端已有样式假设的问题；样式恢复统一复用 build。；修复既有 bool 模板 hydration 将 false 属性也置为存在的问题，复用正常 build 并补 disabled/checked/required 往返浏览器断言；撤销未使用 nightly/Static 文本属性及构建通道探测，不扩大未转义静态输出的支持范围。；按实际 WASM MIR、维护源码及浏览器夹具收窄为 42 个 HTML、17 个 SVG、55 个预定义属性及 10 个事件描述符；撤销 MathML、闲置 SVG use 和内联事件属性，保留 Custom/typed target、模板、原始 DOM/inert/SVG 命名空间；直接 Web API 特性从 116 收窄至 49。详见 tools/rust-sources/web-scope.json 与本轮报告。 2026-11-01：所有component模式保留擦除值TypeId检查；补齐erase_components属性类型导入。",
       "description": "Tools for building reactivity-agnostic, renderer-generic, statically-typed view trees for user interface libraries.",
       "directory": "src/foundation/web-runtime/view-renderer",
       "files_sha256": {
         "Cargo.toml": "ffd58120fe55c1f96524a494c4fcf043470c7e469b9139ce187a4a0efbcdde67",
         "src/dom.rs": "581b3fc173e231c53b7d34ac47598aae0b821d05c339438b3479f5e76ff65c7b",
-        "src/erased.rs": "89974a6b9d6711534ff5fec3ac1e12045b7353678927c659091f45dcc93827d6",
+        "src/erased.rs": "9654ac525c165a45351e7c5f7702d2413b18f4bb0536597e96a04c491f316eef",
         "src/html/attribute/any_attribute.rs": "6eca4018445b6a4213bd1670a6ab426826c50d89982fb499a969155167e9d628",
         "src/html/attribute/aria.rs": "f9b976e5850da7da1d093c2151d64012e28de14b96c41b3ce363b6a9ab519b1a",
         "src/html/attribute/custom.rs": "685ae6082f69b1291db6ca66a057edcfacdce5187ce228d19114fabc63d012d8",
@@ -101513,7 +101541,7 @@
         "src/svg/mod.rs": "e7a32c32f82abdf9884b301c786578cd92d5796f6d2294dbd84163c9fb38c225",
         "src/view/add_attr.rs": "1709ecc464a41b53c162a714b333e7cd123c4a9601641d4f238940bf7734657c",
         "src/view/any_view.rs": "11a51afb75c988bf2cc2619ea3db666ec188f96934fd1cee0dd3db568c1d490c",
-        "src/view/either.rs": "5d8ba08794a3f59b0c511685263ccc497f9004f9d4a519c238a3226d4215aa4a",
+        "src/view/either.rs": "e8a2f7b89a8f17f0e330a572cea995857788c826007c05ec4fa1d9835525e4a1",
         "src/view/error_boundary.rs": "7c4d483b1b33eeaca6f9bf631061fa3478ecd804d28defd83ba69c2f8edd8664",
         "src/view/fragment.rs": "b81b0183c5626d2a4b27b35215f7017f9c1cb5d6220de0dad2ae0e0eff28c09b",
         "src/view/iterators.rs": "3482e94e327d6572f666d0aaa886e8a9343a55a659d82552c8d318ef1cb4eec0",

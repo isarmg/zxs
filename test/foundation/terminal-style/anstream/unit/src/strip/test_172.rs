@@ -4,7 +4,43 @@ mod test {
     // Upstream property generator unavailable in the maintained offline graph.
     #[cfg(any())]
     use proptest::prelude::*;
-    use std::io::Write as _;
+
+    struct ShortWriter(Vec<u8>);
+
+    impl std::io::Write for ShortWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let written = bytes.len().min(1);
+            self.0.extend_from_slice(&bytes[..written]);
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn strip_after_short_write(input: &[u8], completion: &[u8]) -> Vec<u8> {
+        let mut output = ShortWriter(Vec::new());
+        let mut state = StripBytes::new();
+        let accepted = write(&mut output, &mut state, input).unwrap();
+        assert_eq!(accepted, 1);
+        write_all(&mut output, &mut state, &input[accepted..]).unwrap();
+        write_all(&mut output, &mut state, completion).unwrap();
+        output.0
+    }
+
+    #[test]
+    fn short_write_replays_only_the_consumed_prefix() {
+        assert_eq!(strip_after_short_write(b"ab\x1b[", b"31mcd"), b"abcd");
+    }
+
+    #[test]
+    fn short_write_preserves_partial_utf8_before_escape() {
+        assert_eq!(
+            strip_after_short_write("éx\x1b[".as_bytes(), b"31mafter"),
+            "éxafter".as_bytes()
+        );
+    }
 
     #[cfg(any())]
     proptest! {

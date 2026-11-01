@@ -12,20 +12,14 @@ use crate::sqlite::statement::StatementHandle;
 use crate::sqlite::{Sqlite, SqliteColumn, SqliteValue, SqliteValueRef};
 
 /// Implementation of [`Row`] for SQLite.
+///
+/// Rows can move between threads, but their stateful values cannot be decoded
+/// concurrently through shared references. See [`SqliteValue`] for details.
 pub struct SqliteRow {
     pub(crate) values: Box<[SqliteValue]>,
     pub(crate) columns: Arc<Vec<SqliteColumn>>,
     pub(crate) column_names: Arc<HashMap<UStr, usize>>,
 }
-
-// Accessing values from the statement object is
-// safe across threads as long as we don't call [sqlite3_step]
-
-// we block ourselves from doing that by only exposing
-// a set interface on [StatementHandle]
-
-unsafe impl Send for SqliteRow {}
-unsafe impl Sync for SqliteRow {}
 
 impl SqliteRow {
     pub(crate) fn current(

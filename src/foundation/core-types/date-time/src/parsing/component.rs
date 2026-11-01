@@ -616,8 +616,10 @@ pub(crate) fn parse_period(
             _ => None,
         }
     } else {
-        first = first.to_ascii_lowercase();
-        second = second.to_ascii_lowercase();
+        if !modifiers.case_sensitive {
+            first = first.to_ascii_lowercase();
+            second = second.to_ascii_lowercase();
+        }
 
         match &[first, second] {
             b"am" => Some(ParsedItem(rest, Period::Am)),

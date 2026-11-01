@@ -559,6 +559,8 @@ impl Drop for ConnectionState {
         self.statements.clear();
         self.remove_progress_handler();
         self.remove_update_hook();
+        #[cfg(feature = "sqlite-preupdate-hook")]
+        self.remove_preupdate_hook();
         self.remove_commit_hook();
         self.remove_rollback_hook();
     }

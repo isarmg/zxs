@@ -34,6 +34,67 @@ fn ranges_clip_to_size_but_reject_overlap_and_out_of_bounds() {
                 .is_err()
         );
     }
+    assert_eq!(
+        http_range_header::parse_range_header("bytes=4-4, 0-0, 2-2")
+            .unwrap()
+            .validate(5)
+            .unwrap(),
+        vec![4..=4, 0..=0, 2..=2]
+    );
+    assert_eq!(
+        http_range_header::parse_range_header("bytes=0-2, 1-1, 4-3")
+            .unwrap()
+            .validate(5),
+        Err(http_range_header::RangeUnsatisfiableError::RangeReversed)
+    );
+    assert_eq!(
+        http_range_header::parse_range_header(
+            "bytes=18446744073709551614-18446744073709551615, 0-0"
+        )
+        .unwrap()
+        .validate(u64::MAX)
+        .unwrap(),
+        vec![(u64::MAX - 1)..=(u64::MAX - 1), 0..=0]
+    );
+    assert_range_overlap_detection_matches_pairwise_oracle();
+}
+
+fn assert_range_overlap_detection_matches_pairwise_oracle() {
+    use http_range_header::{
+        EndPosition, ParsedRanges, RangeUnsatisfiableError, StartPosition,
+        SyntacticallyCorrectRange,
+    };
+    let candidates: Vec<_> = (0..4)
+        .flat_map(|start| (0..4).map(move |end| start..=end))
+        .collect();
+    for first in &candidates {
+        for second in &candidates {
+            for third in &candidates {
+                let bounds = vec![first.clone(), second.clone(), third.clone()];
+                let expected = if bounds.iter().any(|range| range.start() > range.end()) {
+                    Err(RangeUnsatisfiableError::RangeReversed)
+                } else if bounds.iter().enumerate().any(|(index, left)| {
+                    bounds[index + 1..].iter().any(|right| {
+                        left.start() <= right.end() && right.start() <= left.end()
+                    })
+                }) {
+                    Err(RangeUnsatisfiableError::OverlappingRanges)
+                } else {
+                    Ok(bounds.clone())
+                };
+                let parsed = ParsedRanges {
+                    ranges: bounds
+                        .iter()
+                        .map(|range| SyntacticallyCorrectRange {
+                            start: StartPosition::Index(*range.start()),
+                            end: EndPosition::Index(*range.end()),
+                        })
+                        .collect(),
+                };
+                assert_eq!(parsed.validate(4), expected, "{bounds:?}");
+            }
+        }
+    }
 }
 #[test]
 fn mime_guess_handles_extensions_case_and_unknown() {

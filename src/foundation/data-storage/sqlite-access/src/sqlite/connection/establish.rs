@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 #[cfg(feature = "sqlite-load-extension")]
 use crate::IndexMap;
@@ -26,7 +25,7 @@ static THREAD_ID: AtomicUsize = AtomicUsize::new(0);
 pub struct EstablishParams {
     filename: CString,
     open_flags: i32,
-    busy_timeout: Duration,
+    busy_timeout: i32,
     statement_cache_capacity: usize,
     log_settings: LogSettings,
     #[cfg(feature = "sqlite-load-extension")]
@@ -39,6 +38,14 @@ pub struct EstablishParams {
 
 impl EstablishParams {
     pub fn from_options(options: &SqliteConnectOptions) -> Result<Self, Error> {
+        let timeout_millis = options.busy_timeout.as_millis();
+        let busy_timeout = i32::try_from(timeout_millis).map_err(|_| {
+            Error::InvalidArgument(format!(
+                "SQLite busy timeout must not exceed {} milliseconds, got {timeout_millis}",
+                i32::MAX,
+            ))
+        })?;
+
         let mut filename = options
             .filename
             .to_str()
@@ -167,7 +174,7 @@ impl EstablishParams {
         Ok(Self {
             filename,
             open_flags: flags,
-            busy_timeout: options.busy_timeout,
+            busy_timeout,
             statement_cache_capacity: options.statement_cache_capacity,
             log_settings: options.log_settings.clone(),
             #[cfg(feature = "sqlite-load-extension")]
@@ -200,11 +207,8 @@ impl EstablishParams {
         // This causes SQLite to automatically sleep in increasing intervals until the time
         // when there is something locked during [sqlite3_step].
         //
-        // We also need to convert the u128 value to i32, checking we're not overflowing.
-        let ms = i32::try_from(self.busy_timeout.as_millis())
-            .expect("Given busy timeout value is too big.");
-
-        handle.call_with_result(|db| unsafe { sqlite3_busy_timeout(db, ms) })?;
+        // The configuration boundary already checked SQLite's signed millisecond range.
+        handle.call_with_result(|db| unsafe { sqlite3_busy_timeout(db, self.busy_timeout) })?;
 
         Ok(ConnectionState {
             handle,

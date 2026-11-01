@@ -122,7 +122,6 @@ fn next_str<'s>(bytes: &mut &'s [u8], state: &mut State) -> Option<&'s str> {
     });
     let (_, next) = bytes.split_at(offset.unwrap_or(bytes.len()));
     *bytes = next;
-    *state = State::Ground;
 
     let offset = bytes.iter().copied().position(|b| {
         let (_next_state, action) = state_change(State::Ground, b);
@@ -133,6 +132,7 @@ fn next_str<'s>(bytes: &mut &'s [u8], state: &mut State) -> Option<&'s str> {
     if printable.is_empty() {
         None
     } else {
+        *state = State::Ground;
         let printable = unsafe {
             from_utf8_unchecked(
                 printable,

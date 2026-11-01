@@ -70,7 +70,8 @@ UNIT_SUITES = ('bytes', 'cmov', 'flag-set', 'futures-intrusive', 'guardian', 'ht
                'smallvec', 'tinyvec', 'yoke-derive', 'zerofrom-derive', 'zerotrie', 'either',
                'hybrid-array', 'rustc-hash', 'typenum', 'leb128', 'leb128fmt', 'libsqlite3-sys',
                'anyhow', 'httparse', 'ipnet', 'matchit', 'errno', 'unicase', 'utf8_iter', 'cfg-if',
-               'view-alternatives', 'walrus', 'wasm-bindgen-shared', 'arrayvec', 'const-oid', 'mime')
+               'view-alternatives', 'walrus', 'wasm-bindgen-shared', 'arrayvec', 'const-oid', 'mime',
+               'tempfile')
 
 FOUNDATION_TESTS = 'test/foundation/'
 INTEGRATION_SUITES = (
@@ -137,7 +138,8 @@ INTEGRATION_SUITES = (
 # at their original depth. Its selected features still come from the root graph.
 # proc-macro2 also needs its real build script's cfgs in the integration targets.
 STANDALONE_SUITES = tuple(Suite(name, ()) for name in (
-    'synstructure', 'shared-value', 'heck', 'pkg-config', 'shell-tokenizer', 'version_check')) + (
+    'synstructure', 'shared-value', 'heck', 'pkg-config', 'shell-tokenizer', 'version_check',
+    'proc-macro2-diagnostics')) + (
     Suite('proc-macro2', tuple(FOUNDATION_TESTS + 'proc-macro2/tests/' + name + '.rs'
                               for name in ('test', 'test_fmt', 'marker'))),
     Suite('http', (), doctests=True),

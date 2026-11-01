@@ -142,7 +142,7 @@ fn reset_preserves_configuration() {
     assert_eq!(h.finalize_fixed_reset(), Blake2b512::digest(b"hello"));
     Digest::update(&mut h, b"hello");
     assert_eq!(h.finalize_fixed_reset(), Blake2b512::digest(b"hello"));
-    for key in [vec![7], vec![3; 32], vec![5; 64]] {
+    for key in [vec![], vec![0], vec![0; 64], vec![7], vec![3; 32], vec![5; 64]] {
         let mut h = blake2::Blake2bMac512::new_from_slice(&key).unwrap();
         h.update(b"hello");
         let expected = h.clone().finalize_fixed();
@@ -175,7 +175,7 @@ fn small_reset_and_personalized_reset() {
     let mut second = [0; 13];
     h.finalize_variable_reset(&mut second).unwrap();
     assert_eq!(first, second);
-    for key in [vec![2], vec![4; 32]] {
+    for key in [vec![], vec![0], vec![0; 32], vec![2], vec![4; 32]] {
         let mut m =
             blake2::Blake2sMac256::new_with_salt_and_personal(&key, b"salt", b"personal").unwrap();
         m.update(b"hello");
@@ -183,4 +183,108 @@ fn small_reset_and_personalized_reset() {
         m.update(b"hello");
         assert_eq!(first, m.finalize_fixed_reset());
     }
+}
+
+#[cfg(feature = "reset")]
+#[test]
+fn empty_key_reset_is_unkeyed() {
+    use blake2::cryptographic_core::{FixedOutputReset, Reset};
+    macro_rules! check {
+        ($mac:ty, $hash:ty, $block:expr) => {{
+            for length in [0, 1, $block - 1, $block, $block + 1, 2 * $block + 1] {
+                let data: Vec<u8> = (0..length).map(|i| (i * 37 + 11) as u8).collect();
+                let expected = <$hash>::digest(&data);
+                for mut h in [
+                    <$mac>::new_from_slice(&[]).unwrap(),
+                    <$mac>::new_with_salt_and_personal(&[], &[], &[]).unwrap(),
+                ] {
+                    h.update(&data);
+                    assert_eq!(h.finalize_fixed_reset(), expected);
+                    h.update(&data);
+                    assert_eq!(h.finalize_fixed_reset(), expected);
+                    h.update(b"discarded before reset");
+                    h.reset();
+                    h.update(&data);
+                    assert_eq!(h.finalize_fixed_reset(), expected);
+                }
+            }
+        }};
+    }
+    check!(blake2::Blake2bMac512, Blake2b512, 128);
+    check!(blake2::Blake2sMac256, Blake2s256, 64);
+}
+
+#[test]
+fn argon2_rejects_parallelism_before_memory_arithmetic() {
+    for parallelism in [argon2::Params::MAX_P_COST + 1, 1 << 29, u32::MAX] {
+        for memory in [argon2::Params::MIN_M_COST, u32::MAX] {
+            assert_eq!(
+                argon2::Params::new(memory, 1, parallelism, None).unwrap_err(),
+                argon2::Error::ThreadsTooMany
+            );
+        }
+    }
+    assert!(argon2::Params::new(8, 1, 1, None).is_ok());
+    assert!(argon2::Params::new(
+        argon2::Params::MAX_P_COST * 8,
+        1,
+        argon2::Params::MAX_P_COST,
+        None
+    )
+    .is_ok());
+}
+
+#[cfg(feature = "password-hash")]
+#[test]
+fn argon2_phc_parallelism_returns_parameter_error() {
+    use password_hash::{errors::InvalidValue, PasswordHash, PasswordVerifier};
+    for parallelism in [1 << 29, u32::MAX] {
+        let encoded = format!(
+            "$argon2id$v=19$m=8,t=1,p={parallelism}$c29tZXNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        );
+        let parsed = PasswordHash::new(&encoded).unwrap();
+        assert_eq!(
+            argon2::Argon2::default().verify_password(b"password", &parsed),
+            Err(password_hash::Error::ParamValueInvalid(InvalidValue::TooLong))
+        );
+    }
+}
+
+#[test]
+fn argon2_uses_one_caller_memory_view() {
+    struct ChangingMemory {
+        blocks: Vec<argon2::Block>,
+        calls: usize,
+    }
+    impl AsMut<[argon2::Block]> for ChangingMemory {
+        fn as_mut(&mut self) -> &mut [argon2::Block] {
+            self.calls += 1;
+            if self.calls == 1 {
+                &mut self.blocks
+            } else {
+                &mut []
+            }
+        }
+    }
+    let params = argon2::Params::new(8, 1, 1, Some(32)).unwrap();
+    let argon2 = argon2::Argon2::from(params);
+    let mut expected = [0; 32];
+    argon2
+        .hash_password_into_with_memory(
+            b"password",
+            b"somesalt",
+            &mut expected,
+            vec![argon2::Block::default(); 8],
+        )
+        .unwrap();
+    let mut memory = ChangingMemory {
+        blocks: vec![argon2::Block::default(); 8],
+        calls: 0,
+    };
+    let mut actual = [0; 32];
+    argon2
+        .hash_password_into_with_memory(b"password", b"somesalt", &mut actual, &mut memory)
+        .unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(memory.calls, 1);
 }

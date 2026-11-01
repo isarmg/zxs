@@ -60,6 +60,8 @@ def main():
             '[workspace]\n[dependencies]\n'
             f'http-routing={{path={json.dumps(str(ROOT / "src/foundation/networking/http-routing"))},default-features=false,features=["http1","tokio","json"]}}\n'
             f'reqwest={{path={json.dumps(str(ROOT / "src/foundation/networking/reqwest"))},default-features=false}}\n'
+            f'tokio={{path={json.dumps(str(ROOT / "src/foundation/concurrency/tokio"))},default-features=false,features=["rt","net","io-util","time","sync","macros"]}}\n'
+            '[[test]]\nname="reqwest_retry"\npath="test/reqwest_retry.rs"\n'
         )
         (work / 'src/lib.rs').write_text(
             'pub fn router() -> http_routing::Router { http_routing::Router::new().route("/", http_routing::routing::get(|| async { "ok" })) }\n'
@@ -67,7 +69,13 @@ def main():
         )
         run(work, 'generate-lockfile')
         run(work, 'check', '--locked')
-        print('service-stack: 7 native/WASM feature checks, 4 behavior tests, Axum/Reqwest consumers passed')
+        (work / 'test/reqwest_retry.rs').write_bytes(
+            (ROOT / 'test/architecture/service-stack/reqwest_retry.rs').read_bytes()
+        )
+        output = run(work, 'test', '--locked', '--test', 'reqwest_retry')
+        print(output, end='', flush=True)
+        assert re.search(r'test result: ok\. 3 passed; 0 failed; 0 ignored', output), output
+        print('service-stack: 7 native/WASM feature checks, 4 behavior tests, Axum/Reqwest consumers and 3 retry scope tests passed')
 
 if __name__ == '__main__':
     main()

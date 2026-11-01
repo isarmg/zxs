@@ -170,12 +170,36 @@ fn arithmetic_precedence_wrapping_and_float_promotion() {
         (vec!["+", "8"], 8),
         (vec!["18446744073709551615ULL", "+", "1"], 0),
         (vec!["9223372036854775807", "+", "1"], i64::MIN),
+        (vec!["9223372036854775808", "/", "-", "1"], i64::MIN),
+        (vec!["9223372036854775808", "%", "-", "1"], 0),
     ] {
         assert_eq!(expression(&parts), Int(Wrapping(expected)), "{parts:?}");
     }
     assert_eq!(expression(&["2", "+", "0.5"]), Float(2.5));
     assert_eq!(expression(&["7.5", "%", "2"]), Float(1.5));
     assert_eq!(expression(&["7.5", "/", "2"]), Float(3.75));
+}
+
+fn integer_zero_divisor_macro(operator: &[u8]) -> Vec<cexpr::token::Token> {
+    use cexpr::token::Kind::{Identifier, Literal, Punctuation};
+    vec![
+        (Identifier, b"BAD".as_slice()).into(),
+        (Literal, b"1".as_slice()).into(),
+        (Punctuation, operator).into(),
+        (Literal, b"0".as_slice()).into(),
+    ]
+}
+
+#[test]
+fn integer_division_by_zero_is_a_macro_parse_error() {
+    let tokens = integer_zero_divisor_macro(b"/");
+    assert!(cexpr::expr::macro_definition(&tokens).is_err());
+}
+
+#[test]
+fn integer_remainder_by_zero_is_a_macro_parse_error() {
+    let tokens = integer_zero_divisor_macro(b"%");
+    assert!(cexpr::expr::macro_definition(&tokens).is_err());
 }
 
 #[test]
