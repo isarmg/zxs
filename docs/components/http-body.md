@@ -5,7 +5,7 @@
 ## 功能边界
 
 - 默认功能为空，仅提供 `Body`、`Frame`、`SizeHint` 及基础实现。原有公共类型身份保持唯一。
-- `utilities` 启用 `BodyExt`、完整/空体、流适配、收集、长度限制、映射、错误处理及组合器；仅增加 `futures-core` 和 `pin-project-lite`。
+- `utilities` 启用 `BodyExt`、完整/空体、流适配、收集、长度限制、映射、错误处理及组合器；增加本地 `futures` 的核心 trait 和轮询宏（关闭默认特性）以及 `pin-project-lite`。最终 `futures` 特性由同一解析图中各消费者的请求取并集。
 - `channel` 进一步启用基于 Tokio sync 的发送/接收通道。
 - `full` 包含 `channel`，因此也包含 `utilities`。
 
