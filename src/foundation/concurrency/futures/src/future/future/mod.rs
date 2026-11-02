@@ -531,7 +531,7 @@ pub trait FutureExt: Future {
     }
 
     /// Turns a [`Future<Output = T>`](Future) into a
-    /// [`TryFuture<Ok = T, Error = ()`>](futures::future::TryFuture).
+    /// [`TryFuture<Ok = T, Error = ()`>](crate::future::TryFuture).
     fn unit_error(self) -> UnitError<Self>
     where
         Self: Sized,
@@ -540,7 +540,7 @@ pub trait FutureExt: Future {
     }
 
     /// Turns a [`Future<Output = T>`](Future) into a
-    /// [`TryFuture<Ok = T, Error = Never`>](futures::future::TryFuture).
+    /// [`TryFuture<Ok = T, Error = Never`>](crate::future::TryFuture).
     fn never_error(self) -> NeverError<Self>
     where
         Self: Sized,

@@ -534,7 +534,7 @@ pub trait AsyncWriteExt: AsyncWrite {
         assert_future::<Result<()>, _>(WriteAllVectored::new(self, bufs))
     }
 
-    /// Allow using an [`AsyncWrite`] as a [`Sink`](futures::sink::Sink)`<Item: AsRef<[u8]>>`.
+    /// Allow using an [`AsyncWrite`] as a [`Sink`](crate::sink::Sink)`<Item: AsRef<[u8]>>`.
     ///
     /// This adapter produces a sink that will write each value passed to it
     /// into the underlying writer.

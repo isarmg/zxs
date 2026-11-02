@@ -352,10 +352,10 @@ pub trait TryStreamExt: TryStream {
     }
 
     /// Wraps a [`TryStream`] into a type that implements
-    /// [`Stream`](futures::stream::Stream)
+    /// [`Stream`](crate::stream::Stream)
     ///
     /// [`TryStream`]s currently do not implement the
-    /// [`Stream`](futures::stream::Stream) trait because of limitations
+    /// [`Stream`](crate::stream::Stream) trait because of limitations
     /// of the compiler.
     ///
     /// # Examples
@@ -414,7 +414,7 @@ pub trait TryStreamExt: TryStream {
     /// before moving on to the next item.
     ///
     /// The returned value is a [`Future`] where the
-    /// [`Output`](futures::future::Future::Output) type is
+    /// [`Output`](crate::future::Future::Output) type is
     /// `Result<(), Self::Error>`. If any of the intermediate
     /// futures or the stream returns an error, this future will return
     /// immediately with an error.
