@@ -75,6 +75,9 @@ UNIT_SUITES = ('bytes', 'cmov', 'flag-set', 'futures-intrusive', 'guardian', 'ht
 
 FOUNDATION_TESTS = 'test/foundation/'
 INTEGRATION_SUITES = (
+    Suite('email_address', ('test/ci/fixtures/foundation-email-contracts.rs',), edition='2024'),
+    Suite('command-line', ('test/ci/fixtures/foundation-boxed-args.rs',), edition='2024'),
+    Suite('spin', ('test/ci/fixtures/foundation-spin-raw-upgrade.rs',), edition='2024'),
     Suite('http', ('test/ci/fixtures/foundation-http-contracts.rs',), edition='2024'),
     Suite('futures', ('test/ci/fixtures/foundation-futures-contracts.rs',), edition='2024'),
     Suite('flume', tuple(FOUNDATION_TESTS + 'flume/tests/' + name + '.rs'

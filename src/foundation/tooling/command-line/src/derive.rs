@@ -364,6 +364,10 @@ impl<T: FromArgMatches> FromArgMatches for Box<T> {
 }
 
 impl<T: Args> Args for Box<T> {
+    fn group_id() -> Option<crate::Id> {
+        <T as Args>::group_id()
+    }
+
     fn augment_args(cmd: Command) -> Command {
         <T as Args>::augment_args(cmd)
     }

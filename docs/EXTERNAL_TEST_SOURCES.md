@@ -72,6 +72,12 @@ API 回归，由 `check-async-type-contracts.py` 在 Linux amd64 执行。五个
 不会把任意构建失败当成预期拒绝。临时消费者的编译目标需显式开启，防止 Cargo
 在运行正例时同时构建反例；产品 workspace、特性默认值和根锁文件保持原样。
 
+`foundation-email-contracts.rs`、`foundation-boxed-args.rs` 和
+`foundation-spin-raw-upgrade.rs` 由 `check-foundation-behaviour.py` 分别运行 9、7、2
+个公开 API 回归。Email 按当前验证工具特性执行，检查 Eq/Hash 一致性；另两组按
+实际生产特性检查 Box 参数组转发和 raw 升级的所有权。spin 的有界单线程用例使用
+单位载荷，并保护基线缺陷可能破坏的守卫，避免重复释放。它们不代替竞争调度证明。
+
 <a id="imported-upstream-fixtures"></a>
 
 ## 独立导入的上游数据夹具

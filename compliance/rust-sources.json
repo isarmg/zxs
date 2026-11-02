@@ -80142,7 +80142,7 @@
         "src/builder/styling.rs": "0a23b434edf9db03e8f8a7b0dde32a6f25ca5b39b801e66fb32515dd57c44b1d",
         "src/builder/value_hint.rs": "f5c39816ba558acc065810a8b37234005e23a7c836d8e44d26e1bb015cf9e78d",
         "src/builder/value_parser.rs": "92c3879de66fb80e12058d70051d17ab8fd95992c849505088005d098e6233de",
-        "src/derive.rs": "b13443d773bbd74da38f156b03d2b870e4edbc5860ce4b78818dc2d2e30a8425",
+        "src/derive.rs": "df24179b0c44f1f40e6accaf6e5f59b2a51db4e5b3cc2609015b4da5a0f05313",
         "src/error/context.rs": "156d2611a349ce826378476c9dcb3242a01ad834a095baad096a10cc2f73e1ed",
         "src/error/format.rs": "51e24294829c1d3b20d1eea396a775a66aa68a5d43565a6d082d5a5ff0863853",
         "src/error/kind.rs": "d7b11667622bdf8957b4ffbed89a9e1cd6af92390006c16214bb1dea19c3694e",
@@ -80316,7 +80316,7 @@
         "src/builder/styling.rs": "0a23b434edf9db03e8f8a7b0dde32a6f25ca5b39b801e66fb32515dd57c44b1d",
         "src/builder/value_hint.rs": "f5c39816ba558acc065810a8b37234005e23a7c836d8e44d26e1bb015cf9e78d",
         "src/builder/value_parser.rs": "92c3879de66fb80e12058d70051d17ab8fd95992c849505088005d098e6233de",
-        "src/derive.rs": "b13443d773bbd74da38f156b03d2b870e4edbc5860ce4b78818dc2d2e30a8425",
+        "src/derive.rs": "df24179b0c44f1f40e6accaf6e5f59b2a51db4e5b3cc2609015b4da5a0f05313",
         "src/error/context.rs": "156d2611a349ce826378476c9dcb3242a01ad834a095baad096a10cc2f73e1ed",
         "src/error/format.rs": "51e24294829c1d3b20d1eea396a775a66aa68a5d43565a6d082d5a5ff0863853",
         "src/error/kind.rs": "d7b11667622bdf8957b4ffbed89a9e1cd6af92390006c16214bb1dea19c3694e",
@@ -88701,7 +88701,7 @@
         "src/builder/styling.rs": "0a23b434edf9db03e8f8a7b0dde32a6f25ca5b39b801e66fb32515dd57c44b1d",
         "src/builder/value_hint.rs": "f5c39816ba558acc065810a8b37234005e23a7c836d8e44d26e1bb015cf9e78d",
         "src/builder/value_parser.rs": "92c3879de66fb80e12058d70051d17ab8fd95992c849505088005d098e6233de",
-        "src/derive.rs": "b13443d773bbd74da38f156b03d2b870e4edbc5860ce4b78818dc2d2e30a8425",
+        "src/derive.rs": "df24179b0c44f1f40e6accaf6e5f59b2a51db4e5b3cc2609015b4da5a0f05313",
         "src/error/context.rs": "156d2611a349ce826378476c9dcb3242a01ad834a095baad096a10cc2f73e1ed",
         "src/error/format.rs": "51e24294829c1d3b20d1eea396a775a66aa68a5d43565a6d082d5a5ff0863853",
         "src/error/kind.rs": "d7b11667622bdf8957b4ffbed89a9e1cd6af92390006c16214bb1dea19c3694e",
@@ -92795,7 +92795,7 @@
       "version": "1.4.8"
     },
     "src/foundation/concurrency/spin": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 1 个独立示例程序及专属输入（432 字节）；保留文档编译、真实测试及性能基准输入。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 1 个独立示例程序及专属输入（432 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-02：raw try_upgrade 的临时守卫在成功与失败时都将所有权留给调用方，保持原 CAS 和内存序。",
       "description": "Spin-based synchronization primitives",
       "directory": "src/foundation/concurrency/spin",
       "files_sha256": {
@@ -92811,7 +92811,7 @@
         "src/mutex/ticket.rs": "113a6676b8b5a86085adb924196ac1eb8a207d8330118cbc45384eefb082dd8b",
         "src/once.rs": "89f4dd8476168c2ee16cadcd9e1ca218783fc4c16c637b266a34b9abdaea1bab",
         "src/relax.rs": "919c345bf55c3b2f9a7d9cd4aec2b2b3db68b6dc40ee2e4de4f6f32027abc290",
-        "src/rwlock.rs": "1883794d58aff8a8565d49126c018cf4f01592d11a1a5041e638a8d7c94d8e9c"
+        "src/rwlock.rs": "07667e45330e7f183b7d0320e8ae00d4bd62bf8a92fe2a05f9af388d38b38375"
       },
       "license": "MIT",
       "license_materials": [
@@ -96814,12 +96814,12 @@
       "version": "0.5.1"
     },
     "src/foundation/networking/email_address": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-11-02：Hash 按现有 Eq 的最后 @ 分区保持域 ASCII 大小写等价，并准确说明构造及组件借用；解析和相等策略保持原样。",
       "description": "A Rust crate providing an implementation of an RFC-compliant `EmailAddress` newtype.",
       "directory": "src/foundation/networking/email_address",
       "files_sha256": {
         "Cargo.toml": "7f972a64ad15e07c899d6965780a0ac7853848b7b2481f2a371e5ae124ed1dba",
-        "src/lib.rs": "88eb810e0e910f0a8b16cc3a3b5daecb5d47bd85765872898f6155f155719625"
+        "src/lib.rs": "1b16781f51a048381807ed527eccd83d2b1f4f4ead11a2e22c02b8bd13678a70"
       },
       "license": "MIT",
       "license_materials": [
@@ -100768,7 +100768,7 @@
       "version": "4.6.7"
     },
     "src/foundation/tooling/command-line": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 规范一致性：Extensions 断言说明 TypeId 与存储类型约束，修正 OsStr 原生编码和隐藏别名文档；不改变参数解析、转换或错误类型。；标准 io::Error/fmt::Error 转换保留原始具名 source 和其完整所有权链，维持原 ErrorKind、显示和 render 文本。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 规范一致性：Extensions 断言说明 TypeId 与存储类型约束，修正 OsStr 原生编码和隐藏别名文档；不改变参数解析、转换或错误类型。；标准 io::Error/fmt::Error 转换保留原始具名 source 和其完整所有权链，维持原 ErrorKind、显示和 render 文本。 2026-11-02：Box<Args> 转发既有组标识，保持 Option<Box<Args>> flatten 的分组和拒绝契约。",
       "description": "A simple to use, efficient, and full-featured Command Line Argument Parser",
       "directory": "src/foundation/tooling/command-line",
       "files_sha256": {
@@ -100878,7 +100878,7 @@
         "src/builder/styling.rs": "0a23b434edf9db03e8f8a7b0dde32a6f25ca5b39b801e66fb32515dd57c44b1d",
         "src/builder/value_hint.rs": "f5c39816ba558acc065810a8b37234005e23a7c836d8e44d26e1bb015cf9e78d",
         "src/builder/value_parser.rs": "92c3879de66fb80e12058d70051d17ab8fd95992c849505088005d098e6233de",
-        "src/derive.rs": "b13443d773bbd74da38f156b03d2b870e4edbc5860ce4b78818dc2d2e30a8425",
+        "src/derive.rs": "df24179b0c44f1f40e6accaf6e5f59b2a51db4e5b3cc2609015b4da5a0f05313",
         "src/error/context.rs": "156d2611a349ce826378476c9dcb3242a01ad834a095baad096a10cc2f73e1ed",
         "src/error/format.rs": "51e24294829c1d3b20d1eea396a775a66aa68a5d43565a6d082d5a5ff0863853",
         "src/error/kind.rs": "d7b11667622bdf8957b4ffbed89a9e1cd6af92390006c16214bb1dea19c3694e",

@@ -426,12 +426,14 @@ pub struct Options {
     pub allow_display_text: bool,
 }
 
+/// An email address stored as a single string.
 ///
-/// Type representing a single email address. This is basically a wrapper around a String, the
-/// email address is parsed for correctness with `FromStr::from_str`, which is the only want to
-/// create an instance. The various components of the email _are not_ parsed out to be accessible
-/// independently.
+/// Parse with [`FromStr`] or [`Self::parse_with_options`]. [`Self::new_unchecked`]
+/// stores text without validation; callers must ensure it is valid.
+/// [`Self::local_part`] and [`Self::domain`] borrow components from the stored text.
 ///
+/// Equality compares the stored text before the last `@` exactly and ignores
+/// ASCII case in the remaining domain. Hashing follows the same partition.
 #[derive(Debug, Clone)]
 pub struct EmailAddress(String);
 
@@ -619,7 +621,20 @@ impl Eq for EmailAddress {}
 
 impl Hash for EmailAddress {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
+        // Match Eq's last-@ partition, including any stored display text.
+        let domain_start = self.0.rfind(AT).map_or(self.0.len(), |index| index + 1);
+        let (prefix, domain) = self.0.as_bytes().split_at(domain_start);
+        state.write(prefix);
+
+        let mut folded = [0u8; 64];
+        for chunk in domain.chunks(folded.len()) {
+            for (slot, byte) in folded.iter_mut().zip(chunk) {
+                *slot = byte.to_ascii_lowercase();
+            }
+            state.write(&folded[..chunk.len()]);
+        }
+        // A UTF-8 string contains no 0xff byte, so this keeps the feed prefix-free.
+        state.write_u8(0xff);
     }
 }
 
