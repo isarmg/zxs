@@ -10,7 +10,8 @@ from pathlib import Path
 import source_layout
 
 KEY = 'proof_maintenance_receipts'
-RECEIPTS = ('f6b00af0dad58bb402937c193974d916d525a790decbe043e679954c03bcbd1e',)
+RECEIPTS = ('f6b00af0dad58bb402937c193974d916d525a790decbe043e679954c03bcbd1e',
+            'eede8d6ae6c3a123115c9396650c9f18f9a9ecef47820a9f4dfbfda2ee1e17d9')
 
 
 def state(catalog, directory):

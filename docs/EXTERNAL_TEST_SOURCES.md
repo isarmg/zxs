@@ -359,6 +359,11 @@ before/after 路径、摘要及 base64 `old` / `new` 唯一可逆替换；不能
 本轮 Tokio 收据认证 `fs::asyncify` 保留 `JoinError` 的源码改动、Cargo 测试
 目标及 `fs_asyncify` 取消回归。其证明是字节与归属关系，不替代运行时测试。
 
+Tokio 的[后继收据](../compliance/proof-maintenance/eede8d6ae6c3a123115c9396650c9f18f9a9ecef47820a9f4dfbfda2ee1e17d9.json.gz)
+认证 `File` 在同步前返回缓冲写失败，并在延迟处理时保留原始 `io::Error`。
+[公开回归](../test/ci/fixtures/runtime-file-sync.rs)由现有
+`check-runtime-join-map.py` 门禁执行，覆盖错误消费、克隆及挂起同步的取消。
+
 HTTP demand 的同根维护使用窄范围适配器
 `tools/rust-sources/proof_legacy_maintenance.py`：它仅接受现有 HTTP legacy
 consolidation `9a4a44802e8f493dcc1a1546caa723ea774c956de5d18c474076f85fd1280ac4`

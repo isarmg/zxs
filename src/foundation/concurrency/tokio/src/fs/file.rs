@@ -101,10 +101,9 @@ pub struct File {
 struct Inner {
     state: State,
 
-    /// Errors from writes/flushes are returned in write/flush calls. If a write
-    /// error is observed while performing a read, it is saved until the next
-    /// write / flush call.
-    last_write_err: Option<io::ErrorKind>,
+    /// Errors deferred while another operation completes are returned by the
+    /// next write, flush, or synchronization call.
+    last_write_err: Option<io::Error>,
 
     pos: u64,
 }
@@ -296,6 +295,11 @@ impl File {
     /// This function will attempt to ensure that all in-core data reaches the
     /// filesystem before returning.
     ///
+    /// # Errors
+    ///
+    /// Returns a pending or deferred write error, a background task error, or
+    /// an error from the underlying synchronization call.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -316,7 +320,7 @@ impl File {
     /// [`AsyncWriteExt`]: trait@crate::io::AsyncWriteExt
     pub async fn sync_all(&self) -> io::Result<()> {
         let mut inner = self.inner.lock().await;
-        inner.complete_inflight().await;
+        std::future::poll_fn(|cx| inner.poll_complete_inflight(cx)).await?;
 
         let std = self.std.clone();
         asyncify(move || std.sync_all()).await
@@ -330,6 +334,11 @@ impl File {
     /// operations.
     ///
     /// Note that some platforms may simply implement this in terms of `sync_all`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a pending or deferred write error, a background task error, or
+    /// an error from the underlying synchronization call.
     ///
     /// # Examples
     ///
@@ -351,7 +360,7 @@ impl File {
     /// [`AsyncWriteExt`]: trait@crate::io::AsyncWriteExt
     pub async fn sync_data(&self) -> io::Result<()> {
         let mut inner = self.inner.lock().await;
-        inner.complete_inflight().await;
+        std::future::poll_fn(|cx| inner.poll_complete_inflight(cx)).await?;
 
         let std = self.std.clone();
         asyncify(move || std.sync_data()).await
@@ -642,7 +651,7 @@ impl AsyncRead for File {
                         }
                         Operation::Write(Err(e)) => {
                             assert!(inner.last_write_err.is_none());
-                            inner.last_write_err = Some(e.kind());
+                            inner.last_write_err = Some(e);
                             inner.state = State::Idle(Some(buf));
                         }
                         Operation::Seek(result) => {
@@ -722,7 +731,7 @@ impl AsyncSeek for File {
                         Operation::Read(_) => {}
                         Operation::Write(Err(e)) => {
                             assert!(inner.last_write_err.is_none());
-                            inner.last_write_err = Some(e.kind());
+                            inner.last_write_err = Some(e);
                         }
                         Operation::Write(_) => {}
                         Operation::Seek(res) => {
@@ -749,7 +758,7 @@ impl AsyncWrite for File {
         let inner = me.inner.get_mut();
 
         if let Some(e) = inner.last_write_err.take() {
-            return Poll::Ready(Err(e.into()));
+            return Poll::Ready(Err(e));
         }
 
         loop {
@@ -820,7 +829,7 @@ impl AsyncWrite for File {
         let inner = me.inner.get_mut();
 
         if let Some(e) = inner.last_write_err.take() {
-            return Poll::Ready(Err(e.into()));
+            return Poll::Ready(Err(e));
         }
 
         loop {
@@ -1107,24 +1116,19 @@ impl Inner {
     async fn complete_inflight(&mut self) {
         use std::future::poll_fn;
 
-        poll_fn(|cx| self.poll_complete_inflight(cx)).await;
+        if let Err(e) = poll_fn(|cx| self.poll_complete_inflight(cx)).await {
+            self.last_write_err = Some(e);
+        }
     }
 
-    fn poll_complete_inflight(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll_complete_inflight(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         ready!(crate::trace::trace_leaf(cx));
-        match self.poll_flush(cx) {
-            Poll::Ready(Err(e)) => {
-                self.last_write_err = Some(e.kind());
-                Poll::Ready(())
-            }
-            Poll::Ready(Ok(())) => Poll::Ready(()),
-            Poll::Pending => Poll::Pending,
-        }
+        self.poll_flush(cx)
     }
 
     fn poll_flush(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         if let Some(e) = self.last_write_err.take() {
-            return Poll::Ready(Err(e.into()));
+            return Poll::Ready(Err(e));
         }
 
         let (op, buf) = match self.state {

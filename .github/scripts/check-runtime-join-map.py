@@ -19,6 +19,8 @@ def check(root):
     adapters = json.dumps(str(root / "test/ci/fixtures/runtime-adapters.rs"))
     fixture = json.dumps(str(root / "test/ci/fixtures/runtime-join-map.rs"))
     filesystem = json.dumps(str(root / "test/foundation/tokio/tests/fs_asyncify.rs"))
+    filesystem_sync = json.dumps(str(root / "test/ci/fixtures/runtime-file-sync.rs"))
+    temporary_files = json.dumps(str(root / "src/foundation/platform/tempfile"))
     manifest = f'''[package]
 name = "retained-runtime-join-map-consumer"
 version = "0.0.0"
@@ -30,6 +32,7 @@ edition = "2021"
 tokio = {{ path = {runtime}, features = ["full", "adapters-full"] }}
 futures = {{ path = {futures}, default-features = false, features = ["std"] }}
 service-stack = {{ path = {service}, default-features = false, features = ["buffer", "limit", "util"] }}
+tempfile = {{ path = {temporary_files} }}
 
 [[test]]
 name = "join_map"
@@ -42,6 +45,10 @@ path = {adapters}
 [[test]]
 name = "fs_asyncify"
 path = {filesystem}
+
+[[test]]
+name = "fs_file_sync"
+path = {filesystem_sync}
 
 [profile.dev]
 debug = 0

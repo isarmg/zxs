@@ -42,6 +42,9 @@ class RuntimeJoinMapGateTests(unittest.TestCase):
                 self.assertEqual(manifest["workspace"], {})
                 tests = {target["name"]: target["path"] for target in manifest["test"]}
                 self.assertEqual(tests["fs_asyncify"], str(root / "test/foundation/tokio/tests/fs_asyncify.rs"))
+                self.assertEqual(tests["fs_file_sync"], str(root / "test/ci/fixtures/runtime-file-sync.rs"))
+                self.assertEqual(manifest["dependencies"]["tempfile"]["path"],
+                                 str(root / "src/foundation/platform/tempfile"))
                 for dependency in ("tokio",):
                     self.assertEqual(
                         manifest["dependencies"][dependency]["features"], ["full", "adapters-full"]
