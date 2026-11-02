@@ -300,6 +300,7 @@ fn exercise(
     open_fixture_directory(browser)?;
     assert_metadata_only(browser)?;
     println!("PASS engine-seeded file browsing in the real server namespace");
+    metadata::backup_configuration_read(browser)?;
     naming::run(browser)?;
     file_rows::run(browser)?;
     file_pagination::run(browser)?;
@@ -343,6 +344,7 @@ fn exercise(
     history_cancellation::monitor_range(browser)?;
     accessibility::run(browser)?;
     admin_language::run(browser)?;
+    metadata::disk_notes(browser)?;
     single_account::run(browser, password)?;
     // Language reload intentionally resets file navigation and selection. Restore
     // the seeded directory AND selected file required by the logout write/metadata fences.

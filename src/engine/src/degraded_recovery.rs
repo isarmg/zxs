@@ -244,49 +244,38 @@ impl RecoveryPlan {
     pub(crate) fn accepts(&self) -> &[Receipt] {
         &self.original_accepts
     }
-}
-impl RecoveryProof {
-    pub(crate) fn verify(&self, c: &Candidate, p: &Publication) -> Result<()> {
+
+    /// Admit the frozen plan against its candidate before recovery writes.
+    /// Actual recovery receipts and publication results are verified separately.
+    fn validate_for_candidate(&self, c: &Candidate) -> Result<BTreeSet<(String, String)>> {
         let bad = || {
             Error::new(
                 storage_contract::ErrorCode::PublicationInvalid,
                 "degraded publication recovery evidence is invalid",
             )
         };
-        let plan = &self.plan;
         let candidate = object_hash("candidate", c)?;
         let ids = c.metadata_disk_ids.iter().cloned().collect::<BTreeSet<_>>();
-        if plan.digest != plan_digest(plan)?
-            || plan.candidate_hash != candidate
-            || plan.sequence != c.sequence
-            || plan.operation_id != c.operation_id
-            || plan.reason.trim().is_empty()
-            || plan.principal.is_empty()
+        if self.digest != plan_digest(self)?
+            || self.candidate_hash != candidate
+            || self.sequence != c.sequence
+            || self.operation_id != c.operation_id
+            || self.reason.trim().is_empty()
+            || self.principal.is_empty()
             || ids.is_empty()
             || ids.len() != c.metadata_disk_ids.len()
-            || plan.members.len() != ids.len()
-            || plan.original_accepts.len() < ids.len() / 2 + 1
-            || plan.original_accepts.len() > ids.len()
-            || receipts_ids(&plan.original_accepts).len() != plan.original_accepts.len()
-            || !receipts_ids(&plan.original_accepts).is_subset(&ids)
-            || self.reprotect.len() != ids.len()
-            || receipts_ids(&self.reprotect) != ids
-            || p.finalize.recovery_id.as_deref() != Some(plan.recovery_id.as_str())
-            || canonical_json(&p.finalize.accepts)? != canonical_json(&plan.original_accepts)?
-            || p.result.commit_state != storage_contract::CommitState::PublishedDegraded
-            || p.result.protection_at_publish != storage_contract::ProtectionAtPublish::BelowTarget
-            || p.result.result["recovery_id"].as_str() != Some(plan.recovery_id.as_str())
-            || p.result.result["recovery_plan_digest"].as_str() != Some(plan.digest.as_str())
-            || canonical_json(&p.result.result["version_protection"])?
-                != canonical_json(&plan.version_protection)?
+            || self.members.len() != ids.len()
+            || self.original_accepts.len() < ids.len() / 2 + 1
+            || self.original_accepts.len() > ids.len()
+            || receipts_ids(&self.original_accepts).len() != self.original_accepts.len()
+            || !receipts_ids(&self.original_accepts).is_subset(&ids)
         {
             return Err(bad());
         }
-        validate_id(&plan.recovery_id, "recovery")?;
-        validate_id(&plan.isolation_generation, "fence")?;
-        let plan_hash = object_hash("recovery-plan", plan)?;
+        validate_id(&self.recovery_id, "recovery")?;
+        validate_id(&self.isolation_generation, "fence")?;
         let mut members = BTreeSet::new();
-        for member in &plan.members {
+        for member in &self.members {
             if !members.insert(member.disk_id.clone()) || member.records.is_empty() {
                 return Err(bad());
             }
@@ -312,35 +301,18 @@ impl RecoveryProof {
             if previous != member.last_frame_hash {
                 return Err(bad());
             }
-            let fence = self
-                .reprotect
-                .iter()
-                .find(|r| r.disk_id == member.disk_id)
-                .ok_or_else(bad)?;
-            if fence.slot_id != member.slot_id
-                || fence.record.previous_frame_hash != member.last_frame_hash
-                || !receipt_binds(
-                    fence,
-                    RecordType::Reprotect,
-                    c.sequence,
-                    &candidate,
-                    &plan_hash,
-                )?
-            {
-                return Err(bad());
-            }
         }
         if members != ids {
             return Err(bad());
         }
-        for accept in &plan.original_accepts {
+        for accept in &self.original_accepts {
             if !receipt_binds(
                 accept,
                 RecordType::Accept,
                 c.sequence,
                 &candidate,
                 &candidate,
-            )? || !plan
+            )? || !self
                 .members
                 .iter()
                 .any(|m| m.records.iter().any(|r| r.frame_hash == accept.frame_hash))
@@ -348,13 +320,13 @@ impl RecoveryProof {
                 return Err(bad());
             }
         }
-        if plan.version_protection.len() != c.versions.len() {
+        if self.version_protection.len() != c.versions.len() {
             return Err(bad());
         }
         let mut expected = BTreeSet::new();
         let mut below = false;
         for version in &c.versions {
-            let observation = plan
+            let observation = self
                 .version_protection
                 .iter()
                 .find(|v| v["version_id"].as_str() == Some(version.version.version_id.as_str()))
@@ -383,12 +355,62 @@ impl RecoveryProof {
                 }
             }
         }
+        if !below {
+            return Err(bad());
+        }
+        Ok(expected)
+    }
+}
+impl RecoveryProof {
+    pub(crate) fn verify(&self, c: &Candidate, p: &Publication) -> Result<()> {
+        let plan = &self.plan;
+        let expected = plan.validate_for_candidate(c)?;
+        let bad = || {
+            Error::new(
+                storage_contract::ErrorCode::PublicationInvalid,
+                "degraded publication recovery evidence is invalid",
+            )
+        };
+        let ids = c.metadata_disk_ids.iter().cloned().collect::<BTreeSet<_>>();
+        if self.reprotect.len() != ids.len()
+            || receipts_ids(&self.reprotect) != ids
+            || p.finalize.recovery_id.as_deref() != Some(plan.recovery_id.as_str())
+            || canonical_json(&p.finalize.accepts)? != canonical_json(&plan.original_accepts)?
+            || p.result.commit_state != storage_contract::CommitState::PublishedDegraded
+            || p.result.protection_at_publish != storage_contract::ProtectionAtPublish::BelowTarget
+            || p.result.result["recovery_id"].as_str() != Some(plan.recovery_id.as_str())
+            || p.result.result["recovery_plan_digest"].as_str() != Some(plan.digest.as_str())
+            || canonical_json(&p.result.result["version_protection"])?
+                != canonical_json(&plan.version_protection)?
+        {
+            return Err(bad());
+        }
+        let plan_hash = object_hash("recovery-plan", plan)?;
+        for member in &plan.members {
+            let fence = self
+                .reprotect
+                .iter()
+                .find(|r| r.disk_id == member.disk_id)
+                .ok_or_else(bad)?;
+            if fence.slot_id != member.slot_id
+                || fence.record.previous_frame_hash != member.last_frame_hash
+                || !receipt_binds(
+                    fence,
+                    RecordType::Reprotect,
+                    c.sequence,
+                    &plan.candidate_hash,
+                    &plan_hash,
+                )?
+            {
+                return Err(bad());
+            }
+        }
         let actual = p
             .payload_receipts
             .iter()
             .map(|r| (r.version_id.clone(), r.slot_id.clone()))
             .collect::<BTreeSet<_>>();
-        if !below || actual != expected || actual.len() != p.payload_receipts.len() {
+        if actual != expected || actual.len() != p.payload_receipts.len() {
             return Err(bad());
         }
         Ok(())
@@ -603,6 +625,7 @@ impl Engine {
                     "a unique recovery plan already exists for this candidate",
                 ));
             }
+            plan.validate_for_candidate(&candidate)?;
             for disk in self.members() {
                 let root = &self.disk_resources.get(&disk)?.root;
                 root.write_json(&member_plan_path(&disk, &hash), &plan, false)?;
@@ -733,6 +756,7 @@ impl Engine {
         }
         let (candidate, admitted, members, accepts) =
             self.pending_recovery_candidate(plan.operation_id, Some(&plan))?;
+        plan.validate_for_candidate(&candidate)?;
         // The held generation can outlive a preview. Re-admit each required
         // seal once at this commit's actual payload-loss boundary.
         crate::engine::provenance::validate_candidate_seals(

@@ -151,6 +151,18 @@ fn validate_content_view(value: &Value) -> Result {
 
 fn semantics(name: &str, value: &Value) -> Result {
     match name {
+        "DiskDetailsRecord" => {
+            let _: storage_contract::disk_details::DiskDetailsRecord =
+                json_codec::from_value(value.clone())?;
+        }
+        "DiskNoteRequest" => {
+            let _: storage_contract::disk_details::DiskNoteRequest =
+                json_codec::from_value(value.clone())?;
+        }
+        "DiskNoteResponse" => {
+            let _: storage_contract::disk_details::DiskNoteResponse =
+                json_codec::from_value(value.clone())?;
+        }
         "HistoryWindowPage"
         | "HistoryNodesPage"
         | "HistoryVersionsPage"

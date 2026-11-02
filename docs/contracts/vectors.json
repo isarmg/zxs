@@ -3174,6 +3174,54 @@
         "expected_topology_generation": "1",
         "sealed_manifest_hash": "5ad98e350184ff09100068667be7528497fdbd198fcd0e74d2bf4a9b7bf71b7d"
       }
+    },
+    {
+      "name": "disk-details-unknown-hardware",
+      "schema": "DiskDetailsRecord",
+      "layer": "schema",
+      "value": {
+        "slot_id": "P01",
+        "disk_id": "disk_00000000000000000000000000000001",
+        "root_path": "/data/storage",
+        "mount_path": "/data",
+        "model": null,
+        "serial": null,
+        "capacity_bytes": null,
+        "device_path": null,
+        "filesystem_uuid": null,
+        "mapping": "unknown",
+        "note": "自由备注\n第二行 <text>"
+      }
+    },
+    {
+      "name": "disk-note-multiline-request",
+      "schema": "DiskNoteRequest",
+      "layer": "schema",
+      "value": {
+        "expected_disk_id": "disk_00000000000000000000000000000001",
+        "expected_note": "before",
+        "note": "after\nsecond line"
+      }
+    },
+    {
+      "name": "disk-note-clear-response",
+      "schema": "DiskNoteResponse",
+      "layer": "schema",
+      "value": {
+        "slot_id": "P01",
+        "disk_id": "disk_00000000000000000000000000000001",
+        "note": ""
+      }
+    },
+    {
+      "name": "disk-note-local-record",
+      "schema": "DiskNoteRecord",
+      "layer": "schema",
+      "value": {
+        "format": "disk-note",
+        "disk_id": "disk_00000000000000000000000000000001",
+        "note": "系统盘备注"
+      }
     }
   ],
   "negative": [
@@ -13483,6 +13531,90 @@
         "requested_protection": "strict",
         "expected_topology_generation": "1",
         "sealed_manifest_hash": "5ad98e350184ff09100068667be7528497fdbd198fcd0e74d2bf4a9b7bf71b7d"
+      }
+    },
+    {
+      "name": "disk-details-missing-uuid",
+      "schema": "DiskDetailsRecord",
+      "layer": "schema",
+      "value": {
+        "slot_id": "P01",
+        "disk_id": "disk_00000000000000000000000000000001",
+        "root_path": "/data/storage",
+        "mount_path": "/data",
+        "model": null,
+        "serial": null,
+        "capacity_bytes": null,
+        "device_path": null,
+        "mapping": "unknown",
+        "note": "自由备注\n第二行 <text>"
+      }
+    },
+    {
+      "name": "disk-details-numeric-capacity",
+      "schema": "DiskDetailsRecord",
+      "layer": "schema",
+      "value": {
+        "slot_id": "P01",
+        "disk_id": "disk_00000000000000000000000000000001",
+        "root_path": "/data/storage",
+        "mount_path": "/data",
+        "model": null,
+        "serial": null,
+        "capacity_bytes": 15600000000000,
+        "device_path": null,
+        "filesystem_uuid": null,
+        "mapping": "unknown",
+        "note": "自由备注\n第二行 <text>"
+      }
+    },
+    {
+      "name": "disk-details-unknown-mapping",
+      "schema": "DiskDetailsRecord",
+      "layer": "schema",
+      "value": {
+        "slot_id": "P01",
+        "disk_id": "disk_00000000000000000000000000000001",
+        "root_path": "/data/storage",
+        "mount_path": "/data",
+        "model": null,
+        "serial": null,
+        "capacity_bytes": null,
+        "device_path": null,
+        "filesystem_uuid": null,
+        "mapping": "physical",
+        "note": "自由备注\n第二行 <text>"
+      }
+    },
+    {
+      "name": "disk-note-rejects-physical-binding",
+      "schema": "DiskNoteRequest",
+      "layer": "schema",
+      "value": {
+        "expected_disk_id": "disk_00000000000000000000000000000001",
+        "expected_note": "before",
+        "note": "after\nsecond line",
+        "physical_slot": "front-01"
+      }
+    },
+    {
+      "name": "disk-note-null-is-not-clear",
+      "schema": "DiskNoteRequest",
+      "layer": "schema",
+      "value": {
+        "expected_disk_id": "disk_00000000000000000000000000000001",
+        "expected_note": "before",
+        "note": null
+      }
+    },
+    {
+      "name": "disk-note-unsupported-record",
+      "schema": "DiskNoteRecord",
+      "layer": "schema",
+      "value": {
+        "format": "old-note",
+        "disk_id": "disk_00000000000000000000000000000001",
+        "note": "retain bytes"
       }
     }
   ],

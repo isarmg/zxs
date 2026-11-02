@@ -290,7 +290,7 @@ pub(crate) struct DiskHandle {
 }
 
 impl DiskHandle {
-    fn open(config: &ValidatedConfig, disk: &DiskConfig, sealed: bool) -> Result<Self> {
+    pub(crate) fn open(config: &ValidatedConfig, disk: &DiskConfig, sealed: bool) -> Result<Self> {
         let root = DiskRoot::open(&disk.root)?;
         let seal = identity_at(config, disk, root.directory.directory())?;
         if sealed {

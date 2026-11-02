@@ -55,6 +55,10 @@ pub enum ErrorSource {
     WorkspaceCapacity(#[source] json_codec::Error),
     #[error("invalid disk list: {0}")]
     DiskList(#[source] json_codec::Error),
+    #[error("invalid backup configuration: {0}")]
+    BackupConfiguration(#[source] json_codec::Error),
+    #[error("{0}")]
+    DiskDetails(#[source] crate::admin::DiskDetailsError),
     #[error("invalid monitor history: {0}")]
     MonitorHistory(#[source] crate::monitor::HistoryError),
     #[error("{0}")]

@@ -1,9 +1,10 @@
 //! Per-scope protection and independent logical prefixes on backup disks.
 use super::{actions, model::file_context, review};
 use crate::{
-    api, format,
-    ui::{State, accept_read_response, fail, text},
+    api,
+    ui::{State, accept_read_response, fail},
 };
+use data_serialization::{Deserialize, Deserializer};
 use json_codec::{Value, json};
 use std::collections::BTreeMap;
 use web_interface::components::{LoadingState, Select, SelectOption};
@@ -15,12 +16,58 @@ pub(crate) struct Draft {
     id: String,
     repository: String,
     path: String,
-    configuration: Value,
-    generation: String,
-    scope_id: String,
-    target: u32,
-    prefixes: BTreeMap<String, String>,
+    configuration: Option<Configuration>,
     loading: bool,
+}
+
+// Only the projection used by this editor is decoded here. Unused server
+// fields, including nullable policy IDs, do not affect this read/save boundary.
+#[derive(Clone, Deserialize)]
+struct Configuration {
+    scope: Scope,
+    #[serialization(with = "storage_contract::u64_string")]
+    generation: u64,
+    inherited: bool,
+    target_copies: u32,
+    backup_prefixes: BTreeMap<String, String>,
+    #[serialization(deserialize_with = "read_routes")]
+    backup_routes: Vec<Vec<String>>,
+    max_copies: usize,
+    backup_paths: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Deserialize)]
+struct Scope {
+    id: String,
+}
+
+fn read_routes<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Vec<String>>, D::Error> {
+    let routes = Vec::<Vec<String>>::deserialize(deserializer)?;
+    if routes
+        .iter()
+        .any(|route| route.is_empty() || route.iter().any(String::is_empty))
+    {
+        return Err(data_serialization::de::Error::custom(
+            "empty backup route or slot",
+        ));
+    }
+    Ok(routes)
+}
+
+fn read_configuration(value: Value) -> Result<Configuration, api::Error> {
+    Configuration::deserialize(value).map_err(|source| api::Error {
+        code: storage_contract::ErrorCode::InvalidResponse,
+        message: t(
+            "备份配置响应无效，请关闭后重新读取。",
+            "The backup configuration response is invalid. Close and reload.",
+        ),
+        retryable: false,
+        status: 200,
+        request_id: None,
+        source: Some(std::sync::Arc::new(api::ErrorSource::BackupConfiguration(
+            source,
+        ))),
+    })
 }
 pub(crate) fn start_entry(state: RwSignal<State>, entry: super::page::Entry) {
     let Some((repository, path)) = file_context(&entry) else {
@@ -53,16 +100,12 @@ fn start(state: RwSignal<State>, repository: String, path: String) {
             id: id.clone(),
             repository: repository.clone(),
             path: path.clone(),
-            configuration: Value::Null,
-            generation: String::new(),
-            scope_id: String::new(),
-            target: 0,
-            prefixes: BTreeMap::new(),
+            configuration: None,
             loading: true,
         })
     });
     spawn_local(async move {
-        let result = api::request(
+        let result = api::validated_request(
             "GET",
             &format!(
                 "/api/repositories/{}/backup-configuration?path={}",
@@ -70,6 +113,7 @@ fn start(state: RwSignal<State>, repository: String, path: String) {
                 api::segment(&path)
             ),
             None,
+            read_configuration,
         )
         .await;
         complete_configuration_load(state, epoch, &id, result);
@@ -79,7 +123,7 @@ fn complete_configuration_load(
     state: RwSignal<State>,
     epoch: u64,
     id: &str,
-    result: Result<Value, api::Error>,
+    result: Result<Configuration, api::Error>,
 ) {
     if !accept_read_response(state, epoch, &result)
         || !state.with_untracked(|s| s.files.backup.as_ref().is_some_and(|draft| draft.id == id))
@@ -89,22 +133,7 @@ fn complete_configuration_load(
     match result {
         Ok(configuration) => state.update(|s| {
             if let Some(draft) = s.files.backup.as_mut() {
-                draft.target = format::parse_u64(&configuration["target_copies"])
-                    .and_then(|n| u32::try_from(n).ok())
-                    .unwrap_or(0);
-                draft.generation = text(&configuration, &["generation"]);
-                draft.scope_id = text(&configuration["scope"], &["id"]);
-                draft.prefixes = configuration["backup_prefixes"]
-                    .as_object()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|(slot, prefix)| {
-                        prefix
-                            .as_str()
-                            .map(|prefix| (slot.clone(), prefix.to_owned()))
-                    })
-                    .collect();
-                draft.configuration = configuration;
+                draft.configuration = Some(configuration);
                 draft.loading = false;
             }
         }),
@@ -119,46 +148,25 @@ fn complete_configuration_load(
         }
     }
 }
-fn routes(configuration: &Value) -> Vec<Vec<String>> {
-    let Some(chains) = configuration["backup_routes"].as_array() else {
-        return Vec::new();
-    };
-    chains
-        .iter()
-        .map(|chain| {
-            let slots = chain.as_array().filter(|slots| !slots.is_empty())?;
-            slots
-                .iter()
-                .map(|slot| {
-                    slot.as_str()
-                        .filter(|slot| !slot.is_empty())
-                        .map(str::to_owned)
-                })
-                .collect::<Option<Vec<_>>>()
-        })
-        .collect::<Option<Vec<_>>>()
-        .unwrap_or_default()
-}
-
-fn max_copies(configuration: &Value) -> usize {
-    let available = routes(configuration)
+fn max_copies(configuration: &Configuration) -> usize {
+    let available = configuration
+        .backup_routes
         .iter()
         .map(Vec::len)
         .min()
         .unwrap_or(0);
-    crate::format::parse_u64(&configuration["max_copies"])
-        .and_then(|n| usize::try_from(n).ok())
-        .map(|n| n.min(available))
-        .unwrap_or(0)
+    configuration.max_copies.min(available)
 }
-fn target_slots(configuration: &Value, target: u32) -> Vec<String> {
-    routes(configuration)
-        .into_iter()
+fn target_slots(configuration: &Configuration) -> Vec<String> {
+    configuration
+        .backup_routes
+        .iter()
         .flat_map(|route| {
             route
-                .into_iter()
+                .iter()
                 .skip(1)
-                .take(target.saturating_sub(1) as usize)
+                .take(configuration.target_copies.saturating_sub(1) as usize)
+                .cloned()
         })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -174,21 +182,33 @@ fn request(draft: &Draft) -> Result<Value, String> {
             "The backup configuration is still loading. Try again when it is ready.",
         ));
     }
-    if draft.scope_id.is_empty() || draft.generation.parse::<u64>().is_err() {
+    let Some(configuration) = draft.configuration.as_ref() else {
+        return Err(t(
+            "保护策略依据缺失，请关闭后重新读取。",
+            "The policy baseline is missing. Close and reload.",
+        ));
+    };
+    if configuration.scope.id.is_empty() {
         return Err(t(
             "保护策略依据缺失，请关闭后重新读取。",
             "The policy baseline is missing. Close and reload.",
         ));
     }
-    if draft.target == 0 || draft.target as usize > max_copies(&draft.configuration) {
+    if configuration.target_copies == 0
+        || configuration.target_copies as usize > max_copies(configuration)
+    {
         return Err(t(
             "所选份数超出这条备份路径的能力。",
             "The copy count exceeds this backup route’s capacity.",
         ));
     }
     let mut prefixes = BTreeMap::new();
-    for slot in target_slots(&draft.configuration, draft.target) {
-        let prefix = draft.prefixes.get(&slot).cloned().unwrap_or_default();
+    for slot in target_slots(configuration) {
+        let prefix = configuration
+            .backup_prefixes
+            .get(&slot)
+            .cloned()
+            .unwrap_or_default();
         if !valid_prefix(&prefix) {
             return Err(t(
                 "备份前缀必须是相对路径，最多768个UTF-8字节，可留空。",
@@ -198,7 +218,7 @@ fn request(draft: &Draft) -> Result<Value, String> {
         prefixes.insert(slot, prefix);
     }
     Ok(
-        json!({"path":draft.path,"target_copies":draft.target,"backup_prefixes":prefixes,"expected_generation":draft.generation,"expected_scope_id":draft.scope_id}),
+        json!({"path":draft.path,"target_copies":configuration.target_copies,"backup_prefixes":prefixes,"expected_generation":configuration.generation.to_string(),"expected_scope_id":configuration.scope.id}),
     )
 }
 fn submit(state: RwSignal<State>) {
@@ -222,20 +242,15 @@ fn submit(state: RwSignal<State>) {
         Err(error) => review::error(state, review::Kind::Backup, error),
     }
 }
-fn backup_paths(configuration: &Value) -> Vec<(String, String)> {
-    configuration["backup_paths"]
-        .as_object()
-        .into_iter()
-        .flatten()
-        .filter_map(|(slot, path)| path.as_str().map(|path| (slot.clone(), path.to_owned())))
-        .collect()
-}
-
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     let open = Memo::new(move |_| state.with(|s| s.files.backup.is_some()));
     let disabled = Signal::derive(move || {
         state.with(|s| {
-            !actions::write_allowed(s) || s.files.backup.as_ref().is_none_or(|draft| draft.loading)
+            !actions::write_allowed(s)
+                || s.files
+                    .backup
+                    .as_ref()
+                    .is_none_or(|draft| draft.loading || draft.configuration.is_none())
         })
     });
     let options = Signal::derive(move || {
@@ -243,8 +258,9 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             s.files
                 .backup
                 .as_ref()
-                .map(|draft| {
-                    (1..=max_copies(&draft.configuration))
+                .and_then(|draft| draft.configuration.as_ref())
+                .map(|configuration| {
+                    (1..=max_copies(configuration))
                         .map(|n| {
                             SelectOption::new(
                                 n.to_string(),
@@ -261,7 +277,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             s.files
                 .backup
                 .as_ref()
-                .map(|draft| draft.target.to_string())
+                .and_then(|draft| draft.configuration.as_ref())
+                .map(|configuration| configuration.target_copies.to_string())
                 .unwrap_or_default()
         })
     });
@@ -270,7 +287,8 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             s.files
                 .backup
                 .as_ref()
-                .map(|draft| target_slots(&draft.configuration, draft.target))
+                .and_then(|draft| draft.configuration.as_ref())
+                .map(target_slots)
                 .unwrap_or_default()
         })
     });
@@ -279,7 +297,14 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
             s.files
                 .backup
                 .as_ref()
-                .map(|draft| backup_paths(&draft.configuration))
+                .and_then(|draft| draft.configuration.as_ref())
+                .map(|configuration| {
+                    configuration
+                        .backup_paths
+                        .clone()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default()
         })
     });
@@ -287,11 +312,11 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
         <div class="zxs-file-toolbar zxs-flow"><h3 class="zxs-row">{t("备份保护设置","Backup protection settings")}</h3><button class="zxs-button" disabled=move ||state.with(actions::pending) on:click=move |_|{state.update(|s|s.files.backup=None);review::reset(state,review::Kind::Backup);}>{t("关闭","Close")}</button></div>
         <p class="zxs-row">{move ||state.with(|s|s.files.backup.as_ref().map(|draft|if draft.path.is_empty(){"/".into()}else{draft.path.clone()}).unwrap_or_default())}</p>
         <Show when=move ||state.with(|s|s.files.backup.as_ref().is_some_and(|draft|draft.loading))><LoadingState/></Show>
-        <Show when=move ||state.with(|s|s.files.backup.as_ref().is_some_and(|draft|!draft.loading&&!draft.configuration.is_null()))>
+        <Show when=move ||state.with(|s|s.files.backup.as_ref().is_some_and(|draft|!draft.loading&&draft.configuration.is_some()))>
             <p class="zxs-row">{t("为每个备份硬盘分别设置逻辑前缀；文件使用前缀加文件名，文件夹使用前缀加目录内相对路径。主盘路径保持原样。","Set a separate logical prefix for each backup disk. Files append their name; folders append paths relative to the selected folder. Primary paths stay unchanged.")}</p>
-            <Show when=move ||state.with(|s|s.files.backup.as_ref().is_some_and(|draft|draft.configuration["inherited"]==true))><p class="zxs-row">{t("当前继承上级规则；保存后将为此范围单独设置。","This scope currently inherits its parent’s rule. Saving creates a rule for this scope.")}</p></Show>
-            <div class="zxs-file-toolbar zxs-flow"><Select label=t("目标份数","Target copy count") options=options value=target disabled=disabled on_change=Callback::new(move |value:String|state.update(|s|if let Some(draft)=s.files.backup.as_mut(){draft.target=value.parse().unwrap_or(0);}))/></div>
-            {move ||slots.get().into_iter().map(move |slot|{let read=slot.clone();let write=slot.clone();let label=format!("{slot} {}",t("备份前缀","backup prefix"));view!{<label class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{label.clone()}</span><input class="zxs-input zxs-input--compact zxs-input--underline" aria-label=label data-max-bytes="768" disabled=move ||disabled.get() prop:value=move ||state.with(|s|s.files.backup.as_ref().and_then(|draft|draft.prefixes.get(&read)).cloned().unwrap_or_default()) on:input=move |event|state.update(|s|if let Some(draft)=s.files.backup.as_mut(){draft.prefixes.insert(write.clone(),event_target_value(&event));})/></label>}}).collect_view()}
+            <Show when=move ||state.with(|s|s.files.backup.as_ref().is_some_and(|draft|draft.configuration.as_ref().is_some_and(|configuration|configuration.inherited)))><p class="zxs-row">{t("当前继承上级规则；保存后将为此范围单独设置。","This scope currently inherits its parent’s rule. Saving creates a rule for this scope.")}</p></Show>
+            <div class="zxs-file-toolbar zxs-flow"><Select label=t("目标份数","Target copy count") options=options value=target disabled=disabled on_change=Callback::new(move |value:String|state.update(|s|if let Some(configuration)=s.files.backup.as_mut().and_then(|draft|draft.configuration.as_mut()){configuration.target_copies=value.parse().unwrap_or(0);}))/></div>
+            {move ||slots.get().into_iter().map(move |slot|{let read=slot.clone();let write=slot.clone();let label=format!("{slot} {}",t("备份前缀","backup prefix"));view!{<label class="zxs-file-toolbar zxs-flow"><span class="zxs-row">{label.clone()}</span><input class="zxs-input zxs-input--compact zxs-input--underline" aria-label=label data-max-bytes="768" disabled=move ||disabled.get() prop:value=move ||state.with(|s|s.files.backup.as_ref().and_then(|draft|draft.configuration.as_ref()).and_then(|configuration|configuration.backup_prefixes.get(&read)).cloned().unwrap_or_default()) on:input=move |event|state.update(|s|if let Some(configuration)=s.files.backup.as_mut().and_then(|draft|draft.configuration.as_mut()){configuration.backup_prefixes.insert(write.clone(),event_target_value(&event));})/></label>}}).collect_view()}
             <div class="zxs-stack">{move ||paths.get().into_iter().map(|(slot,path)|view!{<p class="zxs-row">{format!("{slot} / {path}")}</p>}).collect_view()}</div>
             <Show when=move ||state.with(|s|!s.management.storage.writable())><p class="zxs-row">{t("此备份策略仅可查看。","This backup configuration is read only.")}</p></Show>
             <button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|submit(state)>{t("保存备份设置","Save backup settings")}</button>

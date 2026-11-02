@@ -762,6 +762,144 @@ fn degraded_recovery_resumes_the_same_plan_after_each_durable_boundary() {
         );
     }
 }
+
+#[test]
+fn recovery_preview_rejects_stored_absolute_id_before_copying_the_plan() {
+    let (temp, engine, operation, candidate) = fixture("after_accept_2");
+    lose(&engine, &candidate, true);
+    drop(engine);
+    let root = temp.path().join("state");
+    let mut engine = Engine::open_for_recovery(&root).unwrap();
+    let plan = engine
+        .prepare_degraded_recovery(operation, "alice", "permanent loss")
+        .unwrap();
+    // Every changed path remains in this fixture. The absolute ID targets a
+    // sibling of state, outside the intended state/recovery-plans directory.
+    let outside_directory = temp.path().join("outside-recovery-plans");
+    private_dir(&outside_directory).unwrap();
+    let outside = outside_directory.join("plan");
+    let mut malformed = plan.clone();
+    malformed.recovery_id = outside.to_str().unwrap().into();
+    malformed.digest = plan_digest(&malformed).unwrap();
+    for disk in engine.members() {
+        engine
+            .disk_resources
+            .get(&disk)
+            .unwrap()
+            .root
+            .write_json(
+                &member_plan_path(&disk, &plan.candidate_hash),
+                &malformed,
+                true,
+            )
+            .unwrap();
+    }
+    let result = engine.prepare_degraded_recovery(operation, "alice", "permanent loss");
+    assert!(
+        !outside.with_extension("json").exists(),
+        "an invalid persisted recovery ID must not write outside recovery-plans"
+    );
+    assert_eq!(
+        result.as_ref().err().map(|error| error.code()),
+        Some(ErrorCode::InvalidId),
+        "{result:?}"
+    );
+    for disk in engine.members() {
+        assert!(
+            !list_object_hashes(&disk, "recovery-plan")
+                .unwrap()
+                .contains(&object_hash("recovery-plan", &malformed).unwrap())
+        );
+        engine
+            .disk_resources
+            .get(&disk)
+            .unwrap()
+            .root
+            .write_json(&member_plan_path(&disk, &plan.candidate_hash), &plan, true)
+            .unwrap();
+    }
+    let resumed = engine
+        .prepare_degraded_recovery(operation, "alice", "permanent loss")
+        .unwrap();
+    assert_eq!(
+        canonical_json(&resumed).unwrap(),
+        canonical_json(&plan).unwrap()
+    );
+}
+
+fn assert_malformed_recovery_plan_keeps_original_prefix(
+    mutate: impl FnOnce(&mut RecoveryPlan),
+    expected_code: ErrorCode,
+) {
+    let (temp, engine, operation, candidate) = fixture("after_accept_2");
+    lose(&engine, &candidate, true);
+    drop(engine);
+    let root = temp.path().join("state");
+    let mut engine = Engine::open_for_recovery(&root).unwrap();
+    let plan = engine
+        .prepare_degraded_recovery(operation, "alice", "permanent loss")
+        .unwrap();
+    let journals = engine
+        .members()
+        .iter()
+        .map(|member| (log_path(member), fs::read(log_path(member)).unwrap()))
+        .collect::<Vec<_>>();
+    // A self-consistent digest only authenticates these stored bytes, not their
+    // binding to the actual candidate. Keep every other preview fact unchanged.
+    let mut malformed = plan.clone();
+    mutate(&mut malformed);
+    malformed.digest = plan_digest(&malformed).unwrap();
+    write_json(&plan_path(&root, &plan.recovery_id), &malformed, true).unwrap();
+    let error = engine
+        .commit_degraded_recovery(&plan.recovery_id, &malformed.digest, "alice", true)
+        .unwrap_err();
+    assert_eq!(error.code(), expected_code);
+    assert!(!engine.state.operations.contains_key(&operation));
+    let unchanged = journals
+        .iter()
+        .all(|(path, bytes)| fs::read(path).unwrap() == *bytes);
+
+    write_json(&plan_path(&root, &plan.recovery_id), &plan, true).unwrap();
+    let result = engine
+        .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+        .expect("rejecting the malformed plan must leave the original plan resumable");
+    assert!(unchanged, "invalid plan must not append recovery evidence");
+    assert_eq!(result.commit_state, CommitState::PublishedDegraded);
+    assert_eq!(result.result["recovery_id"], plan.recovery_id);
+}
+
+#[test]
+fn malformed_recovery_plan_sequence_cannot_poison_the_original_log_prefix() {
+    assert_malformed_recovery_plan_keeps_original_prefix(
+        |plan| plan.sequence += 1,
+        ErrorCode::PublicationInvalid,
+    );
+}
+
+#[test]
+fn malformed_recovery_plan_fence_cannot_poison_the_original_log_prefix() {
+    assert_malformed_recovery_plan_keeps_original_prefix(
+        |plan| plan.isolation_generation = "not-a-fence".into(),
+        ErrorCode::InvalidId,
+    );
+}
+
+#[test]
+fn malformed_recovery_plan_reason_cannot_poison_the_original_log_prefix() {
+    assert_malformed_recovery_plan_keeps_original_prefix(
+        |plan| plan.reason.clear(),
+        ErrorCode::PublicationInvalid,
+    );
+}
+
+#[test]
+fn malformed_recovery_plan_member_tail_cannot_poison_the_original_log_prefix() {
+    assert_malformed_recovery_plan_keeps_original_prefix(
+        |plan| plan.members[0].last_frame_hash = "0".repeat(64),
+        ErrorCode::PublicationInvalid,
+    );
+}
+
 #[test]
 fn incomplete_log_cannot_prove_absence_and_unknown_record_types_are_rejected() {
     use std::io::Write;

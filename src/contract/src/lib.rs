@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 pub mod api_path;
 pub mod client_protocol;
+pub mod disk_details;
 mod content_hash;
 pub mod encoding;
 pub mod history_window;

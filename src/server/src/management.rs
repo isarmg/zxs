@@ -20,6 +20,7 @@ use std::{
     },
 };
 
+mod disk_notes;
 mod integrity_scrub;
 use integrity_scrub::IntegrityScrubService;
 mod setup_command;
@@ -55,6 +56,7 @@ struct Inner {
     recovery_worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     generation: AtomicU64,
     disk_observation: Mutex<Option<(std::time::Instant, Vec<crate::DiskSample>)>>,
+    disk_notes: Mutex<()>,
     capabilities: Mutex<crate::Capabilities>,
     setup_disks: BTreeMap<String, PathBuf>,
     setup_configs: BTreeMap<String, PathBuf>,
@@ -207,6 +209,7 @@ pub fn open_service_with_options(
             recovery_worker: Mutex::new(None),
             generation: AtomicU64::new(0),
             disk_observation: Mutex::new(None),
+            disk_notes: Mutex::new(()),
             capabilities: Mutex::new(crate::Capabilities::unavailable()),
             setup_disks,
             setup_configs,
@@ -618,6 +621,14 @@ impl Inner {
         }
     }
 }
+/// Simulated registration directories are not evidence of physical device ownership.
+fn disk_hardware_root<'a>(mode: &storage_contract::Mode, root: &'a Path) -> Option<&'a Path> {
+    match mode {
+        storage_contract::Mode::Development => None,
+        storage_contract::Mode::Production => Some(root),
+    }
+}
+
 impl Backend for ManagementBackend {
     fn operation(
         &self,
@@ -814,6 +825,110 @@ impl Backend for ManagementBackend {
         identity: &crate::auth::Identity,
     ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
         self.inner.backend()?.disk_status(identity)
+    }
+    fn disk_details(
+        &self,
+        identity: &Identity,
+        slot: &str,
+    ) -> Result<storage_contract::disk_details::DiskDetailsRecord, ApiError> {
+        let backend = self.inner.backend()?;
+        let (disk, directory, note) = {
+            let _notes = crate::lock(&self.inner.disk_notes);
+            backend.with_disk_registration(identity, slot, |disk, engine| {
+                let note = disk_notes::read(&self.inner.management_root, &disk.disk_id)?;
+                let directory = match disk_hardware_root(&engine.config().mode, &disk.root) {
+                    None => None,
+                    Some(_) => match engine.open_disk_observation_directory(&disk.slot_id) {
+                        Ok(directory) => Some(directory),
+                        Err(error) => {
+                            tracing::debug!(slot_id = %disk.slot_id, error = ?error,
+                                "registered disk directory unavailable for hardware observation");
+                            None
+                        }
+                    },
+                };
+                Ok((disk.clone(), directory, note))
+            })?
+        };
+        let root_path = disk
+            .root
+            .to_str()
+            .ok_or_else(|| {
+                ApiError::new(
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    storage_contract::ErrorCode::InternalError,
+                    "registered disk directory cannot be represented as UTF-8",
+                )
+            })?
+            .to_owned();
+        let crate::disk_hardware::HardwareObservation {
+            model,
+            serial,
+            capacity_bytes,
+            device_path,
+            mount_path,
+            filesystem_uuid,
+            mapping,
+        } = match directory {
+            Some(directory) => {
+                crate::disk_hardware::observe(&disk.root, std::os::fd::AsFd::as_fd(&directory))
+            }
+            None => crate::disk_hardware::HardwareObservation::unknown(),
+        };
+        let mapping = match mapping {
+            crate::disk_hardware::HardwareMapping::Single => {
+                storage_contract::disk_details::DiskMapping::Single
+            }
+            crate::disk_hardware::HardwareMapping::Multiple => {
+                storage_contract::disk_details::DiskMapping::Multiple
+            }
+            crate::disk_hardware::HardwareMapping::Unknown => {
+                storage_contract::disk_details::DiskMapping::Unknown
+            }
+        };
+        Ok(storage_contract::disk_details::DiskDetailsRecord {
+            slot_id: disk.slot_id,
+            disk_id: disk.disk_id,
+            root_path,
+            mount_path,
+            model,
+            serial,
+            capacity_bytes,
+            device_path,
+            filesystem_uuid,
+            mapping,
+            note,
+        })
+    }
+    fn update_disk_note(
+        &self,
+        identity: &Identity,
+        slot: &str,
+        request: storage_contract::disk_details::DiskNoteRequest,
+    ) -> Result<storage_contract::disk_details::DiskNoteResponse, ApiError> {
+        let backend = self.inner.backend()?;
+        // Queue before admission: a waiting mutation must see current credentials
+        // and the registration that actually owns its persistent note filename.
+        let _notes = crate::lock(&self.inner.disk_notes);
+        backend.with_disk_registration(identity, slot, |disk, _engine| {
+            if request.expected_disk_id != disk.disk_id {
+                return Err(ApiError::conflict(
+                    storage_contract::ErrorCode::DiskIdentityMismatch,
+                    "registered disk changed; reload before updating its note",
+                ));
+            }
+            let note = disk_notes::update(
+                &self.inner.management_root,
+                &disk.disk_id,
+                &request.expected_note,
+                request.note,
+            )?;
+            Ok(storage_contract::disk_details::DiskNoteResponse {
+                slot_id: disk.slot_id.clone(),
+                disk_id: disk.disk_id.clone(),
+                note,
+            })
+        })
     }
     fn integrity_check(
         &self,
@@ -1587,6 +1702,10 @@ impl Backend for ManagementBackend {
 #[cfg(test)]
 #[path = "../../web/src/setup/response.rs"]
 mod web_setup_response;
+
+#[cfg(test)]
+#[path = "../../../test/server/unit/management/disk_cards.rs"]
+mod disk_card_tests;
 
 #[cfg(test)]
 #[path = "../../../test/server/unit/management.rs"]

@@ -1,4 +1,5 @@
 //! Storage administration for the sole authenticated account.
+mod disks;
 mod messages;
 mod request;
 mod response;
@@ -9,6 +10,8 @@ use crate::{
 use messages::Message;
 use web_interface::{prelude::*, tasks::spawn_local};
 
+pub use disks::DecodeError as DiskDetailsError;
+pub(crate) use disks::load as load_disks;
 use request::{Kind, QueryKind};
 pub(crate) use response::ResponseError;
 use response::{Contract, ValidatedAdminResponse, ValidatedPlan};
@@ -63,6 +66,7 @@ impl UncertainOperation {
 
 #[derive(Clone)]
 pub(crate) struct Model {
+    disks: disks::Model,
     fields: request::Fields,
     kind: Kind,
     busy: bool,
@@ -75,6 +79,7 @@ pub(crate) struct Model {
 impl Default for Model {
     fn default() -> Self {
         Self {
+            disks: disks::Model::default(),
             fields: request::Fields::new(),
             kind: Kind::Inspect,
             busy: false,
@@ -88,7 +93,7 @@ impl Default for Model {
 }
 impl Model {
     pub(crate) fn reload_blocked(&self) -> bool {
-        self.busy || self.uncertain_operation.is_some()
+        self.busy || self.uncertain_operation.is_some() || self.disks.saving()
     }
 
     /// A reviewed plan belongs to the inputs that produced or selected it.
@@ -297,7 +302,9 @@ fn query(state: RwSignal<State>, kind: QueryKind) {
     }
 }
 pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
-    view! {<section class="zxs-flow" aria-label=Message::Title.text()>
+    view! {<section class="zxs-content-stack zxs-stack">
+    {disks::view(state)}
+    <section class="zxs-flow" aria-label=Message::Title.text()>
     <h2>{Message::Title.text()}</h2>
     <p>{Message::Introduction.text()}</p>
     <nav class="zxs-flow">{messages::ACTIONS.into_iter().map(move |(kind,label)|view!{<button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.busy||s.admin_console.uncertain_operation.is_some()) on:click=move |_|select(state,kind)>{label.text()}</button>}).collect_view()}</nav>
@@ -320,7 +327,7 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
     <Show when=move ||state.with(|s|s.admin_console.kind==Kind::Inspect)>{request::QUERIES.into_iter().map(move |(id,kind)|view!{<button class="zxs-button" disabled=move ||state.with(|s|s.admin_console.busy) on:click=move |_|query(state,kind)>{messages::query_label(id).text()}</button>}).collect_view()}</Show>
     <pre>{move ||state.with(|s|s.admin_console.result.clone())}</pre>
     <Show when=move ||state.with(|s|s.admin_console.plan.is_some())><h3>{Message::PlanReview.text()}</h3><pre>{move ||state.with(|s|s.admin_console.plan.as_ref().map(|plan|json_codec::to_string_pretty(plan.plan()).expect("invariant: plans serialize")))}</pre><label><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.acknowledged) disabled=move ||state.with(|s|s.admin_console.busy) on:change=move |ev|state.update(|s|s.admin_console.acknowledged=event_target_checked(&ev))/>{Message::AcknowledgePlan.text()}</label><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||!s.admin_console.acknowledged||s.admin_console.uncertain_operation.is_some()) on:click=move |_|plan_action(state,true)>{Message::CommitPlan.text()}</button><button class="zxs-button" disabled=move ||state.with(|s|!permitted(s,true)||s.admin_console.uncertain_operation.is_some()) on:click=move |_|plan_action(state,false)>{Message::CancelPlan.text()}</button></Show>
-    </section>}
+    </section></section>}
 }
 
 #[cfg(test)]

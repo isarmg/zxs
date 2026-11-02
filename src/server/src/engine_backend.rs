@@ -76,6 +76,37 @@ impl EngineBackend {
             operation_health_hook: Mutex::new(None),
         }
     }
+    /// Admit one current registration while holding its configuration identity.
+    /// Disk-card reads clone the small registration and observe outside this lock;
+    /// note writes retain it only through their system-disk atomic replacement.
+    pub(crate) fn with_disk_registration<T>(
+        &self,
+        identity: &Identity,
+        slot: &str,
+        action: impl FnOnce(
+            &storage_contract::DiskConfig,
+            &storage_engine::Engine,
+        ) -> Result<T, ApiError>,
+    ) -> Result<T, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        let disk = engine
+            .config()
+            .disks
+            .iter()
+            .find(|disk| disk.slot_id.eq_ignore_ascii_case(slot))
+            .ok_or_else(|| {
+                ApiError::new(
+                    http::StatusCode::NOT_FOUND,
+                    storage_contract::ErrorCode::NotFound,
+                    "registered disk slot not found",
+                )
+            })?;
+        action(disk, &engine)
+    }
     #[cfg(test)]
     pub(crate) fn test_with_engine_locked<T>(&self, f: impl FnOnce(&mut Engine) -> T) -> T {
         let mut engine = self.engine.lock().unwrap();

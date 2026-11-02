@@ -5758,6 +5758,148 @@
         "code"
       ],
       "additionalProperties": false
+    },
+    "DiskDetailsRecord": {
+      "type": "object",
+      "properties": {
+        "slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "disk_id": {
+          "$ref": "#/$defs/DiskId"
+        },
+        "root_path": {
+          "type": "string"
+        },
+        "mount_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "serial": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capacity_bytes": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/UInt64"
+            }
+          ]
+        },
+        "device_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "filesystem_uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mapping": {
+          "type": "string",
+          "enum": [
+            "single",
+            "multiple",
+            "unknown"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot_id",
+        "disk_id",
+        "root_path",
+        "mount_path",
+        "model",
+        "serial",
+        "capacity_bytes",
+        "device_path",
+        "filesystem_uuid",
+        "mapping",
+        "note"
+      ],
+      "additionalProperties": false,
+      "description": "只读身份展示；root_path是ZXS登记目录，mount_path为实际挂载目录，filesystem_uuid仅为文件系统UUID。容量为唯一可关联整块设备或NVMe命名空间字节数，不是文件系统可用量。未知字段为null，不影响存储准入。note是独立系统盘的普通文本备注。"
+    },
+    "DiskNoteRequest": {
+      "type": "object",
+      "properties": {
+        "expected_disk_id": {
+          "type": "string"
+        },
+        "expected_note": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected_disk_id",
+        "expected_note",
+        "note"
+      ],
+      "additionalProperties": false,
+      "description": "将当前登记盘备注设置为note。空串清空；expected_disk_id须匹配现登记身份，expected_note为CAS基线；已等于note的重试成功。接受普通多行文本，仅受现有HTTP总请求字节上限约束。"
+    },
+    "DiskNoteResponse": {
+      "type": "object",
+      "properties": {
+        "slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "disk_id": {
+          "$ref": "#/$defs/DiskId"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot_id",
+        "disk_id",
+        "note"
+      ],
+      "additionalProperties": false
+    },
+    "DiskNoteRecord": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "const": "disk-note"
+        },
+        "disk_id": {
+          "$ref": "#/$defs/DiskId"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "disk_id",
+        "note"
+      ],
+      "additionalProperties": false,
+      "description": "management_root/disk-notes/<disk_id>.json当前持久化格式；不写入data disk.json或核心日志，非灾备副本。"
     }
   }
 }

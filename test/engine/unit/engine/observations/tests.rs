@@ -358,3 +358,54 @@ fn capacity_failure_conversion_retains_stage_and_source_not_zero() {
     assert_eq!(failure.stage, DiskObservationStage::Capacity);
     assert!(std::error::Error::source(&failure).is_some());
 }
+
+#[test]
+fn disk_observation_directory_retains_verified_object_after_name_replacement() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let disk_root = root.path().join("disk");
+    let engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([disk_root.clone()]).unwrap(),
+    )
+    .unwrap();
+    let observed = engine.open_disk_observation_directory("p01").unwrap();
+    let identity = observed.metadata().unwrap();
+    std::fs::rename(&disk_root, root.path().join("old-disk")).unwrap();
+    std::fs::create_dir(&disk_root).unwrap();
+    std::fs::set_permissions(&disk_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(observed.metadata().unwrap().ino(), identity.ino());
+    assert_eq!(observed.metadata().unwrap().dev(), identity.dev());
+    assert_ne!(std::fs::metadata(&disk_root).unwrap().ino(), identity.ino());
+    assert!(engine.open_disk_observation_directory("P01").is_err());
+    assert!(!engine.is_read_only());
+}
+
+#[test]
+fn disk_observation_directory_rejects_reused_seal_and_missing_seal_without_fencing() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let disk_root = root.path().join("disk");
+    let engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([disk_root.clone()]).unwrap(),
+    )
+    .unwrap();
+    let seal = std::fs::read(disk_root.join("disk.json")).unwrap();
+    std::fs::remove_file(disk_root.join("disk.json")).unwrap();
+    assert!(engine.open_disk_observation_directory("P01").is_err());
+    assert!(!engine.is_read_only());
+    std::fs::rename(&disk_root, root.path().join("old-disk")).unwrap();
+    std::fs::create_dir(&disk_root).unwrap();
+    std::fs::set_permissions(&disk_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(disk_root.join("disk.json"), &seal).unwrap();
+    assert_eq!(
+        engine
+            .open_disk_observation_directory("P01")
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+    assert_eq!(std::fs::read(disk_root.join("disk.json")).unwrap(), seal);
+    assert!(!engine.is_read_only());
+}

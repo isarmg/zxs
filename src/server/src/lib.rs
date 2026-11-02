@@ -3,10 +3,13 @@ pub mod auth;
 #[cfg(any(feature = "core", test))]
 mod content_proof_budget;
 #[cfg(feature = "core")]
+mod disk_hardware;
+#[cfg(feature = "core")]
 pub mod engine_backend;
 mod file_manager;
 mod http_auth;
 mod http_boundary;
+mod http_disk_details;
 #[cfg(feature = "core")]
 mod http_integrity_scrub;
 mod http_job;
@@ -508,6 +511,21 @@ pub trait Backend: Send + Sync {
         &self,
         identity: &Identity,
     ) -> Result<Vec<storage_contract::DiskStatus>, ApiError>;
+    fn disk_details(
+        &self,
+        _identity: &Identity,
+        _slot: &str,
+    ) -> Result<storage_contract::disk_details::DiskDetailsRecord, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn update_disk_note(
+        &self,
+        _identity: &Identity,
+        _slot: &str,
+        _request: storage_contract::disk_details::DiskNoteRequest,
+    ) -> Result<storage_contract::disk_details::DiskNoteResponse, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn integrity_check(
         &self,
         identity: &Identity,
@@ -1032,6 +1050,22 @@ impl Backend for AuthorizedBackend {
         identity: &crate::auth::Identity,
     ) -> Result<Vec<storage_contract::DiskStatus>, crate::ApiError> {
         self.backend.disk_status(&self.current(identity)?)
+    }
+    fn disk_details(
+        &self,
+        identity: &Identity,
+        slot: &str,
+    ) -> Result<storage_contract::disk_details::DiskDetailsRecord, ApiError> {
+        self.backend.disk_details(&self.current(identity)?, slot)
+    }
+    fn update_disk_note(
+        &self,
+        identity: &Identity,
+        slot: &str,
+        request: storage_contract::disk_details::DiskNoteRequest,
+    ) -> Result<storage_contract::disk_details::DiskNoteResponse, ApiError> {
+        self.backend
+            .update_disk_note(&self.current(identity)?, slot, request)
     }
     fn integrity_check(
         &self,
@@ -1917,6 +1951,14 @@ fn router_shared(
         .route("/api/plans/{plan}", get(http_plan::info))
         .route("/api/plans/{plan}/cancel", post(http_plan::cancel))
         .route("/api/admin/disks", get(disks).post(register_disk))
+        .route(
+            "/api/admin/disks/{slot}/details",
+            get(http_disk_details::read),
+        )
+        .route(
+            "/api/admin/disks/{slot}/note",
+            put(http_disk_details::update_note),
+        )
         .route("/api/admin/check", get(check))
         .route("/api/backup-topologies/default", get(topology))
         .route("/api/policies/{policy}", get(policy).put(update_policy))
@@ -2093,8 +2135,10 @@ async fn security_headers(request: Request, next: Next) -> Response {
     response
 }
 
+pub(crate) const JSON_BODY_LIMIT: usize = 1024 * 1024;
+
 async fn json_body(request: Request) -> Result<Value, ApiError> {
-    let bytes = http_boundary::read_body(request, 1024 * 1024).await?;
+    let bytes = http_boundary::read_body(request, JSON_BODY_LIMIT).await?;
     if bytes.is_empty() {
         Ok(json!({}))
     } else {

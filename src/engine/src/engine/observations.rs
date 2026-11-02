@@ -156,6 +156,20 @@ impl Engine {
         self.prepare_disk_observation().status()
     }
 
+    /// Open the current registered directory for read-only informational observations.
+    /// The returned descriptor is the same directory object whose seal was verified;
+    /// callers must inspect that descriptor rather than reopening the configured path.
+    /// This does not grant write admission or change metadata-integrity state.
+    ///
+    /// # Errors
+    /// Preserves missing-root, seal and identity errors without substituting the
+    /// filesystem underneath an unavailable or replaced mountpoint.
+    pub fn open_disk_observation_directory(&self, slot: &str) -> Result<std::fs::File> {
+        let disk = self.disk(slot)?;
+        let observed = DiskHandle::open(&self.config, disk, true)?;
+        observed.root.directory(&disk.root)
+    }
+
     /// Filesystem capacity is sampled from the actual managed member mount.
     /// Multiple managed directories may share a filesystem; capacity is not an independent pool.
     pub fn disk_capacity(&self, slot: &str) -> Result<(u64, u64, u64)> {

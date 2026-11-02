@@ -38,7 +38,7 @@ PUBLICATION 中回执使用合成身份与摘要；通过字段或覆盖集合�
 
 持久状态、写请求和固定向量的 JSON 解析先拒绝重复字段、BOM、孤立代理项和浮点数，再做 schema 和 JCS；解析后只检查普通字典无法找回重复字段信息。`/api/system/status` 与 `/api/system/history` 的临时监测响应允许有限小数，不放宽持久状态或写请求规则。固定向量中的 JCS 属性排序包含非 BMP 键样例，用于检测错误地按 Unicode 标量顺序排序；该向量不表示 PortableName 允许 emoji 文件名。
 
-备注写接口通过 `x-maxUtf8Bytes: 128` 标明 UTF-8 字节上限，配合控制字符模式和服务端字节计数校验；JSON Schema 的 `maxLength` 本身只计算 Unicode 字符数。文件、版本和节点备注在写入及历史包读取时均遵守当前128 UTF-8字节、无控制字符规则；不合格式的历史包被拒绝，不截断或迁移备注。读响应原样输出已验证备注；`HistoryNodeSummary.note` 等响应 schema 不替代引擎语义校验，也不承诺旧格式可读。
+文件、版本和节点备注写接口通过 `x-maxUtf8Bytes: 128` 标明 UTF-8 字节上限，配合控制字符模式和服务端字节计数校验；JSON Schema 的 `maxLength` 本身只计算 Unicode 字符数。文件、版本和节点备注在写入及历史包读取时均遵守当前128 UTF-8字节、无控制字符规则；不合格式的历史包被拒绝，不截断或迁移备注。读响应原样输出已验证备注；`HistoryNodeSummary.note` 等响应 schema 不替代引擎语义校验，也不承诺旧格式可读。
 
 ## 运行校验
 
@@ -80,3 +80,36 @@ Rust 依赖源码已包含在仓库中，首次构建也使用唯一根锁文件
 [规范 JSON 编码验证](../validation/canonical-number-encoding.md)。
 
 工作区 capacity 的两个 scope 均新增必填 `cold_records`（规范 UInt64 十进制字符串）；`records` 只计未冷存驻留记录，`metadata_bytes` 仍含全部完整清单与生命周期预留。`automatic_retirement` 是布尔能力字段，当前 Engine 返回 true，仅指普通空 Aborted 原路径冷存，不能推断通用清理或无限历史。缺少新字段的旧响应不兼容；Schema、OpenAPI、固定正反向量与 Rust/Web DTO 同步，仍须执行契约验证后才能声称通过。
+
+## 硬盘身份卡片与备注
+
+管理员沿既有 `/api/admin/disks` 取得登记列表，再以
+`GET /api/admin/disks/{slot}/details` 读取单卡 `DiskDetailsRecord`，避免把所有备注拼成无界响应。
+`slot_id` 是逻辑角色，`disk_id` 是 ZXS 登记身份；`root_path` 是登记目录，
+`mount_path` 是实际挂载目录，两者不要求相同。`filesystem_uuid` **只表示文件系统 UUID**，
+不以 NVMe namespace UUID、PARTUUID 或 ZXS ID 冒充。当前设备路径仅是本次观察值，不成为稳定身份。
+
+Production 在现有 seal 校验成功后，持有同一个只读登记目录 FD，
+通过该 FD 的 Linux mount ID、sysfs 和已有 `/dev/disk/by-uuid` 链接提供尽力观察；
+不会在校验后重新按路径打开，目录替换或失去 seal 不会把承载系统盘误标成该登记盘。
+当前型号和序列号支持可唯一关联的 NVMe 控制器；其他设备这两项可为 `null`。
+`capacity_bytes` 为整块设备或 NVMe 命名空间容量，不是文件系统可用空间、分区容量或控制器总容量。
+复杂/多设备关联标为 `multiple`；无法确定、缺失或读取失败标为 `unknown` 或对应字段 `null`，不猜单块硬盘。
+Development 代表模拟登记目录，不对宿主采集物理硬件信息，仍返回登记路径与备注。
+以上都是展示信息，不改变 managed-directory seal、存储可用性、文件系统选择或物理独立性准入。
+不提供物理槽位绑定、机箱示意图、拓扑面板或定位灯。
+
+`PUT /api/admin/disks/{slot}/note` 接收 `DiskNoteRequest` 的三个必填字符串：
+`expected_disk_id`、`expected_note`、`note`。普通文本可含换行，空串明确清空；
+不套用文件/历史节点备注的 128 字节规则，仅沿既有 HTTP 总请求 1 MiB 边界。
+当前登记身份不符或 CAS 基线已改变返回 409；当前值已等于提交值时，相同请求可以重试。
+响应 `DiskNoteResponse` 确认规范 slot、disk_id 和实际备注。未确认成功时保留原三字段重试，
+本地备注不是核心业务事务，不创建或要求 `operation_id`。
+
+备注持久文件位于现有系统管理根的 `disk-notes/<disk_id>.json`，遵循既有 `/zxs` 部署布局，
+由当前配置中的已认证登记 ID 选择文件名，而非拼接请求路径。安全原子替换经过文件及目录同步后才确认；
+损坏、身份不符、未知格式、权限或 I/O 错误不会当作空备注，也不会覆盖坏文件。
+数据池只读不阻止系统盘备注，队列等待后仍重新核验当前会话。备注重启保留，
+更换 `disk_id` 不自动继承旧盘备注；旧记录保留但不投影给新登记盘。
+它只在系统管理盘本地持久，**不修改 `disk.json`、不进入核心复制日志，也不是数据盘灾备副本**；
+恢复/替换整个系统管理目录时，需要用户自身对该目录的备份。

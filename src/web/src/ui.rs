@@ -137,12 +137,6 @@ pub(crate) fn list(value: &Value, key: &str) -> Vec<Value> {
         .cloned()
         .unwrap_or_default()
 }
-pub(crate) fn text(value: &Value, keys: &[&str]) -> String {
-    keys.iter()
-        .find_map(|key| value.get(key).and_then(Value::as_str))
-        .unwrap_or_default()
-        .to_owned()
-}
 pub(crate) fn feedback(error: &api::Error) -> Feedback {
     Feedback {
         message: format!("HTTP {} · {}", error.status, error),
@@ -250,7 +244,8 @@ pub(crate) fn navigate(state: RwSignal<State>, page: Page) {
         Page::Health => management::load(state),
         Page::Status => monitor::load(state),
         Page::History => history::load(state),
-        Page::Admin | Page::Details | Page::Account | Page::Files => {}
+        Page::Admin => admin::load_disks(state),
+        Page::Details | Page::Account | Page::Files => {}
     }
 }
 fn workspace(state: RwSignal<State>) -> impl IntoView {

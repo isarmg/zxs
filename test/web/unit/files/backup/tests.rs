@@ -1,5 +1,153 @@
 use super::*;
 
+fn configuration_response() -> Value {
+    json!({
+        "scope":{"id":"scope","kind":"directory","path":"docs"},
+        "policy_id":null,"effective_policy_id":"inherited",
+        "generation":"0","effective_generation":"7","inherited":true,
+        "target_copies":2,"backup_prefixes":{"B01":"preserved-prefix"},
+        "route_slot_ids":["P01","B01"],"available_route_slot_ids":["P01","B01"],
+        "backup_routes":[["P01","B01"]],"backup_slot_ids":["B01"],
+        "max_copies":2,"file_count":"1","backup_paths":{"B01":"preserved-prefix/file"}
+    })
+}
+
+#[test]
+fn backup_configuration_rejects_lossy_prefix_projection_before_save() {
+    Owner::new().with(|| {
+        let mut admitted = Vec::new();
+        for (case, prefixes) in [("missing", None), ("non-string", Some(json!({"B01":42})))] {
+            let state = RwSignal::new(State {
+                authenticated: true,
+                session_epoch: 7,
+                ..Default::default()
+            });
+            state.update(|s| {
+                s.files.backup = Some(Draft {
+                    id: "draft".into(),
+                    repository: "repo".into(),
+                    path: "docs".into(),
+                    configuration: None,
+                    loading: true,
+                });
+            });
+            let mut response = configuration_response();
+            match prefixes {
+                Some(prefixes) => response["backup_prefixes"] = prefixes,
+                None => {
+                    response.as_object_mut().unwrap().remove("backup_prefixes");
+                }
+            }
+            let result = read_configuration(response);
+            assert_eq!(
+                result.as_ref().err().unwrap().code,
+                storage_contract::ErrorCode::InvalidResponse
+            );
+            complete_configuration_load(state, 7, "draft", result);
+            state.with_untracked(|s| {
+                let draft = s.files.backup.as_ref().unwrap();
+                assert!(!draft.loading);
+                if let Ok(body) = request(draft) {
+                    admitted.push((case, body));
+                }
+                assert!(draft.configuration.is_none());
+                assert_eq!(s.errors.len(), 1);
+            });
+        }
+        assert!(
+            admitted.is_empty(),
+            "invalid reads became writable: {admitted:?}"
+        );
+    });
+}
+
+#[test]
+fn backup_configuration_required_projection_is_not_defaulted_or_filtered() {
+    for field in [
+        "scope",
+        "generation",
+        "inherited",
+        "target_copies",
+        "backup_prefixes",
+        "backup_routes",
+        "max_copies",
+        "backup_paths",
+    ] {
+        let mut value = configuration_response();
+        value.as_object_mut().unwrap().remove(field);
+        let error = read_configuration(value).err().expect(field);
+        assert!(matches!(
+            error.source.as_deref(),
+            Some(api::ErrorSource::BackupConfiguration(_))
+        ));
+        use std::error::Error as _;
+        assert!(error.source().unwrap().source().is_some());
+    }
+    for (field, invalid) in [
+        ("backup_prefixes", json!(null)),
+        ("backup_prefixes", json!({"B01":42})),
+        (
+            "backup_paths",
+            json!([{"slot_id":"B01","logical_path":"old"}]),
+        ),
+        ("backup_paths", json!({"B01":42})),
+        ("backup_routes", json!([["P01", 42]])),
+        ("backup_routes", json!([[]])),
+        ("backup_routes", json!([["P01", ""]])),
+        ("max_copies", json!("2")),
+        ("target_copies", json!("2")),
+        ("generation", json!(0)),
+    ] {
+        let mut value = configuration_response();
+        value[field] = invalid;
+        assert!(
+            read_configuration(value).is_err(),
+            "accepted invalid {field}"
+        );
+    }
+}
+
+#[test]
+fn backup_configuration_preserves_valid_prefixes_and_allows_explicit_capacity_reduction() {
+    for policy_id in [Value::Null, json!("policy")] {
+        let mut value = configuration_response();
+        value["policy_id"] = policy_id.clone();
+        value["effective_policy_id"] = policy_id;
+        value["generation"] = json!(u64::MAX.to_string());
+        let configuration = read_configuration(value).unwrap();
+        assert!(configuration.inherited);
+        assert_eq!(configuration.backup_paths["B01"], "preserved-prefix/file");
+        let mut draft = Draft {
+            id: "draft".into(),
+            repository: "repo".into(),
+            path: "docs".into(),
+            configuration: Some(configuration),
+            loading: false,
+        };
+        let body = request(&draft).unwrap();
+        assert_eq!(body["backup_prefixes"], json!({"B01":"preserved-prefix"}));
+        assert_eq!(body["expected_generation"], u64::MAX.to_string());
+        // An absent slot within a valid map means the legitimate empty prefix.
+        draft
+            .configuration
+            .as_mut()
+            .unwrap()
+            .backup_prefixes
+            .clear();
+        assert_eq!(
+            request(&draft).unwrap()["backup_prefixes"],
+            json!({"B01":""})
+        );
+        // Route changes may leave the original count above the current maximum.
+        let configuration = draft.configuration.as_mut().unwrap();
+        configuration.backup_routes = vec![vec!["P01".into()]];
+        configuration.max_copies = 1;
+        assert!(request(&draft).is_err());
+        draft.configuration.as_mut().unwrap().target_copies = 1;
+        assert!(request(&draft).is_ok());
+    }
+}
+
 #[test]
 fn navigation_discards_an_open_backup_review() {
     use crate::files::model::{Model, Navigation};
@@ -13,11 +161,7 @@ fn navigation_discards_an_open_backup_review() {
                 id: "draft".into(),
                 repository: "repo".into(),
                 path: "old-path".into(),
-                configuration: Value::Null,
-                generation: String::new(),
-                scope_id: String::new(),
-                target: 0,
-                prefixes: BTreeMap::new(),
+                configuration: None,
                 loading: true,
             }),
             ..Default::default()
@@ -99,15 +243,16 @@ fn replaced_backup_panel_ignores_old_data_but_not_a_current_session_revocation()
                 id: "new-draft".into(),
                 repository: "repo".into(),
                 path: "new-path".into(),
-                configuration: Value::Null,
-                generation: String::new(),
-                scope_id: String::new(),
-                target: 0,
-                prefixes: BTreeMap::new(),
+                configuration: None,
                 loading: true,
             });
         });
-        complete_configuration_load(state, 7, "old-draft", Ok(json!({"target_copies":2})));
+        complete_configuration_load(
+            state,
+            7,
+            "old-draft",
+            read_configuration(configuration_response()),
+        );
         let mut ordinary_error = unauthorized();
         ordinary_error.status = 503;
         complete_configuration_load(state, 7, "old-draft", Err(ordinary_error));
@@ -116,7 +261,7 @@ fn replaced_backup_panel_ignores_old_data_but_not_a_current_session_revocation()
             assert!(s.errors.is_empty());
             let draft = s.files.backup.as_ref().unwrap();
             assert!(draft.loading);
-            assert!(draft.configuration.is_null());
+            assert!(draft.configuration.is_none());
         });
         complete_configuration_load(state, 7, "old-draft", Err(unauthorized()));
         // A concurrent rejection must not report the same expired session twice.
@@ -127,29 +272,33 @@ fn replaced_backup_panel_ignores_old_data_but_not_a_current_session_revocation()
             let draft = s.files.backup.as_ref().unwrap();
             assert_eq!(draft.path, "new-path");
             assert!(draft.loading);
-            assert!(draft.configuration.is_null());
+            assert!(draft.configuration.is_none());
         });
     });
 }
 
 #[test]
 fn multi_primary_routes_use_each_selected_prefix_and_the_shortest_capacity() {
-    let configuration = json!({"route_slot_ids":["P01","B01","C01"],"backup_routes":[["P01","B01","C01"],["P02","B02"]],"backup_slot_ids":["B01","C01","B02"],"max_copies":2});
+    let mut configuration = read_configuration(configuration_response()).unwrap();
+    configuration.backup_routes = vec![
+        vec!["P01".into(), "B01".into(), "C01".into()],
+        vec!["P02".into(), "B02".into()],
+    ];
+    configuration.max_copies = 3;
     assert_eq!(max_copies(&configuration), 2);
-    assert_eq!(target_slots(&configuration, 2), vec!["B01", "B02"]);
-    assert_eq!(target_slots(&configuration, 1), Vec::<String>::new());
+    assert_eq!(target_slots(&configuration), vec!["B01", "B02"]);
+    configuration.target_copies = 1;
+    assert_eq!(target_slots(&configuration), Vec::<String>::new());
+    configuration.target_copies = 2;
+    configuration.backup_prefixes = BTreeMap::from([
+        ("B01".into(), "first-chain".into()),
+        ("B02".into(), "other-chain".into()),
+    ]);
     let draft = Draft {
         id: "draft".into(),
         repository: "repo".into(),
         path: "docs".into(),
-        configuration,
-        generation: "0".into(),
-        scope_id: "scope".into(),
-        target: 2,
-        prefixes: BTreeMap::from([
-            ("B01".into(), "first-chain".into()),
-            ("B02".into(), "other-chain".into()),
-        ]),
+        configuration: Some(configuration),
         loading: false,
     };
     assert_eq!(
@@ -157,30 +306,25 @@ fn multi_primary_routes_use_each_selected_prefix_and_the_shortest_capacity() {
         json!({"B01":"first-chain","B02":"other-chain"})
     );
     let mut invalid = draft;
-    invalid.target = 3;
+    invalid.configuration.as_mut().unwrap().target_copies = 3;
     assert!(request(&invalid).is_err());
-    assert!(target_slots(&json!({"available_route_slot_ids":["P01","B01"]}), 2).is_empty());
-    assert_eq!(max_copies(&json!({"route_slot_ids":["P01","B01"]})), 0);
-    assert_eq!(max_copies(&json!({"backup_routes":[["P01","B01"]]})), 0);
-    assert!(routes(&json!({"backup_routes":[["P01",42]]})).is_empty());
-    assert!(
-        backup_paths(&json!({"backup_paths":[{"slot_id":"B01","logical_path":"old"}]})).is_empty()
-    );
 }
 #[test]
 fn independent_prefixes_are_relative_to_a_stable_scope_and_route() {
+    let mut configuration = read_configuration(configuration_response()).unwrap();
+    configuration.scope.id = "stable-directory".into();
+    configuration.backup_routes = vec![vec!["P01".into(), "B01".into(), "C01".into()]];
+    configuration.max_copies = 3;
+    configuration.target_copies = 3;
+    configuration.backup_prefixes = BTreeMap::from([
+        ("B01".into(), "我的备份".into()),
+        ("C01".into(), "长期保存".into()),
+    ]);
     let draft = Draft {
         id: "draft".into(),
         repository: "repo".into(),
         path: "docs".into(),
-        configuration: json!({"backup_routes":[["P01","B01","C01"]],"max_copies":3}),
-        generation: "0".into(),
-        scope_id: "stable-directory".into(),
-        target: 3,
-        prefixes: BTreeMap::from([
-            ("B01".into(), "我的备份".into()),
-            ("C01".into(), "长期保存".into()),
-        ]),
+        configuration: Some(configuration),
         loading: false,
     };
     let body = request(&draft).unwrap();
@@ -192,7 +336,7 @@ fn independent_prefixes_are_relative_to_a_stable_scope_and_route() {
     assert!(!valid_prefix("../escape"));
     assert!(!valid_prefix("/absolute"));
     let mut invalid = draft;
-    invalid.target = 4;
+    invalid.configuration.as_mut().unwrap().target_copies = 4;
     assert!(request(&invalid).is_err());
 }
 
@@ -275,11 +419,7 @@ fn backup_submission_keeps_session_and_storage_guards_without_role_fields() {
                     id: "draft".into(),
                     repository: "repo".into(),
                     path: "docs".into(),
-                    configuration: json!({"backup_routes":[["P01"]],"max_copies":1}),
-                    generation: "0".into(),
-                    scope_id: "scope".into(),
-                    target: 1,
-                    prefixes: BTreeMap::new(),
+                    configuration: Some(read_configuration(configuration_response()).unwrap()),
                     loading: false,
                 });
             });
