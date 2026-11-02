@@ -263,12 +263,15 @@ mod if_alloc {
     pub mod shared {
         use super::*;
         use crate::channel::shared::ChannelReceiveFuture;
+        use core::sync::atomic::{self, AtomicUsize, Ordering};
 
         struct GenericOneshotChannelSharedState<MutexType, T>
         where
             MutexType: RawMutex,
             T: 'static,
         {
+            /// Receiver endpoints; owned receive futures are not endpoints.
+            receivers: AtomicUsize,
             channel: GenericOneshotBroadcastChannel<MutexType, T>,
         }
 
@@ -333,9 +336,10 @@ mod if_alloc {
             T: Clone + 'static,
         {
             fn clone(&self) -> Self {
-                Self {
-                    inner: self.inner.clone(),
-                }
+                // Each counted receiver owns an Arc; reserve it before adding the endpoint.
+                let inner = alloc::sync::Arc::clone(&self.inner);
+                inner.receivers.fetch_add(1, Ordering::Relaxed);
+                Self { inner }
             }
         }
 
@@ -379,10 +383,10 @@ mod if_alloc {
             T: Clone,
         {
             fn drop(&mut self) {
-                // TODO: This is broken, since it will already close the channel if only one receiver is closed.
-                // We need to count receivers, as in mpmc queue.
-                // Close the channel, before last receiver gets destroyed
-                // TODO: We could potentially avoid this, if no sender is left
+                if self.inner.receivers.fetch_sub(1, Ordering::Release) != 1 {
+                    return;
+                }
+                atomic::fence(Ordering::Acquire);
                 self.inner.channel.close();
             }
         }
@@ -404,6 +408,7 @@ mod if_alloc {
         {
             let inner =
                 alloc::sync::Arc::new(GenericOneshotChannelSharedState {
+                    receivers: AtomicUsize::new(1),
                     channel: GenericOneshotBroadcastChannel::new(),
                 });
 

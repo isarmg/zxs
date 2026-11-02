@@ -508,10 +508,10 @@ mod if_alloc {
             _phantom: PhantomData<MutexType>,
         }
 
-        // Safety: Channel futures can be sent between threads as long as the underlying
-        // channel is thread-safe (Sync), which allows to poll/register/unregister from
-        // a different thread.
-        unsafe impl<MutexType: Sync, T: Clone + Send> Send
+        // SAFETY: Private construction ties the erased Arc to this MutexType
+        // and T. Sync permits shared channel access; Send also permits dropping
+        // its last owning Arc, including the raw mutex, on another thread.
+        unsafe impl<MutexType: Send + Sync, T: Clone + Send> Send
             for StateReceiveFuture<MutexType, T>
         {
         }

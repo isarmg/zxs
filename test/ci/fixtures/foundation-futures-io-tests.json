@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "target": "x86_64-unknown-linux-gnu",
+  "suites": {
+    "seek-relative": {
+      "fixture": "test/ci/fixtures/foundation-futures-seek-relative.rs",
+      "features": [
+        "io"
+      ],
+      "resolved_features": [
+        "alloc",
+        "io",
+        "std",
+        "utilities"
+      ],
+      "tests": [
+        "invalid_min_target_leaves_the_documented_aligned_position",
+        "max_positive_offset_allows_a_u64_position_above_i64_max",
+        "min_alignment_error_retains_payload_and_unread_buffer",
+        "min_offset_from_large_cursor_reaches_zero_without_allocation",
+        "min_offset_from_zero_returns_cursor_invalid_input",
+        "min_offset_resumes_each_pending_stage_without_repeating_completed_seek",
+        "min_offset_with_consumed_buffer_delegates_once",
+        "min_offset_with_unread_buffer_aligns_then_seeks",
+        "min_target_error_retains_payload_after_completed_alignment",
+        "offsets_larger_than_u32_keep_their_full_width",
+        "offsets_outside_buffer_delegate_adjusted_current_positions",
+        "ordinary_outside_seek_resumes_pending_once",
+        "ordinary_underlying_error_retains_payload_and_buffer",
+        "positive_negative_and_zero_offsets_within_buffer_avoid_inner_seek"
+      ]
+    },
+    "string-retention": {
+      "fixture": "test/ci/fixtures/foundation-futures-string-retention.rs",
+      "features": [
+        "io"
+      ],
+      "resolved_features": [
+        "alloc",
+        "io",
+        "std",
+        "utilities"
+      ],
+      "tests": [
+        "lines_invalid_utf8_retains_validation_error_without_asserting_resume_semantics",
+        "lines_successful_lf_crlf_and_eof_are_shared_helper_controls",
+        "pending_read_to_string_cancel_restores_original_string_after_incomplete_utf8",
+        "pending_read_to_string_cancel_restores_original_string_after_valid_bytes",
+        "read_line_invalid_partial_bytes_do_not_replace_primary_io_error",
+        "read_line_invalid_utf8_restores_prefix_and_retains_validation_error",
+        "read_line_success_and_valid_partial_io_error_preserve_prefix",
+        "read_line_unpolled_and_pending_cancellation_are_existing_controls",
+        "read_to_string_empty_eof_preserves_existing_string",
+        "read_to_string_immediate_io_error_preserves_existing_string_and_cause",
+        "read_to_string_incomplete_utf8_at_eof_retains_precise_validation_error",
+        "read_to_string_invalid_partial_bytes_do_not_replace_primary_io_error",
+        "read_to_string_invalid_utf8_restores_prefix_and_retains_validation_error",
+        "read_to_string_success_appends_and_counts_only_new_bytes",
+        "read_to_string_valid_partial_io_error_keeps_appended_bytes_and_primary_cause",
+        "unpolled_read_to_string_preserves_the_original_string_without_reading"
+      ]
+    },
+    "write-zero": {
+      "fixture": "test/ci/fixtures/foundation-futures-write-zero.rs",
+      "features": [
+        "io",
+        "sink"
+      ],
+      "resolved_features": [
+        "alloc",
+        "io",
+        "sink",
+        "std",
+        "utilities"
+      ],
+      "tests": [
+        "into_sink_write_zero_contracts::close_drains_partial_writes_before_delegating_to_the_writer",
+        "into_sink_write_zero_contracts::empty_item_zero_write_remains_successful",
+        "into_sink_write_zero_contracts::nonempty_zero_write_finishes_each_first_sink_poll_with_writezero",
+        "into_sink_write_zero_contracts::original_flush_error_keeps_its_kind_payload_and_source",
+        "into_sink_write_zero_contracts::original_write_error_keeps_its_kind_payload_and_source",
+        "into_sink_write_zero_contracts::original_write_error_without_source_stays_unwrapped",
+        "into_sink_write_zero_contracts::partial_writes_keep_byte_order_before_flush",
+        "into_sink_write_zero_contracts::pending_flush_does_not_rewrite_the_completed_item",
+        "into_sink_write_zero_contracts::pending_write_retains_the_partial_offset_and_wakes"
+      ]
+    }
+  }
+}

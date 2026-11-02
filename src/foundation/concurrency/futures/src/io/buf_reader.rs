@@ -102,7 +102,7 @@ impl<R: AsyncRead + AsyncSeek> BufReader<R> {
     ) -> Poll<io::Result<()>> {
         let pos = self.pos as u64;
         if offset < 0 {
-            if let Some(new_pos) = pos.checked_sub((-offset) as u64) {
+            if let Some(new_pos) = pos.checked_sub(offset.unsigned_abs()) {
                 *self.project().pos = new_pos as usize;
                 return Poll::Ready(Ok(()));
             }
