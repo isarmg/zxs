@@ -444,18 +444,24 @@ impl FrameStream {
         }
         let deadline = self.deadline()?;
         let header = (payload.len() as u32).to_be_bytes();
-        let mut vector = libc::iovec {
-            iov_base: header.as_ptr().cast_mut().cast(),
-            iov_len: header.len(),
-        };
+        let mut vectors = [
+            libc::iovec {
+                iov_base: header.as_ptr().cast_mut().cast(),
+                iov_len: header.len(),
+            },
+            libc::iovec {
+                iov_base: payload.as_ptr().cast_mut().cast(),
+                iov_len: payload.len(),
+            },
+        ];
         // usize provides the alignment required by cmsghdr. Space for one int
         // plus padding fits this fixed, initialized 64-byte control buffer.
         let mut control = [0usize; 8];
         // SAFETY: zero is the initialized empty msghdr representation; all used
-        // pointers below refer to live header/control storage until sendmsg returns.
+        // pointers below refer to live header/payload/control storage until sendmsg returns.
         let mut message: libc::msghdr = unsafe { mem::zeroed() };
-        message.msg_iov = &mut vector;
-        message.msg_iovlen = 1;
+        message.msg_iov = vectors.as_mut_ptr();
+        message.msg_iovlen = vectors.len();
         if let Some(fd) = fd {
             message.msg_control = control.as_mut_ptr().cast();
             // SAFETY: libc computes the native ancillary buffer layout for one fd.
@@ -495,7 +501,10 @@ impl FrameStream {
         if sent == 0 {
             return Err(io::ErrorKind::WriteZero.into());
         }
-        self.write_before_deadline(&header[sent..], deadline)?;
+        // Rights accompany the first header byte. Once any bytes were sent,
+        // finish without control data, even if only part of the header fit.
+        let (header, payload) = remaining_frame_bytes(&header, payload, sent);
+        self.write_before_deadline(header, deadline)?;
         self.write_before_deadline(payload, deadline)
     }
 
@@ -711,6 +720,19 @@ impl FrameStream {
     fn set_remaining_timeout(&self, deadline: Option<Instant>) -> io::Result<()> {
         let remaining = deadline.map(remaining_timeout).transpose()?;
         self.0.set_read_timeout(remaining)
+    }
+}
+
+/// `sent` is the successful sendmsg byte count for these two ordered slices.
+fn remaining_frame_bytes<'a>(
+    header: &'a [u8; 4],
+    payload: &'a [u8],
+    sent: usize,
+) -> (&'a [u8], &'a [u8]) {
+    if sent < header.len() {
+        (&header[sent..], payload)
+    } else {
+        (&[], &payload[sent - header.len()..])
     }
 }
 

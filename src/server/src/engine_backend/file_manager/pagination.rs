@@ -1,6 +1,18 @@
 //! Snapshot-bound selection; cursor validity never replaces current admission.
 use super::*;
 use crate::backend_listing::{ListingCursor, MAX_CURSOR_BYTES, SortKey};
+// Field order preserves the existing JSON-map request fingerprint.
+#[derive(data_serialization::Serialize)]
+struct RequestFingerprint<'a> {
+    limit: usize,
+    lowercase_unicode: (u8, u8, u8),
+    order: &'static str,
+    path: &'a str,
+    query: &'a str,
+    slot: &'a str,
+    unicode: &'static str,
+}
+
 pub(super) struct PageRequest {
     pub(super) limit: usize,
     query: String,
@@ -29,10 +41,21 @@ impl PageRequest {
             selected,
         } = input;
         let path = path.as_ref().map(|path| path.key()).unwrap_or("");
-        let request = blake3::hash(&json_codec::to_vec(&json!({
-            "slot":slot_id,"path":path,"query":query,"limit":limit,
-            "order":"directory-lowercase-normalized-name-path-identity", "unicode":name_policy::UNICODE_VERSION,"lowercase_unicode":std::char::UNICODE_VERSION
-        })).expect("invariant: internal JSON serialization succeeds")).to_hex().to_string();
+        let fingerprint = RequestFingerprint {
+            limit,
+            lowercase_unicode: std::char::UNICODE_VERSION,
+            order: "directory-lowercase-normalized-name-path-identity",
+            path,
+            query: &query,
+            slot: &slot_id,
+            unicode: name_policy::UNICODE_VERSION,
+        };
+        let request = blake3::hash(
+            &json_codec::to_vec(&fingerprint)
+                .expect("invariant: internal JSON serialization succeeds"),
+        )
+        .to_hex()
+        .to_string();
         if let Some(cursor) = &cursor {
             if cursor.request != request {
                 return Err(ApiError::invalid("cursor does not match the listing query"));

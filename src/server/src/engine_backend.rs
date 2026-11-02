@@ -1,6 +1,8 @@
 //! Authorization and wire adaptation for the storage engine.
 use crate::{ApiError, Backend, Content, auth::Identity};
-use json_codec::{Value, json};
+use json_codec::Value;
+#[cfg(test)]
+use json_codec::json;
 use std::{
     path::Path,
     sync::{Arc, Mutex},

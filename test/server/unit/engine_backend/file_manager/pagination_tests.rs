@@ -347,3 +347,51 @@ fn cursor_preserves_request_fingerprint_and_rejects_tampered_sort_components() {
         .unwrap();
     assert_eq!(stale.code, storage_contract::ErrorCode::ListingChanged);
 }
+
+#[test]
+fn borrowed_request_fingerprint_preserves_json_map_bytes_and_digest() {
+    for slot in ["P01", "B01"] {
+        for path in [None, Some(""), Some("Café"), Some("Cafe\u{301}")] {
+            for query in [
+                String::new(),
+                "Straße İ".into(),
+                "\"\\\n".into(),
+                "é".repeat(512),
+            ] {
+                for limit in [1, 200, 500] {
+                    let mut values = BTreeMap::from([
+                        ("query".into(), query.clone()),
+                        ("limit".into(), limit.to_string()),
+                    ]);
+                    if let Some(path) = path {
+                        values.insert("path".into(), path.into());
+                    }
+                    let input = crate::ReadListing::parse(slot.into(), values).unwrap();
+                    let fingerprint = RequestFingerprint {
+                        limit: input.limit,
+                        lowercase_unicode: std::char::UNICODE_VERSION,
+                        order: "directory-lowercase-normalized-name-path-identity",
+                        path: input.path.as_ref().map(|path| path.key()).unwrap_or(""),
+                        query: &input.query,
+                        slot: &input.slot_id,
+                        unicode: name_policy::UNICODE_VERSION,
+                    };
+                    let original = json!({
+                        "slot": fingerprint.slot,
+                        "path": fingerprint.path,
+                        "query": fingerprint.query,
+                        "limit": fingerprint.limit,
+                        "order": fingerprint.order,
+                        "unicode": fingerprint.unicode,
+                        "lowercase_unicode": fingerprint.lowercase_unicode,
+                    });
+                    let original_bytes = json_codec::to_vec(&original).unwrap();
+                    assert_eq!(json_codec::to_vec(&fingerprint).unwrap(), original_bytes);
+                    let expected = blake3::hash(&original_bytes).to_hex().to_string();
+                    let page = PageRequest::with_snapshot(input, "snapshot".into()).unwrap();
+                    assert_eq!(page.request, expected);
+                }
+            }
+        }
+    }
+}

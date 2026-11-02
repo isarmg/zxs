@@ -73,6 +73,53 @@ fn unlinkat_flags_preserve_target_kind_and_reject_unknown_flags() {
 }
 
 #[test]
+fn frame_remainder_preserves_every_partial_header_and_payload_boundary() {
+    for payload in [b"{}".as_slice(), br#"{"result":"payload"}"#.as_slice()] {
+        let header = (payload.len() as u32).to_be_bytes();
+        let complete = [header.as_slice(), payload].concat();
+        for sent in 0..=complete.len() {
+            let (header_tail, payload_tail) = remaining_frame_bytes(&header, payload, sent);
+            assert_eq!([header_tail, payload_tail].concat(), complete[sent..]);
+            if sent < header.len() {
+                assert_eq!(header_tail.as_ptr(), header[sent..].as_ptr());
+                assert_eq!(payload_tail.as_ptr(), payload.as_ptr());
+            } else {
+                assert!(header_tail.is_empty());
+                assert_eq!(
+                    payload_tail.as_ptr(),
+                    payload[sent - header.len()..].as_ptr()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn coalesced_frames_keep_descriptors_bound_to_their_own_header() {
+    let (one, two) = UnixStream::pair().unwrap();
+    let mut sender = FrameStream::new(one).unwrap();
+    let mut receiver = FrameStream::new(two).unwrap();
+    let source = File::open("/dev/null").unwrap();
+    for sequence in 0..3 {
+        sender
+            .send(&sequence, (sequence != 1).then(|| source.as_fd()))
+            .unwrap();
+    }
+    for expected in 0..3 {
+        let (sequence, descriptor) = receiver.receive::<u32>().unwrap();
+        assert_eq!(sequence, expected);
+        assert_eq!(descriptor.is_some(), expected != 1);
+        if let Some(descriptor) = descriptor {
+            // SAFETY: F_GETFD only observes this live, owned received descriptor.
+            assert_ne!(
+                unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+                0
+            );
+        }
+    }
+}
+
+#[test]
 fn framing_transfers_an_owned_cloexec_descriptor_without_a_path() {
     let (one, two) = UnixStream::pair().unwrap();
     let mut sender = FrameStream::new(one).unwrap();

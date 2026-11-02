@@ -1,3 +1,6 @@
+#[path = "foundation-chunk-errors.rs"]
+mod chunk_errors;
+
 use futures::{FusedStream, Stream, StreamExt, TryStreamExt, stream};
 use std::future::{poll_fn, ready};
 use std::pin::{Pin, pin};

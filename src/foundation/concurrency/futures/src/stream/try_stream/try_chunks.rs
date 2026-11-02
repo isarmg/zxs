@@ -113,6 +113,11 @@ where
 /// Error indicating, that while chunk was collected inner stream produced an error.
 ///
 /// Contains all items that were collected before an error occurred, and the stream error itself.
+///
+/// With the `std` feature, this implements `std::error::Error` only when
+/// `E: std::error::Error + 'static`, exposing `E` as its source. Other error
+/// payloads, including borrowed values, remain supported by the stream and
+/// by the `Debug` and `Display` implementations when their bounds are met.
 #[derive(PartialEq, Eq)]
 pub struct TryChunksError<T, E>(pub Vec<T>, pub E);
 
@@ -129,4 +134,8 @@ impl<T, E: fmt::Display> fmt::Display for TryChunksError<T, E> {
 }
 
 #[cfg(feature = "std")]
-impl<T, E: fmt::Debug + fmt::Display> std::error::Error for TryChunksError<T, E> {}
+impl<T, E: std::error::Error + 'static> std::error::Error for TryChunksError<T, E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.1)
+    }
+}

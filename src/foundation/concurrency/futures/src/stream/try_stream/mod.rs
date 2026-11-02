@@ -514,8 +514,13 @@ pub trait TryStreamExt: TryStream {
     ///
     /// This is similar to
     /// [`StreamExt::for_each_concurrent`](crate::stream::StreamExt::for_each_concurrent),
-    /// but will resolve to an error immediately if the underlying stream or the provided
-    /// closure return an error.
+    /// but will resolve to an error immediately if the underlying stream or a future
+    /// returned by the closure produces an error. The stream and all remaining
+    /// in-flight futures are then dropped.
+    ///
+    /// The `limit` bounds the number of in-flight futures. `None` or a limit of
+    /// zero imposes no limit. The futures are polled concurrently, not on separate
+    /// threads by this combinator.
     ///
     /// This method is only available when the `std` or `alloc` feature of this
     /// library is activated, and it is activated by default.
@@ -611,18 +616,19 @@ pub trait TryStreamExt: TryStream {
     /// them into a local vector. At most `capacity` items will get buffered
     /// before they're yielded from the returned stream.
     ///
-    /// Note that the vectors returned from this iterator may not always have
-    /// `capacity` elements. If the underlying stream ended and only a partial
-    /// vector was created, it'll be returned. Additionally if an error happens
-    /// from the underlying stream then the currently buffered items will be
-    /// yielded.
+    /// Note that the vectors returned from this stream may not always have
+    /// `capacity` elements. If the underlying stream ends with a partial vector,
+    /// that vector is returned as `Ok`. If the underlying stream produces an
+    /// error, the currently buffered items and that error are returned together
+    /// in a [`TryChunksError`], even if the buffer is empty. Subsequent polls
+    /// continue collecting new chunks from the underlying stream.
     ///
     /// This method is only available when the `std` or `alloc` feature of this
     /// library is activated, and it is activated by default.
     ///
     /// This function is similar to
-    /// [`StreamExt::chunks`](crate::stream::StreamExt::chunks) but exits
-    /// early if an error occurs.
+    /// [`StreamExt::chunks`](crate::stream::StreamExt::chunks), but an error
+    /// finishes the current chunk rather than terminating the returned stream.
     ///
     /// # Examples
     ///
@@ -1134,8 +1140,13 @@ pub trait TryStreamExt: TryStream {
 
     /// Adapter that converts this stream into an [`AsyncBufRead`](crate::io::AsyncBufRead).
     ///
-    /// This method is only available when the `std` feature of this
-    /// library is activated, and it is activated by default.
+    /// Empty chunks are skipped. If the stream produces an error, that error is
+    /// returned once and the reader enters a permanent end-of-file state:
+    /// subsequent reads return zero bytes and buffered reads return an empty slice,
+    /// without polling the stream again.
+    ///
+    /// This method requires the `io` feature, which enables `std` and is activated
+    /// by default.
     ///
     /// # Examples
     ///
