@@ -1045,7 +1045,7 @@ const HEADER_CHARS_H2: [u8; 256] = [
         0,     0,     0,     0,     0,     0,     0,     0,     0,     0, //   x
         0,     0,     0,     0,     0,     0,     0,     0,     0,     0, //  1x
         0,     0,     0,     0,     0,     0,     0,     0,     0,     0, //  2x
-        0,     0,     0,  b'!',  b'"',  b'#',  b'$',  b'%',  b'&', b'\'', //  3x
+        0,     0,     0,  b'!',     0,  b'#',  b'$',  b'%',  b'&', b'\'', //  3x
         0,     0,  b'*',  b'+',     0,  b'-',  b'.',     0,  b'0',  b'1', //  4x
      b'2',  b'3',  b'4',  b'5',  b'6',  b'7',  b'8',  b'9',     0,     0, //  5x
         0,     0,     0,     0,     0,     0,     0,     0,     0,     0, //  6x
@@ -1509,6 +1509,11 @@ impl<'a> HdrName<'a> {
         let mut buf = uninit_u8_array();
         // Precondition: HEADER_CHARS is a valid table for parse_hdr().
         let hdr = parse_hdr(hdr, &mut buf, &HEADER_CHARS)?;
+        if let Repr::Custom(MaybeLower { buf, lower: false }) = &hdr.inner {
+            if buf.iter().any(|b| HEADER_CHARS[*b as usize] == 0) {
+                return Err(InvalidHeaderName::new());
+            }
+        }
         Ok(f(hdr))
     }
 
@@ -1516,11 +1521,7 @@ impl<'a> HdrName<'a> {
     where
         F: FnOnce(HdrName<'_>) -> U,
     {
-        let mut buf = uninit_u8_array();
-        let hdr =
-            // Precondition: HEADER_CHARS is a valid table for parse_hdr().
-            parse_hdr(hdr.as_bytes(), &mut buf, &HEADER_CHARS).expect("static str is invalid name");
-        f(hdr)
+        Self::from_bytes(hdr.as_bytes(), f).expect("static str is invalid name")
     }
 }
 
@@ -1645,4 +1646,7 @@ unsafe fn slice_assume_init<T>(slice: &[MaybeUninit<T>]) -> &[T] {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/http/unit/src/header/name/tests_1647.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/http/unit/src/header/name/tests_1647.rs"
+));

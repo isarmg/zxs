@@ -2,6 +2,7 @@
 import importlib.util
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import tempfile
@@ -95,6 +96,31 @@ class FoundationBehaviourGateTests(unittest.TestCase):
                 self.assertEqual((copied / target["path"]).resolve(), work / relative)
                 self.assertEqual((work / relative).read_bytes(), (ROOT / relative).read_bytes())
             self.assertFalse((subject / "Cargo.lock").exists())
+
+    def test_standalone_snapshot_refreshes_source_mtimes_without_changing_bytes_or_modes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'source'
+            work = Path(temporary) / 'snapshot'
+            subject = root / 'src/foundation/core-types/cached-subject'
+            tests = root / 'test/foundation/cached-subject'
+            (subject / 'src').mkdir(parents=True)
+            tests.mkdir(parents=True)
+            (root / 'rust-toolchain.toml').write_bytes((ROOT / 'rust-toolchain.toml').read_bytes())
+            (subject / 'Cargo.toml').write_text(
+                '[package]\nname="cached-subject"\nversion="0.0.0"\nedition="2021"\n')
+            library = subject / 'src/lib.rs'
+            external = tests / 'unit.rs'
+            for source in (library, external):
+                source.write_text('pub fn snapshot_identity() {}\n')
+                source.chmod(0o640)
+                os.utime(source, (1, 1))
+            with patch.object(GATE, 'ROOT', root), patch.object(GATE, 'foundation_path', return_value=subject):
+                GATE.standalone_member(GATE.Suite('cached-subject', ()), work)
+            for source in (library, external):
+                copied = work / source.relative_to(root)
+                self.assertEqual(copied.read_bytes(), source.read_bytes())
+                self.assertEqual(copied.stat().st_mode & 0o777, source.stat().st_mode & 0o777)
+                self.assertGreater(copied.stat().st_mtime_ns, source.stat().st_mtime_ns)
 
     def test_legacy_edition_test_keeps_its_visibility_semantics(self):
         suite = next(suite for suite in GATE.INTEGRATION_SUITES if suite.subject == "lazy_static")

@@ -20,6 +20,10 @@ BLAKE2 使用 `blake2::VariableOutput` 和 `VariableOutputReset` 提供运行时
 
 `new_with_salt_and_personal` 对超长 key、salt 或 persona 返回 `InvalidLength`：BLAKE2b 密钥最多 64 字节、salt/persona 各 16 字节；BLAKE2s 分别为 32、8、8 字节。上限不随截断输出长度缩小。返回 `Self` 的底层 `new_with_params` 使用断言，调用方必须自行满足约束。
 
+空密钥不注入密钥块，其结果与相同参数的无密钥哈希一致。重置保留有无密钥块的区别；非空全零密钥仍按有密钥模式处理。`common_types::hazmat` 的 `u128` 数组状态按每个元素 16 字节的小端表示序列化。
+
+Argon2 在计算每条 lane 的内存下限前验证并行度上限，超范围返回 `ThreadsTooMany`。调用者提供的 `AsMut<[Block]>` 只转换一次，同一内存借用贯穿填充与最终输出。
+
 <a id="maintained-boundaries"></a>
 
 ## 检查

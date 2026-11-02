@@ -34,12 +34,26 @@ impl<'a> ErasedMut<'a> {
 
     /// Get a mutable reference to `T` back from the erased mutable reference.
     ///
+    /// The returned reference borrows this wrapper exclusively, so another
+    /// reference cannot be obtained from it while that borrow remains in use.
+    ///
+    /// ```compile_fail
+    /// use erased::ErasedMut;
+    ///
+    /// let mut value = 5usize;
+    /// let mut erased = ErasedMut::new(&mut value);
+    /// // SAFETY: Both retrievals use the exact type passed to `new`.
+    /// let first = unsafe { erased.get::<usize>() };
+    /// let second = unsafe { erased.get::<usize>() };
+    /// *first += *second;
+    /// ```
+    ///
     /// # Safety
     /// The generic argument `T` of this function must match the `T` that was used to create this erased reference in `ErasedMut::new` exactly.
     /// Pay specific attention that any lifetime parameters of `T` match.
     ///
     /// It is **strongly recommended** to provide `T` explicitly, even if it can be inferred. This is to make sure that the value of `T` is not accidentally changed.
-    pub unsafe fn get<T>(&mut self) -> &'a mut T {
+    pub unsafe fn get<T>(&mut self) -> &mut T {
         // Safety: From the safety comment the `T` matches the `T` this erased mutable reference was created with.
         // The mutable reference is still valid since its lifetime `'a` is still alive, and the `&mut self` provides exclusive access.
         self.ptr.cast::<T>().as_mut()
@@ -47,12 +61,26 @@ impl<'a> ErasedMut<'a> {
 
     /// Get a reference to `T` back from the erased mutable reference.
     ///
+    /// The returned reference borrows this wrapper, preventing a mutable
+    /// retrieval while the shared reference remains in use.
+    ///
+    /// ```compile_fail
+    /// use erased::ErasedMut;
+    ///
+    /// let mut value = 5usize;
+    /// let mut erased = ErasedMut::new(&mut value);
+    /// // SAFETY: Both retrievals use the exact type passed to `new`.
+    /// let shared = unsafe { erased.get_ref::<usize>() };
+    /// *unsafe { erased.get::<usize>() } = 42;
+    /// assert_eq!(*shared, 42);
+    /// ```
+    ///
     /// # Safety
     /// The generic argument `T` of this function must match the `T` that was used to create this erased reference in `ErasedMut::new` exactly.
     /// Pay specific attention that any lifetime parameters of `T` match.
     ///
     /// It is **strongly recommended** to provide `T` explicitly, even if it can be inferred. This is to make sure that the value of `T` is not accidentally changed.
-    pub unsafe fn get_ref<T>(&self) -> &'a T {
+    pub unsafe fn get_ref<T>(&self) -> &T {
         // Safety: From the safety comment the `T` matches the `T` this reference was created with. The reference is still valid since its lifetime `'a` is still alive.
         self.ptr.cast::<T>().as_ref()
     }

@@ -158,8 +158,11 @@ impl<'a> Iterator for LocalsIterator<'a> {
         Some(result)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let count = self.reader.get_count() as usize;
-        (count, Some(count))
+        if self.err || self.left == 0 {
+            (0, Some(0))
+        } else {
+            (1, Some(self.left as usize))
+        }
     }
 }
 

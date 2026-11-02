@@ -57,7 +57,7 @@ class CryptoConsolidationTests(unittest.TestCase):
             work = Path(temporary)
             counts = generate(ROOT, work)
             before = {p.name: p.read_bytes() for p in (work / 'tests').iterdir()}
-            self.assertEqual(counts, {'upstream_vectors': 518, 'independent_vectors': 1206})
+            self.assertEqual(counts, {'upstream_vectors': 518, 'independent_vectors': 1296})
             self.assertLess(len(before['vectors.rs']), 1024 * 1024)
             self.assertEqual(generate(ROOT, work), counts)
             self.assertEqual(before, {p.name: p.read_bytes() for p in (work / 'tests').iterdir()})

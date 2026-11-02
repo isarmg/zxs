@@ -1,4 +1,4 @@
-use crate::{Encode, Section, SectionId, encode_section};
+use crate::{encode_section, Encode, Section, SectionId};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
@@ -245,7 +245,7 @@ impl RefType {
         },
     };
 
-    /// Alias for the `anyref` type in WebAssembly.
+    /// Alias for the `eqref` type in WebAssembly.
     pub const EQREF: RefType = RefType {
         nullable: true,
         heap_type: HeapType::Abstract {
@@ -720,4 +720,7 @@ impl<'a> CoreTypeEncoder<'a> {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/wasm-encoder/unit/src/core/types/tests_722.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/wasm-encoder/unit/src/core/types/tests_722.rs"
+));

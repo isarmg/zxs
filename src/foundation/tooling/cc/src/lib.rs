@@ -1452,6 +1452,8 @@ impl Build {
     /// Configure whether *FLAGS variables are parsed using `shlex`, similarly to `make` and
     /// `cmake`.
     ///
+    /// Unclosed quotes and trailing unescaped backslashes cause an error.
+    ///
     /// This option defaults to `false`.
     pub fn shell_escaped_flags(&mut self, shell_escaped_flags: bool) -> &mut Build {
         self.shell_escaped_flags = Some(shell_escaped_flags);
@@ -4539,7 +4541,14 @@ impl Build {
 
                 let var = var.to_string_lossy();
                 if self.get_shell_escaped_flags() {
-                    res.extend(Shlex::new(&var));
+                    let mut flags = Shlex::new(&var);
+                    res.extend(flags.by_ref());
+                    if flags.had_error {
+                        return Err(Error::new(
+                            ErrorKind::InvalidArgument,
+                            format!("invalid shell quoting in {env}"),
+                        ));
+                    }
                 } else {
                     res.extend(var.split_ascii_whitespace().map(ToString::to_string));
                 }

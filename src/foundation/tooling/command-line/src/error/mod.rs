@@ -817,13 +817,13 @@ impl<F: ErrorFormatter> Error<F> {
 
 impl<F: ErrorFormatter> From<io::Error> for Error<F> {
     fn from(e: io::Error) -> Self {
-        Self::raw(ErrorKind::Io, e)
+        Self::raw(ErrorKind::Io, &e).set_source(Box::new(e))
     }
 }
 
 impl<F: ErrorFormatter> From<fmt::Error> for Error<F> {
     fn from(e: fmt::Error) -> Self {
-        Self::raw(ErrorKind::Format, e)
+        Self::raw(ErrorKind::Format, &e).set_source(Box::new(e))
     }
 }
 
@@ -940,4 +940,7 @@ impl Display for Backtrace {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/command-line/builder/functions/src/error/mod/check_auto_traits_943.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/command-line/builder/functions/src/error/mod/check_auto_traits_943.rs"
+));

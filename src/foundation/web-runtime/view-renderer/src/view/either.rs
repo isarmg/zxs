@@ -1,4 +1,6 @@
 use super::{add_attr::AddAnyAttr, Mountable, PositionState, Render, RenderHtml};
+#[cfg(erase_components)]
+use crate::html::attribute::any_attribute::AnyAttribute;
 use crate::{
     html::attribute::{Attribute, NamedAttributeKey, NextAttribute},
     hydration::Cursor,

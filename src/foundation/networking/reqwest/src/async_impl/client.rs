@@ -13,7 +13,6 @@ use super::request::{Request, RequestBuilder};
 use super::response::Response;
 use super::Body;
 
-
 use crate::config::{RequestConfig, TotalTimeout};
 #[cfg(unix)]
 use crate::connect::uds::UnixSocketProvider;
@@ -23,8 +22,6 @@ use crate::connect::{
     sealed::{Conn, Unnameable},
     BoxedConnectorLayer, BoxedConnectorService, Connector, ConnectorBuilder,
 };
-
-
 
 use crate::dns::{gai::GaiResolver, DnsResolverWithOverrides, DynResolver, Resolve};
 use crate::error::{self, BoxError};
@@ -48,10 +45,9 @@ use http_transport::adapters::client::legacy::connect::HttpConnector;
 
 use pin_project_lite::pin_project;
 
-
-use tokio::time::Sleep;
 use service_stack::util::BoxCloneSyncServiceLayer;
 use service_stack::{Layer, Service};
+use tokio::time::Sleep;
 
 use tower_http::follow_redirect::FollowRedirect;
 
@@ -89,26 +85,15 @@ pub struct ClientBuilder {
 enum HttpVersionPref {
     Http1,
 
-
     All,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Accepts {
-
-
-
-
-}
+struct Accepts {}
 
 impl Default for Accepts {
     fn default() -> Accepts {
-        Accepts {
-
-
-
-
-        }
+        Accepts {}
     }
 }
 
@@ -126,7 +111,10 @@ impl Service<http_transport::Request<crate::async_impl::body::Body>> for HyperSe
         self.hyper.poll_ready(cx).map_err(crate::error::request)
     }
 
-    fn call(&mut self, req: http_transport::Request<crate::async_impl::body::Body>) -> Self::Future {
+    fn call(
+        &mut self,
+        req: http_transport::Request<crate::async_impl::body::Body>,
+    ) -> Self::Future {
         let clone = self.hyper.clone();
         let mut inner = std::mem::replace(&mut self.hyper, clone);
         Box::pin(async move { inner.call(req).await.map_err(crate::error::request) })
@@ -186,13 +174,6 @@ struct Config {
     http1_ignore_invalid_headers_in_responses: bool,
     http1_allow_spaces_after_header_name_in_responses: bool,
 
-
-
-
-
-
-
-
     local_address: Option<IpAddr>,
     #[cfg(any(
         target_os = "android",
@@ -212,13 +193,6 @@ struct Config {
     hickory_dns: bool,
     error: Option<crate::Error>,
     https_only: bool,
-
-
-
-
-
-
-
 
     dns_overrides: HashMap<String, Vec<SocketAddr>>,
     dns_resolver: Option<Arc<dyn Resolve>>,
@@ -297,13 +271,6 @@ impl ClientBuilder {
                 http1_ignore_invalid_headers_in_responses: false,
                 http1_allow_spaces_after_header_name_in_responses: false,
 
-
-
-
-
-
-
-
                 local_address: None,
                 #[cfg(any(
                     target_os = "android",
@@ -323,13 +290,6 @@ impl ClientBuilder {
 
                 https_only: false,
                 dns_overrides: HashMap::new(),
-
-
-
-
-
-
-
 
                 dns_resolver: None,
                 #[cfg(unix)]
@@ -361,12 +321,9 @@ impl ClientBuilder {
         }
         let proxies = Arc::new(proxies);
 
-
-
         let resolver = {
             let mut resolver: Arc<dyn Resolve> = match config.hickory_dns {
                 false => Arc::new(GaiResolver::new()),
-
 
                 true => unreachable!("hickory-dns shouldn't be enabled unless the feature is"),
             };
@@ -391,39 +348,31 @@ impl ClientBuilder {
             let mut http = HttpConnector::new_with_resolver(resolver.clone());
             http.set_connect_timeout(config.connect_timeout);
 
-
-
             #[cfg(feature = "__tls")]
             match config.tls {
-
-
                 #[cfg(feature = "__rustls")]
-                TlsBackend::BuiltRustls(conn) => {
-
-
-                    ConnectorBuilder::new_rustls_tls(
-                        http,
-                        conn,
-                        proxies.clone(),
-                        user_agent(&config.headers),
-                        config.local_address,
-                        #[cfg(any(
-                            target_os = "android",
-                            target_os = "fuchsia",
-                            target_os = "illumos",
-                            target_os = "ios",
-                            target_os = "linux",
-                            target_os = "macos",
-                            target_os = "solaris",
-                            target_os = "tvos",
-                            target_os = "visionos",
-                            target_os = "watchos",
-                        ))]
-                        config.interface.as_deref(),
-                        config.nodelay,
-                        config.tls_info,
-                    )
-                }
+                TlsBackend::BuiltRustls(conn) => ConnectorBuilder::new_rustls_tls(
+                    http,
+                    conn,
+                    proxies.clone(),
+                    user_agent(&config.headers),
+                    config.local_address,
+                    #[cfg(any(
+                        target_os = "android",
+                        target_os = "fuchsia",
+                        target_os = "illumos",
+                        target_os = "ios",
+                        target_os = "linux",
+                        target_os = "macos",
+                        target_os = "solaris",
+                        target_os = "tvos",
+                        target_os = "visionos",
+                        target_os = "watchos",
+                    ))]
+                    config.interface.as_deref(),
+                    config.nodelay,
+                    config.tls_info,
+                ),
                 #[cfg(feature = "__rustls")]
                 TlsBackend::Rustls => {
                     use crate::tls::{IgnoreHostname, NoVerifier};
@@ -438,8 +387,6 @@ impl ClientBuilder {
                     if config.tls_built_in_certs_webpki {
                         root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
                     }
-
-
 
                     // Set TLS versions.
                     let mut versions = rustls::ALL_VERSIONS.to_vec();
@@ -536,15 +483,10 @@ impl ClientBuilder {
                             tls.alpn_protocols = vec!["http/1.1".into()];
                         }
 
-
                         HttpVersionPref::All => {
-                            tls.alpn_protocols = vec![
-                                "http/1.1".into(),
-                            ];
+                            tls.alpn_protocols = vec!["http/1.1".into()];
                         }
                     }
-
-
 
                     ConnectorBuilder::new_rustls_tls(
                         http,
@@ -615,9 +557,9 @@ impl ClientBuilder {
         #[cfg(target_os = "windows")]
         connector_builder.set_windows_named_pipe(config.windows_named_pipe.clone());
 
-        let mut builder =
-            http_transport::adapters::client::legacy::Client::builder(http_transport::adapters::rt::TokioExecutor::new());
-
+        let mut builder = http_transport::adapters::client::legacy::Client::builder(
+            http_transport::adapters::rt::TokioExecutor::new(),
+        );
 
         builder.timer(http_transport::adapters::rt::TokioTimer::new());
         builder.pool_timer(http_transport::adapters::rt::TokioTimer::new());
@@ -670,13 +612,7 @@ impl ClientBuilder {
 
         let svc = service_stack::retry::Retry::new(retry_policy.clone(), hyper_service);
 
-
         let hyper = FollowRedirect::with_policy(svc, redirect_policy.clone());
-
-
-
-
-
 
         Ok(Client {
             inner: Arc::new(ClientRef {
@@ -684,7 +620,6 @@ impl ClientBuilder {
 
                 // Use match instead of map since config is partially moved,
                 // and it cannot be used in closure
-
                 headers: config.headers,
                 referer: config.referer,
                 read_timeout: config.read_timeout,
@@ -766,27 +701,12 @@ impl ClientBuilder {
         self
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
     /// Disable auto response body gzip decompression.
     ///
     /// This method exists even if the optional `gzip` feature is not enabled.
     /// This can be used to ensure a `Client` doesn't use gzip decompression
     /// even if another dependency were to enable the optional `gzip` feature.
     pub fn no_gzip(self) -> ClientBuilder {
-
-
-
         {
             self
         }
@@ -798,9 +718,6 @@ impl ClientBuilder {
     /// This can be used to ensure a `Client` doesn't use brotli decompression
     /// even if another dependency were to enable the optional `brotli` feature.
     pub fn no_brotli(self) -> ClientBuilder {
-
-
-
         {
             self
         }
@@ -812,9 +729,6 @@ impl ClientBuilder {
     /// This can be used to ensure a `Client` doesn't use zstd decompression
     /// even if another dependency were to enable the optional `zstd` feature.
     pub fn no_zstd(self) -> ClientBuilder {
-
-
-
         {
             self
         }
@@ -826,9 +740,6 @@ impl ClientBuilder {
     /// This can be used to ensure a `Client` doesn't use deflate decompression
     /// even if another dependency were to enable the optional `deflate` feature.
     pub fn no_deflate(self) -> ClientBuilder {
-
-
-
         {
             self
         }
@@ -1012,26 +923,6 @@ impl ClientBuilder {
         self.config.http09_responses = true;
         self
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     // TCP options
 
@@ -1289,8 +1180,6 @@ impl ClientBuilder {
             self.config.tls_built_in_certs_webpki = tls_built_in_root_certs;
         }
 
-
-
         self
     }
 
@@ -1303,8 +1192,6 @@ impl ClientBuilder {
         self.config.tls_built_in_certs_webpki = enabled;
         self
     }
-
-
 
     /// Sets the identity to be used for client certificate authentication.
     ///
@@ -1464,8 +1351,6 @@ impl ClientBuilder {
         self
     }
 
-
-
     /// Force using the Rustls TLS backend.
     ///
     /// Since multiple TLS backends can be optionally enabled, this option will
@@ -1549,10 +1434,6 @@ impl ClientBuilder {
         self
     }
 
-
-
-
-
     #[doc(hidden)]
     #[deprecated(note = "use `no_hickory_dns` instead")]
     pub fn no_trust_dns(self) -> ClientBuilder {
@@ -1565,9 +1446,6 @@ impl ClientBuilder {
     /// This can be used to ensure a `Client` doesn't use the hickory-dns async resolver
     /// even if another dependency were to enable the optional `hickory-dns` feature.
     pub fn no_hickory_dns(self) -> ClientBuilder {
-
-
-
         {
             self
         }
@@ -1616,22 +1494,6 @@ impl ClientBuilder {
         self
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     /// Adds a new Tower [`Layer`](https://docs.rs/tower/latest/tower/trait.Layer.html) to the
     /// base connector [`Service`](https://docs.rs/tower/latest/tower/trait.Service.html) which
     /// is responsible for connection establishment.
@@ -1639,6 +1501,8 @@ impl ClientBuilder {
     /// Each subsequent invocation of this function will wrap previous layers.
     ///
     /// If configured, the `connect_timeout` will be the outermost layer.
+    /// It starts when the connector is called, and does not include time spent
+    /// waiting for connector readiness, such as waiting for a concurrency permit.
     ///
     /// Example usage:
     /// ```
@@ -1646,7 +1510,7 @@ impl ClientBuilder {
     ///
     /// # #[cfg(not(feature = "rustls-tls-no-provider"))]
     /// let client = reqwest::Client::builder()
-    ///                      // resolved to outermost layer, meaning while we are waiting on concurrency limit
+    ///                      // Outer connection timeout; readiness waits are excluded.
     ///                      .connect_timeout(Duration::from_millis(200))
     ///                      // underneath the concurrency check, so only after concurrency limit lets us through
     ///                      .connector_layer(service_stack::timeout::TimeoutLayer::new(Duration::from_millis(50)))
@@ -1820,7 +1684,6 @@ impl Client {
             .version(version);
 
         let in_flight = match version {
-
             _ => {
                 let mut req = builder.body(body).expect("valid request parts");
                 *req.headers_mut() = headers.clone();
@@ -1952,8 +1815,6 @@ impl Config {
         // Instead of deriving Debug, only print fields when their output
         // would provide relevant or interesting data.
 
-
-
         f.field("accepts", &self.accepts);
 
         if !self.proxies.is_empty() {
@@ -1989,8 +1850,6 @@ impl Config {
         if matches!(self.http_version_pref, HttpVersionPref::Http1) {
             f.field("http1_only", &true);
         }
-
-
 
         if let Some(ref d) = self.connect_timeout {
             f.field("connect_timeout", d);
@@ -2050,13 +1909,9 @@ impl Config {
             f.field("tls_info", &self.tls_info);
         }
 
-
-
         if !self.dns_overrides.is_empty() {
             f.field("dns_overrides", &self.dns_overrides);
         }
-
-
 
         #[cfg(unix)]
         if let Some(ref p) = self.unix_socket {
@@ -2065,15 +1920,9 @@ impl Config {
     }
 }
 
-
 type MaybeCookieService<T> = T;
 
-
-
-
 type MaybeDecompression<T> = T;
-
-
 
 type LayeredService<T> = MaybeDecompression<
     FollowRedirect<
@@ -2103,8 +1952,6 @@ impl ClientRef {
     fn fmt_fields(&self, f: &mut fmt::DebugStruct<'_, '_>) {
         // Instead of deriving Debug, only print fields when their output
         // would provide relevant or interesting data.
-
-
 
         f.field("accepts", &self.accepts);
 
@@ -2162,7 +2009,6 @@ pin_project! {
 
 enum ResponseFuture {
     Default(LayeredFuture<HyperService>),
-
 }
 
 impl PendingRequest {
@@ -2232,7 +2078,6 @@ impl Future for PendingRequest {
                 }
                 Ok(res) => res.map(super::body::boxed),
             },
-
         };
 
         if let Some(url) = &res
@@ -2269,4 +2114,7 @@ impl fmt::Debug for Pending {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/reqwest/unit/src/async_impl/client/tests_2271.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/reqwest/unit/src/async_impl/client/tests_2271.rs"
+));

@@ -275,6 +275,15 @@
       "detail": "test/ci/fixtures/foundation-native-collections.rs::equivalent_borrowed_keys_preserve_equality_and_ordering; borrowed equality and ordering, not merely linked"
     },
     {
+      "package": "erased",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-erased-boundaries.py"
+      ],
+      "detail": "two erased_mut_ref compile-fail aliasing examples; original library tests remain in foundation-behaviour"
+    },
+    {
       "package": "error-definition",
       "kind": "U",
       "shard": "foundation-language",
@@ -445,7 +454,7 @@
       "scripts": [
         ".github/scripts/check-http-routing.py"
       ],
-      "detail": "test/architecture/http-routing/behavior.rs (exactly 5)"
+      "detail": "test/architecture/http-routing/behavior.rs (exactly 8)"
     },
     {
       "package": "http-transport",
@@ -454,7 +463,7 @@
       "scripts": [
         ".github/scripts/check-http-transport.py"
       ],
-      "detail": "behavior (25) and ffi (2)"
+      "detail": "behavior (29, including proxy write progress) and ffi (2)"
     },
     {
       "package": "http-transport",
@@ -755,6 +764,15 @@
         ".github/scripts/check-form-floats.py"
       ],
       "detail": "behavior.rs reqwest_form_and_query_use_encoded_plus only; reqwest lib tests NOT run"
+    },
+    {
+      "package": "reqwest",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-service-stack.py"
+      ],
+      "detail": "test/architecture/service-stack/reqwest_retry.rs: 3 real loopback scope, replay limit and streaming-body tests"
     },
     {
       "package": "ring",
@@ -1297,6 +1315,15 @@
         ".github/scripts/check-csr-scope.py"
       ],
       "detail": "csr-template.rs fixture lib test (1)"
+    },
+    {
+      "package": "view-renderer",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-erased-boundaries.py"
+      ],
+      "detail": "test/ci/fixtures/view-renderer-erased.rs: 10 public-consumer checked-downcast and destruction tests in default and erase_components modes"
     },
     {
       "package": "walrus-macro",

@@ -188,7 +188,7 @@ impl CoreDumpInstancesSection {
         self
     }
 
-    /// The number of modules that are encoded in the section.
+    /// The number of instances that are encoded in the section.
     pub fn len(&self) -> u32 {
         self.num_added
     }
@@ -335,4 +335,7 @@ impl Encode for CoreDumpValue {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/wasm-encoder/unit/src/core/dump/tests_337.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/wasm-encoder/unit/src/core/dump/tests_337.rs"
+));

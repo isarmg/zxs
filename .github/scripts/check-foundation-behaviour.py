@@ -70,10 +70,13 @@ UNIT_SUITES = ('bytes', 'cmov', 'flag-set', 'futures-intrusive', 'guardian', 'ht
                'smallvec', 'tinyvec', 'yoke-derive', 'zerofrom-derive', 'zerotrie', 'either',
                'hybrid-array', 'rustc-hash', 'typenum', 'leb128', 'leb128fmt', 'libsqlite3-sys',
                'anyhow', 'httparse', 'ipnet', 'matchit', 'errno', 'unicase', 'utf8_iter', 'cfg-if',
-               'view-alternatives', 'walrus', 'wasm-bindgen-shared', 'arrayvec', 'const-oid', 'mime')
+               'view-alternatives', 'walrus', 'wasm-bindgen-shared', 'arrayvec', 'const-oid', 'mime',
+               'tempfile')
 
 FOUNDATION_TESTS = 'test/foundation/'
 INTEGRATION_SUITES = (
+    Suite('http', ('test/ci/fixtures/foundation-http-contracts.rs',), edition='2024'),
+    Suite('futures', ('test/ci/fixtures/foundation-futures-contracts.rs',), edition='2024'),
     Suite('flume', tuple(FOUNDATION_TESTS + 'flume/tests/' + name + '.rs'
                          for name in ('basic', 'iter', 'array', 'list', 'zero'))
           + ('test/architecture/flume/behavior.rs',),
@@ -137,7 +140,8 @@ INTEGRATION_SUITES = (
 # at their original depth. Its selected features still come from the root graph.
 # proc-macro2 also needs its real build script's cfgs in the integration targets.
 STANDALONE_SUITES = tuple(Suite(name, ()) for name in (
-    'synstructure', 'shared-value', 'heck', 'pkg-config', 'shell-tokenizer', 'version_check')) + (
+    'synstructure', 'shared-value', 'heck', 'pkg-config', 'shell-tokenizer', 'version_check',
+    'proc-macro2-diagnostics')) + (
     Suite('proc-macro2', tuple(FOUNDATION_TESTS + 'proc-macro2/tests/' + name + '.rs'
                               for name in ('test', 'test_fmt', 'marker'))),
     Suite('http', (), doctests=True),
@@ -306,10 +310,12 @@ def standalone_member(suite, work):
     """Copy real code/tests at the same depth; change only temporary Cargo wiring."""
     subject = foundation_path(ROOT, suite.subject)
     relative = subject.relative_to(ROOT)
-    shutil.copytree(subject, work / relative)
+    # Fresh source mtimes prevent a newer binary from another snapshot being
+    # reused when Cargo shares the target directory. Preserve file modes.
+    shutil.copytree(subject, work / relative, copy_function=shutil.copy)
     tests = ROOT / FOUNDATION_TESTS / suite.subject
     if tests.exists():
-        shutil.copytree(tests, work / tests.relative_to(ROOT))
+        shutil.copytree(tests, work / tests.relative_to(ROOT), copy_function=shutil.copy)
     original = (subject / 'Cargo.toml').read_text()
     readme = tomllib.loads(original)['package'].get('readme')
     if readme:

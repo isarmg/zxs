@@ -13,7 +13,7 @@ impl Extensions {
         let id = AnyValueId::of::<T>();
         self.extensions.get(&id).map(|e| {
             e.downcast_ref::<T>()
-                .expect("`Extensions` tracks values by type")
+                .expect("invariant: Extensions stores values under their concrete TypeId")
         })
     }
 
@@ -29,7 +29,7 @@ impl Extensions {
         let id = AnyValueId::of::<T>();
         self.extensions.remove(&id).map(|e| {
             e.downcast_into::<T>()
-                .expect("`Extensions` tracks values by type")
+                .expect("invariant: Extensions stores values under their concrete TypeId")
         })
     }
 

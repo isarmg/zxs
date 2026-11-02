@@ -50,9 +50,10 @@ def prepare_package(root, work):
     """Only the maintained package/tests are copied; dependencies remain real providers."""
     original = root / "src/foundation/data-storage/sqlite-access"
     package = work / "src/foundation/data-storage/sqlite-access"
-    shutil.copytree(original, package, ignore=shutil.ignore_patterns("Cargo.lock", "target", "__pycache__"))
+    shutil.copytree(original, package, copy_function=shutil.copy,
+                    ignore=shutil.ignore_patterns("Cargo.lock", "target", "__pycache__"))
     for tests in FAMILY_TEST_ROOTS:
-        shutil.copytree(root / tests, work / tests)
+        shutil.copytree(root / tests, work / tests, copy_function=shutil.copy)
     manifest = package / "Cargo.toml"
     text = manifest.read_text()
     parsed = tomllib.loads(text)
@@ -134,7 +135,9 @@ def check(root):
             execute(cargo_command("test", package_manifest, target, "--doc", "--features", "sqlite-bundled",
                                   "types::Type"), root, minimum_tests=1)
             execute(cargo_command("test", package_manifest, target, "--lib", "--features", "sqlite-bundled"), root,
-                    minimum_tests=10, required_tests=("ordinal_parameters_preserve_repetition_order_and_missing_values",
+                    minimum_tests=12, required_tests=("busy_timeout_is_checked_before_creating_the_database",
+                                                     "owned_rows_remain_send_without_shared_decoding",
+                                                     "ordinal_parameters_preserve_repetition_order_and_missing_values",
                                                      "invalid_ordinal_parameters_return_errors_without_poisoning_connection",
                                                      "direct_memory_transactions_savepoints_rollback_and_errors",
                                                      "filename_absolute_relative_unicode_percent_and_query_characters_are_literal",
@@ -147,7 +150,10 @@ def check(root):
             execute(cargo_command("test", package_manifest, target, "--lib", "--features", "sqlite-bundled,url"), root,
                     minimum_tests=12, required_tests=("typed_url_conversion_preserves_retained_sqlite_options",))
             execute(cargo_command("test", package_manifest, target, "--lib", "--all-features"), root,
-                    minimum_tests=19, required_tests=("test_regexp_filters_correctly", "assert_pool_traits"))
+                    minimum_tests=22, required_tests=("test_regexp_filters_correctly", "assert_pool_traits",
+                                                     "preupdate_hook_resources_are_released_on_replace_remove_and_close",
+                                                     "busy_timeout_is_checked_before_creating_the_database",
+                                                     "owned_rows_remain_send_without_shared_decoding"))
             consumer = work / "consumer"
             manifest = consumer_manifest(root, consumer, ["sqlite-bundled"])
             consumer_source = consumer / "src/lib.rs"

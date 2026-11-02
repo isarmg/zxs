@@ -2,14 +2,14 @@
 //!
 //! See [`Either`] documentation for more details.
 
+use crate::Layer;
+use crate::Service;
 use pin_project_lite::pin_project;
 use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
 };
-use crate::Layer;
-use crate::Service;
 
 /// Combine two different service types into a single type.
 ///
@@ -18,9 +18,9 @@ use crate::Service;
 /// to different inner service types.
 #[derive(Clone, Copy, Debug)]
 pub enum Either<A, B> {
-    #[allow(missing_docs)]
+    /// The first service or layer implementation.
     Left(A),
-    #[allow(missing_docs)]
+    /// The second service or layer implementation.
     Right(B),
 }
 

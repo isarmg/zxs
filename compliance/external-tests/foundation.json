@@ -2434,7 +2434,7 @@
         },
         {
           "path": "test/foundation/cc/unit/src/lib/tests_5632.rs",
-          "sha256": "05e50b50cc34337287c012d941e81129957f86a054bc1097d0438ff29722a039",
+          "sha256": "558e94d3ed6f4bd6e8f57ff0cb4d8df7d8b03fb1261480508c43b6594317346c",
           "source": "src/foundation/cc/src/lib.rs",
           "source_sha256_before": "f7a6eff54efe2d223b7a338262b9dbdf8ebeeb7acb75fd455b2928dd6c5d221a"
         },
@@ -3928,7 +3928,7 @@
         {
           "origin_directory": "vendor/rust/time-0.3.55",
           "path": "test/foundation/date-time/unit/src/format_description/well_known/iso8601/adt_hack/tests_165.rs",
-          "sha256": "160fdc8797ce9eb0ce7f0656701d0a209c7d31a63993a6ebc741fc4ad87c3740",
+          "sha256": "56b360bd9031fe2b61bd499e2b72a0bcefc6ae864405925acb12299679be749e",
           "source": "src/foundation/time/src/format_description/well_known/iso8601/adt_hack.rs",
           "source_sha256_before": "2f62bdeccf0ba4cdbeb69f6b55be56cb1084565bc4889d6f48140c8e1bc034de"
         },
@@ -4064,6 +4064,13 @@
           "sha256": "b7cf85cc69af3b891d78803f2862e7b18b674b1d3e27c139f830f41be689ffe9",
           "source": "src/foundation/time/benchmarks/weekday.rs",
           "source_sha256_before": "b7cf85cc69af3b891d78803f2862e7b18b674b1d3e27c139f830f41be689ffe9"
+        },
+        {
+          "source_kind": "project-authored",
+          "source": "test/foundation/date-time/unit/src/parsing/combinator/tests.rs",
+          "source_sha256_before": "120006edcb27c061ebf14c0717be5996db9b18c9dbebf9742c4a555804a78a26",
+          "path": "test/foundation/date-time/unit/src/parsing/combinator/tests.rs",
+          "sha256": "120006edcb27c061ebf14c0717be5996db9b18c9dbebf9742c4a555804a78a26"
         }
       ],
       "roots": [
@@ -12045,6 +12052,13 @@
           "sha256": "e5a0e79cdae4fabb87ba1b3f92f039f9069ec3c4ebbca3c7f44a6c3138460387",
           "source": "src/foundation/proc-macro2-diagnostics/tests/stable/fail/warning.stderr",
           "source_sha256_before": "e5a0e79cdae4fabb87ba1b3f92f039f9069ec3c4ebbca3c7f44a6c3138460387"
+        },
+        {
+          "source_kind": "project-authored",
+          "source": "test/foundation/proc-macro2-diagnostics/unit/diagnostic_tests.rs",
+          "source_sha256_before": "ec617ba7176912d77b664df6e801fb233bd04b0c55a4ba4117f64bba2fc040be",
+          "path": "test/foundation/proc-macro2-diagnostics/unit/diagnostic_tests.rs",
+          "sha256": "ec617ba7176912d77b664df6e801fb233bd04b0c55a4ba4117f64bba2fc040be"
         }
       ],
       "roots": [
@@ -13005,6 +13019,13 @@
           "sha256": "701f53982a474ad3a4e1771dd1bbedc4891afc3dd178bd89929f3bba6b1c3762",
           "source": "src/foundation/reactive_graph/src/owner.rs",
           "source_sha256_before": "50236f8bdf6764ff2587ccd78c3b2fd37902411f65ed4b422495003474667c48"
+        },
+        {
+          "source_kind": "project-authored",
+          "source": "test/foundation/reactive-state/unit/src/graph/subscriber_scope.rs",
+          "source_sha256_before": "f6b56a46dda3183ddc7c93598c0256879056fe4aa6dddfb5d65a4cedcbfba446",
+          "path": "test/foundation/reactive-state/unit/src/graph/subscriber_scope.rs",
+          "sha256": "f6b56a46dda3183ddc7c93598c0256879056fe4aa6dddfb5d65a4cedcbfba446"
         }
       ],
       "roots": [
@@ -18260,6 +18281,13 @@
           "sha256": "f3c3db1e577c3100d49c09d1f49567c04cb5992743441b4172cd15847444d5f1",
           "source": "src/foundation/tempfile/tests/tempfile.rs",
           "source_sha256_before": "f3c3db1e577c3100d49c09d1f49567c04cb5992743441b4172cd15847444d5f1"
+        },
+        {
+          "source_kind": "project-authored",
+          "source": "test/foundation/tempfile/unit/src/error/tests.rs",
+          "source_sha256_before": "1ab789c519dcae5df888474643e7848dfd2841b87e3506caed640864d471bfa4",
+          "path": "test/foundation/tempfile/unit/src/error/tests.rs",
+          "sha256": "1ab789c519dcae5df888474643e7848dfd2841b87e3506caed640864d471bfa4"
         }
       ],
       "roots": [
@@ -18328,7 +18356,7 @@
         {
           "origin_directory": "vendor/rust/anstream-1.0.0",
           "path": "test/foundation/terminal-style/anstream/unit/src/adapter/strip/test_369.rs",
-          "sha256": "b2e95af85f9358b810deb703c745bf443d35ae9b9d7fd5cda3b93b31b2118657",
+          "sha256": "a17dcbf1f042e70fac6f3bfe75e85e2bfaed38166ef708d804e55a6e8cd540a6",
           "source": "src/foundation/anstream/src/adapter/strip.rs",
           "source_sha256_before": "642375f9dc5836eb5aa6eba7be849a84786d22764d470672bf1f646061254c1c"
         },
@@ -18349,7 +18377,7 @@
         {
           "origin_directory": "vendor/rust/anstream-1.0.0",
           "path": "test/foundation/terminal-style/anstream/unit/src/strip/test_172.rs",
-          "sha256": "814f8bfd838533962e5c614afbc665af134e7dd398f885380a2aef12dacf735a",
+          "sha256": "71e1b710599b548149e9c7991e940f238ced369dea956d00681aceb7d04bd14a",
           "source": "src/foundation/anstream/src/strip.rs",
           "source_sha256_before": "0268bdc9155fc91bd7e92337c5e3ba96999780b46fab311b00922c7a3047233c"
         },

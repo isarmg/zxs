@@ -136,6 +136,23 @@ def reject_features_and_private_api(work, environment):
     print('date-time private modules, disabled APIs, and removed local-time APIs rejected', flush=True)
 
 
+def check_parsing_units(root, parent, environment):
+    behaviour = runpy.run_path(str(root / '.github/scripts/check-foundation-behaviour.py'))
+    work = parent / 'parsing-units'
+    work.mkdir()
+    behaviour['standalone_member'](behaviour['Suite']('date-time', ()), work)
+    run(work, environment, 'generate-lockfile')
+    required = ('nine_digits_checks_every_byte_before_numeric_conversion',
+                'fixed_nine_digit_subseconds_return_parse_errors_for_invalid_input',
+                'period_case_sensitivity_is_preserved_for_each_letter_case')
+    for defaults in ([], ['--no-default-features']):
+        result = run(work, environment, 'test', '-p', 'date-time', '--lib',
+                     '--features', 'parsing', *defaults, 'parsing::combinator::tests')
+        print(result.stdout, end='', flush=True)
+        for name in required:
+            assert re.search(r'test parsing::combinator::tests::' + name + r' \.\.\. ok', result.stdout), name
+
+
 def check(root=ROOT):
     structure(root)
     environment = runpy.run_path(str(root / '.github/scripts/backend_environment.py'))['matrix_environment']()
@@ -144,6 +161,7 @@ def check(root=ROOT):
         environment.update(CARGO_BUILD_JOBS='2', CARGO_INCREMENTAL='0',
                            CARGO_PROFILE_DEV_DEBUG='0', CARGO_PROFILE_TEST_DEBUG='0')
         environment.setdefault('CARGO_TARGET_DIR', str(parent / 'target'))
+        check_parsing_units(root, parent, environment)
         work = prepare(root, parent, 'contracts')
         run(work, environment, 'generate-lockfile')
         for features in ((), ('alloc',), ('parsing',), ('formatting',), ('large-dates',)):

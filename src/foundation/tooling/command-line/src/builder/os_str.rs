@@ -2,7 +2,9 @@ use crate::builder::Str;
 #[cfg(feature = "string")]
 use std::borrow::Cow;
 
-/// A UTF-8-encoded fixed string
+/// A fixed string in the platform's native encoding
+///
+/// Values are not required to be valid Unicode.
 ///
 /// <div class="warning">
 ///
@@ -342,4 +344,7 @@ impl std::hash::Hash for Inner {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/command-line/builder/unit/src/builder/os_str/tests_344.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/command-line/builder/unit/src/builder/os_str/tests_344.rs"
+));

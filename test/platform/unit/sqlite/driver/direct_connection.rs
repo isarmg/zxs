@@ -300,3 +300,115 @@ fn invalid_ordinal_parameters_return_errors_without_poisoning_connection() -> Te
         Ok(())
     })
 }
+
+#[test]
+fn busy_timeout_is_checked_before_creating_the_database() -> TestResult {
+    use std::time::Duration;
+
+    let directory = Directory::new()?;
+    let filename = directory.0.join("invalid-timeout.sqlite");
+    block_on(async {
+        for timeout in [
+            Duration::from_millis(i32::MAX as u64 + 1),
+            Duration::MAX,
+        ] {
+            let options = SqliteConnectOptions::new()
+                .filename(&filename)
+                .create_if_missing(true)
+                .busy_timeout(timeout);
+            assert!(matches!(
+                SqliteConnection::connect_with(&options).await,
+                Err(Error::InvalidArgument(_))
+            ));
+            assert!(!filename.exists());
+        }
+        for timeout in [Duration::ZERO, Duration::from_millis(i32::MAX as u64)] {
+            SqliteConnection::connect_with(&SqliteConnectOptions::new().busy_timeout(timeout))
+                .await?
+                .close()
+                .await?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(feature = "sqlite-preupdate-hook")]
+#[test]
+fn preupdate_hook_resources_are_released_on_replace_remove_and_close() -> TestResult {
+    use std::sync::Arc;
+
+    struct DropCount(Arc<AtomicUsize>);
+    impl Drop for DropCount {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    block_on(async {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut connection = SqliteConnection::connect_with(&SqliteConnectOptions::new()).await?;
+        {
+            let mut handle = connection.lock_handle().await?;
+            for expected in 0..2 {
+                let resource = DropCount(Arc::clone(&drops));
+                handle.set_preupdate_hook(move |_| {
+                    let _ = &resource;
+                });
+                assert_eq!(drops.load(Ordering::Relaxed), expected);
+            }
+            handle.remove_preupdate_hook();
+            assert_eq!(drops.load(Ordering::Relaxed), 2);
+
+            let resource = DropCount(Arc::clone(&drops));
+            let calls = Arc::clone(&calls);
+            handle.set_preupdate_hook(move |_| {
+                let _ = &resource;
+                calls.fetch_add(1, Ordering::Relaxed);
+            });
+        }
+        crate::query("CREATE TABLE entries(value INTEGER)")
+            .execute(&mut connection)
+            .await?;
+        crate::query("INSERT INTO entries VALUES(1)")
+            .execute(&mut connection)
+            .await?;
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(drops.load(Ordering::Relaxed), 2);
+        connection.close().await?;
+        assert_eq!(drops.load(Ordering::Relaxed), 3);
+        Ok(())
+    })
+}
+
+#[test]
+fn owned_rows_remain_send_without_shared_decoding() -> TestResult {
+    use crate::{sqlite::SqliteRow, Row};
+
+    // This is ambiguous and fails to compile if SqliteRow ever implements Sync.
+    trait AmbiguousIfSync<A> {
+        fn check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSync<()> for T {}
+    impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {}
+    let _ = <SqliteRow as AmbiguousIfSync<_>>::check;
+
+    let row = block_on(async {
+        let mut connection = SqliteConnection::connect_with(&SqliteConnectOptions::new()).await?;
+        let row = crate::query("SELECT 'retained text', 42")
+            .fetch_one(&mut connection)
+            .await?;
+        connection.close().await?;
+        Ok::<_, Error>(row)
+    })?;
+    let (text, number) = std::thread::spawn(move || {
+        let text: &str = row.try_get(0)?;
+        let number: i64 = row.try_get(1)?;
+        Ok::<_, Error>((text.to_owned(), number))
+    })
+    .join()
+    .expect("row decoding thread panicked")?;
+    assert_eq!(text, "retained text");
+    assert_eq!(number, 42);
+    Ok(())
+}

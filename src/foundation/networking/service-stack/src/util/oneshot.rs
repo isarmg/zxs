@@ -1,3 +1,4 @@
+use crate::Service;
 use pin_project_lite::pin_project;
 use std::{
     fmt,
@@ -5,7 +6,6 @@ use std::{
     pin::Pin,
     task::{ready, Context, Poll},
 };
-use crate::Service;
 
 pin_project! {
     /// A [`Future`] consuming a [`Service`] and request, waiting until the [`Service`]
@@ -69,7 +69,8 @@ impl<S, Req> Oneshot<S, Req>
 where
     S: Service<Req>,
 {
-    #[allow(missing_docs)]
+    /// Creates a future that owns the service and request and waits for readiness
+    /// before calling it.
     pub const fn new(svc: S, req: Req) -> Self {
         Oneshot {
             state: State::not_ready(svc, Some(req)),
@@ -89,7 +90,10 @@ where
             match this.state.as_mut().project() {
                 StateProj::NotReady { svc, req } => {
                     ready!(svc.poll_ready(cx))?;
-                    let f = svc.call(req.take().expect("already called"));
+                    let f = svc.call(
+                        req.take()
+                            .expect("invariant: request is retained until the first service call"),
+                    );
                     this.state.set(State::called(f));
                 }
                 StateProj::Called { fut } => {

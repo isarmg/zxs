@@ -5,6 +5,27 @@ mod test {
     #[cfg(any())]
     use proptest::prelude::*;
 
+    #[test]
+    fn incremental_stripping_preserves_control_state_at_every_boundary() {
+        for (input, expected) in [
+            ("\x1b[31mred\x1b[0m", "red"),
+            ("\x1b]0;title\x07text", "text"),
+            ("\x1bPpayload\x1b\\text", "text"),
+            ("é\x1b[32m中\x1b[0m🙂", "é中🙂"),
+        ] {
+            for split in input.char_indices().map(|(i, _)| i).chain([input.len()]) {
+                let mut state = StripStr::new();
+                let mut actual = String::new();
+                for chunk in [&input[..split], &input[split..]] {
+                    for printable in state.strip_next(chunk) {
+                        actual.push_str(printable);
+                    }
+                }
+                assert_eq!(actual, expected, "input={input:?}, split={split}");
+            }
+        }
+    }
+
     /// Model based off full parser
     fn parser_strip(bytes: &[u8]) -> String {
         #[derive(Default)]

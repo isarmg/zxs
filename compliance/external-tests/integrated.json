@@ -17,7 +17,7 @@
         },
         {
           "path": "test/interface/integration/reactive_state.rs",
-          "sha256": "ae124c27d0f24337426365ae95b40292c38ec8a87fa797e2c400bc36314a3404",
+          "sha256": "5a85744f7022edae1895379e106db336e67814a388e218c0a07f3f96a33635da",
           "source": "src/interface/tests/reactive_state.rs",
           "source_sha256_before": "0e62e3fc9d568ca2e902b8a01a1add3440c7800963f35a9146cf4a5ba5413663"
         },

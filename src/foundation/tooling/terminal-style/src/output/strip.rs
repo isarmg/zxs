@@ -128,7 +128,7 @@ fn write(
         if possible != written {
             let divergence = &printable[written..];
             let offset = offset_to(buf, divergence);
-            let consumed = &buf[offset..];
+            let consumed = &buf[..offset];
             *state = initial_state;
             state.strip_next(consumed).last();
             return Ok(offset);

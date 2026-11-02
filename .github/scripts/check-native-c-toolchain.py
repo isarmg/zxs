@@ -66,7 +66,7 @@ def check_standalone_cc(work, environment):
     ):
         source = ROOT / relative
         # src/target is cc's real Rust module, not a Cargo output directory.
-        shutil.copytree(source, standalone / relative,
+        shutil.copytree(source, standalone / relative, copy_function=shutil.copy,
                         ignore=lambda directory, names: [name for name in names
                             if Path(directory) == source and name in {"Cargo.lock", "target"}])
     cc_manifest = standalone / "src/foundation/tooling/cc/Cargo.toml"

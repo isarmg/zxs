@@ -1,11 +1,11 @@
 use std::{fmt, marker::PhantomData};
 
+use crate::Service;
 use std::{
     future::Future,
     pin::Pin,
     task::{ready, Context, Poll},
 };
-use crate::Service;
 
 /// A [`Future`] that yields the service when it is ready to accept a request.
 ///
@@ -17,14 +17,14 @@ pub struct ReadyOneshot<T, Request> {
     _p: PhantomData<fn() -> Request>,
 }
 
-// Safety: This is safe because `Services`'s are always `Unpin`.
+// The inner service is not structurally pinned and is never projected as Pin<&mut T>.
 impl<T, Request> Unpin for ReadyOneshot<T, Request> {}
 
 impl<T, Request> ReadyOneshot<T, Request>
 where
     T: Service<Request>,
 {
-    #[allow(missing_docs)]
+    /// Creates a future that owns the service and returns it once it is ready.
     pub const fn new(service: T) -> Self {
         Self {
             inner: Some(service),
@@ -43,10 +43,12 @@ where
         ready!(self
             .inner
             .as_mut()
-            .expect("poll after Poll::Ready")
+            .expect("invariant: service is retained until ReadyOneshot returns it")
             .poll_ready(cx))?;
 
-        Poll::Ready(Ok(self.inner.take().expect("poll after Poll::Ready")))
+        Poll::Ready(Ok(self.inner.take().expect(
+            "invariant: successful readiness does not remove the retained service",
+        )))
     }
 }
 
@@ -75,7 +77,7 @@ impl<'a, T, Request> Ready<'a, T, Request>
 where
     T: Service<Request>,
 {
-    #[allow(missing_docs)]
+    /// Creates a future that waits for readiness and returns this mutable service borrow.
     pub fn new(service: &'a mut T) -> Self {
         Self(ReadyOneshot::new(service))
     }

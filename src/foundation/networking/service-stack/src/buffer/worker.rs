@@ -2,6 +2,7 @@ use super::{
     error::{Closed, ServiceError},
     message::Message,
 };
+use crate::Service;
 use std::sync::{Arc, Mutex};
 use std::{
     future::Future,
@@ -9,7 +10,6 @@ use std::{
     task::{ready, Context, Poll},
 };
 use tokio::sync::mpsc;
-use crate::Service;
 
 pin_project_lite::pin_project! {
     /// Task that handles processing the buffer. This type should not be used
@@ -191,7 +191,7 @@ where
                             let _ = msg.tx.send(Err(self
                                 .failed
                                 .as_ref()
-                                .expect("Worker::failed did not set self.failed?")
+                                .expect("invariant: completed failure transition retains the service error")
                                 .clone()));
                         }
                     }
@@ -220,7 +220,7 @@ impl Handle {
 impl Clone for Handle {
     fn clone(&self) -> Handle {
         Handle {
-            inner: self.inner.clone(),
+            inner: Arc::clone(&self.inner),
         }
     }
 }

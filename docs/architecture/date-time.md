@@ -19,6 +19,8 @@
 - `serialization` 直接使用 data-serialization，包括私有有界表示。可读及知名格式适配器另启用格式化/解析；紧凑序列化不需要 `std`。
 - `wasm-bindgen` 保留真实 js-sys Date 互操作和浏览器时钟路径。原生目标为 Linux amd64；浏览器 WASM 服务于 Web 客户端，不是另一种原生平台。
 
+固定九位小数秒在数值转换前拒绝全部非 ASCII 数字字节；非法输入返回解析错误。`Period` 的大小写严格性独立于输出大小写：严格小写仅接受 `am`/`pm`，严格大写仅接受 `AM`/`PM`，忽略大小写模式接受两者的大小写组合。
+
 <a id="explicit-unsupported-boundary"></a>
 
 ## 明确不支持的能力

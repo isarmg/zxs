@@ -41,8 +41,11 @@ class HttpMaintenanceManager(unittest.TestCase):
             catalog = json.loads((root / manage.CATALOG).read_bytes())
             original = deepcopy(catalog)
             original_pins = legacy.RECEIPTS
-            first = root / 'compliance/proof-maintenance' / (original_pins[0] + '.json.gz')
-            first_bytes = first.read_bytes()
+            original_receipts = {
+                root / 'compliance/proof-maintenance' / (sha + '.json.gz'):
+                (root / 'compliance/proof-maintenance' / (sha + '.json.gz')).read_bytes()
+                for sha in original_pins
+            }
             lock_bytes = (root / 'Cargo.lock').read_bytes()
             resolutions = deepcopy(catalog['resolutions'])
             # No source-governance validator is mocked. Fixed resolution data
@@ -79,7 +82,8 @@ class HttpMaintenanceManager(unittest.TestCase):
                 self.assertEqual(catalog['external_tests'], original['external_tests'])
                 for key in source_layout.HISTORY_FIELDS:
                     self.assertEqual(catalog.get(key), original.get(key), key)
-                self.assertEqual(first.read_bytes(), first_bytes)
+                for path, data in original_receipts.items():
+                    self.assertEqual(path.read_bytes(), data, path)
                 self.assertEqual((root / 'Cargo.lock').read_bytes(), lock_bytes)
                 for relative, digest in original['provenance_sha256'].items():
                     self.assertEqual(routing.digest((root / relative).read_bytes()), digest, relative)

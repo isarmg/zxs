@@ -77,8 +77,8 @@ where
             if let Some(fut) = this.pending_fut.as_mut().as_pin_mut() {
                 let res = ready!(fut.try_poll(cx));
                 this.pending_fut.set(None);
-                let skipped = res?;
                 let item = this.pending_item.take();
+                let skipped = res?;
                 if !skipped {
                     *this.done_skipping = true;
                     break item.map(Ok);

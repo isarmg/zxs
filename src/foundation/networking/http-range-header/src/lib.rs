@@ -338,12 +338,11 @@ fn validate_ranges(ranges: &[RangeInclusive<u64>]) -> RangeValidationResult {
         }
         bounds.push((range.start(), range.end()));
     }
-    for i in 0..bounds.len() {
-        for j in i + 1..bounds.len() {
-            if bounds[i].0 <= bounds[j].1 && bounds[j].0 <= bounds[i].1 {
-                return RangeValidationResult::Overlapping;
-            }
-        }
+    // Keep the caller's range order and sort only the temporary bounds. Any
+    // overlap in start order includes an adjacent pair.
+    bounds.sort_unstable();
+    if bounds.windows(2).any(|pair| pair[0].1 >= pair[1].0) {
+        return RangeValidationResult::Overlapping;
     }
     RangeValidationResult::Valid
 }

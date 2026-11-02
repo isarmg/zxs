@@ -37,6 +37,38 @@ fn parser_dispatches_split_sequences() {
     assert_eq!(out.csi, vec![1, 32]);
     assert_eq!(out.osc, vec![b"0".to_vec(), b"title".to_vec()]);
 }
+#[cfg(feature = "parser")]
+#[test]
+fn parameter_iterator_size_hint_bounds_remaining_groups() {
+    use terminal_style::parser::{DefaultCharAccumulator, Params, Parser, Perform};
+
+    #[derive(Default)]
+    struct Recorder(usize);
+
+    impl Perform for Recorder {
+        fn csi_dispatch(&mut self, params: &Params, _: &[u8], _: bool, _: u8) {
+            let mut remaining = params.iter().count();
+            let mut iter = params.iter();
+            loop {
+                let (lower, upper) = iter.size_hint();
+                assert!(lower <= remaining, "lower={lower}, remaining={remaining}");
+                assert!(upper.is_none_or(|upper| upper >= remaining));
+                if iter.next().is_none() {
+                    break;
+                }
+                remaining -= 1;
+            }
+            self.0 += 1;
+        }
+    }
+
+    let mut parser = Parser::<DefaultCharAccumulator>::new();
+    let mut recorder = Recorder::default();
+    for byte in b"\x1b[1:2:3;4;5:6m\x1b[7m\x1b[8:9m" {
+        parser.advance(&mut recorder, *byte);
+    }
+    assert_eq!(recorder.0, 3);
+}
 #[cfg(feature = "output")]
 #[test]
 fn output_strips_incrementally_and_shares_global_choice() {

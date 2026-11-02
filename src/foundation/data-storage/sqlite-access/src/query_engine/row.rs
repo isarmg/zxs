@@ -12,7 +12,7 @@ use crate::value_debug::ValueDebug;
 ///
 /// [`FromRow`]: crate::row::FromRow
 /// [`Query::fetch`]: crate::query::Query::fetch
-pub trait Row: Unpin + Send + Sync + 'static {
+pub trait Row: Unpin + Send + 'static {
     type Database: Database<Row = Self>;
 
     /// Returns `true` if this row has no columns.

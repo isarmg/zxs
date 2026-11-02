@@ -107,7 +107,9 @@ where
         if self.is_done_taking() {
             (0, Some(0))
         } else {
-            self.stream.size_hint() // can't know a lower bound, due to the predicate
+            let (_, upper) = self.stream.size_hint();
+            let pending = usize::from(self.future.is_some());
+            (0, upper.and_then(|upper| upper.checked_add(pending)))
         }
     }
 }

@@ -32,9 +32,17 @@
       "targets": {
         "foundation-codec-boundaries": [
           "base64_known_vectors_and_rejected_padding",
+          "component_builder_name_regressions::instance_map_is_not_duplicated_when_no_values_exist",
+          "component_builder_name_regressions::mixed_maps_preserve_indices_and_existing_subsection_order",
+          "component_builder_name_regressions::ordinary_function_names_are_unchanged_without_instances_or_values",
+          "component_builder_name_regressions::registered_values_have_one_complete_name_map",
+          "component_builder_name_regressions::unnamed_empty_builder_emits_no_name_section",
           "dwarf_reader_decodes_leb_and_reports_truncation",
           "subtle_equality_and_selection_preserve_each_branch_value",
           "wasm_encoder_output_is_valid_and_exports_the_expected_function",
+          "wasm_locals_iteration_preserves_numeric_error_and_operator_position",
+          "wasm_locals_size_hint_bounds_error_termination",
+          "wasm_locals_size_hint_bounds_valid_progress",
           "wasm_parser_rejects_bad_magic_and_version"
         ]
       }
@@ -1525,6 +1533,34 @@
         ]
       }
     },
+    "integration:futures": {
+      "features": [
+        "alloc",
+        "async-await",
+        "async-await-macro",
+        "channel",
+        "executor",
+        "shared-state",
+        "sink",
+        "std",
+        "thread-pool",
+        "utilities"
+      ],
+      "subject": "futures",
+      "targets": {
+        "foundation-futures-contracts": [
+          "predicate_errors_preserve_later_items_and_error_values",
+          "predicate_errors_release_their_consumed_items_promptly",
+          "scan_hint_allows_the_callback_to_stop_early",
+          "scan_hint_includes_the_pending_callback_output",
+          "try_skip_while_terminates_after_a_predicate_error_and_eof",
+          "try_take_while_terminates_after_a_predicate_error_and_eof",
+          "zip_keeps_a_queued_item_until_its_partner_arrives",
+          "zip_reports_termination_when_left_ends",
+          "zip_reports_termination_when_right_ends"
+        ]
+      }
+    },
     "integration:futures-intrusive": {
       "features": [
         "alloc",
@@ -1849,6 +1885,31 @@
         "foundation-html-consumer": [
           "attribute_encoding_keeps_untrusted_quotes_and_markup_inside_the_value",
           "entity_decoding_handles_named_numeric_and_unrecognized_entities"
+        ]
+      }
+    },
+    "integration:http": {
+      "features": [
+        "default",
+        "std"
+      ],
+      "subject": "http",
+      "targets": {
+        "foundation-http-contracts": [
+          "http_public_contract_regressions::borrowed_long_invalid_names_return_error_before_entry",
+          "http_public_contract_regressions::extend_named_entries_handles_maximum_infinite_lower_bound",
+          "http_public_contract_regressions::extend_optional_entries_handles_maximum_infinite_lower_bound",
+          "http_public_contract_regressions::iter_mut_size_hint_bounds_follow_remaining_values",
+          "http_public_contract_regressions::iter_size_hint_bounds_follow_remaining_values",
+          "http_public_contract_regressions::lowercase_name_rejects_double_quote",
+          "http_public_contract_regressions::static_long_invalid_names_panic_before_entry",
+          "http_public_contract_regressions::static_long_invalid_names_panic_before_try_append",
+          "http_public_contract_regressions::static_long_invalid_names_panic_before_try_insert",
+          "http_public_contract_regressions::static_name_rejects_double_quote",
+          "http_public_contract_regressions::valid_long_name_paths_preserve_normalization_and_lookup",
+          "http_public_contract_regressions::valid_name_constructors_preserve_token_punctuation",
+          "http_public_contract_regressions::values_mut_size_hint_bounds_follow_remaining_values",
+          "http_public_contract_regressions::values_size_hint_bounds_follow_remaining_values"
         ]
       }
     },
@@ -2598,14 +2659,14 @@
           "src/foundation/networking/http/src/extensions.rs - extensions::Extensions::is_empty (line 206)",
           "src/foundation/networking/http/src/extensions.rs - extensions::Extensions::len (line 222)",
           "src/foundation/networking/http/src/extensions.rs - extensions::Extensions::remove (line 169)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::key (line 2756)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_insert (line 2598)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_insert_with (line 2673)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_insert_with (line 2685)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_try_insert (line 2633)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_try_insert_with (line 2714)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_try_insert_with (line 2726)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::GetAll<'a,T>::iter (line 2916)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::key (line 2766)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_insert (line 2608)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_insert_with (line 2683)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_insert_with (line 2695)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_try_insert (line 2643)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_try_insert_with (line 2724)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::Entry<'a,T>::or_try_insert_with (line 2736)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::GetAll<'a,T>::iter (line 2926)",
           "src/foundation/networking/http/src/header/map.rs - header::map::HeaderMap (line 63)",
           "src/foundation/networking/http/src/header/map.rs - header::map::HeaderMap::new (line 487)",
           "src/foundation/networking/http/src/header/map.rs - header::map::HeaderMap<T> (line 2072)",
@@ -2637,23 +2698,23 @@
           "src/foundation/networking/http/src/header/map.rs - header::map::HeaderMap<T>::values (line 1007)",
           "src/foundation/networking/http/src/header/map.rs - header::map::HeaderMap<T>::values_mut (line 1031)",
           "src/foundation/networking/http/src/header/map.rs - header::map::HeaderMap<T>::with_capacity (line 528)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::append (line 3369)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::get (line 3245)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::get_mut (line 3272)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::insert (line 3320)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::insert_mult (line 3343)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::into_mut (line 3297)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::iter (line 3471)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::iter_mut (line 3495)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::key (line 3222)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::remove (line 3396)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::remove_entry (line 3420)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::insert (line 2812)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::insert_entry (line 2859)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::into_key (line 2793)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::key (line 2779)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::try_insert (line 2833)",
-          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::try_insert_entry (line 2882)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::append (line 3379)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::get (line 3255)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::get_mut (line 3282)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::insert (line 3330)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::insert_mult (line 3353)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::into_mut (line 3307)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::iter (line 3481)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::iter_mut (line 3505)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::key (line 3232)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::remove (line 3406)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::OccupiedEntry<'a,T>::remove_entry (line 3430)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::insert (line 2822)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::insert_entry (line 2869)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::into_key (line 2803)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::key (line 2789)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::try_insert (line 2843)",
+          "src/foundation/networking/http/src/header/map.rs - header::map::VacantEntry<'a,T>::try_insert_entry (line 2892)",
           "src/foundation/networking/http/src/header/name.rs - header::name::HeaderName::eq (line 1428)",
           "src/foundation/networking/http/src/header/name.rs - header::name::HeaderName::from_lowercase (line 1159)",
           "src/foundation/networking/http/src/header/name.rs - header::name::HeaderName::from_static (line 1210)",
@@ -3210,6 +3271,18 @@
         ],
         "test_fmt": [
           "test_fmt_group"
+        ]
+      }
+    },
+    "standalone:proc-macro2-diagnostics": {
+      "features": [
+        "nightly"
+      ],
+      "subject": "proc-macro2-diagnostics",
+      "targets": {
+        "lib": [
+          "diagnostic::tests::diagnostic_levels_require_exact_names",
+          "diagnostic::tests::ordinary_error_labels_survive_diagnostic_conversion"
         ]
       }
     },
@@ -4145,6 +4218,19 @@
           "rwlock::tests::test_rwlock_try_write",
           "rwlock::tests::test_rwlock_unsized",
           "rwlock::tests::test_upgrade_downgrade"
+        ]
+      }
+    },
+    "unit:tempfile": {
+      "features": [
+        "default",
+        "system-entropy"
+      ],
+      "subject": "tempfile",
+      "targets": {
+        "lib": [
+          "error::tests::nested_path_contexts_preserve_error_chain",
+          "error::tests::path_context_preserves_original_io_error"
         ]
       }
     },

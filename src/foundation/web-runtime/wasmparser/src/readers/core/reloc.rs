@@ -258,7 +258,11 @@ impl RelocationType {
             }
             MemoryAddrRelSleb64 | MemoryAddrTlsSleb64 | MemoryAddrLeb64 | MemoryAddrSleb64
             | MemoryAddrI64 | FunctionOffsetI64 => RelocAddendKind::Addend64,
-            _ => RelocAddendKind::None,
+            FunctionIndexLeb | TableIndexSleb | TableIndexI32 | TypeIndexLeb | GlobalIndexLeb
+            | EventIndexLeb | TableIndexRelSleb | GlobalIndexI32 | TableIndexSleb64
+            | TableIndexI64 | TableNumberLeb | TableIndexRelSleb64 | FunctionIndexI32 => {
+                RelocAddendKind::None
+            }
         }
     }
 

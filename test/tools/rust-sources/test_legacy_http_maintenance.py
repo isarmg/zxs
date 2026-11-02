@@ -68,12 +68,18 @@ class LegacyHttpMaintenance(unittest.TestCase):
         cls.layout_receipt = source_layout.read_receipt(ROOT, layout_id)
         cls.layout_row = next(row for row in cls.layout_receipt['packages']
                               if row['directory'] == legacy.LOGICAL)
-        original = (ROOT / legacy.OWNER / legacy.FILE).read_bytes()
-        for state in ('Want', 'Closed'):
-            for operator in ('==', '!='):
-                original = original.replace(
-                    f'load(SeqCst) {operator} usize::from(State::{state})'.encode(),
-                    f'load(SeqCst) {operator} State::{state}.into()'.encode())
+        actual = source_layout.load(ROOT, cls.catalog_template).legacy_maintenance
+        cls.initial_owner = deepcopy(actual.steps[0][1]['before'])
+        # Reconstruct the complete initial owner, including later real edits to
+        # files other than demand.rs, before testing the synthetic first step.
+        cls.initial_sources = {
+            relative: actual.read(legacy.LOGICAL + '/' + relative,
+                                  (ROOT / legacy.OWNER / relative).read_bytes())
+            for relative in cls.initial_owner['package']['files_sha256']
+        }
+        assert {path: routing.digest(data) for path, data in cls.initial_sources.items()} == \
+            cls.initial_owner['package']['files_sha256']
+        original = cls.initial_sources[legacy.FILE]
         cls.original = original
         cls.changed = original
         for state in ('Want', 'Closed'):
@@ -90,9 +96,10 @@ class LegacyHttpMaintenance(unittest.TestCase):
         self.root = Path(temporary.name)
         self.previous = deepcopy(self.catalog_template)
         self.previous.pop(legacy.KEY, None)
-        for package in [self.previous['packages'][legacy.OWNER],
-                        *[row for row in self.previous['merges'] if row['directory'] == legacy.OWNER]]:
-            package['files_sha256'][legacy.FILE] = routing.digest(self.original)
+        self.previous['packages'][legacy.OWNER] = deepcopy(self.initial_owner['package'])
+        self.previous['merges'] = [row for row in self.previous['merges']
+                                  if row['directory'] != legacy.OWNER] + deepcopy(self.initial_owner['merges'])
+        self.previous['external_tests'][legacy.OWNER] = deepcopy(self.initial_owner['external'])
         before = maintenance.state(deepcopy(self.previous), legacy.OWNER)
         after = deepcopy(before)
         after['package']['files_sha256'][legacy.FILE] = routing.digest(self.changed)
@@ -101,6 +108,8 @@ class LegacyHttpMaintenance(unittest.TestCase):
         roots = [legacy.OWNER, *before['external']['roots']]
         for relative in roots:
             shutil.copytree(ROOT / relative, self.root / relative)
+        for relative, data in self.initial_sources.items():
+            (self.root / legacy.OWNER / relative).write_bytes(data)
         self.path = self.root / legacy.OWNER / legacy.FILE
         self.path.write_bytes(self.changed)
         self.current = deepcopy(self.previous)

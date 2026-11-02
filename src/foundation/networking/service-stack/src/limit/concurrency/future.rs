@@ -17,7 +17,7 @@ pin_project! {
     pub struct ResponseFuture<T> {
         #[pin]
         inner: T,
-        // Keep this around so that it is dropped when the future completes
+        // Hold the permit until this response future is dropped.
         _permit: OwnedSemaphorePermit,
     }
 }

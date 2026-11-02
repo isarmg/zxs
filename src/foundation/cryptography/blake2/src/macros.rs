@@ -265,7 +265,7 @@ macro_rules! blake2_mac_impl {
             core: $hash,
             buffer: LazyBuffer<<$hash as BlockSizeUser>::BlockSize>,
             #[cfg(feature = "reset")]
-            key_block: Key<Self>,
+            key_block: Option<Key<Self>>,
             _out: PhantomData<OutSize>,
         }
 
@@ -292,16 +292,24 @@ macro_rules! blake2_mac_impl {
                 if kl > max_key || salt.len() > max_parameter || persona.len() > max_parameter {
                     return Err(InvalidLength);
                 }
-                let mut padded_key = Block::<$hash>::default();
-                padded_key[..kl].copy_from_slice(key);
+                // RFC 7693 only prepends a padded key block for nonempty keys.
+                let buffer = if key.is_empty() {
+                    LazyBuffer::default()
+                } else {
+                    let mut padded_key = Block::<$hash>::default();
+                    padded_key[..kl].copy_from_slice(key);
+                    LazyBuffer::new(&padded_key)
+                };
                 Ok(Self {
                     core: <$hash>::new_with_params(salt, persona, key.len(), OutSize::USIZE),
-                    buffer: LazyBuffer::new(&padded_key),
+                    buffer,
                     #[cfg(feature = "reset")]
-                    key_block: {
+                    key_block: if key.is_empty() {
+                        None
+                    } else {
                         let mut t = Key::<Self>::default();
                         t[..kl].copy_from_slice(key);
-                        t
+                        Some(t)
                     },
                     _out: PhantomData,
                 })
@@ -328,23 +336,7 @@ macro_rules! blake2_mac_impl {
 
             #[inline]
             fn new_from_slice(key: &[u8]) -> Result<Self, InvalidLength> {
-                let kl = key.len();
-                if kl > <Self as KeySizeUser>::KeySize::USIZE {
-                    return Err(InvalidLength);
-                }
-                let mut padded_key = Block::<$hash>::default();
-                padded_key[..kl].copy_from_slice(key);
-                Ok(Self {
-                    core: <$hash>::new_with_params(&[], &[], key.len(), OutSize::USIZE),
-                    buffer: LazyBuffer::new(&padded_key),
-                    #[cfg(feature = "reset")]
-                    key_block: {
-                        let mut t = Key::<Self>::default();
-                        t[..kl].copy_from_slice(key);
-                        t
-                    },
-                    _out: PhantomData,
-                })
+                Self::new_with_salt_and_personal(key, &[], &[])
             }
         }
 
@@ -390,10 +382,13 @@ macro_rules! blake2_mac_impl {
         {
             fn reset(&mut self) {
                 self.core.reset();
-                let kl = self.key_block.len();
-                let mut padded_key = Block::<$hash>::default();
-                padded_key[..kl].copy_from_slice(&self.key_block);
-                self.buffer = LazyBuffer::new(&padded_key);
+                self.buffer = if let Some(key_block) = &self.key_block {
+                    let mut padded_key = Block::<$hash>::default();
+                    padded_key[..key_block.len()].copy_from_slice(key_block);
+                    LazyBuffer::new(&padded_key)
+                } else {
+                    LazyBuffer::default()
+                };
             }
         }
 

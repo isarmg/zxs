@@ -1,4 +1,4 @@
-use crate::{CustomSection, Encode, Section, SectionId, encode_section};
+use crate::{encode_section, CustomSection, Encode, Section, SectionId};
 use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -125,7 +125,7 @@ impl SymbolTable {
 
     /// Define a function symbol in this symbol table.
     ///
-    /// The `name` must be omitted if `index` references an imported table and
+    /// The `name` must be omitted if `index` references an imported function and
     /// the `WASM_SYM_EXPLICIT_NAME` flag is not set.
     pub fn function(&mut self, flags: u32, index: u32, name: Option<&str>) -> &mut Self {
         SYMTAB_FUNCTION.encode(&mut self.bytes);
@@ -140,7 +140,7 @@ impl SymbolTable {
 
     /// Define a global symbol in this symbol table.
     ///
-    /// The `name` must be omitted if `index` references an imported table and
+    /// The `name` must be omitted if `index` references an imported global and
     /// the `WASM_SYM_EXPLICIT_NAME` flag is not set.
     pub fn global(&mut self, flags: u32, index: u32, name: Option<&str>) -> &mut Self {
         SYMTAB_GLOBAL.encode(&mut self.bytes);

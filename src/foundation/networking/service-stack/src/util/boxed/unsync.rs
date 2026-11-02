@@ -1,5 +1,5 @@
-use crate::{layer_fn, LayerFn};
 use crate::Service;
+use crate::{layer_fn, LayerFn};
 
 use std::fmt;
 use std::{
@@ -25,7 +25,7 @@ struct UnsyncBoxed<S> {
 }
 
 impl<T, U, E> UnsyncBoxService<T, U, E> {
-    #[allow(missing_docs)]
+    /// Boxes the service and each response future without requiring them to be `Send`.
     pub fn new<S>(inner: S) -> Self
     where
         S: Service<T, Response = U, Error = E> + 'static,

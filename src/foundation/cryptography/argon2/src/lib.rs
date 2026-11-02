@@ -261,8 +261,9 @@ impl<'key> Argon2<'key> {
         // Hashing all inputs
         let initial_hash = self.initial_hash(pwd, salt, out);
 
-        self.fill_blocks(memory_blocks.as_mut(), initial_hash)?;
-        self.finalize(memory_blocks.as_mut(), out)
+        let memory_blocks = memory_blocks.as_mut();
+        self.fill_blocks(memory_blocks, initial_hash)?;
+        self.finalize(memory_blocks, out)
     }
 
     /// Use a password and associated parameters only to fill the given memory blocks.

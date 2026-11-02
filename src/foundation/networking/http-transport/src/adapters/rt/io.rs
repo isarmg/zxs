@@ -24,7 +24,11 @@ where
     let mut n = 0;
     poll_fn(move |cx| {
         while n < buf.len() {
-            n += ready!(Pin::new(&mut *io).poll_write(cx, &buf[n..])?);
+            let written = ready!(Pin::new(&mut *io).poll_write(cx, &buf[n..]))?;
+            if written == 0 {
+                return Poll::Ready(Err(std::io::ErrorKind::WriteZero.into()));
+            }
+            n += written;
         }
         Poll::Ready(Ok(()))
     })
