@@ -92239,7 +92239,7 @@
       "version": "0.5.0"
     },
     "src/foundation/concurrency/futures-macro": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "保留发布包来源和现有宏行为；按固定 Rust 1.99 工具链格式整理 StreamSelect 生成器的迭代器表达式；保留当前路径依赖、许可与文档。",
       "description": "The futures-rs procedural macro implementations.",
       "directory": "src/foundation/concurrency/futures-macro",
       "files_sha256": {
@@ -92248,7 +92248,7 @@
         "src/join.rs": "d1de7a731f01c037ac57274f34ae8b5d2c9e9af1768b7f1afdfba35e5b206f9d",
         "src/lib.rs": "4b364389d25337ea7aa25bb4ed13a906de139e15e357a2d78c50db56955a591e",
         "src/select.rs": "39925093d0e716db21071a5dd3fe26c683837988697eccf3e5d93ce3f233a09c",
-        "src/stream_select.rs": "e4bfb6be246544e721a7faa110290bcdf5be3f29a2b8458a86bcca97078fb3ed"
+        "src/stream_select.rs": "9ac421a17d1d11a0a6a2344f1abddc72ab28c97dee7ecb3f7f9cff5303a371d0"
       },
       "license": "MIT OR Apache-2.0",
       "license_materials": [

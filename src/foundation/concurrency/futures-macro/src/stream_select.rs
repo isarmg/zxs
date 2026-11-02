@@ -10,9 +10,15 @@ pub(crate) fn stream_select(input: TokenStream) -> Result<TokenStream, rust_synt
            compile_error!("stream select macro needs at least two arguments.")
         });
     }
-    let generic_idents = (0..args.len()).map(|i| format_ident!("_{}", i)).collect::<Vec<_>>();
-    let field_idents = (0..args.len()).map(|i| format_ident!("__{}", i)).collect::<Vec<_>>();
-    let field_idents_2 = (0..args.len()).map(|i| format_ident!("___{}", i)).collect::<Vec<_>>();
+    let generic_idents = (0..args.len())
+        .map(|i| format_ident!("_{}", i))
+        .collect::<Vec<_>>();
+    let field_idents = (0..args.len())
+        .map(|i| format_ident!("__{}", i))
+        .collect::<Vec<_>>();
+    let field_idents_2 = (0..args.len())
+        .map(|i| format_ident!("___{}", i))
+        .collect::<Vec<_>>();
     let field_indices = (0..args.len()).map(Index::from).collect::<Vec<_>>();
     let args = args.iter().map(|e| e.to_token_stream());
 
