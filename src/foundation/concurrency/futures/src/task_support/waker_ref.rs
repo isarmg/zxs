@@ -8,7 +8,7 @@ use core::task::{RawWaker, Waker};
 
 /// A [`Waker`] that is only valid for a given lifetime.
 ///
-/// Note: this type implements [`Deref<Target = Waker>`](std::ops::Deref),
+/// Note: this type implements [`Deref<Target = Waker>`](core::ops::Deref),
 /// so it can be used to get a `&Waker`.
 #[derive(Debug)]
 pub struct WakerRef<'a> {

@@ -13,7 +13,7 @@ use alloc::sync::Arc;
 /// * [`waker_ref`](super::waker_ref()) converts `&Arc<impl ArcWake>` into [`WakerRef`] that
 ///   provides access to a [`&Waker`][`Waker`].
 ///
-/// [`Waker`]: std::task::Waker
+/// [`Waker`]: core::task::Waker
 /// [`WakerRef`]: super::WakerRef
 // Note: Send + Sync required because `Arc<T>` doesn't automatically imply
 // those bounds, but `Waker` implements them.
@@ -27,7 +27,7 @@ pub trait ArcWake: Send + Sync {
     /// Executors generally maintain a queue of "ready" tasks; `wake` should place
     /// the associated task onto this queue.
     ///
-    /// [`Waker`]: std::task::Waker
+    /// [`Waker`]: core::task::Waker
     fn wake(self: Arc<Self>) {
         Self::wake_by_ref(&self)
     }
@@ -44,6 +44,6 @@ pub trait ArcWake: Send + Sync {
     /// This function is similar to [`wake`](ArcWake::wake), but must not consume the provided data
     /// pointer.
     ///
-    /// [`Waker`]: std::task::Waker
+    /// [`Waker`]: core::task::Waker
     fn wake_by_ref(arc_self: &Arc<Self>);
 }
