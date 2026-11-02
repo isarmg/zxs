@@ -35,4 +35,7 @@ impl<B, E> Policy<B, E> for Limited {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/tower-http/unit/src/follow_redirect/policy/limited/tests_37.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/tower-http/unit/src/follow_redirect/policy/limited/tests_37.rs"
+));

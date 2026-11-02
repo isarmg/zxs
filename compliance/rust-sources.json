@@ -98028,7 +98028,7 @@
       "version": "0.26.6"
     },
     "src/foundation/networking/tower-http": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "保留发布包来源及现有功能；按固定 Rust 1.99 工具链统一 follow_redirect 模块的导入排序和合法 cfg(test)/include! 布局；路径依赖、许可和文档集中维护。",
       "description": "Tower middleware and utilities for HTTP clients and servers",
       "directory": "src/foundation/networking/tower-http",
       "files_sha256": {
@@ -98072,13 +98072,13 @@
         "src/decompression/request/mod.rs": "c3673e9e66c6b430560f5ec9e89fe67334fca7ccbe76e4fcc5932ff1fbbccd86",
         "src/decompression/request/service.rs": "208bf0f383cb4dfb49885fb12c0c840c7586d606c3a692e74944086f39f461f8",
         "src/decompression/service.rs": "67bc52e5a47fde28fef787ce6ba5fdba87ad697f4077d280af9722451f86d029",
-        "src/follow_redirect/mod.rs": "8a779086c8a8e07598a9a8df9a54ff219af046666a27a132c1f080072761b58f",
-        "src/follow_redirect/policy/and.rs": "9517b7d241162d0c8c9349fe6c5298489564647df518b229e3eac7068e75acd9",
+        "src/follow_redirect/mod.rs": "aca9ae0c82cad9e8ad050a993a0b2ccec6340db4908d0e9b94f1f3ce79b544c8",
+        "src/follow_redirect/policy/and.rs": "02015b111f0f59beddbda5baf7fa21d5958c96973d35a120fcdb616c90f3ca12",
         "src/follow_redirect/policy/clone_body_fn.rs": "3a78bf37d4bd000d9c2d60d84a2d02d2d0ae584a0790da2dcdb34fab43fcd557",
         "src/follow_redirect/policy/filter_credentials.rs": "b44a7656cb4b7403de8eb0064a62cbf1326a91a89e6c5b0ab22ae94b742dd46c",
-        "src/follow_redirect/policy/limited.rs": "d18cc2395ac24d9d33bf83c9105deff7bd357b9784972a6b6e2e973800d754e3",
-        "src/follow_redirect/policy/mod.rs": "a5742253e39d1024bc66914f596c1c7c49e6f81a5bef11dad7daa900de5d1dc1",
-        "src/follow_redirect/policy/or.rs": "850372c3067310ae2e52dec51383cbf19b6eecff91073238a6637ca575103930",
+        "src/follow_redirect/policy/limited.rs": "047427c62ed95b89b9491c037783b3e578c36cfd37a4d96e645d4bd010992e9d",
+        "src/follow_redirect/policy/mod.rs": "ab57a429f5db849682a37cebc3922a9920564ddbef77054cceba146d6a9cb693",
+        "src/follow_redirect/policy/or.rs": "bc89670b2e4b577dc70428d04c9a542c82921b6abe90b455347ded2cb84e73ed",
         "src/follow_redirect/policy/redirect_fn.rs": "f4f7bf9219df8da1021ef9f44b07b50814dfa0728c8dbf52090e0dfab0b8edcc",
         "src/follow_redirect/policy/same_origin.rs": "5b7a60d1210939284e65b3da47c99194090991456ebb3f2641160fb61b1fecb6",
         "src/lib.rs": "72c90054ca1f300d9d5c7bbcdd53a82d3caf0654ee96269b0c5c796466fff89f",

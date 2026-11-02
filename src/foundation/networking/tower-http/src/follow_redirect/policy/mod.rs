@@ -298,4 +298,7 @@ fn eq_origin(lhs: &Uri, rhs: &Uri) -> bool {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/tower-http/unit/src/follow_redirect/policy/mod/tests_300.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/tower-http/unit/src/follow_redirect/policy/mod/tests_300.rs"
+));
