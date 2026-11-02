@@ -4,6 +4,7 @@ use crate::sink_trait::Sink;
 use crate::stream::{Fuse, FuturesOrdered, IntoStream, StreamExt};
 use crate::traits::future::TryFuture;
 use crate::traits::stream::{Stream, TryStream};
+use core::num::NonZeroUsize;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use pin_project_lite::pin_project;
@@ -20,7 +21,7 @@ pin_project! {
         #[pin]
         stream: Fuse<IntoStream<St>>,
         in_progress_queue: FuturesOrdered<IntoFuture<St::Ok>>,
-        max: usize,
+        max: NonZeroUsize,
     }
 }
 
@@ -29,7 +30,7 @@ where
     St: TryStream,
     St::Ok: TryFuture,
 {
-    pub(super) fn new(stream: St, n: usize) -> Self {
+    pub(super) fn new(stream: St, n: NonZeroUsize) -> Self {
         Self {
             stream: IntoStream::new(stream).fuse(),
             in_progress_queue: FuturesOrdered::new(),
@@ -52,7 +53,7 @@ where
 
         // First up, try to spawn off as many futures as possible by filling up
         // our queue of futures. Propagate errors from the stream immediately.
-        while this.in_progress_queue.len() < *this.max {
+        while this.in_progress_queue.len() < this.max.get() {
             match this.stream.as_mut().poll_next(cx)? {
                 Poll::Ready(Some(fut)) => this.in_progress_queue.push_back(fut.into_future()),
                 Poll::Ready(None) | Poll::Pending => break,

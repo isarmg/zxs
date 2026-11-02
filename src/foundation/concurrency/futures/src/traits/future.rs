@@ -74,9 +74,9 @@ pub trait TryFuture: Future + private_try_future::Sealed {
 
     /// Poll this `TryFuture` as if it were a `Future`.
     ///
-    /// This method is a stopgap for a compiler limitation that prevents us from
-    /// directly inheriting from the `Future` trait; in the future it won't be
-    /// needed.
+    /// Unlike `Future::poll` under a generic `TryFuture` bound, this method
+    /// explicitly returns `Result<Self::Ok, Self::Error>`. The blanket implementation
+    /// delegates to `Future::poll` for futures with that result output type.
     fn try_poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<Self::Ok, Self::Error>>;
 }
 

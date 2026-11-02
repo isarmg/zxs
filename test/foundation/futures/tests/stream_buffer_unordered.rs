@@ -30,7 +30,7 @@ fn works() {
 
     let (tx4, rx4) = std_mpsc::channel();
     let t2 = thread::spawn(move || {
-        for item in block_on_stream(rx.buffer_unordered(N)) {
+        for item in block_on_stream(rx.buffer_unordered(core::num::NonZeroUsize::new(N).unwrap())) {
             tx4.send(item.unwrap()).unwrap();
         }
     });

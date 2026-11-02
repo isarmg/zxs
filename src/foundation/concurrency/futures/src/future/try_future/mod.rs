@@ -1,7 +1,7 @@
 //! Futures
 //!
-//! This module contains a number of functions for working with `Future`s,
-//! including the `FutureExt` trait which adds methods to `Future` types.
+//! This module contains adapters for futures that return `Result` values,
+//! including the `TryFutureExt` trait which adds methods to `TryFuture` types.
 
 #[cfg(feature = "sink")]
 use crate::sink_trait::Sink;
@@ -33,7 +33,8 @@ delegate_all!(
 );
 
 delegate_all!(
-    /// Future for the [`try_flatten_err`](TryFutureExt::try_flatten_err) method.
+    /// Internal future that flattens an error containing another future.
+    /// Used by [`or_else`](TryFutureExt::or_else) after mapping the error.
     TryFlattenErr<Fut1, Fut2>(
         try_flatten_err::TryFlattenErr<Fut1, Fut2>
     ): Debug + Future + FusedFuture + New[|x: Fut1| try_flatten_err::TryFlattenErr::new(x)]
@@ -573,12 +574,12 @@ pub trait TryFutureExt: TryFuture {
         assert_future::<Self::Ok, _>(UnwrapOrElse::new(self, f))
     }
 
-    /// Wraps a [`TryFuture`] into a type that implements
-    /// [`Future`](core::future::Future).
+    /// Wraps a [`TryFuture`] into a future with
+    /// `Output = Result<Self::Ok, Self::Error>`.
     ///
-    /// [`TryFuture`]s currently do not implement the
-    /// [`Future`](core::future::Future) trait due to limitations of the
-    /// compiler.
+    /// [`TryFuture`] already extends [`Future`](core::future::Future), but a
+    /// generic `TryFuture` bound does not expose this equality for `Future::Output`.
+    /// This adapter makes the result type explicit for consumers that require it.
     ///
     /// # Examples
     ///

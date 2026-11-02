@@ -4,6 +4,7 @@ use crate::stream::{Fuse, FuturesUnordered, StreamExt};
 use crate::traits::future::Future;
 use crate::traits::stream::{FusedStream, Stream};
 use core::fmt;
+use core::num::NonZeroUsize;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use pin_project_lite::pin_project;
@@ -19,7 +20,7 @@ pin_project! {
         #[pin]
         stream: Fuse<St>,
         in_progress_queue: FuturesUnordered<St::Item>,
-        max: usize,
+        max: NonZeroUsize,
     }
 }
 
@@ -41,7 +42,7 @@ where
     St: Stream,
     St::Item: Future,
 {
-    pub(super) fn new(stream: St, n: usize) -> Self {
+    pub(super) fn new(stream: St, n: NonZeroUsize) -> Self {
         Self {
             stream: super::Fuse::new(stream),
             in_progress_queue: FuturesUnordered::new(),
@@ -64,7 +65,7 @@ where
 
         // First up, try to spawn off as many futures as possible by filling up
         // our queue of futures.
-        while this.in_progress_queue.len() < *this.max {
+        while this.in_progress_queue.len() < this.max.get() {
             match this.stream.as_mut().poll_next(cx) {
                 Poll::Ready(Some(fut)) => this.in_progress_queue.push(fut),
                 Poll::Ready(None) | Poll::Pending => break,

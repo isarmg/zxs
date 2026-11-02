@@ -1594,6 +1594,15 @@
       "subject": "futures",
       "targets": {
         "foundation-futures-contracts": [
+          "buffer_capacity::buffered_bounds_and_drop",
+          "buffer_capacity::buffered_positive",
+          "buffer_capacity::try_buffered_bounds_and_drop",
+          "buffer_capacity::try_buffered_positive",
+          "buffer_capacity::try_buffers_preserve_source_error_and_continue",
+          "buffer_capacity::try_unordered_bounds_and_drop",
+          "buffer_capacity::try_unordered_positive",
+          "buffer_capacity::unordered_bounds_and_drop",
+          "buffer_capacity::unordered_positive",
           "chunk_errors::chunks_accepts_non_error_payloads",
           "chunk_errors::chunks_preserves_source_chain",
           "chunk_errors::ready_chunks_accepts_non_error_payloads",

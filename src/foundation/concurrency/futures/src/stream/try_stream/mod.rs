@@ -1008,7 +1008,8 @@ pub trait TryStreamExt: TryStream {
     ///
     /// let stream_of_futures = stream::iter(vec![Ok(recv_one), Ok(recv_two)]);
     ///
-    /// let mut buffered = stream_of_futures.try_buffer_unordered(10);
+    /// let capacity = core::num::NonZeroUsize::new(10).unwrap();
+    /// let mut buffered = stream_of_futures.try_buffer_unordered(capacity);
     ///
     /// send_two.send(2i32)?;
     /// assert_eq!(buffered.next().await, Some(Ok(2i32)));
@@ -1027,7 +1028,8 @@ pub trait TryStreamExt: TryStream {
     /// use futures::stream::{StreamExt, TryStreamExt};
     ///
     /// let (sink, stream_of_futures) = mpsc::unbounded();
-    /// let mut buffered = stream_of_futures.try_buffer_unordered(10);
+    /// let capacity = core::num::NonZeroUsize::new(10).unwrap();
+    /// let mut buffered = stream_of_futures.try_buffer_unordered(capacity);
     ///
     /// sink.unbounded_send(Ok(async { Ok(7i32) }))?;
     /// assert_eq!(buffered.next().await, Some(Ok(7i32)));
@@ -1036,9 +1038,20 @@ pub trait TryStreamExt: TryStream {
     /// assert_eq!(buffered.next().await, Some(Err("error in the stream")));
     /// # Ok::<(), Box<dyn std::error::Error>>(()) }).unwrap();
     /// ```
+    ///
+    /// The capacity is a [`core::num::NonZeroUsize`]: at least one future must
+    /// be admitted for this adapter to make progress. Convert a caller-supplied
+    /// `usize` with `NonZeroUsize::new` and handle zero at the input boundary;
+    /// zero is neither an unlimited capacity nor a request for a default.
+    ///
+    /// ```compile_fail,E0308
+    /// use futures::stream::{self, TryStreamExt};
+    /// let stream = stream::empty::<Result<core::future::Ready<Result<(), ()>>, ()>>();
+    /// let buffered = stream.try_buffer_unordered(0usize);
+    /// ```
     #[cfg(target_has_atomic = "ptr")]
     #[cfg(feature = "alloc")]
-    fn try_buffer_unordered(self, n: usize) -> TryBufferUnordered<Self>
+    fn try_buffer_unordered(self, n: core::num::NonZeroUsize) -> TryBufferUnordered<Self>
     where
         Self::Ok: TryFuture<Error = Self::Error>,
         Self: Sized,
@@ -1079,7 +1092,8 @@ pub trait TryStreamExt: TryStream {
     /// let mut buffered = lazy(move |cx| {
     ///     let stream_of_futures = stream::iter(vec![Ok(recv_one), Ok(recv_two)]);
     ///
-    ///     let mut buffered = stream_of_futures.try_buffered(10);
+    ///     let capacity = core::num::NonZeroUsize::new(10).unwrap();
+    ///     let mut buffered = stream_of_futures.try_buffered(capacity);
     ///
     ///     assert!(buffered.try_poll_next_unpin(cx).is_pending());
     ///
@@ -1103,7 +1117,8 @@ pub trait TryStreamExt: TryStream {
     /// use futures::stream::{StreamExt, TryStreamExt};
     ///
     /// let (sink, stream_of_futures) = mpsc::unbounded();
-    /// let mut buffered = stream_of_futures.try_buffered(10);
+    /// let capacity = core::num::NonZeroUsize::new(10).unwrap();
+    /// let mut buffered = stream_of_futures.try_buffered(capacity);
     ///
     /// sink.unbounded_send(Ok(async { Ok(7i32) }))?;
     /// assert_eq!(buffered.next().await, Some(Ok(7i32)));
@@ -1112,9 +1127,20 @@ pub trait TryStreamExt: TryStream {
     /// assert_eq!(buffered.next().await, Some(Err("error in the stream")));
     /// # Ok::<(), Box<dyn std::error::Error>>(()) }).unwrap();
     /// ```
+    ///
+    /// The capacity is a [`core::num::NonZeroUsize`]: at least one future must
+    /// be admitted for this adapter to make progress. Convert a caller-supplied
+    /// `usize` with `NonZeroUsize::new` and handle zero at the input boundary;
+    /// zero is neither an unlimited capacity nor a request for a default.
+    ///
+    /// ```compile_fail,E0308
+    /// use futures::stream::{self, TryStreamExt};
+    /// let stream = stream::empty::<Result<core::future::Ready<Result<(), ()>>, ()>>();
+    /// let buffered = stream.try_buffered(0usize);
+    /// ```
     #[cfg(target_has_atomic = "ptr")]
     #[cfg(feature = "alloc")]
-    fn try_buffered(self, n: usize) -> TryBuffered<Self>
+    fn try_buffered(self, n: core::num::NonZeroUsize) -> TryBuffered<Self>
     where
         Self::Ok: TryFuture<Error = Self::Error>,
         Self: Sized,

@@ -1,3 +1,6 @@
+#[path = "foundation-buffer-capacity.rs"]
+mod buffer_capacity;
+
 #[path = "foundation-chunk-errors.rs"]
 mod chunk_errors;
 

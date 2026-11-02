@@ -1364,9 +1364,20 @@ pub trait StreamExt: Stream {
     ///
     /// This method is only available when the `std` or `alloc` feature of this
     /// library is activated, and it is activated by default.
+    ///
+    /// The capacity is a [`core::num::NonZeroUsize`]: at least one future must
+    /// be admitted for this adapter to make progress. Convert a caller-supplied
+    /// `usize` with `NonZeroUsize::new` and handle zero at the input boundary;
+    /// zero is neither an unlimited capacity nor a request for a default.
+    ///
+    /// ```compile_fail,E0308
+    /// use futures::stream::{self, StreamExt};
+    /// let stream = stream::empty::<core::future::Ready<()>>();
+    /// let buffered = stream.buffered(0usize);
+    /// ```
     #[cfg(target_has_atomic = "ptr")]
     #[cfg(feature = "alloc")]
-    fn buffered(self, n: usize) -> Buffered<Self>
+    fn buffered(self, n: core::num::NonZeroUsize) -> Buffered<Self>
     where
         Self::Item: Future,
         Self: Sized,
@@ -1398,7 +1409,8 @@ pub trait StreamExt: Stream {
     /// let (send_two, recv_two) = oneshot::channel();
     ///
     /// let stream_of_futures = stream::iter(vec![recv_one, recv_two]);
-    /// let mut buffered = stream_of_futures.buffer_unordered(10);
+    /// let capacity = core::num::NonZeroUsize::new(10).unwrap();
+    /// let mut buffered = stream_of_futures.buffer_unordered(capacity);
     ///
     /// send_two.send(2i32)?;
     /// assert_eq!(buffered.next().await, Some(Ok(2i32)));
@@ -1409,9 +1421,20 @@ pub trait StreamExt: Stream {
     /// assert_eq!(buffered.next().await, None);
     /// # Ok::<(), i32>(()) }).unwrap();
     /// ```
+    ///
+    /// The capacity is a [`core::num::NonZeroUsize`]: at least one future must
+    /// be admitted for this adapter to make progress. Convert a caller-supplied
+    /// `usize` with `NonZeroUsize::new` and handle zero at the input boundary;
+    /// zero is neither an unlimited capacity nor a request for a default.
+    ///
+    /// ```compile_fail,E0308
+    /// use futures::stream::{self, StreamExt};
+    /// let stream = stream::empty::<core::future::Ready<()>>();
+    /// let buffered = stream.buffer_unordered(0usize);
+    /// ```
     #[cfg(target_has_atomic = "ptr")]
     #[cfg(feature = "alloc")]
-    fn buffer_unordered(self, n: usize) -> BufferUnordered<Self>
+    fn buffer_unordered(self, n: core::num::NonZeroUsize) -> BufferUnordered<Self>
     where
         Self::Item: Future,
         Self: Sized,
