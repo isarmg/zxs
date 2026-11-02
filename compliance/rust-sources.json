@@ -92181,7 +92181,7 @@
       "version": "0.3.34"
     },
     "src/foundation/concurrency/futures-intrusive": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 2 个独立示例程序及专属输入（20306 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-02：借用 Mutex lock future 的 Send 实现要求 T: Send，与底层 Mutex 的 Sync 契约一致；保留载荷无需 Sync 的合法调用。 2026-11-02：owned StateReceiveFuture 的 Send 要求原始锁 Send+Sync，以覆盖最后 Arc 析构；借用版边界保持。共享 oneshot broadcast 独立统计接收端，只有最后端点释放才关闭，owned receive future 不计为端点；clone/drop 新增计数原子操作，保留原 channel 锁与关闭线性化。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 2 个独立示例程序及专属输入（20306 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-02：借用 Mutex lock future 的 Send 实现要求 T: Send，与底层 Mutex 的 Sync 契约一致；保留载荷无需 Sync 的合法调用。 2026-11-02：owned StateReceiveFuture 的 Send 要求原始锁 Send+Sync，以覆盖最后 Arc 析构；借用版边界保持。共享 oneshot broadcast 独立统计接收端，只有最后端点释放才关闭，owned receive future 不计为端点；clone/drop 新增计数原子操作，保留原 channel 锁与关闭线性化。 2026-11-02：仅固定工具链格式整理 state/oneshot broadcast 两文件；保留字面量、注释、cfg/测试接线及同步/析构行为。",
       "description": "Futures based on intrusive data structures - for std and no-std environments.",
       "directory": "src/foundation/concurrency/futures-intrusive",
       "files_sha256": {
@@ -92199,8 +92199,8 @@
         "src/channel/mod.rs": "fbc7a7a8e3825e0ecf31458027835167d098b9de4443aff7af95d1e1da2d3136",
         "src/channel/mpmc.rs": "37b6341019aacb8c1bde881b9e0bd8566ce99aba002ec3ee16dcb05f2c7f35df",
         "src/channel/oneshot.rs": "d42fefc10432bccc9e6b4ecb44ad172fe82859809f86ffdb3c6ecfd8919310ce",
-        "src/channel/oneshot_broadcast.rs": "5aabe7c651c5414e23cc491f99b51586fa97d026df95d18f25e9b442566e618d",
-        "src/channel/state_broadcast.rs": "e82e7df33e1c3927d555a827a100ee47d13641a38dbe2751cad6024060070262",
+        "src/channel/oneshot_broadcast.rs": "27873b009574a5f367a5eb7b0f20529bfd03005fa577cc1aff96dbbdb7d198b3",
+        "src/channel/state_broadcast.rs": "458b8562aee860ef53e4d42c60f6a17f98e7f8363b5f82df99cda8b1733968e5",
         "src/intrusive_double_linked_list.rs": "0cf550cc934fbc35acfdde692f25f6095080e816db621bf6c9bec5759b88c092",
         "src/intrusive_pairing_heap.rs": "b2eb10c45597b9179917927664483785475db2e2239214f8f16e714244ddde82",
         "src/lib.rs": "f1e7e787c7674773feabce5e44e1ed1e056635b08415f33ea0990223e0962792",

@@ -2,8 +2,8 @@
 //! multiple consumers.
 
 use super::{
-    ChannelReceiveAccess, ChannelReceiveFuture, ChannelSendError, CloseStatus,
-    RecvPollState, RecvWaitQueueEntry,
+    ChannelReceiveAccess, ChannelReceiveFuture, ChannelSendError, CloseStatus, RecvPollState,
+    RecvWaitQueueEntry,
 };
 use crate::{
     intrusive_double_linked_list::{LinkedList, ListNode},
@@ -165,9 +165,7 @@ unsafe impl<MutexType: RawMutex + Sync, T: Send> Sync
 {
 }
 
-impl<MutexType: RawMutex, T> core::fmt::Debug
-    for GenericOneshotBroadcastChannel<MutexType, T>
-{
+impl<MutexType: RawMutex, T> core::fmt::Debug for GenericOneshotBroadcastChannel<MutexType, T> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         f.debug_struct("GenericOneshotBroadcastChannel").finish()
     }
@@ -228,10 +226,7 @@ where
         self.inner.lock().try_receive(wait_node, cx)
     }
 
-    fn remove_receive_waiter(
-        &self,
-        wait_node: &mut ListNode<RecvWaitQueueEntry>,
-    ) {
+    fn remove_receive_waiter(&self, wait_node: &mut ListNode<RecvWaitQueueEntry>) {
         self.inner.lock().remove_waiter(wait_node)
     }
 }
@@ -239,8 +234,7 @@ where
 // Export a non thread-safe version using NoopLock
 
 /// A [`GenericOneshotBroadcastChannel`] which is not thread-safe.
-pub type LocalOneshotBroadcastChannel<T> =
-    GenericOneshotBroadcastChannel<NoopLock, T>;
+pub type LocalOneshotBroadcastChannel<T> = GenericOneshotBroadcastChannel<NoopLock, T>;
 
 #[cfg(feature = "std")]
 mod if_std {
@@ -277,8 +271,7 @@ mod if_alloc {
 
         // Implement ChannelReceiveAccess trait for SharedChannelState, so that it can
         // be used for dynamic dispatch in futures.
-        impl<MutexType, T> ChannelReceiveAccess<T>
-            for GenericOneshotChannelSharedState<MutexType, T>
+        impl<MutexType, T> ChannelReceiveAccess<T> for GenericOneshotChannelSharedState<MutexType, T>
         where
             MutexType: RawMutex,
             T: Clone,
@@ -291,10 +284,7 @@ mod if_alloc {
                 self.channel.receive_or_register(wait_node, cx)
             }
 
-            fn remove_receive_waiter(
-                &self,
-                wait_node: &mut ListNode<RecvWaitQueueEntry>,
-            ) {
+            fn remove_receive_waiter(&self, wait_node: &mut ListNode<RecvWaitQueueEntry>) {
                 self.channel.remove_receive_waiter(wait_node)
             }
         }
@@ -308,9 +298,7 @@ mod if_alloc {
             MutexType: RawMutex,
             T: Clone + 'static,
         {
-            inner: alloc::sync::Arc<
-                GenericOneshotChannelSharedState<MutexType, T>,
-            >,
+            inner: alloc::sync::Arc<GenericOneshotChannelSharedState<MutexType, T>>,
         }
 
         /// The receiving side of a channel which can be used to exchange values
@@ -323,9 +311,7 @@ mod if_alloc {
             MutexType: RawMutex,
             T: Clone + 'static,
         {
-            inner: alloc::sync::Arc<
-                GenericOneshotChannelSharedState<MutexType, T>,
-            >,
+            inner: alloc::sync::Arc<GenericOneshotChannelSharedState<MutexType, T>>,
         }
 
         // Manual `Clone` implementation, since #[derive(Clone)] also requires
@@ -343,8 +329,7 @@ mod if_alloc {
             }
         }
 
-        impl<MutexType, T> core::fmt::Debug
-            for GenericOneshotBroadcastSender<MutexType, T>
+        impl<MutexType, T> core::fmt::Debug for GenericOneshotBroadcastSender<MutexType, T>
         where
             MutexType: RawMutex,
             T: Clone,
@@ -354,8 +339,7 @@ mod if_alloc {
             }
         }
 
-        impl<MutexType, T> core::fmt::Debug
-            for GenericOneshotBroadcastReceiver<MutexType, T>
+        impl<MutexType, T> core::fmt::Debug for GenericOneshotBroadcastReceiver<MutexType, T>
         where
             MutexType: RawMutex,
             T: Clone,
@@ -406,11 +390,10 @@ mod if_alloc {
             MutexType: RawMutex,
             T: Send + Clone,
         {
-            let inner =
-                alloc::sync::Arc::new(GenericOneshotChannelSharedState {
-                    receivers: AtomicUsize::new(1),
-                    channel: GenericOneshotBroadcastChannel::new(),
-                });
+            let inner = alloc::sync::Arc::new(GenericOneshotChannelSharedState {
+                receivers: AtomicUsize::new(1),
+                channel: GenericOneshotBroadcastChannel::new(),
+            });
 
             let sender = GenericOneshotBroadcastSender {
                 inner: inner.clone(),
