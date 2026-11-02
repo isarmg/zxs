@@ -98028,7 +98028,7 @@
       "version": "0.26.6"
     },
     "src/foundation/networking/tower-http": {
-      "changes": "保留发布包来源及现有功能；按固定 Rust 1.99 工具链统一 follow_redirect 模块的导入排序和合法 cfg(test)/include! 布局；路径依赖、许可和文档集中维护。",
+      "changes": "保留发布包来源、当前路径依赖及集中许可/文档；统一 follow_redirect 模块格式；修复每次策略准备后的 header 权威快照，保留现有方法、载荷和错误处理规则。",
       "description": "Tower middleware and utilities for HTTP clients and servers",
       "directory": "src/foundation/networking/tower-http",
       "files_sha256": {
@@ -98072,12 +98072,12 @@
         "src/decompression/request/mod.rs": "c3673e9e66c6b430560f5ec9e89fe67334fca7ccbe76e4fcc5932ff1fbbccd86",
         "src/decompression/request/service.rs": "208bf0f383cb4dfb49885fb12c0c840c7586d606c3a692e74944086f39f461f8",
         "src/decompression/service.rs": "67bc52e5a47fde28fef787ce6ba5fdba87ad697f4077d280af9722451f86d029",
-        "src/follow_redirect/mod.rs": "aca9ae0c82cad9e8ad050a993a0b2ccec6340db4908d0e9b94f1f3ce79b544c8",
+        "src/follow_redirect/mod.rs": "5afb8fb9b558612493360a757f157d2168b288572e4c13acd40db401a6af43e6",
         "src/follow_redirect/policy/and.rs": "02015b111f0f59beddbda5baf7fa21d5958c96973d35a120fcdb616c90f3ca12",
         "src/follow_redirect/policy/clone_body_fn.rs": "3a78bf37d4bd000d9c2d60d84a2d02d2d0ae584a0790da2dcdb34fab43fcd557",
         "src/follow_redirect/policy/filter_credentials.rs": "b44a7656cb4b7403de8eb0064a62cbf1326a91a89e6c5b0ab22ae94b742dd46c",
         "src/follow_redirect/policy/limited.rs": "047427c62ed95b89b9491c037783b3e578c36cfd37a4d96e645d4bd010992e9d",
-        "src/follow_redirect/policy/mod.rs": "ab57a429f5db849682a37cebc3922a9920564ddbef77054cceba146d6a9cb693",
+        "src/follow_redirect/policy/mod.rs": "6d7628c21f05f3cdc4b9b14c4e76809d3bda280189ba4e8590a56fbf1138b710",
         "src/follow_redirect/policy/or.rs": "bc89670b2e4b577dc70428d04c9a542c82921b6abe90b455347ded2cb84e73ed",
         "src/follow_redirect/policy/redirect_fn.rs": "f4f7bf9219df8da1021ef9f44b07b50814dfa0728c8dbf52090e0dfab0b8edcc",
         "src/follow_redirect/policy/same_origin.rs": "5b7a60d1210939284e65b3da47c99194090991456ebb3f2641160fb61b1fecb6",

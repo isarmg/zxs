@@ -1,3 +1,8 @@
+#[path = "foundation-redirect-headers.rs"]
+mod redirect_headers;
+#[path = "foundation-redirect-controls.rs"]
+mod redirect_controls;
+
 #[test]
 fn ranges_reject_empty_resources_without_fabricating_byte_zero() {
     for value in ["bytes=0-", "bytes=0-0", "bytes=-1", "bytes=1-2"] {

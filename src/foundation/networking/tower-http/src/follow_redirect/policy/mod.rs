@@ -60,6 +60,9 @@ pub trait Policy<B, E> {
     /// This can for example be used to remove sensitive headers from the request
     /// or prepare the request in other ways.
     ///
+    /// The resulting headers are the starting point for later redirects,
+    /// before redirect-specific changes and this hook are applied again.
+    ///
     /// The default implementation does nothing.
     fn on_request(&mut self, _request: &mut Request<B>) {}
 

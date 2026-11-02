@@ -324,8 +324,9 @@ where
                 *req.uri_mut() = this.uri.clone();
                 *req.method_mut() = this.method.clone();
                 *req.version_mut() = *this.version;
-                *req.headers_mut() = this.headers.clone();
+                *req.headers_mut() = mem::take(this.headers);
                 this.policy.on_request(&mut req);
+                *this.headers = req.headers().clone();
                 this.future
                     .set(Either::Right(Oneshot::new(this.service.clone(), req)));
 
