@@ -1,4 +1,7 @@
 """Dedicated minimal-feature futures IO contracts, called by consolidation."""
+if not __debug__:
+    raise RuntimeError('Validation requires assertions; do not use Python optimization (-O/-OO or PYTHONOPTIMIZE).')
+
 import hashlib
 import json
 from pathlib import Path
@@ -31,8 +34,6 @@ def source_hashes(root):
 
 
 def check(root, temporary, target_dir):
-    if not __debug__:
-        raise RuntimeError('Validation requires Python assertions to remain enabled.')
     root, temporary, target_dir = Path(root), Path(temporary), Path(target_dir)
     common = runpy.run_path(str(root / '.github/scripts/check-foundation-behaviour.py'))
     expected = json.loads((root / 'test/ci/fixtures/foundation-futures-io-tests.json').read_text())
