@@ -92181,7 +92181,7 @@
       "version": "0.3.34"
     },
     "src/foundation/concurrency/futures-intrusive": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 2 个独立示例程序及专属输入（20306 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-02：借用 Mutex lock future 的 Send 实现要求 T: Send，与底层 Mutex 的 Sync 契约一致；保留载荷无需 Sync 的合法调用。 2026-11-02：owned StateReceiveFuture 的 Send 要求原始锁 Send+Sync，以覆盖最后 Arc 析构；借用版边界保持。共享 oneshot broadcast 独立统计接收端，只有最后端点释放才关闭，owned receive future 不计为端点；clone/drop 新增计数原子操作，保留原 channel 锁与关闭线性化。 2026-11-02：仅固定工具链格式整理 state/oneshot broadcast 两文件；保留字面量、注释、cfg/测试接线及同步/析构行为。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 2 个独立示例程序及专属输入（20306 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-02：借用 Mutex lock future 的 Send 实现要求 T: Send，与底层 Mutex 的 Sync 契约一致；保留载荷无需 Sync 的合法调用。 2026-11-02：owned StateReceiveFuture 的 Send 要求原始锁 Send+Sync，以覆盖最后 Arc 析构；借用版边界保持。共享 oneshot broadcast 独立统计接收端，只有最后端点释放才关闭，owned receive future 不计为端点；clone/drop 新增计数原子操作，保留原 channel 锁与关闭线性化。 2026-11-02：仅固定工具链格式整理 state/oneshot broadcast 两文件；保留字面量、注释、cfg/测试接线及同步/析构行为。 2026-11-02：共享 semaphore 的 owned acquire Send 与共享 owner Sync 均要求 raw mutex Send+Sync，覆盖最终 Arc 析构；保留 borrowed Sync-only 与本地非 Send 使用，owned releaser 自动 Sync 同步收紧；不改许可计数、公平或回调状态机。",
       "description": "Futures based on intrusive data structures - for std and no-std environments.",
       "directory": "src/foundation/concurrency/futures-intrusive",
       "files_sha256": {
@@ -92208,7 +92208,7 @@
         "src/sync/manual_reset_event.rs": "02fa09c2ce8c17613eef96b83d56a13a7b08cc27b6487eae4ed8db68881496d0",
         "src/sync/mod.rs": "064213746b5f5205c88e5cb6fdb8df8a1898af9f4f693e3f32a0ce4fec3eb45a",
         "src/sync/mutex.rs": "12b5d290e5ac971280d98582076681f8ad89a410252397261569a781df62d971",
-        "src/sync/semaphore.rs": "463cb9f972bf9d4b67ddb7730d6bb6ba18ac1f4667cd1d50d1c4424aed82a8bd",
+        "src/sync/semaphore.rs": "25af43a4de490469ae9869050ea63fa0a5527f9c6fd05d3d9f9249709c0eb12e",
         "src/timer/clock.rs": "e30bae8c0afda6751c9f749031ac09041a18adb4d4733c1f7a34004add7aaca6",
         "src/timer/mod.rs": "a3aa6e0f94e54e2d5bef80921e886601114aa09a01093896ad61b265ddc27b27",
         "src/timer/timer.rs": "5762b7adbc325b16f8b3cda51767ebf7d6e25761380972ff1afabab99c821fe1",
@@ -97487,13 +97487,13 @@
       "version": "0.3.17"
     },
     "src/foundation/networking/mime_guess": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 1 个独立示例程序及专属输入（279 字节）；保留文档编译、真实测试及性能基准输入。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 1 个独立示例程序及专属输入（279 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-02：构建反向映射显式完成缓冲输出，原样返回创建、写入及最终 flush 的 I/O 错误；保留首要错误、生成字节、默认/显式/关闭特性和现有 OUT_DIR 发布方式，不新增 fsync。",
       "description": "A simple crate for detection of a file's MIME type by its extension.",
       "directory": "src/foundation/networking/mime_guess",
       "files_sha256": {
         "Cargo.toml": "535352969af5900be665c3fc7a7f3c1190dd451ec17e672d8a247ce4be3c67bc",
         "benches/benchmark.rs": "021dde9d834a3e4fab08d41f6e23d4f083f18c5f382b59866c2e07dc0ed9747a",
-        "build.rs": "4472f4b59aa64fdb5b81fc319d03e480ace3972081cf892dde4909398ce6738b",
+        "build.rs": "2b18fc583565bc89d4f68f27048e245d1d103aa48cd19ca1c2af488998dfd339",
         "src/impl_bin_search.rs": "dd5817c9bc817c36274361c4cd0612ed303347c38bdbf8dff84cf57cd2918808",
         "src/lib.rs": "1d7a22ca437a0a1249a5fbd69056fd022d79d029f15bf691d3687ce05fd610bb",
         "src/mime_types.rs": "1e89c58024547606d78e71488f0e027b740613fc22ac5877e24e3851e0f0628b"

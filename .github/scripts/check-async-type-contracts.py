@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Exercise public async ownership, pattern, and type contracts."""
+if not __debug__:
+    raise RuntimeError('Validation requires assertions; do not use Python optimization (-O/-OO or PYTHONOPTIMIZE).')
+
 import json
 import os
 from pathlib import Path
@@ -57,6 +60,15 @@ OWNED_STATE_REJECTIONS = (
 )
 OWNED_STATE_GROUPS = (
     ("state_receive_owned", "compile-contracts", OWNED_STATE_RUNS, OWNED_STATE_REJECTIONS),
+)
+SEMAPHORE_RUNS = (
+    ("semaphore_raw_transfer_positive", "semaphore-raw-transfer-positive.rs", "SEMAPHORE_RAW_TRANSFER_CONTROLS_COMPLETE"),
+)
+SEMAPHORE_REJECTIONS = (
+    ("semaphore_owned_send", "semaphore-raw-transfer-owned-send-rejection.rs", "E0277",
+     ("MutexGuard", "SyncOnlyRaw", "GenericSharedSemaphoreAcquireFuture", "Send")),
+    ("semaphore_owner_sync", "semaphore-raw-transfer-owner-sync-rejection.rs", "E0277",
+     ("MutexGuard", "SyncOnlyRaw", "GenericSharedSemaphore", "Sync", "Send")),
 )
 GUARD_GROUPS = (
     ("arc_lock", "compile-contracts,arc-contracts", ARC_RUNS, ARC_REJECTIONS),
@@ -165,6 +177,7 @@ required-features = ["compile-contracts"]
         (ARC_RUNS, ARC_REJECTIONS, ["compile-contracts", "arc-contracts"]),
         (UPGRADABLE_RUNS, UPGRADABLE_REJECTIONS, ["compile-contracts"]),
         (OWNED_STATE_RUNS, OWNED_STATE_REJECTIONS, ["compile-contracts"]),
+        (SEMAPHORE_RUNS, SEMAPHORE_REJECTIONS, ["compile-contracts"]),
     ):
         for case in (*runs, *rejections):
             name, file = case[:2]
@@ -244,6 +257,19 @@ incremental = false
                                    text=True, timeout=300)
         BEHAVIOUR["check_run"](execution.stdout, names, "oneshot_broadcast_receiver_lifecycle")
         print(execution.stdout, end="", flush=True)
+
+        for name, file, marker in SEMAPHORE_RUNS:
+            result = subprocess.run(
+                ["cargo", "run", *common, "--features", "compile-contracts", "--bin", name],
+                cwd=root, capture_output=True, text=True, timeout=300,
+            )
+            check_main_execution(result, fixtures / file, marker, "semaphore_raw_transfer")
+        for name, file, code, fragments in SEMAPHORE_REJECTIONS:
+            result = subprocess.run(
+                compile_only + ["--bin", name, "--message-format=json"],
+                cwd=root, capture_output=True, text=True, timeout=300,
+            )
+            check_rejection(result, fixtures / file, code, fragments=fragments)
 
 
 if __name__ == "__main__":

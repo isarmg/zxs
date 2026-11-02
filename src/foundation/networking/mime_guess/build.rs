@@ -6,6 +6,7 @@ use unicase::UniCase;
 
 use std::env;
 use std::fs::File;
+use std::io;
 #[cfg(feature = "rev-mappings")]
 use std::io::prelude::*;
 #[cfg(feature = "rev-mappings")]
@@ -23,10 +24,10 @@ use mime_types::MIME_TYPES;
 mod mime_types;
 
 
-fn main() {
+fn main() -> io::Result<()> {
     let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("mime_types_generated.rs");
-    let output = File::create(&dest_path).unwrap();
+    let output = File::create(&dest_path)?;
     #[cfg(feature = "rev-mappings")]
     let mut outfile = BufWriter::new(output);
     #[cfg(not(feature = "rev-mappings"))]
@@ -39,11 +40,13 @@ fn main() {
 
 
     #[cfg(feature = "rev-mappings")]
-    build_rev_map(&mut outfile);
+    build_rev_map(&mut outfile)?;
+
+    Ok(())
 }
 
 #[cfg(feature = "rev-mappings")]
-fn build_rev_map<W: Write>(out: &mut W) {
+fn build_rev_map<W: Write>(out: &mut W) -> io::Result<()> {
     use std::fmt::Write as _;
 
     macro_rules! unicase_const {
@@ -58,7 +61,7 @@ fn build_rev_map<W: Write>(out: &mut W) {
 
     let dyn_map = get_rev_mappings();
 
-    write!(out, "static REV_MAPPINGS: &'static [(UniCase<&'static str>, TopLevelExts)] = &[").unwrap();
+    write!(out, "static REV_MAPPINGS: &'static [(UniCase<&'static str>, TopLevelExts)] = &[")?;
 
     let mut exts = Vec::new();
 
@@ -85,12 +88,14 @@ fn build_rev_map<W: Write>(out: &mut W) {
             out,
             "({}, TopLevelExts {{ start: {}, end: {}, subs: &[{}] }}),",
             unicase_const!(top), top_start, top_end, sub_map
-        ).unwrap();
+        )?;
     }
 
-    writeln!(out, "];").unwrap();
+    writeln!(out, "];")?;
 
-    writeln!(out, "const EXTS: &'static [&'static str] = &{:?};", exts).unwrap();
+    writeln!(out, "const EXTS: &'static [&'static str] = &{:?};", exts)?;
+
+    out.flush()
 }
 
 #[cfg(feature = "rev-mappings")]

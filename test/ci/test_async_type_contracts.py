@@ -51,6 +51,7 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
             rejection(Path("/dependency.rs"), "E0277"),
             rejection(Path("/upgradable-raw-support.rs"), "E0277"),
             rejection(Path("/state-receive-owned-support.rs"), "E0277"),
+            rejection(Path("/semaphore-raw-transfer-support.rs"), "E0277"),
             rejection(fixture, None),
             subprocess.CompletedProcess([], 1, rejection(fixture, "E0277").stdout, ""),
         )
@@ -84,6 +85,26 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
                     fixture, code, fragments=fragments,
                 )
 
+    def test_semaphore_rejections_require_the_distinct_owner_diagnostics(self):
+        required = {
+            "semaphore_owned_send": ("MutexGuard", "SyncOnlyRaw", "GenericSharedSemaphoreAcquireFuture", "Send"),
+            "semaphore_owner_sync": ("MutexGuard", "SyncOnlyRaw", "GenericSharedSemaphore", "Send"),
+        }
+        for name, file, code, fragments in GATE.SEMAPHORE_REJECTIONS:
+            fixture = Path("/") / file
+            chain = required[name]
+            GATE.check_rejection(
+                rejection(fixture, "E0277", description=" ".join((*chain, "Sync"))),
+                fixture, code, fragments=fragments,
+            )
+            for missing in chain:
+                description = " ".join(part for part in (*chain, "Sync") if part != missing)
+                with self.subTest(name=name, missing=missing), self.assertRaises(AssertionError):
+                    GATE.check_rejection(
+                        rejection(fixture, "E0277", description=description),
+                        fixture, code, fragments=fragments,
+                    )
+
     def test_runtime_main_requires_success_and_exact_completion_marker(self):
         fixture = Path("/guard-positive.rs")
         marker = "EXPECTED_COMPLETE"
@@ -112,7 +133,7 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
             if "--message-format=json" in command:
                 name = command[command.index("--bin") + 1]
                 cases = (*GATE.REJECTIONS, *GATE.ARC_REJECTIONS, *GATE.UPGRADABLE_REJECTIONS,
-                         *GATE.OWNED_STATE_REJECTIONS)
+                         *GATE.OWNED_STATE_REJECTIONS, *GATE.SEMAPHORE_REJECTIONS)
                 case = next(item for item in cases if item[0] == name)
                 _, file, code = case[:3]
                 fragments = case[3] if len(case) > 3 else ()
@@ -137,7 +158,7 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
             if command[1] == "run":
                 name = command[command.index("--bin") + 1]
                 _, _, marker = next(case for case in (*GATE.ARC_RUNS, *GATE.UPGRADABLE_RUNS,
-                                                      *GATE.OWNED_STATE_RUNS)
+                                                      *GATE.OWNED_STATE_RUNS, *GATE.SEMAPHORE_RUNS)
                                     if case[0] == name)
                 output = marker + "\n" if main_output is None else main_output
             return subprocess.CompletedProcess(command, 0, output, "")
@@ -153,7 +174,8 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
             lock.write_text("root lock sentinel\n")
             calls = self.run_gate(root)
             self.assertEqual(lock.read_text(), "root lock sentinel\n")
-            self.assertEqual(len(calls), 21)
+            self.assertEqual(len(calls), 24)
+            original_calls = calls[:21]
             self.assertEqual(len(GATE.ONESHOT_LIFECYCLE_TESTS), 8)
             for command, kwargs, manifest in calls:
                 self.assertIn("--offline", command)
@@ -216,17 +238,54 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
             self.assertEqual(actual_guard_calls, expected_guard_calls)
             self.assertEqual(
                 [(command[1], command[command.index("--features") + 1],
-                  command[command.index("--bin") + 1]) for command, _, _ in calls[-4:-2]],
+                  command[command.index("--bin") + 1]) for command, _, _ in original_calls[-4:-2]],
                 [("run", "compile-contracts", "state_receive_owned_positive"),
                  ("check", "compile-contracts", "state_receive_owned_send")],
             )
             self.assertEqual(
                 [(command[1], command[command.index("--test") + 1], "--list" in command)
-                 for command, _, _ in calls[-2:]],
+                 for command, _, _ in original_calls[-2:]],
                 [("test", "oneshot_broadcast_receiver_lifecycle", True),
                  ("test", "oneshot_broadcast_receiver_lifecycle", False)],
             )
-            self.assertIn("--test-threads=1", calls[-1][0])
+            self.assertIn("--test-threads=1", original_calls[-1][0])
+            steps = []
+            for command, _, _ in calls:
+                if "--test" in command:
+                    steps.append((command[1], command[command.index("--test") + 1], "--list" in command))
+                elif "--bin" in command:
+                    steps.append((command[1], command[command.index("--features") + 1],
+                                  command[command.index("--bin") + 1]))
+                else:
+                    steps.append((command[1], None, None))
+            self.assertEqual(steps[:21], [
+                ("generate-lockfile", None, None),
+                ("test", "select_patterns", True),
+                ("test", "select_patterns", False),
+                ("check", "compile-contracts", "mutex_send_positive"),
+                ("check", "compile-contracts", "select_type"),
+                ("check", "compile-contracts", "select_borrow"),
+                ("check", "compile-contracts", "mutex_send"),
+                ("run", "compile-contracts,arc-contracts", "arc_remutex_positive"),
+                ("run", "compile-contracts,arc-contracts", "arc_remutex_unpin"),
+                ("check", "compile-contracts,arc-contracts", "arc_remutex_cell_sync"),
+                ("check", "compile-contracts,arc-contracts", "arc_remutex_send"),
+                ("run", "compile-contracts,arc-contracts,send-guard-contracts", "arc_remutex_positive"),
+                ("run", "compile-contracts,arc-contracts,send-guard-contracts", "arc_remutex_unpin"),
+                ("check", "compile-contracts,arc-contracts,send-guard-contracts", "arc_remutex_cell_sync"),
+                ("check", "compile-contracts,arc-contracts,send-guard-contracts", "arc_remutex_send"),
+                ("run", "compile-contracts", "upgradable_raw_positive"),
+                ("check", "compile-contracts", "upgradable_raw_sync"),
+                ("run", "compile-contracts", "state_receive_owned_positive"),
+                ("check", "compile-contracts", "state_receive_owned_send"),
+                ("test", "oneshot_broadcast_receiver_lifecycle", True),
+                ("test", "oneshot_broadcast_receiver_lifecycle", False),
+            ])
+            self.assertEqual(steps[21:], [
+                ("run", "compile-contracts", "semaphore_raw_transfer_positive"),
+                ("check", "compile-contracts", "semaphore_owned_send"),
+                ("check", "compile-contracts", "semaphore_owner_sync"),
+            ])
             self.assertEqual(list((root / "target/scope-consumers").iterdir()), [])
 
     def test_empty_test_inventory_is_rejected(self):

@@ -371,7 +371,7 @@
       "scripts": [
         ".github/scripts/check-async-type-contracts.py"
       ],
-      "detail": "intrusive-mutex-send-positive.rs compiles generic T: Send, i32 guard and Cell controls; intrusive-mutex-send-rejection.rs must fail with E0277 at the fixture; compile-only, no future is polled; state-receive-owned-send-rejection.rs must fail with E0277 from its own fixture with MutexGuard/SyncOnlyRaw/StateReceiveFuture/Send in one diagnostic. Negative cases compile only, never execute."
+      "detail": "intrusive-mutex-send-positive.rs compiles generic T: Send, i32 guard and Cell controls; intrusive-mutex-send-rejection.rs must fail with E0277 at the fixture; compile-only, no future is polled; state-receive-owned-send-rejection.rs must fail with E0277 from its own fixture with MutexGuard/SyncOnlyRaw/StateReceiveFuture/Send in one diagnostic. Negative cases compile only, never execute.; semaphore owned-send and owner-sync fixtures require E0277 at their own primary origin with exact raw/owner type fragments; compile only."
     },
     {
       "package": "futures-intrusive",
@@ -380,7 +380,7 @@
       "scripts": [
         ".github/scripts/check-async-type-contracts.py"
       ],
-      "detail": "state-receive-owned-positive.rs runs main with exact STATE_RECEIVE_OWNED_CONTROLS_COMPLETE marker (native owned Send, local Sync-only owner, borrowed scoped-thread controls); oneshot-broadcast-receiver-lifecycle.rs lists and executes exactly 8 tests with zero ignored/filtered, including 4x16 parallel clone/drop operations and last-endpoint/owned-future close controls. default-features=false, std."
+      "detail": "state-receive-owned-positive.rs runs main with exact STATE_RECEIVE_OWNED_CONTROLS_COMPLETE marker (native owned Send, local Sync-only owner, borrowed scoped-thread controls); oneshot-broadcast-receiver-lifecycle.rs lists and executes exactly 8 tests with zero ignored/filtered, including 4x16 parallel clone/drop operations and last-endpoint/owned-future close controls. default-features=false, std.; semaphore-raw-transfer-positive.rs runs with exact SEMAPHORE_RAW_TRANSFER_CONTROLS_COMPLETE marker, preserving native owning/releaser and borrowed Sync-only controls."
     },
     {
       "package": "futures-intrusive",
@@ -1541,6 +1541,15 @@
         ".github/scripts/check-form-floats.py"
       ],
       "detail": "test/architecture/form-floats/behavior.rs canonical_wire_uses_zmij_positive_exponent_sign, float-bit round trips"
+    },
+    {
+      "package": "mime_guess",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-mime-build.py"
+      ],
+      "detail": "Exact production build.rs prefix and unchanged MIME data plus root project fixture: 5 private generator final-output/error-source tests, zero ignored/filtered. Three actual host-build/API compile controls check exact default, explicit rev-mappings and forward-only resolved features; no reverse API runtime or disk durability claim."
     }
   ]
 }
