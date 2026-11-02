@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise select patterns and the public async Send/borrow type boundaries."""
+"""Exercise select patterns and public async/guard type boundaries."""
 import json
 import os
 from pathlib import Path
@@ -22,6 +22,27 @@ REJECTIONS = (
 )
 
 
+ARC_RUNS = (
+    ("arc_remutex_positive", "arc-remutex-positive.rs", "ARC_REMUTEX_POSITIVE_CONTROLS_COMPLETE"),
+    ("arc_remutex_unpin", "arc-remutex-phantom-pinned-unpin.rs", "ARC_REMUTEX_PHANTOM_PINNED_UNPIN_COMPLETE"),
+)
+ARC_REJECTIONS = (
+    ("arc_remutex_cell_sync", "arc-remutex-cell-sync-rejection.rs", "E0277", ("Cell", "Sync")),
+    ("arc_remutex_send", "arc-remutex-send-rejection.rs", "E0277", ("Send",)),
+)
+UPGRADABLE_RUNS = (
+    ("upgradable_raw_positive", "upgradable-raw-positive.rs", "UPGRADABLE_POSITIVE_CONTROLS_COMPLETE"),
+)
+UPGRADABLE_REJECTIONS = (
+    ("upgradable_raw_sync", "upgradable-raw-sync-rejection.rs", "E0277", ("Cell", "LocalRaw", "Sync")),
+)
+GUARD_GROUPS = (
+    ("arc_lock", "compile-contracts,arc-contracts", ARC_RUNS, ARC_REJECTIONS),
+    ("arc_lock_send_guard", "compile-contracts,arc-contracts,send-guard-contracts", ARC_RUNS, ARC_REJECTIONS),
+    ("upgradable_raw", "compile-contracts", UPGRADABLE_RUNS, UPGRADABLE_REJECTIONS),
+)
+
+
 def has_fixture_span(span, fixture):
     """Follow a macro diagnostic back to its actual call site."""
     while span:
@@ -32,7 +53,7 @@ def has_fixture_span(span, fixture):
     return False
 
 
-def check_rejection(result, fixture, code):
+def check_rejection(result, fixture, code, *, fragments=()):
     errors = [
         item["message"]
         for line in result.stdout.splitlines()
@@ -51,7 +72,26 @@ def check_rejection(result, fixture, code):
             f"{fixture.name}: expected {code} from this fixture\n"
             + result.stdout + result.stderr
         )
+    if fragments and not any(
+        all(fragment in json.dumps(error) for fragment in fragments)
+        for error in errors
+    ):
+        raise AssertionError(
+            f"{fixture.name}: expected type diagnostic containing {fragments}\n"
+            + result.stdout + result.stderr
+        )
     print(f"expected compiler rejection: {fixture.name} ({code}): {errors[0]['message']}", flush=True)
+
+
+def check_main_execution(result, fixture, marker, group):
+    """Require a completed fixture main, not an empty test harness."""
+    if result.returncode != 0 or result.stdout.splitlines().count(marker) != 1:
+        raise AssertionError(
+            f"{group}/{fixture.name}: main did not report exactly one {marker}\n"
+            + result.stdout + result.stderr
+        )
+    print(result.stdout, end="", flush=True)
+    print(f"runtime-main control: {group}/{fixture.name} passed", flush=True)
 
 
 def check(root):
@@ -71,10 +111,13 @@ autotests = false
 
 [features]
 compile-contracts = []
+arc-contracts = ["synchronization/arc_lock"]
+send-guard-contracts = ["synchronization/send_guard"]
 
 [dependencies]
 tokio = {{ path = {json.dumps(str(root / "src/foundation/concurrency/tokio"))}, default-features = false, features = ["macros", "rt"] }}
 futures-intrusive = {{ path = {json.dumps(str(root / "src/foundation/concurrency/futures-intrusive"))}, default-features = false, features = ["std"] }}
+synchronization = {{ path = {json.dumps(str(root / "src/foundation/concurrency/synchronization"))}, default-features = false, features = ["locks"] }}
 
 [[test]]
 name = "select_patterns"
@@ -91,6 +134,18 @@ required-features = ["compile-contracts"]
 name = "{name}"
 path = {json.dumps(str(fixtures / file))}
 required-features = ["compile-contracts"]
+'''
+    for runs, rejections, features in (
+        (ARC_RUNS, ARC_REJECTIONS, ["compile-contracts", "arc-contracts"]),
+        (UPGRADABLE_RUNS, UPGRADABLE_REJECTIONS, ["compile-contracts"]),
+    ):
+        for case in (*runs, *rejections):
+            name, file = case[:2]
+            manifest += f'''
+[[bin]]
+name = "{name}"
+path = {json.dumps(str(fixtures / file))}
+required-features = {json.dumps(features)}
 '''
     manifest += '''
 [profile.dev]
@@ -135,6 +190,21 @@ incremental = false
                 cwd=root, capture_output=True, text=True, timeout=300,
             )
             check_rejection(result, fixtures / file, code)
+
+        for group, features, runs, rejections in GUARD_GROUPS:
+            for name, file, marker in runs:
+                result = subprocess.run(
+                    ["cargo", "run", *common, "--features", features, "--bin", name],
+                    cwd=root, capture_output=True, text=True, timeout=300,
+                )
+                check_main_execution(result, fixtures / file, marker, group)
+            for name, file, code, fragments in rejections:
+                result = subprocess.run(
+                    ["cargo", "check", *common, "--features", features,
+                     "--bin", name, "--message-format=json"],
+                    cwd=root, capture_output=True, text=True, timeout=300,
+                )
+                check_rejection(result, fixtures / file, code, fragments=fragments)
 
 
 if __name__ == "__main__":

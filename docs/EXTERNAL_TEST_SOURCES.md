@@ -78,6 +78,17 @@ API 回归，由 `check-async-type-contracts.py` 在 Linux amd64 执行。五个
 实际生产特性检查 Box 参数组转发和 raw 升级的所有权。spin 的有界单线程用例使用
 单位载荷，并保护基线缺陷可能破坏的守卫，避免重复释放。它们不代替竞争调度证明。
 
+同一 `check-async-type-contracts.py` 入口还覆盖 `arc-remutex-*.rs` 和
+`upgradable-raw-*.rs`：三个正例程序在指定特性下合计运行五次，每次必须出现唯一
+完成标志；五次编译反例必须由自己的夹具产生 E0277，并包含对应的 Cell、原始锁
+或 Send 约束诊断。反例从不执行，支持模块不计独立目标；这些项目新作不增加
+`test/foundation/synchronization` 中的保留上游测试数量。
+
+这两处守卫类型修复由新的
+[Synchronization 同根维护收据](../compliance/proof-maintenance/a9ad25a1f75e0ec0626e5a267dc7ecede3fd3da36f1132af2d91b9173b30b89f.json.gz)
+认证：完整绑定 30 个生产路径、两份合并来源快照和 11 份外测，精确逆转两个源码
+片段后再校验既有整合与布局证明。原始来源、历史收据及既有校验逻辑保持原样。
+
 <a id="imported-upstream-fixtures"></a>
 
 ## 独立导入的上游数据夹具

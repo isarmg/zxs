@@ -1039,6 +1039,24 @@
     {
       "package": "synchronization",
       "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-async-type-contracts.py"
+      ],
+      "detail": "Actual main controls arc-remutex-positive.rs and arc-remutex-phantom-pinned-unpin.rs run under locks+arc_lock with send_guard disabled/enabled; upgradable-raw-positive.rs runs under locks. Exact COMPLETE markers required;5 main runs, not Rust #[test] counts."
+    },
+    {
+      "package": "synchronization",
+      "kind": "I",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-async-type-contracts.py"
+      ],
+      "detail": "Compile-only guard rejections: Arc Cell Sync and Arc !Send under both arc_lock feature variants; LocalRaw upgradable Sync under locks. Every failure must be E0277 at its own primary/macro fixture origin with intended type fragments.5 checks, no negative execution."
+    },
+    {
+      "package": "synchronization",
+      "kind": "P",
       "shard": "foundation-platform",
       "scripts": [
         ".github/scripts/check-linux-parking.py"

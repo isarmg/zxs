@@ -84618,8 +84618,8 @@
         "build.rs": "3698c936b75f8332d9b6b30a8a6838ea116c1ff0a819a025c9ea9696e4d8ce72",
         "src/api/mod.rs": "442dd321d2f71df5ef6c62b7edfcb7cde8676bf9815ccb51bd3c781dc7bb8277",
         "src/api/mutex.rs": "ab91ed4b4881ca526dfeb776d53f900c6a25efc33a822763b6fa5fc2dd878980",
-        "src/api/remutex.rs": "1fe63bca10b93cecfbd43cc6d6ff0e6a822e06a6bcd577bc00032e04792abb0a",
-        "src/api/rwlock.rs": "040b4798658b4984de0a158b034786f3e6f58c307f5371a36a2a51238fd376d6",
+        "src/api/remutex.rs": "4029495c363f238d5165be0f1d3730d111338c4c25eb714bb20df697481ffc44",
+        "src/api/rwlock.rs": "25c47c5cf4b60fea52805e42b0ab40009ffe1ae06267e6fccdac2c1c35bc9fe3",
         "src/lib.rs": "07e2a3d95346cbc303784051c5579e01745073be44d2469ae6e19c4045639fff",
         "src/locks/condvar.rs": "ca7f550238ea56eb7127c0cc647a0c164e2c1e2c7eb6bcf06437f596e0de47a5",
         "src/locks/elision.rs": "7070a29080f4c7d3b2c9b6e51a0d8230ebc8e56e4790aaeda1747b6c073a7438",
@@ -84678,8 +84678,8 @@
         "build.rs": "3698c936b75f8332d9b6b30a8a6838ea116c1ff0a819a025c9ea9696e4d8ce72",
         "src/api/mod.rs": "442dd321d2f71df5ef6c62b7edfcb7cde8676bf9815ccb51bd3c781dc7bb8277",
         "src/api/mutex.rs": "ab91ed4b4881ca526dfeb776d53f900c6a25efc33a822763b6fa5fc2dd878980",
-        "src/api/remutex.rs": "1fe63bca10b93cecfbd43cc6d6ff0e6a822e06a6bcd577bc00032e04792abb0a",
-        "src/api/rwlock.rs": "040b4798658b4984de0a158b034786f3e6f58c307f5371a36a2a51238fd376d6",
+        "src/api/remutex.rs": "4029495c363f238d5165be0f1d3730d111338c4c25eb714bb20df697481ffc44",
+        "src/api/rwlock.rs": "25c47c5cf4b60fea52805e42b0ab40009ffe1ae06267e6fccdac2c1c35bc9fe3",
         "src/lib.rs": "07e2a3d95346cbc303784051c5579e01745073be44d2469ae6e19c4045639fff",
         "src/locks/condvar.rs": "ca7f550238ea56eb7127c0cc647a0c164e2c1e2c7eb6bcf06437f596e0de47a5",
         "src/locks/elision.rs": "7070a29080f4c7d3b2c9b6e51a0d8230ebc8e56e4790aaeda1747b6c073a7438",
@@ -92876,8 +92876,8 @@
         "build.rs": "3698c936b75f8332d9b6b30a8a6838ea116c1ff0a819a025c9ea9696e4d8ce72",
         "src/api/mod.rs": "442dd321d2f71df5ef6c62b7edfcb7cde8676bf9815ccb51bd3c781dc7bb8277",
         "src/api/mutex.rs": "ab91ed4b4881ca526dfeb776d53f900c6a25efc33a822763b6fa5fc2dd878980",
-        "src/api/remutex.rs": "1fe63bca10b93cecfbd43cc6d6ff0e6a822e06a6bcd577bc00032e04792abb0a",
-        "src/api/rwlock.rs": "040b4798658b4984de0a158b034786f3e6f58c307f5371a36a2a51238fd376d6",
+        "src/api/remutex.rs": "4029495c363f238d5165be0f1d3730d111338c4c25eb714bb20df697481ffc44",
+        "src/api/rwlock.rs": "25c47c5cf4b60fea52805e42b0ab40009ffe1ae06267e6fccdac2c1c35bc9fe3",
         "src/lib.rs": "07e2a3d95346cbc303784051c5579e01745073be44d2469ae6e19c4045639fff",
         "src/locks/condvar.rs": "ca7f550238ea56eb7127c0cc647a0c164e2c1e2c7eb6bcf06437f596e0de47a5",
         "src/locks/elision.rs": "7070a29080f4c7d3b2c9b6e51a0d8230ebc8e56e4790aaeda1747b6c073a7438",
@@ -102328,7 +102328,8 @@
   "post_consolidation_benchmark_relocation": "8a08cc5b47c335b9e6aa2b7361ab7259fdc394c8dad16c29efb3e90d330ffbbc",
   "proof_maintenance_receipts": [
     "f6b00af0dad58bb402937c193974d916d525a790decbe043e679954c03bcbd1e",
-    "eede8d6ae6c3a123115c9396650c9f18f9a9ecef47820a9f4dfbfda2ee1e17d9"
+    "eede8d6ae6c3a123115c9396650c9f18f9a9ecef47820a9f4dfbfda2ee1e17d9",
+    "a9ad25a1f75e0ec0626e5a267dc7ecede3fd3da36f1132af2d91b9173b30b89f"
   ],
   "proof_routing_receipts": [
     "42cbfc30f0e5db58801c1806abba6926e34a3279dd0697bc1b4cdf2c98fbcce0",
