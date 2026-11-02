@@ -1921,6 +1921,14 @@
           "mime_guess_handles_extensions_case_and_unknown",
           "ranges_clip_to_size_but_reject_overlap_and_out_of_bounds",
           "ranges_reject_empty_resources_without_fabricating_byte_zero",
+          "redirect_controls::cancelling_after_follow_preparation_drops_the_unsent_request",
+          "redirect_controls::post_302_and_307_preserve_their_distinct_method_body_and_payload_header_rules",
+          "redirect_controls::redirected_readiness_error_keeps_its_source_and_drops_the_unsent_request",
+          "redirect_controls::stop_and_policy_error_do_not_prepare_a_second_request",
+          "redirect_headers::cross_origin_then_same_origin_never_restores_filtered_headers",
+          "redirect_headers::policy_header_changes_form_the_next_requests_authoritative_header_state",
+          "redirect_headers::policy_may_explicitly_supply_the_next_origins_fixed_fixture_credentials",
+          "redirect_headers::same_origin_three_request_control_keeps_headers_and_relative_uri_base",
           "serve_dir_empty_range_is_416_and_head_is_empty_200",
           "serve_dir_range_delivers_exact_bytes_and_preserves_head_length"
         ]

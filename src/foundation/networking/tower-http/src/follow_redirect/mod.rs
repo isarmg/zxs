@@ -103,6 +103,9 @@ use http::{
 };
 use http_body::Body;
 use pin_project_lite::pin_project;
+use service_stack::util::Oneshot;
+use service_stack::Layer;
+use service_stack::Service;
 use std::{
     convert::TryFrom,
     future::Future,
@@ -111,9 +114,6 @@ use std::{
     str,
     task::{ready, Context, Poll},
 };
-use service_stack::util::Oneshot;
-use service_stack::Layer;
-use service_stack::Service;
 use url_encoding::address::Url;
 
 /// [`Layer`] for retrying requests with a [`Service`] to follow redirection responses.
@@ -324,8 +324,9 @@ where
                 *req.uri_mut() = this.uri.clone();
                 *req.method_mut() = this.method.clone();
                 *req.version_mut() = *this.version;
-                *req.headers_mut() = this.headers.clone();
+                *req.headers_mut() = mem::take(this.headers);
                 this.policy.on_request(&mut req);
+                *this.headers = req.headers().clone();
                 this.future
                     .set(Either::Right(Oneshot::new(this.service.clone(), req)));
 
@@ -402,4 +403,7 @@ fn resolve_uri(relative: &str, base: &Uri) -> Option<Uri> {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/tower-http/unit/src/follow_redirect/mod/tests_404.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/tower-http/unit/src/follow_redirect/mod/tests_404.rs"
+));

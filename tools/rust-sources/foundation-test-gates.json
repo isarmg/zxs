@@ -1134,7 +1134,7 @@
       "scripts": [
         ".github/scripts/check-runtime-join-map.py"
       ],
-      "detail": "test/foundation/tokio/tests/fs_asyncify.rs (1 test; registered source_kind project-authored) as [[test]]; no retained upstream tokio test is executed"
+      "detail": "test/foundation/tokio/tests/fs_asyncify.rs (1 test; registered source_kind project-authored) and test/ci/fixtures/runtime-file-sync.rs (13 project-authored tests) as [[test]]; no retained upstream tokio test is executed"
     },
     {
       "package": "tokio",

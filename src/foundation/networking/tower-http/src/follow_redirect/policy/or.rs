@@ -43,4 +43,7 @@ where
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/tower-http/unit/src/follow_redirect/policy/or/tests_45.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/tower-http/unit/src/follow_redirect/policy/or/tests_45.rs"
+));

@@ -60,6 +60,9 @@ pub trait Policy<B, E> {
     /// This can for example be used to remove sensitive headers from the request
     /// or prepare the request in other ways.
     ///
+    /// The resulting headers are the starting point for later redirects,
+    /// before redirect-specific changes and this hook are applied again.
+    ///
     /// The default implementation does nothing.
     fn on_request(&mut self, _request: &mut Request<B>) {}
 
@@ -298,4 +301,7 @@ fn eq_origin(lhs: &Uri, rhs: &Uri) -> bool {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/tower-http/unit/src/follow_redirect/policy/mod/tests_300.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/tower-http/unit/src/follow_redirect/policy/mod/tests_300.rs"
+));
