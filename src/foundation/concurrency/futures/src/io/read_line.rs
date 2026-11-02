@@ -1,3 +1,4 @@
+use super::read_to_string::finish_string_read;
 use super::read_until::read_until_internal;
 use crate::io_traits::AsyncBufRead;
 use crate::traits::future::Future;
@@ -6,7 +7,6 @@ use core::task::{Context, Poll};
 use std::io;
 use std::mem;
 use std::pin::Pin;
-use std::str;
 use std::string::String;
 use std::vec::Vec;
 
@@ -42,20 +42,10 @@ pub(super) fn read_line_internal<R: AsyncBufRead + ?Sized>(
     bytes: &mut Vec<u8>,
     read: &mut usize,
 ) -> Poll<io::Result<usize>> {
-    let mut ret = ready!(read_until_internal(reader, cx, b'\n', bytes, read));
-    if str::from_utf8(&bytes[bytes.len() - *read..bytes.len()]).is_err() {
-        bytes.truncate(bytes.len() - *read);
-        if ret.is_ok() {
-            ret = Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "stream did not contain valid UTF-8",
-            ));
-        }
-    }
+    let ret = ready!(read_until_internal(reader, cx, b'\n', bytes, read));
+    let start_len = bytes.len() - *read;
+    let ret = finish_string_read(buf, bytes, start_len, ret);
     *read = 0;
-    // Safety: `bytes` is valid UTF-8 because it was taken from a String
-    // and the newly read bytes are either valid UTF-8 or have been removed.
-    mem::swap(unsafe { buf.as_mut_vec() }, bytes);
     Poll::Ready(ret)
 }
 

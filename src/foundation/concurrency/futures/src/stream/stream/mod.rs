@@ -1645,14 +1645,14 @@ pub trait StreamExt: Stream {
     /// returned future type will return `true` from
     /// [`FusedFuture::is_terminated`][] when the [`Stream`] is empty, allowing
     /// [`select_next_some`][StreamExt::select_next_some] to be easily used with
-    /// the [`select!`] macro.
+    /// the `select!` macro.
     ///
     /// If the future is polled after this [`Stream`] is empty it will panic.
     /// Using the future with a [`FusedFuture`][]-aware primitive like the
-    /// [`select!`] macro will prevent this.
+    /// `select!` macro will prevent this.
     ///
-    /// [`FusedFuture`]: futures::future::FusedFuture
-    /// [`FusedFuture::is_terminated`]: futures::future::FusedFuture::is_terminated
+    /// [`FusedFuture`]: crate::future::FusedFuture
+    /// [`FusedFuture::is_terminated`]: crate::future::FusedFuture::is_terminated
     ///
     /// # Examples
     ///
@@ -1686,7 +1686,8 @@ pub trait StreamExt: Stream {
     /// # });
     /// ```
     ///
-    /// [`select!`]: crate::select
+    /// The `select!` macro requires both the `async-await-macro` and `std`
+    /// features.
     fn select_next_some(&mut self) -> SelectNextSome<'_, Self>
     where
         Self: Unpin + FusedStream,

@@ -279,9 +279,28 @@ pub trait AsyncReadExt: AsyncRead {
         assert_future::<Result<usize>, _>(ReadToEnd::new(self, buf))
     }
 
-    /// Creates a future which will read all the bytes from this `AsyncRead`.
+    /// Creates a future which reads this `AsyncRead` to EOF, appending to `buf`.
     ///
-    /// On success the total number of bytes read is returned.
+    /// On success, returns the number of newly read bytes, excluding the original
+    /// contents of `buf`.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error is returned unchanged. If all bytes read before that error are
+    /// valid UTF-8, they remain appended to `buf`; otherwise, the original contents
+    /// of `buf` are restored.
+    ///
+    /// If EOF is reached but the newly read bytes are not valid UTF-8, the original
+    /// contents of `buf` are restored and an error with kind
+    /// [`std::io::ErrorKind::InvalidData`] is returned. Its inner
+    /// [`std::str::Utf8Error`] is available through [`std::io::Error::get_ref`], with
+    /// byte offsets relative to the newly read bytes.
+    ///
+    /// # Cancellation
+    ///
+    /// Dropping the future before completion restores the original contents of
+    /// `buf` and discards newly read bytes. Bytes already consumed from the reader
+    /// are not put back.
     ///
     /// # Examples
     ///
@@ -515,7 +534,7 @@ pub trait AsyncWriteExt: AsyncWrite {
         assert_future::<Result<()>, _>(WriteAllVectored::new(self, bufs))
     }
 
-    /// Allow using an [`AsyncWrite`] as a [`Sink`](futures::sink::Sink)`<Item: AsRef<[u8]>>`.
+    /// Allow using an [`AsyncWrite`] as a [`Sink`](crate::sink::Sink)`<Item: AsRef<[u8]>>`.
     ///
     /// This adapter produces a sink that will write each value passed to it
     /// into the underlying writer.

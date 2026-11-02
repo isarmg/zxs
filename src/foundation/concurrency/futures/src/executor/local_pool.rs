@@ -26,7 +26,7 @@ use std::vec::Vec;
 /// To get a handle to the pool that implements [`Spawn`], use the
 /// [`spawner()`](LocalPool::spawner) method. Because the executor is
 /// single-threaded, it supports a special form of task spawning for non-`Send`
-/// futures, via [`spawn_local_obj`](futures::task::LocalSpawn::spawn_local_obj).
+/// futures, via [`spawn_local_obj`](crate::task::LocalSpawn::spawn_local_obj).
 #[derive(Debug)]
 pub struct LocalPool {
     pool: FuturesUnordered<LocalFutureObj<'static, ()>>,

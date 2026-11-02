@@ -267,7 +267,7 @@ pub trait TryFutureExt: TryFuture {
     /// of the future into a different type. It is similar to the
     /// [`Result::map_err`] method. You can use this method for example to
     /// ensure that futures have the same [`Error`](TryFuture::Error) type when
-    /// using [`select!`] or [`join!`].
+    /// using `select!` or `join!`.
     ///
     /// The provided closure `f` will only be called if this future is resolved
     /// to an [`Err`]. If it resolves to an [`Ok`], panics, or is dropped, then
@@ -301,8 +301,8 @@ pub trait TryFutureExt: TryFuture {
     /// # });
     /// ```
     ///
-    /// [`join!`]: crate::join
-    /// [`select!`]: crate::select
+    /// The `join!` macro requires the `async-await-macro` feature; `select!`
+    /// additionally requires `std`.
     fn map_err<E, F>(self, f: F) -> MapErr<Self, F>
     where
         F: FnOnce(Self::Error) -> E,
@@ -318,7 +318,7 @@ pub trait TryFutureExt: TryFuture {
     /// [`Result`]: It lets the compiler infer the type of the resulting
     /// error. Just as [`map_err`](TryFutureExt::map_err), this is useful for
     /// example to ensure that futures have the same [`Error`](TryFuture::Error)
-    /// type when using [`select!`] or [`join!`].
+    /// type when using `select!` or `join!`.
     ///
     /// Note that this method consumes the future it is called on and returns a
     /// wrapped version of it.
@@ -334,8 +334,8 @@ pub trait TryFutureExt: TryFuture {
     /// # });
     /// ```
     ///
-    /// [`join!`]: crate::join
-    /// [`select!`]: crate::select
+    /// The `join!` macro requires the `async-await-macro` feature; `select!`
+    /// additionally requires `std`.
     fn err_into<E>(self) -> ErrInto<Self, E>
     where
         Self: Sized,

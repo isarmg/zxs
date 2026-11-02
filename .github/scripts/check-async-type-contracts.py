@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Exercise select patterns and public async/guard type boundaries."""
+"""Exercise public async ownership, pattern, and type contracts."""
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
+BEHAVIOUR = runpy.run_path(str(ROOT / ".github/scripts/check-foundation-behaviour.py"))
 TARGET = "x86_64-unknown-linux-gnu"
 SELECT_TESTS = {
     "unparenthesized_mut_binding_is_a_control",
@@ -14,6 +16,16 @@ SELECT_TESTS = {
     "unparenthesized_ref_mut_binding_is_a_control",
     "parenthesized_ref_mut_binding_mutates_only_the_owned_output",
     "parenthesized_nonmatching_pattern_keeps_else_behavior",
+}
+ONESHOT_LIFECYCLE_TESTS = {
+    "broadcast_value_survives_sender_drop_and_fresh_receives",
+    "canceled_pending_receive_does_not_close_endpoint",
+    "completed_receive_future_repolls_panic",
+    "dropping_one_receiver_clone_keeps_survivor_open",
+    "last_receiver_drop_closes_with_owned_pending_receive",
+    "owned_receive_reads_fulfilled_value_after_endpoint_drop",
+    "parallel_receiver_clone_drops_keep_original_open",
+    "sender_drop_wakes_pending_receive_as_closed",
 }
 REJECTIONS = (
     ("select_type", "runtime-select-type-rejection.rs", "E0599"),
@@ -35,6 +47,16 @@ UPGRADABLE_RUNS = (
 )
 UPGRADABLE_REJECTIONS = (
     ("upgradable_raw_sync", "upgradable-raw-sync-rejection.rs", "E0277", ("Cell", "LocalRaw", "Sync")),
+)
+OWNED_STATE_RUNS = (
+    ("state_receive_owned_positive", "state-receive-owned-positive.rs", "STATE_RECEIVE_OWNED_CONTROLS_COMPLETE"),
+)
+OWNED_STATE_REJECTIONS = (
+    ("state_receive_owned_send", "state-receive-owned-send-rejection.rs", "E0277",
+     ("MutexGuard", "SyncOnlyRaw", "StateReceiveFuture", "Send")),
+)
+OWNED_STATE_GROUPS = (
+    ("state_receive_owned", "compile-contracts", OWNED_STATE_RUNS, OWNED_STATE_REJECTIONS),
 )
 GUARD_GROUPS = (
     ("arc_lock", "compile-contracts,arc-contracts", ARC_RUNS, ARC_REJECTIONS),
@@ -123,6 +145,10 @@ synchronization = {{ path = {json.dumps(str(root / "src/foundation/concurrency/s
 name = "select_patterns"
 path = {json.dumps(str(fixtures / "runtime-select-patterns.rs"))}
 
+[[test]]
+name = "oneshot_broadcast_receiver_lifecycle"
+path = {json.dumps(str(fixtures / "oneshot-broadcast-receiver-lifecycle.rs"))}
+
 [[bin]]
 name = "mutex_send_positive"
 path = {json.dumps(str(fixtures / "intrusive-mutex-send-positive.rs"))}
@@ -138,6 +164,7 @@ required-features = ["compile-contracts"]
     for runs, rejections, features in (
         (ARC_RUNS, ARC_REJECTIONS, ["compile-contracts", "arc-contracts"]),
         (UPGRADABLE_RUNS, UPGRADABLE_REJECTIONS, ["compile-contracts"]),
+        (OWNED_STATE_RUNS, OWNED_STATE_REJECTIONS, ["compile-contracts"]),
     ):
         for case in (*runs, *rejections):
             name, file = case[:2]
@@ -191,7 +218,7 @@ incremental = false
             )
             check_rejection(result, fixtures / file, code)
 
-        for group, features, runs, rejections in GUARD_GROUPS:
+        for group, features, runs, rejections in (*GUARD_GROUPS, *OWNED_STATE_GROUPS):
             for name, file, marker in runs:
                 result = subprocess.run(
                     ["cargo", "run", *common, "--features", features, "--bin", name],
@@ -205,6 +232,18 @@ incremental = false
                     cwd=root, capture_output=True, text=True, timeout=300,
                 )
                 check_rejection(result, fixtures / file, code, fragments=fragments)
+
+        lifecycle = ["cargo", "test", *common, "--test", "oneshot_broadcast_receiver_lifecycle"]
+        listing = subprocess.run(lifecycle + ["--", "--list"], cwd=root, check=True,
+                                 capture_output=True, text=True, timeout=300)
+        names = BEHAVIOUR["listed"](listing.stdout)
+        if names != sorted(ONESHOT_LIFECYCLE_TESTS):
+            raise AssertionError(f"oneshot lifecycle tests differ: {names}")
+        execution = subprocess.run(lifecycle + ["--", "--test-threads=1"],
+                                   cwd=root, check=True, capture_output=True,
+                                   text=True, timeout=300)
+        BEHAVIOUR["check_run"](execution.stdout, names, "oneshot_broadcast_receiver_lifecycle")
+        print(execution.stdout, end="", flush=True)
 
 
 if __name__ == "__main__":

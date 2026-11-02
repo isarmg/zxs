@@ -21,9 +21,9 @@ pub trait SpawnExt: Spawn {
     /// This method returns a [`Result`] that contains a [`SpawnError`] if
     /// spawning fails.
     ///
-    /// You can use [`spawn_with_handle`](SpawnExt::spawn_with_handle) if
-    /// you want to spawn a future with output other than `()` or if you want
-    /// to be able to await its completion.
+    /// When both the `channel` and `std` features are enabled, you can use
+    /// `SpawnExt::spawn_with_handle` to spawn a future with output other than
+    /// `()` or to await its completion.
     ///
     /// Note this method will eventually be replaced with the upcoming
     /// `Spawn::spawn` method which will take a `dyn Future` as input.
@@ -93,9 +93,9 @@ pub trait LocalSpawnExt: LocalSpawn {
     /// This method returns a [`Result`] that contains a [`SpawnError`] if
     /// spawning fails.
     ///
-    /// You can use [`spawn_with_handle`](SpawnExt::spawn_with_handle) if
-    /// you want to spawn a future with output other than `()` or if you want
-    /// to be able to await its completion.
+    /// When both the `channel` and `std` features are enabled, you can use
+    /// `LocalSpawnExt::spawn_local_with_handle` to spawn a future with output
+    /// other than `()` or to await its completion.
     ///
     /// Note this method will eventually be replaced with the upcoming
     /// `Spawn::spawn` method which will take a `dyn Future` as input.

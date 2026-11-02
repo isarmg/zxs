@@ -348,6 +348,15 @@
     },
     {
       "package": "futures",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-futures-consolidation.py"
+      ],
+      "detail": "futures_io_contracts.py executes exact project fixtures: seek-relative (14), string-retention (16), write-zero (9). Isolated default-features=false consumers use io or io+sink on x86_64-unknown-linux-gnu; actual names and resolved features must equal foundation-futures-io-tests.json. Public IO API validation, not an added production IO feature."
+    },
+    {
+      "package": "futures",
       "kind": "U",
       "shard": "foundation-async",
       "scripts": [
@@ -362,7 +371,16 @@
       "scripts": [
         ".github/scripts/check-async-type-contracts.py"
       ],
-      "detail": "intrusive-mutex-send-positive.rs compiles generic T: Send, i32 guard and Cell controls; intrusive-mutex-send-rejection.rs must fail with E0277 at the fixture; compile-only, no future is polled"
+      "detail": "intrusive-mutex-send-positive.rs compiles generic T: Send, i32 guard and Cell controls; intrusive-mutex-send-rejection.rs must fail with E0277 at the fixture; compile-only, no future is polled; state-receive-owned-send-rejection.rs must fail with E0277 from its own fixture with MutexGuard/SyncOnlyRaw/StateReceiveFuture/Send in one diagnostic. Negative cases compile only, never execute."
+    },
+    {
+      "package": "futures-intrusive",
+      "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-async-type-contracts.py"
+      ],
+      "detail": "state-receive-owned-positive.rs runs main with exact STATE_RECEIVE_OWNED_CONTROLS_COMPLETE marker (native owned Send, local Sync-only owner, borrowed scoped-thread controls); oneshot-broadcast-receiver-lifecycle.rs lists and executes exactly 8 tests with zero ignored/filtered, including 4x16 parallel clone/drop operations and last-endpoint/owned-future close controls. default-features=false, std."
     },
     {
       "package": "futures-intrusive",

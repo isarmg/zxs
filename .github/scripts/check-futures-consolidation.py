@@ -219,6 +219,9 @@ def check(root):
     with tempfile.TemporaryDirectory(prefix="futures-", dir=temporary_root) as directory:
         temporary = Path(directory)
         check_features(root, temporary, target_dir)
+        runpy.run_path(str(root / '.github/scripts/futures_io_contracts.py'))['check'](
+            root, temporary / 'io-contracts', target_dir
+        )
         check_retained_tests(root, temporary, target_dir)
     for package in (*NATIVE_CONSUMERS, "platform-io"):
         run(root, ["cargo", "check", "--locked", "--offline", "--jobs", "2", "--target-dir", str(target_dir),
