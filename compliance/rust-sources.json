@@ -79634,7 +79634,7 @@
     "src/foundation/text-unicode/bytecount/Cargo.toml": "0bc0a549895df48f002a6d99358864ecec2a44ee6204451f748c234981fb09b0",
     "src/foundation/text-unicode/const_str_slice_concat/Cargo.toml": "678df6f6d48b07df0e3c7078b831510f9d382aca91a7e5c465eff73d6026f8ad",
     "src/foundation/text-unicode/convert_case/Cargo.toml": "a7dd57eb801d4a81a12bd45ebc4109a152e84a3dced7b76ceb00a2d4dfc9e210",
-    "src/foundation/text-unicode/fancy-regex/Cargo.toml": "fbfeaaef638cc1144d1610bb59187329269af64a945313ed4b43b2504770560c",
+    "src/foundation/text-unicode/fancy-regex/Cargo.toml": "2d9fe63ad9e3fda631db21b936091737dd75939ab37fae240047b32408fdaa98",
     "src/foundation/text-unicode/heck/Cargo.toml": "f4b37496e148e75d56e5c77f0997b3385ae0eb967a1b7ef2baa4b537dbe4d8f3",
     "src/foundation/text-unicode/html-escape/Cargo.toml": "a6512554c99b1a8ce0c0b207fc4681bf22ce03ff59e3c80ffc1996db3e4e5a28",
     "src/foundation/text-unicode/icu_collections/Cargo.toml": "6cfa8364d11a20034f12c34c9b15f4ddab1ccd7cf89e7e352b1bdcf7d576b80a",
@@ -79681,7 +79681,7 @@
     "src/foundation/web-runtime/wasm-bindgen-shared/Cargo.toml": "e97acff374e151697f7dfaa0bdf7338c3ecf7540dc5a6f147ee3903f551ac6bf",
     "src/foundation/web-runtime/wasm-bindgen/Cargo.toml": "b33de63aa298f48eb031c63fa2580756e9c12a840c5327eedbeb729cd5e3b3ca",
     "src/foundation/web-runtime/wasm-binding-macros/Cargo.toml": "e07bec93c2d869bd882f3866ed36190cbb859a15fa8d821517eb8c67fd759e83",
-    "src/foundation/web-runtime/wasm-encoder/Cargo.toml": "63f4fdeb12bc8dc6860ff36442cc2fdd71d8519f3a9dd79e105d7dcafe69f301",
+    "src/foundation/web-runtime/wasm-encoder/Cargo.toml": "c3989a0dcb9b21bd86e216781db565f5bb0e6d722c0ac76d0cf982e018f865ac",
     "src/foundation/web-runtime/wasm-text-parser/Cargo.toml": "4fd5db6895a89a1d3272c9c4df66c5a4af3a6897a1f94257397817c05e0e05e9",
     "src/foundation/web-runtime/wasm-text-printer/Cargo.toml": "69ed0cdda84a13bfc928eda48dc1acd44d49e962f624f0e873f882d2651d9a65",
     "src/foundation/web-runtime/wasmparser/Cargo.toml": "771207359c85d13aa247962a53b713da998d1bbc634fee7931dfb1c180e558f8",
@@ -80163,7 +80163,7 @@
         "src/builder/styling.rs": "0a23b434edf9db03e8f8a7b0dde32a6f25ca5b39b801e66fb32515dd57c44b1d",
         "src/builder/value_hint.rs": "f5c39816ba558acc065810a8b37234005e23a7c836d8e44d26e1bb015cf9e78d",
         "src/builder/value_parser.rs": "92c3879de66fb80e12058d70051d17ab8fd95992c849505088005d098e6233de",
-        "src/derive.rs": "b13443d773bbd74da38f156b03d2b870e4edbc5860ce4b78818dc2d2e30a8425",
+        "src/derive.rs": "df24179b0c44f1f40e6accaf6e5f59b2a51db4e5b3cc2609015b4da5a0f05313",
         "src/error/context.rs": "156d2611a349ce826378476c9dcb3242a01ad834a095baad096a10cc2f73e1ed",
         "src/error/format.rs": "51e24294829c1d3b20d1eea396a775a66aa68a5d43565a6d082d5a5ff0863853",
         "src/error/kind.rs": "d7b11667622bdf8957b4ffbed89a9e1cd6af92390006c16214bb1dea19c3694e",
@@ -80337,7 +80337,7 @@
         "src/builder/styling.rs": "0a23b434edf9db03e8f8a7b0dde32a6f25ca5b39b801e66fb32515dd57c44b1d",
         "src/builder/value_hint.rs": "f5c39816ba558acc065810a8b37234005e23a7c836d8e44d26e1bb015cf9e78d",
         "src/builder/value_parser.rs": "92c3879de66fb80e12058d70051d17ab8fd95992c849505088005d098e6233de",
-        "src/derive.rs": "b13443d773bbd74da38f156b03d2b870e4edbc5860ce4b78818dc2d2e30a8425",
+        "src/derive.rs": "df24179b0c44f1f40e6accaf6e5f59b2a51db4e5b3cc2609015b4da5a0f05313",
         "src/error/context.rs": "156d2611a349ce826378476c9dcb3242a01ad834a095baad096a10cc2f73e1ed",
         "src/error/format.rs": "51e24294829c1d3b20d1eea396a775a66aa68a5d43565a6d082d5a5ff0863853",
         "src/error/kind.rs": "d7b11667622bdf8957b4ffbed89a9e1cd6af92390006c16214bb1dea19c3694e",
@@ -84639,8 +84639,8 @@
         "build.rs": "3698c936b75f8332d9b6b30a8a6838ea116c1ff0a819a025c9ea9696e4d8ce72",
         "src/api/mod.rs": "442dd321d2f71df5ef6c62b7edfcb7cde8676bf9815ccb51bd3c781dc7bb8277",
         "src/api/mutex.rs": "ab91ed4b4881ca526dfeb776d53f900c6a25efc33a822763b6fa5fc2dd878980",
-        "src/api/remutex.rs": "1fe63bca10b93cecfbd43cc6d6ff0e6a822e06a6bcd577bc00032e04792abb0a",
-        "src/api/rwlock.rs": "040b4798658b4984de0a158b034786f3e6f58c307f5371a36a2a51238fd376d6",
+        "src/api/remutex.rs": "4029495c363f238d5165be0f1d3730d111338c4c25eb714bb20df697481ffc44",
+        "src/api/rwlock.rs": "25c47c5cf4b60fea52805e42b0ab40009ffe1ae06267e6fccdac2c1c35bc9fe3",
         "src/lib.rs": "07e2a3d95346cbc303784051c5579e01745073be44d2469ae6e19c4045639fff",
         "src/locks/condvar.rs": "ca7f550238ea56eb7127c0cc647a0c164e2c1e2c7eb6bcf06437f596e0de47a5",
         "src/locks/elision.rs": "7070a29080f4c7d3b2c9b6e51a0d8230ebc8e56e4790aaeda1747b6c073a7438",
@@ -84699,8 +84699,8 @@
         "build.rs": "3698c936b75f8332d9b6b30a8a6838ea116c1ff0a819a025c9ea9696e4d8ce72",
         "src/api/mod.rs": "442dd321d2f71df5ef6c62b7edfcb7cde8676bf9815ccb51bd3c781dc7bb8277",
         "src/api/mutex.rs": "ab91ed4b4881ca526dfeb776d53f900c6a25efc33a822763b6fa5fc2dd878980",
-        "src/api/remutex.rs": "1fe63bca10b93cecfbd43cc6d6ff0e6a822e06a6bcd577bc00032e04792abb0a",
-        "src/api/rwlock.rs": "040b4798658b4984de0a158b034786f3e6f58c307f5371a36a2a51238fd376d6",
+        "src/api/remutex.rs": "4029495c363f238d5165be0f1d3730d111338c4c25eb714bb20df697481ffc44",
+        "src/api/rwlock.rs": "25c47c5cf4b60fea52805e42b0ab40009ffe1ae06267e6fccdac2c1c35bc9fe3",
         "src/lib.rs": "07e2a3d95346cbc303784051c5579e01745073be44d2469ae6e19c4045639fff",
         "src/locks/condvar.rs": "ca7f550238ea56eb7127c0cc647a0c164e2c1e2c7eb6bcf06437f596e0de47a5",
         "src/locks/elision.rs": "7070a29080f4c7d3b2c9b6e51a0d8230ebc8e56e4790aaeda1747b6c073a7438",
@@ -88722,7 +88722,7 @@
         "src/builder/styling.rs": "0a23b434edf9db03e8f8a7b0dde32a6f25ca5b39b801e66fb32515dd57c44b1d",
         "src/builder/value_hint.rs": "f5c39816ba558acc065810a8b37234005e23a7c836d8e44d26e1bb015cf9e78d",
         "src/builder/value_parser.rs": "92c3879de66fb80e12058d70051d17ab8fd95992c849505088005d098e6233de",
-        "src/derive.rs": "b13443d773bbd74da38f156b03d2b870e4edbc5860ce4b78818dc2d2e30a8425",
+        "src/derive.rs": "df24179b0c44f1f40e6accaf6e5f59b2a51db4e5b3cc2609015b4da5a0f05313",
         "src/error/context.rs": "156d2611a349ce826378476c9dcb3242a01ad834a095baad096a10cc2f73e1ed",
         "src/error/format.rs": "51e24294829c1d3b20d1eea396a775a66aa68a5d43565a6d082d5a5ff0863853",
         "src/error/kind.rs": "d7b11667622bdf8957b4ffbed89a9e1cd6af92390006c16214bb1dea19c3694e",
@@ -92816,7 +92816,7 @@
       "version": "1.4.8"
     },
     "src/foundation/concurrency/spin": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 1 个独立示例程序及专属输入（432 字节）；保留文档编译、真实测试及性能基准输入。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：裁剪不支持平台与缺失后端的依赖/feature边；移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 1 个独立示例程序及专属输入（432 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-02：raw try_upgrade 的临时守卫在成功与失败时都将所有权留给调用方，保持原 CAS 和内存序。",
       "description": "Spin-based synchronization primitives",
       "directory": "src/foundation/concurrency/spin",
       "files_sha256": {
@@ -92832,7 +92832,7 @@
         "src/mutex/ticket.rs": "113a6676b8b5a86085adb924196ac1eb8a207d8330118cbc45384eefb082dd8b",
         "src/once.rs": "89f4dd8476168c2ee16cadcd9e1ca218783fc4c16c637b266a34b9abdaea1bab",
         "src/relax.rs": "919c345bf55c3b2f9a7d9cd4aec2b2b3db68b6dc40ee2e4de4f6f32027abc290",
-        "src/rwlock.rs": "1883794d58aff8a8565d49126c018cf4f01592d11a1a5041e638a8d7c94d8e9c"
+        "src/rwlock.rs": "07667e45330e7f183b7d0320e8ae00d4bd62bf8a92fe2a05f9af388d38b38375"
       },
       "license": "MIT",
       "license_materials": [
@@ -92897,8 +92897,8 @@
         "build.rs": "3698c936b75f8332d9b6b30a8a6838ea116c1ff0a819a025c9ea9696e4d8ce72",
         "src/api/mod.rs": "442dd321d2f71df5ef6c62b7edfcb7cde8676bf9815ccb51bd3c781dc7bb8277",
         "src/api/mutex.rs": "ab91ed4b4881ca526dfeb776d53f900c6a25efc33a822763b6fa5fc2dd878980",
-        "src/api/remutex.rs": "1fe63bca10b93cecfbd43cc6d6ff0e6a822e06a6bcd577bc00032e04792abb0a",
-        "src/api/rwlock.rs": "040b4798658b4984de0a158b034786f3e6f58c307f5371a36a2a51238fd376d6",
+        "src/api/remutex.rs": "4029495c363f238d5165be0f1d3730d111338c4c25eb714bb20df697481ffc44",
+        "src/api/rwlock.rs": "25c47c5cf4b60fea52805e42b0ab40009ffe1ae06267e6fccdac2c1c35bc9fe3",
         "src/lib.rs": "07e2a3d95346cbc303784051c5579e01745073be44d2469ae6e19c4045639fff",
         "src/locks/condvar.rs": "ca7f550238ea56eb7127c0cc647a0c164e2c1e2c7eb6bcf06437f596e0de47a5",
         "src/locks/elision.rs": "7070a29080f4c7d3b2c9b6e51a0d8230ebc8e56e4790aaeda1747b6c073a7438",
@@ -96835,12 +96835,12 @@
       "version": "0.5.1"
     },
     "src/foundation/networking/email_address": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-11-02：Hash 按现有 Eq 的最后 @ 分区保持域 ASCII 大小写等价，并准确说明构造及组件借用；解析和相等策略保持原样。",
       "description": "A Rust crate providing an implementation of an RFC-compliant `EmailAddress` newtype.",
       "directory": "src/foundation/networking/email_address",
       "files_sha256": {
         "Cargo.toml": "7f972a64ad15e07c899d6965780a0ac7853848b7b2481f2a371e5ae124ed1dba",
-        "src/lib.rs": "88eb810e0e910f0a8b16cc3a3b5daecb5d47bd85765872898f6155f155719625"
+        "src/lib.rs": "1b16781f51a048381807ed527eccd83d2b1f4f4ead11a2e22c02b8bd13678a70"
       },
       "license": "MIT",
       "license_materials": [
@@ -99207,7 +99207,7 @@
       "description": "An implementation of regexes, supporting a relatively rich set of features, including backreferences and look-around. Aims to be compatible with Oniguruma syntax when the relevant flag is set.",
       "directory": "src/foundation/text-unicode/fancy-regex",
       "files_sha256": {
-        "Cargo.toml": "fbfeaaef638cc1144d1610bb59187329269af64a945313ed4b43b2504770560c",
+        "Cargo.toml": "2d9fe63ad9e3fda631db21b936091737dd75939ab37fae240047b32408fdaa98",
         "benches/bench.rs": "89f56c3fdde5316785e569779ca1b6497fac7a776f8df07271960b63efe89d18",
         "benches/compile.rs": "9423e086cbce5f6740501d379501ca8b1bdec9f529ebc12d066244a83b7b6966",
         "benches/regexset_vs_individual.rs": "b27bbbb0811a62e0e518ff6dceb5ec0d823d7182e2b10e709315ea1ffe0102b3",
@@ -100789,7 +100789,7 @@
       "version": "4.6.7"
     },
     "src/foundation/tooling/command-line": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 规范一致性：Extensions 断言说明 TypeId 与存储类型约束，修正 OsStr 原生编码和隐藏别名文档；不改变参数解析、转换或错误类型。；标准 io::Error/fmt::Error 转换保留原始具名 source 和其完整所有权链，维持原 ErrorKind、显示和 render 文本。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 规范一致性：Extensions 断言说明 TypeId 与存储类型约束，修正 OsStr 原生编码和隐藏别名文档；不改变参数解析、转换或错误类型。；标准 io::Error/fmt::Error 转换保留原始具名 source 和其完整所有权链，维持原 ErrorKind、显示和 render 文本。 2026-11-02：Box<Args> 转发既有组标识，保持 Option<Box<Args>> flatten 的分组和拒绝契约。",
       "description": "A simple to use, efficient, and full-featured Command Line Argument Parser",
       "directory": "src/foundation/tooling/command-line",
       "files_sha256": {
@@ -100899,7 +100899,7 @@
         "src/builder/styling.rs": "0a23b434edf9db03e8f8a7b0dde32a6f25ca5b39b801e66fb32515dd57c44b1d",
         "src/builder/value_hint.rs": "f5c39816ba558acc065810a8b37234005e23a7c836d8e44d26e1bb015cf9e78d",
         "src/builder/value_parser.rs": "92c3879de66fb80e12058d70051d17ab8fd95992c849505088005d098e6233de",
-        "src/derive.rs": "b13443d773bbd74da38f156b03d2b870e4edbc5860ce4b78818dc2d2e30a8425",
+        "src/derive.rs": "df24179b0c44f1f40e6accaf6e5f59b2a51db4e5b3cc2609015b4da5a0f05313",
         "src/error/context.rs": "156d2611a349ce826378476c9dcb3242a01ad834a095baad096a10cc2f73e1ed",
         "src/error/format.rs": "51e24294829c1d3b20d1eea396a775a66aa68a5d43565a6d082d5a5ff0863853",
         "src/error/kind.rs": "d7b11667622bdf8957b4ffbed89a9e1cd6af92390006c16214bb1dea19c3694e",
@@ -101886,7 +101886,7 @@
       "description": "A low-level WebAssembly encoder.",
       "directory": "src/foundation/web-runtime/wasm-encoder",
       "files_sha256": {
-        "Cargo.toml": "63f4fdeb12bc8dc6860ff36442cc2fdd71d8519f3a9dd79e105d7dcafe69f301",
+        "Cargo.toml": "c3989a0dcb9b21bd86e216781db565f5bb0e6d722c0ac76d0cf982e018f865ac",
         "src/component.rs": "992de8b4a14190f0a7d65aca8de28a37207fadb31a55e90e4e1bc4565eb38e08",
         "src/component/aliases.rs": "686100ebe50004fecfc0d99467bea4ea28a222d683eb1b746653fd334dbac92e",
         "src/component/builder.rs": "8fe66320db504b794a116e4c06d96a3dbca6b416477e00e187b1f55a27534349",
@@ -102349,7 +102349,8 @@
   "post_consolidation_benchmark_relocation": "8a08cc5b47c335b9e6aa2b7361ab7259fdc394c8dad16c29efb3e90d330ffbbc",
   "proof_maintenance_receipts": [
     "f6b00af0dad58bb402937c193974d916d525a790decbe043e679954c03bcbd1e",
-    "eede8d6ae6c3a123115c9396650c9f18f9a9ecef47820a9f4dfbfda2ee1e17d9"
+    "eede8d6ae6c3a123115c9396650c9f18f9a9ecef47820a9f4dfbfda2ee1e17d9",
+    "a9ad25a1f75e0ec0626e5a267dc7ecede3fd3da36f1132af2d91b9173b30b89f"
   ],
   "proof_routing_receipts": [
     "42cbfc30f0e5db58801c1806abba6926e34a3279dd0697bc1b4cdf2c98fbcce0",

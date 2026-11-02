@@ -39,7 +39,6 @@ path = "../../data-storage/leb128fmt"
 version = "0.245.1"
 features = [
     "simd",
-    "simd",
 ]
 optional = true
 default-features = false

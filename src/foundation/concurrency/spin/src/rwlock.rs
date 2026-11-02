@@ -894,10 +894,17 @@ unsafe impl<R: RelaxStrategy> synchronization::api::RawRwLockUpgrade for RwLock<
             data: &(),
             phantom: PhantomData,
         };
-        tmp_guard
-            .try_upgrade()
-            .map(|g| core::mem::forget(g))
-            .is_ok()
+        // Transfer the temporary guard's ownership back to the raw caller in both cases.
+        match tmp_guard.try_upgrade() {
+            Ok(guard) => {
+                core::mem::forget(guard);
+                true
+            }
+            Err(guard) => {
+                core::mem::forget(guard);
+                false
+            }
+        }
     }
 }
 

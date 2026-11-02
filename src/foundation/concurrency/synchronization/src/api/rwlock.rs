@@ -2040,7 +2040,9 @@ pub struct RwLockUpgradableReadGuard<'a, R: RawRwLockUpgrade, T: ?Sized> {
     marker: PhantomData<(&'a T, R::GuardMarker)>,
 }
 
-unsafe impl<'a, R: RawRwLockUpgrade + 'a, T: ?Sized + Sync + 'a> Sync
+// SAFETY: Shared guard access exposes &T and raw lock queries through rwlock().
+// T: Sync permits shared data access; R: Sync permits those shared raw queries.
+unsafe impl<'a, R: RawRwLockUpgrade + Sync + 'a, T: ?Sized + Sync + 'a> Sync
     for RwLockUpgradableReadGuard<'a, R, T>
 {
 }

@@ -22,6 +22,13 @@
 `python3 .github/scripts/check-async-type-contracts.py` 编译这些正反例，并检查具体诊断；
 这些编译检查不执行 future，也不替代互斥、取消和唤醒的运行测试。
 
+`ArcReentrantMutexGuard` 保持线程归属；共享它的引用还要求载荷 `T: Sync`。
+移动守卫只移动 Arc 句柄，因此守卫保持 `Unpin`，也适用于 `!Unpin` 载荷；
+守卫不提供载荷的 Pin 投影。`RwLockUpgradableReadGuard` 的共享引用要求
+原始锁 `R: Sync` 及载荷 `T: Sync`，因为其 `rwlock()` 可暴露原始锁查询。
+同一类型门禁保留这两类拒绝，并运行非 static、DST、析构及 Pin 控制；
+Arc 守卫在 `send_guard` 开关两种配置下都保持 `!Send`。
+
 <a id="safety-and-validation"></a>
 
 ## 安全与验证

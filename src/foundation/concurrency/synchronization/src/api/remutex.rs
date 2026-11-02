@@ -839,8 +839,14 @@ impl<'a, R: RawMutex + 'a, G: GetThreadId + 'a, T: fmt::Display + ?Sized + 'a> f
 #[must_use = "if unused the ReentrantMutex will immediately unlock"]
 pub struct ArcReentrantMutexGuard<R: RawMutex, G: GetThreadId, T: ?Sized> {
     remutex: Arc<ReentrantMutex<R, G, T>>,
-    marker: PhantomData<GuardNoSend>,
+    // Sharing exposes &T and requires T: Sync; unlocking stays on the owner thread.
+    marker: PhantomData<(GuardNoSend, T)>,
 }
+
+// Moving this guard moves only an Arc handle, not its allocation or data.
+// The guard provides no pinned projection, even when T itself is not Unpin.
+#[cfg(feature = "arc_lock")]
+impl<R: RawMutex, G: GetThreadId, T: ?Sized> Unpin for ArcReentrantMutexGuard<R, G, T> {}
 
 #[cfg(feature = "arc_lock")]
 impl<R: RawMutex, G: GetThreadId, T: ?Sized> ArcReentrantMutexGuard<R, G, T> {

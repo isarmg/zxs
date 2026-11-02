@@ -16,14 +16,14 @@ GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
 
 
-def rejection(fixture, code, *, macro=False):
+def rejection(fixture, code, *, macro=False, description="expected type boundary"):
     span = {"file_name": str(fixture), "is_primary": True, "expansion": None}
     if macro:
         span = {"file_name": "macro-definition.rs", "is_primary": True,
                 "expansion": {"span": span}}
     message = {"reason": "compiler-message", "message": {
         "level": "error", "code": {"code": code} if code else None,
-        "message": "expected type boundary",
+        "message": description,
         "spans": [span],
     }}
     return subprocess.CompletedProcess([], 101, json.dumps(message) + "\n", "")
@@ -49,6 +49,7 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
             subprocess.CompletedProcess([], 101, "", "dependency build failed"),
             rejection(fixture, "E0432"),
             rejection(Path("/dependency.rs"), "E0277"),
+            rejection(Path("/upgradable-raw-support.rs"), "E0277"),
             rejection(fixture, None),
             subprocess.CompletedProcess([], 1, rejection(fixture, "E0277").stdout, ""),
         )
@@ -56,7 +57,31 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
             with self.subTest(result=result), self.assertRaises(AssertionError):
                 GATE.check_rejection(result, fixture, "E0277")
 
-    def run_gate(self, root, *, listed=None, executed=None):
+    def test_guard_rejections_require_the_intended_type_diagnostic(self):
+        fixture = Path("/guard-rejection.rs")
+        result = rejection(fixture, "E0277", description="Cell LocalRaw Sync")
+        GATE.check_rejection(result, fixture, "E0277", fragments=("Cell", "LocalRaw", "Sync"))
+        with self.assertRaises(AssertionError):
+            GATE.check_rejection(result, fixture, "E0277", fragments=("Send",))
+
+    def test_runtime_main_requires_success_and_exact_completion_marker(self):
+        fixture = Path("/guard-positive.rs")
+        marker = "EXPECTED_COMPLETE"
+        GATE.check_main_execution(
+            subprocess.CompletedProcess([], 0, marker + "\n", ""), fixture, marker, "guard"
+        )
+        for code, output in (
+            (0, ""),
+            (0, "test result: ok. 0 passed; 0 failed\n"),
+            (0, marker + "\n" + marker + "\n"),
+            (1, marker + "\n"),
+        ):
+            with self.subTest(code=code, output=output), self.assertRaises(AssertionError):
+                GATE.check_main_execution(
+                    subprocess.CompletedProcess([], code, output, ""), fixture, marker, "guard"
+                )
+
+    def run_gate(self, root, *, listed=None, executed=None, main_output=None):
         calls = []
 
         def capture(command, **kwargs):
@@ -65,8 +90,12 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
             calls.append((command, kwargs, data))
             if "--message-format=json" in command:
                 name = command[command.index("--bin") + 1]
-                _, file, code = next(item for item in GATE.REJECTIONS if item[0] == name)
-                return rejection(root / "test/ci/fixtures" / file, code)
+                cases = (*GATE.REJECTIONS, *GATE.ARC_REJECTIONS, *GATE.UPGRADABLE_REJECTIONS)
+                case = next(item for item in cases if item[0] == name)
+                _, file, code = case[:3]
+                fragments = case[3] if len(case) > 3 else ()
+                return rejection(root / "test/ci/fixtures" / file, code,
+                                 description="expected type boundary " + " ".join(fragments))
             output = ""
             if command[1] == "test":
                 if "--list" in command:
@@ -76,6 +105,11 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
                     output = executed if executed is not None else "".join(
                         f"test {name} ... ok\n" for name in sorted(GATE.SELECT_TESTS)
                     ) + "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n"
+            if command[1] == "run":
+                name = command[command.index("--bin") + 1]
+                _, _, marker = next(case for case in (*GATE.ARC_RUNS, *GATE.UPGRADABLE_RUNS)
+                                    if case[0] == name)
+                output = marker + "\n" if main_output is None else main_output
             return subprocess.CompletedProcess(command, 0, output, "")
 
         with patch.object(GATE.subprocess, "run", side_effect=capture):
@@ -89,25 +123,59 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
             lock.write_text("root lock sentinel\n")
             calls = self.run_gate(root)
             self.assertEqual(lock.read_text(), "root lock sentinel\n")
-            self.assertEqual(len(calls), 7)
+            self.assertEqual(len(calls), 17)
             for command, kwargs, manifest in calls:
                 self.assertIn("--offline", command)
                 self.assertEqual(kwargs["cwd"], root)
                 self.assertGreater(kwargs["timeout"], 0)
                 self.assertEqual(manifest["workspace"], {})
-                for name, features in (("tokio", ["macros", "rt"]), ("futures-intrusive", ["std"])):
+                for name, features in (("tokio", ["macros", "rt"]),
+                                       ("futures-intrusive", ["std"]), ("synchronization", ["locks"])):
                     dependency = manifest["dependencies"][name]
                     self.assertFalse(dependency["default-features"])
                     self.assertEqual(dependency["features"], features)
-                self.assertTrue(all(target["required-features"] == ["compile-contracts"]
-                                    for target in manifest["bin"]))
+                arc_names = {case[0] for case in (*GATE.ARC_RUNS, *GATE.ARC_REJECTIONS)}
+                for target in manifest["bin"]:
+                    required = ["compile-contracts", "arc-contracts"] if target["name"] in arc_names else ["compile-contracts"]
+                    self.assertEqual(target["required-features"], required)
+                self.assertEqual(manifest["features"]["arc-contracts"], ["synchronization/arc_lock"])
+                self.assertEqual(manifest["features"]["send-guard-contracts"], ["synchronization/send_guard"])
                 if command[1] != "generate-lockfile":
                     self.assertIn("--locked", command)
                     self.assertEqual(command[command.index("--target") + 1], GATE.TARGET)
                 if command[1] == "test":
                     self.assertNotIn("--features", command)
-                if command[1] == "check":
-                    self.assertEqual(command[command.index("--features") + 1], "compile-contracts")
+                if command[1] in ("check", "run"):
+                    name = command[command.index("--bin") + 1]
+                    features = command[command.index("--features") + 1]
+                    if name in arc_names:
+                        self.assertIn(features, {group[1] for group in GATE.GUARD_GROUPS[:2]})
+                    else:
+                        self.assertEqual(features, "compile-contracts")
+            arc_features = (
+                "compile-contracts,arc-contracts",
+                "compile-contracts,arc-contracts,send-guard-contracts",
+            )
+            expected_guard_calls = {
+                ("run", features, name)
+                for features in arc_features
+                for name in ("arc_remutex_positive", "arc_remutex_unpin")
+            } | {
+                ("check", features, name)
+                for features in arc_features
+                for name in ("arc_remutex_cell_sync", "arc_remutex_send")
+            } | {
+                ("run", "compile-contracts", "upgradable_raw_positive"),
+                ("check", "compile-contracts", "upgradable_raw_sync"),
+            }
+            actual_guard_calls = {
+                (command[1], command[command.index("--features") + 1],
+                 command[command.index("--bin") + 1])
+                for command, _, _ in calls
+                if "--bin" in command
+                and command[command.index("--bin") + 1] in {case[2] for case in expected_guard_calls}
+            }
+            self.assertEqual(actual_guard_calls, expected_guard_calls)
             self.assertEqual(list((root / "target/scope-consumers").iterdir()), [])
 
     def test_empty_test_inventory_is_rejected(self):
@@ -117,6 +185,10 @@ class AsyncTypeContractsGateTests(unittest.TestCase):
     def test_ignored_tests_cannot_count_as_executed(self):
         with tempfile.TemporaryDirectory() as temporary, self.assertRaises(AssertionError):
             self.run_gate(Path(temporary), executed="test result: ok. 0 passed; 0 failed; 5 ignored\n")
+
+    def test_zero_test_output_cannot_stand_in_for_guard_main(self):
+        with tempfile.TemporaryDirectory() as temporary, self.assertRaises(AssertionError):
+            self.run_gate(Path(temporary), main_output="test result: ok. 0 passed; 0 failed\n")
 
     def test_lock_failure_stops_before_checks(self):
         with tempfile.TemporaryDirectory() as temporary:

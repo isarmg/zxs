@@ -1250,6 +1250,30 @@
         ]
       }
     },
+    "integration:command-line": {
+      "features": [
+        "color",
+        "default",
+        "derive",
+        "error-context",
+        "help",
+        "std",
+        "suggestions",
+        "usage"
+      ],
+      "subject": "command-line",
+      "targets": {
+        "foundation-boxed-args": [
+          "boxed_args_forwards_the_underlying_group_id",
+          "boxed_args_preserves_deliberately_absent_group_ids",
+          "optional_boxed_flatten_parses_supplied_group_members",
+          "optional_boxed_flatten_stays_absent_when_no_group_member_is_supplied",
+          "optional_boxed_flatten_update_can_create_a_present_group",
+          "optional_skipped_group_keeps_the_existing_configuration_rejection",
+          "unboxed_optional_control_and_boxed_group_constraints_keep_their_semantics"
+        ]
+      }
+    },
     "integration:concurrent-collections": {
       "features": [
         "alloc",
@@ -1368,6 +1392,27 @@
           "diagnostics_escape_messages_as_literals_and_keep_child_context",
           "displaydoc_preserves_borrowed_values_and_numeric_error_context",
           "source_formatter_preserves_expression_precedence_and_reparses_its_output"
+        ]
+      }
+    },
+    "integration:email_address": {
+      "features": [
+        "default",
+        "serialization",
+        "serialization_support"
+      ],
+      "subject": "email_address",
+      "targets": {
+        "foundation-email-contracts": [
+          "email_public_contract_regressions::accepted_domain_literal_uses_the_existing_ascii_case_equality",
+          "email_public_contract_regressions::canonical_hash_feed_remains_prefix_free_for_nested_domain_text",
+          "email_public_contract_regressions::casefold_boundaries_do_not_depend_on_domain_capitalization",
+          "email_public_contract_regressions::hashing_does_not_change_stored_spelling_or_equality",
+          "email_public_contract_regressions::hashmap_reuses_equivalent_domains_and_retains_local_case_distinctions",
+          "email_public_contract_regressions::last_at_partition_preserves_quoted_local_and_display_prefix",
+          "email_public_contract_regressions::parsed_ascii_domain_case_has_identical_hash_write_sequence",
+          "email_public_contract_regressions::public_construction_paths_share_the_same_equality_and_hash_contract",
+          "email_public_contract_regressions::unicode_bytes_are_preserved_and_only_ascii_domain_case_is_folded"
         ]
       }
     },
@@ -2289,6 +2334,25 @@
           "shrink_to_fit_no_vacant",
           "slab_get_mut",
           "try_remove"
+        ]
+      }
+    },
+    "integration:spin": {
+      "features": [
+        "barrier",
+        "default",
+        "lazy",
+        "lock_api",
+        "mutex",
+        "once",
+        "rwlock",
+        "spin_mutex"
+      ],
+      "subject": "spin",
+      "targets": {
+        "foundation-spin-raw-upgrade": [
+          "raw_try_upgrade_failure_preserves_public_guard",
+          "raw_try_upgrade_success_retains_public_writer"
         ]
       }
     },
