@@ -18,7 +18,7 @@ pub(crate) struct SortKey {
 }
 impl SortKey {
     #[cfg(feature = "core")]
-    pub(crate) fn for_entry(entry: &storage_contract::Entry, display_path: &str) -> Self {
+    pub(crate) fn for_entry(entry: &storage_contract::Entry, display_path: String) -> Self {
         Self {
             file: entry.kind == storage_contract::NamespaceEntryKind::File,
             folded: entry.name().to_lowercase(),
@@ -31,7 +31,7 @@ impl SortKey {
                 .expect("invariant: a portable path has a component")
                 .into(),
             name: entry.name().into(),
-            path: display_path.into(),
+            path: display_path,
             identity: entry.entry_id.clone(),
         }
     }

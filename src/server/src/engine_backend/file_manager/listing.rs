@@ -206,7 +206,7 @@ impl PrimaryListing {
                 } else {
                     format!("{}/{}", repo.name, entry.path)
                 };
-                page.consider(SortKey::for_entry(entry, &display), Candidate::Entry(index));
+                page.consider(SortKey::for_entry(entry, display), Candidate::Entry(index));
             }
         }
         Ok(SelectedListing {

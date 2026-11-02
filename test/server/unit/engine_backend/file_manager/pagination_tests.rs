@@ -251,13 +251,17 @@ fn admitted_entry_sort_keys_reuse_component_keys_without_changing_order_or_curso
                 size: 0,
             };
             for display in [path.to_owned(), format!("Repository/{path}")] {
-                let key = SortKey::for_entry(&entry, &display);
                 let original = SortKey::new(
                     kind == storage_contract::NamespaceEntryKind::Directory,
                     entry.name(),
                     &display,
                     &entry.entry_id,
                 );
+                let display_buffer = display.as_ptr();
+                let display_capacity = display.capacity();
+                let key = SortKey::for_entry(&entry, display);
+                assert_eq!(key.path.as_ptr(), display_buffer);
+                assert_eq!(key.path.capacity(), display_capacity);
                 assert_eq!(key, original);
                 let encoded = request(None, "").cursor(&key, false).unwrap();
                 let decoded = request(Some(&encoded), "");
