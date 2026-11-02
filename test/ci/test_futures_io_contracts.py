@@ -102,7 +102,7 @@ class Harness:
             }
 
         check = IO['check']
-        with mock.patch.dict(check.__globals__, {'runpy': SimpleNamespace(run_path=load_common)}), \
+        with mock.patch.dict(check.__globals__, {'runpy': SimpleNamespace(run_path=load_common), 'check_rejections': mock.Mock(return_value=[])}), \
                 mock.patch('subprocess.run', side_effect=AssertionError('real subprocess is forbidden')), \
                 mock.patch('builtins.print'):
             check(self.root, self.root / 'consumers', self.root / 'shared-target')
@@ -112,7 +112,7 @@ class Harness:
 
 
 class FuturesIoContractsTests(unittest.TestCase):
-    def test_three_locked_offline_consumers_preserve_features_fixtures_and_root_lock(self):
+    def test_four_locked_offline_consumers_preserve_features_fixtures_and_root_lock(self):
         with tempfile.TemporaryDirectory() as temporary:
             harness = Harness(self, Path(temporary))
             lock_before = (harness.root / 'Cargo.lock').read_bytes()
@@ -120,7 +120,7 @@ class FuturesIoContractsTests(unittest.TestCase):
             self.assertEqual((harness.root / 'Cargo.lock').read_bytes(), lock_before)
             self.assertEqual(set(key for key, *_ in harness.commands), set(harness.expected['suites']))
             manifests = {manifest for _, _, manifest, _ in harness.commands}
-            self.assertEqual(len(manifests), 3)
+            self.assertEqual(len(manifests), 4)
             for key, command, manifest, data in harness.commands:
                 self.assertTrue(manifest.is_relative_to(harness.root / 'consumers'))
                 self.assertIn('--offline', command)
@@ -209,7 +209,40 @@ class FuturesIoContractsTests(unittest.TestCase):
                     harness.run()
                 self.assertFalse(harness.summaries())
                 self.assertEqual(sum('test' in command and '--list' not in command
-                                     for _, command, *_ in harness.commands), 3)
+                                     for _, command, *_ in harness.commands), 4)
+
+    def test_compile_rejections_require_expected_code_and_primary_fixture_span(self):
+        check = IO['check_rejections']
+        for fault in (None, 'accepted', 'wrong-code', 'wrong-path', 'secondary-only'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                manifest = root / 'Cargo.toml'
+                manifest.write_text('[package]\nname="fixture"\n')
+                commands = []
+                def run(command, **kwargs):
+                    commands.append(command)
+                    name = command[command.index('--bin') + 1]
+                    _, filename, code = next(row for row in IO['REJECTIONS'] if row[0] == name)
+                    fixture = root / 'test/ci/fixtures' / filename
+                    message = {'reason': 'compiler-message', 'message': {
+                        'level': 'error', 'code': {'code': 'E0000' if fault == 'wrong-code' else code},
+                        'spans': [{'file_name': str(root / 'other.rs' if fault == 'wrong-path' else fixture),
+                                   'is_primary': fault != 'secondary-only'}],
+                    }}
+                    return SimpleNamespace(returncode=0 if fault == 'accepted' else 101,
+                                           stdout=json.dumps(message) + '\n', stderr='')
+                with mock.patch.dict(check.__globals__, {'subprocess': SimpleNamespace(run=run)}):
+                    if fault:
+                        with self.assertRaises(AssertionError):
+                            check(root, manifest, root / 'target', root)
+                    else:
+                        records = check(root, manifest, root / 'target', root)
+                        self.assertEqual([row['code'] for row in records], ['E0277', 'E0597'])
+                        self.assertEqual(len(commands), 2)
+                        for command in commands:
+                            self.assertIn('--locked', command)
+                            self.assertIn('--offline', command)
+                            self.assertIn('--message-format=json', command)
 
     def test_existing_parent_calls_io_helper_once_with_the_shared_target(self):
         check = PARENT['check']

@@ -1,15 +1,17 @@
 use crate::io_traits::AsyncWrite;
 use crate::sink_trait::Sink;
 use crate::traits::ready;
+use core::marker::PhantomData;
 use core::task::{Context, Poll};
 use pin_project_lite::pin_project;
+use std::borrow::Cow;
 use std::io;
 use std::pin::Pin;
 
 #[derive(Debug)]
-struct Block<Item> {
+struct Block<'a> {
     offset: usize,
-    bytes: Item,
+    bytes: Cow<'a, [u8]>,
 }
 
 pin_project! {
@@ -17,20 +19,23 @@ pin_project! {
     #[must_use = "sinks do nothing unless polled"]
     #[derive(Debug)]
     #[cfg_attr(docsrs, doc(cfg(feature = "sink")))]
-    pub struct IntoSink<W, Item> {
+    pub struct IntoSink<'a, W, Item> {
         #[pin]
         writer: W,
         // An outstanding block for us to push into the underlying writer, along with an offset of how
         // far into this block we have written already.
-        buffer: Option<Block<Item>>,
+        buffer: Option<Block<'a>>,
+        // Conversion consumes Item; only its stable byte block remains queued.
+        item: PhantomData<fn(Item)>,
     }
 }
 
-impl<W: AsyncWrite, Item: AsRef<[u8]>> IntoSink<W, Item> {
+impl<'a, W: AsyncWrite, Item: Into<Cow<'a, [u8]>>> IntoSink<'a, W, Item> {
     pub(super) fn new(writer: W) -> Self {
         Self {
             writer,
             buffer: None,
+            item: PhantomData,
         }
     }
 
@@ -60,7 +65,7 @@ impl<W: AsyncWrite, Item: AsRef<[u8]>> IntoSink<W, Item> {
     }
 }
 
-impl<W: AsyncWrite, Item: AsRef<[u8]>> Sink<Item> for IntoSink<W, Item> {
+impl<'a, W: AsyncWrite, Item: Into<Cow<'a, [u8]>>> Sink<Item> for IntoSink<'a, W, Item> {
     type Error = io::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -72,7 +77,7 @@ impl<W: AsyncWrite, Item: AsRef<[u8]>> Sink<Item> for IntoSink<W, Item> {
         debug_assert!(self.buffer.is_none());
         *self.project().buffer = Some(Block {
             offset: 0,
-            bytes: item,
+            bytes: item.into(),
         });
         Ok(())
     }

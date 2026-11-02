@@ -612,6 +612,12 @@ mod if_alloc {
     }
 
     /// A future which resolves when the target semaphore has been successfully acquired.
+    ///
+    /// This future retains its own `Arc` handle until completion, when ownership
+    /// passes to the returned [`GenericSharedSemaphoreReleaser`]. Moving it between
+    /// threads requires `MutexType: Send + Sync`, because dropping the last owner
+    /// may destroy the raw mutex on the receiving thread. A future with a
+    /// non-`Send` raw mutex can still be created and polled locally.
     #[must_use = "futures do nothing unless polled"]
     pub struct GenericSharedSemaphoreAcquireFuture<MutexType: RawMutex> {
         /// The Semaphore which should get acquired trough this Future
@@ -623,10 +629,10 @@ mod if_alloc {
         auto_release: bool,
     }
 
-    // Safety: Futures can be sent between threads as long as the underlying
-    // semaphore is thread-safe (Sync), which allows to poll/register/unregister from
-    // a different thread.
-    unsafe impl<MutexType: RawMutex + Sync> Send
+    // SAFETY: The future owns a semaphore handle and may drop its last Arc
+    // on another thread. Send permits transferring and dropping the owned raw
+    // mutex; Sync permits shared polling and cancellation through that mutex.
+    unsafe impl<MutexType: RawMutex + Send + Sync> Send
         for GenericSharedSemaphoreAcquireFuture<MutexType>
     {
     }
@@ -715,6 +721,11 @@ mod if_alloc {
     }
 
     /// A futures-aware shared semaphore.
+    ///
+    /// Clones, acquire futures, and releasers retain independent `Arc` ownership.
+    /// The semaphore is `Send` and `Sync` when `MutexType: Send + Sync`: shared
+    /// access can create another owner, whose final drop may destroy the raw mutex
+    /// on that thread. A non-`Send` raw mutex remains usable on the local thread.
     pub struct GenericSharedSemaphore<MutexType: RawMutex> {
         state: Arc<LockApiMutex<MutexType, SemaphoreState>>,
     }
@@ -733,8 +744,10 @@ mod if_alloc {
         for GenericSharedSemaphore<MutexType>
     {
     }
-    // The Semaphore is thread-safe as long as the utilized Mutex is thread-safe
-    unsafe impl<MutexType: RawMutex + Sync> Sync
+    // SAFETY: Shared access can create independent owners through Clone,
+    // acquire, or try_acquire. Send permits those owners to drop the final Arc
+    // on their thread; Sync permits shared access through the raw mutex.
+    unsafe impl<MutexType: RawMutex + Send + Sync> Sync
         for GenericSharedSemaphore<MutexType>
     {
     }

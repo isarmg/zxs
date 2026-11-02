@@ -534,10 +534,17 @@ pub trait AsyncWriteExt: AsyncWrite {
         assert_future::<Result<()>, _>(WriteAllVectored::new(self, bufs))
     }
 
-    /// Allow using an [`AsyncWrite`] as a [`Sink`](crate::sink::Sink)`<Item: AsRef<[u8]>>`.
+    /// Allow using an [`AsyncWrite`] as a [`Sink`](crate::sink::Sink) of stable byte blocks.
     ///
     /// This adapter produces a sink that will write each value passed to it
-    /// into the underlying writer.
+    /// into the underlying writer. Each item is converted once, in
+    /// [`start_send`](crate::sink::Sink::start_send), into a [`Cow`](std::borrow::Cow)
+    /// byte block. Partial writes and `Pending` retain that same block until it
+    /// has been written. An owned `Vec<u8>` is moved without copying; a borrowed
+    /// slice must remain valid for the sink's lifetime. Other input types must
+    /// explicitly choose an owned snapshot or an immutable borrowed slice.
+    /// Arbitrary `AsRef<[u8]>` values are not accepted because repeated calls
+    /// may return different byte sequences.
     ///
     /// Note that this function consumes the given writer, returning a wrapped
     /// version.
@@ -549,7 +556,7 @@ pub trait AsyncWriteExt: AsyncWrite {
     /// use futures::io::AsyncWriteExt;
     /// use futures::stream::{self, StreamExt};
     ///
-    /// let stream = stream::iter(vec![Ok([1, 2, 3]), Ok([4, 5, 6])]);
+    /// let stream = stream::iter(vec![Ok(vec![1, 2, 3]), Ok(vec![4, 5, 6])]);
     ///
     /// let mut writer = vec![];
     ///
@@ -562,7 +569,7 @@ pub trait AsyncWriteExt: AsyncWrite {
     /// ```
     #[cfg(feature = "sink")]
     #[cfg_attr(docsrs, doc(cfg(feature = "sink")))]
-    fn into_sink<Item: AsRef<[u8]>>(self) -> IntoSink<Self, Item>
+    fn into_sink<'a, Item: Into<std::borrow::Cow<'a, [u8]>>>(self) -> IntoSink<'a, Self, Item>
     where
         Self: Sized,
     {

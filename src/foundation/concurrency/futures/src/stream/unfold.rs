@@ -15,17 +15,20 @@ use pin_project_lite::pin_project;
 /// `Stream` from a seed value.
 ///
 /// `unfold()` will call the provided closure with the provided seed, then wait
-/// for the returned `Future` to complete with `(a, b)`. It will then yield the
-/// value `a`, and use `b` as the next internal state.
+/// for the returned `Future` to complete with `Some((a, b))`. It will then yield
+/// the value `a`, and use `b` as the next internal state.
 ///
-/// If the closure returns `None` instead of `Some(Future)`, then the `unfold()`
-/// will stop producing items and return `Poll::Ready(None)` in future
-/// calls to `poll()`.
+/// If the `Future` completes with `None`, the stream returns `Poll::Ready(None)`
+/// and stops producing items.
 ///
 /// This function can typically be used when wanting to go from the "world of
 /// futures" to the "world of streams": the provided closure can build a
 /// `Future` using other library functions working on futures, and `unfold()`
 /// will turn it into a `Stream` by repeating the operation.
+///
+/// # Panics
+///
+/// Calling `poll_next()` after the stream has returned `Poll::Ready(None)` panics.
 ///
 /// # Example
 ///

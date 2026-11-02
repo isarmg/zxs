@@ -126,10 +126,7 @@ mod into_sink_write_zero_contracts {
                     Poll::Pending
                 }
                 Some(WriteStep::Error(error)) => Poll::Ready(Err(error)),
-                None => Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    ScriptExhausted("write"),
-                ))),
+                None => Poll::Ready(Err(io::Error::other(ScriptExhausted("write")))),
             }
         }
 
@@ -164,14 +161,11 @@ mod into_sink_write_zero_contracts {
                 Poll::Pending
             }
             Some(FinishStep::Error(error)) => Poll::Ready(Err(error)),
-            None => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::Other,
-                ScriptExhausted(phase),
-            ))),
+            None => Poll::Ready(Err(io::Error::other(ScriptExhausted(phase)))),
         }
     }
 
-    type WriterSink = IntoSink<ScriptedWriter, Vec<u8>>;
+    type WriterSink = IntoSink<'static, ScriptedWriter, Vec<u8>>;
 
     fn writer(steps: Vec<WriteStep>) -> (ScriptedWriter, Rc<RefCell<WriteLog>>) {
         let log = Rc::new(RefCell::new(WriteLog::default()));
@@ -256,7 +250,7 @@ mod into_sink_write_zero_contracts {
         for drain in [Drain::Ready, Drain::Flush, Drain::Close] {
             let (writer, log) = writer(vec![
                 WriteStep::Take(0),
-                WriteStep::Error(io::Error::new(io::ErrorKind::Other, RepollAfterWriteZero)),
+                WriteStep::Error(io::Error::other(RepollAfterWriteZero)),
             ]);
             let mut sink = writer.into_sink::<Vec<u8>>();
             let mut cx = noop_context();

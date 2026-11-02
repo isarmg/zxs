@@ -402,6 +402,12 @@
     {
       "tool": "python3",
       "args": [
+        ".github/scripts/check-mime-build.py"
+      ]
+    },
+    {
+      "tool": "python3",
+      "args": [
         ".github/scripts/check-foundation-behaviour.py"
       ]
     },

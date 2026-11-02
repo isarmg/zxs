@@ -6,14 +6,20 @@ import hashlib
 import json
 from pathlib import Path
 import runpy
+import subprocess
 import tempfile
 
 
 SUITES = {
     'seek-relative': ('foundation-futures-seek-relative.rs', ['io'], 14),
     'string-retention': ('foundation-futures-string-retention.rs', ['io'], 16),
+    'stable-bytes': ('foundation-futures-stable-bytes.rs', ['io', 'sink'], 8),
     'write-zero': ('foundation-futures-write-zero.rs', ['io', 'sink'], 9),
 }
+REJECTIONS = (
+    ('asref-only', 'foundation-futures-asref-only-rejection.rs', 'E0277'),
+    ('borrowed-block', 'foundation-futures-borrowed-block-rejection.rs', 'E0597'),
+)
 TARGET = 'x86_64-unknown-linux-gnu'
 IDENTITY = (
     '.github/scripts/futures_io_contracts.py',
@@ -26,11 +32,37 @@ IDENTITY = (
     'src/foundation/concurrency/futures/src/io/read_line.rs',
     'src/foundation/concurrency/futures/src/io/into_sink.rs',
     *(f'test/ci/fixtures/{recipe[0]}' for recipe in SUITES.values()),
+    *(f'test/ci/fixtures/{filename}' for _, filename, _ in REJECTIONS),
 )
 
 
 def source_hashes(root):
     return {path: hashlib.sha256((root / path).read_bytes()).hexdigest() for path in IDENTITY}
+
+
+def check_rejections(root, manifest, target_dir, evidence):
+    with manifest.open('a') as handle:
+        for name, filename, _ in REJECTIONS:
+            handle.write('\n[[bin]]\nname=' + json.dumps(name) + '\npath='
+                         + json.dumps(str(root / 'test/ci/fixtures' / filename)) + '\n')
+    verified = []
+    for name, filename, code in REJECTIONS:
+        fixture = root / 'test/ci/fixtures' / filename
+        command = ['cargo', 'check', '--locked', '--offline', '--manifest-path', str(manifest),
+                   '--target', TARGET, '--target-dir', str(target_dir), '--jobs', '1',
+                   '--bin', name, '--message-format=json']
+        result = subprocess.run(command, cwd=root, text=True, capture_output=True, timeout=180)
+        (evidence / (name + '.log')).write_text(
+            '$ ' + ' '.join(command) + '\n' + result.stdout + '\n' + result.stderr)
+        errors = [item['message'] for line in result.stdout.splitlines()
+                  if (item := json.loads(line)).get('reason') == 'compiler-message'
+                  and item['message']['level'] == 'error']
+        assert result.returncode == 101 and errors, f'{name}: expected compiler rejection'
+        assert all((error.get('code') or {}).get('code') == code and any(
+            Path(span['file_name']) == fixture and span['is_primary']
+            for span in error['spans']) for error in errors), f'{name}: unrelated diagnostic: {errors}'
+        verified.append({'fixture': str(fixture.relative_to(root)), 'code': code})
+    return verified
 
 
 def check(root, temporary, target_dir):
@@ -90,8 +122,9 @@ def check(root, temporary, target_dir):
         finally:
             log.close()
         print(f'PASS futures-io:{key}: {len(actual)} tests; inventory equal', flush=True)
+    rejections = check_rejections(root, temporary / 'stable-bytes/Cargo.toml', target_dir, evidence)
     assert source_hashes(root) == before, 'futures IO source/fixture changed during validation'
     summary = {'schema': 1, 'commit': commit, 'dirty': dirty, 'rustc': toolchain,
-               'source_sha256': before, 'target': TARGET, 'suites': results}
+               'source_sha256': before, 'target': TARGET, 'suites': results, 'rejections': rejections}
     (evidence / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
-    print(f'Futures IO contracts passed: 3 suites, 39 tests; evidence: {evidence}', flush=True)
+    print(f'Futures IO contracts passed: 4 suites, 47 tests, 2 compile rejections; evidence: {evidence}', flush=True)

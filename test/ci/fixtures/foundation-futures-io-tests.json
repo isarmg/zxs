@@ -84,6 +84,30 @@
         "into_sink_write_zero_contracts::pending_flush_does_not_rewrite_the_completed_item",
         "into_sink_write_zero_contracts::pending_write_retains_the_partial_offset_and_wakes"
       ]
+    },
+    "stable-bytes": {
+      "fixture": "test/ci/fixtures/foundation-futures-stable-bytes.rs",
+      "features": [
+        "io",
+        "sink"
+      ],
+      "resolved_features": [
+        "alloc",
+        "io",
+        "sink",
+        "std",
+        "utilities"
+      ],
+      "tests": [
+        "conversion_occurs_at_start_send_before_first_poll",
+        "cow_owned_and_borrowed_items_share_one_sink",
+        "local_slice_is_borrowed_without_copying",
+        "offset_length_view_after_pending_does_not_truncate",
+        "same_length_view_after_pending_does_not_mix_bytes",
+        "shorter_view_after_pending_keeps_original_block",
+        "unchanged_view_control_keeps_original_block",
+        "vec_is_moved_without_copying_its_allocation"
+      ]
     }
   }
 }
