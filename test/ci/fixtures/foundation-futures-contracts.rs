@@ -7,6 +7,9 @@ use std::sync::{
 };
 use std::task::{Context, Poll};
 
+#[path = "foundation-stream-select.rs"]
+mod stream_select;
+
 fn poll_next<S: Stream + ?Sized>(stream: Pin<&mut S>) -> Poll<Option<S::Item>> {
     stream.poll_next(&mut Context::from_waker(futures::task::noop_waker_ref()))
 }

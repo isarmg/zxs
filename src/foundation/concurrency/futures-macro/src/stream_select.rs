@@ -10,9 +10,15 @@ pub(crate) fn stream_select(input: TokenStream) -> Result<TokenStream, rust_synt
            compile_error!("stream select macro needs at least two arguments.")
         });
     }
-    let generic_idents = (0..args.len()).map(|i| format_ident!("_{}", i)).collect::<Vec<_>>();
-    let field_idents = (0..args.len()).map(|i| format_ident!("__{}", i)).collect::<Vec<_>>();
-    let field_idents_2 = (0..args.len()).map(|i| format_ident!("___{}", i)).collect::<Vec<_>>();
+    let generic_idents = (0..args.len())
+        .map(|i| format_ident!("_{}", i))
+        .collect::<Vec<_>>();
+    let field_idents = (0..args.len())
+        .map(|i| format_ident!("__{}", i))
+        .collect::<Vec<_>>();
+    let field_idents_2 = (0..args.len())
+        .map(|i| format_ident!("___{}", i))
+        .collect::<Vec<_>>();
     let field_indices = (0..args.len()).map(Index::from).collect::<Vec<_>>();
     let args = args.iter().map(|e| e.to_token_stream());
 
@@ -54,6 +60,7 @@ pub(crate) fn stream_select(input: TokenStream) -> Result<TokenStream, rust_synt
                         let mut #field_idents_2 = false;
                     )*
                     let mut any_pending = false;
+                    let mut ready_item = None;
                     {
                         let mut stream_array = [#(#field_idents.as_mut().map(|f| StreamEnum::#generic_idents(f)).unwrap_or(StreamEnum::None)),*];
                         __futures_crate::async_await::shuffle(&mut stream_array);
@@ -63,8 +70,9 @@ pub(crate) fn stream_select(input: TokenStream) -> Result<TokenStream, rust_synt
                                 continue;
                             } else {
                                 match __futures_crate::stream::Stream::poll_next(::std::pin::Pin::new(&mut s), cx) {
-                                    r @ __futures_crate::task::Poll::Ready(Some(_)) => {
-                                        return r;
+                                    __futures_crate::task::Poll::Ready(Some(item)) => {
+                                        ready_item = Some(item);
+                                        break;
                                     },
                                     __futures_crate::task::Poll::Pending => {
                                         any_pending = true;
@@ -86,7 +94,9 @@ pub(crate) fn stream_select(input: TokenStream) -> Result<TokenStream, rust_synt
                             *#field_idents = None;
                         }
                     )*
-                    if any_pending {
+                    if let Some(item) = ready_item {
+                        __futures_crate::task::Poll::Ready(Some(item))
+                    } else if any_pending {
                         __futures_crate::task::Poll::Pending
                     } else {
                         __futures_crate::task::Poll::Ready(None)
@@ -94,12 +104,11 @@ pub(crate) fn stream_select(input: TokenStream) -> Result<TokenStream, rust_synt
                 }
 
                 fn size_hint(&self) -> (usize, Option<usize>) {
-                    let mut s = (0, Some(0));
+                    let mut s: (usize, Option<usize>) = (0, Some(0));
                     #(
                         if let Some(new_hint) = self.#field_indices.as_ref().map(|s| s.size_hint()) {
-                            s.0 += new_hint.0;
-                            // We can change this out for `.zip` when the MSRV is 1.46.0 or higher.
-                            s.1 = s.1.and_then(|a| new_hint.1.map(|b| a + b));
+                            s.0 = s.0.saturating_add(new_hint.0);
+                            s.1 = s.1.and_then(|a| new_hint.1.and_then(|b| a.checked_add(b)));
                         }
                     )*
                     s
