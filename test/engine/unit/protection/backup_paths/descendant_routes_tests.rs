@@ -315,3 +315,187 @@ fn shadowed_ancestor_placement_does_not_add_a_phantom_route() {
         vec!["P01", "B01", "C01"]
     );
 }
+
+#[test]
+fn admission_rejects_equivalent_placement_prefixes() {
+    let low = "rule_00000000000000000000000000000000";
+    let high = "rule_ffffffffffffffffffffffffffffffff";
+    for (path, equivalent) in [("docs", "docs"), ("docs", "DOCS"), ("", "")] {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut engine, repo) = initialize_routes(temp.path());
+        engine
+            .update_placement_rule(PlacementRuleUpdate {
+                rule_id: low,
+                repository_id: &repo.repository_id,
+                path_prefix: path,
+                primary_slot_id: "P01",
+                expected_generation: 0,
+                principal: "admin",
+                operation_id: OperationId::generate().unwrap(),
+            })
+            .unwrap();
+        let duplicate = engine
+            .update_placement_rule(PlacementRuleUpdate {
+                rule_id: high,
+                repository_id: &repo.repository_id,
+                path_prefix: equivalent,
+                primary_slot_id: "P02",
+                expected_generation: 0,
+                principal: "admin",
+                operation_id: OperationId::generate().unwrap(),
+            })
+            .unwrap_err();
+        assert_eq!(duplicate.code(), storage_contract::ErrorCode::NameCollision);
+
+        let baseline = engine.state().clone();
+        for (first, second) in [(low, high), (high, low)] {
+            let mut state = baseline.clone();
+            state.placement_rules.clear();
+            for (id, prefix, primary) in [(first, path, "P01"), (second, equivalent, "P02")] {
+                let mut rule = baseline.placement_rules[low].clone();
+                rule.rule_id = id.into();
+                rule.path_prefix = prefix.into();
+                rule.primary_slot_id = primary.into();
+                state.placement_rules.insert(id.into(), rule);
+            }
+            let raw: crate::history_package::RawState =
+                decode_strict(&canonical_json(&state).unwrap()).unwrap();
+            let error = State::try_from(raw)
+                .expect_err("equivalent placement prefixes must fail snapshot admission");
+            assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
+        }
+    }
+}
+
+#[test]
+fn admission_preserves_distinct_placement_prefixes_and_repositories() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut engine, repo) = initialize_routes(temp.path());
+    mkdir(&mut engine, &repo, "docs");
+    for path in ["", "docs"] {
+        engine
+            .update_placement_rule(PlacementRuleUpdate {
+                rule_id: &new_id("rule").unwrap(),
+                repository_id: &repo.repository_id,
+                path_prefix: path,
+                primary_slot_id: "P01",
+                expected_generation: 0,
+                principal: "admin",
+                operation_id: OperationId::generate().unwrap(),
+            })
+            .unwrap();
+    }
+    for path in ["docs/child", "docs-sibling", "docs2"] {
+        place(&mut engine, &repo, path);
+    }
+    let other = engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("other admitted routes").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    place(&mut engine, &other, "DOCS");
+    let raw: crate::history_package::RawState =
+        decode_strict(&canonical_json(engine.state()).unwrap()).unwrap();
+    engine.state = std::sync::Arc::new(State::try_from(raw).unwrap());
+    for (repository, path, expected) in [
+        (&repo, "other/new.txt", "P01"),
+        (&repo, "docs/new.txt", "P01"),
+        (&repo, "docs/child/new.txt", "P02"),
+        (&repo, "docs-sibling/new.txt", "P02"),
+        (&repo, "docs2/new.txt", "P02"),
+        (&other, "docs/new.txt", "P02"),
+    ] {
+        assert_eq!(
+            engine
+                .new_file_placement_for_file(&repository.repository_id, None, path)
+                .unwrap()
+                .0,
+            expected
+        );
+    }
+    let read = engine
+        .backup_configuration(&repo.repository_id, "docs")
+        .unwrap();
+    assert_eq!(
+        json_codec::json!(read.backup_routes),
+        json!([["P01", "B01", "C01"], ["P02", "B02"]])
+    );
+}
+
+#[test]
+fn placement_specificity_uses_normalized_component_depth() {
+    let low = "rule_00000000000000000000000000000000";
+    let high = "rule_ffffffffffffffffffffffffffffffff";
+    assert!("ſſſ".len() > "SSS/x".len());
+    for (ancestor, spelling, query) in [("ſſſ", "SSS", "sss"), ("docs", "DOCS", "docs")] {
+        let admitted_path = name_policy::PortablePath::parse(ancestor).unwrap();
+        assert_eq!(admitted_path.key(), query);
+        let child = format!("{spelling}/x");
+        let sibling = format!("{spelling}-sibling");
+        name_policy::PortablePath::parse(&child).unwrap();
+        assert_eq!(name_policy::path_key(&child), format!("{query}/x"));
+        for (parent_id, child_id) in [(low, high), (high, low)] {
+            let temp = tempfile::tempdir().unwrap();
+            let (mut engine, repo) = initialize_routes(temp.path());
+            for (id, path, primary) in [
+                ("rule_11111111111111111111111111111111", "", "P02"),
+                (parent_id, ancestor, "P01"),
+                (child_id, child.as_str(), "P02"),
+                (
+                    "rule_22222222222222222222222222222222",
+                    sibling.as_str(),
+                    "P01",
+                ),
+            ] {
+                engine
+                    .update_placement_rule(PlacementRuleUpdate {
+                        rule_id: id,
+                        repository_id: &repo.repository_id,
+                        path_prefix: path,
+                        primary_slot_id: primary,
+                        expected_generation: 0,
+                        principal: "admin",
+                        operation_id: OperationId::generate().unwrap(),
+                    })
+                    .unwrap();
+            }
+            for (path, expected) in [
+                (format!("{query}/x/new.txt"), "P02"),
+                (format!("{query}/new.txt"), "P01"),
+                (format!("{query}-sibling/new.txt"), "P01"),
+                (format!("{query}2/new.txt"), "P02"),
+                ("unrelated/new.txt".into(), "P02"),
+            ] {
+                let actual = engine
+                    .new_file_placement_for_file(&repo.repository_id, None, &path)
+                    .unwrap()
+                    .0;
+                eprintln!(
+                    "accepted ancestor {ancestor:?}, key {query:?}; query {path:?} selected {actual}"
+                );
+                assert_eq!(actual, expected, "ancestor={ancestor}, path={path}");
+            }
+            let written = save(
+                &mut engine,
+                &repo,
+                &format!("{query}/x/new.txt"),
+                b"most specific placement",
+            );
+            assert_eq!(
+                engine.state.placements[&written.version_id].primary_slot_id,
+                "P02"
+            );
+            let configuration = engine
+                .backup_configuration(&repo.repository_id, &format!("{query}/x"))
+                .unwrap();
+            assert_eq!(
+                json_codec::json!(configuration.backup_routes),
+                json!([["P02", "B02"]])
+            );
+        }
+    }
+}

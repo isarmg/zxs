@@ -949,3 +949,73 @@ fn public_placement_query_does_not_inherit_another_repositories_file_policy() {
         2
     );
 }
+
+#[test]
+fn admission_rejects_equivalent_inheritable_path_policies() {
+    let low = "policy_00000000000000000000000000000000";
+    let high = "policy_ffffffffffffffffffffffffffffffff";
+    for (path, equivalent) in [("docs", "docs"), ("docs", "DOCS"), ("", "")] {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut engine, repo) = initialize(temp.path(), 2, None);
+        engine
+            .update_protection_policy(crate::ProtectionPolicyUpdate {
+                policy_id: low,
+                repository_id: &repo.repository_id,
+                path_prefix: path,
+                target_copies: 1,
+                expected_generation: 0,
+                principal: "admin",
+                operation_id: OperationId::generate().unwrap(),
+            })
+            .unwrap();
+        let duplicate = engine
+            .update_protection_policy(crate::ProtectionPolicyUpdate {
+                policy_id: high,
+                repository_id: &repo.repository_id,
+                path_prefix: equivalent,
+                target_copies: 3,
+                expected_generation: 0,
+                principal: "admin",
+                operation_id: OperationId::generate().unwrap(),
+            })
+            .unwrap_err();
+        assert_eq!(duplicate.code(), storage_contract::ErrorCode::NameCollision);
+
+        let baseline = engine.state().clone();
+        for (one, three) in [(low, high), (high, low)] {
+            let mut state = baseline.clone();
+            state.protection_policies.clear();
+            for (id, prefix, copies) in [(one, path, 1), (three, equivalent, 3)] {
+                let mut policy = baseline.protection_policies[low].clone();
+                policy.policy_id = id.into();
+                policy.path_prefix = prefix.into();
+                policy.target_copies = copies;
+                state.protection_policies.insert(id.into(), policy);
+            }
+            let raw: crate::history_package::RawState =
+                decode_strict(&canonical_json(&state).unwrap()).unwrap();
+            let error = State::try_from(raw)
+                .expect_err("equivalent current path rules must fail snapshot admission");
+            assert_eq!(error.code(), storage_contract::ErrorCode::StateInvalid);
+        }
+
+        // Separate child and sibling prefixes remain distinct selection scopes.
+        for prefix in ["docs/child", "docs-more"] {
+            let mut state = baseline.clone();
+            let mut policy = baseline.protection_policies[low].clone();
+            policy.policy_id = high.into();
+            policy.path_prefix = prefix.into();
+            policy.target_copies = 3;
+            state.protection_policies.insert(high.into(), policy);
+            let raw: crate::history_package::RawState =
+                decode_strict(&canonical_json(&state).unwrap()).unwrap();
+            let admitted = State::try_from(raw).unwrap();
+            assert_eq!(
+                effective_policy(&admitted, &repo.repository_id, None, prefix)
+                    .unwrap()
+                    .target_copies,
+                3
+            );
+        }
+    }
+}

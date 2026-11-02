@@ -156,7 +156,12 @@ impl crate::engine::PlanningContext<'_> {
             .placement_rules
             .values()
             .filter(|r| r.repository_id == repository && applies(&r.path_prefix, path))
-            .max_by_key(|r| r.path_prefix.len())
+            .max_by_key(|r| {
+                r.path_prefix
+                    .split('/')
+                    .filter(|component| !component.is_empty())
+                    .count()
+            })
             .map(|r| r.primary_slot_id.clone())
             .unwrap_or_else(|| repo.primary_slot_id.clone());
         let copies = backup_paths::effective_policy(self.state, repository, file_id, path)

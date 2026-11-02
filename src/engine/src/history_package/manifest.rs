@@ -1366,6 +1366,7 @@ impl HistoryManifest {
             validate_id(&boundary.external_history_tree_id, "history")?;
             validate_id(&boundary.external_commit_id, "commit")?;
         }
+        let mut placement_prefixes = BTreeSet::new();
         for (id, rule) in &self.placement_rules {
             validate_id(id, "rule")?;
             if id != &rule.rule_id || rule.repository_id != self.repository.repository_id {
@@ -1373,6 +1374,9 @@ impl HistoryManifest {
             }
             if !rule.path_prefix.is_empty() {
                 name_policy::validate_path(&rule.path_prefix)?;
+            }
+            if !placement_prefixes.insert(name_policy::path_key(&rule.path_prefix)) {
+                return Err(invalid("placement prefix has multiple rules"));
             }
         }
         for (file, paths) in &self.file_backup_paths {
@@ -1395,6 +1399,7 @@ impl HistoryManifest {
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
         let mut inheritable_scopes = BTreeSet::new();
+        let mut inheritable_prefixes = BTreeSet::new();
         for (id, policy) in &self.protection_policies {
             validate_id(id, "policy")?;
             if id != &policy.policy_id || policy.repository_id != self.repository.repository_id {
@@ -1413,6 +1418,14 @@ impl HistoryManifest {
                 .or_else(|| policy.scope_file_id.as_deref().map(|id| ("file", id)));
             if policy.inheritable && scope.is_some_and(|scope| !inheritable_scopes.insert(scope)) {
                 return Err(invalid("backup scope has multiple inheritable policies"));
+            }
+            if policy.inheritable
+                && scope.is_none()
+                && !inheritable_prefixes.insert(name_policy::path_key(&policy.path_prefix))
+            {
+                return Err(invalid(
+                    "backup prefix has multiple inheritable path policies",
+                ));
             }
             if policy.target_copies == 0
                 || (policy.scope_file_id.is_some() && policy.scope_directory_id.is_some())
