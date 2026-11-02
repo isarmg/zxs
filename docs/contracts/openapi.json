@@ -7238,7 +7238,6 @@
           },
           "file_placement": {
             "type": "object",
-            "minProperties": 1,
             "propertyNames": {
               "type": "string",
               "pattern": "^entry_[0-9a-f]{32}(?![\\s\\S])"
@@ -7299,7 +7298,6 @@
           },
           "file_placement": {
             "type": "object",
-            "minProperties": 1,
             "propertyNames": {
               "type": "string",
               "pattern": "^entry_[0-9a-f]{32}(?![\\s\\S])"

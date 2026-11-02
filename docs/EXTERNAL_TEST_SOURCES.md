@@ -65,6 +65,13 @@ Rust include 保留所属包的特性开关与私有模块语义；不建立独�
 编辑，不授权跨 owner 转移或根重命名；这些变更未有专门证明时保持拒绝，
 不能通过删除标记或重写初始来源绕过。
 
+`test/ci/fixtures/runtime-select-*.rs` 和 `intrusive-mutex-send-*.rs` 是项目新写的公开
+API 回归，由 `check-async-type-contracts.py` 在 Linux amd64 执行。五个 select
+正例必须逐个运行完成；Mutex 的泛型、Guard 和 `Cell` 控制只编译。三个反例分别
+要求真实夹具产生 E0599（载荷方法）、E0716（借用逃逸）和 E0277（非 Send 载荷），
+不会把任意构建失败当成预期拒绝。临时消费者的编译目标需显式开启，防止 Cargo
+在运行正例时同时构建反例；产品 workspace、特性默认值和根锁文件保持原样。
+
 <a id="imported-upstream-fixtures"></a>
 
 ## 独立导入的上游数据夹具

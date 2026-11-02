@@ -1778,11 +1778,16 @@ fn invalid_utf8_field_offsets_and_tiny_unusable_budgets_are_explicit_errors() {
         },
         7,
     );
-    let HistoryWindowPage::NodeField { next_cursor, .. } = public_page(&view, &request) else {
+    let HistoryWindowPage::NodeField {
+        next_cursor,
+        total_bytes,
+        ..
+    } = public_page(&view, &request)
+    else {
         panic!("field fragment requested");
     };
     let cursor = next_cursor.unwrap();
-    for offset in [1, u64::MAX] {
+    for offset in [1, total_bytes, u64::MAX] {
         let mut payload = cursor.payload().clone();
         payload.position = HistoryPosition::Field {
             byte_offset: offset,

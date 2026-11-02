@@ -67,6 +67,7 @@ case "${1:-}" in
     python3 .github/scripts/check-async-notification.py
     python3 .github/scripts/check-tracing-family.py
     python3 .github/scripts/check-runtime-join-map.py
+    python3 .github/scripts/check-async-type-contracts.py
     python3 .github/scripts/check-runtime-features.py
     python3 .github/scripts/check-futures-consolidation.py
     python3 .github/scripts/check-http-body-consolidation.py

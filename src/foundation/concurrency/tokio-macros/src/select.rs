@@ -72,6 +72,9 @@ fn clean_pattern(pat: &mut rust_syntax::Pat) {
                 clean_pattern(&mut *pat);
             }
         }
+        rust_syntax::Pat::Paren(paren) => {
+            clean_pattern(&mut paren.pat);
+        }
         rust_syntax::Pat::Or(or) => {
             for case in &mut or.cases {
                 clean_pattern(case);

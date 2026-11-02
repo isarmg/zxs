@@ -32,6 +32,8 @@ PUBLICATION 中回执使用合成身份与摘要；通过字段或覆盖集合�
 
 `SaveOperation` 是即时内容回执及 `/api/operations/{operation}/outcome` 的内容变体，明确拒绝 `current_health`。`SaveOperationObservation` 是原 operation GET 的显式诊断内容变体：必填的 `current_health=null` 表示 NotObserved，不把 pending 或缺少作用域伪装成健康；实际 Checked 才返回 `CurrentHealth` 的 state/checked_at 对象。非内容操作由 `GenericOperation` / `GenericOperationObservation` 表达，两个 GET 分别使用联合 `OperationOutcome` / `OperationObservation`。通用 operation_kind/result 保持开放，发布结果和当前观察互不替代。固定向量同步覆盖额外健康字段拒绝、缺失观察判别字段、旧字符串形态、pending 伪造检查、健康状态变化及原保护语义；它们是手工审阅的合成契约源输入，不是运行时捕获证据。持久化 `OperationResult`、`OperationSegment`、原固定规范字节与摘要向量未改变，不增加旧响应兼容分支。
 
+`CommitBody.file_placement` 和 `CommitRequest.file_placement` 必须是对象，但无上传文件的命名空间提交（例如仅重命名）使用空映射。非空映射仍要求合法条目 ID 和严格的放置字段；schema 不掌握封存工作区，不能证明成员完整性。引擎继续要求映射与全部封存上传项精确对应，不允许漏项或未知项，也不增加旧格式兼容。
+
 文件大小等大整数使用十进制字符串；schema 的 UInt64 正则精确限制最大值。语义检查另验证盘位连续、物理成员不重复、所需内容证明覆盖、上传完整性及 HTTP、SMB 各自独立的 spool 所有者/总额关系。OpenAPI 内嵌与 core 相同的定义供工具离线使用，校验器会拒绝二者漂移。
 
 持久状态、写请求和固定向量的 JSON 解析先拒绝重复字段、BOM、孤立代理项和浮点数，再做 schema 和 JCS；解析后只检查普通字典无法找回重复字段信息。`/api/system/status` 与 `/api/system/history` 的临时监测响应允许有限小数，不放宽持久状态或写请求规则。固定向量中的 JCS 属性排序包含非 BMP 键样例，用于检测错误地按 Unicode 标量顺序排序；该向量不表示 PortableName 允许 emoji 文件名。

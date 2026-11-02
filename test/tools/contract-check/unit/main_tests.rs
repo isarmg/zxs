@@ -1420,3 +1420,55 @@ fn offline_disk_list_contracts_accept_unknown_and_zero_but_reject_bad_classifica
         assert!(!check.is_valid(&invalid));
     }
 }
+
+#[test]
+fn namespace_only_commit_placement_matches_existing_wire_contract() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/contracts");
+    let mut core = read(&root.join("core.schema.json")).unwrap();
+    let mut api = read(&root.join("openapi.json")).unwrap();
+    let vectors = read(&root.join("vectors.json")).unwrap();
+    assert_eq!(api["components"]["schemas"], bundle(&core["$defs"]));
+    let body = array(&vectors["positive"])
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "namespace-only-commit-body")
+        .unwrap()["value"]
+        .clone();
+    let workspace = body["workspace_id"].as_str().unwrap();
+    let mut request = body.clone();
+    request["request_digest"] = storage_contract::request_digest(
+        "POST",
+        "/api/workspaces/{workspace}/commit",
+        json!({"workspace": workspace}),
+        json!({}),
+        &body,
+    )
+    .unwrap()
+    .into();
+    let envelope =
+        storage_contract::PublicCommitEnvelope::parse(workspace, request.clone()).unwrap();
+    assert!(envelope.file_placement().is_empty());
+    semantics("CommitRequest", &request).unwrap();
+
+    for (name, value) in [("CommitBody", body), ("CommitRequest", request)] {
+        core["$ref"] = format!("#/$defs/{name}").into();
+        api["$ref"] = format!("#/components/schemas/{name}").into();
+        let core_schema = validator(&core).unwrap();
+        let api_schema = validator(&api).unwrap();
+        assert!(core_schema.is_valid(&value), "{name}");
+        assert!(api_schema.is_valid(&value), "{name}");
+        for case in array(&vectors["negative"]).unwrap().iter().filter(|case| {
+            case["name"]
+                .as_str()
+                .unwrap()
+                .starts_with("namespace-commit-placement-")
+        }) {
+            let mut invalid = case["value"].clone();
+            if name == "CommitRequest" {
+                invalid["request_digest"] = value["request_digest"].clone();
+            }
+            assert!(!core_schema.is_valid(&invalid), "{name}: {}", case["name"]);
+            assert!(!api_schema.is_valid(&invalid), "{name}: {}", case["name"]);
+        }
+    }
+}

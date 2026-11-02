@@ -668,8 +668,8 @@ impl<'a> Query<'a> {
             },
             None => 0,
         };
-        if offset > text.len() || !text.is_char_boundary(offset) {
-            return Err(invalid("field offset is outside a UTF-8 boundary"));
+        if !text.is_char_boundary(offset) || (offset == text.len() && !text.is_empty()) {
+            return Err(invalid("field offset is outside a readable UTF-8 boundary"));
         }
         self.cancel.checkpoint()?;
         let mut end = offset + self.request.limit.get().min(text.len() - offset);

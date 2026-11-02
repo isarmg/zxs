@@ -3156,6 +3156,24 @@
           "next_cursor": null
         }
       }
+    },
+    {
+      "name": "namespace-only-commit-body",
+      "schema": "CommitBody",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "repository_id": "repo_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "expected_head": "commit_00000000000000000000000000000001",
+        "fencing_token": "1",
+        "message": "重命名文件，不上传正文",
+        "requested_protection": "strict",
+        "file_placement": {},
+        "expected_topology_generation": "1",
+        "sealed_manifest_hash": "5ad98e350184ff09100068667be7528497fdbd198fcd0e74d2bf4a9b7bf71b7d"
+      }
     }
   ],
   "negative": [
@@ -13343,6 +13361,129 @@
       "schema": "HistoryCursor",
       "layer": "schema",
       "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "namespace-commit-placement-null",
+      "schema": "CommitBody",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "repository_id": "repo_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "expected_head": "commit_00000000000000000000000000000001",
+        "fencing_token": "1",
+        "message": "重命名文件，不上传正文",
+        "requested_protection": "strict",
+        "file_placement": null,
+        "expected_topology_generation": "1",
+        "sealed_manifest_hash": "5ad98e350184ff09100068667be7528497fdbd198fcd0e74d2bf4a9b7bf71b7d"
+      }
+    },
+    {
+      "name": "namespace-commit-placement-array",
+      "schema": "CommitBody",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "repository_id": "repo_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "expected_head": "commit_00000000000000000000000000000001",
+        "fencing_token": "1",
+        "message": "重命名文件，不上传正文",
+        "requested_protection": "strict",
+        "file_placement": [],
+        "expected_topology_generation": "1",
+        "sealed_manifest_hash": "5ad98e350184ff09100068667be7528497fdbd198fcd0e74d2bf4a9b7bf71b7d"
+      }
+    },
+    {
+      "name": "namespace-commit-placement-invalid-item-id",
+      "schema": "CommitBody",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "repository_id": "repo_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "expected_head": "commit_00000000000000000000000000000001",
+        "fencing_token": "1",
+        "message": "重命名文件，不上传正文",
+        "requested_protection": "strict",
+        "file_placement": {
+          "not-an-entry": {
+            "primary_slot_id": "P01",
+            "target_copies": 1
+          }
+        },
+        "expected_topology_generation": "1",
+        "sealed_manifest_hash": "5ad98e350184ff09100068667be7528497fdbd198fcd0e74d2bf4a9b7bf71b7d"
+      }
+    },
+    {
+      "name": "namespace-commit-placement-zero-copies",
+      "schema": "CommitBody",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "repository_id": "repo_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "expected_head": "commit_00000000000000000000000000000001",
+        "fencing_token": "1",
+        "message": "重命名文件，不上传正文",
+        "requested_protection": "strict",
+        "file_placement": {
+          "entry_00000000000000000000000000000001": {
+            "primary_slot_id": "P01",
+            "target_copies": 0
+          }
+        },
+        "expected_topology_generation": "1",
+        "sealed_manifest_hash": "5ad98e350184ff09100068667be7528497fdbd198fcd0e74d2bf4a9b7bf71b7d"
+      }
+    },
+    {
+      "name": "namespace-commit-placement-unknown-field",
+      "schema": "CommitBody",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "repository_id": "repo_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "expected_head": "commit_00000000000000000000000000000001",
+        "fencing_token": "1",
+        "message": "重命名文件，不上传正文",
+        "requested_protection": "strict",
+        "file_placement": {
+          "entry_00000000000000000000000000000001": {
+            "primary_slot_id": "P01",
+            "target_copies": 1,
+            "extra": true
+          }
+        },
+        "expected_topology_generation": "1",
+        "sealed_manifest_hash": "5ad98e350184ff09100068667be7528497fdbd198fcd0e74d2bf4a9b7bf71b7d"
+      }
+    },
+    {
+      "name": "namespace-commit-placement-missing",
+      "schema": "CommitBody",
+      "layer": "schema",
+      "value": {
+        "operation_id": "op_00000000000000000000000000000001",
+        "workspace_id": "ws_00000000000000000000000000000001",
+        "repository_id": "repo_00000000000000000000000000000001",
+        "branch_id": "br_00000000000000000000000000000001",
+        "expected_head": "commit_00000000000000000000000000000001",
+        "fencing_token": "1",
+        "message": "重命名文件，不上传正文",
+        "requested_protection": "strict",
+        "expected_topology_generation": "1",
+        "sealed_manifest_hash": "5ad98e350184ff09100068667be7528497fdbd198fcd0e74d2bf4a9b7bf71b7d"
+      }
     }
   ],
   "canonical": [
