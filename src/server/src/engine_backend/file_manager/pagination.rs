@@ -67,11 +67,18 @@ impl PageRequest {
         self.cursor.as_ref().is_some_and(|cursor| cursor.backward)
     }
     fn cursor(&self, key: &SortKey, backward: bool) -> Result<String, ApiError> {
-        let bytes = json_codec::to_vec(&ListingCursor {
-            snapshot: self.snapshot.clone(),
-            request: self.request.clone(),
+        #[derive(data_serialization::Serialize)]
+        struct CursorView<'a> {
+            snapshot: &'a str,
+            request: &'a str,
+            backward: bool,
+            key: &'a SortKey,
+        }
+        let bytes = json_codec::to_vec(&CursorView {
+            snapshot: &self.snapshot,
+            request: &self.request,
             backward,
-            key: key.clone(),
+            key,
         })
         .expect("invariant: internal JSON serialization succeeds");
         let mut encoded = String::with_capacity(bytes.len() * 2);

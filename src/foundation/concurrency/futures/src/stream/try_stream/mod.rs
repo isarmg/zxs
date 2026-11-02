@@ -351,12 +351,12 @@ pub trait TryStreamExt: TryStream {
         assert_stream::<Result<Self::Ok, Self::Error>, _>(InspectErr::new(self, f))
     }
 
-    /// Wraps a [`TryStream`] into a type that implements
-    /// [`Stream`](crate::stream::Stream)
+    /// Wraps a [`TryStream`] into a [`Stream`](crate::stream::Stream) with
+    /// `Item = Result<Self::Ok, Self::Error>`.
     ///
-    /// [`TryStream`]s currently do not implement the
-    /// [`Stream`](crate::stream::Stream) trait because of limitations
-    /// of the compiler.
+    /// [`TryStream`] already extends [`Stream`](crate::stream::Stream), but a
+    /// generic `TryStream` bound does not expose its `Stream::Item` as a `Result`.
+    /// This adapter makes that associated-type equality explicit.
     ///
     /// # Examples
     ///

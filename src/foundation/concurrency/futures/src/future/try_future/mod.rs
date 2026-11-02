@@ -545,7 +545,7 @@ pub trait TryFutureExt: TryFuture {
 
     /// Unwraps this future's output, producing a future with this future's
     /// [`Ok`](TryFuture::Ok) type as its
-    /// [`Output`](std::future::Future::Output) type.
+    /// [`Output`](core::future::Future::Output) type.
     ///
     /// If this future is resolved successfully, the returned future will
     /// contain the original future's success value as output. Otherwise, the
@@ -574,10 +574,10 @@ pub trait TryFutureExt: TryFuture {
     }
 
     /// Wraps a [`TryFuture`] into a type that implements
-    /// [`Future`](std::future::Future).
+    /// [`Future`](core::future::Future).
     ///
     /// [`TryFuture`]s currently do not implement the
-    /// [`Future`](std::future::Future) trait due to limitations of the
+    /// [`Future`](core::future::Future) trait due to limitations of the
     /// compiler.
     ///
     /// # Examples

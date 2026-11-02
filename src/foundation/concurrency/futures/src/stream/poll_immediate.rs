@@ -40,7 +40,10 @@ where
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.stream.as_ref().map_or((0, Some(0)), Stream::size_hint)
+        // Each source item is retained, but every Pending adds another output item.
+        self.stream
+            .as_ref()
+            .map_or((0, Some(0)), |stream| (stream.size_hint().0, None))
     }
 }
 

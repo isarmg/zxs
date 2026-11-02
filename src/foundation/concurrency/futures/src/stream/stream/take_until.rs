@@ -8,8 +8,6 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 use pin_project_lite::pin_project;
 
-// FIXME: docs, tests
-
 pin_project! {
     /// Stream for the [`take_until`](super::StreamExt::take_until) method.
     #[must_use = "streams do nothing unless polled"]
@@ -22,7 +20,7 @@ pin_project! {
         fut: Option<Fut>,
         // Contains fut's return value once fut is resolved
         fut_result: Option<Fut::Output>,
-        // Whether the future was taken out by the user.
+        // Whether the stopping future was removed while the stream is still running.
         free: bool,
     }
 }
@@ -58,9 +56,9 @@ where
     delegate_access_inner!(stream, St, ());
 
     /// Extract the stopping future out of the combinator.
-    /// The future is returned only if it isn't resolved yet, ie. if the stream isn't stopped yet.
-    /// Taking out the future means the combinator will be yielding
-    /// elements from the wrapped stream without ever stopping it.
+    /// The future is returned only while unresolved and before the wrapped stream ends.
+    /// Taking it out disables early stopping; the combinator still stops when the
+    /// wrapped stream ends. This cannot restart an already stopped stream.
     pub fn take_future(&mut self) -> Option<Fut> {
         if self.fut.is_some() {
             self.free = true;
@@ -109,8 +107,8 @@ where
         self.fut_result.take()
     }
 
-    /// Whether the stream was stopped yet by the stopping future
-    /// being resolved.
+    /// Whether the wrapped stream has ended or the stopping future has resolved.
+    /// Removing the stopping future does not prevent termination at the wrapped stream's end.
     pub fn is_stopped(&self) -> bool {
         !self.free && self.fut.is_none()
     }
@@ -140,6 +138,7 @@ where
             // Future either not resolved yet or taken out by the user
             let item = ready!(this.stream.poll_next(cx));
             if item.is_none() {
+                *this.free = false;
                 this.fut.set(None);
             }
             Poll::Ready(item)
@@ -151,7 +150,8 @@ where
             return (0, Some(0));
         }
 
-        self.stream.size_hint()
+        let (lower, upper) = self.stream.size_hint();
+        (if self.free { lower } else { 0 }, upper)
     }
 }
 

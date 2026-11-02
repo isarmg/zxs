@@ -263,9 +263,25 @@ fn admitted_entry_sort_keys_reuse_component_keys_without_changing_order_or_curso
                 assert_eq!(key.path.as_ptr(), display_buffer);
                 assert_eq!(key.path.capacity(), display_capacity);
                 assert_eq!(key, original);
-                let encoded = request(None, "").cursor(&key, false).unwrap();
-                let decoded = request(Some(&encoded), "");
-                assert_eq!(decoded.cursor.unwrap().key, original);
+                for backward in [false, true] {
+                    let page_request = request(None, "");
+                    let owned = ListingCursor {
+                        snapshot: page_request.snapshot.clone(),
+                        request: page_request.request.clone(),
+                        backward,
+                        key: original.clone(),
+                    };
+                    let expected: String = json_codec::to_vec(&owned)
+                        .unwrap()
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect();
+                    let encoded = page_request.cursor(&key, backward).unwrap();
+                    assert_eq!(encoded, expected);
+                    let decoded = request(Some(&encoded), "").cursor.unwrap();
+                    assert_eq!(decoded.key, original);
+                    assert_eq!(decoded.backward, backward);
+                }
                 actual.push(key);
                 expected.push(original);
             }

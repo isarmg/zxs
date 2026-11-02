@@ -9,7 +9,7 @@
 ///
 /// This type is a stable equivalent to the `!` type from `std`.
 ///
-/// This is currently an alias for [`std::convert::Infallible`], but in
+/// This is currently an alias for [`core::convert::Infallible`], but in
 /// the future it may be an alias for [`!`][never].
 /// See ["Future compatibility" section of `std::convert::Infallible`][infallible] for more.
 ///

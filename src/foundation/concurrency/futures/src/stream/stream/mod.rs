@@ -252,9 +252,8 @@ pub trait StreamExt: Stream {
     /// Note that because `next` doesn't take ownership over the stream,
     /// the [`Stream`] type must be [`Unpin`]. If you want to use `next` with a
     /// [`!Unpin`](Unpin) stream, you'll first have to pin the stream. This can
-    /// be done by boxing the stream using [`Box::pin`] or
-    /// pinning it to the stack using the `pin_mut!` macro from the `pin_utils`
-    /// crate.
+    /// be done on the stack using [`core::pin::pin!`] or, when allocation is
+    /// available, by boxing the stream using `alloc::boxed::Box::pin`.
     ///
     /// # Examples
     ///
@@ -286,9 +285,8 @@ pub trait StreamExt: Stream {
     /// Note that because `into_future` moves the stream, the [`Stream`] type
     /// must be [`Unpin`]. If you want to use `into_future` with a
     /// [`!Unpin`](Unpin) stream, you'll first have to pin the stream. This can
-    /// be done by boxing the stream using [`Box::pin`] or
-    /// pinning it to the stack using the `pin_mut!` macro from the `pin_utils`
-    /// crate.
+    /// be done on the stack using [`core::pin::pin!`] or, when allocation is
+    /// available, by boxing the stream using `alloc::boxed::Box::pin`.
     ///
     /// # Examples
     ///
@@ -636,11 +634,12 @@ pub trait StreamExt: Stream {
         assert_future::<usize, _>(Count::new(self))
     }
 
-    /// Repeats a stream endlessly.
+    /// Repeats a stream by restarting clones of its initial state.
     ///
-    /// The stream never terminates. Note that you likely want to avoid
-    /// usage of `collect` or such on the returned stream as it will exhaust
-    /// available memory as it tries to just fill up all RAM.
+    /// When the current stream ends, it is replaced with a clone of the original
+    /// stream and polled again. If that clone is empty, the returned stream also
+    /// ends. Otherwise, the items from each restarted clone are yielded in turn.
+    /// Collecting a cycle that keeps yielding items will consume unbounded memory.
     ///
     /// # Examples
     ///
@@ -1018,7 +1017,8 @@ pub trait StreamExt: Stream {
     ///
     /// The stopping future may return any type. Once the stream is stopped
     /// the result of the stopping future may be accessed with `TakeUntil::take_result()`.
-    /// The stream may also be resumed with `TakeUntil::take_future()`.
+    /// Before the stopping future resolves, `TakeUntil::take_future()` can remove
+    /// it and disable early stopping. This cannot restart a completed stream.
     /// See the documentation of [`TakeUntil`] for more information.
     ///
     /// # Examples
@@ -1496,11 +1496,12 @@ pub trait StreamExt: Stream {
     /// them into a local vector. At most `capacity` items will get buffered
     /// before they're yielded from the returned stream.
     ///
-    /// Note that the vectors returned from this iterator may not always have
+    /// Note that the vectors returned from this stream may not always have
     /// `capacity` elements. If the underlying stream ended and only a partial
-    /// vector was created, it'll be returned. Additionally if an error happens
-    /// from the underlying stream then the currently buffered items will be
-    /// yielded.
+    /// vector was created, it'll be returned. A pending underlying stream leaves
+    /// the buffered items in place until the chunk is full or the stream ends.
+    /// All items are buffered alike, including `Err` values in a stream of
+    /// `Result`s; they do not cause an early flush.
     ///
     /// This method is only available when the `std` or `alloc` feature of this
     /// library is activated, and it is activated by default.

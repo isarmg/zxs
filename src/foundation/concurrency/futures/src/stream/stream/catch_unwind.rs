@@ -53,7 +53,9 @@ impl<St: Stream + UnwindSafe> Stream for CatchUnwind<St> {
         if self.caught_unwind {
             (0, Some(0))
         } else {
-            self.stream.size_hint()
+            let (lower, upper) = self.stream.size_hint();
+            // A panic may truncate normal items or add one error after the last item.
+            (lower.min(1), upper.and_then(|upper| upper.checked_add(1)))
         }
     }
 }
