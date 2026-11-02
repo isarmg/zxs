@@ -16,6 +16,12 @@
 
 面向调用方的运行时停驻开关为 `parking`，once_cell 的可选后端开关也为 `parking`。`futures-intrusive` 只在 std 配置下显式启用锁；spin 的通用锁 API 保持 no_std。不再保留兼容门面 crate。
 
+`futures-intrusive` 的借用锁 future `GenericMutexLockFuture` 在底层 `RawMutex: Sync`
+且载荷 `T: Send` 时才实现 `Send`，与所借用的 `GenericMutex` 的 `Sync` 条件一致。
+载荷不需要 `Sync`；例如 `Cell<i32>` 可以在互斥保护下移动，`Rc<Cell<i32>>` 则不能。
+`python3 .github/scripts/check-async-type-contracts.py` 编译这些正反例，并检查具体诊断；
+这些编译检查不执行 future，也不替代互斥、取消和唤醒的运行测试。
+
 <a id="safety-and-validation"></a>
 
 ## 安全与验证

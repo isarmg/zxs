@@ -357,6 +357,15 @@
     },
     {
       "package": "futures-intrusive",
+      "kind": "I",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-async-type-contracts.py"
+      ],
+      "detail": "intrusive-mutex-send-positive.rs compiles generic T: Send, i32 guard and Cell controls; intrusive-mutex-send-rejection.rs must fail with E0277 at the fixture; compile-only, no future is polled"
+    },
+    {
+      "package": "futures-intrusive",
       "kind": "P",
       "shard": "foundation-platform",
       "scripts": [
@@ -1121,6 +1130,15 @@
     {
       "package": "tokio",
       "kind": "P",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-async-type-contracts.py"
+      ],
+      "detail": "runtime-select-patterns.rs executes exactly 5 public select! cases; payload-type and borrow-escape fixtures must fail with E0599/E0716 at their own call sites; rt,macros only"
+    },
+    {
+      "package": "tokio",
+      "kind": "P",
       "shard": "foundation-platform",
       "scripts": [
         ".github/scripts/check-linux-search-process.py"
@@ -1153,6 +1171,15 @@
         ".github/scripts/check-synchronization.py"
       ],
       "detail": "consumers.rs (tokio rt/sync with parking)"
+    },
+    {
+      "package": "tokio-macros",
+      "kind": "F",
+      "shard": "foundation-async",
+      "scripts": [
+        ".github/scripts/check-async-type-contracts.py"
+      ],
+      "detail": "select_priv_clean_pattern! expansion exercised by 5 executed public select! pattern tests; original handler type/borrow rejection is checked separately"
     },
     {
       "package": "tokio-macros",

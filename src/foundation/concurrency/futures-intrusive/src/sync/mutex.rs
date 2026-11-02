@@ -318,6 +318,8 @@ unsafe impl<MutexType: RawMutex, T: Sync> Sync
 }
 
 /// A future which resolves when the target mutex has been successfully acquired.
+///
+/// This future is `Send` when `MutexType: Sync` and `T: Send`.
 #[must_use = "futures do nothing unless polled"]
 pub struct GenericMutexLockFuture<'a, MutexType: RawMutex, T: 'a> {
     /// The Mutex which should get locked trough this Future
@@ -326,10 +328,12 @@ pub struct GenericMutexLockFuture<'a, MutexType: RawMutex, T: 'a> {
     wait_node: ListNode<WaitQueueEntry>,
 }
 
-// Safety: Futures can be sent between threads as long as the underlying
-// mutex is thread-safe (Sync), which allows to poll/register/unregister from
-// a different thread.
-unsafe impl<'a, MutexType: RawMutex + Sync, T: 'a> Send
+// SAFETY: MutexType: Sync and T: Send make the borrowed GenericMutex Sync.
+// Its state lock synchronizes wait-node access during polling/cancellation
+// across threads. An unpinned future can move before registration. After
+// polling, Pin keeps the wait node at its registered address until completion
+// or Drop unregisters it.
+unsafe impl<'a, MutexType: RawMutex + Sync, T: Send + 'a> Send
     for GenericMutexLockFuture<'a, MutexType, T>
 {
 }

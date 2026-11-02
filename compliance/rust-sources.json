@@ -92181,7 +92181,7 @@
       "version": "0.3.34"
     },
     "src/foundation/concurrency/futures-intrusive": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 2 个独立示例程序及专属输入（20306 字节）；保留文档编译、真实测试及性能基准输入。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 2 个独立示例程序及专属输入（20306 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-02：借用 Mutex lock future 的 Send 实现要求 T: Send，与底层 Mutex 的 Sync 契约一致；保留载荷无需 Sync 的合法调用。",
       "description": "Futures based on intrusive data structures - for std and no-std environments.",
       "directory": "src/foundation/concurrency/futures-intrusive",
       "files_sha256": {
@@ -92207,7 +92207,7 @@
         "src/noop_lock.rs": "e8861c70ad759c8baa8ac9960925f7f5d4f8d7f4f777615e157c320fc795d6f0",
         "src/sync/manual_reset_event.rs": "02fa09c2ce8c17613eef96b83d56a13a7b08cc27b6487eae4ed8db68881496d0",
         "src/sync/mod.rs": "064213746b5f5205c88e5cb6fdb8df8a1898af9f4f693e3f32a0ce4fec3eb45a",
-        "src/sync/mutex.rs": "25e57f7afde7f60d337432f4a4fc0fbf9638d6a9ef5d8e0e1067778b4e68add6",
+        "src/sync/mutex.rs": "12b5d290e5ac971280d98582076681f8ad89a410252397261569a781df62d971",
         "src/sync/semaphore.rs": "463cb9f972bf9d4b67ddb7730d6bb6ba18ac1f4667cd1d50d1c4424aed82a8bd",
         "src/timer/clock.rs": "e30bae8c0afda6751c9f749031ac09041a18adb4d4733c1f7a34004add7aaca6",
         "src/timer/mod.rs": "a3aa6e0f94e54e2d5bef80921e886601114aa09a01093896ad61b265ddc27b27",
@@ -93419,14 +93419,14 @@
       "version": "1.53.3"
     },
     "src/foundation/concurrency/tokio-macros": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-11-02：select! 借用预检查递归清理括号内绑定，保留最终 owned handler 模式、类型与借用拒绝。",
       "description": "Tokio's proc macros.",
       "directory": "src/foundation/concurrency/tokio-macros",
       "files_sha256": {
         "Cargo.toml": "090adca6e27cc092619c657c9b657c6232a56577daca4cf4a51759d8b28705e7",
         "src/entry.rs": "3ecb795a2c3afe72c88036f8152541167f44b8e083b0cef098d07ae0b1ad19f0",
         "src/lib.rs": "adaab2f4e65d733bc167b6040b7564123555769f62b6c0248ae03c5fc805ed3f",
-        "src/select.rs": "b55a2e5b6f78504618da6167a503313dc85a6141f3d5b53ef28ab69e77f82705"
+        "src/select.rs": "dd3ebcbb0568ffda4bef188dbb1d381fae4319a8d9154e5e5266ce3301e6fcdd"
       },
       "license": "MIT",
       "license_materials": [
