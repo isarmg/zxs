@@ -46,8 +46,11 @@
 //! will keep reading from an [`AsyncRead`] implementer until a whole frame, according to a codec,
 //! can be parsed.
 //!
+//! This example requires Tokio's `adapters-codec`, `rt`, and `macros` features,
+//! plus the `utilities` feature of the `futures` crate.
+//!
 //!```
-//! use tokio_stream::StreamExt;
+//! use futures::StreamExt;
 //! use tokio::adapters::codec::LinesCodec;
 //! use tokio::adapters::codec::FramedRead;
 //!
@@ -108,36 +111,49 @@
 //! It is guaranteed that, from one call to `decode` to another, the provided
 //! buffer will contain the exact same data as before, except that if more data
 //! has arrived through the IO resource, that data will have been appended to
-//! the buffer.  This means that reading frames from a `FramedRead` is
-//! essentially equivalent to the following loop:
+//! the buffer. The following helper illustrates a read/decode loop. It passes
+//! each decoded frame by value to a synchronous callback rather than implementing
+//! a `Stream`.
+//!
+//! This example requires Tokio's `adapters-codec` and `io-util` features, and a
+//! direct dependency on the `bytes` crate.
 //!
 //! ```no_run
-//! use tokio::io::AsyncReadExt;
-//! # // This uses async_stream to create an example that compiles.
-//! # fn foo() -> impl futures::Stream<Item = std::io::Result<bytes::BytesMut>> { async_stream::try_stream! {
-//! # use tokio::adapters::codec::Decoder;
-//! # let mut decoder = tokio::adapters::codec::BytesCodec::new();
-//! # let io_resource = &mut &[0u8, 1, 2, 3][..];
+//! use tokio::adapters::codec::Decoder;
+//! use tokio::io::{AsyncRead, AsyncReadExt};
 //!
-//! let mut buf = bytes::BytesMut::new();
-//! loop {
-//!     // The read_buf call will append to buf rather than overwrite existing data.
-//!     let len = io_resource.read_buf(&mut buf).await?;
+//! async fn decode_frames<R, D, F>(
+//!     io_resource: &mut R,
+//!     decoder: &mut D,
+//!     mut on_frame: F,
+//! ) -> Result<(), D::Error>
+//! where
+//!     R: AsyncRead + Unpin,
+//!     D: Decoder,
+//!     F: FnMut(D::Item),
+//! {
+//!     let mut buf = bytes::BytesMut::new();
+//!     loop {
+//!         // The read_buf call will append to buf rather than overwrite existing data.
+//!         let len = io_resource.read_buf(&mut buf).await?;
 //!
-//!     if len == 0 {
-//!         while let Some(frame) = decoder.decode_eof(&mut buf)? {
-//!             yield frame;
+//!         if len == 0 {
+//!             while let Some(frame) = decoder.decode_eof(&mut buf)? {
+//!                 on_frame(frame);
+//!             }
+//!             break;
 //!         }
-//!         break;
-//!     }
 //!
-//!     while let Some(frame) = decoder.decode(&mut buf)? {
-//!         yield frame;
+//!         while let Some(frame) = decoder.decode(&mut buf)? {
+//!             on_frame(frame);
+//!         }
 //!     }
+//!     Ok(())
 //! }
-//! # }}
 //! ```
-//! The example above uses `yield` whenever the `Stream` produces an item.
+//! This helper propagates read and decode errors and drains `decode_eof` before
+//! returning at EOF. It is not a replacement for `FramedRead`'s `Stream`
+//! implementation.
 //!
 //! ## Example decoder
 //!

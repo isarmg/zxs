@@ -409,6 +409,36 @@ impl<E: EventDescriptor> EventDescriptor for Capture<E> {
     }
 }
 
+/// A wrapper that attaches an event listener directly to its element.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Undelegated<E> {
+    inner: E,
+}
+
+/// Wraps an event to disable delegation without changing its capture phase.
+pub fn undelegated<E>(event: E) -> Undelegated<E> {
+    Undelegated { inner: event }
+}
+
+impl<E: EventDescriptor> EventDescriptor for Undelegated<E> {
+    type EventType = E::EventType;
+
+    const BUBBLES: bool = false;
+    const CAPTURE: bool = E::CAPTURE;
+
+    fn name(&self) -> Cow<'static, str> {
+        self.inner.name()
+    }
+
+    fn event_delegation_key(&self) -> Cow<'static, str> {
+        self.inner.event_delegation_key()
+    }
+
+    fn options(&self) -> Option<&web_sys::AddEventListenerOptions> {
+        self.inner.options()
+    }
+}
+
 /// A custom event.
 #[derive(Debug)]
 pub struct Custom<E: FromWasmAbi = web_sys::Event> {

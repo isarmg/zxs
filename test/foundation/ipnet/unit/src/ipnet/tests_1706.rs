@@ -33,7 +33,7 @@ mod tests {
                     $start.parse().unwrap(),
                     $end.parse().unwrap(),
                     $min_prefix_len,
-                ));
+                ).unwrap());
                 let results = make_ipnet_vec![$($x),*];
                 assert_eq!(subnets.collect::<Vec<IpNet>>(), results);
             }
@@ -51,7 +51,7 @@ mod tests {
                     $start.parse().unwrap(),
                     $end.parse().unwrap(),
                     $min_prefix_len,
-                ));
+                ).unwrap());
                 let results = make_ipnet_vec![$($x),*];
                 assert_eq!(subnets.collect::<Vec<IpNet>>(), results);
             }
@@ -154,14 +154,26 @@ mod tests {
     // Issue #70
     #[test]
     fn test_ipv4_subnets_zero_max_minus_one() {
-        let subnets: Vec<Ipv4Net> = Ipv4Subnets::new(Ipv4Addr::from(0u32), Ipv4Addr::from(u32::MAX-1), 0).collect();
+        let subnets: Vec<Ipv4Net> = Ipv4Subnets::new(
+            Ipv4Addr::from(0u32),
+            Ipv4Addr::from(u32::MAX - 1),
+            0,
+        )
+        .unwrap()
+        .collect();
         assert!(!subnets[0].contains(&Ipv4Addr::from(u32::MAX)));
     }
 
     // Issue #70
     #[test]
     fn test_ipv6_subnets_zero_max_minus_one() {
-        let subnets: Vec<Ipv6Net> = Ipv6Subnets::new(Ipv6Addr::from(0u128), Ipv6Addr::from(u128::MAX-1), 0).collect();
+        let subnets: Vec<Ipv6Net> = Ipv6Subnets::new(
+            Ipv6Addr::from(0u128),
+            Ipv6Addr::from(u128::MAX - 1),
+            0,
+        )
+        .unwrap()
+        .collect();
         assert!(!subnets[0].contains(&Ipv6Addr::from(u128::MAX)));
     }
 

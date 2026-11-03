@@ -6,12 +6,19 @@ use std::io;
 
 /// A simple [`Decoder`] and [`Encoder`] implementation that just ships bytes around.
 ///
+/// Decoding returns all bytes currently in the input buffer as one chunk, or
+/// `None` when the buffer is empty. With `FramedRead`, chunk boundaries depend on
+/// how data is buffered, not on message boundaries or a fixed frame length.
+/// Encoding appends the supplied `Bytes` or `BytesMut` to the output buffer
+/// without adding framing.
+///
 /// [`Decoder`]: tokio::adapters::codec::Decoder
 /// [`Encoder`]: tokio::adapters::codec::Encoder
 ///
 /// # Example
 ///
 /// Turn an [`AsyncRead`] into a stream of `Result<`[`BytesMut`]`, `[`Error`]`>`.
+/// This example requires the `adapters-codec`, `fs`, `macros`, and `rt` features.
 ///
 /// [`AsyncRead`]: tokio::io::AsyncRead
 /// [`BytesMut`]: bytes::BytesMut

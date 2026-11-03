@@ -29,12 +29,22 @@ FOUNDATION_CHECKS = {
 }
 
 
+INERT_CHECKS = {
+    'inert cache HTML then SVG',
+    'inert cache SVG then HTML',
+    'inert cache repeated clones',
+}
+
+
 def validate_result(result):
     if result.get('status') != 'passed':
         raise AssertionError(result)
     missing = FOUNDATION_CHECKS - set(result['checks'])
     if missing:
         raise AssertionError(f'missing foundation browser contracts: {sorted(missing)}')
+    missing = INERT_CHECKS - set(result['checks'])
+    if missing:
+        raise AssertionError(f'missing inert namespace browser contracts: {sorted(missing)}')
 
 
 def check():

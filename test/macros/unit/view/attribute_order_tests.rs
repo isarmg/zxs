@@ -71,3 +71,19 @@ fn many_tuple_additions_keep_source_order_without_invalid_comparison() {
         .collect::<Vec<_>>();
     assert_eq!(after, before);
 }
+
+#[test]
+fn absolute_attributes_keep_implicit_and_explicit_boolean_values() {
+    for (input, value) in [
+        (quote! { <{..} disabled /> }, quote! { true }),
+        (quote! { <{..} disabled=true /> }, quote! { true }),
+        (quote! { <{..} disabled=false /> }, quote! { false }),
+    ] {
+        let mut nodes = rstml::parse2(input).unwrap();
+        let actual = render_view(&mut nodes, None, None, true).unwrap().unwrap();
+        let expected = quote! {
+            (::web_interface::view_renderer::html::attribute::disabled(#value),)
+        };
+        assert_eq!(actual.to_string(), expected.to_string());
+    }
+}

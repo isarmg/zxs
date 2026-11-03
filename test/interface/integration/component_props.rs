@@ -249,3 +249,187 @@ fn explicit_slot_generic_arguments_reach_the_builder() {
     });
     assert_eq!(*captured.lock().unwrap(), "u8");
 }
+
+#[test]
+fn absolute_attributes_keep_boolean_and_custom_event_semantics() {
+    let attributes = view! { <{..} disabled /> };
+    let _view = view! { <input {..attributes} /> };
+
+    let attributes = view! {
+        <{..} on:custom-event=|_: web_sys::Event| {} />
+    };
+    let _view = view! { <div {..attributes} /> };
+
+    #[component]
+    fn Target() -> impl IntoView {
+        view! { <div /> }
+    }
+
+    let _view = view! {
+        <Target on:custom-event:capture=|_: web_sys::Event| {} />
+    };
+}
+
+#[test]
+fn undelegated_event_descriptors_preserve_capture_identity_and_options() {
+    use std::{borrow::Cow, cell::Cell, rc::Rc};
+    use web_interface::ev::{EventDescriptor, capture, click, undelegated};
+
+    fn assert_direct<E: EventDescriptor>(_: &E, captured: bool) {
+        assert!(!E::BUBBLES);
+        assert_eq!(E::CAPTURE, captured);
+    }
+
+    let direct = undelegated(click);
+    assert_direct(&direct, false);
+    assert_eq!(direct.name(), click.name());
+    assert_eq!(direct.event_delegation_key(), click.event_delegation_key());
+    assert_direct(&undelegated(capture(click)), true);
+    assert_direct(&capture(undelegated(click)), true);
+
+    #[derive(Clone)]
+    struct OptionsProbe(Rc<Cell<usize>>);
+
+    impl EventDescriptor for OptionsProbe {
+        type EventType = web_sys::Event;
+        const BUBBLES: bool = true;
+        const CAPTURE: bool = true;
+
+        fn name(&self) -> Cow<'static, str> {
+            "options-probe".into()
+        }
+
+        fn event_delegation_key(&self) -> Cow<'static, str> {
+            "$$$options-probe".into()
+        }
+
+        fn options(&self) -> Option<&web_sys::AddEventListenerOptions> {
+            self.0.set(self.0.get() + 1);
+            None
+        }
+    }
+
+    let calls = Rc::new(Cell::new(0));
+    let probe = undelegated(OptionsProbe(Rc::clone(&calls)));
+    assert_direct(&probe, true);
+    assert_eq!(probe.name(), "options-probe");
+    assert_eq!(probe.event_delegation_key(), "$$$options-probe");
+    assert!(probe.options().is_none());
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn undelegated_event_modifiers_compile_on_elements_and_components() {
+    let _view = view! { <button on:click:undelegated=|_: web_sys::MouseEvent| {} /> };
+    let _view = view! { <div on:click:target:capture:undelegated=|_| {} /> };
+    let _view = view! { <div on:custom-event:undelegated=|_: web_sys::Event| {} /> };
+
+    #[component]
+    fn Target() -> impl IntoView {
+        view! { <div /> }
+    }
+
+    let _view = view! {
+        <Target on:click:undelegated=|_: web_sys::MouseEvent| {} />
+        <Target on:custom-event:capture:undelegated=|_: web_sys::Event| {} />
+    };
+}
+
+#[test]
+fn sibling_context_preserves_the_svg_namespace() {
+    Owner::new().with(|| {
+        let single = NodeRef::<web_interface::svg::Title>::new();
+        let _view = view! { <svg><title node_ref=single /></svg> };
+
+        let multiple = NodeRef::<web_interface::svg::Title>::new();
+        let _view = view! { <svg><title node_ref=multiple /><circle /></svg> };
+
+        let fragment = NodeRef::<web_interface::svg::Title>::new();
+        let _view = view! { <svg><><title node_ref=fragment /><circle /></></svg> };
+    });
+}
+
+#[test]
+fn sibling_context_collects_component_slots_in_source_order() {
+    use std::sync::{Arc, Mutex};
+
+    #[slot]
+    struct ItemSlot {
+        value: &'static str,
+    }
+
+    #[component]
+    fn SlotReceiver(
+        item_slot: Vec<ItemSlot>,
+        captured: Arc<Mutex<Vec<&'static str>>>,
+    ) -> impl IntoView {
+        *captured.lock().unwrap() = item_slot.into_iter().map(|slot| slot.value).collect();
+    }
+
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    Owner::new().with(|| {
+        let _view = view! {
+            <SlotReceiver captured=captured.clone()>
+                <ItemSlot slot value="first" />
+                <><ItemSlot slot value="second" /></>
+            </SlotReceiver>
+        };
+    });
+    assert_eq!(*captured.lock().unwrap(), ["first", "second"]);
+}
+
+#[test]
+fn inert_attribute_literals_keep_the_inner_html_consumer_type() {
+    fn same_type<T>(_: T, _: T) {}
+
+    same_type(
+        view! { <div><div inner_html="<b>content</b>" /></div> },
+        view! { <div><div inner_html={"<b>content</b>"} /></div> },
+    );
+    same_type(
+        view! { <svg><g inner_html="<path />" /></svg> },
+        view! { <svg><g inner_html={"<path />"} /></svg> },
+    );
+}
+
+#[test]
+fn inert_namespace_ambiguous_svg_children_use_svg_constructors() {
+    fn same_type<T>(_: T, _: T) {}
+
+    same_type(
+        view! { <svg><title>"label"</title></svg> },
+        View::new(
+            web_interface::svg::svg().child(web_interface::svg::InertElement::new(
+                "<title>label</title>",
+            )),
+        ),
+    );
+    same_type(
+        view! { <svg><a href="#target">"link"</a></svg> },
+        View::new(
+            web_interface::svg::svg().child(web_interface::svg::InertElement::new(
+                "<a href=\"#target\">link</a>",
+            )),
+        ),
+    );
+}
+
+#[test]
+fn inert_namespace_ordinary_html_and_svg_keep_their_constructors() {
+    fn same_type<T>(_: T, _: T) {}
+
+    same_type(
+        view! { <div><a href="#target">"link"</a></div> },
+        View::new(web_interface::html::div().child(
+            web_interface::view_renderer::html::InertElement::new("<a href=\"#target\">link</a>"),
+        )),
+    );
+    same_type(
+        view! { <svg><g id="group"><title>"label"</title></g></svg> },
+        View::new(
+            web_interface::svg::svg().child(web_interface::svg::InertElement::new(
+                "<g id=\"group\"><title>label</title></g>",
+            )),
+        ),
+    );
+}

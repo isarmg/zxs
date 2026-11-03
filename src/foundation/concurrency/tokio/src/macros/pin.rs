@@ -67,11 +67,12 @@
 ///
 /// # Examples
 ///
-/// Using with select:
+/// Using with select (requires Tokio's `macros` and `rt` features, plus
+/// `futures` with its `utilities` feature):
 ///
 /// ```
 /// use tokio::{pin, select};
-/// use tokio_stream::{self as stream, StreamExt};
+/// use futures::{stream, StreamExt};
 ///
 /// async fn my_async_fn() {
 ///     // async logic here

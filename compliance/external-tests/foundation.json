@@ -9434,7 +9434,7 @@
         },
         {
           "path": "test/foundation/ipnet/unit/src/ipnet/tests_1706.rs",
-          "sha256": "650cf46bc192cc7541569a1a4c0c1aa92aa5f4291ca390b9dafd04549291f064",
+          "sha256": "99a72ea2328d8a63944f2f99cec57a8f26437297fd742bf6d3ab85f0f37d5c1b",
           "source": "src/foundation/ipnet/src/ipnet.rs",
           "source_sha256_before": "54557b29befaaedadc301b0cec9f34d021b017ddb0856e6628a0d469149c5379"
         },
@@ -9449,6 +9449,13 @@
           "sha256": "c7ad48a2ae003c0317d65e62f7cb8aa26b5a6eb43ec634e6185b96ac225de854",
           "source": "src/foundation/ipnet/src/mask.rs",
           "source_sha256_before": "eac453f58776b7d84eaf5e640306cd3c3651c602f19bbfb1b3e9a7aeee5917d8"
+        },
+        {
+          "source_kind": "project-authored",
+          "source": "test/foundation/ipnet/unit/subnets_contract.rs",
+          "source_sha256_before": "4ea9288448b302e1f234afce29ff9d732671557d763f0c2afcf043c16199f002",
+          "path": "test/foundation/ipnet/unit/subnets_contract.rs",
+          "sha256": "4ea9288448b302e1f234afce29ff9d732671557d763f0c2afcf043c16199f002"
         }
       ],
       "roots": [

@@ -55,3 +55,42 @@ fn every_builtin_event_has_valid_rust_tokens() {
         assert_eq!(tokens.to_string(), name);
     }
 }
+
+#[test]
+fn absolute_attributes_preserve_hyphenated_custom_events() {
+    let mut nodes = rstml::parse2(quote! {
+        <{..} on:custom-event=handler />
+    })
+    .unwrap();
+    let actual = render_view(&mut nodes, None, None, true).unwrap().unwrap();
+    let expected = quote! {
+        (::web_interface::view_renderer::html::event::on(
+            ::web_interface::view_renderer::html::event::Custom::new("custom-event"),
+            handler
+        ),)
+    };
+    assert_eq!(actual.to_string(), expected.to_string());
+}
+
+#[test]
+fn absolute_attributes_keep_custom_event_modifiers_and_data_attributes() {
+    let mut nodes = rstml::parse2(quote! {
+        <{..} on:custom-event:capture=handler data-event="custom-event" />
+    })
+    .unwrap();
+    let actual = render_view(&mut nodes, None, None, true).unwrap().unwrap();
+    let expected = quote! {
+        (
+            ::web_interface::view_renderer::html::event::on(
+                ::web_interface::view_renderer::html::event::capture(
+                    ::web_interface::view_renderer::html::event::Custom::new("custom-event")
+                ),
+                handler
+            ),
+            ::web_interface::view_renderer::html::attribute::custom::custom_attribute(
+                "data-event", "custom-event"
+            ),
+        )
+    };
+    assert_eq!(actual.to_string(), expected.to_string());
+}

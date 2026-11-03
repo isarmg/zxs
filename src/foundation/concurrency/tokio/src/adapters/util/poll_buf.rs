@@ -11,9 +11,12 @@ use std::task::{ready, Context, Poll};
 ///
 /// # Example
 ///
+/// This example uses Tokio with the `adapters-io-util` and `macros` features,
+/// plus `bytes` and `futures` with its `utilities` feature.
+///
 /// ```
 /// use bytes::{Bytes, BytesMut};
-/// use tokio_stream as stream;
+/// use futures::stream;
 /// use tokio::io::Result;
 /// use tokio::adapters::io::{StreamReader, poll_read_buf};
 /// use std::future::poll_fn;

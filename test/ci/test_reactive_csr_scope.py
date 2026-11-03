@@ -100,17 +100,33 @@ class ReactiveCsrScope(unittest.TestCase):
         gate = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(gate)
         self.assertEqual(len(gate.FOUNDATION_CHECKS), 10)
-        gate.validate_result({'status': 'passed', 'checks': sorted(gate.FOUNDATION_CHECKS)})
+        checks = gate.FOUNDATION_CHECKS | gate.INERT_CHECKS
+        gate.validate_result({'status': 'passed', 'checks': sorted(checks)})
         for missing in gate.FOUNDATION_CHECKS:
             with self.subTest(missing=missing), self.assertRaises(AssertionError):
-                gate.validate_result({'status': 'passed', 'checks': sorted(gate.FOUNDATION_CHECKS - {missing})})
+                gate.validate_result({'status': 'passed', 'checks': sorted(checks - {missing})})
         with self.assertRaises(AssertionError):
-            gate.validate_result({'status': 'failed', 'checks': sorted(gate.FOUNDATION_CHECKS)})
+            gate.validate_result({'status': 'failed', 'checks': sorted(checks)})
         scope = (ROOT / '.github/scripts/check-csr-scope.py').read_text()
         self.assertIn('test/tools/web-bindings/fixtures/foundation-browser.rs', scope)
         self.assertIn('await api.run_foundation_probe()', scope)
         self.assertIn('api.run_foundation_panic_probe()', scope)
         self.assertIn('foundation_fixture_sha256', scope)
+
+    def test_browser_requires_every_inert_namespace_contract(self):
+        spec = importlib.util.spec_from_file_location('csr_browser', ROOT / '.github/scripts/check-csr-browser.py')
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        self.assertEqual(gate.INERT_CHECKS, {
+            'inert cache HTML then SVG',
+            'inert cache SVG then HTML',
+            'inert cache repeated clones',
+        })
+        checks = gate.FOUNDATION_CHECKS | gate.INERT_CHECKS
+        gate.validate_result({'status': 'passed', 'checks': sorted(checks)})
+        for missing in gate.INERT_CHECKS:
+            with self.subTest(missing=missing), self.assertRaisesRegex(AssertionError, 'inert namespace'):
+                gate.validate_result({'status': 'passed', 'checks': sorted(checks - {missing})})
 
     def test_scope_gate_exercises_retired_modes_and_keeps_template_probe(self):
         source = (ROOT / '.github/scripts/check-csr-scope.py').read_text()

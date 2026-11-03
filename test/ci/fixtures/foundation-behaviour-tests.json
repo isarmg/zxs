@@ -3913,6 +3913,10 @@
       "targets": {
         "lib": [
           "ipext::tests::test_ipaddrrange",
+          "ipnet::subnets_contract::ipv4_subnets_accepts_valid_prefixes_and_preserves_empty_ranges",
+          "ipnet::subnets_contract::ipv4_subnets_rejects_invalid_prefix",
+          "ipnet::subnets_contract::ipv6_subnets_accepts_valid_prefixes_and_preserves_empty_ranges",
+          "ipnet::subnets_contract::ipv6_subnets_rejects_invalid_prefix",
           "ipnet::tests::ipnet_aggregate",
           "ipnet::tests::ipnet_default",
           "ipnet::tests::ipv4net_default",

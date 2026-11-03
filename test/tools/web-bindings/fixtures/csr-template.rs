@@ -43,6 +43,57 @@ async fn settle_properties() {
         js_sys::futures::JsFuture::from(js_sys::Promise::resolve(&JsValue::UNDEFINED)).await;
 }
 
+fn inert_namespace_cache_contract(parent: &web_sys::Element) -> Result<(), JsValue> {
+    for (markup, order, label) in [
+        (
+            "<a data-zxs-namespace-order=\"html-first\">html-first</a>",
+            [false, true, false, true],
+            "html-first",
+        ),
+        (
+            "<a data-zxs-namespace-order=\"svg-first\">svg-first</a>",
+            [true, false, true, false],
+            "svg-first",
+        ),
+    ] {
+        let mut previous: Vec<web_sys::Element> = Vec::new();
+        for svg in order {
+            let node = if svg {
+                let mut state = view_renderer::svg::InertElement::new(markup).build();
+                state.mount(parent, None);
+                let node = state.elements().into_iter().next().unwrap();
+                state.unmount();
+                node
+            } else {
+                let mut state = view_renderer::html::InertElement::new(markup).build();
+                state.mount(parent, None);
+                let node = state.elements().into_iter().next().unwrap();
+                state.unmount();
+                node
+            };
+            let (namespace, tag) = if svg {
+                ("http://www.w3.org/2000/svg", "a")
+            } else {
+                ("http://www.w3.org/1999/xhtml", "A")
+            };
+            if node.namespace_uri().as_deref() != Some(namespace)
+                || node.tag_name() != tag
+                || node.get_attribute("data-zxs-namespace-order").as_deref() != Some(label)
+                || node.text_content().as_deref() != Some(label)
+            {
+                return Err(
+                    format!("inert cache namespace/root/content: {label}, svg={svg}").into(),
+                );
+            }
+            if previous.iter().any(|old| old.is_same_node(Some(&node))) {
+                return Err(format!("inert cache did not clone independently: {label}").into());
+            }
+            previous.push(node);
+        }
+    }
+    Ok(())
+}
+
 #[wasm_bindgen]
 pub async fn run_template_probe() -> Result<String, JsValue> {
     let owner = reactive_state::owner::Owner::new();
@@ -77,6 +128,7 @@ pub async fn run_template_probe() -> Result<String, JsValue> {
             return Err("inert SVG namespace".into());
         }
         svg.unmount();
+        inert_namespace_cache_contract(parent.as_ref())?;
         state.mount(parent.as_ref(), None);
         let root = state.elements().into_iter().next().unwrap();
         let mut flags = ViewTemplate::new(boolean_template(false)).build();
@@ -129,7 +181,7 @@ pub async fn run_template_probe() -> Result<String, JsValue> {
         if document.get_element_by_id("csr-template-probe").is_some() { return Err("template unmount".into()); }
         button.dispatch_event(&web_sys::Event::new("click")?)?;
         if counter.load(Ordering::SeqCst) != 2 { return Err("template handler cleanup".into()); }
-        Ok("{\"status\":\"passed\",\"checks\":[\"custom element and Unicode attribute\",\"custom event and cleanup\",\"inert SVG namespace\",\"boolean initial false\",\"boolean false→false\",\"boolean false→true\",\"boolean true→false\",\"template attributes\",\"dynamic text\",\"DOM property\",\"primitive text and escaping\",\"style\",\"class toggle rebuild\",\"text escaping\",\"event listener\",\"rebuild\",\"node retention\",\"focus retention\",\"listener replacement\",\"unmount and cleanup\"]}".into())
+        Ok("{\"status\":\"passed\",\"checks\":[\"custom element and Unicode attribute\",\"custom event and cleanup\",\"inert SVG namespace\",\"inert cache HTML then SVG\",\"inert cache SVG then HTML\",\"inert cache repeated clones\",\"boolean initial false\",\"boolean false→false\",\"boolean false→true\",\"boolean true→false\",\"template attributes\",\"dynamic text\",\"DOM property\",\"primitive text and escaping\",\"style\",\"class toggle rebuild\",\"text escaping\",\"event listener\",\"rebuild\",\"node retention\",\"focus retention\",\"listener replacement\",\"unmount and cleanup\"]}".into())
     })).await
 }
 

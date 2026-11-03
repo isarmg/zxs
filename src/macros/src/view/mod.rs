@@ -154,23 +154,27 @@ fn is_inert_element(orig_node: &Node<impl CustomNode>) -> bool {
                                 NodeAttribute::Block(_) => return false,
                                 NodeAttribute::Attribute(attr) => {
                                     let static_key = !matches!(attr.key, NodeName::Block(_));
+                                    let key = attr.key.to_string();
+                                    // These attributes need their normal lowering and type checks,
+                                    // even when their value is omitted or is a string literal.
+                                    if matches!(key.as_str(), "inner_html" | "node_ref")
+                                        || key.starts_with("class:")
+                                        || key.starts_with("style:")
+                                        || key.starts_with("prop:")
+                                        || key.starts_with("on:")
+                                        || key.starts_with("use:")
+                                        || key.starts_with("bind")
+                                    {
+                                        return false;
+                                    }
 
                                     let static_value = match attr.possible_value.to_value() {
                                         None => true,
-                                        Some(value) => {
-                                            matches!(&value.value, KVAttributeValue::Expr(expr) if {
-                                                if let Expr::Lit(lit) = expr {
-                                                    let key = attr.key.to_string();
-                                                    if key.starts_with("style:") || key.starts_with("prop:") || key.starts_with("on:") || key.starts_with("use:") || key.starts_with("bind") {
-                                                        false
-                                                    } else {
-                                                        matches!(&lit.lit, Lit::Str(_))
-                                                    }
-                                                } else {
-                                                    false
-                                                }
-                                            })
-                                        }
+                                        Some(value) => matches!(
+                                            &value.value,
+                                            KVAttributeValue::Expr(Expr::Lit(lit))
+                                                if matches!(&lit.lit, Lit::Str(_))
+                                        ),
                                     };
 
                                     if !static_key || !static_value {
@@ -633,14 +637,14 @@ fn children_to_tokens(
             None => Ok(vec![]),
         }
     } else {
-        let mut slots = HashMap::new();
+        let mut slots = parent_slots.as_ref().map(|_| HashMap::new());
         let nodes = nodes
             .iter_mut()
             .filter_map(|node| {
                 node_to_tokens(
                     node,
-                    TagType::Unknown,
-                    Some(&mut slots),
+                    parent_type,
+                    slots.as_mut(),
                     global_class,
                     view_marker,
                     top_level,
@@ -650,7 +654,7 @@ fn children_to_tokens(
                 .transpose()
             })
             .collect::<rust_syntax::Result<Vec<_>>>()?;
-        if let Some(parent_slots) = parent_slots {
+        if let (Some(parent_slots), Some(mut slots)) = (parent_slots, slots) {
             for (slot, mut values) in slots.drain() {
                 parent_slots
                     .entry(slot)
@@ -705,7 +709,9 @@ fn node_to_tokens(
                 let escape = el_name != "script" && el_name != "style";
 
                 let el_name = el_node.name().to_string();
-                if is_svg_element(&el_name) && el_name != "svg" {
+                if (is_svg_element(&el_name) && el_name != "svg")
+                    || (is_ambiguous_element(&el_name) && matches!(parent_type, TagType::Svg))
+                {
                     Ok(Some(inert_svg_element_to_tokens(
                         node,
                         escape,
@@ -1136,6 +1142,7 @@ pub(crate) fn attribute_absolute(
     let key = node.key.to_string();
     let contains_dash = key.contains('-');
     let attr_colon = key.starts_with("attr:")
+        || key.starts_with("on:")
         || key.starts_with("style:")
         || key.starts_with("class:")
         || key.starts_with("prop:")
@@ -1229,7 +1236,7 @@ pub(crate) fn attribute_absolute(
         }
         _ => after_spread.then(|| {
             let key = attribute_name(&node.key);
-            let value = &node.value();
+            let value = attribute_value(node, false);
             let name = &node.key.to_string();
             if name == "class" || name == "style" {
                 quote! {
@@ -1879,3 +1886,11 @@ mod event_modifier_tests;
 #[cfg(test)]
 #[path = "../../../../test/macros/unit/view/case_normalization_tests.rs"]
 mod case_normalization_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/macros/unit/view/inert_attribute_tests.rs"]
+mod inert_attribute_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/macros/unit/view/inert_namespace_tests.rs"]
+mod inert_namespace_tests;

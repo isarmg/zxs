@@ -133,6 +133,18 @@ mod view_source;
 /// # }
 /// ```
 ///
+/// Nested static elements still require a boolean class toggle, not a string.
+/// ```rust,compile_fail
+/// # use web_interface::prelude::*;
+/// let _ = view! { <div><span class:active="yes" /></div> };
+/// ```
+///
+/// Event attributes require a handler even on nested static elements.
+/// ```rust,compile_fail
+/// # use web_interface::prelude::*;
+/// let _ = view! { <div><button on:click /></div> };
+/// ```
+///
 /// Class names can include dashes, and since v0.5.0 can include a dash-separated segment of only numbers.
 /// ```rust
 /// # use web_interface::prelude::*;
@@ -747,6 +759,18 @@ fn component_macro(
 ///         </ComponentWithSlot>
 ///     }
 /// }
+/// ```
+///
+/// 4. A slot requires a component context; HTML siblings do not provide one.
+///
+/// ```rust,compile_fail
+/// # use web_interface::prelude::*;
+/// #[slot]
+/// struct LabelSlot {}
+///
+/// # fn invalid_slot_parent() -> impl IntoView {
+/// view! { <div><LabelSlot slot /><span /></div> }
+/// # }
 /// ```
 #[proc_macro_attribute]
 pub fn slot(args: proc_macro::TokenStream, s: TokenStream) -> TokenStream {

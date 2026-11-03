@@ -117,6 +117,8 @@ where
 impl<T: IntoView + 'static, A: Attribute> RenderHtml for AttributeInterceptorInner<T, A> {
     type Owned = AttributeInterceptorInner<T, A::CloneableOwned>;
 
+    const EXISTS: bool = T::EXISTS;
+
     fn hydrate(
         self,
         cursor: &web_interface::view_renderer::hydration::Cursor,
@@ -133,3 +135,7 @@ impl<T: IntoView + 'static, A: Attribute> RenderHtml for AttributeInterceptorInn
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../test/interface/unit/attribute_interceptor/tests.rs"]
+mod tests;

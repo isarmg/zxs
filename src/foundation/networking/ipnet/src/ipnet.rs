@@ -887,15 +887,15 @@ impl Ipv4Net {
     /// assert_eq!(net.subnets(33), Err(PrefixLenError));
     /// ```
     pub fn subnets(&self, new_prefix_len: u8) -> Result<Ipv4Subnets, PrefixLenError> {
-        if self.prefix_len > new_prefix_len || new_prefix_len > 32 {
+        if self.prefix_len > new_prefix_len {
             return Err(PrefixLenError);
         }
 
-        Ok(Ipv4Subnets::new(
+        Ipv4Subnets::new(
             self.network(),
             self.broadcast(),
             new_prefix_len,
-        ))
+        )
     }
 
     /// Test if a network address contains either another network
@@ -968,7 +968,11 @@ impl Ipv4Net {
         let mut res: Vec<Ipv4Net> = Vec::new();
 
         for (start, end) in merged {
-            res.extend(Ipv4Subnets::new(start.into(), end.into(), 0));
+            res.extend(Ipv4Subnets {
+                start: start.into(),
+                end: end.into(),
+                min_prefix_len: 0,
+            });
         }
 
         res
@@ -1273,15 +1277,15 @@ impl Ipv6Net {
     /// assert_eq!(net.subnets(129), Err(PrefixLenError));
     /// ```
     pub fn subnets(&self, new_prefix_len: u8) -> Result<Ipv6Subnets, PrefixLenError> {
-        if self.prefix_len > new_prefix_len || new_prefix_len > 128 {
+        if self.prefix_len > new_prefix_len {
             return Err(PrefixLenError);
         }
 
-        Ok(Ipv6Subnets::new(
+        Ipv6Subnets::new(
             self.network(),
             self.broadcast(),
             new_prefix_len,
-        ))
+        )
     }
 
     /// Test if a network address contains either another network
@@ -1354,7 +1358,11 @@ impl Ipv6Net {
         let mut res: Vec<Ipv6Net> = Vec::new();
 
         for (start, end) in merged {
-            res.extend(Ipv6Subnets::new(start.into(), end.into(), 0));
+            res.extend(Ipv6Subnets {
+                start: start.into(),
+                end: end.into(),
+                min_prefix_len: 0,
+            });
         }
 
         res
@@ -1488,7 +1496,7 @@ impl<'a> Contains<&'a Ipv6Addr> for Ipv6Net {
 ///     "10.0.0.0".parse().unwrap(),
 ///     "10.0.0.239".parse().unwrap(),
 ///     26,
-/// ));
+/// ).unwrap());
 /// 
 /// assert_eq!(subnets.collect::<Vec<IpNet>>(), vec![
 ///     "10.0.0.0/26".parse().unwrap(),
@@ -1502,7 +1510,7 @@ impl<'a> Contains<&'a Ipv6Addr> for Ipv6Net {
 ///     "fd00::".parse().unwrap(),
 ///     "fd00:ef:ffff:ffff:ffff:ffff:ffff:ffff".parse().unwrap(),
 ///     26,
-/// ));
+/// ).unwrap());
 /// 
 /// assert_eq!(subnets.collect::<Vec<IpNet>>(), vec![
 ///     "fd00::/26".parse().unwrap(),
@@ -1535,7 +1543,7 @@ pub enum IpSubnets {
 ///     "10.0.0.0".parse().unwrap(),
 ///     "10.0.0.239".parse().unwrap(),
 ///     26,
-/// );
+/// ).unwrap();
 /// 
 /// assert_eq!(subnets.collect::<Vec<Ipv4Net>>(), vec![
 ///     "10.0.0.0/26".parse().unwrap(),
@@ -1569,7 +1577,7 @@ pub struct Ipv4Subnets {
 ///     "fd00::".parse().unwrap(),
 ///     "fd00:ef:ffff:ffff:ffff:ffff:ffff:ffff".parse().unwrap(),
 ///     26,
-/// );
+/// ).unwrap();
 /// 
 /// assert_eq!(subnets.collect::<Vec<Ipv6Net>>(), vec![
 ///     "fd00::/26".parse().unwrap(),
@@ -1587,22 +1595,62 @@ pub struct Ipv6Subnets {
 }
 
 impl Ipv4Subnets {
-    pub fn new(start: Ipv4Addr, end: Ipv4Addr, min_prefix_len: u8) -> Self {
-        Ipv4Subnets {
-            start: start,
-            end: end,
-            min_prefix_len: min_prefix_len,
+    /// Creates an iterator over the inclusive address range.
+    ///
+    /// A valid prefix with `start > end` produces an empty iterator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrefixLenError`] if `min_prefix_len` is greater than 32,
+    /// including when the address range is empty.
+    ///
+    /// # API change
+    ///
+    /// This constructor returns `Result<Self, PrefixLenError>` rather than
+    /// `Self`. Callers must handle the result before iterating.
+    pub fn new(
+        start: Ipv4Addr,
+        end: Ipv4Addr,
+        min_prefix_len: u8,
+    ) -> Result<Self, PrefixLenError> {
+        if min_prefix_len > 32 {
+            return Err(PrefixLenError);
         }
+        Ok(Ipv4Subnets {
+            start,
+            end,
+            min_prefix_len,
+        })
     }
 }
 
 impl Ipv6Subnets {
-    pub fn new(start: Ipv6Addr, end: Ipv6Addr, min_prefix_len: u8) -> Self {
-        Ipv6Subnets {
-            start: start,
-            end: end,
-            min_prefix_len: min_prefix_len,
+    /// Creates an iterator over the inclusive address range.
+    ///
+    /// A valid prefix with `start > end` produces an empty iterator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrefixLenError`] if `min_prefix_len` is greater than 128,
+    /// including when the address range is empty.
+    ///
+    /// # API change
+    ///
+    /// This constructor returns `Result<Self, PrefixLenError>` rather than
+    /// `Self`. Callers must handle the result before iterating.
+    pub fn new(
+        start: Ipv6Addr,
+        end: Ipv6Addr,
+        min_prefix_len: u8,
+    ) -> Result<Self, PrefixLenError> {
+        if min_prefix_len > 128 {
+            return Err(PrefixLenError);
         }
+        Ok(Ipv6Subnets {
+            start,
+            end,
+            min_prefix_len,
+        })
     }
 }
 
@@ -1635,7 +1683,11 @@ fn next_ipv4_subnet(start: Ipv4Addr, end: Ipv4Addr, min_prefix_len: u8) -> Ipv4N
     let range_pl = if range_lz + range.trailing_ones() == u32::BITS { range_lz } else { range_lz + 1 };
     let start_pl = 32 - u32::from(start).trailing_zeros();
     let new_prefix_len = max(max(range_pl as u8, start_pl as u8), min_prefix_len);
-    Ipv4Net::new(start, new_prefix_len).unwrap()
+    // Range, alignment, and the validated minimum each require at most 32 bits.
+    Ipv4Net {
+        addr: start,
+        prefix_len: new_prefix_len,
+    }
 }
 
 fn next_ipv6_subnet(start: Ipv6Addr, end: Ipv6Addr, min_prefix_len: u8) -> Ipv6Net {
@@ -1644,7 +1696,11 @@ fn next_ipv6_subnet(start: Ipv6Addr, end: Ipv6Addr, min_prefix_len: u8) -> Ipv6N
     let range_pl = if range_lz + range.trailing_ones() == u128::BITS { range_lz } else { range_lz + 1 };
     let start_pl = 128 - u128::from(start).trailing_zeros();
     let new_prefix_len = max(max(range_pl as u8, start_pl as u8), min_prefix_len);
-    Ipv6Net::new(start, new_prefix_len).unwrap()
+    // Range, alignment, and the validated minimum each require at most 128 bits.
+    Ipv6Net {
+        addr: start,
+        prefix_len: new_prefix_len,
+    }
 }
 
 impl Iterator for Ipv4Subnets {
@@ -1705,3 +1761,9 @@ impl FusedIterator for Ipv6Subnets {}
 
 #[cfg(test)]
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/ipnet/unit/src/ipnet/tests_1706.rs"));
+
+#[cfg(test)]
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/ipnet/unit/subnets_contract.rs"
+));

@@ -3,11 +3,7 @@ use super::{
     notification::{Toasts, push_toast},
     *,
 };
-use crate::{
-    component::{component_props_builder, component_view},
-    i18n::t,
-    prelude::*,
-};
+use crate::{i18n::t, prelude::*};
 use gloo_events::EventListener;
 use wasm_bindgen::JsCast;
 
@@ -77,310 +73,97 @@ pub fn AppShell(
             }.into_any();
         }
         let children = children.clone();
-        View::new(
-    web_interface::html::div()
-        .child((
-            web_interface::html::a()
-                .child(
-                    #[allow(unused_braces)]
+        view! {
+            <div class="zxs-app-shell" data-zxs-scope="" style=("--zxs-header-icon-size", "1em")>
+                <a class="zxs-skip-link" href="#zxs-main-content" on:click=move |event| {
+                    event.prevent_default();
+                    if let Some(main) = web_sys::window()
+                        .unwrap()
+                        .document()
+                        .unwrap()
+                        .get_element_by_id("zxs-main-content")
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+                        && let Err(error) = main.focus()
                     {
-                        IntoRender::into_render({
-                            t("跳至正文", "Skip to content")
-                        })
-                    },
-                )
-                .class("zxs-skip-link")
-                .href("#zxs-main-content")
-                .on(
-                    web_interface::ev::click,
-                    move |event| {
-                        event.prevent_default();
-                        if let Some(main) = web_sys::window()
-                            .unwrap()
-                            .document()
-                            .unwrap()
-                            .get_element_by_id("zxs-main-content")
-                            .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
-                            && let Err(error) = main.focus()
-                        {
-                            web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
-                        }
-                    },
-                ),
-            web_interface::html::header()
-                .child((
-                    web_interface::html::div()
-                        .child(
-                            #[allow(unused_braces)]
-                            {
-                                web_interface::html::div()
-                                    .child((
-                                        web_interface::html::div()
-                                            .child(
-                                                #[allow(unused_braces)]
-                                                {
-                                                    web_interface::html::strong()
-                                                        .child(
-                                                            #[allow(unused_braces)]
-                                                            { IntoRender::into_render({ product }) },
-                                                        )
-                                                },
-                                            )
-                                            .class("zxs-product-identity zxs-row"),
-                                        web_interface::html::div()
-                                            .node_ref(targets.navigation)
-                                            .style(("display", "contents")),
-                                    ))
-                                    .class("zxs-header-brand-navigation zxs-flow")
-                            },
-                        )
-                        .class("zxs-header-navigation-slot"),
-                    web_interface::html::div()
-                        .child((
-                            web_interface::html::div()
-                                .node_ref(targets.actions)
-                                .style(("display", "contents")),
-                            {
-                                #[allow(unreachable_code)] #[allow(unused_mut)]
-                                #[allow(clippy::let_and_return, clippy::let_unit_value, clippy::unit_arg)]
-                                component_view(
-                                    #[allow(clippy::needless_borrows_for_generic_args)]
-                                    &LanguageToggle,
-                                    {
-                                        let mut props = component_props_builder(
-                                                &LanguageToggle,
-                                            )
-                                            .build();
-                                        props
-                                    },
-                                )
-                            },
-                            {
-                                #[allow(unreachable_code)] #[allow(unused_mut)]
-                                #[allow(clippy::let_and_return, clippy::let_unit_value, clippy::unit_arg)]
-                                component_view(
-                                    #[allow(clippy::needless_borrows_for_generic_args)]
-                                    &ThemeToggle,
-                                    {
-                                        let mut props = component_props_builder(
-                                                &ThemeToggle,
-                                            )
-                                            .build();
-                                        props
-                                    },
-                                )
-                            },
-                            web_interface::html::button()
-                                .child(
-                                    #[allow(unused_braces)]
-                                    {
-                                        web_interface::svg::svg()
-                                            .child(
-                                                #[allow(unused_braces)]
-                                                {
-                                                    web_interface::svg::path()
-                                                        .attr("d", "M9 4H4v16h5m5-12 4 4-4 4M8 12h12")
-                                                },
-                                            )
-                                            .attr("aria-hidden", "true")
-                                            .attr("width", "1em")
-                                            .attr("height", "1em")
-                                            .attr("viewBox", "0 0 24 24")
-                                            .attr("fill", "none")
-                                            .attr("stroke", "currentColor")
-                                            .attr("stroke-width", "1.7")
-                                    },
-                                )
-                                .class("zxs-button")
-                                .disabled(
-                                    ::web_interface::prelude::IntoAttributeValue::into_attribute_value(move ||
-                                    pending_logout.get()),
-                                )
-                                .aria_label(
-                                    ::web_interface::prelude::IntoAttributeValue::into_attribute_value(move ||
-                                    {
-                                        if pending_logout.get() {
-                                            t("正在退出…", "Signing out…")
-                                        } else {
-                                            t("退出", "Sign out")
-                                        }
-                                    }),
-                                )
-                                .title(
-                                    ::web_interface::prelude::IntoAttributeValue::into_attribute_value(
-                                        t("退出", "Sign out"),
-                                    ),
-                                )
-                                .on(
-                                    web_interface::ev::click,
-                                    move |_| {
-                                        if !pending_logout.get_untracked() { on_logout.run(()); }
-                                    },
-                                ),
-                            web_interface::html::button()
-                                .child(
-                                    #[allow(unused_braces)]
-                                    {
-                                        web_interface::svg::svg()
-                                            .child((
-                                                web_interface::svg::circle()
-                                                    .attr("cx", "12")
-                                                    .attr("cy", "8")
-                                                    .attr("r", "3.5"),
-                                                web_interface::svg::path()
-                                                    .attr("d", "M4.5 21v-2a7.5 7.5 0 0 1 15 0v2"),
-                                            ))
-                                            .attr("viewBox", "0 0 24 24")
-                                            .attr("width", "1em")
-                                            .attr("height", "1em")
-                                            .attr("fill", "none")
-                                            .attr("stroke", "currentColor")
-                                            .attr("stroke-width", "1.7")
-                                            .attr("aria-hidden", "true")
-                                    },
-                                )
-                                .class("zxs-button zxs-account-entry")
-                                .attr("data-zxs-contour", "none")
-                                .style(("border-radius", "50%"))
-                                .style(("aspect-ratio", "1"))
-                                .aria_label(
-                                    ::web_interface::prelude::IntoAttributeValue::into_attribute_value(
-                                        t("账号设置", "Account settings"),
-                                    ),
-                                )
-                                .title(
-                                    ::web_interface::prelude::IntoAttributeValue::into_attribute_value(
-                                        t("账号设置", "Account settings"),
-                                    ),
-                                )
-                                .on(
-                                    web_interface::ev::click,
-                                    move |_| {
-                                        on_account.run(());
-                                    },
-                                ),
-                        ))
-                        .class("zxs-header-actions zxs-flow zxs-control-group--comfortable")
-                        .role("group")
-                        .aria_label(
-                            ::web_interface::prelude::IntoAttributeValue::into_attribute_value(
-                                t("全局操作", "Global actions"),
-                            ),
-                        ),
-                ))
-                .class("zxs-page-header zxs-flow"),
-            {
-                #[allow(unreachable_code)] #[allow(unused_mut)]
-                #[allow(clippy::let_and_return, clippy::let_unit_value, clippy::unit_arg)]
-                component_view(
-                    #[allow(clippy::needless_borrows_for_generic_args)]
-                    &Show,
-                    {
-                        let mut props = component_props_builder(
-                                &Show,
-                            )
-                            .when(
-                                #[allow(unused_braces)]
-                                { move || !toasts.records.get().is_empty() },
-                            )
-                            .children({
-                                ::web_interface::children::ToChildren::to_children(move || {
-                                    web_interface::html::div()
-                                        .child(
-                                            #[allow(unused_braces)]
-                                            {
-                                                {
-                                                    #[allow(unreachable_code)] #[allow(unused_mut)]
-                                                    #[allow(clippy::let_and_return, clippy::let_unit_value, clippy::unit_arg)]
-                                                    component_view(
-                                                        #[allow(clippy::needless_borrows_for_generic_args)]
-                                                        &For,
-                                                        {
-                                                            let mut props = component_props_builder(
-                                                                    &For,
-                                                                )
-                                                                .each(
-                                                                    #[allow(unused_braces)]
-                                                                    { move || toasts.records.get() },
-                                                                )
-                                                                .key(#[allow(unused_braces)] { |r| r.id })
-                                                                .children(
-                                                                    #[allow(unused_braces)]
-                                                                    {
-                                                                        move |r| {
-                                                                            let id = r.id;
-                                                                            View::new(
-    web_interface::html::div()
-        .child((
-            web_interface::html::span()
-                .child(
-                    #[allow(unused_braces)]
-                    { IntoRender::into_render({ r.message }) },
-                ),
-            web_interface::html::button()
-                .child(#[allow(unused_braces)] { "×" })
-                .class("zxs-button")
-                .aria_label(
-                    ::web_interface::prelude::IntoAttributeValue::into_attribute_value(
-                        t("关闭通知", "Dismiss notification"),
-                    ),
-                )
-                .on(
-                    web_interface::ev::click,
-                    move |_| toasts.dismiss(id),
-                ),
-        ))
-        .class("zxs-toast zxs-row zxs-flow")
-        .role("status")
-        .aria_live("polite")
-        .aria_atomic("true"),
-)
-                                                                        }
-                                                                    },
-                                                                )
-                                                                .build();
-                                                            props
-                                                        },
-                                                    )
-                                                }
-                                            },
-                                        )
-                                        .class("zxs-toast-stack")
-                                        .role("region")
-                                        .aria_label(
-                                            ::web_interface::prelude::IntoAttributeValue::into_attribute_value(
-                                                t("通知", "Notifications"),
-                                            ),
-                                        )
-                                })
-                            })
-                            .build();
-                        props
-                    },
-                )
-            },
-            web_interface::html::div()
-                .child(
-                    #[allow(unused_braces)]
-                    {
-                        web_interface::html::main()
-                            .child(
-                                #[allow(unused_braces)]
-                                {
-                                    IntoRender::into_render(children())
-                                },
-                            )
-                            .class("zxs-shell-main zxs-stack")
-                            .id("zxs-main-content")
-                            .tabindex("-1")
-                    },
-                )
-                .class("zxs-shell-layout zxs-shell-layout--full"),
-        ))
-        .class("zxs-app-shell")
-        .attr("data-zxs-scope", "")
-        .style(("--zxs-header-icon-size", "1em")),
-)
-            .into_any()
+                        web_sys::console::warn_2(&"Could not move keyboard focus".into(), &error);
+                    }
+                }>
+                    {t("跳至正文", "Skip to content")}
+                </a>
+                <header class="zxs-page-header zxs-flow">
+                    <div class="zxs-header-navigation-slot">
+                        <div class="zxs-header-brand-navigation zxs-flow">
+                            <div class="zxs-product-identity zxs-row"><strong>{product}</strong></div>
+                            <div node_ref=targets.navigation style=("display", "contents")></div>
+                        </div>
+                    </div>
+                    <div class="zxs-header-actions zxs-flow zxs-control-group--comfortable"
+                        role="group" aria-label=t("全局操作", "Global actions")>
+                        <div node_ref=targets.actions style=("display", "contents")></div>
+                        <LanguageToggle/>
+                        <ThemeToggle/>
+                        <button class="zxs-button"
+                            disabled=move || pending_logout.get()
+                            aria-label=move || {
+                                if pending_logout.get() {
+                                    t("正在退出…", "Signing out…")
+                                } else {
+                                    t("退出", "Sign out")
+                                }
+                            }
+                            title=t("退出", "Sign out")
+                            on:click=move |_| {
+                                if !pending_logout.get_untracked() { on_logout.run(()); }
+                            }>
+                            <svg aria-hidden="true" width="1em" height="1em" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="1.7">
+                                <path d="M9 4H4v16h5m5-12 4 4-4 4M8 12h12"/>
+                            </svg>
+                        </button>
+                        <button class="zxs-button zxs-account-entry" data-zxs-contour="none"
+                            {..view! { <{..} style=("border-radius", "50%") style=("aspect-ratio", "1") /> }}
+                            aria-label=t("账号设置", "Account settings")
+                            title=t("账号设置", "Account settings")
+                            on:click=move |_| {
+                                on_account.run(());
+                            }>
+                            <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none"
+                                stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                                <circle cx="12" cy="8" r="3.5"/>
+                                <path d="M4.5 21v-2a7.5 7.5 0 0 1 15 0v2"/>
+                            </svg>
+                        </button>
+                    </div>
+                </header>
+                <Show
+                    when=move || !toasts.records.get().is_empty()
+                    children=ToChildren::to_children(move || view! {
+                        <div class="zxs-toast-stack" role="region" aria-label=t("通知", "Notifications")>
+                            <For
+                                each=move || toasts.records.get()
+                                key=|r| r.id
+                                children=move |r| {
+                                    let id = r.id;
+                                    view! {
+                                        <div class="zxs-toast zxs-row zxs-flow" role="status"
+                                            aria-live="polite" aria-atomic="true">
+                                            <span>{r.message}</span>
+                                            <button class="zxs-button"
+                                                aria-label=t("关闭通知", "Dismiss notification")
+                                                on:click=move |_| toasts.dismiss(id)>"×"</button>
+                                        </div>
+                                    }
+                                }
+                            />
+                        </div>
+                    }.into_inner())
+                />
+                <div class="zxs-shell-layout zxs-shell-layout--full">
+                    <main class="zxs-shell-main zxs-stack" id="zxs-main-content" tabindex="-1">
+                        {children()}
+                    </main>
+                </div>
+            </div>
+        }.into_any()
     })
 }

@@ -23,7 +23,9 @@ pub struct Dom;
 
 thread_local! {
     pub(crate) static GLOBAL_EVENTS: RefCell<FxHashSet<Cow<'static, str>>> = Default::default();
+    /// Cached HTML fragments; SVG fragments use a separate namespace partition.
     pub static TEMPLATE_CACHE: RefCell<Vec<(Cow<'static, str>, web_sys::Element)>> = Default::default();
+    static SVG_TEMPLATE_CACHE: RefCell<Vec<(Cow<'static, str>, web_sys::Element)>> = Default::default();
 }
 
 pub type Node = web_sys::Node;
@@ -570,7 +572,7 @@ impl Dom {
     }
 
     pub fn create_svg_element_from_html(html: Cow<'static, str>) -> Element {
-        let tpl = TEMPLATE_CACHE.with_borrow_mut(|cache| {
+        let tpl = SVG_TEMPLATE_CACHE.with_borrow_mut(|cache| {
             if let Some(tpl_content) = cache.iter().find_map(|(key, tpl)| {
                 (html == *key)
                     .then_some(Self::clone_template(tpl.unchecked_ref()))
