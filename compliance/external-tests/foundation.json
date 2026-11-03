@@ -6923,7 +6923,7 @@
         },
         {
           "path": "test/foundation/futures-intrusive/unit/src/buffer/ring_buffer/tests_319.rs",
-          "sha256": "507d4a793f121522f07a0f0ab61617b62d18ff51b4d4d9d842efc5a20475aa2c",
+          "sha256": "5e1e87a8c9564de36874a6de58fc06807b5addbb40a364f2472f369c89fb051d",
           "source": "src/foundation/futures-intrusive/src/buffer/ring_buffer.rs",
           "source_sha256_before": "5e829d368e41e4f720578471cd02b43e6d5c8d9eddb1e1480d82235d960d54ad"
         },

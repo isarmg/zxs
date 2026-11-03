@@ -71,6 +71,36 @@ class FoundationBehaviourGateTests(unittest.TestCase):
         source = (ROOT / ".github/scripts/check-foundation-behaviour.py").read_text()
         self.assertNotIn("--all-features", source)
 
+    def test_only_intrusive_unit_contracts_repeat_in_release(self):
+        self.assertEqual(GATE.RELEASE_UNIT_SUITES, ('futures-intrusive',))
+        inventory = json.loads(GATE.INVENTORY.read_text())['suites']
+        for name in GATE.UNIT_SUITES:
+            targets = inventory['unit:' + name]['targets']
+            expected = {'lib', 'lib_release'} if name in GATE.RELEASE_UNIT_SUITES else {'lib'}
+            self.assertEqual(set(targets), expected)
+        intrusive = inventory['unit:futures-intrusive']['targets']
+        self.assertEqual(intrusive['lib'], intrusive['lib_release'])
+
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(GATE, 'OUTPUT', Path(temporary)), \
+                patch.object(GATE, 'source_state', return_value=('head', False, 'rustc')), \
+                patch.object(GATE, 'production_features', return_value={}), \
+                patch.object(GATE, 'root_features', return_value={'futures-intrusive': ['std']}), \
+                patch.object(GATE, 'Log'), \
+                patch.object(GATE, 'cargo_test', return_value=['contract']) as run, \
+                patch('builtins.print'):
+            result = GATE.run_suites({'unit:futures-intrusive'})
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual([call.args[2] for call in run.call_args_list], [
+                ['--lib', '-p', 'futures-intrusive'],
+                ['--lib', '-p', 'futures-intrusive', '--release'],
+            ])
+            self.assertEqual(result['unit:futures-intrusive']['targets'],
+                             {'lib': ['contract'], 'lib_release': ['contract']})
+            run.side_effect = [['contract'], AssertionError('release regression')]
+            with self.assertRaisesRegex(AssertionError, 'release regression'):
+                GATE.run_suites({'unit:futures-intrusive'})
+
     def test_suites_do_not_execute_material_of_receipt_bound_owners(self):
         for suite in (*GATE.INTEGRATION_SUITES, *GATE.STANDALONE_SUITES):
             self.assertNotIn(suite.subject, PROOF_BOUND)

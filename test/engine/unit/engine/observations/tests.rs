@@ -135,6 +135,90 @@ fn accounting_snapshot_preserves_purge_and_duplicate_route_semantics() {
 }
 
 #[test]
+fn accounting_snapshot_preserves_slot_keys_and_saturating_totals() {
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("member")]).unwrap(),
+    )
+    .unwrap();
+    // This accounting-only fixture deliberately exercises keys and routes that
+    // normal config admission does not produce. It is not an admitted pool.
+    let state = std::sync::Arc::make_mut(&mut engine.state);
+    let rows = [
+        ("first", u64::MAX - 1, None, vec!["P01", "盘é", "P01"]),
+        ("next", 2, Some(ContentState::Available), vec!["P01", "盘é"]),
+        ("zero", 0, Some(ContentState::Available), vec!["p01", ""]),
+        (
+            "purged",
+            99,
+            Some(ContentState::Purged),
+            vec!["P01", "skip"],
+        ),
+        (
+            "migrated",
+            99,
+            Some(ContentState::Migrated),
+            vec!["P01", "skip"],
+        ),
+        ("empty", 99, None, vec![]),
+    ];
+    for (id, size, content_state, route) in rows {
+        state.versions.insert(
+            id.into(),
+            FileVersion {
+                history_tree_id: String::new(),
+                version_id: id.into(),
+                file_id: String::new(),
+                creation_primary_slot_id: "P01".into(),
+                logical_size: size,
+                version_sequence: 1,
+                content_hash: "0".repeat(64).parse().unwrap(),
+                checksum_chunk_bytes: 65_536,
+                checksum_manifest_hash: String::new(),
+                creation_name: String::new(),
+                storage_name: String::new(),
+                created_at: String::new(),
+                source_version_ids: vec![],
+                created_as_full_checkpoint: true,
+            },
+        );
+        state.placements.insert(
+            id.into(),
+            Placement {
+                version_id: id.into(),
+                primary_slot_id: "P01".into(),
+                target_copies: route.len() as u32,
+                route_slot_ids: route.into_iter().map(str::to_owned).collect(),
+                topology_generation: 1,
+                binding_generations: BTreeMap::new(),
+            },
+        );
+        if let Some(content_state) = content_state {
+            state.content_states.insert(id.into(), content_state);
+        }
+    }
+    let plan = engine.prepare_disk_observation();
+    assert_eq!(
+        plan.used_bytes,
+        BTreeMap::from([
+            (String::new(), 0),
+            ("P01".into(), u64::MAX),
+            ("p01".into(), 0),
+            ("盘é".into(), u64::MAX),
+        ])
+    );
+    for (slot, used) in &plan.used_bytes {
+        assert_eq!(*used, engine.used_bytes(slot));
+    }
+    std::sync::Arc::make_mut(&mut engine.state).placements = Default::default();
+    assert!(engine.prepare_disk_observation().used_bytes.is_empty());
+    drop(engine);
+    assert_eq!(plan.used_bytes["P01"], u64::MAX);
+    assert_eq!(plan.used_bytes["盘é"], u64::MAX);
+}
+
+#[test]
 #[should_panic(expected = "invariant: every placement references an existing version")]
 fn observation_exposes_dangling_internal_placement() {
     let root = tempfile::tempdir().unwrap();

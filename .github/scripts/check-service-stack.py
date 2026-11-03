@@ -31,13 +31,15 @@ def main():
         (work / 'src/lib.rs').write_text('pub use service_stack::{Service, Layer, ServiceBuilder};\n')
         (work / 'test').mkdir()
         (work / 'test/behavior.rs').write_bytes((ROOT / 'test/architecture/service-stack/behavior.rs').read_bytes())
+        (work / 'test/rng.rs').write_bytes((ROOT / 'test/architecture/service-stack/rng.rs').read_bytes())
         for features in FEATURES:
             (work / 'Cargo.toml').write_text(
                 '[package]\nname="service-stack-contract"\nversion="0.0.0"\nedition="2021"\n'
-                '[workspace]\n[dependencies.service-stack]\n'
+                '[workspace]\n[features]\nbalance=["service-stack/balance"]\n[dependencies.service-stack]\n'
                 f'path={json.dumps(str(ROOT / "src/foundation/networking/service-stack"))}\n'
                 f'default-features=false\nfeatures={json.dumps(features)}\n'
                 '[[test]]\nname="behavior"\npath="test/behavior.rs"\nrequired-features=["service-stack/util"]\n'
+                '[[test]]\nname="rng"\npath="test/rng.rs"\nrequired-features=["service-stack/util"]\n'
             )
             run(work, 'generate-lockfile')
             metadata = json.loads(run(work, 'metadata', '--locked', '--format-version', '1'))
@@ -55,6 +57,12 @@ def main():
             if features == ('util',):
                 output = run(work, 'test', '--locked', '--test', 'behavior')
                 assert re.search(r'test result: ok\. 4 passed; 0 failed', output), output
+            if features in (('util',), ('full',)):
+                balance = ('--features', 'balance') if features == ('full',) else ()
+                output = run(work, 'test', '--locked', '--test', 'rng', *balance)
+                print(output, end='', flush=True)
+                expected = 7 if features == ('full',) else 6
+                assert re.search(rf'test result: ok\. {expected} passed; 0 failed; 0 ignored', output), output
         (work / 'Cargo.toml').write_text(
             '[package]\nname="service-stack-consumers"\nversion="0.0.0"\nedition="2021"\n'
             '[workspace]\n[dependencies]\n'
@@ -75,7 +83,7 @@ def main():
         output = run(work, 'test', '--locked', '--test', 'reqwest_retry')
         print(output, end='', flush=True)
         assert re.search(r'test result: ok\. 3 passed; 0 failed; 0 ignored', output), output
-        print('service-stack: 7 native/WASM feature checks, 4 behavior tests, Axum/Reqwest consumers and 3 retry scope tests passed')
+        print('service-stack: 7 native/WASM feature checks, 4 behavior tests, 6 util / 7 full RNG tests, Axum/Reqwest consumers and 3 retry scope tests passed')
 
 if __name__ == '__main__':
     main()

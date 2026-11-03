@@ -5,7 +5,7 @@ Three kinds of suites run against the locally renamed implementations:
 
 * unit suites: ``cargo test --lib -p <package>`` in the root workspace, so the
   package compiles with the features the root graph resolves for its real
-  consumers;
+  consumers; selected contracts also run with ``--release``;
 * standalone suites: copy the real subject, build script, documentation and
   external tests at their repository-relative depth into a temporary member;
   only dependency/target wiring changes, and resolved subject features must
@@ -72,6 +72,9 @@ UNIT_SUITES = ('bytes', 'cmov', 'flag-set', 'futures-intrusive', 'guardian', 'ht
                'anyhow', 'httparse', 'ipnet', 'matchit', 'errno', 'unicase', 'utf8_iter', 'cfg-if',
                'view-alternatives', 'walrus', 'wasm-bindgen-shared', 'arrayvec', 'const-oid', 'mime',
                'tempfile')
+
+# RingBuf's full-buffer panic contract must also hold without debug assertions.
+RELEASE_UNIT_SUITES = ('futures-intrusive',)
 
 FOUNDATION_TESTS = 'test/foundation/'
 INTEGRATION_SUITES = (
@@ -365,9 +368,13 @@ def run_suites(selected):
             continue
         log = Log(OUTPUT / 'logs' / (key.replace(':', '-') + '.log'), header)
         names = cargo_test(log, ROOT, ['--lib', '-p', name], key)
+        targets = {'lib': names}
+        if name in RELEASE_UNIT_SUITES:
+            targets['lib_release'] = cargo_test(log, ROOT, ['--lib', '-p', name, '--release'], key + '/release')
+            assert targets['lib_release'] == names, f'{key}: debug/release test inventory differs'
         log.close()
-        results[key] = {'subject': name, 'features': resolved[name], 'targets': {'lib': names}}
-        print(f'PASS {key}: {len(names)} tests', flush=True)
+        results[key] = {'subject': name, 'features': resolved[name], 'targets': targets}
+        print(f'PASS {key}: {sum(map(len, targets.values()))} test executions', flush=True)
     for suite in STANDALONE_SUITES:
         key = 'standalone:' + suite.subject
         if selected and key not in selected:

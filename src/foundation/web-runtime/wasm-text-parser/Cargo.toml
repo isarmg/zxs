@@ -46,3 +46,7 @@ path = "../../../../test/foundation/wasm-text-parser/tests/parse-fail.rs"
 [[test]]
 name = "diagnostics"
 path = "../../../../test/foundation/wasm-text-parser/tests/diagnostics.rs"
+
+[[test]]
+name = "custom_reserved"
+path = "../../../../test/foundation/wasm-text-parser/tests/custom_reserved.rs"

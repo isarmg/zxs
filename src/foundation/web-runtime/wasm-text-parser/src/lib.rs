@@ -172,7 +172,7 @@ macro_rules! custom_reserved {
         }
 
         impl $crate::parser::Peek for $name {
-            fn peek(cursor: $crate::parser::Cursor<'_>) -> Result<bool> {
+            fn peek(cursor: $crate::parser::Cursor<'_>) -> $crate::parser::Result<bool> {
                 if let Some((rsv, _rest)) = cursor.reserved()? {
                     Ok(rsv == $rsv)
                 } else {

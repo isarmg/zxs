@@ -301,7 +301,7 @@ mod if_alloc {
 
         #[inline]
         fn push(&mut self, value: Self::Item) {
-            debug_assert!(self.can_push());
+            assert!(self.can_push());
             self.buffer.push_back(value);
         }
 

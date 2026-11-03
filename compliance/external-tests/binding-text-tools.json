@@ -39,6 +39,13 @@
           "source_kind": "project-authored"
         },
         {
+          "path": "test/foundation/wasm-text-parser/tests/custom_reserved.rs",
+          "sha256": "fe9f5cdef04588b203ee788b80bec12d234d04a7c1fcefdae9eec1f0eedc059d",
+          "source": "test/foundation/wasm-text-parser/tests/custom_reserved.rs",
+          "source_sha256_before": "fe9f5cdef04588b203ee788b80bec12d234d04a7c1fcefdae9eec1f0eedc059d",
+          "source_kind": "project-authored"
+        },
+        {
           "path": "test/foundation/wasm-text-parser/tests/diagnostics.rs",
           "sha256": "73742533764178c873d18cfa6989dfd466e292cd742baf551b374c057d76198f",
           "source": "test/foundation/wasm-text-parser/tests/diagnostics.rs",

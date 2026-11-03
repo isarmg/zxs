@@ -16,6 +16,11 @@
 
 Rust 1.99 的简单 lint 按等价写法修正，不恢复上游全局 Clippy allow。宏生成借用和固定 core 语法表等必要形状只用窄位置具名 expect，并说明原因。
 
+`custom_reserved!` 的两种调用形式均将 `Parse` 和 `Peek` 的返回类型绑定到本组件的
+`parser::Result`，调用方无需导入该别名，也可保留自己的 `Result` 类型。根测试
+`custom_reserved` 覆盖这两种作用域、重复 peek、符号解析、未消费的非匹配 token
+及词法错误传播；不改变 WAT 语法或错误类型。
+
 ## core-only 边界收口
 
 最终复核实际构造旧 `Wat::Component(Component { span, id: None })` 后调用 encode，

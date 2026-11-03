@@ -61,6 +61,14 @@ impl<R: Rng + ?Sized> Rng for Box<R> {
     fn next_u64(&mut self) -> u64 {
         (**self).next_u64()
     }
+
+    fn next_f64(&mut self) -> f64 {
+        (**self).next_f64()
+    }
+
+    fn next_range(&mut self, range: Range<u64>) -> u64 {
+        (**self).next_range(range)
+    }
 }
 
 /// A [`Rng`] implementation that uses a [`Hasher`] to generate the random
@@ -126,4 +134,7 @@ pub(crate) fn sample_floyd2<R: Rng>(rng: &mut R, length: u64) -> [u64; 2] {
 }
 
 #[cfg(test)]
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../test/foundation/service-stack/unit/src/util/rng/tests_128.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../../test/foundation/service-stack/unit/src/util/rng/tests_128.rs"
+));

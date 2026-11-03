@@ -20,7 +20,7 @@
 | `web-production` | 本地维护的绑定工具、wasm32 release 构建、资源清单和压缩产物 |
 | `browser-smoke` | 实际 Web/WASM 对真实服务端的 Chrome 交互；响应式尺寸预览不冒充原生 App 验收 |
 
-`browser-smoke` 成功完成真实归档解压验收及模板浏览器检查后，运行无发布副作用的 `release-assemble.sh`，生成并校验完整安装材料。随该 job 上传的 `installation-candidate-linux-web` artifact 保留 7 天，包含两个归档、`INSTALL.md`、`BUILD.txt` 和 `SHA256SUMS`，供检查或部署演练；下载后仍须完整校验摘要。
+`browser-smoke` 成功完成单个 ELF 的内嵌 Web 运行验收及模板浏览器检查后，运行无发布副作用的 `release-assemble.sh`，生成并校验完整安装材料。随该 job 上传的 `installation-candidate-linux-web` artifact 保留 7 天，包含 `zxs-VERSION-debian13-amd64` 主程序、`zxs-vfs-VERSION-debian13-amd64.so` 独立 VFS、`zxs-materials-VERSION.tar.gz` 资料归档、`VFS-BUILD.json`、`INSTALL.md`、`BUILD.txt` 和 `SHA256SUMS` 七文件集合（`VERSION` 为构建版本），供检查或部署演练；下载后仍须完整校验摘要。
 
 该候选只表示此 job 的打包、浏览器及组装检查通过，不代表同次 CI 的其他并行门禁已通过。它不会创建标签、GitHub Release 或公开发布；也不等同于 Release 工作流的 `workflow_dispatch` 演练，后者还通过版本工具验证并等待全部发布验证分片和固定 Samba SDK 检查，最终提供 `release-complete`。正式发布前仍须检查完整工作流结果及首发验收清单。
 

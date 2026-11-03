@@ -35,6 +35,12 @@ async fn service_example() -> Result<(), Infallible> {
 
 接入 [http-routing](http-routing.md) 时，可能失败的中间件需要在外层用 `HandleErrorLayer` 等机制转成 HTTP 响应，不能让服务错误漏到连接层。直接接入 [http-transport](http-transport.md) 时用 `TowerToHyperService` 适配，不能把两个不同的 `Service` trait 当成同一个接口。
 
+## 随机源的装箱委托
+
+`util::rng::Rng` 的 `Box<R>` 实现转发全部三个方法：`next_u64`、`next_f64` 和 `next_range`。具体类型、trait object 及嵌套装箱均保留实现者的覆盖方法；仅实现 `next_u64` 的随机源继续使用 trait 的默认浮点和范围算法。
+
+`Balance::from_rng` 会将随机源装箱。启用 `balance` 时，双候选抽样仍通过传入随机源的 `next_range` 选择两个不同候选，不因装箱改用默认算法。本次修正只恢复委托，不改变默认分布、范围约束或随机源强度。
+
 <a id="boundaries"></a>
 
 ## 能力边界
@@ -49,6 +55,6 @@ async fn service_example() -> Result<(), Infallible> {
 
 ## 检查与来源
 
-运行 `python3 .github/scripts/check-service-stack.py`，检查原生/WASM 特性隔离、零依赖基础 trait，以及真实层组合、错误、取消和 trait 身份。依赖不可用 `tower-test` 的上游用例及 hedge 测试仅保留来源，不计为执行。
+运行 `python3 .github/scripts/check-service-stack.py`，检查原生/WASM 特性隔离、零依赖基础 trait，以及真实层组合、错误、取消和 trait 身份。随机源回归在 `util` 下执行 6 项，在原生 `full` 下执行同样 6 项及 1 项真实 `Balance::from_rng` 委托回归。依赖不可用 `tower-test` 的上游用例及 hedge 测试仅保留来源，不计为执行。
 
 来源为 [Tower 0.5.3](../upstream/tower-0.5.3/README.md)、[tower-layer 0.3.3](../upstream/tower-layer-0.3.3/README.md) 和 [tower-service 0.3.3](../upstream/tower-service-0.3.3/README.md)。当前导入统一使用 `service_stack`；原始文档仍按上游身份保留。精确源码、许可证、上游版本和测试归属保存在 `compliance/provenance`、来源目录及整合凭据中，包括不启用的 hedge 原始生产文件。

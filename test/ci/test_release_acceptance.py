@@ -1,5 +1,7 @@
 """Keep post-packaging acceptance bound to extracted release artifacts."""
 from pathlib import Path
+import re
+import runpy
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +46,19 @@ class ReleaseAcceptance(unittest.TestCase):
         self.assertNotIn('contents: write', workflow)
         for path in ('docs/ci.md', 'docs/release.md'):
             self.assertIn('installation-candidate-linux-web', (ROOT / path).read_text())
+
+    def test_candidate_documentation_matches_complete_standalone_assets(self):
+        documentation = (ROOT / 'docs/ci.md').read_text()
+        candidate = next(paragraph for paragraph in documentation.split('\n\n')
+                         if 'installation-candidate-linux-web' in paragraph)
+        validator = runpy.run_path(str(ROOT / '.github/scripts/verify-release-assets.py'))
+        expected = validator['asset_names']('VERSION') | {'SHA256SUMS'}
+        documented = set(re.findall(r'`([^`]+)`', candidate))
+        self.assertEqual(expected & documented, expected)
+        self.assertIn('七文件集合', candidate)
+        self.assertIn('单个 ELF 的内嵌 Web 运行验收', candidate)
+        self.assertNotIn('两个归档', candidate)
+        self.assertNotIn('归档解压验收', candidate)
 
     def test_release_rebuilds_both_native_products_before_packaging(self):
         workflow = (ROOT / '.github/workflows/release.yml').read_text()

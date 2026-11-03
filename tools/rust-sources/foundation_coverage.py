@@ -102,8 +102,10 @@ def behaviour_entries(behaviour):
     entries = defaultdict(list)
     script = BEHAVIOUR.relative_to(ROOT).as_posix()
     for name in behaviour.UNIT_SUITES:
+        profiles = ' in debug and release profiles' if name in behaviour.RELEASE_UNIT_SUITES else ''
         entries[name].append({'kind': 'U', 'shard': 'foundation-async', 'scripts': [script],
-                              'detail': 'cargo test --lib -p ' + name + '; names equal the generated inventory'})
+                              'detail': 'cargo test --lib -p ' + name + profiles
+                              + '; names equal the generated inventory'})
     for suite in behaviour.STANDALONE_SUITES:
         entries[suite.subject].append({'kind': 'U', 'shard': 'foundation-async', 'scripts': [script],
                                       'detail': 'retained tests in a temporary copied member, real source/build script'

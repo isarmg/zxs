@@ -139,8 +139,12 @@ impl Engine {
                 if placement.route_slot_ids[..index].contains(slot) {
                     continue;
                 }
-                let used = used_bytes.entry(slot.clone()).or_default();
-                *used = used.saturating_add(version.logical_size);
+                match used_bytes.get_mut(slot) {
+                    Some(used) => *used = used.saturating_add(version.logical_size),
+                    None => {
+                        used_bytes.insert(slot.clone(), version.logical_size);
+                    }
+                }
             }
         }
         DiskObservationPlan {

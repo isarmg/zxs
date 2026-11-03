@@ -3727,6 +3727,27 @@
       "subject": "futures-intrusive",
       "targets": {
         "lib": [
+          "buffer::ring_buffer::tests::growing_ring_buf_rejection_preserves_items_and_releases_input",
+          "buffer::ring_buffer::tests::growing_ring_buf_rejects_default_capacity_push",
+          "buffer::ring_buffer::tests::growing_ring_buf_rejects_full_push",
+          "buffer::ring_buffer::tests::growing_ring_buf_rejects_zero_capacity_push",
+          "buffer::ring_buffer::tests::test_array_ring_buf",
+          "buffer::ring_buffer::tests::test_growing_ring_buf",
+          "buffer::ring_buffer::tests::test_heap_ring_buf",
+          "intrusive_double_linked_list::tests::drain_and_collect",
+          "intrusive_double_linked_list::tests::insert_and_iterate",
+          "intrusive_double_linked_list::tests::peek_last",
+          "intrusive_double_linked_list::tests::remove_by_address",
+          "intrusive_double_linked_list::tests::remove_first",
+          "intrusive_double_linked_list::tests::remove_last",
+          "intrusive_pairing_heap::tests::equal_values",
+          "intrusive_pairing_heap::tests::insert_and_remove"
+        ],
+        "lib_release": [
+          "buffer::ring_buffer::tests::growing_ring_buf_rejection_preserves_items_and_releases_input",
+          "buffer::ring_buffer::tests::growing_ring_buf_rejects_default_capacity_push",
+          "buffer::ring_buffer::tests::growing_ring_buf_rejects_full_push",
+          "buffer::ring_buffer::tests::growing_ring_buf_rejects_zero_capacity_push",
           "buffer::ring_buffer::tests::test_array_ring_buf",
           "buffer::ring_buffer::tests::test_growing_ring_buf",
           "buffer::ring_buffer::tests::test_heap_ring_buf",

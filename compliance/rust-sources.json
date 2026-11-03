@@ -52061,8 +52061,8 @@
     }
   },
   "external_test_mappings_sha256": {
-    "compliance/external-tests/binding-text-tools.json": "cf85f72fb40b8d9a90ac77d7a6df9a6d1c649a00bba9f6636901721e6d5c9d98",
-    "compliance/external-tests/foundation.json": "5d001e4ca22c9059eaffc367fa6de0af986fb7ff2d7c238d995d6497bcf79f02",
+    "compliance/external-tests/binding-text-tools.json": "6c3afd7724be2e6f975a7650a96328d125bda493fadb3968480dd918d945f05d",
+    "compliance/external-tests/foundation.json": "7553f119ba2b1a530ea7c8126701f0410a88945425a76ceb7e7643f6cbb1fecf",
     "compliance/external-tests/integrated.json": "f40f0affb3c5f226f98f18dd85f3b7b25e23687f05353e6c6e2b8fa44c3e6786",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
@@ -56704,7 +56704,7 @@
       ]
     },
     "src/foundation/concurrency/futures-intrusive": {
-      "bytes": 169203,
+      "bytes": 170754,
       "directory": "src/foundation/concurrency/futures-intrusive",
       "file_count": 11,
       "files": [
@@ -56759,7 +56759,7 @@
         },
         {
           "path": "test/foundation/futures-intrusive/unit/src/buffer/ring_buffer/tests_319.rs",
-          "sha256": "507d4a793f121522f07a0f0ab61617b62d18ff51b4d4d9d842efc5a20475aa2c",
+          "sha256": "5e1e87a8c9564de36874a6de58fc06807b5addbb40a364f2472f369c89fb051d",
           "source": "src/foundation/futures-intrusive/src/buffer/ring_buffer.rs",
           "source_sha256_before": "5e829d368e41e4f720578471cd02b43e6d5c8d9eddb1e1480d82235d960d54ad"
         },
@@ -78307,9 +78307,9 @@
       ]
     },
     "src/foundation/web-runtime/wasm-text-parser": {
-      "bytes": 31601,
+      "bytes": 34328,
       "directory": "src/foundation/web-runtime/wasm-text-parser",
-      "file_count": 118,
+      "file_count": 119,
       "files": [
         {
           "path": "test/foundation/wasm-text-parser/tests/.gitattributes",
@@ -78341,6 +78341,13 @@
           "source": "test/foundation/wasm-text-parser/tests/common/mod.rs",
           "source_kind": "project-authored",
           "source_sha256_before": "d58d636aff5f735deeee9279576125de9035fd36e8a63dfaae6d4634f11b4527"
+        },
+        {
+          "path": "test/foundation/wasm-text-parser/tests/custom_reserved.rs",
+          "sha256": "fe9f5cdef04588b203ee788b80bec12d234d04a7c1fcefdae9eec1f0eedc059d",
+          "source": "test/foundation/wasm-text-parser/tests/custom_reserved.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "fe9f5cdef04588b203ee788b80bec12d234d04a7c1fcefdae9eec1f0eedc059d"
         },
         {
           "path": "test/foundation/wasm-text-parser/tests/diagnostics.rs",
@@ -79717,7 +79724,7 @@
     "src/foundation/web-runtime/wasm-bindgen/Cargo.toml": "b33de63aa298f48eb031c63fa2580756e9c12a840c5327eedbeb729cd5e3b3ca",
     "src/foundation/web-runtime/wasm-binding-macros/Cargo.toml": "e07bec93c2d869bd882f3866ed36190cbb859a15fa8d821517eb8c67fd759e83",
     "src/foundation/web-runtime/wasm-encoder/Cargo.toml": "c3989a0dcb9b21bd86e216781db565f5bb0e6d722c0ac76d0cf982e018f865ac",
-    "src/foundation/web-runtime/wasm-text-parser/Cargo.toml": "4fd5db6895a89a1d3272c9c4df66c5a4af3a6897a1f94257397817c05e0e05e9",
+    "src/foundation/web-runtime/wasm-text-parser/Cargo.toml": "925d64144a86385f92fc4ed66221a3fad6486a5b05bdeb74d19163c10fdc75c4",
     "src/foundation/web-runtime/wasm-text-printer/Cargo.toml": "69ed0cdda84a13bfc928eda48dc1acd44d49e962f624f0e873f882d2651d9a65",
     "src/foundation/web-runtime/wasmparser/Cargo.toml": "771207359c85d13aa247962a53b713da998d1bbc634fee7931dfb1c180e558f8",
     "src/foundation/web-runtime/web-sys/Cargo.toml": "3ab4e3a313566167584cc6f711e6d84209f01be850ca1a18a88292704b267011",
@@ -84274,7 +84281,7 @@
         "src/util/optional/future.rs": "dadfbfc1cbde1ab14d9a2bd9072f7398d57aeaf4529efd7a86de6c1ad80fdc9d",
         "src/util/optional/mod.rs": "38d086eaf887fd00cf1f49bb082f5ae9867c574124063c40584bb70bf1222fae",
         "src/util/ready.rs": "d928aba39bfa98abe3a5ed498530e0d3e61e394e616024fe447617ef4fbbbf96",
-        "src/util/rng.rs": "4705ba13934f14b1688c9d21553ca7e8559976101057965a16b251f31038081d",
+        "src/util/rng.rs": "cb8a7a561698d19532d853df129f5c2c54433956168149047ea9eda53da103be",
         "src/util/service_fn.rs": "5eee1f0f16fec9bd5e574a2b04dba5eb4278edce68de7b854c7d602f5e19393e",
         "src/util/then.rs": "7a372b97f64dcff7d0838b0c420c72d0936ae06f927aca202a9fcf2589f7908b"
       },
@@ -84405,7 +84412,7 @@
         "src/util/optional/future.rs": "dadfbfc1cbde1ab14d9a2bd9072f7398d57aeaf4529efd7a86de6c1ad80fdc9d",
         "src/util/optional/mod.rs": "38d086eaf887fd00cf1f49bb082f5ae9867c574124063c40584bb70bf1222fae",
         "src/util/ready.rs": "d928aba39bfa98abe3a5ed498530e0d3e61e394e616024fe447617ef4fbbbf96",
-        "src/util/rng.rs": "4705ba13934f14b1688c9d21553ca7e8559976101057965a16b251f31038081d",
+        "src/util/rng.rs": "cb8a7a561698d19532d853df129f5c2c54433956168149047ea9eda53da103be",
         "src/util/service_fn.rs": "5eee1f0f16fec9bd5e574a2b04dba5eb4278edce68de7b854c7d602f5e19393e",
         "src/util/then.rs": "7a372b97f64dcff7d0838b0c420c72d0936ae06f927aca202a9fcf2589f7908b"
       },
@@ -92237,7 +92244,7 @@
       "version": "0.3.34"
     },
     "src/foundation/concurrency/futures-intrusive": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 2 个独立示例程序及专属输入（20306 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-02：借用 Mutex lock future 的 Send 实现要求 T: Send，与底层 Mutex 的 Sync 契约一致；保留载荷无需 Sync 的合法调用。 2026-11-02：owned StateReceiveFuture 的 Send 要求原始锁 Send+Sync，以覆盖最后 Arc 析构；借用版边界保持。共享 oneshot broadcast 独立统计接收端，只有最后端点释放才关闭，owned receive future 不计为端点；clone/drop 新增计数原子操作，保留原 channel 锁与关闭线性化。 2026-11-02：仅固定工具链格式整理 state/oneshot broadcast 两文件；保留字面量、注释、cfg/测试接线及同步/析构行为。 2026-11-02：共享 semaphore 的 owned acquire Send 与共享 owner Sync 均要求 raw mutex Send+Sync，覆盖最终 Arc 析构；保留 borrowed Sync-only 与本地非 Send 使用，owned releaser 自动 Sync 同步收紧；不改许可计数、公平或回调状态机。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 2026-10-20：移除不可达条件实现并修复稳定工具链编译诊断；当前逐文件摘要记录本地实现差异。 清理独立演示：移除 2 个独立示例程序及专属输入（20306 字节）；保留文档编译、真实测试及性能基准输入。 2026-11-02：借用 Mutex lock future 的 Send 实现要求 T: Send，与底层 Mutex 的 Sync 契约一致；保留载荷无需 Sync 的合法调用。 2026-11-02：owned StateReceiveFuture 的 Send 要求原始锁 Send+Sync，以覆盖最后 Arc 析构；借用版边界保持。共享 oneshot broadcast 独立统计接收端，只有最后端点释放才关闭，owned receive future 不计为端点；clone/drop 新增计数原子操作，保留原 channel 锁与关闭线性化。 2026-11-02：仅固定工具链格式整理 state/oneshot broadcast 两文件；保留字面量、注释、cfg/测试接线及同步/析构行为。 2026-11-02：共享 semaphore 的 owned acquire Send 与共享 owner Sync 均要求 raw mutex Send+Sync，覆盖最终 Arc 析构；保留 borrowed Sync-only 与本地非 Send 使用，owned releaser 自动 Sync 同步收紧；不改许可计数、公平或回调状态机。 2026-11-03：GrowingHeapBuf::push 在 debug/release 均执行既有满容量 panic 契约；拒绝在入队前完成，容量、FIFO 与输入释放由根测试覆盖。",
       "description": "Futures based on intrusive data structures - for std and no-std environments.",
       "directory": "src/foundation/concurrency/futures-intrusive",
       "files_sha256": {
@@ -92249,7 +92256,7 @@
         "benches/utils/mod.rs": "a00db13c6f6945a1d1e390e0a35811ac47e355976cf0fff93574da15dfcc4e34",
         "src/buffer/mod.rs": "10c1832b42fb86f6787e5aa994c010e51ba62672d46a1bd910f2060d63d4cd20",
         "src/buffer/real_array.rs": "c0ac5f0684e6679ca3b30b8647e212f7445fc3914214a69f527a20f1bd57eb7d",
-        "src/buffer/ring_buffer.rs": "fe193d9ebfb0755f5e161b30482334923e7a9ba164bf4b6ed467a68733e46b25",
+        "src/buffer/ring_buffer.rs": "8bad874eb99267218d4d4e9a14f281b4e0d9641868ec5f53d8c4c6cac4ccfb23",
         "src/channel/channel_future.rs": "829f31ad537131450a606ed7f154e891c71969911b50ed71eb3e7b8d7130d880",
         "src/channel/error.rs": "43d5a23d7d948e5d6807803d3463e1fc1af52432c3bc47d8d711db25fda537bd",
         "src/channel/mod.rs": "fbc7a7a8e3825e0ecf31458027835167d098b9de4443aff7af95d1e1da2d3136",
@@ -97881,7 +97888,7 @@
       "version": "0.103.16"
     },
     "src/foundation/networking/service-stack": {
-      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 清理独立演示：移除 1 个独立示例程序及专属输入（6617 字节）；保留文档编译、真实测试及性能基准输入。 规范一致性：说明 Oneshot/Ready 内部断言的不变量与非结构化 pin 依据，补充 util 构造器及 Either 变体文档；不改变服务状态或错误传播。 规范一致性：说明 Buffer 内部失败状态断言及 Arc 共享，明确并发许可由响应 future 的 Drop 释放；不改变容量、共享信号量关闭、错误或释放时序。",
+      "changes": "Rust 发布包保留；无业务算法修改。稳定实现未发现经验证的替换收益，保留安全/平台分支。；统一路径依赖、集中许可证与文档，裁剪上游独立仓库和开发构建脚手架。 清理独立演示：移除 1 个独立示例程序及专属输入（6617 字节）；保留文档编译、真实测试及性能基准输入。 规范一致性：说明 Oneshot/Ready 内部断言的不变量与非结构化 pin 依据，补充 util 构造器及 Either 变体文档；不改变服务状态或错误传播。 规范一致性：说明 Buffer 内部失败状态断言及 Arc 共享，明确并发许可由响应 future 的 Drop 释放；不改变容量、共享信号量关闭、错误或释放时序。 修复 Box<Rng> 对 next_f64/next_range 覆盖方法的委托，保留默认算法；以根测试验证具体类型、trait object、嵌套装箱和 Balance::from_rng 的真实抽样调用。",
       "description": "Tower is a library of modular and reusable components for building robust\nclients and servers.",
       "directory": "src/foundation/networking/service-stack",
       "files_sha256": {
@@ -97984,7 +97991,7 @@
         "src/util/optional/future.rs": "dadfbfc1cbde1ab14d9a2bd9072f7398d57aeaf4529efd7a86de6c1ad80fdc9d",
         "src/util/optional/mod.rs": "38d086eaf887fd00cf1f49bb082f5ae9867c574124063c40584bb70bf1222fae",
         "src/util/ready.rs": "d928aba39bfa98abe3a5ed498530e0d3e61e394e616024fe447617ef4fbbbf96",
-        "src/util/rng.rs": "4705ba13934f14b1688c9d21553ca7e8559976101057965a16b251f31038081d",
+        "src/util/rng.rs": "cb8a7a561698d19532d853df129f5c2c54433956168149047ea9eda53da103be",
         "src/util/service_fn.rs": "5eee1f0f16fec9bd5e574a2b04dba5eb4278edce68de7b854c7d602f5e19393e",
         "src/util/then.rs": "7a372b97f64dcff7d0838b0c420c72d0936ae06f927aca202a9fcf2589f7908b"
       },
@@ -101992,11 +101999,11 @@
       "version": "0.245.1"
     },
     "src/foundation/web-runtime/wasm-text-parser": {
-      "changes": "精确来源与当前职责分离；测试外置；仅core WAT、普通打印、正常Unicode宽度；无DWARF/component-model/validate/folded/CJK歧义模式/终端颜色/编译器内部依赖；详见docs/validation/wasm-binding-test-tools.md。",
+      "changes": "精确来源与当前职责分离；测试外置；仅core WAT、普通打印、正常Unicode宽度；无DWARF/component-model/validate/folded/CJK歧义模式/终端颜色/编译器内部依赖；详见docs/validation/wasm-binding-test-tools.md。 custom_reserved! 的 Peek 返回类型通过 $crate 固定为 parser::Result，根测试覆盖无导入与无关 Result 别名调用方。",
       "description": "绑定转换测试的wasm-text-parser职责组件",
       "directory": "src/foundation/web-runtime/wasm-text-parser",
       "files_sha256": {
-        "Cargo.toml": "4fd5db6895a89a1d3272c9c4df66c5a4af3a6897a1f94257397817c05e0e05e9",
+        "Cargo.toml": "925d64144a86385f92fc4ed66221a3fad6486a5b05bdeb74d19163c10fdc75c4",
         "src/core.rs": "cd5349b371fdcfaa9377b0689edc6d9347e5b60ec46843c987585740ef5e1fdc",
         "src/core/binary.rs": "b82a1cf5a0437cb2cd4843cbc0f2af37473b677afbe34af429378700a810d951",
         "src/core/custom.rs": "dcb87915d98a336e58e3c5bcce8e3febe460685c8a710549a43faa0e5835b976",
@@ -102018,7 +102025,7 @@
         "src/error.rs": "0a07d39fc427d14b0176fead732b79a640417274bdefe0603845eb7f8a96d34d",
         "src/gensym.rs": "06b02b19c1fb089620b8f0cf0881c2093e883a8705e30ea44d989b3c2ee999f1",
         "src/lexer.rs": "2dbb78911e7ac3bcd029469f72d43136bbc19fe830f950b4ae634468226794d8",
-        "src/lib.rs": "a19419923af856ac323161f6dfc4e0ade2349b21dad46b7975c305115417acd1",
+        "src/lib.rs": "722172c63049872ad315157ef156212f437a09ce5e54092c8b8769c2a1d4e9ad",
         "src/names.rs": "dd8e05380316de31e9d2930547cd9d6cdbbce195f0c83233c70e74eedc0ecf4d",
         "src/parser.rs": "97901c0d8b1d0cd982944b06f138bc30b201ab40da763c3981b811c1295e221e",
         "src/token.rs": "5ef201d3e5cc32b1441ad2c0df07e5db62160b373724d7f61268c1bdda0d20f9",
