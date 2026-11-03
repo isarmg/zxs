@@ -24,7 +24,7 @@
       "--version"
     ],
     "code": 0,
-    "stdout": "zxs 0.1.1\n",
+    "stdout": "zxs 1.0.0\n",
     "stderr": ""
   },
   {
@@ -99,7 +99,7 @@
       "--version"
     ],
     "code": 0,
-    "stdout": "zxs-rescue 0.1.1\n",
+    "stdout": "zxs-rescue 1.0.0\n",
     "stderr": ""
   },
   {

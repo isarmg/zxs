@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "authentication"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "argon2",
  "base64",
@@ -796,7 +796,7 @@ dependencies = [
 
 [[package]]
 name = "name-policy"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "data-serialization",
  "error-definition",
@@ -869,7 +869,7 @@ version = "0.3.34"
 
 [[package]]
 name = "platform-io"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "data-serialization",
@@ -1226,7 +1226,7 @@ version = "1.16.3"
 
 [[package]]
 name = "smb-protocol"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "data-serialization",
  "json-codec",
@@ -1236,7 +1236,7 @@ dependencies = [
 
 [[package]]
 name = "smb-vfs"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "bindgen",
  "blake3",
@@ -1290,7 +1290,7 @@ version = "1.2.1"
 
 [[package]]
 name = "storage-client"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "data-serialization",
@@ -1313,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "storage-contract"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "data-serialization",
@@ -1326,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "storage-engine"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "data-serialization",
@@ -1347,7 +1347,7 @@ dependencies = [
 
 [[package]]
 name = "storage-rescue"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "authentication",
  "command-line",
@@ -1364,7 +1364,7 @@ dependencies = [
 
 [[package]]
 name = "storage-server"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "authentication",
  "blake3",
@@ -1858,7 +1858,7 @@ dependencies = [
 
 [[package]]
 name = "web-app"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "data-serialization",
  "date-time",
@@ -1899,7 +1899,7 @@ dependencies = [
 
 [[package]]
 name = "web-interface"
-version = "0.1.1"
+version = "1.0.0"
 dependencies = [
  "console_error_panic_hook",
  "data-serialization",

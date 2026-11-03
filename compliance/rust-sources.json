@@ -79498,10 +79498,10 @@
     "16f5b39477c05e0df34e296682097f028f028797f6ed2ecc7e2d1e227a984fe1"
   ],
   "lockfiles_sha256": {
-    "Cargo.lock": "9f7c5447d044e101d420074c29ad7a3123be70dc775a9ebd9e04df17da129333"
+    "Cargo.lock": "517cd06c04f42581249da4632c89145833dcdc3ad7c109f37659ca4d8b631ef6"
   },
   "manifests_sha256": {
-    "Cargo.toml": "ec76e5f6326d68308c0f3d56c8ac7fd4537a46f91045c30ebb4defcd5052b2bc",
+    "Cargo.toml": "d6e9dbd9e1f4973cad5ce12f1d42191928e70363208e7da7a240b69dd1c91b5f",
     "src/auth/Cargo.toml": "f315d7648a6399f68f04ec5e49d9df3f69d9254b68c6f5e8369e87fb1e8282f9",
     "src/client/Cargo.toml": "e52f0f1e11816d9fb28c4b0bfbe607ff3342b30493a92fbb7a75847a1f96b7b6",
     "src/contract/Cargo.toml": "c78a39f40d067f1267d056f0f51c17ada5b2c365556fac2a8c54f9b488f3649f",
