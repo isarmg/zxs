@@ -27,24 +27,18 @@ pub fn FileIcon(name: &'static str) -> impl IntoView {
         "file" => "zxs-file-icon zxs-file-icon--file",
         _ => "zxs-file-icon",
     };
-    View::new(
-        web_interface::svg::svg()
-            .child(
-                #[allow(unused_braces)]
-                {
-                    web_interface::svg::path().attr(
-                        "d",
-                        ::web_interface::prelude::IntoAttributeValue::into_attribute_value(path),
-                    )
-                },
-            )
-            .attr("class", icon_class)
-            .attr("aria-hidden", "true")
-            .attr("width", "1em")
-            .attr("height", "1em")
-            .attr("viewBox", "0 0 24 24")
-            .attr("fill", "none")
-            .attr("stroke", "currentColor")
-            .attr("stroke-width", "1.7"),
-    )
+    view! {
+        <svg
+            class=icon_class
+            aria-hidden="true"
+            width="1em"
+            height="1em"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+        >
+            <path d=path/>
+        </svg>
+    }
 }

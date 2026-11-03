@@ -21,11 +21,16 @@
 //!
 //! ## Feature Flag
 //!
-//! This functionality is available through the `compat` feature flag:
+//! This functionality is available through Tokio's `adapters-compat` feature.
+//! For a member of this workspace:
 //!
 //! ```toml
-//! tokio-util = { version = "...", features = ["compat"] }
+//! tokio = { workspace = true, features = ["adapters-compat"] }
 //! ```
+//!
+//! The examples below also use Tokio's `io-util`, `net`, `macros`, and
+//! `rt-multi-thread` features, and a direct dependency on `futures` with its `io`
+//! feature.
 //!
 //! ## Example 1: Tokio -> Futures (`AsyncRead`)
 //!
@@ -131,7 +136,7 @@ pin_project! {
 /// `futures::io::AsyncRead` to implement `tokio::io::AsyncRead`.
 pub trait FuturesAsyncReadCompatExt: futures::io::AsyncRead {
     /// Wraps `self` with a compatibility layer that implements
-    /// `tokio_io::AsyncRead`.
+    /// `tokio::io::AsyncRead`.
     fn compat(self) -> Compat<Self>
     where
         Self: Sized,

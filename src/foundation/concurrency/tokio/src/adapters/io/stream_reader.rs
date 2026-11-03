@@ -15,6 +15,8 @@ use crate::io::{AsyncBufRead, AsyncRead, ReadBuf};
 ///
 /// # Example
 ///
+/// These examples use the `utilities` feature of the `futures` crate.
+///
 /// ```
 /// use bytes::Bytes;
 /// use tokio::io::{AsyncReadExt, Result};
@@ -23,7 +25,7 @@ use crate::io::{AsyncBufRead, AsyncRead, ReadBuf};
 /// # async fn main() -> std::io::Result<()> {
 ///
 /// // Create a stream from an iterator.
-/// let stream = tokio_stream::iter(vec![
+/// let stream = futures::stream::iter(vec![
 ///     Result::Ok(Bytes::from_static(&[0, 1, 2, 3])),
 ///     Result::Ok(Bytes::from_static(&[4, 5, 6, 7])),
 ///     Result::Ok(Bytes::from_static(&[8, 9, 10, 11])),
@@ -53,19 +55,19 @@ use crate::io::{AsyncBufRead, AsyncRead, ReadBuf};
 /// ```
 ///
 /// If the stream produces errors which are not [`std::io::Error`],
-/// the errors can be converted using [`StreamExt`] to map each
+/// the errors can be converted using `futures::StreamExt` to map each
 /// element.
 ///
 /// ```
 /// use bytes::Bytes;
 /// use tokio::io::AsyncReadExt;
 /// use tokio::adapters::io::StreamReader;
-/// use tokio_stream::StreamExt;
+/// use futures::StreamExt;
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() -> std::io::Result<()> {
 ///
 /// // Create a stream from an iterator, including an error.
-/// let stream = tokio_stream::iter(vec![
+/// let stream = futures::stream::iter(vec![
 ///     Result::Ok(Bytes::from_static(&[0, 1, 2, 3])),
 ///     Result::Ok(Bytes::from_static(&[4, 5, 6, 7])),
 ///     Result::Err("Something bad happened!")
@@ -112,7 +114,7 @@ use crate::io::{AsyncBufRead, AsyncRead, ReadBuf};
 /// # async fn main() -> std::io::Result<()> {
 ///
 /// // Create a stream of byte chunks.
-/// let stream = tokio_stream::iter(vec![
+/// let stream = futures::stream::iter(vec![
 ///     Result::Ok(b"The first line.\n".as_slice()),
 ///     Result::Ok(b"The second line.".as_slice()),
 ///     Result::Ok(b"\nThe third".as_slice()),
@@ -151,7 +153,6 @@ use crate::io::{AsyncBufRead, AsyncRead, ReadBuf};
 /// [`AsyncBufRead`]: tokio::io::AsyncBufRead
 /// [`Stream`]: futures::Stream
 /// [`ReaderStream`]: tokio::adapters::io::ReaderStream
-/// [`StreamExt`]: https://docs.rs/tokio-stream/latest/tokio_stream/trait.StreamExt.html
 #[derive(Debug)]
 pub struct StreamReader<S, B> {
     // This field is pinned.
@@ -227,7 +228,7 @@ impl<S, B> StreamReader<S, B> {
         self.project().inner
     }
 
-    /// Consumes this `BufWriter`, returning the underlying stream.
+    /// Consumes this `StreamReader`, returning the underlying stream.
     ///
     /// Note that any leftover data in the internal buffer is lost.
     /// If you additionally want access to the internal buffer use

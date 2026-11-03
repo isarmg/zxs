@@ -12,7 +12,11 @@ import source_layout
 KEY = 'proof_maintenance_receipts'
 RECEIPTS = ('f6b00af0dad58bb402937c193974d916d525a790decbe043e679954c03bcbd1e',
             'eede8d6ae6c3a123115c9396650c9f18f9a9ecef47820a9f4dfbfda2ee1e17d9',
-            'a9ad25a1f75e0ec0626e5a267dc7ecede3fd3da36f1132af2d91b9173b30b89f')
+            'a9ad25a1f75e0ec0626e5a267dc7ecede3fd3da36f1132af2d91b9173b30b89f',
+            'f3c2cfc74ea14081472edce27827546e1ebcc96a7bec2ba680855972d906d487',
+            '0d46a253ad082747390e56da68e87ca51b676e9744a0bc146d60bb00d88be6ad',
+            '1534d49212579b251172a37cd5229dd1c1d3e078cd8d86b4bffa0276ad8bda71',
+            '2a01d7b1de02da5262f5b41fea1b9e7ad9ed4a4c055199116371a277d42f9b07')
 
 
 def state(catalog, directory):

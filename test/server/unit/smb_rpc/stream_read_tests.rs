@@ -244,3 +244,67 @@ fn held_payload_identity_survives_path_replacement_and_late_truncation_is_an_err
     assert_eq!(error.code, storage_contract::ErrorCode::ContentUnavailable);
     assert!(format!("{error:?}").contains("UnexpectedEof"));
 }
+
+#[test]
+fn typed_read_reply_preserves_wire_bytes_without_a_value_array() {
+    for length in [0, 1, 255, 256, smb_protocol::protocol::MAX_READ_BYTES] {
+        let bytes = bytes::Bytes::from((0..=u8::MAX).cycle().take(length).collect::<Vec<_>>());
+        let address = bytes.as_ptr();
+        let legacy = json!({"bytes": bytes.as_ref()});
+        assert_eq!(legacy["bytes"].as_array().unwrap().len(), length);
+        let expected = json_codec::to_vec(&Response::Ok { result: legacy }).unwrap();
+        let reply = Reply::Read(bytes);
+        let actual = json_codec::to_vec(&ResponsePayload::Ok { result: &reply }).unwrap();
+        assert_eq!(actual, expected, "reply length {length}");
+        let Reply::Read(retained) = reply else {
+            panic!("expected typed read bytes");
+        };
+        assert_eq!(retained.as_ptr(), address);
+        let decoded: Response = storage_contract::decode_strict(&actual).unwrap();
+        let Response::Ok { result } = decoded else {
+            panic!("expected a successful read");
+        };
+        assert!(result.get("operation_id").is_none());
+        let read: smb_protocol::protocol::ReadResult = json_codec::from_value(result).unwrap();
+        assert_eq!(read.bytes.as_slice(), retained.as_ref());
+    }
+    for value in [
+        json!({"alive": true}),
+        json!({"operation_id": "original", "value": null}),
+    ] {
+        let expected = json_codec::to_vec(&Response::Ok {
+            result: value.clone(),
+        })
+        .unwrap();
+        let actual = json_codec::to_vec(&ResponsePayload::Ok {
+            result: Reply::Json(value),
+        })
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn dispatched_read_retains_the_verified_slice_after_cache_release() {
+    let (_temp, shared, _, branch) = fixture();
+    let mut active = session(shared, &branch);
+    let (opened, _placeholder) = open_file(&mut active, false);
+    let (reply, descriptor) = active
+        .dispatch(Request::Read {
+            handle: opened.handle,
+            offset: 1,
+            length: 2,
+        })
+        .unwrap();
+    assert!(descriptor.is_none());
+    let Reply::Read(bytes) = reply else {
+        panic!("read dispatch built a JSON value instead of retaining verified bytes");
+    };
+    let cached = active.read_cache.as_ref().unwrap().1.range(1, 2).unwrap();
+    assert_eq!(bytes.as_ptr(), cached.as_ptr());
+    assert_eq!(bytes.as_ref(), b"ld");
+    drop(cached);
+    active.close(opened.handle, true).unwrap();
+    assert!(active.read_cache.is_none());
+    assert_eq!(bytes.as_ref(), b"ld");
+}

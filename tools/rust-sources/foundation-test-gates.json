@@ -227,7 +227,7 @@
       "scripts": [
         ".github/scripts/check-serialization-family.py"
       ],
-      "detail": "serialization-family.rs (6)"
+      "detail": "serialization-family.rs (8)"
     },
     {
       "package": "data-serialization",
@@ -353,7 +353,7 @@
       "scripts": [
         ".github/scripts/check-futures-consolidation.py"
       ],
-      "detail": "futures_io_contracts.py executes exact project fixtures: seek-relative (14), string-retention (16), write-zero (9), stable-bytes (8), plus exact E0277 AsRef-only and E0597 borrowed-block compiler rejections. Isolated default-features=false consumers use io or io+sink on x86_64-unknown-linux-gnu; actual names and resolved features must equal foundation-futures-io-tests.json. Public IO API validation, not an added production IO feature."
+      "detail": "futures_io_contracts.py executes exact project fixtures: seek-relative (14), string-retention (19), write-zero (9), stable-bytes (8), plus exact E0277 AsRef-only and E0597 borrowed-block compiler rejections. Isolated default-features=false consumers use io or io+sink on x86_64-unknown-linux-gnu; actual names and resolved features must equal foundation-futures-io-tests.json. Public IO API validation, not an added production IO feature."
     },
     {
       "package": "futures",
@@ -1550,6 +1550,24 @@
         ".github/scripts/check-mime-build.py"
       ],
       "detail": "Exact production build.rs prefix and unchanged MIME data plus root project fixture: 5 private generator final-output/error-source tests, zero ignored/filtered. Three actual host-build/API compile controls check exact default, explicit rev-mappings and forward-only resolved features; no reverse API runtime or disk durability claim."
+    },
+    {
+      "package": "tinystr",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-serialization-family.py"
+      ],
+      "detail": "serialization_contract.rs (9 tests each with default+serialization and no-default+serialization); retained tinystr tests NOT run"
+    },
+    {
+      "package": "semver",
+      "kind": "P",
+      "shard": "foundation-language",
+      "scripts": [
+        ".github/scripts/check-serialization-family.py"
+      ],
+      "detail": "serialization-family.rs: 2 public Deserialize tests for precise Version/VersionReq/Comparator type diagnostics and unchanged requirement string acceptance/parse errors"
     }
   ]
 }

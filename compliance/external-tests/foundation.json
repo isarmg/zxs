@@ -18476,6 +18476,13 @@
           "source_sha256_before": "cf8cee82f731928375888d1b5e7e5e50368d3e16ce372fced230c9b1ee2a7451"
         },
         {
+          "path": "test/foundation/tinystr/tests/serialization_contract.rs",
+          "sha256": "1175d7a632b8437a7c25e90b6ec4d78655a6b88a535e88357fa864bb0057a80a",
+          "source": "test/foundation/tinystr/tests/serialization_contract.rs",
+          "source_kind": "project-authored",
+          "source_sha256_before": "1175d7a632b8437a7c25e90b6ec4d78655a6b88a535e88357fa864bb0057a80a"
+        },
+        {
           "path": "test/foundation/tinystr/unit/src/ascii/test_889.rs",
           "sha256": "4e4ff682b6d62575ef74c4b0fa94a55d6631596a3ac438e9950422086da38ca9",
           "source": "src/foundation/tinystr/src/ascii.rs",

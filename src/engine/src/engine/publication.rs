@@ -542,19 +542,20 @@ impl Engine {
             accepts,
             recovery_id: None,
         };
-        let final_hash = object_hash("finalize", &finalize)?;
+        let finalize_object = PreparedMetadataObject::new("finalize", &finalize, MAX_METADATA)?;
         let mut final_receipts = Vec::new();
         for d in &members {
-            store_object_at(&self.disk_resources.get(d)?.root, d, "finalize", &finalize)?;
+            finalize_object.store_at(&self.disk_resources, std::slice::from_ref(d))?;
             final_receipts.push(append(
                 self,
                 d,
                 RecordType::Finalize,
                 c.sequence,
                 hash,
-                &final_hash,
+                &finalize_object.hash,
             )?);
         }
+        drop(finalize_object);
         #[cfg(feature = "fault-injection")]
         self.failpoint("after_finalize")?;
         // Only a decided candidate may rename a published file container.

@@ -505,3 +505,89 @@ fn selected_backup_page_releases_scan_tables_and_head_records_before_recheck() {
     drop(selected);
     assert!(selected_version.upgrade().is_none());
 }
+
+fn legacy_directory_identity(slot: &str, display: &str) -> String {
+    format!(
+        "backupdir_{}",
+        blake3::hash(format!("{slot}/{}", name_policy::path_key(display)).as_bytes()).to_hex()
+    )
+}
+
+#[test]
+fn directory_identity_reuses_retained_keys_after_unicode_parent_merges() {
+    let paths = [
+        "P01/file.txt",
+        "Archives/Café/Å/one.txt",
+        "ARCHIVES/Cafe\u{301}/A\u{30a}/two.txt",
+        "Straße/Deep/three.txt",
+        "STRASSE/deep/four.txt",
+    ];
+    for reverse in [false, true] {
+        let mut nodes = BTreeMap::new();
+        let mut paths = paths.to_vec();
+        if reverse {
+            paths.reverse();
+        }
+        for path in paths {
+            parents(&mut nodes, path, 100).unwrap();
+        }
+        for (key, node) in nodes {
+            assert!(node.directory());
+            assert_eq!(key, name_policy::path_key(node.display()));
+            for slot in ["B01", "B02"] {
+                assert_eq!(
+                    node.identity(slot, &key),
+                    legacy_directory_identity(slot, node.display()),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn merged_unicode_backup_directories_keep_root_and_nested_identities() {
+    let (_root, mut engine) = initialize(100);
+    for (name, path, prefix) in [
+        ("First", "one.txt", "Archives/Café"),
+        ("Second", "two.txt", "ARCHIVES/CAFÉ"),
+    ] {
+        let repo = repository(&mut engine, name);
+        save(&mut engine, &repo, path, b"independent body");
+        configure(&mut engine, &repo, path, prefix);
+    }
+    let root = listing(&engine, "", &[]).unwrap();
+    assert_eq!(root["total_entries"], "1");
+    assert_eq!(root["entries"][0]["kind"], "directory");
+    assert_eq!(
+        root["entries"][0]["entry_id"],
+        legacy_directory_identity("B01", "Archives"),
+    );
+    let nested = listing(&engine, "aRCHIVES", &[]).unwrap();
+    assert_eq!(nested["total_entries"], "1");
+    assert_eq!(nested["entries"][0]["kind"], "directory");
+    assert_eq!(
+        nested["entries"][0]["entry_id"],
+        legacy_directory_identity("B01", "Archives/Cafe\u{301}"),
+    );
+    let files = listing(&engine, "aRCHIVES/Cafe\u{301}", &[]).unwrap();
+    let names = files["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["one.txt", "two.txt"]);
+    let directory = &nested["entries"][0];
+    let selected = listing(
+        &engine,
+        "archives",
+        &[
+            ("query", "missing"),
+            ("selected_path", "Archives/Cafe\u{301}"),
+            ("selected_entry_id", directory["entry_id"].as_str().unwrap()),
+        ],
+    )
+    .unwrap();
+    assert_eq!(selected["total_entries"], "0");
+    assert_eq!(selected["selected_entry"], *directory);
+}

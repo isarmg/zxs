@@ -184,3 +184,46 @@ fn date_time_human_readable_round_trip_uses_owned_capability() {
     assert_eq!(restored.unix_timestamp_nanos(), -1);
     assert_eq!(restored.offset(), value.offset());
 }
+
+#[test]
+fn semver_wrong_type_diagnostics_name_the_requested_type() {
+    use data_serialization::de::value::{Error, U64Deserializer};
+
+    let input = || U64Deserializer::<Error>::new(1);
+    assert_eq!(
+        semver::Version::deserialize(input())
+            .unwrap_err()
+            .to_string(),
+        "invalid type: integer `1`, expected semver version"
+    );
+    assert_eq!(
+        semver::Comparator::deserialize(input())
+            .unwrap_err()
+            .to_string(),
+        "invalid type: integer `1`, expected semver comparator"
+    );
+    assert_eq!(
+        semver::VersionReq::deserialize(input())
+            .unwrap_err()
+            .to_string(),
+        "invalid type: integer `1`, expected semver version requirement"
+    );
+}
+
+#[test]
+fn semver_requirement_string_boundary_preserves_parser_contract() {
+    use data_serialization::de::value::{Error, StrDeserializer};
+
+    for text in ["*", ">=1.2.3, <2.0.0"] {
+        assert_eq!(
+            semver::VersionReq::deserialize(StrDeserializer::<Error>::new(text)).unwrap(),
+            semver::VersionReq::parse(text).unwrap()
+        );
+    }
+    assert_eq!(
+        semver::VersionReq::deserialize(StrDeserializer::<Error>::new(">="))
+            .unwrap_err()
+            .to_string(),
+        semver::VersionReq::parse(">=").unwrap_err().to_string()
+    );
+}

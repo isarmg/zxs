@@ -8,13 +8,13 @@ fn stat(active: &mut Session, path: &str) -> StatResult {
         .dispatch(Request::Stat { path: path.into() })
         .unwrap();
     assert!(descriptor.is_none());
-    json_codec::from_value(value).unwrap()
+    json_codec::from_value(json_reply(value)).unwrap()
 }
 
 fn handle_time(active: &mut Session, handle: u64) -> FileMtime {
     let (value, descriptor) = active.dispatch(Request::AuthorizeRead { handle }).unwrap();
     assert!(descriptor.is_none());
-    json_codec::from_value::<AuthorizedMetadata>(value)
+    json_codec::from_value::<AuthorizedMetadata>(json_reply(value))
         .unwrap()
         .mtime
 }
@@ -31,7 +31,7 @@ fn page(active: &mut Session, handle: u64, restart: bool) -> DirectoryPage {
         .dispatch(Request::ReadDirectory { handle, restart })
         .unwrap();
     assert!(descriptor.is_none());
-    json_codec::from_value(value).unwrap()
+    json_codec::from_value(json_reply(value)).unwrap()
 }
 
 #[test]

@@ -355,7 +355,7 @@ impl<T: Future, S: Schedule> Core<T, S> {
     ///
     /// # Safety
     ///
-    /// The caller must ensure it is safe to mutate the `state` field. This
+    /// The caller must ensure it is safe to mutate the `stage` field. This
     /// requires ensuring mutual exclusion between any concurrent thread that
     /// might modify the future or output field.
     ///

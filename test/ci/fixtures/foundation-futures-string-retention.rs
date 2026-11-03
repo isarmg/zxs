@@ -312,5 +312,88 @@ fn lines_invalid_utf8_retains_validation_error_without_asserting_resume_semantic
         Poll::Ready(Some(Err(error))) => assert_utf8_error(&error, 2, Some(1)),
         other => panic!("invariant: invalid line fixture must yield its UTF-8 error: {other:?}"),
     }
-    // Later polling after a valid-partial I/O error has a separate pending design.
+}
+
+#[test]
+fn lines_error_discards_partial_before_two_following_lines() {
+    let reader = ScriptedReader::new(&[
+        Step::Bytes(b"discarded"),
+        Step::Error(41),
+        Step::Bytes(b"next\nlast\n"),
+        Step::Eof,
+    ]);
+    let mut lines = reader.lines();
+    let mut cx = Context::from_waker(noop_waker_ref());
+    match Pin::new(&mut lines).poll_next(&mut cx) {
+        Poll::Ready(Some(Err(error))) => assert_primary_io_error(&error, 41),
+        other => panic!("expected original reader error: {other:?}"),
+    }
+    for expected in ["next", "last"] {
+        match Pin::new(&mut lines).poll_next(&mut cx) {
+            Poll::Ready(Some(Ok(line))) => assert_eq!(line, expected),
+            other => panic!("expected subsequent line: {other:?}"),
+        }
+    }
+    assert!(matches!(
+        Pin::new(&mut lines).poll_next(&mut cx),
+        Poll::Ready(None)
+    ));
+}
+
+#[test]
+fn lines_pending_then_error_at_eof_preserves_error_not_partial() {
+    let reader = ScriptedReader::new(&[
+        Step::Bytes(b"discarded"),
+        Step::Pending,
+        Step::Error(42),
+        Step::Eof,
+    ]);
+    let mut lines = reader.lines();
+    let mut cx = Context::from_waker(noop_waker_ref());
+    assert!(Pin::new(&mut lines).poll_next(&mut cx).is_pending());
+    match Pin::new(&mut lines).poll_next(&mut cx) {
+        Poll::Ready(Some(Err(error))) => assert_primary_io_error(&error, 42),
+        other => panic!("expected original reader error: {other:?}"),
+    }
+    assert!(matches!(
+        Pin::new(&mut lines).poll_next(&mut cx),
+        Poll::Ready(None)
+    ));
+}
+
+#[test]
+fn standard_lines_discards_failed_partial_before_following_lines() {
+    struct Standard(ScriptedReader);
+    impl io::Read for Standard {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            match Pin::new(&mut self.0)
+                .poll_read(&mut Context::from_waker(noop_waker_ref()), output)
+            {
+                Poll::Ready(result) => result,
+                Poll::Pending => panic!("standard reference script has no Pending step"),
+            }
+        }
+    }
+    impl io::BufRead for Standard {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            match Pin::new(&mut self.0).poll_fill_buf(&mut Context::from_waker(noop_waker_ref())) {
+                Poll::Ready(result) => result,
+                Poll::Pending => panic!("standard reference script has no Pending step"),
+            }
+        }
+        fn consume(&mut self, amount: usize) {
+            Pin::new(&mut self.0).consume(amount);
+        }
+    }
+    let reader = Standard(ScriptedReader::new(&[
+        Step::Bytes(b"discarded"),
+        Step::Error(41),
+        Step::Bytes(b"next\nlast\n"),
+        Step::Eof,
+    ]));
+    let mut lines = io::BufRead::lines(reader);
+    assert_primary_io_error(&lines.next().unwrap().unwrap_err(), 41);
+    assert_eq!(lines.next().unwrap().unwrap(), "next");
+    assert_eq!(lines.next().unwrap().unwrap(), "last");
+    assert!(lines.next().is_none());
 }

@@ -77,6 +77,10 @@ impl<'a> Builder<'a> {
 
     /// Spawns a task with this builder's settings on the current runtime.
     ///
+    /// # Errors
+    ///
+    /// This method currently does not return an error.
+    ///
     /// # Panics
     ///
     /// This method panics if called outside of a Tokio runtime.
@@ -102,6 +106,10 @@ impl<'a> Builder<'a> {
     ///
     /// See [`Handle::spawn`] for more details.
     ///
+    /// # Errors
+    ///
+    /// This method currently does not return an error.
+    ///
     /// [runtime handle]: crate::runtime::Handle
     /// [`Handle::spawn`]: crate::runtime::Handle::spawn
     #[track_caller]
@@ -124,6 +132,10 @@ impl<'a> Builder<'a> {
     /// The spawned future will be run on the same thread that called `spawn_local`.
     /// This may only be called from the context of a [local task set][`LocalSet`]
     /// or a [`LocalRuntime`].
+    ///
+    /// # Errors
+    ///
+    /// This method currently does not return an error.
     ///
     /// # Panics
     ///
@@ -154,6 +166,10 @@ impl<'a> Builder<'a> {
     ///
     /// See [`LocalSet::spawn_local`] for more details.
     ///
+    /// # Errors
+    ///
+    /// This method currently does not return an error.
+    ///
     /// [`LocalSet::spawn_local`]: crate::task::LocalSet::spawn_local
     /// [`LocalSet`]: crate::task::LocalSet
     #[track_caller]
@@ -175,6 +191,12 @@ impl<'a> Builder<'a> {
     }
 
     /// Spawns blocking code on the blocking threadpool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime has begun shutting down or a blocking worker
+    /// thread cannot be created. A temporary thread-creation error is tolerated if
+    /// the pool already has a worker thread.
     ///
     /// # Panics
     ///
@@ -198,6 +220,12 @@ impl<'a> Builder<'a> {
     /// Spawns blocking code on the provided [runtime handle]'s blocking threadpool.
     ///
     /// See [`Handle::spawn_blocking`] for more details.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime has begun shutting down or a blocking worker
+    /// thread cannot be created. A temporary thread-creation error is tolerated if
+    /// the pool already has a worker thread.
     ///
     /// [runtime handle]: crate::runtime::Handle
     /// [`Handle::spawn_blocking`]: crate::runtime::Handle::spawn_blocking

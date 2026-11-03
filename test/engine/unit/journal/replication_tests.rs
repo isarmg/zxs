@@ -1,11 +1,11 @@
 use super::*;
 use std::cell::Cell;
 
-struct CountedValue {
-    value: json_codec::Value,
+struct CountedValue<T> {
+    value: T,
     serializations: Cell<usize>,
 }
-impl Serialize for CountedValue {
+impl<T: Serialize> Serialize for CountedValue<T> {
     fn serialize<S: data_serialization::Serializer>(
         &self,
         serializer: S,
@@ -122,7 +122,7 @@ fn prepared_publication_objects_encode_once_across_individual_held_member_stores
     ])
     .unwrap();
     let engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
-    for kind in ["candidate", "publication"] {
+    for kind in ["candidate", "finalize", "publication"] {
         let value = CountedValue {
             value: json_codec::json!({"width": "18446744073709551615", "名字": ["\n\"\\", null]}),
             serializations: Cell::new(0),
@@ -178,4 +178,80 @@ fn replicated_metadata_rejects_oversize_before_creating_any_object() {
         .unwrap_err();
     assert_eq!(error.code(), storage_contract::ErrorCode::ResourceLimit);
     assert!(config.disks.iter().all(|disk| !disk.root.exists()));
+}
+
+#[test]
+fn prepared_finalize_preserves_all_accepts_with_one_encoding() {
+    let temp = tempfile::tempdir().unwrap();
+    let config =
+        Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}")))).unwrap();
+    let mut engine = Engine::initialize(&temp.path().join("state"), config).unwrap();
+    let operation = storage_contract::OperationId::generate().unwrap();
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("finalize encoding").unwrap(),
+            "P01",
+            1,
+            "alice",
+            operation,
+        )
+        .unwrap();
+    let sequence = engine.operation(operation).unwrap().sequence;
+    let members = engine.members();
+    let records = scan(&members[0]).unwrap().records;
+    let record = records
+        .iter()
+        .map(|(record, _)| record)
+        .find(|record| record.sequence == sequence && record.record_type == RecordType::Finalize)
+        .unwrap();
+    let finalize: Finalize = load_object(&members[0], "finalize", &record.object_hash).unwrap();
+    assert_eq!(finalize.accepts.len(), members.len());
+    for (receipt, disk) in finalize.accepts.iter().zip(&members) {
+        assert_eq!(receipt.disk_id, disk.disk_id);
+        assert_eq!(receipt.slot_id, disk.slot_id);
+        assert!(
+            receipt_binds(
+                receipt,
+                RecordType::Accept,
+                sequence,
+                &finalize.candidate_hash,
+                &finalize.candidate_hash,
+            )
+            .unwrap()
+        );
+    }
+    let value = CountedValue {
+        value: finalize,
+        serializations: Cell::new(0),
+    };
+    // The former publication path hashed once, then encoded twice per member.
+    let old_hash = object_hash("finalize", &value).unwrap();
+    for disk in &members {
+        assert_eq!(
+            store_object_at(
+                &engine.disk_resources.get(disk).unwrap().root,
+                disk,
+                "finalize",
+                &value,
+            )
+            .unwrap(),
+            old_hash
+        );
+    }
+    assert_eq!(value.serializations.replace(0), 2 * (1 + 2 * members.len()));
+    let prepared = PreparedMetadataObject::new("finalize", &value, MAX_METADATA).unwrap();
+    assert_eq!(prepared.hash, old_hash);
+    for disk in &members {
+        prepared
+            .store_at(&engine.disk_resources, std::slice::from_ref(disk))
+            .unwrap();
+        let bytes = std::fs::read(object_path(disk, "finalize", &old_hash)).unwrap();
+        assert_eq!(bytes, prepared.bytes());
+        let stored: Finalize = decode_object("finalize", &old_hash, &bytes).unwrap();
+        assert_eq!(
+            canonical_json(&stored).unwrap(),
+            canonical_json(&value.value).unwrap()
+        );
+    }
+    assert_eq!(value.serializations.get(), 2);
 }

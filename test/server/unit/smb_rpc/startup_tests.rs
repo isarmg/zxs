@@ -189,14 +189,14 @@ fn oversized_success_is_a_business_error_and_the_connection_remains_usable() {
             }
             send_success(
                 &mut stream,
-                result,
+                Reply::Json(result),
                 Some(descriptor.into()),
                 Some("original-operation".into()),
             )
             .unwrap();
             assert_eq!(peer.read(&mut [0u8; 1]).unwrap(), 0);
         }
-        send_success(&mut stream, json!({"alive":true}), None, None).unwrap();
+        send_success(&mut stream, Reply::Json(json!({"alive":true})), None, None).unwrap();
     });
     let mut stream = FrameStream::new(client).unwrap();
     for expected_operation in ["original-operation", "result-operation"] {

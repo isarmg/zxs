@@ -228,9 +228,8 @@ impl DirectorySnapshot {
                 entry: entry.clone(),
                 mtime,
             };
-            let extra = json_codec::to_vec(&entry)
+            let extra = encoded_size(&entry)
                 .expect("invariant: internal JSON serialization succeeds")
-                .len()
                 + usize::from(!page.entries.is_empty());
             if page.entries.len() >= MAX_DIRECTORY_PAGE_ENTRIES
                 || bytes.saturating_add(extra) > MAX_DIRECTORY_PAGE_BYTES
@@ -246,6 +245,26 @@ impl DirectorySnapshot {
         }
         Ok(page)
     }
+}
+
+// Measure the same JSON bytes without retaining a throwaway encoded buffer.
+fn encoded_size(value: &impl data_serialization::Serialize) -> Result<usize, json_codec::Error> {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .expect("invariant: encoded JSON fits the address space");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    json_codec::to_writer(&mut counter, value)?;
+    Ok(counter.0)
 }
 
 #[cfg(test)]

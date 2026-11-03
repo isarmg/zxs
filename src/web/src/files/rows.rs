@@ -79,8 +79,6 @@ impl Listing {
         }
     }
     fn project(&self) -> Vec<Arc<Row>> {
-        #[cfg(test)]
-        tests::record_project(self.entries.len());
         let context = Arc::new(RowContext {
             epoch: self.epoch,
             slot: self.slot.clone(),

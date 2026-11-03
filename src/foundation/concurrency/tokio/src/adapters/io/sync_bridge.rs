@@ -9,39 +9,32 @@ use crate::io::{
 ///
 /// # Alternatives
 ///
-/// In many cases, there are better alternatives to using `SyncIoBridge`, especially
-/// if you want to avoid blocking the async runtime. Consider the following scenarios:
-///
-/// When hashing data, using `SyncIoBridge` can lead to suboptimal performance and
-/// might not fully leverage the async capabilities of the system.
+/// `SyncIoBridge` is useful when a synchronous library expects I/O traits such as
+/// `Read` or `Write`. If the library accepts byte slices instead, asynchronous I/O
+/// can supply those slices directly, as in the examples below.
 ///
 /// ### Why It Matters:
 ///
-/// `SyncIoBridge` allows you to use asynchronous I/O operations in an synchronous
-/// context by blocking the current thread. However, this can be inefficient because:
-/// - **Inefficient Resource Usage**: `SyncIoBridge` takes up an entire OS thread,
-///   which is inefficient compared to asynchronous code that can multiplex many
-///   tasks on a single thread.
-/// - **Thread Pool Saturation**: Excessive use of `SyncIoBridge` can exhaust the
-///   async runtime's thread pool, reducing the number of threads available for
-///   other tasks and impacting overall performance.
-/// - **Missed Concurrency Benefits**: By using synchronous operations with
-///   `SyncIoBridge`, you lose the ability to interleave tasks efficiently,
-///   which is a key advantage of asynchronous programming.
+/// Synchronous I/O through `SyncIoBridge` blocks the calling thread while it waits
+/// for the underlying asynchronous operation. Use these methods in a
+/// blocking context, such as a `spawn_blocking` closure, not directly in an async
+/// task. Each such closure occupies a blocking-pool thread while it waits for I/O
+/// or performs synchronous work. Many long-running closures can saturate that pool;
+/// moving work there does not eliminate its CPU or thread-capacity cost.
 ///
 /// ## Example 1: Hashing Data
 ///
-/// The use of `SyncIoBridge` is unnecessary when hashing data. Instead, you can
-/// process the data asynchronously by reading it into memory, which avoids blocking
-/// the async runtime.
+/// Hashing functions that accept byte slices can consume data read directly from
+/// an asynchronous reader, without `SyncIoBridge`. The I/O may yield, but the
+/// synchronous hashing calls still run on the thread polling the async task.
 ///
 /// There are two strategies for avoiding `SyncIoBridge` when hashing data. When
 /// the data fits into memory, the easiest is to read the data into a `Vec<u8>`
 /// and hash it:
 ///
-/// Explanation: This example demonstrates how to asynchronously read data from a
-/// reader into memory and hash it using a synchronous hashing function. The
-/// `SyncIoBridge` is avoided, ensuring that the async runtime is not blocked.
+/// This example reads asynchronously, then calls a synchronous hashing function.
+/// Large CPU-bound hashing work should be moved to a blocking task or dedicated
+/// thread rather than assuming that asynchronous reads also offload hashing.
 /// ```rust
 /// use tokio::io::AsyncReadExt;
 /// use tokio::io::AsyncRead;
@@ -72,10 +65,9 @@ use crate::io::{
 /// provide a `hasher` that you can repeatedly call `update` on to hash the data
 /// one chunk at the time.
 ///
-/// Explanation: This example demonstrates how to asynchronously stream data in
-/// chunks for hashing. Each chunk is read asynchronously, and the hash is updated
-/// incrementally. This avoids blocking and improves performance over using
-/// `SyncIoBridge`.
+/// This version uses a 16 KiB read buffer and hashes incrementally. Each `update`
+/// call and finalization remain synchronous. Chunking alone does not guarantee
+/// that the task yields, nor does it establish a throughput improvement.
 ///
 /// ```rust
 /// use tokio::io::AsyncReadExt;
@@ -117,15 +109,14 @@ use crate::io::{
 ///
 /// ## Example 2: Compressing Data
 ///
-/// When compressing data, the use of `SyncIoBridge` is unnecessary as it introduces
-/// blocking and inefficient code. Instead, you can utilize an async compression library
-/// such as the [`async-compression`](https://docs.rs/async-compression/latest/async_compression/)
-/// crate, which is built to handle asynchronous data streams efficiently.
+/// When a compression library accepts asynchronous readers or writers, its I/O
+/// interface can be used directly without `SyncIoBridge`. The
+/// [`async-compression`](https://docs.rs/async-compression/latest/async_compression/)
+/// crate is used in the illustrative, ignored example below.
 ///
-/// Explanation: This example shows how to asynchronously compress data using an
-/// async compression library. By reading and writing asynchronously, it avoids
-/// blocking and is more efficient than using `SyncIoBridge` with a non-async
-/// compression library.
+/// An asynchronous I/O interface does not by itself offload compression work or
+/// guarantee better performance. CPU scheduling depends on the implementation
+/// and workload, not just whether its I/O methods are asynchronous.
 ///
 /// ```ignore
 /// use async_compression::tokio::write::GzipEncoder;
@@ -160,24 +151,22 @@ use crate::io::{
 /// ## Example 3: Parsing Data Formats
 ///
 ///
-/// `SyncIoBridge` is not ideal when parsing data formats such as `JSON`, as it
-/// blocks async operations. A more efficient approach is to read data asynchronously
-/// into memory and then `deserialize` it, avoiding unnecessary synchronization overhead.
+/// A parser that accepts a byte slice can process data read directly into memory
+/// without `SyncIoBridge`, provided the input fits the chosen memory budget.
 ///
-/// Explanation: This example shows how to asynchronously read data into memory
-/// and then parse it as `JSON`. By avoiding `SyncIoBridge`, the asynchronous runtime
-/// remains unblocked, leading to better performance when working with asynchronous
-/// I/O streams.
+/// The deserialization call below is synchronous and runs on the async task's
+/// thread. Reading the input asynchronously does not offload parsing; large
+/// CPU-bound parsing work belongs in a blocking task or dedicated thread.
 ///
 /// ```rust,no_run
 /// use tokio::io::AsyncRead;
 /// use tokio::io::AsyncReadExt;
 /// use std::io::Cursor;
-/// # mod serde {
+/// # mod data_serialization {
 /// #     pub trait DeserializeOwned: 'static {}
 /// #     impl<T: 'static> DeserializeOwned for T {}
 /// # }
-/// # mod serde_json {
+/// # mod json_codec {
 /// #     use super::data_serialization::DeserializeOwned;
 /// #     pub fn from_slice<T: DeserializeOwned>(_: &[u8]) -> Result<T, std::io::Error> {
 /// #         unimplemented!()
@@ -212,10 +201,10 @@ use crate::io::{
 /// `SyncIoBridge` is mainly useful when you need to interface with synchronous
 /// libraries from an asynchronous context.
 ///
-/// Explanation: This example shows how to use `SyncIoBridge` inside a `spawn_blocking`
-/// task to safely perform synchronous I/O without blocking the async runtime. The
-/// `spawn_blocking` ensures that the synchronous code is offloaded to a dedicated
-/// thread pool, preventing it from interfering with the async tasks.
+/// This example constructs the bridge in a runtime context, then moves it into a
+/// `spawn_blocking` closure. The synchronous I/O runs on a blocking-pool thread
+/// while the async caller awaits its result. This avoids running that synchronous
+/// work on an async worker, but still consumes blocking-pool capacity.
 ///
 /// ```rust
 /// # #[cfg(not(target_family = "wasm"))]

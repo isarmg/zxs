@@ -12,15 +12,15 @@ pub(super) fn read(
 ) -> Result<DirectorySelectionSnapshot, ApiError> {
     let repo = repository(engine, selection.repository_id())?;
     let state = engine.state();
-    let scopes = super::directory_scopes::matching(
+    let scopes = super::directory_scopes::matching_unordered(
         state,
         repo,
         Some(selection.scope().map_or("", name_policy::LookupPath::key)),
     )
-    .into_iter()
     .map(|branch| (branch.directory_branch_id.as_str(), branch))
     .collect::<BTreeMap<_, _>>();
     let mut branches = Vec::with_capacity(selection.sources().len());
+    let mut selected = None;
     for source in selection.sources() {
         let branch = scopes
             .get(source.directory_branch_id.as_str())
@@ -35,7 +35,9 @@ pub(super) fn read(
             == Some(&branch.directory_branch_id);
         branches.push(DirectorySelectionBranch {
             summary: DirectoryBranchChoice::capture(branch, current),
-            entries: selected_entry_facts(&branch.entries, selection.entries()),
+            entries: selected
+                .get_or_insert_with(|| SelectedEntries::new(selection.entries()))
+                .facts(&branch.entries),
         });
     }
     Ok(DirectorySelectionSnapshot {
@@ -47,52 +49,61 @@ enum IdentityMatch<'a> {
     Unique(&'a storage_contract::Entry),
     Ambiguous,
 }
-fn selected_entry_facts(
-    entries: &[storage_contract::Entry],
-    selections: &[SelectedDirectoryEntry],
-) -> Vec<SelectedEntryFact> {
-    let ids = selections
-        .iter()
-        .map(|entry| entry.entry_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let selected_keys = selections
-        .iter()
-        .map(|entry| (entry.entry_id.as_str(), entry.path.key()))
-        .collect::<BTreeSet<_>>();
-    let mut matches = BTreeMap::new();
-    let mut exact = BTreeMap::new();
-    for entry in entries {
-        if ids.contains(entry.entry_id.as_str()) {
-            match matches.entry(entry.entry_id.as_str()) {
-                MapEntry::Vacant(slot) => {
-                    slot.insert(IdentityMatch::Unique(entry));
-                }
-                MapEntry::Occupied(mut slot) => {
-                    slot.insert(IdentityMatch::Ambiguous);
-                }
-            }
-            let key = (entry.entry_id.as_str(), entry.lookup_key());
-            if selected_keys.contains(&key) {
-                exact.insert(key, entry);
-            }
+struct SelectedEntries<'a> {
+    selections: &'a [SelectedDirectoryEntry],
+    ids: BTreeSet<&'a str>,
+    keys: BTreeSet<(&'a str, &'a str)>,
+}
+impl<'a> SelectedEntries<'a> {
+    fn new(selections: &'a [SelectedDirectoryEntry]) -> Self {
+        Self {
+            selections,
+            ids: selections
+                .iter()
+                .map(|entry| entry.entry_id.as_str())
+                .collect(),
+            keys: selections
+                .iter()
+                .map(|entry| (entry.entry_id.as_str(), entry.path.key()))
+                .collect(),
         }
     }
-    selections
-        .iter()
-        .filter_map(|selected| {
-            let chosen = match matches.get(selected.entry_id.as_str()) {
-                Some(IdentityMatch::Unique(entry)) => Some(*entry),
-                Some(IdentityMatch::Ambiguous) | None => exact
-                    .get(&(selected.entry_id.as_str(), selected.path.key()))
-                    .copied(),
-            };
-            chosen.map(|entry| SelectedEntryFact {
-                entry_id: entry.entry_id.clone(),
-                path: entry.path.as_str().into(),
-                selected_path: selected.path.as_str().into(),
+    fn facts(&self, entries: &[storage_contract::Entry]) -> Vec<SelectedEntryFact> {
+        let mut matches = BTreeMap::new();
+        let mut exact = BTreeMap::new();
+        for entry in entries {
+            if self.ids.contains(entry.entry_id.as_str()) {
+                match matches.entry(entry.entry_id.as_str()) {
+                    MapEntry::Vacant(slot) => {
+                        slot.insert(IdentityMatch::Unique(entry));
+                    }
+                    MapEntry::Occupied(mut slot) => {
+                        slot.insert(IdentityMatch::Ambiguous);
+                    }
+                }
+                let key = (entry.entry_id.as_str(), entry.lookup_key());
+                if self.keys.contains(&key) {
+                    exact.insert(key, entry);
+                }
+            }
+        }
+        self.selections
+            .iter()
+            .filter_map(|selected| {
+                let chosen = match matches.get(selected.entry_id.as_str()) {
+                    Some(IdentityMatch::Unique(entry)) => Some(*entry),
+                    Some(IdentityMatch::Ambiguous) | None => exact
+                        .get(&(selected.entry_id.as_str(), selected.path.key()))
+                        .copied(),
+                };
+                chosen.map(|entry| SelectedEntryFact {
+                    entry_id: entry.entry_id.clone(),
+                    path: entry.path.as_str().into(),
+                    selected_path: selected.path.as_str().into(),
+                })
             })
-        })
-        .collect()
+            .collect()
+    }
 }
 #[cfg(test)]
 #[path = "../../../../test/server/unit/engine_backend/file_manager/scope_query_tests.rs"]

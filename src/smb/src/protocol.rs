@@ -272,11 +272,15 @@ pub fn remove_request(
     )
 }
 
+/// The existing owned JSON response used by RPC readers and ordinary callers.
+pub type Response = ResponsePayload<Value>;
+
+/// One wire envelope for owned JSON or an already typed response payload.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Response {
+pub enum ResponsePayload<R> {
     Ok {
-        result: Value,
+        result: R,
     },
     Error {
         code: storage_contract::ErrorCode,
@@ -377,8 +381,8 @@ pub struct DirectoryEntry {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
-pub struct ReadResult {
-    pub bytes: Vec<u8>,
+pub struct ReadResult<B = Vec<u8>> {
+    pub bytes: B,
 }
 
 impl OpenResult {

@@ -579,18 +579,43 @@ fn a_removed_entry_discards_metadata() {
 #[test]
 fn disk_list_accepts_current_contract_and_rejects_legacy_or_partial_records() {
     let disk = json!({"slot_id":"P01", "level":2, "online":true, "writable":false, "available_bytes":"18446744073709551615", "used_bytes":"0", "simulation":true, "observation_failure":null});
-    let parsed = parse_disks(&json!({"disks":[disk.clone()]})).unwrap();
+    let parsed = parse_disks(json!({"disks":[disk.clone()]})).unwrap();
     assert_eq!(parsed[0].slot_id, "P01");
     assert_eq!(parsed[0].available_bytes, Some(u64::MAX));
     assert!(!parsed[0].writable);
-    assert!(parse_disks(&json!({"disks":[]})).unwrap().is_empty());
+    assert!(parse_disks(json!({"disks":[]})).unwrap().is_empty());
     for invalid in [
         json!([disk.clone()]),
         json!({"disks":[{"id":"legacy", "online":true, "writable":true,"available_bytes":"0"}]}),
         json!({"disks":[disk, {"slot_id":"P02"}]}),
         json!({"disks":null}),
     ] {
-        assert!(parse_disks(&invalid).is_err());
+        assert!(parse_disks(invalid).is_err());
+    }
+}
+
+#[test]
+fn disk_list_moves_slot_buffers_from_the_owned_response() {
+    let response = json!({"disks":[
+        {"slot_id":"P01", "level":1, "online":true, "writable":true, "available_bytes":"0", "used_bytes":"9", "simulation":true, "observation_failure":null},
+        {"slot_id":"B01", "level":2, "online":false, "writable":false, "available_bytes":null, "used_bytes":"9", "simulation":true, "observation_failure":{"stage":"seal","code":"IO_ERROR"}}
+    ]});
+    let buffers = response["disks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|disk| disk["slot_id"].as_str().unwrap().as_ptr())
+        .collect::<Vec<_>>();
+    let disks = parse_disks(response).unwrap();
+    assert_eq!(
+        disks
+            .iter()
+            .map(|disk| disk.slot_id.as_str())
+            .collect::<Vec<_>>(),
+        ["P01", "B01"]
+    );
+    for (disk, buffer) in disks.iter().zip(buffers) {
+        assert_eq!(disk.slot_id.as_ptr(), buffer);
     }
 }
 
@@ -651,7 +676,7 @@ fn targeted_refresh_preserves_details_outside_the_loaded_page() {
 #[test]
 fn disk_list_offline_unknown_capacity_and_zero_are_distinct_current_records() {
     let offline = json!({"slot_id":"P01", "level":1, "online":false, "writable":true, "available_bytes":null, "used_bytes":"9", "simulation":true, "observation_failure":{"stage":"seal","code":"IO_ERROR"}});
-    let parsed = parse_disks(&json!({"disks":[offline.clone()]})).unwrap();
+    let parsed = parse_disks(json!({"disks":[offline.clone()]})).unwrap();
     assert!(!parsed[0].online);
     assert!(parsed[0].writable);
     assert_eq!(parsed[0].available_bytes, None);
@@ -666,7 +691,7 @@ fn disk_list_offline_unknown_capacity_and_zero_are_distinct_current_records() {
     zero["available_bytes"] = "0".into();
     zero["observation_failure"] = Value::Null;
     assert_eq!(
-        parse_disks(&json!({"disks":[zero.clone()]})).unwrap()[0].available_bytes,
+        parse_disks(json!({"disks":[zero.clone()]})).unwrap()[0].available_bytes,
         Some(0)
     );
     for field in [
@@ -681,7 +706,7 @@ fn disk_list_offline_unknown_capacity_and_zero_are_distinct_current_records() {
     ] {
         let mut partial = zero.clone();
         partial.as_object_mut().unwrap().remove(field);
-        let error = parse_disks(&json!({"disks":[partial]})).unwrap_err();
+        let error = parse_disks(json!({"disks":[partial]})).unwrap_err();
         assert!(error.source.is_some(), "missing {field}");
     }
     for issue in [
@@ -692,7 +717,7 @@ fn disk_list_offline_unknown_capacity_and_zero_are_distinct_current_records() {
         let mut invalid = offline.clone();
         invalid["observation_failure"] = issue;
         assert!(
-            parse_disks(&json!({"disks":[invalid]}))
+            parse_disks(json!({"disks":[invalid]}))
                 .unwrap_err()
                 .source
                 .is_some()
@@ -700,7 +725,7 @@ fn disk_list_offline_unknown_capacity_and_zero_are_distinct_current_records() {
     }
     let mut extra = zero;
     extra["root"] = "/private".into();
-    assert!(parse_disks(&json!({"disks":[extra]})).is_err());
+    assert!(parse_disks(json!({"disks":[extra]})).is_err());
 }
 
 #[test]
@@ -709,7 +734,7 @@ fn server_offline_disk_vector_preserves_known_zero_and_unavailable_rows() {
         "../../../../../test/server/fixtures/offline-file-manager-disks.json"
     ))
     .unwrap();
-    let disks = parse_disks(&value).unwrap();
+    let disks = parse_disks(value).unwrap();
     assert_eq!(disks.len(), 2);
     assert_eq!(disks[0].slot_id, "P01");
     assert!(disks[0].online);

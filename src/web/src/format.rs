@@ -12,7 +12,7 @@ pub fn bytes(value: u64) -> String {
         n /= 1024.;
         index += 1;
     }
-    format!("{n:.1} {}", units[index.saturating_sub(1)])
+    format!("{n:.1} {}", units[index - 1])
 }
 pub fn parse_u64(v: &Value) -> Option<u64> {
     match v {

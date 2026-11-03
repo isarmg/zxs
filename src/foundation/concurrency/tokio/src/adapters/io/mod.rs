@@ -1,13 +1,13 @@
 //! Helpers for IO related tasks.
 //!
-//! The stream types are often used in combination with hyper or reqwest, as they
-//! allow converting between a hyper [`Body`] and [`AsyncRead`].
+//! Use `ReaderStream` to turn an [`AsyncRead`] into a stream of byte chunks, and
+//! `StreamReader` for the reverse conversion. These adapters work with streams
+//! rather than a particular HTTP client or body type.
 //!
-//! The [`SyncIoBridge`] type converts from the world of async I/O
-//! to synchronous I/O; this may often come up when using synchronous APIs
-//! inside [`tokio::task::spawn_blocking`].
+//! With the `adapters-io-util` feature, `SyncIoBridge` exposes asynchronous I/O
+//! through synchronous I/O traits. It is intended for a synchronous context,
+//! such as a closure passed to `tokio::task::spawn_blocking`.
 //!
-//! [`Body`]: https://docs.rs/hyper/0.13/hyper/struct.Body.html
 //! [`AsyncRead`]: tokio::io::AsyncRead
 
 mod copy_to_bytes;

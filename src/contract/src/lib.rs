@@ -130,17 +130,13 @@ pub mod optional_u64_string {
 }
 
 pub mod u64_string_map {
-    use data_serialization::{Deserialize, Deserializer, Serialize, Serializer};
+    use data_serialization::{Deserialize, Deserializer, Serializer};
     use std::collections::BTreeMap;
     pub fn serialize<S: Serializer>(
         value: &BTreeMap<String, u64>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        value
-            .iter()
-            .map(|(key, value)| (key, value.to_string()))
-            .collect::<BTreeMap<_, _>>()
-            .serialize(serializer)
+        serializer.collect_map(value.iter().map(|(key, value)| (key, value.to_string())))
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,

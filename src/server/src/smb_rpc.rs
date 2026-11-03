@@ -4,9 +4,10 @@ use crate::{
     ApiError, Backend, Content,
     auth::{AuthReader, AuthStore, Identity},
 };
+use data_serialization::Serialize;
 use json_codec::{Value, json};
 use smb_protocol::protocol::{
-    FrameStream, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, Request, Response,
+    FrameStream, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, Request, Response, ResponsePayload,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -45,6 +46,27 @@ pub(crate) use workers::{ConnectionRegistry, ConnectionShutdown};
 #[cfg(all(test, feature = "core"))]
 #[path = "../../../test/server/unit/smb_rpc/tests.rs"]
 mod tests;
+
+#[derive(Debug)]
+enum Reply {
+    Json(Value),
+    Read(bytes::Bytes),
+}
+
+impl Serialize for Reply {
+    fn serialize<S: data_serialization::Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Json(value) => value.serialize(serializer),
+            Self::Read(bytes) => smb_protocol::protocol::ReadResult {
+                bytes: bytes.as_ref(),
+            }
+            .serialize(serializer),
+        }
+    }
+}
 
 struct Shared {
     backend: Arc<dyn Backend>,

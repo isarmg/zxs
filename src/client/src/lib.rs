@@ -92,6 +92,7 @@ impl std::fmt::Debug for Session {
 }
 
 /// A backup update whose policy generation, scope identity, and operation remain explicit.
+/// `expected_generation` is the read response's own `generation`, not `effective_generation`.
 #[derive(Clone, Copy, Debug)]
 pub struct BackupConfigurationRequest<'a> {
     pub repository_id: &'a str,
@@ -232,6 +233,7 @@ impl Client {
         .await
     }
     /// Inspect frozen directory compositions without changing the shared default.
+    /// `None` selects all scopes; `Some("")` selects the root scope only.
     pub async fn directory_branches(
         &self,
         repository: &str,
@@ -249,6 +251,7 @@ impl Client {
     }
 
     /// Submit explicit source/target branch mappings as one idempotent operation.
+    /// Preserve the operation ID and every frozen source/target identity for a retry.
     pub async fn directory_namespace_batch(
         &self,
         slot: &str,
@@ -283,6 +286,8 @@ impl Client {
         )
         .await
     }
+    /// Create a branch from the explicit node and its body version, without selecting it.
+    /// The server checks that the node belongs to the file and references `version`.
     pub async fn create_file_branch_from_node(
         &self,
         file: &str,
@@ -294,6 +299,8 @@ impl Client {
         self.request("POST",&format!("/api/file-manager/files/{}/branches",segment(file)),
             Some(&json!({"source_version_id":version,"source_node_id":node,"name":name,"operation_id":operation_id}))).await
     }
+    /// Set a path, tag, or merge node's independent note; an empty note clears it.
+    /// This does not edit a content version's note or create a new node.
     pub async fn set_file_path_note(
         &self,
         file: &str,
@@ -313,6 +320,8 @@ impl Client {
         .await
     }
     /// Merge reviewed public file-branch heads into one explicitly owned result.
+    /// Calling this method submits `confirmed: true`; obtain user confirmation first.
+    /// No repository/path precondition is sent. Preserve all inputs for a retry.
     pub async fn merge_file_branches(
         &self,
         file: &str,
@@ -324,6 +333,8 @@ impl Client {
         self.request("POST", &format!("/api/file-manager/files/{}/merge", segment(file)),
             Some(&json!({"inputs":inputs,"chosen_node_id":chosen_node,"surviving_branch_id":surviving_branch,"confirmed":true,"operation_id":operation_id}))).await
     }
+    /// Apply tag deltas to explicit source nodes with their expected branch heads.
+    /// No repository/path precondition is sent. Preserve all inputs for a retry.
     pub async fn update_file_node_tags(
         &self,
         file: &str,
@@ -339,6 +350,7 @@ impl Client {
         )
         .await
     }
+    /// Read backup policy and scope identities; an empty path selects the repository root.
     pub async fn backup_configuration(&self, repository: &str, path: &str) -> Result<Value, Error> {
         self.request(
             "GET",
@@ -351,6 +363,8 @@ impl Client {
         )
         .await
     }
+    /// Submit the caller's scope and own-policy generation without refreshing either.
+    /// Preserve the operation ID and the full request after an uncertain response.
     pub async fn configure_backups(
         &self,
         request: BackupConfigurationRequest<'_>,

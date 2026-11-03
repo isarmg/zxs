@@ -45,7 +45,7 @@ fn nullable_issue<'de, D: Deserializer<'de>>(
     Option::deserialize(deserializer)
 }
 
-pub(crate) fn parse_disks(value: &Value) -> Result<Vec<Disk>, crate::api::Error> {
+pub(crate) fn parse_disks(value: Value) -> Result<Vec<Disk>, crate::api::Error> {
     let parsed = DiskList::deserialize(value).and_then(|list| {
         list.disks
             .into_iter()

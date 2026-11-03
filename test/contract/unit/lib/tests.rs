@@ -47,6 +47,117 @@ fn full_width_wire_integers_roundtrip_without_float_or_precision_loss() {
     }
 }
 
+struct DecimalMap<'a>(&'a std::collections::BTreeMap<String, u64>);
+impl Serialize for DecimalMap<'_> {
+    fn serialize<S: data_serialization::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        crate::u64_string_map::serialize(self.0, serializer)
+    }
+}
+
+#[test]
+fn decimal_map_stream_preserves_wire_bytes_hashes_and_tracked_state() {
+    use std::collections::BTreeMap;
+    let cases = [
+        BTreeMap::new(),
+        BTreeMap::from([("P01".into(), u64::MAX)]),
+        BTreeMap::from([
+            ("".into(), 0),
+            ("quote\"slash\\\n".into(), 1),
+            ("é".into(), (1 << 53) - 1),
+            ("e\u{301}".into(), 1 << 53),
+            ("\u{e000}".into(), (1 << 53) + 1),
+            ("😀".into(), u64::MAX),
+        ]),
+        (0..1024)
+            .map(|index| (format!("scope-{index:04}"), u64::MAX - index))
+            .collect(),
+    ];
+    for map in cases {
+        // Keep the former intermediate map only as an independent wire oracle.
+        let previous: BTreeMap<_, _> = map
+            .iter()
+            .map(|(key, value)| (key, value.to_string()))
+            .collect();
+        let actual = DecimalMap(&map);
+        assert_eq!(
+            json_codec::to_vec(&actual).unwrap(),
+            json_codec::to_vec(&previous).unwrap()
+        );
+        assert_eq!(
+            json_codec::to_string_pretty(&actual).unwrap(),
+            json_codec::to_string_pretty(&previous).unwrap()
+        );
+        assert_eq!(
+            canonical_json(&actual).unwrap(),
+            canonical_json(&previous).unwrap()
+        );
+        assert_eq!(
+            object_hash("state-page", &actual).unwrap(),
+            object_hash("state-page", &previous).unwrap()
+        );
+        let state = State {
+            directory_selection_generations: map.clone().into(),
+            file_selection_generations: map.clone().into(),
+            ..State::default()
+        };
+        let mut expected = json_codec::to_value(State::default()).unwrap();
+        if !map.is_empty() {
+            let values = json_codec::to_value(&previous).unwrap();
+            expected["directory_selection_generations"] = values.clone();
+            expected["file_selection_generations"] = values;
+        }
+        let bytes = canonical_json(&state).unwrap();
+        assert_eq!(bytes, canonical_json(&expected).unwrap());
+        assert_eq!(decode_strict::<State>(&bytes).unwrap(), state);
+    }
+}
+
+#[test]
+fn decimal_map_stream_preserves_writer_failures_and_partial_bytes() {
+    use std::{collections::BTreeMap, io};
+    struct BoundedWriter {
+        bytes: Vec<u8>,
+        limit: usize,
+    }
+    impl io::Write for BoundedWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let remaining = self.limit - self.bytes.len();
+            if remaining == 0 {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "fixture limit"));
+            }
+            let written = bytes.len().min(remaining);
+            self.bytes.extend_from_slice(&bytes[..written]);
+            Ok(written)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let map = BTreeMap::from([("a".into(), 0), ("中".into(), u64::MAX)]);
+    let previous: BTreeMap<_, _> = map
+        .iter()
+        .map(|(key, value)| (key, value.to_string()))
+        .collect();
+    let expected = json_codec::to_vec(&previous).unwrap();
+    for limit in 0..expected.len() {
+        let writer = || BoundedWriter {
+            bytes: Vec::new(),
+            limit,
+        };
+        let mut before = writer();
+        let before_error = json_codec::to_writer(&mut before, &previous).unwrap_err();
+        let mut after = writer();
+        let after_error = json_codec::to_writer(&mut after, &DecimalMap(&map)).unwrap_err();
+        assert_eq!(after.bytes, before.bytes, "limit={limit}");
+        assert_eq!(after.bytes, expected[..limit], "limit={limit}");
+        assert_eq!(after_error.io_error_kind(), Some(io::ErrorKind::BrokenPipe));
+        assert_eq!(after_error.to_string(), before_error.to_string());
+    }
+}
+
 #[test]
 fn persisted_workspace_requires_explicit_purpose_without_changing_current_bytes() {
     for purpose in ["normal", "historical_branch"] {

@@ -74,53 +74,45 @@
 //! [alloc]: https://doc.rust-lang.org/alloc/
 //! [std]: https://doc.rust-lang.org/std/
 //!
-//! ## "serde"
+//! ## "serialization"
 //!
-//! Uses [`serde`] to implement the `Serialize` and
-//! `Deserialize` traits.
+//! Uses the local `data-serialization` component to implement the
+//! `Serialize` and `Deserialize` traits.
 //!
 //! For human readable formats (e.g. JSON) the `IpNet`, `Ipv4Net`, and
 //! `Ipv6Net` types will serialize to their `Display` strings.
 //!
-//! For compact binary formats (e.g. Bincode) the `Ipv4Net` and
-//! `Ipv6Net` types will serialize to a string of 5 and 17 bytes that
-//! consist of the network address octets followed by the prefix
-//! length. The `IpNet` type will serialize to an Enum with the V4 or V6
-//! variant index prepending the above string of 5 or 17 bytes.
+//! For non-human-readable formats, `Ipv4Net` and `Ipv6Net` serialize
+//! as tuples of 5 and 17 `u8` elements: address octets followed by the
+//! prefix length. `IpNet` uses a newtype enum variant, `V4` (index 0)
+//! or `V6` (index 1), containing the corresponding tuple. The format
+//! determines the byte encoding of tuples and enum discriminants;
+//! these data-model shapes do not guarantee a particular byte layout.
 //!
-//! [`serde`]: https://serde.rs
+//! Deserialization parses the display string or validates the tuple's
+//! prefix length with the corresponding network constructor.
 //!
-//! ## "heapless" [^1]
+//! ## Provider-backed feature limitations
 //!
-//! Uses [`heapless`] to optimize serialization performance by avoiding
-//! dynamic allocations.
+//! The local manifest still declares `heapless`, `ser_as_str`,
+//! `schemars08`, `schemars1`, `json`, and `schemars`, but does not supply
+//! the `heapless` or schema-provider dependencies. Their provider-backed
+//! behavior requires a separate feature-design decision.
 //!
-//! [`heapless`]: https://docs.rs/heapless/latest/heapless/
+//! `heapless` currently enables only `serialization`; it neither enables
+//! `ser_as_str` nor guarantees allocation-free formatting. Without
+//! `ser_as_str`, human-readable serialization delegates to the format's
+//! `Serializer::collect_str` implementation.
 //!
-//! ## "schemars08"
+//! `ser_as_str` alone does not enable `serialization`. Combining them
+//! selects code that requires the absent `heapless` provider and cannot
+//! currently compile.
 //!
-//! Uses [`schemars@0.8.*`] to implement the `JsonSchema` trait.
-//!
-//! [`schemars@0.8.*`]: https://docs.rs/schemars/0.8/schemars/
-//!
-//! ## "schemars1"
-//!
-//! Uses [`schemars@1.*`] to implement the `JsonSchema` trait.
-//!
-//! [`schemars@1.*`]: https://docs.rs/schemars/1/schemars/
-//!
-//! ## Legacy features
-//!
-//! The following features are set to be removed in the next major
-//! release. Use the provided analogs instead.
-//!
-//! | Name         | Analog                   | Reason for removal                                              |
-//! | ------------ | ------------------------ | --------------------------------------------------------------- |
-//! | `json` [^1]  | `schemars08` and `serde` | Unconventional naming.                                          |
-//! | `ser_as_str` | `heapless` [^1]          | Doesn't enable the `serde` feature but does nothing on its own. |
-//! | `schemars`   | `schemars08`             | Replaced by `schemars08`.                                       |
-//!
-//! [^1]: Enabling these features will also enable the `serde` feature.
+//! `schemars08` and `schemars1` require their absent schema providers.
+//! `schemars` enables `schemars08`, while `json` enables `schemars08`
+//! and `serialization`; these combinations cannot currently compile
+//! either. No schema support or provider replacement is implied by
+//! the declared flags.
 //!
 
 #![no_std]

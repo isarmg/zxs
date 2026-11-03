@@ -123,8 +123,9 @@
 //! task is signalled to shut down next time it yields at an `.await` point. If
 //! the task is already idle, then it will be shut down as soon as possible
 //! without running again before being shut down. Additionally, shutting down a
-//! Tokio runtime (e.g. by returning from `#[tokio::main]`) immediately cancels
-//! all tasks on it.
+//! Tokio runtime (e.g. by returning from `#[tokio::main]`) also cancels its
+//! asynchronous tasks. A task that is already running continues until it yields
+//! back to the runtime.
 //!
 //! When tasks are shut down, it will stop running at whichever `.await` it has
 //! yielded at. All local variables are destroyed by running their destructor.

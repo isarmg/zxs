@@ -64,7 +64,6 @@ pin_project! {
     /// [`Handle`]: struct@tokio::runtime::Handle
     /// [`Runtime::handle()`]: fn@tokio::runtime::Runtime::handle
     /// [`RuntimeExt`]: trait@tokio::adapters::context::RuntimeExt
-    /// [`new_static`]: fn@Self::new_static
     /// [`sleep`]: fn@tokio::time::sleep
     /// [current thread]: fn@tokio::runtime::Builder::new_current_thread
     /// [enables time]: fn@tokio::runtime::Builder::enable_time
@@ -80,8 +79,8 @@ impl<F> TokioContext<F> {
     /// Associate the provided future with the context of the runtime behind
     /// the provided `Handle`.
     ///
-    /// This constructor uses a `'static` lifetime to opt-out of checking that
-    /// the runtime still exists.
+    /// The future does not need to be `'static`. You must keep the runtime alive
+    /// until the future has finished executing.
     ///
     /// # Examples
     ///

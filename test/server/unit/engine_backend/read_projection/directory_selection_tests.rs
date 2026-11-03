@@ -132,3 +132,90 @@ fn bounded_selection_freezes_only_requested_facts_and_rechecks_current_baselines
     drop(backend);
     assert_eq!(json_codec::to_value(response).unwrap(), expected);
 }
+
+#[test]
+fn bounded_selection_preserves_multiple_source_order_and_empty_queries() {
+    let (_root, mut engine, repo, _) = fixture();
+    save_projection_file(&mut engine, &repo.main_branch_id, "Café.txt", b"content");
+    engine
+        .initialize_directory_scope(
+            &repo.repository_id,
+            None,
+            "owner",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    engine
+        .create_directory_branches(
+            &repo.repository_id,
+            None,
+            &storage_contract::BranchName::parse("frozen").unwrap(),
+            "owner",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let mut branches = engine
+        .state()
+        .directory_branches
+        .values()
+        .collect::<Vec<_>>();
+    branches.reverse();
+    assert_eq!(branches.len(), 2);
+    let entry = &branches[0].entries[0];
+    let query = |source_count, select_entry, stale: Option<usize>| {
+        ReadDirectorySelection::parse(
+            repo.repository_id.clone(),
+            "",
+            branches
+                .iter()
+                .take(source_count)
+                .enumerate()
+                .map(|(index, branch)| DirectorySelectionSourceInput {
+                    directory_branch_id: branch.directory_branch_id.clone(),
+                    expected_tree_id: if stale == Some(index) {
+                        "stale-tree".into()
+                    } else {
+                        branch.head_tree_id.clone()
+                    },
+                })
+                .collect(),
+            if select_entry {
+                vec![DirectorySelectionEntryInput {
+                    entry_id: entry.entry_id.clone(),
+                    path: "CAFE\u{301}.txt".into(),
+                }]
+            } else {
+                vec![]
+            },
+        )
+        .unwrap()
+    };
+    for (source_count, select_entry) in [(2, true), (2, false), (0, true), (0, false)] {
+        let request = query(source_count, select_entry, None);
+        let snapshot = crate::engine_backend::directory_selection::read(&engine, &request).unwrap();
+        assert_eq!(snapshot.branches.len(), source_count);
+        for (actual, expected) in snapshot.branches.iter().zip(&branches) {
+            assert_eq!(
+                actual.summary.directory_branch_id,
+                expected.directory_branch_id
+            );
+            assert_eq!(actual.entries.len(), usize::from(select_entry));
+            if select_entry {
+                assert_eq!(actual.entries[0].entry_id, entry.entry_id);
+                assert_eq!(actual.entries[0].path, "Café.txt");
+                assert_eq!(actual.entries[0].selected_path, "CAFE\u{301}.txt");
+            }
+        }
+    }
+    for stale_index in 0..branches.len() {
+        let request = query(2, true, Some(stale_index));
+        let error = crate::engine_backend::directory_selection::read(&engine, &request)
+            .err()
+            .unwrap();
+        assert_eq!(error.code, storage_contract::ErrorCode::ListingChanged);
+        assert_eq!(
+            error.message,
+            "source scope changed; refresh before preparing a batch"
+        );
+    }
+}

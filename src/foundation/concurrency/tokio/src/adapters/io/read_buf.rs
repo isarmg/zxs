@@ -10,9 +10,11 @@ use crate::io::AsyncRead;
 ///
 /// # Example
 ///
+/// This example uses the `utilities` feature of the `futures` crate.
+///
 /// ```
 /// use bytes::{Bytes, BytesMut};
-/// use tokio_stream as stream;
+/// use futures::stream;
 /// use tokio::io::Result;
 /// use tokio::adapters::io::{StreamReader, read_buf};
 /// # #[tokio::main(flavor = "current_thread")]

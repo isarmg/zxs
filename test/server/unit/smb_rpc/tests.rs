@@ -895,11 +895,15 @@ fn open_file(session: &mut Session, writable: bool) -> (OpenResult, File) {
     )
 }
 
+fn json_reply(reply: Reply) -> Value {
+    let Reply::Json(value) = reply else {
+        panic!("expected an ordinary JSON reply");
+    };
+    value
+}
+
 fn read_session(session: &mut Session, handle: u64, offset: u64, length: u32) -> Vec<u8> {
-    let result = session.read(handle, offset, length).unwrap();
-    json_codec::from_value::<smb_protocol::protocol::ReadResult>(result)
-        .unwrap()
-        .bytes
+    session.read(handle, offset, length).unwrap().to_vec()
 }
 
 fn read_rpc(wire: &mut FrameStream, handle: u64, offset: u64, length: u32) -> Vec<u8> {
@@ -1796,6 +1800,7 @@ fn listing_uses_portable_lookup_keys_and_rejects_files_or_missing_directories() 
                 restart: false,
             })
             .unwrap();
+        let listed = json_reply(listed);
         let entries = listed["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["entry"]["name"], expected_name);

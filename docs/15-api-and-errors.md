@@ -62,7 +62,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `POST /api/file-manager/disks/{slot}/directory-select` | 同结构请求；选择完整冻结目录子树，恢复成员、名称、层级及精确节点；不要求后代有同名文件分支 |
 | `GET /api/file-manager/files/{file}/history` | 当前根上的统一节点窗口及有界父边预览；可成对传入 repository_id/path 区分别名，支持 limit/cursor 或精确 anchor_node_id |
 | `POST /api/file-manager/files/{file}/branches` | 从选定版本登记公共文件分支；可传 source_node_id 固定路径节点来源，不复制正文或新增节点 |
-| `PATCH /api/file-manager/files/{file}/nodes/{node}` | 设置路径节点独立备注，最多128 UTF-8字节；不改正文备注或新增节点 |
+| `PATCH /api/file-manager/files/{file}/nodes/{node}` | 设置路径、标签或合并节点的独立备注，最多128 UTF-8字节；空字符串清空，不改正文备注或新增节点 |
 | `PATCH /api/file-manager/files/{file}/branches/{branch}` | 修改公共文件分支标签，最多128 UTF-8字节；同文件内规范化名称唯一，不增加版本或目录子树 |
 | `POST /api/file-manager/files/{file}/select` | 选择此文件的分支；传入 repository_id/path 时只改变该逻辑别名，不改变其他路径 |
 | `POST /api/file-manager/files/{file}/metadata` | 设置或清空文件容器备注，最多 128 UTF-8 字节，禁止换行及控制字符 |
@@ -373,13 +373,13 @@ HTTP 状态描述本次调用，operation 的终态描述原业务请求，二�
 
 `GET /api/workspaces/capacity` 要求当前有效会话，返回 `WorkspaceCapacity`：
 
-- `principal` 仅统计当前授权身份的保留记录和元数据预留量；`records` 与 `metadata_bytes` 各包含 `used`、`limit`、`remaining`，全部为规范 UInt64 十进制字符串。
+- `principal` 仅统计当前授权身份的预算；两个 scope 的 `records` 只计未冷存的驻留记录，`cold_records` 为冷存记录数，`metadata_bytes` 包含冷热清单及生命周期预留。`records` 与 `metadata_bytes` 各包含 `used`、`limit`、`remaining`，这些值与 `cold_records` 全部为规范 UInt64 十进制字符串。
 - `global` 与 `principal` 均必填且不得为 null，分别返回全池汇总和唯一管理员的主体预算。现有响应字段、每主体及全池上限均保留，不扩大容量；请求参数不能指定另一主体。
 - `warning` 为 `ok`、`near_limit`（全池或主体的任一预算达到 80%）或 `exhausted`。`remaining` 下限为零。
-- `automatic_retirement` 固定为 `false`。提交、终止及过期记录仍占用保留证据预算；本接口不删除证据、不修改预算，也不承诺下一次写入一定获准。后端不支持时返回 501。
+- 当前 Engine 的 `automatic_retirement` 为 `true`，仅表示[工作区生命周期合同](19-capacity-and-performance.md)规定的受限冷存能力，不表示自动删除证据；冷存记录仍计入元数据字节预算。本接口只读，不修改预算，也不承诺下一次写入一定获准。后端不支持时返回 501。
 
 ### 引擎错误到 HTTP 的现行映射登记
 
-服务器集中登记现有内部错误别名与公开 HTTP 状态，并测试别名唯一性、目标状态登记、重试语义和 500 诊断遮蔽。`RESOURCE_LIMIT → RESOURCE_LIMIT_EXCEEDED` 等转换是边界适配，不意味着每个内部错误码均为公共契约。未列入显式状态表的码仍保留原有 400 兼容行为，`NOT_FOUND` 与 `_NOT_FOUND` 后缀仍映射 404；这不是全量内部错误码白名单，也尚未形成全仓新增错误码穷尽门禁。
+服务器以共享的封闭 `ErrorCode` 对内部错误别名与公开 HTTP 状态作穷尽匹配，并测试别名唯一性、目标状态登记、重试语义和 500 诊断遮蔽。`RESOURCE_LIMIT → RESOURCE_LIMIT_EXCEEDED` 等转换是边界适配，不意味着每个内部错误码都会原样成为公开响应。既有 400 与各类 NotFound 的 404 策略由枚举分支显式保留，不再依靠未登记码默认 400 或字符串后缀推断；新增 `ErrorCode` 必须明确别名和状态策略，否则穷尽匹配不能通过编译。该约束限于此类型化映射，不代表所有错误来源及调用路径已完成审阅，详见[类型化错误边界](architecture/error-types.md)。
 
 HTTP Bearer 的认证方案名按 ASCII 不区分大小写；令牌保持原始大小写和字节。重复 Authorization、空令牌及额外空白字段仍被拒绝，不改变 Cookie/CSRF 或原生 SMB 凭据策略。

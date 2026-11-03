@@ -15,10 +15,12 @@ pin_project! {
     ///
     /// # Example
     ///
+    /// This example uses the `utilities` feature of the `futures` crate.
+    ///
     /// ```
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() -> std::io::Result<()> {
-    /// use tokio_stream::StreamExt;
+    /// use futures::StreamExt;
     /// use tokio::adapters::io::ReaderStream;
     ///
     /// // Create a stream of data.

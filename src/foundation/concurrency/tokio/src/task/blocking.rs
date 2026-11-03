@@ -148,10 +148,11 @@ cfg_rt! {
     /// `blocking_recv` methods for use in non-async code such as the thread created
     /// by `spawn_blocking`.
     ///
-    /// Another option is [`SyncIoBridge`] for cases where the synchronous context
-    /// is operating on byte streams.  For example, you might use an asynchronous
-    /// HTTP client such as [hyper] to fetch data, but perform complex parsing
-    /// of the payload body using a library written for synchronous I/O.
+    /// Another option is `tokio::adapters::io::SyncIoBridge`, available with the
+    /// `adapters-io-util` feature, for cases where the synchronous context is
+    /// operating on byte streams. For example, you might use an asynchronous
+    /// HTTP client to fetch data, but perform complex parsing of the payload
+    /// body using a library written for synchronous I/O.
     ///
     /// Finally, see also [Bridging with sync code][bridgesync] for discussions
     /// around the opposite case of using Tokio as part of a larger synchronous
@@ -161,8 +162,6 @@ cfg_rt! {
     /// [blocking]: ../index.html#cpu-bound-tasks-and-blocking-code
     /// [rayon]: https://docs.rs/rayon
     /// [`mpsc channel`]: crate::sync::mpsc
-    /// [`SyncIoBridge`]: https://docs.rs/tokio-util/latest/tokio_util/io/struct.SyncIoBridge.html
-    /// [hyper]: https://docs.rs/hyper
     /// [`thread::spawn`]: fn@std::thread::spawn
     /// [`shutdown_timeout`]: fn@crate::runtime::Runtime::shutdown_timeout
     /// [bridgesync]: https://tokio.rs/tokio/topics/bridging

@@ -48,6 +48,11 @@ name = "tinystr"
 path = "src/lib.rs"
 bench = false
 
+[[test]]
+name = "serialization_contract"
+path = "../../../../test/foundation/tinystr/tests/serialization_contract.rs"
+required-features = ["serialization"]
+
 [dependencies.displaydoc]
 version = "0.2.3"
 default-features = false

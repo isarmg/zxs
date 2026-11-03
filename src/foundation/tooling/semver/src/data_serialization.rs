@@ -67,7 +67,7 @@ impl<'de> Deserialize<'de> for VersionReq {
             type Value = VersionReq;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("semver version")
+                formatter.write_str("semver version requirement")
             }
 
             fn visit_str<E>(self, string: &str) -> Result<Self::Value, E>

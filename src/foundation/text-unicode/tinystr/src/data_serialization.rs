@@ -54,10 +54,10 @@ impl<'de, const N: usize> Visitor<'de> for TinyAsciiStrVisitor<N> {
     {
         let mut bytes = [0u8; N];
         let mut zeroes = false;
-        for out in &mut bytes.iter_mut().take(N) {
+        for (index, out) in bytes.iter_mut().enumerate() {
             let byte = seq
                 .next_element()?
-                .ok_or_else(|| Error::invalid_length(N, &self))?;
+                .ok_or_else(|| Error::invalid_length(index, &self))?;
             if byte == 0 {
                 zeroes = true;
             } else if zeroes {
@@ -92,7 +92,7 @@ impl<'de, const N: usize> Deserialize<'de> for TinyAsciiStr<N> {
                 where
                     E: Error,
                 {
-                    TinyAsciiStr::try_from_str(v).map_err(|_| Error::custom("invalid str"))
+                    TinyAsciiStr::try_from_str(v).map_err(Error::custom)
                 }
             }
             deserializer.deserialize_str(HumanVisitor::<N>)

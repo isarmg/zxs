@@ -61,7 +61,7 @@ pub(crate) fn load_disks(state: RwSignal<State>) {
     spawn_local(async move {
         let result = api::request("GET", "/api/file-manager/disks", None)
             .await
-            .and_then(|value| super::super::model::parse_disks(&value));
+            .and_then(super::super::model::parse_disks);
         match state.try_update(|s| complete_disk_load(s, epoch, generation, result)) {
             Some(Ok(true)) => load_disks(state),
             Some(Err(error)) => fail_in(

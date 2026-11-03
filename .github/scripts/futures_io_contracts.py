@@ -12,7 +12,7 @@ import tempfile
 
 SUITES = {
     'seek-relative': ('foundation-futures-seek-relative.rs', ['io'], 14),
-    'string-retention': ('foundation-futures-string-retention.rs', ['io'], 16),
+    'string-retention': ('foundation-futures-string-retention.rs', ['io'], 19),
     'stable-bytes': ('foundation-futures-stable-bytes.rs', ['io', 'sink'], 8),
     'write-zero': ('foundation-futures-write-zero.rs', ['io', 'sink'], 9),
 }
@@ -30,6 +30,7 @@ IDENTITY = (
     'src/foundation/concurrency/futures/src/io/buf_reader.rs',
     'src/foundation/concurrency/futures/src/io/read_to_string.rs',
     'src/foundation/concurrency/futures/src/io/read_line.rs',
+    'src/foundation/concurrency/futures/src/io/lines.rs',
     'src/foundation/concurrency/futures/src/io/into_sink.rs',
     *(f'test/ci/fixtures/{recipe[0]}' for recipe in SUITES.values()),
     *(f'test/ci/fixtures/{filename}' for _, filename, _ in REJECTIONS),
@@ -127,4 +128,4 @@ def check(root, temporary, target_dir):
     summary = {'schema': 1, 'commit': commit, 'dirty': dirty, 'rustc': toolchain,
                'source_sha256': before, 'target': TARGET, 'suites': results, 'rejections': rejections}
     (evidence / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
-    print(f'Futures IO contracts passed: 4 suites, 47 tests, 2 compile rejections; evidence: {evidence}', flush=True)
+    print(f'Futures IO contracts passed: 4 suites, 50 tests, 2 compile rejections; evidence: {evidence}', flush=True)

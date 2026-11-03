@@ -32,4 +32,20 @@ cargo test --locked --offline -p storage-client
 
 HTTP 回归使用临时目录和本机随机端口，不访问已运行用户池，不代替 Linux 文件系统故障、跨浏览器或 SMB 客户端设备验收。
 
-客户端还提供 `merge_file_branches`、`update_file_node_tags`、`backup_configuration` 与 `configure_backups`。文件合并绑定每个参与分支的精确节点head及用户明确选择的结果/归属，标签批量操作固定源节点与分支head，备份配置固定scope身份和代数；重试保持原operation_id和全部输入。目录分支合并待用户确认，暂不实现且无业务入口。
+## 业务便利入口
+
+这些方法只构造并发送当前协议请求，不自动重新读取基线、生成 operation_id 或重试；当前身份、对象归属、名称／路径与动态冲突仍由服务端准入。写入响应不确定时，先按原 operation_id 查询；如重试，保持原身份、operation_id 和全部输入，不能用新读到的 head、scope 或代数替换原请求。通用 `request` 可用于便利方法未表达的当前协议字段，不提供旧格式兼容。
+
+| 方法 | 调用合同 |
+| --- | --- |
+| `directory_branches` | 只读冻结目录分支，不切换默认分支；`path: None` 查询所有 scope，`Some("")` 只查询根，非空 path 查询指定目录 |
+| `directory_namespace_batch` | 原样发送显式源／目标目录分支、冻结 tree 与条目身份，并绑定调用方 operation_id；不自动解析或补齐映射 |
+| `rename_file_branch` | 修改指定公共文件分支标签，不修改内容或当前选择 |
+| `create_file_branch_from_node` | 同时固定节点与正文 version；服务端检查二者属于同一文件且正文对应，不自动选择新分支 |
+| `set_file_path_note` | 名称保留，但也接受标签／合并元数据节点；空字符串显式清空该节点备注，不修改正文版本备注或新增节点 |
+| `merge_file_branches` | 固定每个输入分支 head、所选结果与归属分支；调用即发送 `confirmed:true`，调用方须先取得用户明确确认 |
+| `update_file_node_tags` | 固定每个源节点、关联分支与预期 head，发送 add/remove 增量，不改写调用方输入 |
+| `backup_configuration` | 读取指定路径的自身／有效策略与 scope；空路径表示仓库根 |
+| `configure_backups` | 固定原 scope 与**自身 `generation`**（不是 `effective_generation`）；总份数包含主盘，备份前缀原样发送，代数编码为规范十进制字符串 |
+
+`merge_file_branches` 与 `update_file_node_tags` 不发送 `repository_id/path` 条件；核心将这一缺省位置明确绑定为 `location:null` 的摘要，不能将其理解成对某个逻辑路径的条件写入。需要位置约束时，通过 `request` 同时发送这两个字段，并在重试时保持它们不变。详见[请求摘要与幂等](../15-api-and-errors.md#s15-07)。目录分支合并待用户确认，暂不实现且无业务入口。

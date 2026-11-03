@@ -22,7 +22,10 @@ use crate::util::IdleNotifiedSet;
 ///
 /// All of the tasks must have the same return type `T`.
 ///
-/// When the `JoinSet` is dropped, all tasks in the `JoinSet` are immediately aborted.
+/// When the `JoinSet` is dropped, it requests cancellation of all tasks in the set
+/// without waiting for them to finish. Tasks spawned with `spawn_blocking` cannot
+/// be cancelled once they have started. To request cancellation and wait for all
+/// tasks to finish, use `JoinSet::shutdown`.
 ///
 /// # Examples
 ///

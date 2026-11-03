@@ -45,6 +45,7 @@ class SerializationGateTests(unittest.TestCase):
     def test_manifest_features_match_internal_packages(self):
         for no_std in (False, True):
             dependencies = tomllib.loads(CHECKER['manifest'](ROOT, no_std))['dependencies']
+            self.assertEqual('semver' in dependencies, not no_std)
             for name, dependency in dependencies.items():
                 package = tomllib.loads((Path(dependency['path']) / 'Cargo.toml').read_text())
                 self.assertEqual(package['package']['name'], name)

@@ -38,7 +38,7 @@ pub(crate) struct Context {
     trace_leaf_fn: Cell<Option<NonNull<dyn FnMut(&TraceMeta)>>>,
 }
 
-/// A [`Frame`] in an intrusive, doubly-linked tree of [`Frame`]s.
+/// A [`Frame`] linked to its parent in a chain of nested `Root` polls.
 struct Frame {
     /// The location associated with this frame.
     inner_addr: *const c_void,
@@ -406,7 +406,7 @@ cfg_rt_multi_thread! {
     use crate::runtime::scheduler::multi_thread::Synced;
     use crate::runtime::scheduler::inject::Shared;
 
-    /// Trace and poll all tasks of the `current_thread` runtime.
+    /// Trace and poll all tasks of the `multi_thread` runtime.
     ///
     /// ## Safety
     ///

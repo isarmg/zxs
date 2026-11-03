@@ -152,7 +152,7 @@ Backend::ready() 不接收身份；HTTP /readyz 与后台 observe_storage_once �
 
 ## 保留工作区容量投影
 
-contract::WorkspaceCapacity 本来就是只读容量响应契约而非持久化记录；现在 Backend::workspace_capacity 返回该投影，engine同锁复核当前身份后使用 current.principal 捕获预算，不经 Value encode。HTTP 只在真实响应边界序列化一次，保留原 management_slots、不接纳query身份选择、全局/当前主体字段、u64文本及 automatic_retirement=false；没有更改核心计数、near-limit规则、永久证据保留或启动配置。
+contract::WorkspaceCapacity 本来就是只读容量响应契约而非持久化记录；现在 Backend::workspace_capacity 返回该投影，engine同锁复核当前身份后使用 current.principal 捕获预算，不经 Value encode。HTTP 只在真实响应边界序列化一次，保留原 management_slots、不接纳query身份选择、全局/当前主体字段及u64文本；这次类型化迁移没有更改核心计数、near-limit规则、永久证据保留或启动配置。当前 Engine 返回 automatic_retirement=true，仅指[现行生命周期合同](../19-capacity-and-performance.md)允许的受限冷存，不删除永久证据；records计驻留记录、cold_records另计冷存记录，metadata_bytes仍包含冷热清单及生命周期预留。
 
 WorkspaceCapacity action 删除，原 management_call JSON桥已无消费者并删除。授权装饰器、排队撤权、forged principal、真实panic、独立管理槽取消和原live-capacity/多session/logout/不可通过query隐藏全局预算测试均走真实typed方法；其它 FileManager/计划/通用读取仍按剩余库存继续，不据此宣称所有动作完成。
 

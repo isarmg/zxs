@@ -27,7 +27,7 @@ fn call(session: &mut Session, sent: &mut Vec<Sent>, request: VfsRequest) -> io:
     sent.push(kind);
     session
         .dispatch(request)
-        .map(|(value, _)| value)
+        .map(|(value, _)| json_reply(value))
         .map_err(|error| io::Error::other(error.error))
 }
 

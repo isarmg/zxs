@@ -356,7 +356,7 @@ impl Session {
         handle: u64,
         offset: u64,
         length: u32,
-    ) -> Result<Value, ApiError> {
+    ) -> Result<bytes::Bytes, ApiError> {
         if length as usize > smb_protocol::protocol::MAX_READ_BYTES {
             return Err(ApiError::limit("SMB read exceeds bounded reply size"));
         }
@@ -374,7 +374,7 @@ impl Session {
             None => unreachable!("invariant: read authorization admitted this handle"),
         };
         if length == 0 || offset >= content.size {
-            return Ok(json!({"bytes":[]}));
+            return Ok(bytes::Bytes::new());
         }
         let cached = self
             .read_cache
@@ -411,6 +411,6 @@ impl Session {
                 bytes
             }
         };
-        Ok(json!({"bytes":bytes.as_ref()}))
+        Ok(bytes)
     }
 }

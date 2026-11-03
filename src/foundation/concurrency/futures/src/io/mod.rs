@@ -782,6 +782,9 @@ pub trait AsyncBufReadExt: AsyncBufRead {
     /// # Errors
     ///
     /// Each line of the stream has the same error semantics as [`AsyncBufReadExt::read_line`].
+    /// If reading a line fails, its already-consumed partial contents are discarded
+    /// and the error is yielded. The next poll continues at the reader's current
+    /// position; consumed bytes are not rolled back or attached to later lines.
     ///
     /// [`AsyncBufReadExt::read_line`]: AsyncBufReadExt::read_line
     ///

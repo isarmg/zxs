@@ -539,3 +539,31 @@ fn raw_and_domain_namespace_requests_preserve_identical_wire_bytes() {
 
 #[path = "mtime_tests.rs"]
 mod mtime_tests;
+
+#[test]
+fn typed_response_envelope_keeps_owned_success_and_error_wire_bytes() {
+    let owned = Response::Ok {
+        result: json_codec::json!({"bytes": [0, 255]}),
+    };
+    let borrowed = ResponsePayload::Ok {
+        result: ReadResult {
+            bytes: &[0_u8, 255][..],
+        },
+    };
+    let expected = br#"{"status":"ok","result":{"bytes":[0,255]}}"#;
+    assert_eq!(json_codec::to_vec(&owned).unwrap(), expected);
+    assert_eq!(json_codec::to_vec(&borrowed).unwrap(), expected);
+    for (operation_id, expected) in [
+        (None, br#"{"status":"error","code":"NOT_FOUND","message":"missing","retryable":false,"operation_id":null}"#.as_slice()),
+        (Some("original".into()), br#"{"status":"error","code":"NOT_FOUND","message":"missing","retryable":false,"operation_id":"original"}"#.as_slice()),
+    ] {
+        let error = Response::Error {
+            code: storage_contract::ErrorCode::NotFound,
+            message: "missing".into(),
+            retryable: false,
+            operation_id,
+        };
+        assert_eq!(json_codec::to_vec(&error).unwrap(), expected);
+        assert!(matches!(storage_contract::decode_strict::<Response>(expected).unwrap(), Response::Error { .. }));
+    }
+}

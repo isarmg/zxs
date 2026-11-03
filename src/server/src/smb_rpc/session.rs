@@ -120,7 +120,7 @@ impl Session {
     pub(super) fn dispatch(
         &mut self,
         request: Request,
-    ) -> Result<(Value, Option<OwnedFd>), DispatchError> {
+    ) -> Result<(Reply, Option<OwnedFd>), DispatchError> {
         let request = request
             .parse_operation_id()
             .map_err(|error| DispatchError {
@@ -166,7 +166,7 @@ impl Session {
     fn dispatch_request(
         &mut self,
         request: Request<OperationId>,
-    ) -> Result<(Value, Option<OwnedFd>), ApiError> {
+    ) -> Result<(Reply, Option<OwnedFd>), ApiError> {
         let value = match request {
             Request::Hello { .. } => return Err(ApiError::invalid("hello is allowed only once")),
             Request::Open {
@@ -176,7 +176,11 @@ impl Session {
                 truncate,
                 exclusive,
                 write_through,
-            } => return self.open(path, writable, create, truncate, exclusive, write_through),
+            } => {
+                return self
+                    .open(path, writable, create, truncate, exclusive, write_through)
+                    .map(|(value, descriptor)| (Reply::Json(value), descriptor));
+            }
             Request::AuthorizeRead { handle } => {
                 self.authorize_read(handle)?;
                 self.handle_metadata(handle)?
@@ -185,7 +189,11 @@ impl Session {
                 handle,
                 offset,
                 length,
-            } => self.read(handle, offset, length)?,
+            } => {
+                return self
+                    .read(handle, offset, length)
+                    .map(|bytes| (Reply::Read(bytes), None));
+            }
             Request::PrepareWrite { handle, end, bytes } => {
                 self.prepare_write(handle, end, bytes)?
             }
@@ -204,6 +212,6 @@ impl Session {
                 operation_id,
             } => self.namespace(kind, path, destination, replace, operation_id)?,
         };
-        Ok((value, None))
+        Ok((Reply::Json(value), None))
     }
 }

@@ -42,7 +42,9 @@
         "utilities"
       ],
       "tests": [
+        "lines_error_discards_partial_before_two_following_lines",
         "lines_invalid_utf8_retains_validation_error_without_asserting_resume_semantics",
+        "lines_pending_then_error_at_eof_preserves_error_not_partial",
         "lines_successful_lf_crlf_and_eof_are_shared_helper_controls",
         "pending_read_to_string_cancel_restores_original_string_after_incomplete_utf8",
         "pending_read_to_string_cancel_restores_original_string_after_valid_bytes",
@@ -57,6 +59,7 @@
         "read_to_string_invalid_utf8_restores_prefix_and_retains_validation_error",
         "read_to_string_success_appends_and_counts_only_new_bytes",
         "read_to_string_valid_partial_io_error_keeps_appended_bytes_and_primary_cause",
+        "standard_lines_discards_failed_partial_before_following_lines",
         "unpolled_read_to_string_preserves_the_original_string_without_reading"
       ]
     },

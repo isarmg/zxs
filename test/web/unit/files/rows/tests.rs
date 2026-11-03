@@ -4,16 +4,25 @@ use json_codec::json;
 use std::cell::Cell;
 
 thread_local! {
-    static PROJECTIONS: Cell<usize> = const { Cell::new(0) };
-    static PROJECTED: Cell<usize> = const { Cell::new(0) };
+    static DROPPED_CONTEXTS: Cell<usize> = const { Cell::new(0) };
+    static DROPPED_ROWS: Cell<usize> = const { Cell::new(0) };
 }
-pub(super) fn record_project(entries: usize) {
-    PROJECTIONS.set(PROJECTIONS.get() + 1);
-    PROJECTED.set(PROJECTED.get() + entries);
+// Observe real projection outputs, including any discarded by memo equality.
+// Each call creates one shared context, including empty pages, and one row per
+// entry. Explicit owner cleanup makes their destruction counts complete.
+impl Drop for RowContext {
+    fn drop(&mut self) {
+        DROPPED_CONTEXTS.set(DROPPED_CONTEXTS.get() + 1);
+    }
+}
+impl Drop for Row {
+    fn drop(&mut self) {
+        DROPPED_ROWS.set(DROPPED_ROWS.get() + 1);
+    }
 }
 fn reset_counts() {
-    PROJECTIONS.set(0);
-    PROJECTED.set(0);
+    DROPPED_CONTEXTS.set(0);
+    DROPPED_ROWS.set(0);
 }
 fn state(entries: Vec<Entry>) -> State {
     let mut state = State {
@@ -52,17 +61,20 @@ fn unrelated_updates_and_query_changes_do_not_reproject_a_server_page() {
                     s.notice = i.to_string();
                     s.files.selected = Some(s.files.entries[i % size].clone());
                     s.files.checked_entries.insert(i.to_string());
-                    s.files.file_history = crate::files::history::tests::history(json!({"history":i}));
+                    s.files.file_history =
+                        crate::files::history::tests::history(json!({"history":i}));
                 });
                 assert_eq!(rows.with_untracked(Vec::len), size);
             }
             state.update(|s| s.files.query = "does not match this page".into());
             assert_eq!(rows.with_untracked(Vec::len), size);
-            assert_eq!((PROJECTIONS.get(), PROJECTED.get()), (1, size));
-            println!(
-                "synthetic_page_entries={size}; unrelated_updates=100; projections=1; projected={size}; query_reprojections=0"
-            );
+            assert_eq!((DROPPED_CONTEXTS.get(), DROPPED_ROWS.get()), (0, 0));
         });
+        owner.cleanup();
+        assert_eq!((DROPPED_CONTEXTS.get(), DROPPED_ROWS.get()), (1, size));
+        println!(
+            "synthetic_page_entries={size}; unrelated_updates=100; projections=1; projected={size}; query_reprojections=0"
+        );
     }
 }
 
@@ -97,7 +109,8 @@ fn server_order_is_preserved_without_local_sorting_or_filtering() {
 
 #[test]
 fn replacing_pages_drops_old_keys_and_projects_only_the_new_response() {
-    Owner::new().with(|| {
+    let owner = Owner::new();
+    owner.with(|| {
         reset_counts();
         let page = |start: usize| {
             (start..start + 200)
@@ -124,11 +137,17 @@ fn replacing_pages_drops_old_keys_and_projects_only_the_new_response() {
             }
         }
         assert_eq!(seen.len(), 1_000);
-        assert_eq!((PROJECTIONS.get(), PROJECTED.get()), (5, 1_000));
+        // The retained keys also own their original page contexts.
+        drop(seen);
+        drop(old);
+        // Four pages are released; the memo still owns the fifth 200-row page.
+        assert_eq!((DROPPED_CONTEXTS.get(), DROPPED_ROWS.get()), (4, 800));
         state.update(|s| s.files.entries = Default::default());
         assert!(rows.with_untracked(Vec::is_empty));
-        assert_eq!((PROJECTIONS.get(), PROJECTED.get()), (6, 1_000));
+        assert_eq!((DROPPED_CONTEXTS.get(), DROPPED_ROWS.get()), (6, 1_000));
     });
+    owner.cleanup();
+    assert_eq!((DROPPED_CONTEXTS.get(), DROPPED_ROWS.get()), (6, 1_000));
 }
 
 #[test]

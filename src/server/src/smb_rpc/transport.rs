@@ -179,16 +179,19 @@ pub(super) fn run_connection(mut stream: FrameStream, shared: Arc<Shared>) -> io
 // a business error instead of tearing down unrelated handles on this stream.
 fn send_success(
     stream: &mut FrameStream,
-    result: Value,
+    result: Reply,
     descriptor: Option<OwnedFd>,
     requested_operation: Option<String>,
 ) -> io::Result<()> {
-    let operation_id = result
-        .get("operation_id")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or(requested_operation);
-    let response = Response::Ok { result };
+    let operation_id = match &result {
+        Reply::Json(value) => value
+            .get("operation_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        Reply::Read(_) => None,
+    }
+    .or(requested_operation);
+    let response = ResponsePayload::Ok { result };
     let payload = json_codec::to_vec(&response).map_err(io::Error::other)?;
     if payload.len() > smb_protocol::protocol::MAX_FRAME_BYTES {
         drop(payload);

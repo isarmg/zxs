@@ -146,7 +146,7 @@ fn renamed_and_replaced_directory_does_not_retarget_the_open_handle() {
         })
         .unwrap();
     assert!(
-        json_codec::from_value::<DirectoryPage>(old)
+        json_codec::from_value::<DirectoryPage>(json_reply(old))
             .unwrap()
             .entries
             .is_empty()

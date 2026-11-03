@@ -108,6 +108,36 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
             )
             .unwrap();
     }
+    // Selection consumes a map keyed by id, not the scope presentation order.
+    // Removing the intermediate presentation sort preserves every map byte.
+    let repository = &engine.state().repositories[&repo.repository_id];
+    for key in [
+        None,
+        Some(""),
+        Some("café"),
+        Some("cafe\u{301}"),
+        Some("missing"),
+    ] {
+        let old: BTreeMap<_, _> =
+            crate::engine_backend::directory_scopes::matching(engine.state(), repository, key)
+                .into_iter()
+                .map(|branch| (branch.directory_branch_id.as_str(), branch))
+                .collect();
+        let new: BTreeMap<_, _> = crate::engine_backend::directory_scopes::matching_unordered(
+            engine.state(),
+            repository,
+            key,
+        )
+        .map(|branch| (branch.directory_branch_id.as_str(), branch))
+        .collect();
+        assert_eq!(
+            json_codec::to_vec(&old).unwrap(),
+            json_codec::to_vec(&new).unwrap()
+        );
+        for (id, branch) in &new {
+            assert!(std::ptr::eq(*branch, old[id]));
+        }
+    }
     let expected = legacy_full(&engine, &repo.repository_id);
     let expected_summary = compact(&expected);
     let (backend, mut auth, token, identity) = authenticated_backend(engine, root.path());

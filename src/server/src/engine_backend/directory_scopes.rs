@@ -7,8 +7,8 @@ use crate::{
 
 pub(super) fn matching<'a>(
     state: &'a storage_contract::State,
-    repository: &Repository,
-    requested_key: Option<&str>,
+    repository: &'a Repository,
+    requested_key: Option<&'a str>,
 ) -> Vec<&'a storage_contract::DirectoryBranch> {
     matching_tables(
         &state.branches,
@@ -25,9 +25,47 @@ pub(super) fn matching_tables<'a>(
     branches: &'a storage_contract::TrackedMap<storage_contract::Branch>,
     commits: &'a storage_contract::TrackedRecords<storage_contract::Commit>,
     directory_branches: &'a storage_contract::TrackedMap<storage_contract::DirectoryBranch>,
-    repository: &Repository,
-    requested_key: Option<&str>,
+    repository: &'a Repository,
+    requested_key: Option<&'a str>,
 ) -> Vec<&'a storage_contract::DirectoryBranch> {
+    let mut branches = matching_rows(
+        branches,
+        commits,
+        directory_branches,
+        repository,
+        requested_key,
+    )
+    .collect::<Vec<_>>();
+    branches.sort_by_key(|branch| {
+        (
+            std::cmp::Reverse(branch.sequence),
+            branch.directory_branch_id.as_str(),
+        )
+    });
+    branches
+}
+
+pub(super) fn matching_unordered<'a>(
+    state: &'a storage_contract::State,
+    repository: &'a Repository,
+    requested_key: Option<&'a str>,
+) -> impl Iterator<Item = &'a storage_contract::DirectoryBranch> {
+    matching_rows(
+        &state.branches,
+        &state.commits,
+        &state.directory_branches,
+        repository,
+        requested_key,
+    )
+}
+
+fn matching_rows<'a>(
+    branches: &'a storage_contract::TrackedMap<storage_contract::Branch>,
+    commits: &'a storage_contract::TrackedRecords<storage_contract::Commit>,
+    directory_branches: &'a storage_contract::TrackedMap<storage_contract::DirectoryBranch>,
+    repository: &'a Repository,
+    requested_key: Option<&'a str>,
+) -> impl Iterator<Item = &'a storage_contract::DirectoryBranch> {
     let requested_directory_id = requested_key.and_then(|key| {
         if key.is_empty() {
             return Some(repository.repository_id.as_str());
@@ -47,26 +85,17 @@ pub(super) fn matching_tables<'a>(
             })
             .map(|entry| entry.entry_id.as_str())
     });
-    let mut branches = directory_branches
-        .values()
-        .filter(|branch| {
-            branch.repository_id == repository.repository_id
-                && requested_key.is_none_or(|key| {
-                    requested_directory_id.map_or_else(
-                        || name_policy::path_key(&branch.path) == key,
-                        |id| branch.directory_id == id,
-                    )
-                })
-        })
-        .collect::<Vec<_>>();
-    branches.sort_by_key(|branch| {
-        (
-            std::cmp::Reverse(branch.sequence),
-            branch.directory_branch_id.as_str(),
-        )
-    });
-    branches
+    directory_branches.values().filter(move |branch| {
+        branch.repository_id == repository.repository_id
+            && requested_key.is_none_or(|key| {
+                requested_directory_id.map_or_else(
+                    || name_policy::path_key(&branch.path) == key,
+                    |id| branch.directory_id == id,
+                )
+            })
+    })
 }
+
 pub(super) fn capture(
     engine: &Engine,
     request: ReadDirectoryScopes<'_>,

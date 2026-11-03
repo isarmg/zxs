@@ -360,13 +360,11 @@ impl State {
     pub(super) fn drop_join_handle_fast(&self) -> Result<(), ()> {
         use std::sync::atomic::Ordering::Relaxed;
 
-        // Relaxed is acceptable as if this function is called and succeeds,
-        // then nothing has been done w/ the join handle.
-        //
-        // The moment the join handle is used (polled), the `JOIN_WAKER` flag is
-        // set, at which point the CAS will fail.
-        //
-        // Given this, there is no risk if this operation is reordered.
+        // On success, the Release CAS removes the join handle's reference and
+        // clears JOIN_INTEREST while the state still equals INITIAL_STATE.
+        // On failure, the Relaxed load is not used to access task data: the
+        // caller falls back to drop_join_handle_slow. This also handles a
+        // spurious failure of compare_exchange_weak.
         self.val
             .compare_exchange_weak(
                 INITIAL_STATE,

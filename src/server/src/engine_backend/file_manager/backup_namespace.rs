@@ -25,10 +25,10 @@ fn conflict() -> ApiError {
         "authorized backup containers have conflicting logical paths; choose distinct backup prefixes",
     )
 }
-fn directory_identity(slot: &str, display: &str) -> String {
+fn directory_identity(slot: &str, key: &str) -> String {
     format!(
         "backupdir_{}",
-        blake3::hash(format!("{slot}/{}", name_policy::path_key(display)).as_bytes()).to_hex()
+        blake3::hash(format!("{slot}/{key}").as_bytes()).to_hex()
     )
 }
 
@@ -52,9 +52,9 @@ impl Node<'_> {
     fn directory(&self) -> bool {
         matches!(self, Self::Directory { .. })
     }
-    fn identity(&self, slot: &str) -> String {
+    fn identity(&self, slot: &str, key: &str) -> String {
         match self {
-            Self::Directory { display } => directory_identity(slot, display),
+            Self::Directory { .. } => directory_identity(slot, key),
             Self::File {
                 current, version, ..
             } => current
@@ -182,9 +182,11 @@ fn project(
         .next()
         .expect("invariant: split has at least one element");
     let mut entry = match node {
-        Candidate::Directory { .. } => {
-            directory(name, display, &directory_identity(&scope.slot_id, display))
-        }
+        Candidate::Directory { .. } => directory(
+            name,
+            display,
+            &directory_identity(&scope.slot_id, &name_policy::path_key(display)),
+        ),
         Candidate::File {
             repository_id,
             current,
@@ -421,7 +423,7 @@ impl BackupListingRead {
                     node.directory(),
                     display.rsplit('/').next().unwrap_or(display),
                     display,
-                    &node.identity(&scope.slot_id),
+                    &node.identity(&scope.slot_id, key),
                 ),
                 node,
             );

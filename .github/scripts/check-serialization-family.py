@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Check serialization protocol bytes and coordinated derives with isolated consumers."""
+if not __debug__:
+    raise RuntimeError('Validation requires assertions; do not use Python optimization (-O/-OO or PYTHONOPTIMIZE).')
+
 from pathlib import Path
 import json
 import re
@@ -13,6 +16,53 @@ ROOT = Path(__file__).resolve().parents[2]
 foundation_path = runpy.run_path(str(ROOT / '.github/scripts/foundation_paths.py'))['package_path']
 NATIVE = "x86_64-unknown-linux-gnu"
 WASM = "wasm32-unknown-unknown"
+
+TINYSTR_CONTRACT_TESTS = {
+    'human_acceptance_is_unchanged',
+    'human_error_preserves_length_and_capacity',
+    'human_error_preserves_non_ascii_cause',
+    'human_error_preserves_null_cause',
+    'truncated_tuple_reports_the_number_of_consumed_elements',
+    'tuple_acceptance_preserves_full_values_and_trailing_padding',
+    'tuple_preserves_element_decoder_errors',
+    'tuple_rejects_non_ascii_bytes',
+    'tuple_rejects_non_trailing_null_bytes',
+}
+
+
+def run_tinystr_contract(root, environment, executable):
+    def output(arguments):
+        result = subprocess.run([executable, *arguments], cwd=root, env=environment,
+                                capture_output=True, text=True)
+        print(result.stdout, end='')
+        print(result.stderr, end='', file=sys.stderr)
+        result.check_returncode()
+        return result.stdout
+
+    listed = re.findall(r'^(.+): test$', output(['--list']), re.M)
+    assert len(listed) == len(TINYSTR_CONTRACT_TESTS) and set(listed) == TINYSTR_CONTRACT_TESTS
+    executed = output([])
+    outcomes = re.findall(r'^test (.+) \.\.\. (\w+)$', executed, re.M)
+    assert len(outcomes) == len(listed) and dict(outcomes) == dict.fromkeys(listed, 'ok')
+    summaries = re.findall(r'^test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored; '
+                           r'(\d+) measured; (\d+) filtered out', executed, re.M)
+    assert summaries == [('ok', str(len(listed)), '0', '0', '0', '0')]
+
+
+def check_tinystr_contracts(root, directory, environment):
+    for defaults in (True, False):
+        work = directory / ('tinystr-default' if defaults else 'tinystr-core')
+        (work / 'src').mkdir(parents=True)
+        (work / 'src/lib.rs').write_text('')
+        (work / 'Cargo.toml').write_text(
+            '[package]\nname="tinystr-contract-consumer"\nversion="0.0.0"\nedition="2021"\n'
+            '[workspace]\n[dependencies]\ntinystr={path='
+            + json.dumps(str(foundation_path(root, 'tinystr')))
+            + ',default-features=' + str(defaults).lower() + ',features=["serialization"]}\n')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline', '--manifest-path',
+                        str(work / 'Cargo.toml')], cwd=root, env=environment, check=True)
+        build(root, work, environment, NATIVE, tests=True,
+              test_target=('tinystr', 'serialization_contract'))
 
 
 
@@ -51,7 +101,7 @@ def manifest(root, no_std=False):
     }
     if not no_std:
         for name in ('flag-set', 'compression', 'icu_collections', 'random-generator-core',
-                     'derive-where'):
+                     'derive-where', 'semver'):
             dependencies[name] = (['serialization'], True)
         dependencies['toml'] = (['serialization'], False)
         dependencies['date-time'] = (['serialization', 'serialization-human-readable'], True)
@@ -64,13 +114,18 @@ def manifest(root, no_std=False):
     return '\n'.join(lines) + '\n'
 
 
-def build(root, work, environment, target, tests=False):
+def build(root, work, environment, target, tests=False, test_target=None):
     diagnostics_type = runpy.run_path(str(root / '.github/scripts/check-rust-diagnostics.py'))['CargoDiagnostics']
     command = ['cargo', 'test' if tests else 'check', '--locked', '--offline',
                '--manifest-path', str(work / 'Cargo.toml'), '--target', target,
-               '--target-dir', environment.get('CARGO_TARGET_DIR', str(work.parent / 'target')), '--message-format=json', '-j2']
+               '--target-dir', environment.get('CARGO_TARGET_DIR', str(work.parent / 'target')),
+               '--message-format=json', '-j1' if test_target else '-j2']
     if tests:
         command.append('--no-run')
+    if test_target is not None:
+        assert tests, 'an explicit test target requires a test build'
+        command.extend(['-p', test_target[0], '--test', test_target[1]])
+    executable_name = test_target[1] if test_target else 'serialization_family_regression'
     diagnostics = diagnostics_type(sys.stderr)
     executables = []
     with subprocess.Popen(command, cwd=root, env=environment, stdout=subprocess.PIPE,
@@ -82,7 +137,7 @@ def build(root, work, environment, target, tests=False):
             except ValueError:
                 continue
             if (isinstance(event, dict) and event.get('reason') == 'compiler-artifact'
-                    and event.get('target', {}).get('name') == 'serialization_family_regression'
+                    and event.get('target', {}).get('name') == executable_name
                     and event.get('profile', {}).get('test') and event.get('executable')):
                 executables.append(event['executable'])
         if diagnostics.result(process.wait()):
@@ -90,7 +145,10 @@ def build(root, work, environment, target, tests=False):
     if tests:
         if len(executables) != 1:
             raise AssertionError('expected exactly one serialization test executable')
-        subprocess.run([executables[0]], cwd=root, env=environment, check=True)
+        if test_target is not None:
+            run_tinystr_contract(root, environment, executables[0])
+        else:
+            subprocess.run([executables[0]], cwd=root, env=environment, check=True)
 
 
 
@@ -125,6 +183,7 @@ def check(root):
     environment = runpy.run_path(str(root / '.github/scripts/backend_environment.py'))['matrix_environment']()
     (root / 'target').mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='serialization-regression-', dir=root / 'target') as temporary:
+        check_tinystr_contracts(root, Path(temporary), environment)
         for no_std in (False, True):
             work = Path(temporary) / ('no-std' if no_std else 'standard')
             (work / 'src').mkdir(parents=True)

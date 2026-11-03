@@ -1142,3 +1142,43 @@ mod create_repository_tests;
 
 #[path = "merge_link_tests.rs"]
 mod merge_link_tests;
+
+#[test]
+fn directory_encoded_size_matches_buffer_bytes_and_serialization_errors() {
+    let values = [
+        json!(null),
+        json!(false),
+        json!(u64::MAX),
+        json!(i64::MIN),
+        json!("Café/界\n\t\"\\"),
+        json!([]),
+        json!({}),
+        json!({"nested": [null, true, {"name": "Straße"}]}),
+    ];
+    for value in values {
+        assert_eq!(
+            encoded_size(&value).unwrap(),
+            json_codec::to_vec(&value).unwrap().len()
+        );
+    }
+    for index in 0..32 {
+        let entry = smb_protocol::protocol::DirectoryEntry {
+            entry: directory_entry(index, format!("界{index}-{}", "é".repeat(index))),
+            mtime: smb_protocol::protocol::FileMtime::NotFile {},
+        };
+        assert_eq!(
+            encoded_size(&entry).unwrap(),
+            json_codec::to_vec(&entry).unwrap().len()
+        );
+    }
+    struct Fails;
+    impl Serialize for Fails {
+        fn serialize<S: Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            Err(S::Error::custom("test encoding failure"))
+        }
+    }
+    let old = json_codec::to_vec(&Fails).unwrap_err();
+    let new = encoded_size(&Fails).unwrap_err();
+    assert_eq!(old.to_string(), new.to_string());
+    assert_eq!(old.classify(), new.classify());
+}

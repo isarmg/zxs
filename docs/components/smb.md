@@ -83,6 +83,11 @@ Unix epoch 版本仍是秒与纳秒均为零的真实时间。目录时间不在
 
 同步 `pread` 和异步 `pread_send` 的只读分支均调用 `Read {handle, offset, length}`。每个 RPC 最多请求 64 KiB，响应为严格 `ReadResult {bytes}`，使用既有 JSON 帧。客户端连续读取直到填满宿主请求或明确 EOF；段边界的短响应不冒充 EOF。每个 Read（含缓存、零长度与 EOF）在实际执行处重新授权。写句柄继续授权后读取私有工作 FD。sendfile/recvfile 拒绝，其他直接读取占位 FD 的路径不能取得正文。
 
+服务端 Read 回复直接持有已认证的 `Bytes` 切片，借用字节数组编码进同一 `ResponsePayload<R>` 信封；不先为每个字节构造 JSON Value。普通操作仍返回原 Value，客户端仍按原严格响应与请求类型准入；缓存、EOF/零长度授权、错误、FD 与帧上限不变。满 64 KiB 回复省去的是含 65,536 个 Value 元素的中间数组，不是 65,536 次独立堆分配，也不是已测得吞吐收益。
+
+Rust API 中 `Response` 现在是 `ResponsePayload<Value>` 类型别名，既有 `Response::Ok` / `Response::Error` 构造和 `receive::<Response>` 保留；`ReadResult` 的字节存储参数默认仍为 `Vec<u8>`。这是公开 enum 身份变化：未知外部代码若用 `use Response::{Ok, Error}` 导入变体，需要改用实际 enum 名；不声称完全源兼容。JSON 字段、状态标签、错误中的 null、数字字节数组和协议能力均不改变，不提供第二套兼容 schema。
+
+
 VFS 显式注册 `lseek`：重新授权后，只读句柄的所有 seek 模式均返回 `ENOTSUP`，不查询占位目录的长度、游标或 data/hole 分配；可写句柄仍对受 I/O 锁保护的工作 FD 执行真实 lseek，并保留内核结果与错误。此前验证的 Samba 4.23 SMB2/3 读和文件位置设置使用自己的句柄位置状态；稀疏范围查询的 seek 扩展不由占位 FD 推断。固定 SDK 测试从注册表取出回调，覆盖只读拒绝、可写位置与长度、撤权、重绑定和终结释放。
 
 HTTP 与 SMB 共用完整段读取、BLAKE3 校验及同版本副本回退核心。返回字节来自刚校验的同一缓冲区，不先校验再重读磁盘。每个已认证 SMB 会话最多缓存一个完整已验证段，绑定其唯一活跃句柄；不同句柄或段替换缓存，Close/Detach 释放缓存，断连释放全部句柄与租约。支持段最大 4 MiB，既有八会话上限使缓存正文合计至多 32 MiB；每会话串行执行一个至多 64 KiB 的 JSON 字节响应。JSON 编解码和跨进程复制仍有成本，未声称吞吐提高。宿主异步 I/O 的既有 8 MiB 缓冲与两工作线程/八排队槽限制独立计算。

@@ -15,8 +15,10 @@
 //!
 //! Consider a future like this one:
 //!
+//! This example uses the `utilities` feature of the `futures` crate.
+//!
 //! ```
-//! # use tokio_stream::{Stream, StreamExt};
+//! # use futures::{Stream, StreamExt};
 //! async fn drop_all<I: Stream + Unpin>(mut input: I) {
 //!     while let Some(_) = input.next().await {}
 //! }
