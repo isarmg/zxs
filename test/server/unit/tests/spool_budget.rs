@@ -387,28 +387,87 @@ fn upload_total_timeout_retains_unfinished_evidence_despite_progress() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let mut settings = config(root.path(), METADATA_ALLOWANCE + 100);
-        settings.http_transfer_limits.idle_timeout = Duration::from_millis(100);
-        settings.http_transfer_limits.total_timeout = Duration::from_millis(180);
+        const CHUNK_BYTES: usize = 1024 * 1024;
+        const DECLARED_BYTES: u64 = 4 * CHUNK_BYTES as u64;
+        let idle_timeout = Duration::from_millis(100);
+        let total_timeout = Duration::from_millis(180);
+        let mut settings = config(root.path(), METADATA_ALLOWANCE + DECLARED_BYTES);
+        settings.http_transfer_limits.idle_timeout = idle_timeout;
+        settings.http_transfer_limits.total_timeout = total_timeout;
         let app = application_config(root.path(), settings);
         let (token, _, _) = authenticated(&app).await;
-        let hash = blake3::hash(&[b'x'; 100]).to_hex().to_string();
-        let stream = futures::stream::unfold((), |_| async {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            Some((Ok::<_, std::io::Error>(Bytes::from_static(b"x")), ()))
+
+        // Keep paused time stationary even while awaiting real disk work.
+        // The blocking-task guard disables Tokio's automatic time advance;
+        // dropping its sender also releases it if a test assertion unwinds.
+        let (release_clock, hold_clock) = std::sync::mpsc::channel::<()>();
+        let (clock_ready, clock_started) = tokio::sync::oneshot::channel();
+        let clock_guard = tokio::task::spawn_blocking(move || {
+            clock_ready.send(()).unwrap();
+            assert_eq!(
+                hold_clock.recv_timeout(Duration::from_secs(30)),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected),
+                "virtual-clock test exceeded its real-time watchdog",
+            );
         });
-        let response = app
-            .oneshot(request(
-                &token,
-                "entry_00000000000000000000000000000008",
-                1,
-                100,
-                &hash,
-                Body::from_stream(stream),
-            ))
-            .await
-            .unwrap();
+        clock_started.await.unwrap();
+        tokio::time::pause();
+
+        let chunk = Bytes::from(vec![b'x'; CHUNK_BYTES]);
+        let mut hash = blake3::Hasher::new();
+        for _ in 0..4 {
+            hash.update(&chunk);
+        }
+        let (frames, receiver) = tokio::sync::mpsc::channel::<Bytes>(1);
+        let (progress, mut observed) = tokio::sync::watch::channel(0);
+        let stream = futures::stream::unfold(
+            (receiver, progress, 0),
+            |(mut receiver, progress, completed)| async move {
+                // Each frame reaches the 1 MiB checkpoint and cannot be
+                // coalesced. Requesting another frame confirms that the prior
+                // frame's write and progress publication have both finished.
+                progress.send_replace(completed);
+                receiver.recv().await.map(|bytes| {
+                    (
+                        Ok::<_, std::io::Error>(bytes),
+                        (receiver, progress, completed + 1),
+                    )
+                })
+            },
+        );
+        let started = tokio::time::Instant::now();
+        let response = tokio::spawn(app.oneshot(request(
+            &token,
+            "entry_00000000000000000000000000000008",
+            1,
+            DECLARED_BYTES,
+            &hash.finalize().to_hex().to_string(),
+            Body::from_stream(stream),
+        )));
+        for completed in 1..=3 {
+            frames.send(chunk.clone()).await.unwrap();
+            while *observed.borrow_and_update() < completed {
+                observed.changed().await.unwrap();
+            }
+            assert_eq!(
+                started.elapsed(),
+                Duration::from_millis((completed - 1) * 60),
+                "disk work must not advance the controlled transfer clock",
+            );
+            if completed < 3 {
+                tokio::time::advance(Duration::from_millis(60)).await;
+            }
+        }
+        let last_progress = tokio::time::Instant::now();
+        // Timer deadlines round up to the next millisecond tick.
+        tokio::time::advance(Duration::from_millis(61)).await;
+        let response = response.await.unwrap().unwrap();
         assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(started.elapsed(), total_timeout + Duration::from_millis(1));
+        assert!(last_progress.elapsed() < idle_timeout);
+        tokio::time::resume();
+        drop(release_clock);
+        clock_guard.await.unwrap();
     });
     // The total deadline ends HTTP waiting, not an admitted blocking progress
     // publication. Join those jobs before inspecting retained evidence; otherwise
@@ -422,9 +481,11 @@ fn upload_total_timeout_retains_unfinished_evidence_despite_progress() {
     .unwrap()
     .unwrap();
     assert_eq!(record.state(), crate::uploads::UploadState::Incomplete);
+    assert_eq!(record.persisted_bytes(), 3 * 1024 * 1024);
     let bytes = std::fs::read(root.path().join("api-spool").join(record.data_file())).unwrap();
     assert!(!bytes.is_empty());
-    assert!(bytes.len() < 100);
+    assert_eq!(bytes.len(), 3 * 1024 * 1024);
+    assert!(bytes.len() < 4 * 1024 * 1024);
     assert!(bytes.iter().all(|&byte| byte == b'x'));
 }
 
