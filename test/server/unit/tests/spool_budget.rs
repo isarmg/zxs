@@ -441,7 +441,7 @@ fn upload_total_timeout_retains_unfinished_evidence_despite_progress() {
             "entry_00000000000000000000000000000008",
             1,
             DECLARED_BYTES,
-            &hash.finalize().to_hex().to_string(),
+            hash.finalize().to_hex().as_ref(),
             Body::from_stream(stream),
         )));
         for completed in 1..=3 {
