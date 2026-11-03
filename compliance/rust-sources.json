@@ -101592,7 +101592,7 @@
         "src/reactive_state/property.rs": "1a6d0d8b23486018c1f1348bb478479b6780ebcfe67d190702ba420c8f86a67e",
         "src/reactive_state/style.rs": "f9708641def55d65294c6a61ee8b3e641ce9403d5450a141a9fb89bc14339659",
         "src/reactive_state/suspense.rs": "bc4140f8d313ef19972284aa25d6058b5c7d3682ac80884e8da47326a120167d",
-        "src/renderer/dom.rs": "527914a2d7ab1a1dd0f9f9d6a1a1098d301c31b3df00a16a578fe3495344e3b0",
+        "src/renderer/dom.rs": "7d51a2ce1e8dc133cc662e7c529a3be417398d2116be1f2f7ad5175ebe205404",
         "src/renderer/mod.rs": "8a4521b46751a9f720664e5d954f50e7d0c5272eb53a978e0efbc08551c7d7e2",
         "src/shared_value.rs": "553ea41c71bd87c913135e204c591cec17024149e1300e5e8f262a538ab8f9b7",
         "src/svg/mod.rs": "e7a32c32f82abdf9884b301c786578cd92d5796f6d2294dbd84163c9fb38c225",
