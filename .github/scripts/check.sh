@@ -105,6 +105,13 @@ case "${1:-}" in
     ;;
   smb-protocol)
     cargo test --locked --offline -p smb-protocol
+    # Borrowed Read admission must retain the active Map's error order.
+    for features in \
+      json-codec/float_roundtrip \
+      json-codec/preserve_order \
+      json-codec/preserve_order,json-codec/float_roundtrip; do
+      cargo test --locked --offline -p smb-protocol --features "$features"
+    done
     ;;
   web-production)
     python3 tools/rust-sources/manage.py verify

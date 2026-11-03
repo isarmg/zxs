@@ -6,71 +6,126 @@ use data_serialization::{
 use json_codec::{Map, Number, Value};
 use std::fmt;
 
-/// Reject duplicate keys before a Value or typed DTO can erase the evidence.
-pub fn strict_json(bytes: &[u8]) -> Result<Value> {
-    struct Strict(Value);
-    impl<'de> Deserialize<'de> for Strict {
+fn parse_strict<const MATERIALIZE: bool>(bytes: &[u8]) -> Result<Value> {
+    struct Strict<const MATERIALIZE: bool>(Value);
+    impl<'de, const MATERIALIZE: bool> Deserialize<'de> for Strict<MATERIALIZE> {
         fn deserialize<D: data_serialization::Deserializer<'de>>(
             d: D,
         ) -> std::result::Result<Self, D::Error> {
-            struct V;
-            impl<'de> Visitor<'de> for V {
-                type Value = Strict;
+            struct V<const MATERIALIZE: bool>;
+            impl<'de, const MATERIALIZE: bool> Visitor<'de> for V<MATERIALIZE> {
+                type Value = Strict<MATERIALIZE>;
                 fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                     f.write_str("integer-only JSON without duplicate fields")
                 }
-                fn visit_bool<E: de::Error>(self, v: bool) -> std::result::Result<Strict, E> {
+                fn visit_bool<E: de::Error>(
+                    self,
+                    v: bool,
+                ) -> std::result::Result<Strict<MATERIALIZE>, E> {
                     Ok(Strict(Value::Bool(v)))
                 }
-                fn visit_unit<E: de::Error>(self) -> std::result::Result<Strict, E> {
+                fn visit_unit<E: de::Error>(self) -> std::result::Result<Strict<MATERIALIZE>, E> {
                     Ok(Strict(Value::Null))
                 }
-                fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<Strict, E> {
+                fn visit_i64<E: de::Error>(
+                    self,
+                    v: i64,
+                ) -> std::result::Result<Strict<MATERIALIZE>, E> {
                     Ok(Strict(Value::Number(v.into())))
                 }
-                fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<Strict, E> {
+                fn visit_u64<E: de::Error>(
+                    self,
+                    v: u64,
+                ) -> std::result::Result<Strict<MATERIALIZE>, E> {
                     Ok(Strict(Value::Number(v.into())))
                 }
-                fn visit_f64<E: de::Error>(self, _: f64) -> std::result::Result<Strict, E> {
+                fn visit_f64<E: de::Error>(
+                    self,
+                    _: f64,
+                ) -> std::result::Result<Strict<MATERIALIZE>, E> {
                     Err(E::custom("floating point is not part of the ZXS contract"))
                 }
-                fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Strict, E> {
-                    Ok(Strict(Value::String(v.into())))
+                fn visit_str<E: de::Error>(
+                    self,
+                    v: &str,
+                ) -> std::result::Result<Strict<MATERIALIZE>, E> {
+                    Ok(Strict(if MATERIALIZE {
+                        Value::String(v.into())
+                    } else {
+                        Value::Null
+                    }))
                 }
-                fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<Strict, E> {
-                    Ok(Strict(Value::String(v)))
+                fn visit_string<E: de::Error>(
+                    self,
+                    v: String,
+                ) -> std::result::Result<Strict<MATERIALIZE>, E> {
+                    Ok(Strict(if MATERIALIZE {
+                        Value::String(v)
+                    } else {
+                        Value::Null
+                    }))
                 }
                 fn visit_seq<A: SeqAccess<'de>>(
                     self,
                     mut a: A,
-                ) -> std::result::Result<Strict, A::Error> {
+                ) -> std::result::Result<Strict<MATERIALIZE>, A::Error> {
                     let mut v = Vec::new();
-                    while let Some(e) = a.next_element::<Strict>()? {
-                        v.push(e.0);
+                    while let Some(e) = a.next_element::<Strict<MATERIALIZE>>()? {
+                        if MATERIALIZE {
+                            v.push(e.0);
+                        }
                     }
                     Ok(Strict(Value::Array(v)))
                 }
                 fn visit_map<A: MapAccess<'de>>(
                     self,
                     mut a: A,
-                ) -> std::result::Result<Strict, A::Error> {
+                ) -> std::result::Result<Strict<MATERIALIZE>, A::Error> {
                     let mut v = Map::new();
                     while let Some(k) = a.next_key::<String>()? {
                         if v.contains_key(&k) {
                             return Err(de::Error::custom(format!("duplicate field: {k}")));
                         }
-                        v.insert(k, a.next_value::<Strict>()?.0);
+                        let value = a.next_value::<Strict<MATERIALIZE>>()?;
+                        v.insert(k, if MATERIALIZE { value.0 } else { Value::Null });
                     }
                     Ok(Strict(Value::Object(v)))
                 }
             }
-            d.deserialize_any(V)
+            d.deserialize_any(V::<MATERIALIZE>)
         }
     }
     let mut d = json_codec::Deserializer::from_slice(bytes);
-    let v = Strict::deserialize(&mut d)?;
+    let v = Strict::<MATERIALIZE>::deserialize(&mut d)?;
     d.end()?;
     Ok(v.0)
+}
+
+/// Reject duplicate keys before a Value or typed DTO can erase the evidence.
+pub fn strict_json(bytes: &[u8]) -> Result<Value> {
+    parse_strict::<true>(bytes)
+}
+
+/// Immutable JSON bytes admitted by the integer-only, duplicate-free contract.
+/// Arrays and string values are validated without retaining their contents.
+/// Decoded object keys are retained until that object ends to detect duplicates.
+#[derive(Clone, Copy)]
+pub struct StrictJson<'a>(&'a [u8]);
+
+impl<'a> StrictJson<'a> {
+    /// Validate the complete input without building its JSON value tree.
+    /// Returns the same syntax, number and duplicate-field errors as `strict_json`.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self> {
+        parse_strict::<false>(bytes)?;
+        Ok(Self(bytes))
+    }
+
+    /// Decode a borrowed representation of the already admitted input.
+    /// Representation-specific errors are preserved; this does not apply the
+    /// Value-based error ordering used by `decode_strict` for typed DTOs.
+    pub fn decode<T: Deserialize<'a>>(self) -> Result<T> {
+        Ok(json_codec::from_slice(self.0)?)
+    }
 }
 
 pub fn decode_strict<T: data_serialization::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {

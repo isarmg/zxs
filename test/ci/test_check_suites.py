@@ -81,6 +81,17 @@ class SuiteCoverageTests(unittest.TestCase):
         actual = [call for call in calls if "storage-contract" in call["args"]]
         self.assertEqual(actual, expected)
 
+    def test_smb_read_admission_exercises_json_feature_unification(self):
+        prefix = ["test", "--locked", "--offline", "-p", "smb-protocol"]
+        expected = [{"tool": "cargo", "args": prefix}]
+        for features in (
+            "json-codec/float_roundtrip",
+            "json-codec/preserve_order",
+            "json-codec/preserve_order,json-codec/float_roundtrip",
+        ):
+            expected.append({"tool": "cargo", "args": prefix + ["--features", features]})
+        self.assertEqual(self.suite("smb-protocol"), expected)
+
     def test_workspace_checks_native_capabilities_before_product_tests(self):
         calls = self.suite("workspace")
         self.assertEqual(calls[0], {

@@ -85,6 +85,13 @@ Unix epoch 版本仍是秒与纳秒均为零的真实时间。目录时间不在
 
 服务端 Read 回复直接持有已认证的 `Bytes` 切片，借用字节数组编码进同一 `ResponsePayload<R>` 信封；不先为每个字节构造 JSON Value。普通操作仍返回原 Value，客户端仍按原严格响应与请求类型准入；缓存、EOF/零长度授权、错误、FD 与帧上限不变。满 64 KiB 回复省去的是含 65,536 个 Value 元素的中间数组，不是 65,536 次独立堆分配，也不是已测得吞吐收益。
 
+客户端 Read 接收先用共享严格 visitor 验证完整帧，再借用 `result` 的 `RawValue`，
+用原 `Response` 准入信封、检查 FD，最后直接解码 `ReadResult<Vec<u8>>`。
+成功的数字字节数组不再构造逐元素 Value；拒绝路径回到原 Value 解码，保留原错误类型、
+来源及当前 Map 顺序。`preserve_order` 特性统一启用时也保持原首错顺序。
+普通响应、帧长度／期限、FD 归属、读范围、共享锁和业务错误后的连接复用不变。
+测量、开销边界及回归命令见[Read 解码验证](../validation/smb-read-decoding.md)。
+
 Rust API 中 `Response` 现在是 `ResponsePayload<Value>` 类型别名，既有 `Response::Ok` / `Response::Error` 构造和 `receive::<Response>` 保留；`ReadResult` 的字节存储参数默认仍为 `Vec<u8>`。这是公开 enum 身份变化：未知外部代码若用 `use Response::{Ok, Error}` 导入变体，需要改用实际 enum 名；不声称完全源兼容。JSON 字段、状态标签、错误中的 null、数字字节数组和协议能力均不改变，不提供第二套兼容 schema。
 
 

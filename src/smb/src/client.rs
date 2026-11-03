@@ -1,7 +1,9 @@
 use crate::protocol::{
-    FrameStream, MAX_READ_BYTES, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, ReadResult,
+    FrameStream, MAX_READ_BYTES, OpenResult, PROTOCOL, REQUIRED_CAPABILITIES, ReadMode, ReadResult,
     Request as RawRequest, Response,
 };
+
+mod read_response;
 
 type Request = RawRequest<storage_contract::OperationId>;
 use json_codec::Value;
@@ -486,8 +488,16 @@ impl Client {
         })?;
         let exchange = stream
             .send(&request, None)
-            .and_then(|()| stream.receive::<Response>())
-            .and_then(|(response, fd)| {
+            .and_then(|()| stream.receive_payload(ReadMode::Deadline))
+            .and_then(|(payload, fd)| {
+                let (response, read_result) = if matches!(request, Request::Read { .. }) {
+                    read_response::decode(&payload).map_err(io::Error::other)?
+                } else {
+                    (
+                        storage_contract::decode_strict(&payload).map_err(io::Error::other)?,
+                        None,
+                    )
+                };
                 // Descriptor ownership is part of the response contract, not
                 // an optional convenience for individual VFS callers. Reject
                 // malformed replies while still holding the shared lock so no
@@ -514,7 +524,7 @@ impl Client {
                             fd.expect("invariant: successful open response has a descriptor"),
                         )
                     } else if let Request::Read { length, .. } = request {
-                        let result: ReadResult = json_codec::from_value(result)
+                        let result = read_response::decode_result(result, read_result)
                             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
                         if result.bytes.len() > length as usize
                             || result.bytes.len() > MAX_READ_BYTES

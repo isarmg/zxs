@@ -9,5 +9,5 @@ description = "ZXS local Samba bridge protocol and file descriptor transport"
 [dependencies]
 libc = {version = "0.2", path = "../foundation/platform/libc"}
 data-serialization.workspace = true
-json-codec.workspace = true
+json-codec = { workspace = true, features = ["raw_value"] }
 storage-contract.workspace = true

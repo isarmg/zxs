@@ -709,3 +709,5 @@ fn entropy_fault_returns_typed_failure_without_panic_or_identity() {
     assert!(new_id("entry").is_ok());
     println!("\nZXS_ENTROPY_FAULT_COMPLETE");
 }
+
+mod borrowed_json;

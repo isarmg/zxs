@@ -581,6 +581,15 @@ impl FrameStream {
         &mut self,
         mode: ReadMode,
     ) -> io::Result<(T, Option<OwnedFd>)> {
+        let (payload, descriptor) = self.receive_payload(mode)?;
+        let value = storage_contract::decode_strict(&payload).map_err(io::Error::other)?;
+        Ok((value, descriptor))
+    }
+
+    pub(crate) fn receive_payload(
+        &mut self,
+        mode: ReadMode,
+    ) -> io::Result<(Vec<u8>, Option<OwnedFd>)> {
         let mut deadline = match mode {
             ReadMode::Deadline => Some(self.deadline()?),
             ReadMode::EstablishedSession => None,
@@ -708,8 +717,7 @@ impl FrameStream {
             }
             received += count as usize;
         }
-        let value = storage_contract::decode_strict(&payload).map_err(io::Error::other)?;
-        Ok((value, descriptor))
+        Ok((payload, descriptor))
     }
 
     fn deadline(&self) -> io::Result<Instant> {
