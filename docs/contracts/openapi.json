@@ -5483,7 +5483,7 @@
     "/api/workspaces/capacity": {
       "get": {
         "operationId": "workspaceCapacity",
-        "description": "当前唯一管理员的工作区保留证据预算；global与principal均必填。records为未冷存驻留记录，cold_records为普通空Aborted冷存记录，metadata_bytes仍累计冷热全部清单。automatic_retirement仅表示此受限冷存，不删除证据；warning考虑两者全部预算。所有计数与字节数使用UInt64十进制字符串。",
+        "description": "当前唯一管理员的工作区保留证据预算；global与principal均必填。records为未冷存驻留记录，cold_records为冷存记录，metadata_bytes仍累计冷热全部清单。automatic_retirement仅表示普通及历史编辑的空Aborted，以及经发布证据精确绑定的普通提交或历史保存的Committed及其后显式Aborted可受限冷存，不删除证据或返还元数据字节预算；warning考虑两者全部预算。所有计数与字节数使用UInt64十进制字符串。",
         "responses": {
           "200": {
             "description": "当前容量快照，不保证后续写入准入。",
@@ -9776,7 +9776,7 @@
             "type": "boolean"
           }
         },
-        "description": "当前唯一管理员的全池与主体预算均必填；records为未冷存驻留数，cold_records为冷存数，metadata_bytes仍包含全部完整清单与生命周期预留；automatic_retirement仅指普通空Aborted受限冷存，不删除证据。"
+        "description": "当前唯一管理员的全池与主体预算均必填；records为未冷存驻留数，cold_records为冷存数，metadata_bytes仍包含全部完整清单与生命周期预留；automatic_retirement仅表示普通及历史编辑的空Aborted，以及经发布证据精确绑定的普通提交或历史保存的Committed及其后显式Aborted可受限冷存，不删除证据或返还元数据字节预算。"
       },
       "AdministratorPrincipal": {
         "type": "string",
