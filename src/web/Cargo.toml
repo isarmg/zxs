@@ -12,10 +12,10 @@ date-time = { workspace = true, features = ["parsing"] }
 data-serialization.workspace = true
 error-definition.workspace = true
 web-interface = { path = "../interface" }
-storage-contract = { path = "../contract" }
-name-policy = { path = "../naming" }
+storage-contract.workspace = true
+name-policy.workspace = true
 uuid = { version = "1", features = ["js"], path = "../foundation/core-types/uuid"}
-json-codec = {version = "1", path = "../foundation/data-storage/json-codec"}
+json-codec.workspace = true
 wasm-bindgen = {version = "=0.2.129", path = "../foundation/web-runtime/wasm-bindgen"}
 js-sys = {version = "=0.3.106", path = "../foundation/web-runtime/js-sys"}
 gloo-timers = { version = "0.3", path = "../foundation/web-runtime/gloo-timers" }

@@ -25,7 +25,7 @@ gloo-timers = { version = "0.3", path = "../foundation/web-runtime/gloo-timers" 
 futures = { version = "0.3.34", path = "../foundation/concurrency/futures", default-features = false, features = ["async-await-macro", "channel", "shared-state", "std", "utilities"] }
 js-sys = {version = "=0.3.106", path = "../foundation/web-runtime/js-sys"}
 send_wrapper = {version = "0.6", path = "../foundation/concurrency/send_wrapper"}
-data-serialization = { version = "1", features = ["derive"], path = "../foundation/data-storage/data-serialization"}
+data-serialization.workspace = true
 wasm-bindgen = {version = "=0.2.129", path = "../foundation/web-runtime/wasm-bindgen"}
 web-sys = { version = "=0.3.106", features = [
   "Window", "Document", "DocumentFragment", "HtmlElement", "Element", "Node", "NodeList", "HtmlCollection", "DomTokenList",
@@ -39,7 +39,7 @@ web-sys = { version = "=0.3.106", features = [
 ], path = "../foundation/web-runtime/web-sys"}
 
 [dev-dependencies]
-json-codec = {version = "1", path = "../foundation/data-storage/json-codec"}
+json-codec.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

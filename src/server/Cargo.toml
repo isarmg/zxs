@@ -36,9 +36,9 @@ platform-io.workspace = true
 http-range-header = { version = "0.4.0", path = "../foundation/networking/http-range-header" }
 httpdate = { version = "1.0", path = "../foundation/networking/httpdate" }
 mime_guess = { version = "2", default-features = false, path = "../foundation/networking/mime_guess" }
-storage-contract = { path = "../contract" }
+storage-contract.workspace = true
 rustix.workspace = true
-name-policy = { path = "../naming" }
+name-policy.workspace = true
 smb-protocol = { path = "../smb" }
 tempfile.workspace = true
 
