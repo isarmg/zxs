@@ -7,3 +7,6 @@ mod regression;
 mod regression_fuzz;
 #[path = "../foundation/regex/tests/replace.rs"]
 mod replace;
+
+#[cfg(feature = "dfa-build")]
+mod byteset_roundtrip;

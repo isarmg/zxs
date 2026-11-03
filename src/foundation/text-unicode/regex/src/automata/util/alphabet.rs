@@ -801,10 +801,10 @@ impl ByteSet {
         self.bits.0 == [0, 0]
     }
 
-    /// Deserializes a byte set from the given slice. If the slice is of
-    /// incorrect length or is otherwise malformed, then an error is returned.
-    /// Upon success, the number of bytes read along with the set are returned.
-    /// The number of bytes read is always a multiple of 8.
+    /// Deserializes two native-endian u128 buckets from the given slice.
+    /// Returns an error if the slice contains fewer than 32 bytes. On success,
+    /// returns the set and exactly 32 bytes consumed, leaving any trailing
+    /// bytes unread.
     pub(crate) fn from_bytes(
         slice: &[u8],
     ) -> Result<(ByteSet, usize), DeserializeError> {
@@ -814,7 +814,8 @@ impl ByteSet {
         let mut nread = 0;
         let (low, nr) = wire::try_read_u128(slice, "byte set low bucket")?;
         nread += nr;
-        let (high, nr) = wire::try_read_u128(slice, "byte set high bucket")?;
+        let (high, nr) =
+            wire::try_read_u128(&slice[nread..], "byte set high bucket")?;
         nread += nr;
         Ok((ByteSet { bits: BitSet([low, high]) }, nread))
     }
