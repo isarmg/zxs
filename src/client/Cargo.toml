@@ -14,7 +14,7 @@ json-codec.workspace = true
 error-definition.workspace = true
 tokio = { version = "1.53.2", features = ["fs", "io-util", "adapters-io"], path = "../foundation/concurrency/tokio"}
 futures = { version = "0.3.34", path = "../foundation/concurrency/futures", default-features = false, features = ["std", "utilities"] }
-url-encoding = { path = "../foundation/networking/url-encoding", default-features = false, features = ["std", "parser"] }
+url-encoding.workspace = true
 blake3.workspace = true
 storage-contract = { path = "../contract" }
 tempfile.workspace = true
