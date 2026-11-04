@@ -468,3 +468,284 @@ fn held_recovery_reads_original_identity_and_preserves_published_state() {
         Some(json_codec::json!({"control":"retained"}))
     );
 }
+
+fn published_membership_fixture() -> (tempfile::TempDir, Engine, crate::journal::Candidate) {
+    let temporary = tempfile::tempdir().unwrap();
+    let config =
+        Config::development([temporary.path().join("p"), temporary.path().join("b")]).unwrap();
+    let mut engine = Engine::initialize(&temporary.path().join("system"), config).unwrap();
+    engine
+        .create_repository(
+            &RepositoryName::parse("membership").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let member = engine.members().remove(0);
+    let scan = crate::journal::scan(&member).unwrap();
+    let candidate = crate::journal::load_object(
+        &member,
+        "candidate",
+        &scan.records.last().unwrap().0.candidate_hash,
+    )
+    .unwrap();
+    (temporary, engine, candidate)
+}
+
+#[test]
+fn saved_metadata_membership_binds_pool_slots_and_binding_generations() {
+    let (_temporary, engine, candidate) = published_membership_fixture();
+    engine
+        .config
+        .verify_candidate_membership(&candidate)
+        .unwrap();
+    let original = (*engine.config).clone();
+    let mutations: &[fn(&mut Config)] = &[
+        |config| config.pool_id = new_id("pool").unwrap(),
+        |config| config.disks[0].binding_generation += 1,
+        |config| {
+            config.disks[0].slot_id = "PrimaryChanged".into();
+            config.disks[1].upstream_slot_id = Some("PrimaryChanged".into());
+        },
+        |config| config.disks[1].metadata_member = false,
+    ];
+    for mutate in mutations {
+        let mut changed = original.clone();
+        mutate(&mut changed);
+        let changed = ValidatedConfig::try_from(changed).unwrap();
+        assert_eq!(
+            engine
+                .config
+                .verify_saved_metadata_membership(&changed)
+                .unwrap_err()
+                .code(),
+            ErrorCode::PublicationInvalid,
+        );
+    }
+}
+
+#[test]
+fn admitted_membership_ignores_roots_limits_and_disk_order() {
+    let (_temporary, engine, candidate) = published_membership_fixture();
+    let mut changed = (*engine.config).clone();
+    changed.disks.reverse();
+    changed.disks[0].root = "/different/first".into();
+    changed.disks[1].root = "/different/second".into();
+    changed.max_workspaces += 1;
+    let changed = ValidatedConfig::try_from(changed).unwrap();
+    assert_eq!(
+        changed.admitted.membership,
+        engine.config.admitted.membership
+    );
+    changed.verify_candidate_membership(&candidate).unwrap();
+    engine
+        .config
+        .verify_saved_metadata_membership(&changed)
+        .unwrap();
+}
+
+#[test]
+fn candidate_pool_and_exact_voters_cannot_be_reinterpreted() {
+    let (_temporary, engine, candidate) = published_membership_fixture();
+    let mut wrong_pool = candidate.clone();
+    wrong_pool.pool_id = new_id("pool").unwrap();
+    assert!(
+        engine
+            .config
+            .verify_candidate_membership(&wrong_pool)
+            .is_err()
+    );
+    let mut duplicate = candidate.clone();
+    let duplicate_id = duplicate.metadata_disk_ids[0].clone();
+    duplicate.metadata_disk_ids.push(duplicate_id);
+    assert!(
+        engine
+            .config
+            .verify_candidate_membership(&duplicate)
+            .is_err()
+    );
+    let mut missing = candidate.clone();
+    missing.metadata_disk_ids.pop();
+    assert!(engine.config.verify_candidate_membership(&missing).is_err());
+    let mut unexpected = candidate.clone();
+    unexpected.metadata_disk_ids[0] = new_id("disk").unwrap();
+    assert!(
+        engine
+            .config
+            .verify_candidate_membership(&unexpected)
+            .is_err()
+    );
+    let mut reordered = candidate.clone();
+    reordered.metadata_disk_ids.reverse();
+    engine
+        .config
+        .verify_candidate_membership(&reordered)
+        .unwrap();
+}
+
+#[test]
+fn unchanged_membership_reopens_and_restores_after_system_loss() {
+    let (temporary, engine, candidate) = published_membership_fixture();
+    let system = engine.root.clone();
+    let members = engine
+        .members()
+        .iter()
+        .map(|disk| disk.root.clone())
+        .collect::<Vec<_>>();
+    let expected = engine.config.admitted.membership.clone();
+    drop(engine);
+    let reopened = Engine::open(&system).unwrap();
+    assert_eq!(reopened.config.admitted.membership, expected);
+    reopened.verify_candidate_membership(&candidate).unwrap();
+    drop(reopened);
+    let restored =
+        Engine::restore_from_disks(&temporary.path().join("restored-system"), &members).unwrap();
+    assert_eq!(restored.config.admitted.membership, expected);
+    restored.verify_candidate_membership(&candidate).unwrap();
+}
+
+#[test]
+fn empty_genesis_cannot_replace_membership_from_an_edited_system_config() {
+    let temporary = tempfile::tempdir().unwrap();
+    let system = temporary.path().join("system");
+    let config = Config::development([
+        temporary.path().join("primary"),
+        temporary.path().join("backup"),
+    ])
+    .unwrap();
+    let engine = Engine::initialize(&system, config.clone()).unwrap();
+    let journals = config
+        .disks
+        .iter()
+        .map(crate::journal::log_path)
+        .map(|path| {
+            let bytes = std::fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+    drop(engine);
+    let mut changed = config;
+    changed.disks[1].metadata_member = false;
+    write_json(&system.join("config.json"), &changed, true).unwrap();
+    assert_eq!(
+        Engine::open(&system).err().unwrap().code(),
+        ErrorCode::MetadataQuorumUnavailable
+    );
+    for (path, before) in journals {
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+}
+
+#[test]
+fn empty_genesis_with_missing_anchor_is_not_silently_admitted_or_repaired() {
+    let temporary = tempfile::tempdir().unwrap();
+    let system = temporary.path().join("system");
+    let config = Config::development([temporary.path().join("primary")]).unwrap();
+    let engine = Engine::initialize(&system, config.clone()).unwrap();
+    let anchor = config.disks[0]
+        .root
+        .join("metadata/pool-membership/config.json");
+    let journal = crate::journal::log_path(&config.disks[0]);
+    let before = std::fs::read(&journal).unwrap();
+    drop(engine);
+    std::fs::remove_file(&anchor).unwrap();
+    assert!(Engine::open(&system).is_err());
+    assert!(!anchor.exists());
+    assert_eq!(std::fs::read(journal).unwrap(), before);
+}
+
+#[test]
+fn membership_anchor_fault_is_isolated_when_original_quorum_remains() {
+    for damage in ["missing", "malformed", "different-membership"] {
+        let temporary = tempfile::tempdir().unwrap();
+        let system = temporary.path().join("system");
+        let config =
+            Config::development((0..3).map(|n| temporary.path().join(format!("disk-{n}"))))
+                .unwrap();
+        let mut engine = Engine::initialize(&system, config.clone()).unwrap();
+        let operation = OperationId::generate().unwrap();
+        engine
+            .create_repository(
+                &RepositoryName::parse("preserved").unwrap(),
+                "P01",
+                1,
+                "admin",
+                operation,
+            )
+            .unwrap();
+        let expected_state = canonical_json(engine.state()).unwrap();
+        let expected_operation = canonical_json(&engine.operation(operation).unwrap()).unwrap();
+        let journals = config
+            .disks
+            .iter()
+            .map(crate::journal::log_path)
+            .map(|path| {
+                let bytes = std::fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect::<Vec<_>>();
+        drop(engine);
+        let disk = &config.disks[2];
+        let anchor = disk.root.join("metadata/pool-membership/config.json");
+        let original = std::fs::read(&anchor).unwrap();
+        match damage {
+            "missing" => std::fs::remove_file(&anchor).unwrap(),
+            "malformed" => std::fs::write(&anchor, b"{").unwrap(),
+            _ => {
+                let mut changed = config.clone();
+                changed.disks[1].metadata_member = false;
+                write_json(&anchor, &changed, true).unwrap();
+            }
+        }
+        for preserve_pending in [false, true] {
+            let mut recovered = if preserve_pending {
+                Engine::open_for_recovery(&system)
+            } else {
+                Engine::open(&system)
+            }
+            .unwrap();
+            assert!(recovered.is_read_only());
+            assert_eq!(recovered.config.metadata_quorum(), 2);
+            assert_eq!(recovered.config.metadata_members().len(), 3);
+            assert_eq!(recovered.journals.len(), 2);
+            assert!(recovered.disk_resources.available(disk).is_none());
+            assert_eq!(canonical_json(recovered.state()).unwrap(), expected_state);
+            assert_eq!(
+                canonical_json(&recovered.operation(operation).unwrap()).unwrap(),
+                expected_operation
+            );
+            assert_eq!(
+                recovered
+                    .create_repository(
+                        &RepositoryName::parse("blocked").unwrap(),
+                        "P01",
+                        1,
+                        "admin",
+                        OperationId::generate().unwrap()
+                    )
+                    .unwrap_err()
+                    .code(),
+                ErrorCode::RecoveryRequired
+            );
+            let warnings = recovered.take_recovery_warnings();
+            assert_eq!(warnings.seals.len(), 1);
+            assert_eq!(
+                warnings.seals[0].context(),
+                &crate::RecoverySealContext::MembershipAnchor {
+                    disk_id: disk.disk_id.clone(),
+                    slot_id: disk.slot_id.clone()
+                }
+            );
+            assert!(recovered.take_recovery_warnings().seals.is_empty());
+            for (path, before) in &journals {
+                assert_eq!(std::fs::read(path).unwrap(), *before, "{damage}");
+            }
+        }
+        std::fs::write(anchor, original).unwrap();
+        let mut reopened = Engine::open(&system).unwrap();
+        assert!(!reopened.is_read_only());
+        assert!(reopened.take_recovery_warnings().seals.is_empty());
+    }
+}

@@ -308,7 +308,7 @@ impl Engine {
             std::sync::Arc::new(PublishedStateBase {
                 state: std::sync::Arc::downgrade(&self.state),
                 metadata_epoch,
-                snapshot: candidate.snapshot_hash,
+                snapshot: candidate.snapshot_hash.clone(),
                 sequence: self.state.sequence,
                 config_hash,
                 config: self.config.clone(),
@@ -1020,24 +1020,34 @@ impl crate::engine::PlanningContext<'_> {
                 .reference(),
             "incremental history roots differ from complete projection",
         );
-        let candidate = Candidate {
-            pool_id: self.config.pool_id.clone(),
-            sequence: next.sequence,
-            transaction_id: new_id("tx")?,
-            operation_id: result.operation_id,
-            request_digest: result.request_digest.clone(),
-            previous_snapshot: self.snapshot.clone(),
-            snapshot_hash,
-            versions: prepared
-                .iter()
-                .map(|p| VersionEvidence {
-                    version: p.version.clone(),
-                    placement: p.placement.clone(),
-                })
-                .collect(),
-            metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
-            history_roots: history_basis.reference().clone(),
-        };
+        let candidate = Candidate::new(
+            CandidateData {
+                pool_id: self.config.pool_id.clone(),
+                sequence: next.sequence,
+                transaction_id: match self
+                    .config
+                    .generation()
+                    .and_then(|generation| generation.transaction_id(result.operation_id))
+                {
+                    Some(id) => id,
+                    None => new_id("tx")?,
+                },
+                operation_id: result.operation_id,
+                request_digest: result.request_digest.clone(),
+                previous_snapshot: self.snapshot.clone(),
+                snapshot_hash,
+                versions: prepared
+                    .iter()
+                    .map(|p| VersionEvidence {
+                        version: p.version.clone(),
+                        placement: p.placement.clone(),
+                    })
+                    .collect(),
+                metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
+                history_roots: history_basis.reference().clone(),
+            },
+            self.config.generation_hash(),
+        );
         crate::metadata_budget::preflight_publication_prepared(
             self,
             &candidate,

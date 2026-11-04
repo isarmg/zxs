@@ -1,0 +1,75 @@
+name: Experimental membership activation
+
+on:
+  push:
+    branches: ['verify/membership-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: membership-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_BUILD_JOBS: '1'
+
+jobs:
+  membership:
+    name: First pure-add activation and affected engine boundaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize isolated Cargo home
+        run: bash .github/scripts/initialize-cargo-home.sh
+      - name: Install repository Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+      - name: Check workflow, architecture and package formatting
+        run: |
+          set -euo pipefail
+          mkdir -p target/membership-validation
+          {
+            python3 .github/scripts/check-workflows.py
+            python3 .github/scripts/check-architecture.py
+            python3 -m unittest discover -s test/ci -p 'test_workflows.py'
+            cargo fmt -p storage-engine -- --check
+          } 2>&1 | tee target/membership-validation/static.log
+      - name: Compile one unit-test binary and run affected groups
+        if: ${{ !cancelled() }}
+        run: python3 .github/scripts/check-membership-activation.py
+      - name: Check hook-free production and Clippy
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/check-rust-diagnostics.py -- cargo check \
+            -p storage-engine --lib --locked --offline --message-format=json \
+            2>&1 | tee target/membership-validation/production.log
+          python3 .github/scripts/check-rust-diagnostics.py -- cargo clippy \
+            -p storage-engine --lib --features fault-injection --locked --offline \
+            --message-format=json -- -D warnings \
+            2>&1 | tee target/membership-validation/clippy.log
+      - name: Check document contracts
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo run -p contract-check --locked --offline -- --root . \
+            2>&1 | tee target/membership-validation/contracts.log
+      - name: Preserve source-bound text evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: membership-validation-${{ github.sha }}
+          path: target/membership-validation/
+          if-no-files-found: error
+          retention-days: 14

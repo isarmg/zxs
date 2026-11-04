@@ -38,6 +38,13 @@ mod reads;
 pub use reads::{ContentReadPlan, RangeContent, WorkspaceReadPlan};
 mod history_window;
 pub use history_window::{HistoryWindowCancellation, HistoryWindowRead};
+pub(crate) mod membership_transition;
+pub use membership_transition::{
+    MembershipArchiveInspection, MembershipControlArchive, MembershipFenceStatus,
+    MembershipJointDecisionStatus, MembershipJointVote, MembershipJournalInspection,
+    PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
+    verify_membership_control_archive,
+};
 mod recovery;
 use recovery::RecoveryMode;
 mod recovery_checkpoint;
@@ -62,6 +69,8 @@ pub(crate) struct EvidenceMembers {
 pub enum RecoverySealContext {
     /// Revalidation on the admitted member's held root.
     Member { disk_id: String, slot_id: String },
+    /// The original configuration anchor could not admit this member's journal.
+    MembershipAnchor { disk_id: String, slot_id: String },
     /// Aggregate barrier failure; the verifier does not identify a replica.
     Publication { candidate_hash: String },
 }
@@ -88,7 +97,7 @@ impl RecoverySealFailure {
 /// Handled failures from the latest recovery invocation, drained by the application.
 #[derive(Debug, Default)]
 pub struct RecoveryWarnings {
-    /// At most one failure per configured metadata member and one publication barrier.
+    /// At most one seal/anchor failure per member and one publication barrier.
     pub seals: Vec<RecoverySealFailure>,
     pub checkpoint_load: Option<Error>,
     pub checkpoint_save: Option<Error>,
@@ -105,6 +114,8 @@ pub struct Engine {
     historical_workspace_operations: BTreeMap<String, OperationId>,
     workspace_budget: workspace_budget::WorkspaceBudget,
     pub(crate) blocked: bool,
+    membership_fence: Option<membership_transition::AdmittedFence>,
+    pending_membership: Option<membership_transition::pending::PendingMembership>,
     pub(crate) snapshot: Option<String>,
     published_state_base: Option<Arc<publication::PublishedStateBase>>,
     history_window_roots: Option<Arc<history_window::HistoryRootBindings>>,
@@ -267,6 +278,7 @@ impl Engine {
         candidate: &str,
         object: &str,
     ) -> Result<crate::journal::Receipt> {
+        self.require_unfenced_membership()?;
         let journal = self
             .journals
             .get_mut(&disk.disk_id)
@@ -287,6 +299,7 @@ impl Engine {
         candidate: &str,
         object: &str,
     ) -> Result<crate::journal::Receipt> {
+        self.require_unfenced_membership()?;
         let journal = self
             .journals
             .get_mut(&disk.disk_id)
@@ -455,6 +468,8 @@ impl Engine {
             historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
+            membership_fence: None,
+            pending_membership: None,
             snapshot: None,
             published_state_base: None,
             history_window_roots: None,
@@ -508,11 +523,16 @@ impl Engine {
         let root = existing_private_dir(root)?.path().to_path_buf();
         let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
             .with_workspace_limits(workspace_limits)?;
+        let config = membership_transition::pending::activation::discover(config)?;
         let resources = Arc::new(DiskResources::recover_held(&config, directories)?);
         let mut engine = Self::prepare_recovery_resources(root, config, resources)?;
-        let mut prepared = engine.prepare_recovery()?;
+        let warnings = engine.prepare_generation_resources()?;
+        let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
         engine.preflight_workspace_receipts(&mut prepared)?;
         engine.recover_prepared(RecoveryMode::PreservePending, prepared)?;
+        if engine.config.generation().is_some() && !engine.generation_activation_published() {
+            engine.blocked = true;
+        }
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
@@ -526,10 +546,17 @@ impl Engine {
         let root = existing_private_dir(root)?.path().to_path_buf();
         let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
             .with_workspace_limits(workspace_limits)?;
-        let mut engine = Self::prepare_workspace_recovery(root, config)?;
-        let mut prepared = engine.prepare_recovery()?;
+        let (mut engine, warnings) = Self::prepare_workspace_recovery(root, config)?;
+        let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
         engine.preflight_workspace_receipts(&mut prepared)?;
         engine.recover_prepared(mode, prepared)?;
+        if engine.config.generation().is_some() {
+            if mode == RecoveryMode::CompletePending {
+                engine.complete_generation_activation()?;
+            } else if !engine.generation_activation_published() {
+                engine.blocked = true;
+            }
+        }
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
@@ -538,9 +565,16 @@ impl Engine {
     /// Hold the same Engine and writer locks through read-only receipt/workspace
     /// admission, replay and authoritative reconciliation. No journal writer is
     /// opened until both preflights have accepted the retained evidence.
-    fn prepare_workspace_recovery(root: PathBuf, config: ValidatedConfig) -> Result<Self> {
+    /// Return fresh admission failures for the following journal diagnostics.
+    fn prepare_workspace_recovery(
+        root: PathBuf,
+        config: ValidatedConfig,
+    ) -> Result<(Self, Vec<RecoverySealFailure>)> {
+        let config = membership_transition::pending::activation::discover(config)?;
         let disk_resources = Arc::new(DiskResources::open(&config, true)?);
-        Self::prepare_recovery_resources(root, config, disk_resources)
+        let mut engine = Self::prepare_recovery_resources(root, config, disk_resources)?;
+        let warnings = engine.prepare_generation_resources()?;
+        Ok((engine, warnings))
     }
 
     fn prepare_recovery_resources(
@@ -561,6 +595,8 @@ impl Engine {
             historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
+            membership_fence: None,
+            pending_membership: None,
             snapshot: None,
             published_state_base: None,
             history_window_roots: None,
@@ -603,46 +639,54 @@ impl Engine {
         }
         let mut configs = BTreeMap::<String, (ValidatedConfig, usize)>::new();
         let mut seals = BTreeMap::new();
+        let mut anchor_failure = None;
         for path in disks {
             let seal = decode_seal(&read_bytes(&path.join("disk.json"), MAX_METADATA)?)?;
-            let config = ValidatedConfig::try_from(read_json::<Config>(
-                &path.join("metadata/pool-membership/config.json"),
-            )?)?;
-            let mut member = config
-                .disks
-                .iter()
-                .find(|disk| disk.disk_id == seal.disk_id && disk.metadata_member)
-                .cloned()
-                .ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::ConfigConflict,
-                        "recovery input is not a metadata member of its saved configuration",
-                    )
-                })?;
             let path = path.canonicalize()?;
-            member.root = path.clone();
-            validate_seal(&config, &member)?;
-            let hash = object_hash("pool-config", &config)?;
-            configs
-                .entry(hash)
-                .and_modify(|(_, n)| *n += 1)
-                .or_insert((config, 1));
-            if seals.insert(seal.disk_id, path).is_some() {
+            // Keep every input identity, including rejected anchors. A bad
+            // anchor cannot hide a duplicate or a foreign/nonmember disk.
+            if seals.insert(seal.disk_id.clone(), path.clone()).is_some() {
                 return Err(Error::new(
                     storage_contract::ErrorCode::ConfigConflict,
                     "duplicate disk id in recovery input",
                 ));
             }
+            let config = match config::read_recovery_anchor(&path, &seal) {
+                Ok(config) => config,
+                Err(error) => {
+                    let code = error.code();
+                    anchor_failure.get_or_insert_with(|| {
+                        error.context(
+                            code,
+                            format!(
+                                "recovery configuration anchor rejected for disk {} at {}",
+                                seal.disk_id,
+                                path.display(),
+                            ),
+                        )
+                    });
+                    continue;
+                }
+            };
+            let hash = match config.generation_hash() {
+                Some(hash) => hash.to_owned(),
+                None => object_hash("pool-config", &config)?,
+            };
+            configs
+                .entry(hash)
+                .and_modify(|(_, n)| *n += 1)
+                .or_insert((config, 1));
         }
         let mut agreed = configs
             .into_values()
             .filter(|(c, n)| *n >= c.metadata_quorum())
             .map(|(c, _)| c);
         let config = agreed.next().ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::ConfigConflict,
-                "a configured metadata majority does not agree on pool configuration",
-            )
+            let message = "a configured metadata majority does not agree on pool configuration";
+            match anchor_failure {
+                Some(source) => source.context(ErrorCode::ConfigConflict, message),
+                None => Error::new(ErrorCode::ConfigConflict, message),
+            }
         })?;
         if agreed.next().is_some()
             || seals.keys().any(|id| {
@@ -673,13 +717,18 @@ impl Engine {
         let config = config.with_workspace_limits(workspace_limits)?;
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
-        let mut engine = Self::prepare_workspace_recovery(root, config)?;
-        let mut prepared = engine.prepare_recovery()?;
+        let (mut engine, warnings) = Self::prepare_workspace_recovery(root, config)?;
+        let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
         engine.preflight_workspace_receipts(&mut prepared)?;
         // A quota failure must not publish a system configuration or replay any
         // journal repair. Preflight above retains the locks across publication.
-        write_json(&engine.root.join("config.json"), &engine.config, false)?;
+        if engine.config.generation().is_none() {
+            write_json(&engine.root.join("config.json"), &engine.config, false)?;
+        }
         engine.recover_prepared(RecoveryMode::CompletePending, prepared)?;
+        if engine.config.generation().is_some() {
+            engine.complete_generation_activation()?;
+        }
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)

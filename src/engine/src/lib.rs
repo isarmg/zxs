@@ -43,11 +43,14 @@ pub use engine::{
     IndexFailureStage, IndexHealth, IntegrityScrubArea, IntegrityScrubBatch,
     IntegrityScrubBatchAdmission, IntegrityScrubCancellation, IntegrityScrubCompletion,
     IntegrityScrubIssue, IntegrityScrubOutcome, IntegrityScrubPlan, IntegrityScrubReport,
-    IntegrityScrubSchedule, IntegrityScrubTarget, MetadataMemberProbe, MetadataView,
+    IntegrityScrubSchedule, IntegrityScrubTarget, MembershipArchiveInspection,
+    MembershipControlArchive, MembershipFenceStatus, MembershipJointDecisionStatus,
+    MembershipJointVote, MembershipJournalInspection, MetadataMemberProbe, MetadataView,
     ObservedDiskStatus, OpenedContent, OperationReadObservation, OperationReadPlan,
-    OperationRecord, RangeContent, ReadLease, RecoverySealContext, RecoverySealFailure,
-    RecoveryWarnings, RetainedWorkspaceLimits, ValidatedConfig, WorkspaceInventory,
-    WorkspaceInventoryRecord, WorkspaceReadPlan,
+    OperationRecord, PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
+    RangeContent, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
+    RetainedWorkspaceLimits, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
+    WorkspaceReadPlan, verify_membership_control_archive,
 };
 pub use history_package::{HistoryManifest, HistoryPackageReport, offline_check_history_package};
 pub use protection::{

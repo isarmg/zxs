@@ -70,6 +70,7 @@ impl Engine {
             prepared.candidates.clear();
             prepared.candidates.insert(*sequence, candidate);
         }
+        self.verify_membership_fence_prefix(published, previous.as_deref())?;
         // Main's operation and operation_principals maps remain authoritative.
         // Only the latest fully published State is needed for cold admission;
         // no alternate receipt index or persistent representation is introduced.
@@ -111,10 +112,7 @@ impl Engine {
             bound.snapshot = Some(shared);
             state
         } else {
-            Arc::new(State {
-                topology_generation: 1,
-                ..State::default()
-            })
+            Arc::clone(&self.state)
         };
         // The seed is read-only and borrows this verified publication view only
         // for admission. Replay must still start from its original prefix.
@@ -135,6 +133,11 @@ impl Engine {
         let candidate: Candidate =
             verified_object_at(&self.disk_resources, online, "candidate", hash)?;
         self.verify_candidate_membership(&candidate)?;
+        if let Some(generation) = self.config.generation()
+            && previous == &generation.snapshot()
+        {
+            generation.verify_activation_candidate(&candidate)?;
+        }
         if candidate.sequence != sequence
             || candidate.pool_id != self.config.pool_id
             || &candidate.previous_snapshot != previous

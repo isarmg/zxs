@@ -17,6 +17,12 @@ pub(crate) enum RecordType {
     Finalize,
     Publication,
     Reprotect,
+    #[serialization(rename = "MEMBERSHIP_FENCE")]
+    MembershipFence,
+    #[serialization(rename = "MEMBERSHIP_CONTROL_BOOTSTRAP")]
+    MembershipControlBootstrap,
+    #[serialization(rename = "MEMBERSHIP_JOINT_ACCEPT")]
+    MembershipJointAccept,
 }
 impl<'de> Deserialize<'de> for RecordType {
     fn deserialize<D: data_serialization::Deserializer<'de>>(
@@ -29,15 +35,27 @@ impl<'de> Deserialize<'de> for RecordType {
             "FINALIZE" => Ok(Self::Finalize),
             "PUBLICATION" => Ok(Self::Publication),
             "REPROTECT" => Ok(Self::Reprotect),
+            "MEMBERSHIP_FENCE" => Ok(Self::MembershipFence),
+            "MEMBERSHIP_CONTROL_BOOTSTRAP" => Ok(Self::MembershipControlBootstrap),
+            "MEMBERSHIP_JOINT_ACCEPT" => Ok(Self::MembershipJointAccept),
             token => Err(data_serialization::de::Error::unknown_variant(
                 token,
-                &["PREPARE", "ACCEPT", "FINALIZE", "PUBLICATION", "REPROTECT"],
+                &[
+                    "PREPARE",
+                    "ACCEPT",
+                    "FINALIZE",
+                    "PUBLICATION",
+                    "REPROTECT",
+                    "MEMBERSHIP_FENCE",
+                    "MEMBERSHIP_CONTROL_BOOTSTRAP",
+                    "MEMBERSHIP_JOINT_ACCEPT",
+                ],
             )),
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Record {
     pub record_type: RecordType,
@@ -47,7 +65,7 @@ pub(crate) struct Record {
     pub object_hash: String,
     pub previous_frame_hash: String,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Receipt {
     pub disk_id: String,
@@ -96,7 +114,20 @@ pub(crate) fn scan(d: &DiskConfig) -> Result<Scan> {
     scan_at(&DiskRoot::open(&d.root)?, d)
 }
 pub(crate) fn scan_at(root: &DiskRoot, d: &DiskConfig) -> Result<Scan> {
-    match root.open_optional_regular(&log_path(d))? {
+    scan_path_at(root, &log_path(d))
+}
+pub(crate) fn scan_configured_at(
+    root: &DiskRoot,
+    d: &DiskConfig,
+    config: &ValidatedConfig,
+) -> Result<Scan> {
+    scan_path_at(
+        root,
+        &crate::engine::membership_transition::pending::activation::log_path(config, d),
+    )
+}
+fn scan_path_at(root: &DiskRoot, path: &Path) -> Result<Scan> {
+    match root.open_optional_regular(path)? {
         Some(file) => scan_frames(BufReader::new(file)),
         None => Ok(Scan {
             records: Vec::new(),
@@ -106,8 +137,33 @@ pub(crate) fn scan_at(root: &DiskRoot, d: &DiskConfig) -> Result<Scan> {
     }
 }
 
+mod pending;
+pub(crate) use pending::PendingJournal;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JournalNamespace {
+    Active,
+    Pending,
+    Joint,
+}
+impl JournalNamespace {
+    fn accepts(self, kind: RecordType) -> bool {
+        match kind {
+            RecordType::Prepare
+            | RecordType::Accept
+            | RecordType::Finalize
+            | RecordType::Publication
+            | RecordType::Reprotect
+            | RecordType::MembershipFence => self == Self::Active,
+            RecordType::MembershipControlBootstrap => self == Self::Pending,
+            RecordType::MembershipJointAccept => self == Self::Joint,
+        }
+    }
+}
+
 /// Existing bytes stay untouched until recovery has accepted the publication prefix.
 pub(crate) struct OpenJournal {
+    namespace: JournalNamespace,
     directory: std::fs::File,
     file: Option<std::fs::File>,
     pub scan: Scan,
@@ -119,11 +175,28 @@ impl OpenJournal {
     pub(crate) fn scan(d: &DiskConfig) -> Result<Self> {
         Self::scan_at(&DiskRoot::open(&d.root)?, d)
     }
+    #[cfg(test)]
     pub(crate) fn scan_at(root: &DiskRoot, d: &DiskConfig) -> Result<Self> {
-        let directory = root.directory(log_path(d).parent().expect("journal parent"))?;
+        Self::scan_directory(
+            root.directory(log_path(d).parent().expect("journal parent"))?,
+            JournalNamespace::Active,
+        )
+    }
+    pub(crate) fn scan_configured_at(
+        root: &DiskRoot,
+        d: &DiskConfig,
+        config: &ValidatedConfig,
+    ) -> Result<Self> {
+        let path = crate::engine::membership_transition::pending::activation::log_path(config, d);
+        Self::scan_directory(
+            root.directory(path.parent().expect("invariant: journal parent"))?,
+            JournalNamespace::Active,
+        )
+    }
+    fn scan_directory(directory: std::fs::File, namespace: JournalNamespace) -> Result<Self> {
         let file = open_existing_journal(&directory, &journal_name())?;
         let scan = match &file {
-            Some(file) => scan_frames(BufReader::new(file))?,
+            Some(file) => scan_frames_namespace(BufReader::new(file), namespace)?,
             None => Scan {
                 records: Vec::new(),
                 valid_bytes: 0,
@@ -131,6 +204,7 @@ impl OpenJournal {
             },
         };
         Ok(Self {
+            namespace,
             directory,
             file,
             scan,
@@ -142,18 +216,16 @@ impl OpenJournal {
     /// duplicated for the writer's independently mutable receipt tail.
     pub(crate) fn into_writer(self) -> Result<(JournalWriter, Vec<(Record, String)>)> {
         let file = match self.file {
-            Some(file) => {
-                // A surviving leaf may come from a failed creation before its directory fence.
-                sync_open_journal(
-                    &file,
-                    &self.directory,
-                    #[cfg(feature = "fault-injection")]
-                    self.opening_fault,
-                )?;
-                file
-            }
-            None => create_synced_journal(&self.directory)?,
+            Some(file) => file,
+            None => create_journal(&self.directory, &journal_name())?,
         };
+        // A surviving leaf may come from a failed creation before its directory fence.
+        sync_open_journal(
+            &file,
+            &self.directory,
+            #[cfg(feature = "fault-injection")]
+            self.opening_fault,
+        )?;
         let records = self.scan.records;
         let start = records.last().map_or(0, |(last, _)| {
             records.partition_point(|(record, _)| record.sequence < last.sequence)
@@ -161,6 +233,7 @@ impl OpenJournal {
         let tail = records[start..].to_vec();
         Ok((
             JournalWriter {
+                namespace: self.namespace,
                 file,
                 records: tail,
                 state: if self.scan.torn_tail {
@@ -179,6 +252,7 @@ impl OpenJournal {
 /// The same bounded frame/chain parser serves recovery and streaming scrub.
 /// This reader never repairs a torn tail or opens a writable descriptor.
 pub(crate) struct JournalFrameReader<R> {
+    namespace: JournalNamespace,
     reader: R,
     previous: String,
     last_sequence: u64,
@@ -188,7 +262,11 @@ pub(crate) struct JournalFrameReader<R> {
 
 impl<R: Read> JournalFrameReader<R> {
     pub(crate) fn new(reader: R) -> Self {
+        Self::with_namespace(reader, JournalNamespace::Active)
+    }
+    fn with_namespace(reader: R, namespace: JournalNamespace) -> Self {
         Self {
+            namespace,
             reader,
             previous: "0".repeat(64),
             last_sequence: 0,
@@ -225,6 +303,12 @@ impl<R: Read> JournalFrameReader<R> {
         let got = read_fill_with_limit(&mut self.reader, &mut header, maximum_read, observe)?;
         if got == 0 {
             return Ok(None);
+        }
+        if self.namespace != JournalNamespace::Active && self.valid_bytes != 0 {
+            return Err(Error::new(
+                ErrorCode::LogCorrupt,
+                "membership singleton journal contains a second frame",
+            ));
         }
         if got < LOG_HEADER_BYTES {
             self.torn_tail = true;
@@ -271,7 +355,8 @@ impl<R: Read> JournalFrameReader<R> {
         let record: Record = decode_strict(&payload).map_err(|source| {
             Error::from(source).context(ErrorCode::LogCorrupt, "log record JSON is invalid")
         })?;
-        if canonical_json(&record)? != payload
+        if !self.namespace.accepts(record.record_type)
+            || canonical_json(&record)? != payload
             || record.previous_frame_hash != self.previous
             || record.sequence < self.last_sequence
         {
@@ -288,7 +373,10 @@ impl<R: Read> JournalFrameReader<R> {
 }
 
 fn scan_frames(reader: impl Read) -> Result<Scan> {
-    let mut reader = JournalFrameReader::new(reader);
+    scan_frames_namespace(reader, JournalNamespace::Active)
+}
+fn scan_frames_namespace(reader: impl Read, namespace: JournalNamespace) -> Result<Scan> {
+    let mut reader = JournalFrameReader::with_namespace(reader, namespace);
     let mut records = Vec::new();
     while let Some(record) = reader.next_record()? {
         records.push(record);
@@ -303,6 +391,8 @@ fn scan_frames(reader: impl Read) -> Result<Scan> {
 enum AppendMode {
     Live,
     Recovery,
+    Pending,
+    Joint,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -321,6 +411,7 @@ pub enum JournalFault {
 
 /// The Engine owns this descriptor and its current decision-slot receipts.
 pub(crate) struct JournalWriter {
+    namespace: JournalNamespace,
     file: std::fs::File,
     records: Vec<(Record, String)>,
     state: WriterState,
@@ -375,6 +466,7 @@ impl JournalWriter {
     pub(crate) fn create_at(root: &DiskRoot, d: &DiskConfig) -> Result<Self> {
         let directory = root.directory(log_path(d).parent().expect("journal parent"))?;
         Ok(Self {
+            namespace: JournalNamespace::Active,
             file: create_synced_journal(&directory)?,
             records: Vec::new(),
             state: WriterState::Ready,
@@ -452,6 +544,21 @@ impl JournalWriter {
         object: &str,
         mode: AppendMode,
     ) -> Result<Receipt> {
+        if !self.namespace.accepts(kind)
+            || !matches!(
+                (mode, self.namespace),
+                (
+                    AppendMode::Live | AppendMode::Recovery,
+                    JournalNamespace::Active
+                ) | (AppendMode::Pending, JournalNamespace::Pending)
+                    | (AppendMode::Joint, JournalNamespace::Joint)
+            )
+        {
+            return Err(Error::new(
+                ErrorCode::LogCorrupt,
+                "record belongs to another journal namespace",
+            ));
+        }
         if self.state == WriterState::RecoveryRequired
             || (mode == AppendMode::Live && self.needs_recovery())
         {
@@ -473,6 +580,12 @@ impl JournalWriter {
                 record: record.clone(),
             });
         }
+        if self.namespace != JournalNamespace::Active && !self.records.is_empty() {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "membership singleton journal binding differs",
+            ));
+        }
         self.check_slot(sequence, candidate)?;
         let record = Record {
             record_type: kind,
@@ -492,7 +605,7 @@ impl JournalWriter {
         bytes.extend(payload);
         let hash = blake3::hash(&bytes);
         bytes.extend(hash.as_bytes());
-        if mode == AppendMode::Recovery {
+        if mode != AppendMode::Live {
             self.repair_torn_tail()?;
         }
         // A partial write, failed sync, or unwind leaves the writer unusable until recovery.
@@ -568,6 +681,7 @@ pub(crate) fn store_object_at<T: Serialize + ?Sized>(
 /// Frozen canonical bytes shared by size preflight and every replica write.
 /// Construction performs all serialization and hashing; installation retains
 /// atomic writes, immutable-byte collision checks and reader-size limits.
+#[derive(Clone)]
 pub(crate) struct PreparedMetadataObject {
     kind: &'static str,
     pub(crate) hash: String,
@@ -1002,21 +1116,8 @@ pub(crate) struct VersionEvidence {
     pub version: FileVersion,
     pub placement: Placement,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub(crate) struct Candidate {
-    pub pool_id: String,
-    #[serialization(with = "storage_contract::u64_string")]
-    pub sequence: u64,
-    pub transaction_id: String,
-    pub operation_id: OperationId,
-    pub request_digest: String,
-    pub previous_snapshot: Option<String>,
-    pub snapshot_hash: String,
-    pub versions: Vec<VersionEvidence>,
-    pub metadata_disk_ids: Vec<String>,
-    pub history_roots: crate::metadata_map::Reference,
-}
+mod candidate;
+pub(crate) use candidate::{Candidate, CandidateData};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(crate) struct Finalize {
@@ -1237,13 +1338,6 @@ pub(crate) struct ContentTombstone {
     pub snapshot: Snapshot,
     pub content_state_proof: crate::metadata_map::InclusionProof,
 }
-fn read_local_json<T: data_serialization::de::DeserializeOwned>(
-    path: &Path,
-    read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
-) -> Result<T> {
-    decode_strict(&read(path)?).map_err(Into::into)
-}
-
 /// Offline receipts must bind the saved pool membership, not a smaller set
 /// declared by their own candidate. Verification never creates a missing anchor.
 fn verify_local_membership(
@@ -1253,28 +1347,11 @@ fn verify_local_membership(
     read: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
     metadata: Option<&crate::engine::provenance::MetadataReadContext<'_>>,
 ) -> Result<()> {
-    let loaded =
-        read_local_json::<Config>(&root.join("metadata/pool-membership/config.json"), read)
-            .and_then(ValidatedConfig::try_from);
-    let config = match metadata {
-        Some(metadata) => metadata.membership(loaded)?,
-        None => loaded?,
-    };
-    let expected = config
-        .disks
-        .iter()
-        .filter(|d| d.metadata_member)
-        .map(|d| d.disk_id.clone())
-        .collect::<BTreeSet<_>>();
-    let actual = candidate
-        .metadata_disk_ids
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    if config.pool_id != candidate.pool_id
-        || seal.pool_id != config.pool_id
-        || actual != expected
-        || actual.len() != candidate.metadata_disk_ids.len()
+    let config =
+        crate::engine::membership_transition::pending::activation::verify_local_membership(
+            root, candidate, seal, read, metadata,
+        )?;
+    if seal.pool_id != config.pool_id
         || !config.disks.iter().any(|d| {
             d.disk_id == seal.disk_id
                 && d.slot_id == seal.slot_id

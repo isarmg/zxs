@@ -67,6 +67,8 @@ pub(crate) struct DiskSeal {
 pub(crate) enum DiskSealFormat {
     #[serialization(rename = "managed-directory")]
     ManagedDirectory,
+    #[serialization(rename = "membership-generation")]
+    MembershipGeneration { authority_hash: String },
 }
 
 /// Add identity context only after bounded file I/O has succeeded.
@@ -928,13 +930,22 @@ pub(crate) fn identity(config: &ValidatedConfig, disk: &DiskConfig) -> Result<Di
     Ok(seal_for_root(config, disk, &m))
 }
 
-fn identity_at(config: &ValidatedConfig, disk: &DiskConfig, root: &File) -> Result<DiskSeal> {
+pub(crate) fn identity_at(
+    config: &ValidatedConfig,
+    disk: &DiskConfig,
+    root: &File,
+) -> Result<DiskSeal> {
     Ok(seal_for_root(config, disk, &root.metadata()?))
 }
 
 fn seal_for_root(config: &ValidatedConfig, disk: &DiskConfig, metadata: &fs::Metadata) -> DiskSeal {
     DiskSeal {
-        format: DiskSealFormat::ManagedDirectory,
+        format: match config.generation_hash() {
+            None => DiskSealFormat::ManagedDirectory,
+            Some(hash) => DiskSealFormat::MembershipGeneration {
+                authority_hash: hash.to_owned(),
+            },
+        },
         pool_id: config.pool_id.clone(),
         disk_id: disk.disk_id.clone(),
         slot_id: disk.slot_id.clone(),

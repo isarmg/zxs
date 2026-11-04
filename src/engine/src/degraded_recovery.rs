@@ -247,7 +247,10 @@ impl RecoveryPlan {
 
     /// Admit the frozen plan against its candidate before recovery writes.
     /// Actual recovery receipts and publication results are verified separately.
-    fn validate_for_candidate(&self, c: &Candidate) -> Result<BTreeSet<(String, String)>> {
+    pub(crate) fn validate_for_candidate(
+        &self,
+        c: &Candidate,
+    ) -> Result<BTreeSet<(String, String)>> {
         let bad = || {
             Error::new(
                 storage_contract::ErrorCode::PublicationInvalid,
@@ -433,7 +436,7 @@ impl Engine {
         let mut accepts = Vec::new();
         for disk in self.members() {
             let root = &self.disk_resources.get(&disk)?.root;
-            let scanned = scan_at(root, &disk)?;
+            let scanned = scan_configured_at(root, &disk, &self.config)?;
             if scanned.torn_tail {
                 return Err(required("a torn log cannot exclude an earlier publication"));
             }
@@ -505,7 +508,12 @@ impl Engine {
                             .as_deref()
                                 == Some(plan.recovery_id.as_str())
                         }
-                        RecordType::Prepare | RecordType::Accept | RecordType::Publication => false,
+                        RecordType::Prepare
+                        | RecordType::Accept
+                        | RecordType::Publication
+                        | RecordType::MembershipFence
+                        | RecordType::MembershipControlBootstrap
+                        | RecordType::MembershipJointAccept => false,
                     };
                     if !valid || record.record.candidate_hash != hash {
                         return Err(required(
@@ -584,6 +592,7 @@ impl Engine {
         principal: &str,
         reason: &str,
     ) -> Result<RecoveryPlan> {
+        self.require_unfenced_membership()?;
         if principal.is_empty() || reason.trim().is_empty() || reason.len() > 4096 {
             return Err(Error::new(
                 storage_contract::ErrorCode::InvalidRequest,
@@ -732,6 +741,7 @@ impl Engine {
         principal: &str,
         accept_permanent_loss: bool,
     ) -> Result<OperationResult> {
+        self.require_unfenced_membership()?;
         self.require_no_commit_preparation()?;
         let plan = self.recovery_plan(id)?;
         if plan.digest != digest || plan.principal != principal {
@@ -932,7 +942,7 @@ impl Engine {
             .insert(candidate.operation_id, result.clone());
         self.state = std::sync::Arc::new(next);
         self.bind_recovered_history_roots(roots);
-        self.snapshot = Some(candidate.snapshot_hash);
+        self.snapshot = Some(candidate.snapshot_hash.clone());
         self.next_slot = self.next_slot.max(
             candidate
                 .sequence

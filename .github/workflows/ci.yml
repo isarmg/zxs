@@ -2,6 +2,10 @@ name: CI
 
 on:
   push:
+    # Experimental membership batches have their own bounded validation job.
+    # Main, pull requests and manual full-CI runs retain the existing gates.
+    branches-ignore: ['verify/membership-*']
+    tags: ['**']
   pull_request:
   workflow_dispatch:
 

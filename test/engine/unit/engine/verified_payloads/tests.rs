@@ -83,30 +83,33 @@ fn fixture_with_payload_and_members(
             request_digest: None,
         })
         .unwrap();
-    let candidate = Candidate {
-        pool_id: engine.config.pool_id.clone(),
-        sequence: engine.state.sequence,
-        transaction_id: new_id("tx").unwrap(),
-        operation_id: result.operation_id,
-        request_digest: result.request_digest,
-        previous_snapshot: None,
-        snapshot_hash: engine.snapshot.clone().unwrap(),
-        versions: engine
-            .state
-            .versions
-            .values()
-            .map(|version| VersionEvidence {
-                version: version.clone(),
-                placement: engine.state.placements[&version.version_id].clone(),
-            })
-            .collect(),
-        metadata_disk_ids: engine
-            .members()
-            .iter()
-            .map(|disk| disk.disk_id.clone())
-            .collect(),
-        history_roots: crate::journal::stored_map(&[], json_codec::Map::new()),
-    };
+    let candidate = Candidate::new(
+        CandidateData {
+            pool_id: engine.config.pool_id.clone(),
+            sequence: engine.state.sequence,
+            transaction_id: new_id("tx").unwrap(),
+            operation_id: result.operation_id,
+            request_digest: result.request_digest,
+            previous_snapshot: None,
+            snapshot_hash: engine.snapshot.clone().unwrap(),
+            versions: engine
+                .state
+                .versions
+                .values()
+                .map(|version| VersionEvidence {
+                    version: version.clone(),
+                    placement: engine.state.placements[&version.version_id].clone(),
+                })
+                .collect(),
+            metadata_disk_ids: engine
+                .members()
+                .iter()
+                .map(|disk| disk.disk_id.clone())
+                .collect(),
+            history_roots: crate::journal::stored_map(&[], json_codec::Map::new()),
+        },
+        None,
+    );
     (temp, engine, candidate)
 }
 #[test]
@@ -1092,7 +1095,10 @@ fn ordered_proofs_reject_version_slot_hash_and_count_mismatches() {
             "missing" => {
                 changed.versions.pop();
             }
-            "extra" => changed.versions.push(changed.versions[0].clone()),
+            "extra" => {
+                let extra = changed.versions[0].clone();
+                changed.versions.push(extra);
+            }
             _ => unreachable!(),
         }
         assert_eq!(
@@ -1121,7 +1127,8 @@ fn ordered_proofs_reject_version_slot_hash_and_count_mismatches() {
     for extra in [false, true] {
         let mut changed = candidate.clone();
         if extra {
-            changed.versions.push(changed.versions[0].clone());
+            let extra = changed.versions[0].clone();
+            changed.versions.push(extra);
         } else {
             changed.versions.pop();
         }

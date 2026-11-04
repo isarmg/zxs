@@ -222,7 +222,11 @@ impl Engine {
             mut first_error,
         } = self.trusted_evidence_members();
         for disk in &members {
-            let scanned = match scan_at(&self.disk_resources.get(disk)?.root, disk) {
+            let scanned = match scan_configured_at(
+                &self.disk_resources.get(disk)?.root,
+                disk,
+                &self.config,
+            ) {
                 Ok(scanned) => scanned,
                 Err(error) => {
                     first_error.get_or_insert(error);

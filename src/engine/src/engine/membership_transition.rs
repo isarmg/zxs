@@ -1,0 +1,421 @@
+//! First pure-add handoff: original fence, independent archive, pending joint
+//! authority and explicit generation activation. Successor/removal transitions
+//! remain unsupported; the fence alone never grants target write authority.
+use super::{Engine, ValidatedConfig, recovery_checkpoint::Records};
+use crate::{disk::*, journal::*, publication_evidence::verified_object_at, *};
+use data_serialization::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+mod archive;
+pub(crate) mod pending;
+pub use archive::{
+    MembershipArchiveInspection, MembershipControlArchive, MembershipJournalInspection,
+    verify_membership_control_archive,
+};
+pub use pending::{
+    MembershipJointDecisionStatus, MembershipJointVote, PendingMemberControlReceipt,
+    PendingMemberDirectory, PendingMembershipStatus,
+};
+
+const INTENT_KIND: &str = "membership-transition";
+
+/// This stage admits only an original pool's first handoff. A later completed
+/// transition requires its own authenticated predecessor, not a default genesis.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(tag = "kind", deny_unknown_fields)]
+enum Origin {
+    Genesis { config: ValidatedConfig },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct PublishedBoundary {
+    #[serialization(with = "storage_contract::u64_string")]
+    sequence: u64,
+    candidate_hash: String,
+    snapshot_hash: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct TransitionIntent {
+    operation_id: OperationId,
+    principal: String,
+    origin: Origin,
+    target: ValidatedConfig,
+    boundary: Option<PublishedBoundary>,
+    #[serialization(with = "storage_contract::u64_string")]
+    fence_sequence: u64,
+}
+
+#[derive(Clone)]
+pub(super) struct AdmittedFence {
+    intent: TransitionIntent,
+    hash: String,
+    receipts: BTreeMap<String, Receipt>,
+}
+
+/// Observed, synchronized old-member fence receipts. Neither a quorum nor all
+/// receipts authorizes the target membership to write or retire any old disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MembershipFenceStatus {
+    pub operation_id: OperationId,
+    pub transition_hash: String,
+    pub confirmed_members: usize,
+    pub original_members: usize,
+    pub original_quorum: usize,
+}
+impl MembershipFenceStatus {
+    pub fn quorum_fenced(&self) -> bool {
+        self.confirmed_members >= self.original_quorum
+    }
+    pub fn all_members_fenced(&self) -> bool {
+        self.confirmed_members == self.original_members
+    }
+}
+
+impl Engine {
+    pub fn membership_fence_status(&self) -> Option<MembershipFenceStatus> {
+        self.membership_fence
+            .as_ref()
+            .map(|fence| MembershipFenceStatus {
+                operation_id: fence.intent.operation_id,
+                transition_hash: fence.hash.clone(),
+                confirmed_members: fence.receipts.len(),
+                original_members: self.config.metadata_members().len(),
+                original_quorum: self.config.metadata_quorum(),
+            })
+    }
+
+    pub(crate) fn require_unfenced_membership(&self) -> Result<()> {
+        if self.membership_fence.is_some() {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "membership handoff has started or may have persisted; original writes remain blocked",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Experimental first barrier, not an add/remove operation. It permanently
+    /// pauses old business decisions. First pure-add activation is explicit;
+    /// cancellation and subsequent membership transitions are not supported.
+    /// It writes only the existing members. Target paths are not opened or created.
+    /// A failed append may have persisted: inspect/reopen and retry the same intent.
+    pub fn begin_membership_handoff(
+        &mut self,
+        target: Config,
+        principal: &str,
+        operation_id: OperationId,
+    ) -> Result<MembershipFenceStatus> {
+        if self.config.generation().is_some() {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "repeated membership transitions are not supported by the first-add protocol",
+            ));
+        }
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let target = ValidatedConfig::try_from(target)?;
+        self.validate_handoff_target(&target)?;
+        if let Some(fence) = &self.membership_fence {
+            if fence.intent.operation_id != operation_id
+                || fence.intent.principal != principal
+                || object_hash("membership-target", &fence.intent.target)?
+                    != object_hash("membership-target", &target)?
+            {
+                return Err(Error::new(
+                    ErrorCode::IdempotencyKeyReused,
+                    "the pending membership handoff has a different actor, operation or target",
+                ));
+            }
+        } else {
+            self.require_write()?;
+            if self.state.operations.contains_key(&operation_id) {
+                return Err(Error::new(
+                    ErrorCode::IdempotencyKeyReused,
+                    "membership operation already belongs to a published business decision",
+                ));
+            }
+            let next_slot = self.next_slot.checked_add(1).ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "membership fence sequence exhausted",
+                )
+            })?;
+            let intent = TransitionIntent {
+                operation_id,
+                principal: principal.to_owned(),
+                origin: Origin::Genesis {
+                    config: self.config.clone(),
+                },
+                target,
+                boundary: self.handoff_boundary()?,
+                fence_sequence: self.next_slot,
+            };
+            let prepared = PreparedMetadataObject::new(INTENT_KIND, &intent, MAX_METADATA)?;
+            let members = self.members();
+            // No fence is issued until every original held member still belongs
+            // to this pool, and every journal can append at a clean boundary.
+            self.validate_fence_members(&members)?;
+            if self.journals.values().any(JournalWriter::needs_recovery) {
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "a new membership fence requires clean original journals",
+                ));
+            }
+            self.blocked = true;
+            self.metadata_integrity.invalidate();
+            self.published_state_base = None;
+            self.next_slot = next_slot;
+            self.membership_fence = Some(AdmittedFence {
+                intent,
+                hash: prepared.hash,
+                receipts: BTreeMap::new(),
+            });
+        }
+        self.persist_membership_fence()
+    }
+
+    fn validate_handoff_target(&self, target: &ValidatedConfig) -> Result<()> {
+        if target.pool_id != self.config.pool_id || self.config.same_metadata_membership(target) {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "handoff must retain the pool identity and change its fixed metadata members",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_fence_members(&self, members: &[DiskConfig]) -> Result<()> {
+        for disk in members {
+            super::provenance::validate_owned_seal(
+                &self.disk_resources,
+                disk,
+                &self.metadata_integrity,
+            )?;
+            let saved: ValidatedConfig = self.disk_resources.get(disk)?.root.read_json_observed(
+                &disk.root.join("metadata/pool-membership/config.json"),
+                &mut |_| Ok(()),
+            )?;
+            self.config.verify_saved_metadata_membership(&saved)?;
+            if self
+                .journals
+                .get(&disk.disk_id)
+                .is_none_or(JournalWriter::requires_reopen)
+            {
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "membership fence needs every original journal at a clean boundary",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn handoff_boundary(&self) -> Result<Option<PublishedBoundary>> {
+        let Some(snapshot) = &self.snapshot else {
+            return Ok(None);
+        };
+        let disk = self
+            .config
+            .metadata_members()
+            .next()
+            .expect("invariant: nonempty membership");
+        let scan = scan_at(&self.disk_resources.get(disk)?.root, disk)?;
+        let record = scan
+            .records
+            .iter()
+            .find(|(record, _)| {
+                record.sequence == self.state.sequence
+                    && record.record_type == RecordType::Publication
+            })
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "published handoff prefix has no original publication record",
+                )
+            })?;
+        let candidate: Candidate = verified_object_at(
+            &self.disk_resources,
+            &self.members(),
+            "candidate",
+            &record.0.candidate_hash,
+        )?;
+        self.verify_candidate_membership(&candidate)?;
+        if candidate.sequence != self.state.sequence || &candidate.snapshot_hash != snapshot {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "handoff prefix differs from visible state",
+            ));
+        }
+        Ok(Some(PublishedBoundary {
+            sequence: candidate.sequence,
+            candidate_hash: record.0.candidate_hash.clone(),
+            snapshot_hash: snapshot.clone(),
+        }))
+    }
+
+    fn persist_membership_fence(&mut self) -> Result<MembershipFenceStatus> {
+        let members = self.members();
+        self.validate_fence_members(&members)?;
+        let fence = self
+            .membership_fence
+            .as_ref()
+            .expect("invariant: handoff is admitted");
+        let sequence = fence.intent.fence_sequence;
+        let hash = fence.hash.clone();
+        // Reinstall the exact intent before extending a partial fence. This does
+        // not repair, relabel or replace any existing Candidate or receipt.
+        PreparedMetadataObject::new(INTENT_KIND, &fence.intent, MAX_METADATA)?
+            .store_at(&self.disk_resources, &members)?;
+        for disk in &members {
+            let journal = self
+                .journals
+                .get_mut(&disk.disk_id)
+                .expect("invariant: fence writer admission requires every journal");
+            // Only the already admitted same-intent resume repairs a torn tail.
+            // No ordinary candidate completion runs on this path.
+            journal.repair_torn_tail()?;
+            let receipt =
+                journal.append(disk, RecordType::MembershipFence, sequence, &hash, &hash)?;
+            self.membership_fence
+                .as_mut()
+                .expect("invariant: handoff is admitted")
+                .receipts
+                .insert(disk.disk_id.clone(), receipt);
+            #[cfg(feature = "fault-injection")]
+            self.failpoint(&format!(
+                "after_membership_fence_{}",
+                self.membership_fence
+                    .as_ref()
+                    .expect("invariant: handoff is admitted")
+                    .receipts
+                    .len()
+            ))?;
+        }
+        Ok(self
+            .membership_fence_status()
+            .expect("invariant: handoff is admitted"))
+    }
+
+    pub(super) fn admit_membership_fence(
+        &mut self,
+        online: &[DiskConfig],
+        records: &Records,
+    ) -> Result<()> {
+        let fences = records
+            .values()
+            .flat_map(|slot| slot.values())
+            .flatten()
+            .filter(|receipt| receipt.record.record_type == RecordType::MembershipFence)
+            .collect::<Vec<_>>();
+        let Some(first) = fences.first() else {
+            return Ok(());
+        };
+        if self.config.generation().is_some() {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "a later generation fence blocks this first-add implementation",
+            ));
+        }
+        let hash = &first.record.object_hash;
+        let intent: TransitionIntent =
+            verified_object_at(&self.disk_resources, online, INTENT_KIND, hash)?;
+        let Origin::Genesis { config } = &intent.origin;
+        self.config.verify_saved_metadata_membership(config)?;
+        self.validate_handoff_target(&intent.target)?;
+        Self::require_actor(&intent.principal)?;
+        let boundary_sequence = intent.boundary.as_ref().map_or(0, |base| base.sequence);
+        if intent.fence_sequence <= boundary_sequence || intent.fence_sequence == u64::MAX {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "membership fence does not follow its published prefix",
+            ));
+        }
+        let mut receipts = BTreeMap::new();
+        for receipt in fences {
+            if !receipt_binds(
+                receipt,
+                RecordType::MembershipFence,
+                intent.fence_sequence,
+                hash,
+                hash,
+            )? {
+                return Err(Error::new(
+                    ErrorCode::LogFork,
+                    "conflicting membership fences",
+                ));
+            }
+            if receipts
+                .insert(receipt.disk_id.clone(), receipt.clone())
+                .is_some()
+            {
+                return Err(Error::new(
+                    ErrorCode::LogFork,
+                    "duplicate membership fence in one journal",
+                ));
+            }
+        }
+        for (sequence, candidates) in records {
+            for (candidate_hash, entries) in candidates {
+                for receipt in entries {
+                    if receipt.record.record_type == RecordType::MembershipFence {
+                        continue;
+                    }
+                    if *sequence >= intent.fence_sequence
+                        || (*sequence > boundary_sequence
+                            && matches!(
+                                receipt.record.record_type,
+                                RecordType::Accept
+                                    | RecordType::Finalize
+                                    | RecordType::Publication
+                                    | RecordType::Reprotect
+                            ))
+                        || (*sequence == boundary_sequence
+                            && intent
+                                .boundary
+                                .as_ref()
+                                .is_some_and(|base| candidate_hash != &base.candidate_hash))
+                    {
+                        return Err(Error::new(
+                            ErrorCode::LogFork,
+                            "business decision conflicts with the frozen membership prefix",
+                        ));
+                    }
+                }
+            }
+        }
+        self.blocked = true;
+        self.membership_fence = Some(AdmittedFence {
+            intent,
+            hash: hash.clone(),
+            receipts,
+        });
+        Ok(())
+    }
+
+    pub(super) fn verify_membership_fence_prefix(
+        &self,
+        sequence: Option<u64>,
+        snapshot: Option<&str>,
+    ) -> Result<()> {
+        let Some(fence) = &self.membership_fence else {
+            return Ok(());
+        };
+        let expected = fence.intent.boundary.as_ref();
+        if sequence != expected.map(|base| base.sequence)
+            || snapshot != expected.map(|base| base.snapshot_hash.as_str())
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "membership fence requires its exact fully published historical prefix",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/membership_transition_tests.rs"]
+mod tests;

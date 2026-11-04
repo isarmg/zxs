@@ -314,9 +314,8 @@ impl DiskHandle {
         let root = DiskRoot::open(&disk.root)?;
         let seal = identity_at(config, disk, root.directory.directory())?;
         if sealed {
-            let stored =
-                decode_seal(&root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?)?;
-            validate_stored_seal(&stored, &seal)?;
+            let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+            validate_stored_seal(&decode_seal(&bytes)?, &seal)?;
         }
         Ok(Self { root, seal })
     }
@@ -368,6 +367,19 @@ impl DiskResources {
         Ok(Self { disks })
     }
 
+    pub(crate) fn open_activation(config: &ValidatedConfig) -> Result<Self> {
+        let mut disks = BTreeMap::new();
+        for disk in &config.disks {
+            let root = DiskRoot::open(&disk.root)?;
+            let seal = identity_at(config, disk, &root.directory(root.path())?)?;
+            let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+            crate::engine::membership_transition::pending::activation::predecessor_seal_matches(
+                config, disk, &root, &bytes, &seal,
+            )?;
+            disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle { root, seal }));
+        }
+        Ok(Self { disks })
+    }
     pub(crate) fn initialize_held(
         config: &ValidatedConfig,
         directories: Vec<File>,
@@ -420,14 +432,33 @@ impl DiskResources {
                 ));
             }
             let seal = identity_at(config, disk, root.directory.directory())?;
-            let stored =
-                decode_seal(&root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?)?;
-            validate_stored_seal(&stored, &seal)?;
+            let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
+            validate_stored_seal(&decode_seal(&bytes)?, &seal)?;
             disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle { root, seal }));
         }
         Ok(Self { disks })
     }
 
+    pub(crate) fn generation_handles(
+        config: &ValidatedConfig,
+        handles: Vec<Arc<DiskHandle>>,
+    ) -> Result<Self> {
+        let mut disks = BTreeMap::new();
+        for handle in handles {
+            let disk = config
+                .disks
+                .iter()
+                .find(|disk| disk.disk_id == handle.seal.disk_id)
+                .expect("invariant: retained generation disk");
+            let root = DiskRoot::from_directory(
+                disk.root.clone(),
+                handle.root.directory(handle.root.path())?,
+            )?;
+            let seal = identity_at(config, disk, &root.directory(root.path())?)?;
+            disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle { root, seal }));
+        }
+        Ok(Self { disks })
+    }
     pub(crate) fn get(&self, disk: &DiskConfig) -> Result<&Arc<DiskHandle>> {
         self.disks.get(&disk.disk_id).ok_or_else(|| {
             Error::new(
@@ -435,6 +466,19 @@ impl DiskResources {
                 format!("disk {} was unavailable at admission", disk.slot_id),
             )
         })
+    }
+
+    /// Remove rejected recovery resources from this admission without dropping
+    /// the Engine's separately held writer locks or changing configured voters.
+    pub(crate) fn excluding(&self, rejected: &BTreeSet<String>) -> Self {
+        Self {
+            disks: self
+                .disks
+                .iter()
+                .filter(|(id, _)| !rejected.contains(*id))
+                .map(|(id, handle)| (id.clone(), Arc::clone(handle)))
+                .collect(),
+        }
     }
 
     pub(crate) fn handles(&self) -> impl Iterator<Item = &Arc<DiskHandle>> {

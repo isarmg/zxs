@@ -20,8 +20,9 @@ fn member_seal_failures_keep_each_identity_and_reset_on_the_next_recovery() {
     let config =
         Config::development((0..5).map(|i| temp.path().join(format!("disk-{i}")))).unwrap();
     drop(Engine::initialize(&root, config.clone()).unwrap());
-    let mut engine =
+    let (mut engine, warnings) =
         Engine::prepare_workspace_recovery(root, config.clone().try_into().unwrap()).unwrap();
+    assert!(warnings.is_empty());
     let expected = canonical_json(engine.state()).unwrap();
     let corrupt = config.disks[0].root.join("disk.json");
     let original = std::fs::read(&corrupt).unwrap();
@@ -115,8 +116,9 @@ fn missing_publication_seal_keeps_the_verified_prefix_and_candidate_cause() {
             .unwrap()
             .0;
         drop(engine);
-        let mut engine =
+        let (mut engine, warnings) =
             Engine::prepare_workspace_recovery(root, config.clone().try_into().unwrap()).unwrap();
+        assert!(warnings.is_empty());
         std::fs::write(
             config.disks[2].root.join("disk.json"),
             b"broken member seal",

@@ -441,6 +441,7 @@ impl Engine {
         Ok(())
     }
     pub(crate) fn cleanup_purged(&mut self) -> Result<()> {
+        self.require_unfenced_membership()?;
         self.require_no_commit_preparation()?;
         if !self
             .state
@@ -459,9 +460,11 @@ impl Engine {
             first_error,
         } = self.trusted_evidence_members();
         for member in &members {
-            let scanned = self
-                .metadata_integrity
-                .observe(scan_at(&self.disk_resources.get(member)?.root, member))?;
+            let scanned = self.metadata_integrity.observe(scan_configured_at(
+                &self.disk_resources.get(member)?.root,
+                member,
+                &self.config,
+            ))?;
             if let Some((record, _)) = scanned.records.iter().rev().find(|(r, _)| {
                 r.sequence == self.state.sequence && r.record_type == RecordType::Publication
             }) {

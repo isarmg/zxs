@@ -14,6 +14,23 @@ SPEC.loader.exec_module(checker)
 
 
 class WorkflowContexts(unittest.TestCase):
+    def test_membership_validation_is_separate_from_normal_ci(self):
+        workflows = SCRIPTS.parent / "workflows"
+        ci = (workflows / "ci.yml").read_text()
+        trigger = ci.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertIn("branches-ignore: ['verify/membership-*']", trigger)
+        self.assertIn("tags: ['**']", trigger)
+        self.assertIn("  pull_request:\n", trigger)
+        self.assertIn("  workflow_dispatch:\n", trigger)
+        membership = (workflows / "membership-validation.yml").read_text()
+        self.assertIn("branches: ['verify/membership-*']", membership)
+        self.assertNotIn("pull_request:", membership)
+        self.assertIn("  contents: read\n", membership)
+        self.assertIn("persist-credentials: false", membership)
+        self.assertIn("path: target/membership-validation/", membership)
+        self.assertLess(membership.index("initialize-cargo-home.sh"),
+                        membership.index("rustup "))
+
     def test_job_display_name_colon_requires_yaml_quotes(self):
         bad = "jobs:\n  browser-smoke:\n    name: Standalone ELF: Debian 13 server + host Chrome\n"
         self.assertTrue(any("must be quoted" in error for error in checker.check(bad)))

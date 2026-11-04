@@ -9,6 +9,9 @@ use std::{
     sync::Arc,
 };
 
+mod membership;
+use membership::MetadataMembership;
+
 /// A pool configuration admitted at a file or public API boundary.
 /// Only root rebinding and restart-only limits can change after admission.
 ///
@@ -27,7 +30,9 @@ pub struct ValidatedConfig {
 struct AdmittedConfig {
     config: Config,
     metadata_members: Box<[usize]>,
+    membership: MetadataMembership,
     workspace_limits: Option<super::RetainedWorkspaceLimits>,
+    generation: Option<Arc<super::membership_transition::pending::activation::Generation>>,
 }
 
 impl TryFrom<Config> for ValidatedConfig {
@@ -35,6 +40,7 @@ impl TryFrom<Config> for ValidatedConfig {
 
     fn try_from(config: Config) -> Result<Self> {
         validate_config(&config)?;
+        let membership = MetadataMembership::from_config(&config);
         let metadata_members = config
             .disks
             .iter()
@@ -45,7 +51,9 @@ impl TryFrom<Config> for ValidatedConfig {
             admitted: Arc::new(AdmittedConfig {
                 config,
                 metadata_members,
+                membership,
                 workspace_limits: None,
+                generation: None,
             }),
         })
     }
@@ -73,37 +81,62 @@ impl ValidatedConfig {
         Arc::ptr_eq(&self.admitted, &other.admitted)
     }
 
-    pub(super) fn verify_candidate_membership(
+    pub(crate) fn verify_candidate_membership(
         &self,
         candidate: &crate::journal::Candidate,
     ) -> Result<()> {
-        let expected: BTreeSet<_> = self
-            .metadata_members()
-            .map(|disk| disk.disk_id.as_str())
-            .collect();
-        let actual: BTreeSet<_> = candidate
-            .metadata_disk_ids
-            .iter()
-            .map(String::as_str)
-            .collect();
-        if expected.is_empty()
-            || actual != expected
-            || actual.len() != candidate.metadata_disk_ids.len()
-        {
+        match &self.admitted.generation {
+            Some(generation) => generation.verify_candidate(candidate),
+            None if candidate.generation().is_none() => {
+                self.admitted.membership.verify_candidate(candidate)
+            }
+            None => Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "generation candidate has no admitted authority",
+            )),
+        }
+    }
+
+    pub(crate) fn verify_original_candidate_membership(
+        &self,
+        candidate: &crate::journal::Candidate,
+    ) -> Result<()> {
+        self.admitted.membership.verify_candidate(candidate)
+    }
+    pub(crate) fn generation(
+        &self,
+    ) -> Option<&Arc<super::membership_transition::pending::activation::Generation>> {
+        self.admitted.generation.as_ref()
+    }
+    pub(crate) fn generation_hash(&self) -> Option<&str> {
+        self.generation().map(|generation| generation.hash.as_str())
+    }
+    pub(crate) fn membership_epoch(&self) -> u64 {
+        match self.generation() {
+            None => 1,
+            Some(generation) => generation.membership_epoch(),
+        }
+    }
+    pub(crate) fn with_generation(
+        mut self,
+        generation: Arc<super::membership_transition::pending::activation::Generation>,
+    ) -> Result<Self> {
+        if self.admitted.generation.is_some() {
             return Err(Error::new(
-                storage_contract::ErrorCode::PublicationInvalid,
-                "candidate membership differs from configured metadata members",
+                ErrorCode::ConfigConflict,
+                "generation is already admitted",
             ));
         }
-        Ok(())
+        Arc::make_mut(&mut self.admitted).generation = Some(generation);
+        Ok(self)
     }
+
+    pub(super) fn same_metadata_membership(&self, other: &Self) -> bool {
+        self.admitted.membership == other.admitted.membership
+    }
+
     pub(crate) fn verify_saved_metadata_membership(&self, saved: &Self) -> Result<()> {
-        fn identity(member: &DiskConfig) -> (&str, &str, u64) {
-            (&member.disk_id, &member.slot_id, member.binding_generation)
-        }
-        let expected: BTreeSet<_> = self.metadata_members().map(identity).collect();
-        let actual: BTreeSet<_> = saved.metadata_members().map(identity).collect();
-        if saved.pool_id != self.pool_id || actual != expected {
+        if !self.same_metadata_membership(saved) {
             return Err(Error::new(
                 ErrorCode::PublicationInvalid,
                 "saved metadata membership differs from admitted configuration",
@@ -162,6 +195,30 @@ impl ValidatedConfig {
             .workspace_limits
             .unwrap_or_else(|| super::RetainedWorkspaceLimits::from_config(self))
     }
+}
+
+/// Admit one recovery input against its own anchor. Selection still requires a
+/// configured majority and later checks every input seal against that winner.
+pub(super) fn read_recovery_anchor(path: &Path, seal: &DiskSeal) -> Result<ValidatedConfig> {
+    let original = ValidatedConfig::try_from(read_json::<Config>(
+        &path.join("metadata/pool-membership/config.json"),
+    )?)?;
+    let config =
+        super::membership_transition::pending::activation::restore_anchor(path, seal, original)?;
+    let mut member = config
+        .disks
+        .iter()
+        .find(|disk| disk.disk_id == seal.disk_id && disk.metadata_member)
+        .cloned()
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::ConfigConflict,
+                "recovery input is not a metadata member of its saved configuration",
+            )
+        })?;
+    member.root = path.to_path_buf();
+    validate_seal(&config, &member)?;
+    Ok(config)
 }
 
 pub(super) fn acquire_locks(root: &Path, disks: &DiskResources) -> Result<Vec<File>> {
@@ -306,3 +363,7 @@ fn validate_disk_roots<'a>(roots: impl IntoIterator<Item = &'a Path>) -> Result<
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/config/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/config/membership_recovery_tests.rs"]
+mod membership_recovery_tests;

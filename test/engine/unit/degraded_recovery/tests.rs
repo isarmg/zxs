@@ -1171,3 +1171,58 @@ fn scrub_classifies_acknowledged_permanent_loss_as_payload_unavailable_not_metad
     assert_eq!(report.payload_copies_unavailable, 3);
     assert_eq!(report.payload_copies_unverified, 1);
 }
+
+#[test]
+fn membership_activation_preserves_degraded_outcome_and_acknowledged_missing_proofs() {
+    let (temp, engine, operation, candidate) = fixture("after_accept_2");
+    lose(&engine, &candidate, true);
+    drop(engine);
+    let mut engine = Engine::open_for_recovery(&temp.path().join("state")).unwrap();
+    let plan = engine
+        .prepare_degraded_recovery(operation, "alice", "acknowledged permanent loss")
+        .unwrap();
+    engine
+        .commit_degraded_recovery(&plan.recovery_id, &plan.digest, "alice", true)
+        .unwrap();
+    assert!(!engine.blocked);
+    let outcome = engine.state.operations[&operation].clone();
+    let mut target = (*engine.config).clone();
+    let added = Config::development((0..4).map(|n| temp.path().join(format!("new-{n}"))))
+        .unwrap()
+        .disks
+        .pop()
+        .unwrap();
+    private_dir(&added.root).unwrap();
+    target.disks.push(added.clone());
+    engine
+        .begin_membership_handoff(target, "alice", OperationId::generate().unwrap())
+        .unwrap();
+    let archive = temp.path().join("archive");
+    private_dir(&archive).unwrap();
+    let certificate = engine.build_membership_control_archive(&archive).unwrap();
+    engine
+        .enroll_pending_members(
+            &archive,
+            &certificate.root_hash,
+            vec![crate::engine::PendingMemberDirectory {
+                disk_id: added.disk_id,
+                directory: std::fs::File::open(added.root).unwrap(),
+            }],
+        )
+        .unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    engine.activate_pending_membership().unwrap();
+    assert_eq!(engine.state.operations[&operation], outcome);
+    let report = engine.scrub(&IntegrityScrubCancellation::new()).unwrap();
+    assert_eq!(report.metadata_failures, 0, "{report:?}");
+    assert_eq!(report.payload_copies_required, 6);
+    assert_eq!(report.payload_copies_verified, 3);
+    assert_eq!(report.payload_copies_unavailable, 3);
+    assert_eq!(report.payload_copies_unverified, 0);
+    drop(engine);
+    let mut engine = Engine::open(&temp.path().join("state")).unwrap();
+    assert_eq!(engine.state.operations[&operation], outcome);
+    let report = engine.scrub(&IntegrityScrubCancellation::new()).unwrap();
+    assert_eq!(report.metadata_failures, 0, "{report:?}");
+    assert_eq!(report.payload_copies_unavailable, 3);
+}

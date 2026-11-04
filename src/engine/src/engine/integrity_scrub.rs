@@ -179,6 +179,7 @@ impl Engine {
     /// Capture only admitted in-memory roots/frontiers. Reject already detached preparation.
     /// No filesystem access; State and configuration are shared, not deep-copied.
     pub fn prepare_integrity_scrub(&self) -> Result<IntegrityScrubPlan> {
+        self.require_unfenced_membership()?;
         self.require_no_commit_preparation()?;
         Ok(IntegrityScrubPlan {
             config: self.config.clone(),

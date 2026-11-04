@@ -815,27 +815,39 @@ impl Engine {
                 damage.get_or_insert(error);
             }
             for member in &members {
-                for (record, _) in self
-                    .metadata_integrity
-                    .observe(crate::journal::scan_at(
-                        &self.disk_resources.get(member)?.root,
-                        member,
-                    ))?
+                let scanned =
+                    self.metadata_integrity
+                        .observe(crate::journal::scan_configured_at(
+                            &self.disk_resources.get(member)?.root,
+                            member,
+                            &self.config,
+                        ))?;
+                let mut candidates = scanned
                     .records
+                    .into_iter()
+                    .filter(|(record, _)| {
+                        record.sequence == operation.sequence
+                            && record.record_type == RecordType::Publication
+                    })
+                    .map(|(record, _)| record.candidate_hash)
+                    .collect::<Vec<_>>();
+                if let Some(hash) = self
+                    .config
+                    .generation()
+                    .and_then(|generation| generation.historical_candidate(operation.sequence))
                 {
-                    if record.sequence != operation.sequence
-                        || record.record_type != RecordType::Publication
-                    {
-                        continue;
-                    }
+                    candidates.push(hash.to_owned());
+                }
+                for hash in candidates {
                     let candidate: crate::journal::Candidate =
                         crate::publication_evidence::verified_object_observed_at(
                             &self.disk_resources,
                             &members,
                             "candidate",
-                            &record.candidate_hash,
+                            &hash,
                             &mut |error| self.metadata_integrity.fault(error),
                         )?;
+                    self.verify_candidate_membership(&candidate)?;
                     if candidate.operation_id != request.operation_id
                         || candidate.sequence != operation.sequence
                     {
