@@ -450,10 +450,14 @@ fn activation_namespace_present(
     disk: &DiskConfig,
     config: &ValidatedConfig,
 ) -> Result<bool> {
-    let generation = config.generation().expect("invariant: activation has a generation");
+    let generation = config
+        .generation()
+        .expect("invariant: activation has a generation");
     let parent = disk.root.join("metadata/membership-generations");
     if root.optional_metadata(&parent)?.is_some()
-        && root.optional_metadata(&generation_directory(disk, &generation.hash))?.is_some()
+        && root
+            .optional_metadata(&generation_directory(disk, &generation.hash))?
+            .is_some()
     {
         return Ok(true);
     }
@@ -466,7 +470,10 @@ fn activation_namespace_present(
         if seal.format == expected.format {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
-                format!("active generation namespace is missing for {}", disk.disk_id),
+                format!(
+                    "active generation namespace is missing for {}",
+                    disk.disk_id
+                ),
             ));
         }
     }
@@ -480,7 +487,10 @@ fn activation_namespace_present(
         if Some(hash.as_str()) != generation.intent.origin.predecessor() {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
-                format!("prepared generation marker lacks its namespace for {}", disk.disk_id),
+                format!(
+                    "prepared generation marker lacks its namespace for {}",
+                    disk.disk_id
+                ),
             ));
         }
     }
@@ -512,10 +522,14 @@ impl Engine {
             if !activation_namespace_present(held, disk, &config)? {
                 continue;
             }
-            let scan = crate::journal::scan_configured_at(held, disk, &config).map_err(|error| {
-                let code = error.code();
-                error.context(code, format!("inspect activation journal for {}", disk.disk_id))
-            })?;
+            let scan =
+                crate::journal::scan_configured_at(held, disk, &config).map_err(|error| {
+                    let code = error.code();
+                    error.context(
+                        code,
+                        format!("inspect activation journal for {}", disk.disk_id),
+                    )
+                })?;
             if scan
                 .records
                 .iter()

@@ -7,9 +7,10 @@ use crate::{
     disk::MAX_METADATA,
     journal::{
         AuthenticatedMetadataObject, Candidate, PreparedMetadataObject, Publication,
-        PublicationSeal, object_hash, verify_publication_seal,
+        PublicationSeal, verify_publication_seal,
     },
     metadata_map::{Encoder, ProofMeasure, Reference},
+    object_hash,
 };
 use data_serialization::{Deserialize, Serialize};
 use std::collections::BTreeMap;
