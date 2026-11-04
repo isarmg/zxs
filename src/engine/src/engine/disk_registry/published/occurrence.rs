@@ -65,7 +65,7 @@ impl NamespaceScope {
         }
     }
     fn key(&self) -> Result<String> {
-        object_hash("disk-occurrence-scope", self)
+        object_hash("disk-occurrence-scope", self).map_err(Error::from)
     }
 }
 impl From<DeregistrationNamespace<'_>> for NamespaceScope {
@@ -355,7 +355,7 @@ fn scope_mask(namespace: &NamespaceDeregistrationPreview<'_>) -> ProjectionResul
             if row.visibility_after == OccurrenceVisibility::Hidden {
                 hidden.insert(
                     entry.lookup_key().to_owned(),
-                    object_hash("disk-occurrence-entry", entry)?,
+                    object_hash("disk-occurrence-entry", entry).map_err(Error::from)?,
                 );
             }
         }
@@ -368,7 +368,7 @@ fn scope_mask(namespace: &NamespaceDeregistrationPreview<'_>) -> ProjectionResul
             scope: namespace.scope().into(),
             frozen_head_id: namespace.frozen_head_id().into(),
             owner: namespace.namespace_owner().identity(),
-            entries_hash: object_hash("disk-occurrence-entries", &entries)?,
+            entries_hash: object_hash("disk-occurrence-entries", &entries).map_err(Error::from)?,
             disposition: namespace.root_visibility_after()?.into(),
         },
         hidden,
