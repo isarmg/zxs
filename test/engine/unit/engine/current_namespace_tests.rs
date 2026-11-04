@@ -163,6 +163,8 @@ impl Fixture {
     }
 }
 
+#[path = "current_namespace_batch_tests.rs"]
+mod batches;
 #[path = "current_namespace_directory_label_tests.rs"]
 mod directory_labels;
 #[path = "current_namespace_initialization_tests.rs"]
@@ -173,6 +175,8 @@ mod placement;
 mod rename;
 #[path = "current_namespace_repository_tests.rs"]
 mod repositories;
+#[path = "current_namespace_workspace_overlap_tests.rs"]
+mod workspace_overlap;
 
 #[test]
 fn membership_registry_current_listing_and_lookup_preserve_immutable_history() {
@@ -692,12 +696,7 @@ fn membership_registry_current_unadapted_imports_never_invoke_the_mutation_plann
     let mut fixture = Fixture::new(false);
     fixture.project(false);
     let before = canonical_json(fixture.engine.state()).unwrap();
-    for kind in [
-        "file.branches.merge",
-        "directory.namespace.batch",
-        "directory.branches.select",
-        "file.branch.select",
-    ] {
+    for kind in ["branch.create", "file.history.merge", "merge-link.create"] {
         let invoked = std::cell::Cell::new(false);
         let result = fixture.engine.plan_mutation_digest(
             kind,

@@ -221,8 +221,20 @@ impl Engine {
         stop: &DurableDiskStop,
         binding: &DiskRegistrationIdentity,
     ) -> crate::Result<RecoveredDiskStop> {
-        let disk = self
-            .config
+        self.recover_disk_exit_io_for_config(stop, binding, &self.config)
+    }
+
+    /// The prepared Exit driver has already installed and independently read
+    /// every retained control copy. Its authenticated restricted generation can
+    /// exclude an unopened target before the active Engine projection changes.
+    /// This is not a drain proof: the caller must still acquire RecoveredDiskIo.
+    pub(crate) fn recover_disk_exit_io_for_config(
+        &self,
+        stop: &DurableDiskStop,
+        binding: &DiskRegistrationIdentity,
+        config: &ValidatedConfig,
+    ) -> crate::Result<RecoveredDiskStop> {
+        let disk = config
             .disks
             .iter()
             .find(|disk| disk.disk_id == binding.disk_id)
@@ -233,7 +245,7 @@ impl Engine {
                 )
             })?;
         if &stop.binding != binding
-            || !self.config.excludes_io_disk(&binding.disk_id)
+            || !config.excludes_io_disk(&binding.disk_id)
             || self.disk_resources.available(disk).is_some()
         {
             return Err(Error::new(
@@ -241,7 +253,7 @@ impl Engine {
                 "recovered stop requires exact startup resource exclusion",
             ));
         }
-        let generation = self.config.generation().ok_or_else(|| {
+        let generation = config.generation().ok_or_else(|| {
             Error::new(
                 ErrorCode::RecoveryRequired,
                 "recovered stop lacks authenticated generation",
@@ -254,7 +266,7 @@ impl Engine {
         )?;
         Ok(RecoveredDiskStop {
             binding: binding.clone(),
-            _admission: self.config.clone(),
+            _admission: config.clone(),
         })
     }
 

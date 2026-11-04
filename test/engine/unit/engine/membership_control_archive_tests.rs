@@ -693,3 +693,117 @@ fn membership_control_archive_cannot_replace_admitted_fence_with_its_own_summary
     assert_eq!(bytes(&path), before);
     assert_eq!(source_bytes(&config), original);
 }
+
+fn retained_exit_archive() -> (tempfile::TempDir, Config, Engine, MembershipControlArchive) {
+    let temp = tempfile::tempdir().unwrap();
+    let original =
+        Config::development((0..3).map(|n| temp.path().join(format!("disk-{n}")))).unwrap();
+    let system = temp.path().join("system");
+    let mut engine = Engine::initialize(&system, original.clone()).unwrap();
+    engine
+        .create_repository(
+            &RepositoryName::parse("retained-proof").unwrap(),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    drop(engine);
+    fs::rename(&original.disks[0].root, temp.path().join("absent")).unwrap();
+    let mut engine = Engine::open(&system).unwrap();
+    engine
+        .begin_disk_exit(
+            &original.disks[0].disk_id,
+            MembershipExitAction::Deregister,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let archive = engine.build_managed_membership_control_archive().unwrap();
+    (temp, original, engine, archive)
+}
+
+#[test]
+fn retained_exit_archive_rejects_scope_relabelling_and_missing_real_witness() {
+    for damage in [
+        "full-format",
+        "missing-witness",
+        "missing-history",
+        "fence-owner",
+    ] {
+        let (_temp, original, _engine, mut archive) = retained_exit_archive();
+        let store = store(&archive.archive_path);
+        let mut root: ArchiveRoot =
+            decode_strict(&fs::read(archive.archive_path.join(ROOT_FILE)).unwrap()).unwrap();
+        assert_eq!(root.format, Format::RetainedExitQuorum);
+        let mut members =
+            crate::metadata_map::read_map(&root.members, |kind, hash| store.load(kind, hash))
+                .unwrap();
+        assert_eq!(members.len(), 2);
+        assert!(!members.contains_key(&original.disks[0].disk_id));
+        match damage {
+            "full-format" => root.format = Format::FrozenControlMetadata,
+            "missing-witness" => {
+                members.remove(&original.disks[1].disk_id);
+                root.members = store.map(members).unwrap();
+            }
+            "fence-owner" => {
+                let mut member: ArchivedMember =
+                    json_codec::from_value(members[&original.disks[1].disk_id].clone()).unwrap();
+                member.fence.disk_id.clone_from(&original.disks[0].disk_id);
+                members.insert(
+                    original.disks[1].disk_id.clone(),
+                    json_codec::to_value(member).unwrap(),
+                );
+                root.members = store.map(members).unwrap();
+            }
+            _ => {
+                let seals = archive_seals(&store, &root).unwrap();
+                let hash = seals.keys().next().unwrap();
+                let candidate: Candidate =
+                    json_codec::from_value(store.load("candidate", hash).unwrap().into_value())
+                        .unwrap();
+                fs::remove_file(
+                    store
+                        .object_path(
+                            candidate.history_roots.kind().domain(),
+                            candidate.history_roots.hash(),
+                        )
+                        .unwrap(),
+                )
+                .unwrap();
+            }
+        }
+        archive.root_hash = object_hash(ROOT_KIND, &root).unwrap();
+        fs::write(
+            archive.archive_path.join(ROOT_FILE),
+            canonical_json(&root).unwrap(),
+        )
+        .unwrap();
+        let before = bytes(&archive.archive_path);
+        assert!(verify(&archive.archive_path, &archive).is_err(), "{damage}");
+        assert_eq!(bytes(&archive.archive_path), before);
+    }
+}
+
+#[test]
+fn retained_exit_archive_cannot_be_reused_for_abort_or_rebound_to_a_full_archive() {
+    let (_temp, _original, engine, archive) = retained_exit_archive();
+    let pending =
+        PendingControlArchive::open(&engine, &archive.archive_path, &archive.root_hash).unwrap();
+    assert_eq!(
+        pending.abort_material().err().unwrap().code(),
+        ErrorCode::ConfigConflict
+    );
+    let before = bytes(&archive.archive_path);
+    assert!(
+        ArchiveStore::admit(
+            DiskRoot::open(&archive.archive_path).unwrap(),
+            &archive.transition_hash,
+            Format::FrozenControlMetadata
+        )
+        .is_err()
+    );
+    assert_eq!(bytes(&archive.archive_path), before);
+}

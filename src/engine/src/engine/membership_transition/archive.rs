@@ -463,7 +463,7 @@ impl<R: Read> Read for HashingReader<'_, R> {
 }
 
 impl Engine {
-    /// Inspect every original member's exact journal and all referenced candidate
+    /// Inspect every intent-selected original journal and all referenced candidate
     /// snapshot/history graphs, without repairing or writing any source bytes.
     /// This is a preflight for a future archive, not a completed copy or bootstrap.
     pub fn inspect_membership_metadata_archive(&self) -> Result<MembershipArchiveInspection> {
@@ -473,19 +473,22 @@ impl Engine {
                 "archive inspection requires a fixed membership handoff",
             )
         })?;
-        let members = self.members();
+        let members = fence.intent.fence_members_at(&self.config)?;
         self.validate_fence_members(&members)?;
         if fence.receipts.len() != members.len()
+            || members
+                .iter()
+                .any(|disk| !fence.receipts.contains_key(&disk.disk_id))
             || self.journals.values().any(JournalWriter::needs_recovery)
         {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
-                "archive inspection requires every original member's complete fence",
+                "archive inspection requires every intent-selected original member's complete fence",
             ));
         }
         let mut source = LiveSource {
             engine: self,
-            members: self.members(),
+            members,
             destination: None,
             seals: BTreeMap::new(),
             copied: BTreeSet::new(),
@@ -499,8 +502,30 @@ fn inspect_control(
     fence: &AdmittedFence,
     source: &mut impl ControlSource,
 ) -> Result<MembershipArchiveInspection> {
-    pending::reservation::verify_intent_roots(&fence.intent)?;
-    let epoch = FrozenEpoch::read(&fence.intent, source)?;
+    inspect_control_prefix(
+        config,
+        &fence.intent,
+        &fence.hash,
+        JournalEnd::Fenced(fence),
+        source,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum JournalEnd<'a> {
+    BeforeFence,
+    Fenced(&'a AdmittedFence),
+}
+
+fn inspect_control_prefix(
+    config: &ValidatedConfig,
+    intent: &TransitionIntent,
+    transition_hash: &str,
+    end: JournalEnd<'_>,
+    source: &mut impl ControlSource,
+) -> Result<MembershipArchiveInspection> {
+    pending::reservation::verify_intent_roots(intent)?;
+    let epoch = FrozenEpoch::read(intent, source)?;
     let mut members = config.metadata_members().cloned().collect::<Vec<_>>();
     members.sort_by(|left, right| left.disk_id.cmp(&right.disk_id));
     let mut inspection = Inspection {
@@ -515,7 +540,7 @@ fn inspect_control(
     let mut journals = Vec::new();
     let mut journal_frames = 0u64;
     let mut journal_bytes = 0u64;
-    for disk in &members {
+    for disk in &intent.fence_members_at(config)? {
         let mut digest = blake3::Hasher::new();
         let source = inspection.source.journal(disk)?;
         let mut reader = JournalFrameReader::new(HashingReader {
@@ -540,7 +565,7 @@ fn inspect_control(
                     "records follow the archived membership fence",
                 ));
             }
-            validate_frozen_record(&fence.intent, &record)?;
+            validate_frozen_record(intent, &record)?;
             journal_frames = journal_frames.checked_add(1).ok_or_else(|| {
                 Error::new(ErrorCode::ResourceLimit, "archive frame count overflow")
             })?;
@@ -579,9 +604,10 @@ fn inspect_control(
                     ));
                 }
                 RecordType::MembershipFence => {
-                    if record.object_hash != fence.hash
-                        || record.candidate_hash != fence.hash
-                        || record.sequence != fence.intent.fence_sequence
+                    if matches!(end, JournalEnd::BeforeFence)
+                        || record.object_hash != transition_hash
+                        || record.candidate_hash != transition_hash
+                        || record.sequence != intent.fence_sequence
                     {
                         return Err(Error::new(
                             ErrorCode::LogFork,
@@ -610,31 +636,16 @@ fn inspect_control(
         let bytes = reader.valid_bytes;
         drop(reader);
         let content_hash = digest.finalize().to_hex().to_string();
-        let expected = &fence.receipts[&disk.disk_id];
-        if !receipt_binds(
-            expected,
-            RecordType::MembershipFence,
-            fence.intent.fence_sequence,
-            &fence.hash,
-            &fence.hash,
-        )? || expected.disk_id != disk.disk_id
-            || expected.slot_id != disk.slot_id
-            || last.as_ref().map(|(_, hash)| hash.as_str()) != Some(expected.frame_hash.as_str())
-        {
-            return Err(Error::new(
-                ErrorCode::LogFork,
-                "archive journal differs from its admitted original fence",
-            ));
-        }
+        let tail_frame_hash = verify_journal_end(end, disk, last.as_ref())?;
         journals.push(MembershipJournalInspection {
             disk_id: disk.disk_id.clone(),
             slot_id: disk.slot_id.clone(),
             binding_generation: disk.binding_generation,
             bytes,
-            tail_frame_hash: expected.frame_hash.clone(),
+            tail_frame_hash,
             content_hash,
         });
-        let expected_boundary = fence.intent.boundary.as_ref();
+        let expected_boundary = intent.boundary.as_ref();
         if (epoch.activation.is_some() && !publications.contains_key(&epoch.first_sequence))
             || publications
                 .last_key_value()
@@ -660,7 +671,7 @@ fn inspect_control(
         }
     }
     Ok(MembershipArchiveInspection {
-        transition_hash: fence.hash.clone(),
+        transition_hash: transition_hash.to_owned(),
         original_members: members.len(),
         published_candidates: prefix
             .expect("invariant: original membership is nonempty")
@@ -671,6 +682,64 @@ fn inspect_control(
         immutable_metadata_bytes: inspection.metadata_bytes,
         journals,
     })
+}
+
+fn verify_journal_end(
+    end: JournalEnd<'_>,
+    disk: &DiskConfig,
+    last: Option<&(Record, String)>,
+) -> Result<String> {
+    let Some((_, tail)) = last else {
+        return Err(Error::new(ErrorCode::LogFork, "frozen journal is empty"));
+    };
+    if let JournalEnd::Fenced(fence) = end {
+        let expected = fence.receipts.get(&disk.disk_id).ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "frozen original fence receipt is missing",
+            )
+        })?;
+        if expected.disk_id != disk.disk_id
+            || expected.slot_id != disk.slot_id
+            || tail != &expected.frame_hash
+            || !receipt_binds(
+                expected,
+                RecordType::MembershipFence,
+                fence.intent.fence_sequence,
+                &fence.hash,
+                &fence.hash,
+            )?
+        {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "archive journal differs from its admitted original fence",
+            ));
+        }
+    }
+    Ok(tail.clone())
+}
+
+impl Engine {
+    /// A recovered visible snapshot alone cannot authorize a new fence. Read
+    /// every retained original journal and its complete graph before narrowing
+    /// a write-blocked recovery to this exact majority-fenced Exit operation.
+    pub(super) fn inspect_retained_exit_prefix(&self, intent: &TransitionIntent) -> Result<()> {
+        let mut source = LiveSource {
+            engine: self,
+            members: intent.fence_members_at(&self.config)?,
+            destination: None,
+            seals: BTreeMap::new(),
+            copied: BTreeSet::new(),
+        };
+        inspect_control_prefix(
+            &self.config,
+            intent,
+            &object_hash(INTENT_KIND, intent)?,
+            JournalEnd::BeforeFence,
+            &mut source,
+        )?;
+        Ok(())
+    }
 }
 
 fn validate_frozen_record(intent: &TransitionIntent, record: &Record) -> Result<()> {

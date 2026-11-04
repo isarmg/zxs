@@ -514,7 +514,7 @@ fn membership_registry_current_workspace_rename_orders_deletions_and_unrelated_u
 }
 
 #[test]
-fn membership_registry_current_rename_conflicts_and_overlapping_upload_preserve_staging() {
+fn membership_registry_current_rename_conflicts_and_overlapping_collision_preserve_staging() {
     let mut fixture = Fixture::new(true);
     save(
         &mut fixture.engine,
@@ -562,7 +562,7 @@ fn membership_registry_current_rename_conflicts_and_overlapping_upload_preserve_
         &workspace,
         NamespaceOperationKind::Rename,
         "dir",
-        Some("moved"),
+        Some("occupied"),
     );
     let before = canonical_json(fixture.engine.state()).unwrap();
     assert_eq!(
@@ -571,7 +571,7 @@ fn membership_registry_current_rename_conflicts_and_overlapping_upload_preserve_
             .commit_workspace(request(&workspace))
             .unwrap_err()
             .code(),
-        ErrorCode::WorkspaceDependencyBusy
+        ErrorCode::NameCollision
     );
     assert_eq!(canonical_json(fixture.engine.state()).unwrap(), before);
     assert_eq!(

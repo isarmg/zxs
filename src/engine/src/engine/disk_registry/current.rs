@@ -7,7 +7,10 @@
 //! a registry admission: workspaces without a live baseline remain fenced.
 use super::{DiskRegistryCommitment, Engine};
 mod admission;
+mod batch;
+mod directory_branches;
 mod directory_metadata;
+mod file_branches;
 mod new_scope;
 mod relocation;
 mod workspace;
@@ -176,9 +179,9 @@ impl CurrentNamespaces {
     }
 
     pub(crate) fn require_operation(&self, kind: &str) -> Result<()> {
-        // Merge, rebase, historical restoration, directory selection and batch
-        // relocation still import raw frozen references. Reject before invoking
-        // their planner, even if the eventual draft might happen to look safe.
+        // Imports without an exact current occurrence proof remain fenced.
+        // Admitted planners must verify their own projected sources and
+        // reference closure before a resulting state can be published.
         if kind == "repository.create"
             || kind == "workspace.commit"
             || kind == "workspace.namespace.admit"
@@ -186,8 +189,17 @@ impl CurrentNamespaces {
             || kind == "file.metadata"
             || kind == "version.metadata"
             || kind == "file.branch.rename"
+            || kind == "file.branch.create"
+            || kind == "file.branch.select"
+            || kind == "file.default.set"
+            || kind == "file.branches.merge"
             || kind == "directory.scope.initialize"
+            || kind == "directory.namespace.batch"
             || kind == "directory.branch.rename"
+            || kind == "directory.branches.create"
+            || kind == "directory.branches.select"
+            || kind == "directory.default.select"
+            || kind == "directory.default.set"
             || kind == "placement-rule.update"
             || kind == "placement.configure"
             || kind == "protection-policy.update"
@@ -382,6 +394,18 @@ impl CurrentNamespaces {
         self.validate_entries(Some(scope), entries)
     }
 
+    pub(crate) fn validate_workspace_draft(
+        &self,
+        previous: &State,
+        next: &State,
+        branch: &str,
+        entries: &[Entry],
+    ) -> Result<()> {
+        let scope = self.branches.get(branch).ok_or_else(stale)?;
+        let changes = VerifiedEntryChanges::between_states(&scope.entries, entries, previous, next);
+        self.validate_entry_changes(Some(scope), entries, &changes)
+    }
+
     fn validate_entries(&self, scope: Option<&CurrentScope>, entries: &[Entry]) -> Result<()> {
         let changes = VerifiedEntryChanges::between(
             scope.map(|scope| scope.entries.as_slice()).unwrap_or(&[]),
@@ -488,9 +512,20 @@ impl CurrentNamespaces {
                     "publication changes a namespace with no retained writable registration",
                 ));
             }
-            let mut changes = VerifiedEntryChanges::between(
-                old.map(|scope| scope.entries.as_slice()).unwrap_or(&[]),
+            let source = self.new_file_branch_source(previous, next, branch, commit)?;
+            let selection_source =
+                self.directory_selection_source(previous, next, branch, commit)?;
+            let validation_scope = selection_source
+                .as_ref()
+                .or(old.map(Arc::as_ref))
+                .or(source);
+            let mut changes = VerifiedEntryChanges::between_states(
+                validation_scope
+                    .map(|scope| scope.entries.as_slice())
+                    .unwrap_or(&[]),
                 &commit.entries,
+                previous,
+                next,
             );
             if branch.file_id.is_some() {
                 let repository = next
@@ -514,7 +549,7 @@ impl CurrentNamespaces {
                     &commit.entries,
                 )?;
             }
-            self.validate_entry_changes(old.map(Arc::as_ref), &commit.entries, &changes)?;
+            self.validate_entry_changes(validation_scope, &commit.entries, &changes)?;
             let writable = match old {
                 Some(scope) => scope.writable,
                 None => self.new_branch_writable(previous, next, branch, commit)?,
@@ -545,9 +580,11 @@ impl CurrentNamespaces {
                 continue;
             }
             let old = self.directories.get(id);
-            let mut changes = VerifiedEntryChanges::between(
+            let mut changes = VerifiedEntryChanges::between_states(
                 old.map(|scope| scope.entries.as_slice()).unwrap_or(&[]),
                 &branch.entries,
+                previous,
+                next,
             );
             let repository = next
                 .repositories
@@ -558,7 +595,12 @@ impl CurrentNamespaces {
                 .get(&repository.main_branch_id)
                 .ok_or_else(stale)?;
             changes.synchronize_directory(next, branch, &owner.entries)?;
-            self.validate_entry_changes(old.map(Arc::as_ref), &branch.entries, &changes)?;
+            let fork_source = self.directory_fork_source(previous, next, branch, owner)?;
+            self.validate_entry_changes(
+                fork_source.as_ref().or(old.map(Arc::as_ref)),
+                &branch.entries,
+                &changes,
+            )?;
             Arc::make_mut(&mut view.directories).insert(
                 id.clone(),
                 Arc::new(CurrentScope {

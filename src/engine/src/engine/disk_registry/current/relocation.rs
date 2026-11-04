@@ -54,6 +54,26 @@ pub(super) struct VerifiedEntryChanges<'a> {
 }
 impl<'a> VerifiedEntryChanges<'a> {
     pub(super) fn between(before: &'a [Entry], after: &'a [Entry]) -> Self {
+        Self::between_versions(before, after, None)
+    }
+
+    /// A moved and rewritten occurrence must consume its exact visible source.
+    /// The new body is part of this publication, not an arbitrary historical
+    /// version of the same file. Recovery derives this from authenticated States.
+    pub(super) fn between_states(
+        before: &'a [Entry],
+        after: &'a [Entry],
+        previous: &'a State,
+        next: &'a State,
+    ) -> Self {
+        Self::between_versions(before, after, Some((previous, next)))
+    }
+
+    fn between_versions(
+        before: &'a [Entry],
+        after: &'a [Entry],
+        states: Option<(&'a State, &'a State)>,
+    ) -> Self {
         let next: BTreeMap<_, _> = after.iter().map(|e| (e.lookup_key(), e)).collect();
         let mut sources = BTreeMap::<BodyIdentity<'_>, Vec<&Entry>>::new();
         let mut vacated = BTreeSet::new();
@@ -73,6 +93,9 @@ impl<'a> VerifiedEntryChanges<'a> {
             vacated,
             synchronized: BTreeSet::new(),
         };
+        let mut rewritten = Vec::new();
+        // Exact body relocations consume their source first. A rewritten alias
+        // cannot steal that same occurrence and authorize an additional copy.
         for entry in after {
             if previous
                 .get(entry.lookup_key())
@@ -83,6 +106,37 @@ impl<'a> VerifiedEntryChanges<'a> {
             let identity = BodyIdentity::from(entry);
             if sources.get_mut(&identity).and_then(Vec::pop).is_some() {
                 change.relocated.insert(entry.lookup_key());
+            } else if entry.kind == NamespaceEntryKind::File {
+                rewritten.push(entry);
+            }
+        }
+        if let Some((previous, next)) = states {
+            for entry in rewritten {
+                if previous.versions.contains_key(&entry.version_id) {
+                    continue;
+                }
+                let Some(version) = next.versions.get(&entry.version_id) else {
+                    continue;
+                };
+                let [source] = version.source_version_ids.as_slice() else {
+                    continue;
+                };
+                let Some(old) = previous.versions.get(source) else {
+                    continue;
+                };
+                if version.version_sequence != next.sequence
+                    || version.file_id != entry.file_id
+                    || old.file_id != entry.file_id
+                    || version.history_tree_id != old.history_tree_id
+                    || version.logical_size != entry.size
+                {
+                    continue;
+                }
+                let identity =
+                    BodyIdentity::File(&entry.entry_id, &entry.file_id, source, old.logical_size);
+                if sources.get_mut(&identity).and_then(Vec::pop).is_some() {
+                    change.relocated.insert(entry.lookup_key());
+                }
             }
         }
         change

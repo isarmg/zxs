@@ -1,6 +1,7 @@
 //! Atomic branch-scoped namespace edits. All baselines are checked before any
 //! publication; named branches retain their identities and gain subtree nodes.
 use super::*;
+use crate::DirectoryNamespaceView;
 use crate::engine::Prepared;
 use json_codec::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -71,6 +72,90 @@ fn active_scopes(
     }
     Ok(active)
 }
+/// Read projections carry no write authority. Bind each selected composition to
+/// the admitted owner before using its entries, and discard only path-local
+/// metadata absent from that projection. Immutable trees remain untouched.
+fn batch_scope(
+    engine: &Engine,
+    namespaces: &DirectoryNamespaceView,
+    branch: &DirectoryBranch,
+) -> Result<DirectoryBranch> {
+    let Some(current) = engine.admitted_current_namespaces()? else {
+        return Ok(branch.clone());
+    };
+    current.require_batch_scope(&engine.state, branch)?;
+    let mut scope = branch.clone();
+    scope.entries = namespaces.entries(&branch.directory_branch_id)?.to_vec();
+    let files = scope
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == NamespaceEntryKind::File)
+        .map(|entry| entry.file_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let paths = scope
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == NamespaceEntryKind::File)
+        .map(Entry::lookup_key)
+        .collect::<BTreeSet<_>>();
+    let directories = scope
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == NamespaceEntryKind::Directory)
+        .map(|entry| entry.entry_id.as_str())
+        .collect::<BTreeSet<_>>();
+    scope
+        .file_branches
+        .retain(|file, _| files.contains(file.as_str()));
+    scope
+        .inherited_files
+        .retain(|file, _| files.contains(file.as_str()));
+    scope
+        .file_contexts
+        .retain(|path, _| paths.contains(path.as_str()));
+    scope
+        .directory_refs
+        .retain(|id, _| directories.contains(id.as_str()));
+    Ok(scope)
+}
+
+/// Batch sources refer to one original composition, not sequential intermediate
+/// paths. Assemble that final active view before freezing renamed directories.
+fn projected_active_entries(
+    current: &[Entry],
+    originals: &BTreeMap<String, DirectoryBranch>,
+    projected: &BTreeMap<String, Vec<Entry>>,
+    active: &[String],
+    repository: &str,
+) -> Result<Vec<Entry>> {
+    let mut entries = current.to_vec();
+    for id in active {
+        let branch = &originals[id];
+        let path = if branch.directory_id == repository {
+            ""
+        } else {
+            current
+                .iter()
+                .find(|entry| {
+                    entry.kind == NamespaceEntryKind::Directory
+                        && entry.entry_id == branch.directory_id
+                })
+                .expect("invariant: active_scopes resolved each current directory")
+                .path()
+        };
+        let key = name_policy::path_key(path);
+        entries
+            .retain(|entry| !key.is_empty() && !namespace::is_descendant(entry.lookup_key(), &key));
+        entries.extend(directory::rebase_entries(
+            &projected[id],
+            &branch.path,
+            path,
+        )?);
+    }
+    sorted(&mut entries);
+    Ok(entries)
+}
+
 fn remove(branch: &mut DirectoryBranch, source: &Entry) {
     let key = &source.lookup_key();
     let removed = branch
@@ -274,6 +359,13 @@ fn apply(
             "batch requires a bounded nonempty item list",
         ));
     }
+    // Both captures borrow this mutation's immutable engine input. The mutable
+    // draft below cannot turn an older Commit/DirectoryTree into current data.
+    let current = engine.namespace_snapshot(&repo.main_branch_id)?;
+    let namespaces = engine.directory_namespace_view()?;
+    let current_parents = engine
+        .admitted_current_namespaces()?
+        .map(|_| current.entries());
     let mut originals = BTreeMap::new();
     let mut paths = Vec::with_capacity(request.items.len());
     for item in &request.items {
@@ -320,7 +412,9 @@ fn apply(
                     "batch subtree baseline changed; no item was published",
                 ));
             }
-            originals.insert(id.clone(), branch.clone());
+            if !originals.contains_key(id) {
+                originals.insert(id.clone(), batch_scope(engine, &namespaces, branch)?);
+            }
         }
     }
     let main = state
@@ -331,16 +425,6 @@ fn apply(
             Error::new(
                 storage_contract::ErrorCode::StateInvalid,
                 "repository main branch missing",
-            )
-        })?;
-    let current = state
-        .commits
-        .get(&main.head_commit_id)
-        .cloned()
-        .ok_or_else(|| {
-            Error::new(
-                storage_contract::ErrorCode::StateInvalid,
-                "repository head missing",
             )
         })?;
     let mut drafts = originals.clone();
@@ -463,7 +547,12 @@ fn apply(
         touched.insert(target.directory_branch_id.clone());
         planned.push((item, source, target, target_path));
     }
-    // Every source was resolved against its original frozen composition, and
+    if touched.is_empty() {
+        return Ok(
+            json!({"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"commit_id":main.head_commit_id,"no_change":true,"directory_branch_ids":[],"changes":[],"copies":[]}),
+        );
+    }
+    // Every source was resolved against its admitted baseline composition, and
     // all non-copy sources are now absent from drafts. Check the complete
     // destination namespace before creating path nodes or preparing content.
     let mut projected = touched
@@ -506,11 +595,11 @@ fn apply(
         );
     }
     for id in &touched {
-        let mut full = projected.remove(id).expect("checked");
-        ensure_parents_for_scope(state, &drafts[id], &mut full)?;
+        let mut full = projected[id].clone();
+        ensure_parents_for_scope(state, &drafts[id], &mut full, current_parents)?;
         validate_entries(&mut full, engine.config.max_entries)?;
     }
-    let active = active_scopes(state, &originals, &touched, repository, &current.entries)?;
+    let active = active_scopes(state, &originals, &touched, repository, current.entries())?;
     let active_rename_changes = request
         .items
         .iter()
@@ -535,7 +624,7 @@ fn apply(
             {
                 return None;
             }
-            let entry = namespace::find_unordered_key(&current.entries, source_path.key())?;
+            let entry = namespace::find_unordered_key(current.entries(), source_path.key())?;
             if entry.entry_id != item.source.entry_id {
                 return None;
             }
@@ -545,12 +634,35 @@ fn apply(
             })
         })
         .collect::<Vec<_>>();
-    let renamed_directories = directory::prepare_independent_renamed_directories(
-        state,
-        repository,
-        &current.entries,
-        &active_rename_changes,
-    )?;
+    let renamed_directories = if let Some(view) = engine.admitted_current_namespaces()? {
+        view.remove_hidden_contexts(state, repository, &repo.main_branch_id);
+        let after = if active_rename_changes.is_empty() {
+            Vec::new()
+        } else {
+            projected_active_entries(
+                current.entries(),
+                &originals,
+                &projected,
+                &active,
+                repository,
+            )?
+        };
+        directory::prepare_current_renamed_directories(
+            state,
+            repository,
+            current.entries(),
+            &after,
+            &active_rename_changes,
+        )?
+    } else {
+        directory::prepare_independent_renamed_directories(
+            state,
+            repository,
+            current.entries(),
+            &active_rename_changes,
+        )?
+    };
+    drop(projected);
     let baseline_heads = state
         .directory_branches
         .iter()
@@ -682,7 +794,12 @@ fn apply(
                     commit.author = principal.into();
                     commit.entries = target_draft.entries.clone();
                     commit.entries.push(moved.clone());
-                    ensure_parents_for_scope(state, target_draft, &mut commit.entries)?;
+                    ensure_parents_for_scope(
+                        state,
+                        target_draft,
+                        &mut commit.entries,
+                        current_parents,
+                    )?;
                     validate_entries(&mut commit.entries, engine.config.max_entries)?;
                     let branch = file::ensure_shared_file_branch(state, &commit, &moved)?;
                     target_draft.file_contexts.insert(
@@ -769,15 +886,10 @@ fn apply(
             target_draft.entries.push(moved);
         }
     }
-    if touched.is_empty() {
-        return Ok(
-            json!({"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"commit_id":main.head_commit_id,"no_change":true,"directory_branch_ids":[],"changes":[],"copies":[]}),
-        );
-    }
     for id in &touched {
         let draft = drafts.get_mut(id).expect("checked");
         let mut full = draft.entries.clone();
-        ensure_parents_for_scope(state, draft, &mut full)?;
+        ensure_parents_for_scope(state, draft, &mut full, current_parents)?;
         validate_entries(&mut full, engine.config.max_entries)?;
         validate_identities(&draft.entries)?;
         sorted(&mut draft.entries);
@@ -793,8 +905,7 @@ fn apply(
             inactive_deleted.entry(scope).or_default().push(path);
         }
     }
-    let previous = current;
-    let mut entries = previous.entries.clone();
+    let mut entries = current.entries().to_vec();
     let mut changed_paths = renamed_directories;
     let mut active_paths = BTreeMap::new();
     for id in &active {
@@ -865,6 +976,21 @@ fn apply(
     }
     validate_entries(&mut entries, engine.config.max_entries)?;
     validate_identities(&entries)?;
+    if engine.admitted_current_namespaces()?.is_some() {
+        let by_path = entries
+            .iter()
+            .map(|entry| (entry.lookup_key(), entry))
+            .collect::<BTreeMap<_, _>>();
+        for entry in entries
+            .iter()
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
+        {
+            if let Some(context) = directory::context_at_key(state, repository, entry.lookup_key())
+            {
+                file::relocate_namespace_file_branch(state, &context, &by_path, entry, operation)?;
+            }
+        }
+    }
     let active_deleted = active_deleted
         .into_iter()
         .map(|(scope, mut deleted)| {
@@ -883,7 +1009,7 @@ fn apply(
                 commit_id: id.clone(),
                 history_tree_id: repo.history_tree_id.clone(),
                 kind: "namespace_batch".into(),
-                parent_commit_ids: vec![previous.commit_id],
+                parent_commit_ids: vec![current.head_commit_id().to_owned()],
                 tree_id: new_id("tree")?,
                 sequence: state.sequence,
                 operation_id: operation,
@@ -926,7 +1052,13 @@ fn apply(
             ),
         )?;
     }
-    let ancestors = directory::record_directory_edits(state, repository, &changed_paths, None)?;
+    let ancestors = directory::record_projected_directory_edits(
+        state,
+        repository,
+        &changed_paths,
+        None,
+        engine.admitted_current_namespaces()?,
+    )?;
     let mut affected = touched;
     affected.extend(ancestors);
     let changes=affected.iter().map(|id| {let b=&state.directory_branches[id];json!({"directory_branch_id":id,"previous_tree_id":baseline_heads.get(id),"head_tree_id":b.head_tree_id,"path":b.path})}).collect::<Vec<_>>();
@@ -942,19 +1074,28 @@ fn ensure_parents_for_scope(
     state: &State,
     branch: &DirectoryBranch,
     entries: &mut Vec<Entry>,
+    current: Option<&[Entry]>,
 ) -> Result<()> {
     let key = name_policy::path_key(&branch.path);
+    // Selected current scopes take their ancestors from the same admitted main,
+    // never from an older frozen commit whose path might have been reused.
+    let parents = match current {
+        Some(entries) => entries,
+        None => {
+            &state
+                .commits
+                .get(&branch.commit_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::StateInvalid,
+                        "directory branch commit missing",
+                    )
+                })?
+                .entries
+        }
+    };
     entries.extend(
-        state
-            .commits
-            .get(&branch.commit_id)
-            .ok_or_else(|| {
-                Error::new(
-                    storage_contract::ErrorCode::StateInvalid,
-                    "directory branch commit missing",
-                )
-            })?
-            .entries
+        parents
             .iter()
             .filter(|e| {
                 e.kind == NamespaceEntryKind::Directory

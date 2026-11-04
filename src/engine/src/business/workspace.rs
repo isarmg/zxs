@@ -1249,7 +1249,6 @@ impl crate::engine::PlanningContext<'_> {
                 "commit a historical-save plan to create a full branch",
             ));
         }
-        validate_workspace_dependencies(&w)?;
         if let Some(view) = self.current_namespaces {
             view.validate_workspace(
                 self.state,
@@ -1327,7 +1326,7 @@ impl crate::engine::PlanningContext<'_> {
                 let source_commits = state.commits.clone();
                 let current = source_commits.get(&branch.head_commit_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "branch HEAD missing"))?;
-                let base = state.commits.get(&w.base_head)
+                let base = source_commits.get(&w.base_head)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "workspace base missing"))?;
                 let repo = engine.repository_for_branch(&w.branch_id)?;
 
@@ -1372,6 +1371,7 @@ impl crate::engine::PlanningContext<'_> {
                         }
                     }
                 }
+                let upload_locations = namespace::workspace_upload_locations(current_entries, &w)?;
                 let commit_id = new_id("commit")?;
                 let mut written_files = std::collections::BTreeSet::new();
                 let mut written_paths = Vec::new();
@@ -1381,7 +1381,8 @@ impl crate::engine::PlanningContext<'_> {
                     // display path; explicit namespace operations own renames.
                     let location = existing.as_ref().map(|entry| entry.location()).unwrap_or(&file.path);
                     let path = location.as_str();
-                    written_paths.push(path.to_owned());
+                    let final_location = upload_locations.get(&file.item_id).expect("invariant: workspace preview covers every upload");
+                    written_paths.push(final_location.as_str().to_owned());
                     let file_id = match existing.as_ref() { Some(entry) => entry.file_id.clone(), None => new_id("file")? };
                     if existing.is_some() {
                         super::directory::prepare_file_write(engine,state,&w.branch_id,&file_id,location.key(),&request.principal,request.operation_id)?;
@@ -1420,6 +1421,7 @@ impl crate::engine::PlanningContext<'_> {
                         state.file_node_parents.insert(version.version_id.clone(),vec![node.clone()]);
                     }
                     if repo.main_branch_id == w.branch_id
+                        && final_location.as_str() == path
                         && let Some(context) = state.file_contexts.get_mut(&directory::context_key_from_key(&repo.repository_id, location.key()))
                     {
                         context.node_id = None;
@@ -1427,8 +1429,8 @@ impl crate::engine::PlanningContext<'_> {
                     let location = location.clone();
                     let entry = Entry { entry_id: existing.as_ref().map(|entry| entry.entry_id.clone()).unwrap_or_else(|| file.item_id.clone()), path: location, kind: NamespaceEntryKind::File, file_id: file_id.clone(), version_id: version.version_id, size: version.logical_size };
                     draft.replace(entry);
-                    state.file_locations.entry(file_id.clone()).or_insert_with(||path.to_owned());
-                    state.file_names.entry(file_id.clone()).or_insert_with(||path.rsplit('/').next().unwrap_or("").into());
+                    state.file_locations.entry(file_id.clone()).or_insert_with(||final_location.as_str().to_owned());
+                    state.file_names.entry(file_id.clone()).or_insert_with(||final_location.file_name().into());
                     written_files.insert(file_id);
                 }
                 let mut entries = draft.into_entries();
@@ -1436,7 +1438,7 @@ impl crate::engine::PlanningContext<'_> {
                 let renamed_directories=directory::prepare_current_renamed_directories(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations)?;
                 super::directory::namespace_locations(state,&repo.repository_id,current_entries,&entries,&w.namespace_operations,&request.principal,request.operation_id)?;
                 validate_entries(&mut entries, engine.config.max_entries)?;
-                if let Some(view) = engine.current_namespaces { view.validate_draft(&w.branch_id, &entries)?; }
+                if let Some(view) = engine.current_namespaces { view.validate_workspace_draft(engine.state, state, &w.branch_id, &entries)?; }
                 if entries == current.entries && deleted.is_empty() {
                     return Ok(json!({"commit_id":current.commit_id,"branch_id":branch.branch_id,"history_tree_id":branch.history_tree_id,"no_change":true}));
                 }

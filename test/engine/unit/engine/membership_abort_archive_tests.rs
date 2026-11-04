@@ -284,6 +284,7 @@ fn membership_abort_held_archive_copy_preserves_core_and_accepts_alternate_witne
     let (destination, _lock) = ArchiveStore::admit(
         DiskRoot::open(&copy).unwrap(),
         &history.root.transition_hash,
+        history.root.format,
     )
     .unwrap();
     verify_root_copying(

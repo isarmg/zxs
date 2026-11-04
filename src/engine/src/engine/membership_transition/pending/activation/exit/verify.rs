@@ -115,6 +115,12 @@ impl Engine {
                             "recovered logical exclusion differs from authenticated history",
                         ));
                     }
+                    ExitIoOwner::Unopened => {
+                        return Err(Error::new(
+                            ErrorCode::RecoveryRequired,
+                            "unopened exit target lacks its logical I/O exclusion",
+                        ));
+                    }
                 }
             }
             // Keep the old closed physical binding and every earlier guard held

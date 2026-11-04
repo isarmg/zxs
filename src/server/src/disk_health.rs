@@ -3,14 +3,15 @@ use super::{
     DeviceKind, HardwareMapping, HardwareObservation, ObservationError, RootMount,
     dependency_count, nvme_controller, read_attribute, read_device, read_root_mount,
 };
+use platform_io::disk_smart::{self, AtaData, AtaHealth, AtaPowerMode, CommandTimeout};
 use std::{
     fs::{self, File},
-    io::{self, Read},
+    io::{self, Read, Seek, Write},
     os::unix::fs::{FileTypeExt, MetadataExt},
     path::{Path, PathBuf},
 };
 use std::{
-    os::fd::AsRawFd,
+    os::fd::AsFd,
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -100,8 +101,14 @@ struct DeviceBinding {
     mounted_sysfs: File,
     device: File,
     device_path: String,
-    protocol: &'static str,
+    protocol: Protocol,
     number: (u32, u32),
+}
+
+#[derive(Clone, Copy)]
+enum Protocol {
+    Nvme,
+    Sat,
 }
 
 fn query(
@@ -110,39 +117,253 @@ fn query(
     mounted_path: Option<&str>,
 ) -> Result<DiskHealth, Reason> {
     let binding = bind(root, directory, mounted_path)?;
-    let proc_fd = format!(
-        "/proc/{}/fd/{}",
-        std::process::id(),
-        binding.device.as_raw_fd()
-    );
-    let mut command = Command::new("/usr/sbin/smartctl");
-    command.env_clear().env("LC_ALL", "C").args([
-        "--json",
-        "--health",
-        "--attributes",
-        "--device",
-        binding.protocol,
-    ]);
-    if binding.protocol == "sat" {
-        // Fail closed if checking the power mode is unsupported; do not spin up.
-        command.args(["--nocheck=standby,3,3"]);
-    }
-    command
-        .arg(&proc_fd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+    let deadline = Instant::now() + QUERY_TIMEOUT;
     binding.revalidate(root, directory)?;
-    let (status, bytes) = run(&mut command, QUERY_TIMEOUT, directory)?;
+    let report = match binding.protocol {
+        Protocol::Nvme => {
+            let health = capture_nvme(&binding.device, directory, deadline)?;
+            command_timeout(directory, deadline)?;
+            nvme_record(health, observation_time()?, binding.device_path.clone())
+        }
+        Protocol::Sat => {
+            let snapshot = capture_ata(&binding.device, directory, deadline)?;
+            command_timeout(directory, deadline)?;
+            let observed_at = observation_time()?;
+            // The only subprocess is an offline decoder. No target path is in
+            // its argv or replay text; all held device/sysfs FDs are CLOEXEC.
+            // Official smartctl selects parsed_ata_device for literal "-";
+            // missing/malformed replay commands fail without any device fallback.
+            let mut command = replay_command(snapshot.input()?);
+            let (status, bytes) = run_until(&mut command, deadline, directory)?;
+            parse(&bytes, status, observed_at, binding.device_path.clone())?
+        }
+    };
     binding.revalidate(root, directory)?;
+    Ok(report)
+}
+
+fn capture_nvme(
+    device: &File,
+    directory: &DiskObservationAccess<'_>,
+    deadline: Instant,
+) -> Result<disk_smart::NvmeHealth, Reason> {
+    command_timeout(directory, deadline)?;
+    let device = disk_smart::BlockDevice::bind(device.as_fd()).map_err(native_reason)?;
+    let namespace = disk_smart::nvme_namespace(device).map_err(native_reason)?;
+    let controller = disk_smart::nvme_controller(device, command_timeout(directory, deadline)?)
+        .map_err(native_reason)?;
+    disk_smart::nvme_health(
+        device,
+        controller.health_namespace(namespace),
+        command_timeout(directory, deadline)?,
+    )
+    .map_err(native_reason)
+}
+
+fn observation_time() -> Result<u64, Reason> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| {
             tracing::debug!(?error, "SMART observation clock precedes Unix epoch");
             Reason::QueryFailed
         })?;
-    let observed_at = u64::try_from(now.as_millis()).map_err(|_| Reason::QueryFailed)?;
-    parse(&bytes, status, observed_at, binding.device_path)
+    u64::try_from(now.as_millis()).map_err(|_| Reason::QueryFailed)
+}
+
+fn nvme_record(
+    health: disk_smart::NvmeHealth,
+    observed_at_unix_ms: u64,
+    device_path: String,
+) -> DiskHealth {
+    DiskHealth::Smart {
+        observed_at_unix_ms,
+        device_path,
+        assessment: if health.critical_warning == 0 {
+            DiskHealthAssessment::Passed
+        } else {
+            DiskHealthAssessment::Failed
+        },
+        temperature_celsius: health.temperature_celsius,
+        power_on_hours: Some(health.power_on_hours),
+    }
+}
+
+fn command_timeout(
+    directory: &DiskObservationAccess<'_>,
+    deadline: Instant,
+) -> Result<CommandTimeout, Reason> {
+    directory.check_running().map_err(directory_reason)?;
+    CommandTimeout::remaining(deadline.saturating_duration_since(Instant::now()))
+        .map_err(native_reason)
+}
+
+struct AtaSnapshot {
+    identify: [u8; 512],
+    measurements: Option<AtaMeasurements>,
+}
+
+struct AtaMeasurements {
+    attributes: [u8; 512],
+    thresholds: [u8; 512],
+    health: AtaHealth,
+}
+
+fn capture_ata(
+    device: &File,
+    directory: &DiskObservationAccess<'_>,
+    deadline: Instant,
+) -> Result<AtaSnapshot, Reason> {
+    command_timeout(directory, deadline)?;
+    let device = disk_smart::BlockDevice::bind(device.as_fd()).map_err(native_reason)?;
+    let power = disk_smart::ata_power_mode(device, command_timeout(directory, deadline)?)
+        .map_err(native_reason)?;
+    if power == AtaPowerMode::LowPower {
+        return Err(Reason::LowPower);
+    }
+    let identify = disk_smart::ata_data(
+        device,
+        AtaData::Identify,
+        command_timeout(directory, deadline)?,
+    )
+    .map_err(native_reason)?;
+    // Let the installed decoder interpret unsupported/disabled/ambiguous SMART
+    // capability. Do not enable SMART or send attribute commands in those states.
+    let measurements = if ata_smart_readable(&identify) {
+        let attributes = disk_smart::ata_data(
+            device,
+            AtaData::Attributes,
+            command_timeout(directory, deadline)?,
+        )
+        .map_err(native_reason)?;
+        let thresholds = disk_smart::ata_data(
+            device,
+            AtaData::Thresholds,
+            command_timeout(directory, deadline)?,
+        )
+        .map_err(native_reason)?;
+        let health = disk_smart::ata_health(device, command_timeout(directory, deadline)?)
+            .map_err(native_reason)?;
+        Some(AtaMeasurements {
+            attributes,
+            thresholds,
+            health,
+        })
+    } else {
+        None
+    };
+    Ok(AtaSnapshot {
+        identify,
+        measurements,
+    })
+}
+
+fn ata_smart_readable(identify: &[u8; 512]) -> bool {
+    let word = |index: usize| u16::from_le_bytes([identify[index * 2], identify[index * 2 + 1]]);
+    // ATA IDENTIFY words 83 and 87 carry the validity bits. Unknown support is
+    // accepted when SMART is explicitly enabled, as in smartctl; unknown enable
+    // state is rejected by its default (non-permissive) mandatory-command policy.
+    (word(83) & 0xc000 != 0x4000 || word(82) & 1 != 0)
+        && word(87) & 0xc000 == 0x4000
+        && word(85) & 1 != 0
+}
+
+impl AtaSnapshot {
+    fn replay(&self) -> String {
+        let mut text = String::with_capacity(8 * 1024);
+        replay_data(&mut text, "IDENTIFY DEVICE", &self.identify);
+        if let Some(data) = &self.measurements {
+            replay_data(&mut text, "SMART READ ATTRIBUTE VALUES", &data.attributes);
+            replay_data(
+                &mut text,
+                "SMART READ ATTRIBUTE THRESHOLDS",
+                &data.thresholds,
+            );
+            let result = match data.health {
+                AtaHealth::Passed => "0",
+                AtaHealth::Failed => "1",
+                AtaHealth::RegistersUnavailable => "-1 errno=38 [ATA return registers unavailable]",
+            };
+            text.push_str("REPORT-IOCTL: Device=offline Command=SMART STATUS CHECK\n");
+            text.push_str("REPORT-IOCTL: Device=offline Command=SMART STATUS CHECK returned ");
+            text.push_str(result);
+            text.push('\n');
+        }
+        // Three fixed 512-byte sector dumps and four fixed command records.
+        // This is an internal format bound, not a truncating external read.
+        assert!(
+            text.len() < 8 * 1024,
+            "invariant: fixed ATA replay fits 8 KiB"
+        );
+        text
+    }
+
+    fn input(&self) -> Result<File, Reason> {
+        // memfd is anonymous RAM-backed input, not a file on the observed disk.
+        // Supplying a completed input avoids a pipe writer or a second worker.
+        let fd = rustix::fs::memfd_create(c"zxs-smart-replay", rustix::fs::MemfdFlags::CLOEXEC)
+            .map_err(|error| io_reason("create offline SMART input", error.into()))?;
+        let mut file = File::from(fd);
+        file.write_all(self.replay().as_bytes())
+            .map_err(|error| io_reason("write offline SMART input", error))?;
+        file.rewind()
+            .map_err(|error| io_reason("rewind offline SMART input", error))?;
+        Ok(file)
+    }
+}
+
+fn replay_data(text: &mut String, name: &'static str, data: &[u8; 512]) {
+    use std::fmt::Write;
+    writeln!(text, "REPORT-IOCTL: Device=offline Command={name}")
+        .expect("invariant: String formatting cannot fail");
+    writeln!(
+        text,
+        "REPORT-IOCTL: Device=offline Command={name} returned 0"
+    )
+    .expect("invariant: String formatting cannot fail");
+    writeln!(text, "===== [{name}] DATA START (BASE-16) =====")
+        .expect("invariant: String formatting cannot fail");
+    for (index, row) in data.chunks_exact(16).enumerate() {
+        write!(text, "{:03}-{:03}:", index * 16, index * 16 + 15)
+            .expect("invariant: String formatting cannot fail");
+        for byte in row {
+            write!(text, " {byte:02x}").expect("invariant: String formatting cannot fail");
+        }
+        text.push('\n');
+    }
+    writeln!(text, "===== [{name}] DATA END =====")
+        .expect("invariant: String formatting cannot fail");
+}
+
+fn replay_command(input: File) -> Command {
+    let mut command = Command::new("/usr/sbin/smartctl");
+    command
+        .env_clear()
+        .env("LC_ALL", "C")
+        .args(["--json", "--health", "--attributes", "-"])
+        .stdin(Stdio::from(input))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    command
+}
+
+fn native_reason(error: disk_smart::Error) -> Reason {
+    tracing::debug!(?error, "native SMART observation unavailable");
+    match error {
+        disk_smart::Error::Io { source, .. }
+            if source.kind() == io::ErrorKind::PermissionDenied =>
+        {
+            Reason::PermissionDenied
+        }
+        disk_smart::Error::Io { source, .. } if source.kind() == io::ErrorKind::TimedOut => {
+            Reason::TimedOut
+        }
+        disk_smart::Error::TimedOut => Reason::TimedOut,
+        disk_smart::Error::ScsiStatus { host, driver, .. } if host == 3 || driver & 0x0f == 6 => {
+            Reason::TimedOut
+        }
+        disk_smart::Error::InvalidResponse { .. } => Reason::InvalidOutput,
+        _ => Reason::QueryFailed,
+    }
 }
 
 fn bind(
@@ -187,13 +408,13 @@ fn bind(
         .map_err(observation_reason)?
         .is_some()
     {
-        "nvme"
+        Protocol::Nvme
     } else if read_attribute(&disk.join("device/vendor"))
         .map_err(observation_reason)?
         .as_deref()
         == Some("ATA")
     {
-        "sat"
+        Protocol::Sat
     } else {
         return Err(Reason::UnsupportedDevice);
     };
@@ -304,12 +525,12 @@ impl Drop for QueryChild<'_, '_> {
     }
 }
 
-fn run(
+fn run_until(
     command: &mut Command,
-    timeout: Duration,
+    deadline: Instant,
     directory: &DiskObservationAccess<'_>,
 ) -> Result<(i32, Vec<u8>), Reason> {
-    directory.check_running().map_err(directory_reason)?;
+    command_timeout(directory, deadline)?;
     let process = command.spawn().map_err(|error| match error.kind() {
         io::ErrorKind::NotFound => Reason::ToolMissing,
         _ => io_reason("execute smartctl", error),
@@ -323,7 +544,7 @@ fn run(
             .process
             .as_mut()
             .expect("invariant: new SMART child is owned"),
-        timeout,
+        deadline,
         directory,
     );
     if result.is_ok() {
@@ -336,7 +557,7 @@ fn run(
 
 fn collect_output(
     child: &mut std::process::Child,
-    timeout: Duration,
+    deadline: Instant,
     directory: &DiskObservationAccess<'_>,
 ) -> Result<(i32, Vec<u8>), Reason> {
     let mut stdout = child
@@ -345,7 +566,6 @@ fn collect_output(
         .expect("invariant: SMART stdout is piped");
     rustix::fs::fcntl_setfl(&stdout, rustix::fs::OFlags::NONBLOCK)
         .map_err(|error| io_reason("set SMART pipe nonblocking", error.into()))?;
-    let deadline = Instant::now() + timeout;
     let mut bytes = Vec::new();
     let mut status = None;
     loop {

@@ -83,19 +83,92 @@ struct TransitionIntent {
     added_roots: BTreeMap<String, pending::MemberIdentity>,
     #[serialization(default, skip_serializing_if = "Option::is_none")]
     effect: Option<ExitEffect>,
+    #[serialization(default, skip_serializing_if = "Option::is_none")]
+    fence_scope: Option<FenceScope>,
     boundary: Option<PublishedBoundary>,
     #[serialization(with = "storage_contract::u64_string")]
     fence_sequence: u64,
 }
 
+/// An explicit, hash-bound proof scope, never a reinterpretation of an old
+/// all-member intent. Only the departing old-only voter may be absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum FenceScope {
+    #[serialization(rename = "retained-exit-quorum")]
+    RetainedExitQuorum,
+}
+
 impl TransitionIntent {
+    fn verify_fence_scope(&self) -> Result<()> {
+        if self.fence_scope.is_none() {
+            return Ok(());
+        }
+        let original = self.origin.config();
+        let effect = self.effect.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::ConfigConflict,
+                "quorum fence requires an exit effect",
+            )
+        })?;
+        effect.validate(original, &self.target)?;
+        if self.boundary.is_none()
+            || self.old_only().count() != 1
+            || !self.old_only().any(|disk| disk.disk_id == effect.disk_id)
+            || self.target.metadata_members().len() < original.metadata_quorum()
+        {
+            return Err(Error::new(
+                ErrorCode::MetadataQuorumUnavailable,
+                "retained exit fence requires a published source and the unchanged original quorum",
+            ));
+        }
+        Ok(())
+    }
+
+    fn fence_members(&self) -> Vec<DiskConfig> {
+        let config = if self.fence_scope.is_some() {
+            &self.target
+        } else {
+            self.origin.config()
+        };
+        let mut members = config.metadata_members().cloned().collect::<Vec<_>>();
+        members.sort_by(|left, right| left.disk_id.cmp(&right.disk_id));
+        members
+    }
+
+    /// Rebind paths only after the caller's original membership is verified.
+    /// Persisted intent identities and the fixed witness set stay unchanged.
+    fn fence_members_at(&self, config: &ValidatedConfig) -> Result<Vec<DiskConfig>> {
+        config.verify_saved_metadata_membership(self.origin.config())?;
+        self.fence_members()
+            .into_iter()
+            .map(|mut disk| {
+                let current = config
+                    .metadata_members()
+                    .find(|current| current.disk_id == disk.disk_id)
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::ConfigConflict,
+                            "fence witness is absent from the admitted original membership",
+                        )
+                    })?;
+                disk.root = current.root.clone();
+                Ok(disk)
+            })
+            .collect()
+    }
+
     fn participants(&self) -> Vec<DiskConfig> {
         let mut members = self
             .target
             .metadata_members()
             .map(|disk| (disk.disk_id.clone(), disk.clone()))
             .collect::<BTreeMap<_, _>>();
-        for disk in self.origin.config().metadata_members() {
+        for disk in self
+            .origin
+            .config()
+            .metadata_members()
+            .filter(|_| self.fence_scope.is_none())
+        {
             members
                 .entry(disk.disk_id.clone())
                 .or_insert_with(|| disk.clone());
@@ -272,7 +345,18 @@ impl Engine {
                 }
             }
         } else {
-            self.require_write()?;
+            let fence_scope = effect.as_ref().and_then(|effect| {
+                self.config
+                    .metadata_members()
+                    .find(|disk| {
+                        disk.disk_id == effect.disk_id
+                            && self.disk_resources.available(disk).is_none()
+                    })
+                    .map(|_| FenceScope::RetainedExitQuorum)
+            });
+            if fence_scope.is_none() {
+                self.require_write()?;
+            }
             if self.state.operations.contains_key(&operation_id) {
                 return Err(Error::new(
                     ErrorCode::IdempotencyKeyReused,
@@ -294,8 +378,11 @@ impl Engine {
                     config: self.config.clone(),
                 },
             };
-            let boundary = self.handoff_boundary()?;
-            let members = self.members();
+            let members = if fence_scope.is_some() {
+                target.metadata_members().cloned().collect::<Vec<_>>()
+            } else {
+                self.members()
+            };
             self.validate_fence_members(&members)?;
             if self.journals.values().any(JournalWriter::needs_recovery) {
                 return Err(Error::new(
@@ -305,6 +392,7 @@ impl Engine {
             }
             let prepared_roots =
                 self.prepare_added_roots(&origin, &target, principal, operation_id, held)?;
+            let boundary = self.handoff_boundary(&members)?;
             let intent = TransitionIntent {
                 operation_id,
                 principal: principal.to_owned(),
@@ -315,9 +403,17 @@ impl Engine {
                     .collect(),
                 target,
                 effect,
+                fence_scope,
                 boundary,
                 fence_sequence: self.next_slot,
             };
+            intent.verify_fence_scope()?;
+            if intent.fence_scope.is_some() {
+                // Missing-voter recovery is normally write-blocked. This exact
+                // read-only prefix/decision closure is the narrower admission,
+                // not permission to ignore an unresolved accepted operation.
+                self.inspect_retained_exit_prefix(&intent)?;
+            }
             let prepared = PreparedMetadataObject::new(INTENT_KIND, &intent, MAX_METADATA)?;
             for root in prepared_roots.values() {
                 root.verify_unsealed()?;
@@ -359,15 +455,11 @@ impl Engine {
         Ok(())
     }
 
-    fn handoff_boundary(&self) -> Result<Option<PublishedBoundary>> {
+    fn handoff_boundary(&self, members: &[DiskConfig]) -> Result<Option<PublishedBoundary>> {
         let Some(snapshot) = &self.snapshot else {
             return Ok(None);
         };
-        let disk = self
-            .config
-            .metadata_members()
-            .next()
-            .expect("invariant: nonempty membership");
+        let disk = members.first().expect("invariant: nonempty membership");
         let scan = scan_configured_at(&self.disk_resources.get(disk)?.root, disk, &self.config)?;
         let record = scan
             .records
@@ -384,7 +476,7 @@ impl Engine {
             })?;
         let candidate: Candidate = verified_object_at(
             &self.disk_resources,
-            &self.members(),
+            members,
             "candidate",
             &record.0.candidate_hash,
         )?;
@@ -403,7 +495,12 @@ impl Engine {
     }
 
     fn persist_membership_fence(&mut self) -> Result<MembershipFenceStatus> {
-        let members = self.members();
+        let members = self
+            .membership_fence
+            .as_ref()
+            .expect("invariant: handoff is admitted")
+            .intent
+            .fence_members_at(&self.config)?;
         self.validate_fence_members(&members)?;
         let fence = self
             .membership_fence
@@ -492,14 +589,19 @@ impl Engine {
             ));
         }
         let mut receipts = BTreeMap::new();
+        let members = intent.fence_members();
         for receipt in fences {
-            if !receipt_binds(
-                receipt,
-                RecordType::MembershipFence,
-                intent.fence_sequence,
-                hash,
-                hash,
-            )? {
+            if !members
+                .iter()
+                .any(|disk| disk.disk_id == receipt.disk_id && disk.slot_id == receipt.slot_id)
+                || !receipt_binds(
+                    receipt,
+                    RecordType::MembershipFence,
+                    intent.fence_sequence,
+                    hash,
+                    hash,
+                )?
+            {
                 return Err(Error::new(
                     ErrorCode::LogFork,
                     "conflicting membership fences",
@@ -578,3 +680,7 @@ impl Engine {
 #[cfg(test)]
 #[path = "../../../../test/engine/unit/engine/membership_transition_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/engine/unit/engine/membership_missing_exit_tests.rs"]
+mod missing_exit_tests;

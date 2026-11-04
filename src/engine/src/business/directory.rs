@@ -203,6 +203,25 @@ impl DirectorySnapshotSource {
         repository: &str,
         key: Cow<'a, str>,
     ) -> Result<DirectoryScopeView<'a>> {
+        let source = Self::current_read_view(engine, repository, key)?;
+        let repo = &engine.state.repositories[repository];
+        let branch = &engine.state.branches[&repo.main_branch_id];
+        if let Some(view) = engine.admitted_current_namespaces()? {
+            view.require_branch_write(&engine.state, &repo.main_branch_id)?;
+        } else if branch.state != BranchState::Active {
+            return Err(Error::new(
+                storage_contract::ErrorCode::BranchNotActive,
+                "directory namespace is not writable",
+            ));
+        }
+        Ok(source)
+    }
+
+    fn current_read_view<'a>(
+        engine: &'a Engine,
+        repository: &str,
+        key: Cow<'a, str>,
+    ) -> Result<DirectoryScopeView<'a>> {
         let repo = engine.state.repositories.get(repository).ok_or_else(|| {
             Error::new(
                 storage_contract::ErrorCode::RepositoryNotFound,
@@ -213,14 +232,6 @@ impl DirectorySnapshotSource {
             engine.state.branches.get(&repo.main_branch_id),
             "repository main branch missing",
         )?;
-        if let Some(view) = engine.admitted_current_namespaces()? {
-            view.require_branch_write(&engine.state, &repo.main_branch_id)?;
-        } else if branch.state != BranchState::Active {
-            return Err(Error::new(
-                storage_contract::ErrorCode::BranchNotActive,
-                "directory namespace is not writable",
-            ));
-        }
         let tree = engine.namespace_tree(&repo.main_branch_id)?;
         let (directory_id, path) = if key.is_empty() {
             (repo.repository_id.as_str(), "")
@@ -1163,6 +1174,7 @@ pub(crate) fn record_directory_edits(
 /// Replace the complete namespace and all frozen descendant references. Merely
 /// selecting a directory never advances the selected branch's immutable head.
 pub(crate) fn select_change(
+    engine: &Engine,
     state: &mut State,
     repository: &str,
     branch_id: &str,
@@ -1170,7 +1182,7 @@ pub(crate) fn select_change(
     operation: OperationId,
     max_entries: usize,
 ) -> Result<Value> {
-    let selected = state
+    let raw_selected = state
         .directory_branches
         .get(branch_id)
         .cloned()
@@ -1181,6 +1193,17 @@ pub(crate) fn select_change(
                 "directory composition missing",
             )
         })?;
+    let projection = engine
+        .admitted_current_namespaces()?
+        .map(|view| {
+            view.require_directory_branch_write(&engine.state, branch_id)?;
+            view.directory_projection(&engine.state, branch_id)
+        })
+        .transpose()?;
+    let selected = projection
+        .as_ref()
+        .map(|projection| projection.branch().clone())
+        .unwrap_or(raw_selected);
     let repo = required(
         state.repositories.get(repository),
         "directory repository missing",
@@ -1196,6 +1219,7 @@ pub(crate) fn select_change(
         "repository head commit missing",
     )?
     .clone();
+    let owner_entries = engine.current_branch_entries(&repo.main_branch_id, &previous)?;
     required(
         state.directory_trees.get(&selected.head_tree_id),
         "selected directory head tree missing",
@@ -1217,8 +1241,7 @@ pub(crate) fn select_change(
     let path = if selected.directory_id == repository {
         String::new()
     } else {
-        previous
-            .entries
+        owner_entries
             .iter()
             .find(|e| {
                 e.entry_id == selected.directory_id && e.kind == NamespaceEntryKind::Directory
@@ -1232,7 +1255,7 @@ pub(crate) fn select_change(
             .path()
             .to_owned()
     };
-    let (_, old_entries, _) = scope(state, repository, &path)?;
+    let old_entries = current_scope_entries(owner_entries, &name_policy::path_key(&path)).to_vec();
     let restored = rebase_entries(&selected.entries, &selected.path, &path)?;
     let selected_contexts = selected
         .entries
@@ -1259,15 +1282,18 @@ pub(crate) fn select_change(
     let contexts_match = selected_contexts
         .iter()
         .all(|(key, value)| state.file_contexts.get(key) == Some(value));
-    if state
-        .directory_selections
-        .get(&selected.directory_id)
-        .is_some_and(|id| id == branch_id)
-        && state.directory_tree_selections.get(&selected.directory_id)
-            == Some(&selected.head_tree_id)
-        && contexts_match
-        && old_entries == restored
-    {
+    let selection_matches = match &projection {
+        None => {
+            state
+                .directory_selections
+                .get(&selected.directory_id)
+                .is_some_and(|id| id == branch_id)
+                && state.directory_tree_selections.get(&selected.directory_id)
+                    == Some(&selected.head_tree_id)
+        }
+        Some(projection) => projection.matches_selection(state)?,
+    };
+    if selection_matches && contexts_match && old_entries == restored {
         return Ok(
             json!({"directory_branch_id":branch_id,"branch_id":repo.main_branch_id,"commit_id":previous.commit_id,"no_change":true,"count":selected.file_branches.len().to_string()}),
         );
@@ -1276,10 +1302,14 @@ pub(crate) fn select_change(
     // when combined with the currently selected siblings. Check the complete
     // replacement before changing any selections or publishing a commit.
     let key = name_policy::path_key(&path);
-    let mut entries = previous.entries.clone();
+    let mut entries = owner_entries.to_vec();
     entries.retain(|e| !key.is_empty() && !namespace::is_descendant(e.lookup_key(), &key));
     entries.extend(restored);
     validate_entries(&mut entries, max_entries)?;
+
+    if let Some(view) = engine.admitted_current_namespaces()? {
+        view.remove_hidden_contexts(state, repository, &repo.main_branch_id);
+    }
 
     for e in old_entries
         .iter()
@@ -1310,20 +1340,24 @@ pub(crate) fn select_change(
     state
         .file_write_origins
         .extend(selected.inherited_files.clone());
-    for (id, reference) in &selected.directory_refs {
+    if let Some(projection) = &projection {
+        projection.install_selection(state)?;
+    } else {
+        for (id, reference) in &selected.directory_refs {
+            state
+                .directory_selections
+                .insert(id.clone(), reference.directory_branch_id.clone());
+            state
+                .directory_tree_selections
+                .insert(id.clone(), reference.tree_id.clone());
+        }
         state
             .directory_selections
-            .insert(id.clone(), reference.directory_branch_id.clone());
+            .insert(selected.directory_id.clone(), branch_id.into());
         state
             .directory_tree_selections
-            .insert(id.clone(), reference.tree_id.clone());
+            .insert(selected.directory_id.clone(), selected.head_tree_id.clone());
     }
-    state
-        .directory_selections
-        .insert(selected.directory_id.clone(), branch_id.into());
-    state
-        .directory_tree_selections
-        .insert(selected.directory_id.clone(), selected.head_tree_id.clone());
     let pending = snapshot_pending(state, &entries);
     let commit_id = new_id("commit")?;
     state.commits.insert(
@@ -1370,11 +1404,22 @@ pub(crate) fn select_change(
             "directory selection generation exhausted",
         )
     })?;
-    let changed = if path.is_empty() {
+    let mut changed = if path.is_empty() {
         Vec::new()
     } else {
         vec![path.clone()]
     };
+    if let Some(view) = engine.admitted_current_namespaces()? {
+        // The selected source already installed its complete projected ref graph.
+        // Refresh only hidden paths outside it, not its frozen selected children.
+        changed.extend(
+            view.removed_paths(&repo.main_branch_id)
+                .filter(|hidden| {
+                    !key.is_empty() && *hidden != key && !namespace::is_descendant(hidden, &key)
+                })
+                .map(str::to_owned),
+        );
+    }
     let parents = record_directory_edits(state, repository, &changed, Some(&key))?;
     Ok(
         json!({"directory_branch_id":branch_id,"branch_id":repo.main_branch_id,"commit_id":commit_id,"history_tree_id":repo.history_tree_id,"path":path,"name":selected.name,"head_tree_id":selected.head_tree_id,"count":selected.file_branches.len().to_string(),"selected":true,"directory_branch_ids":parents}),
@@ -1483,7 +1528,7 @@ impl Engine {
                 "path": path.map_or("", name_policy::LookupPath::as_str),
                 "name": name.as_str(),
             }),
-            |_, state, _| {
+            |engine, state, _| {
                 let repo = state.repositories.get(repository).ok_or_else(|| {
                     Error::new(
                         storage_contract::ErrorCode::RepositoryNotFound,
@@ -1492,14 +1537,29 @@ impl Engine {
                 })?;
 
                 let history_tree_id = repo.history_tree_id.clone();
-                let view = scope_view_for_key(
-                    state,
-                    repo,
+                let view = DirectorySnapshotSource::current_view(
+                    engine,
+                    repository,
                     Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
                 )?;
                 let directory_id = view.directory_id.to_owned();
-                if !state.directory_selections.contains_key(&directory_id) {
-                    let source = DirectorySnapshotSource::capture(state, view);
+                if engine.admitted_current_namespaces()?.is_some() {
+                    let source = DirectorySnapshotSource::capture(&engine.state, view);
+                    snapshot_current_source(state, repository, source)?;
+                    if directory_id != repository {
+                        // Creation refreshes the selected source without editing
+                        // the owning main commit. Freeze its ancestors from that
+                        // same admitted owner, never from the raw historical head.
+                        let root = DirectorySnapshotSource::current_view(
+                            engine,
+                            repository,
+                            Cow::Borrowed(""),
+                        )?;
+                        let root = DirectorySnapshotSource::capture(&engine.state, root);
+                        snapshot_current_source(state, repository, root)?;
+                    }
+                } else if !state.directory_selections.contains_key(&directory_id) {
+                    let source = DirectorySnapshotSource::capture(&engine.state, view);
                     snapshot_source(state, repository, source)?;
                 }
                 if state.directory_branches.values().any(|b| {
@@ -1584,16 +1644,9 @@ impl Engine {
                 "name": name.as_str(),
             }),
             |engine, state, _| {
-                let repo = state.repositories.get(repository).ok_or_else(|| {
-                    Error::new(
-                        storage_contract::ErrorCode::RepositoryNotFound,
-                        "repository missing",
-                    )
-                })?;
-
-                let view = scope_view_for_key(
-                    state,
-                    repo,
+                let view = DirectorySnapshotSource::current_view(
+                    engine,
+                    repository,
                     Cow::Borrowed(path.map_or("", name_policy::LookupPath::key)),
                 )?;
                 let id = view.directory_id;
@@ -1611,6 +1664,7 @@ impl Engine {
                         )
                     })?;
                 select_change(
+                    engine,
                     state,
                     repository,
                     &selected,
@@ -1626,15 +1680,34 @@ impl Engine {
         repository: &str,
         path: &str,
     ) -> Result<Vec<storage_contract::DirectoryBranchSummary>> {
-        let view = scope_view(&self.state, repository, path)?;
-        Ok(storage_contract::directory_branch_summaries(
+        if !path.is_empty() {
+            name_policy::validate_lookup_path(path)?;
+        }
+        let view = DirectorySnapshotSource::current_read_view(
+            self,
+            repository,
+            Cow::Owned(name_policy::path_key(path)),
+        )?;
+        let mut summaries = storage_contract::directory_branch_summaries(
             &self.state,
             storage_contract::DirectoryBranchScope {
                 repository_id: repository,
                 directory_id: view.directory_id,
                 path,
             },
-        ))
+        );
+        if let Some(current) = self.admitted_current_namespaces()? {
+            for summary in &mut summaries {
+                summary.file_count = current
+                    .directory_entries(&summary.directory_branch_id, &summary.head_tree_id)?
+                    .iter()
+                    .filter(|entry| entry.kind == NamespaceEntryKind::File)
+                    .map(|entry| entry.file_id.as_str())
+                    .collect::<BTreeSet<_>>()
+                    .len();
+            }
+        }
+        Ok(summaries)
     }
     pub fn select_default_directory_branch(
         &mut self,
@@ -1667,6 +1740,7 @@ impl Engine {
                     ));
                 }
                 select_change(
+                    engine,
                     state,
                     repository,
                     branch,

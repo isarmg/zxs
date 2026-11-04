@@ -562,10 +562,11 @@ fn verify_held_genesis(
             "retained roots cannot satisfy the original fixed genesis quorum",
         ));
     }
+    let metadata_members = config.metadata_members().len();
     Ok(RestrictedGenerationEvidence {
         #[cfg(test)]
         authority_hash: object_hash("pool-config", &config)?,
-        metadata_members: config.metadata_members().len(),
+        metadata_members,
         metadata_quorum: config.metadata_quorum(),
         config,
         verified_members,

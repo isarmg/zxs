@@ -513,12 +513,7 @@ fn membership_registry_current_initialize_recovery_revalidates_exact_owner_entri
         .unwrap();
     assert_current_tree(&fixture, initialized_tree(&fixture.engine, &result));
     let before_rejections = canonical_json(fixture.engine.state()).unwrap();
-    for kind in [
-        "directory.branches.create",
-        "directory.branches.select",
-        "directory.default.select",
-        "directory.namespace.batch",
-    ] {
+    for kind in ["branch.create", "file.history.merge", "merge-link.create"] {
         assert_eq!(
             fixture
                 .engine

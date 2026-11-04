@@ -192,6 +192,7 @@ impl<'de> Deserialize<'de> for PortableAuthority {
 impl AuthorityNode {
     fn intent(&self) -> Result<TransitionIntent> {
         let verified = self.joint.verify()?;
+        self.archive.verify_scope(&verified.intent)?;
         if verified.intent.effect.is_some() {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,

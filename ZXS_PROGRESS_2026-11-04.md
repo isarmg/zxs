@@ -1,12 +1,12 @@
 # ZXS 开发进度快照
 
-记录日期：2026-11-04，更新至 18:21 UTC。UI、磁盘基础、生产 Abort/recovery 与已有池添加 API/Web 已进入主线。后续退出协议、当前命名空间和受管观察代码正在合批，尚未验证。历史运行的统计时点分别列明。
+记录日期：2026-11-04，更新至 18:55 UTC。主线已包含真实退出、当前命名空间及管理入口源码；最新主线构建仍被下述确定编译错误阻断。缺席目标退出、当前分支/批量编辑及进程内 SMART 的下一源码批已经整合，尚未编译或测试。历史运行的统计时点分别列明。
 
 本文记录本轮 ZXS 改进已落地的代码、已有验证证据、已知失败和剩余工作，供后续继续开发时核对。它是有时间边界的快照，不代替功能规范、发布说明或部署验收。提交和运行链接固定到具体版本；分支后续移动不改变本文所记录的历史结果。
 
 ## 当前结论
 
-- UI、SMB、历史、放置配置及中立失焦修补已进入主线 [`e54281cf`](https://github.com/isarmg/zxs/commit/e54281cffca72915287fd72caa0a16702fccfb0a)，保留原 `a8e57f0d` 祖先。磁盘基础随后进入主线 [`349367a3`](https://github.com/isarmg/zxs/commit/349367a37d5ab220dda1b66f3f17eb1cea44de03)。生产 Abort/recovery 与已有池添加 API/Web 随后进入 [`024647ca`](https://github.com/isarmg/zxs/commit/024647ca57f5824c6d0ab27a7691b019c087118d)。该提交的 [完整 CI 41876682031](https://github.com/isarmg/zxs/actions/runs/41876682031) 已在多个构建组报告 E0425，未通过。窄修已进入 [`1d082cd9`](https://github.com/isarmg/zxs/commit/1d082cd99f34e05ea52d85152d75590e7462df65)，[完整 CI 41882962028](https://github.com/isarmg/zxs/actions/runs/41882962028) 截至本次记录仍在运行；quality 因未使用的 `open_optional_regular` 和可合并条件失败，workspace 在测试调用不存在的方法处编译失败，其余任务尚未核实终态。三项源码修补已纳入下述后续批，尚未运行。
+- UI、SMB、历史、放置配置及中立失焦修补已进入主线 [`e54281cf`](https://github.com/isarmg/zxs/commit/e54281cffca72915287fd72caa0a16702fccfb0a)，保留原 `a8e57f0d` 祖先。磁盘基础随后进入主线 [`349367a3`](https://github.com/isarmg/zxs/commit/349367a37d5ab220dda1b66f3f17eb1cea44de03)。生产 Abort/recovery 与已有池添加 API/Web 随后进入 [`024647ca`](https://github.com/isarmg/zxs/commit/024647ca57f5824c6d0ab27a7691b019c087118d)。该提交的 [完整 CI 41876682031](https://github.com/isarmg/zxs/actions/runs/41876682031) 已在多个构建组报告 E0425，未通过。窄修已进入 [`1d082cd9`](https://github.com/isarmg/zxs/commit/1d082cd99f34e05ea52d85152d75590e7462df65)，[完整 CI 41882962028](https://github.com/isarmg/zxs/actions/runs/41882962028) 截至本次记录仍在运行；quality 因未使用的 `open_optional_regular` 和可合并条件失败，workspace 在测试调用不存在的方法处编译失败，其余任务尚未核实终态。三项源码修补已随真实退出批进入 [`57464e4e`](https://github.com/isarmg/zxs/commit/57464e4e118440708183bc43dbdf2709f27b10fb)，但该提交的 CI 又被下述编译错误阻断，不能标为通过。
 - Web 首次设置已经有真实 Chrome、生产 WASM 和真实服务端的通过证据；同一轮浏览器验收随后在搜索框失焦截图检查处失败，不能称为整体浏览器通过。
 - 已有池的在线新增、计划下线和删除登记尚未完成。实验协议、I/O 所有权收束及测试代码的进展，不能表述成这三项能力已经可用。
 - `349367a3` 的 [完整 CI 41868114575](https://github.com/isarmg/zxs/actions/runs/41868114575) 已出现质量任务及 engine 测试失败；浏览器构建也被相同无消费者封装警告阻断，尚未进入浏览器。修补已进入 `024647ca`，但新 CI 被另一处 E0425 构建错误阻断。此前失败不能改写为通过；本轮没有真实部署或真实数据盘操作。
@@ -85,7 +85,7 @@
 
 本批仅执行源码阅读、合并、rustfmt 和 git diff 检查，未执行类型检查、测试、模型、浏览器、SMB 或 CI。新增回归文件是待运行的源码，不是通过证据。需要主负责人对组合树运行 engine membership/Abort/recovery、server 添加与重启/响应丢失/撤权、Web 状态/生产 WASM 及正式质量检查；真实硬件掉电和部署不在本轮范围。
 
-## 当前后续源码批：真实退出与当前投影
+## 已合入 57464e4e 的源码批：真实退出与当前投影
 
 以下是基于准确主线 `1d082cd9` 整合、尚未组合编译或运行的源码，不是通过证据：
 
@@ -95,11 +95,27 @@
 - 已写添加的真实认证取消入口，以及计划下线／去登记的 HTTP/Web 确认、原操作恢复和永久结果查询。控制准备状态不是成功，激活中只续原激活而不重开被禁止目标。
 - 已写受管目录观察和 SMART 实际进程尾部责任。超时返回或接收者丢失不等于子进程退出；无法确认清理结果时禁止宣称关闭。同进程的已关闭旧计划不得通过健康查询重开目标；服务进程崩溃后外部 SMART 子进程的存活与内核 I/O 尾部，尚无跨进程排空证明，不能据此宣称全面覆盖真实掉电或服务崩溃。checkpoint 新上下文绑定准确代际、活动 I/O 身份与固定 voters，任何 registry-bearing 代际仍从 D3 完整回放，不启用未经证明的加速。
 
-当前 HTTP 文件管理、目录 Full/summary 和 SMB 已写已准入投影消费者；同一 immutable HEAD 下 registry 改变会要求当前目录句柄重新绑定，显式历史访问保留历史树。已写多代 Exit 后继续添加／退出、Disabled→Deregister、精确旧操作回执、当前 Rename、新仓入口和主盘配置路由；源码尚未运行。当前目录 scope 初始化、当前目录分支标签、纯元数据编辑，以及首次激活补全不能绕回已停止目录的连续锁证明均已写入同一候选，尚未编译或执行，未将 gate 当成功。最后一个 voter 的管理终止权威、原参与者缺席时的准备驱动、merge/rebase/批量或历史导入，以及大规模分页便携证据仍未完成。相关阶段保留明确拒绝，不以按钮或准备证书伪造成功。
+当前 HTTP 文件管理、目录 Full/summary 和 SMB 已写已准入投影消费者；同一 immutable HEAD 下 registry 改变会要求当前目录句柄重新绑定，显式历史访问保留历史树。已写多代 Exit 后继续添加／退出、Disabled→Deregister、精确旧操作回执、当前 Rename、新仓入口和主盘配置路由；源码尚未运行。当前目录 scope 初始化、当前目录分支标签、纯元数据编辑，以及首次激活补全不能绕回已停止目录的连续锁证明均已写入同一候选，尚未编译或执行，未将 gate 当成功。该批冻结时，最后一个 voter 的管理终止权威、原参与者缺席时的准备驱动、merge/rebase/批量或历史导入，以及大规模分页便携证据仍未完成。下一节单独记录后续已写源码；未闭合阶段保留明确拒绝，不以按钮或准备证书伪造成功。
 
 本批同时移除无消费者的原始可选文件打开封装，保留实际受管入口；等价合并 recovery 条件；将 Abort 回归改为真实 joint 续作并断言双方多数与证书，处理 `1d082cd9` 的三项已知构建／lint 阻断，没有豁免警告或放宽多数。
 
 本批作者仅做源码整合、格式化和差异审阅。新测试源码涵盖第一轮 D3、stop/关闭/部分 publication 中断、原操作续作、目标字节保留、共享内容、旧工作区、逻辑域排除、观察取消与 checkpoint 范围；都需要主负责人针对最终同一树运行后才能记录结果。
+
+## 18:55 后续源码批及主线构建状态
+
+基线为真实主线 [`57464e4e`](https://github.com/isarmg/zxs/commit/57464e4e118440708183bc43dbdf2709f27b10fb)，源码作者未运行本批测试、构建、Clippy、模型或 CI，没有远端推送。主负责人统一发布及验证。
+
+该主线 CI 的 quality 任务 `126788359129` 实际报告未使用的 `DurableDiskStop` 导入、工作区 base 借用与隐藏 context 修改冲突、Exit runtime 两处 failpoint 的可变借用冲突、restricted recovery 中 metadata iterator 与移动 Config 冲突；workspace/build-tools 也在编译阶段被阻断，不能声称后续测试已经运行。本批改动将 base/current 绑定同一已持有 source-commit 快照，并修正上述生命周期借用范围；保留故障点、真实 guard、多数与持久化条件，不加入警告豁免。修补尚待运行确认。
+
+本批写入的实际消费者：
+
+- 唯一退出 voter 缺席时，用原固定 N/Q 的完整已发布前缀及持久 fence 准备，完整安装所有保留目标；data-only 缺席沿用完整原 metadata 证明。Unopened 只有取得准确 durable stop、restricted authority 和全逻辑 I/O 域关闭证明后才可推进，不伪造缺席 journal 或零 I/O。独立 11 项对抗回归源码与原正负回归同时交付，见 [缺席退出](docs/validation/missing-exit-members.md)。
+- 当前文件分支创建、选择、默认与合并绑定准确 owner/occurrence、历史正文和 child refs；当前目录分支创建/选择发布必要的不可变投影树，保留旧树。恢复重建相同来源证明，不凭回执布尔值放行，见 [文件分支](docs/validation/current-file-branches.md) 与 [目录分支](docs/validation/current-directory-branches.md)。
+- 当前选中且 tree 等于 branch head 的批量操作已写 Move/Copy/Rename/DeleteTree 等真实消费者。选择投影导致 tree 不等于 head 的合法后续批量消费仍在独立实现，此冻结批精确拒绝而非借旧树放行，见 [批量编辑](docs/validation/current-namespace-batches.md)。
+- 上传与同次 Rename 绑定真正新版本及最终路径，恢复拒绝多余别名/隐藏身份。删除链最终消耗上传时仍明确拒绝并保留暂存，因为尚无跨两类动作的用户顺序记录，见 [工作区写入与改名](docs/validation/workspace-rename-writes.md)。
+- SMART 目标 I/O 改为服务内同步 NVMe/SAT 查询，保持真实准入直到内核调用返回。smartctl 只用 stdin 离线解释，无目标路径或设备 FD；来源解析、取消、超时及错误保留。跨进程/真实硬件验收未执行，见 [SMART 生命周期](docs/validation/smart-query-lifetime.md)。
+
+尚未纳入此批的生产闭环：最后 voter 退出进入经认证管理态、从该管理态建立新 metadata 组、完整历史导入/rebase、选择投影后的批量消费者，以及更大规模证据分页。前两项独立并行实现，不能当作零盘 Genesis 或临时 N=0/Q=0。已有在线管理源码也仍需编译、故障恢复、HTTP/Web/SMB 和实际 I/O 验收，未获可部署结论。
 
 ## 在线磁盘生命周期与 I/O 收束
 
@@ -145,7 +161,7 @@
 
 ## 继续工作的顺序
 
-1. 主线已到 `1d082cd9`，其 CI 的已知 quality 和测试编译阻断均有源码修补。主负责人核验运行终态，并基于该主线接收真实退出、当前命名空间、取消入口、首激活锁证明与观察责任的完整冻结批。
+1. 主线已到 `57464e4e`，已知构建阻断按上述准确错误修补。主负责人核验运行终态，并接收基于该真实主线的新冻结源码批；代码作者继续剩余管理态和当前消费者闭环。
 2. 合并到同一候选树，保留各方实现，清理仅服务临时验证分支的专用门控和过时说明；更新本进度文档中的主线提交与状态。
 3. 将已冻结代码提交 `main`，由主负责人组织受影响检查和完整 CI；尚未执行的检查仍标记为未验证，既有 CI 的最终状态另行补充，不自动推断。
 4. 不进行真实部署、凭据或权限修改，不操作真实数据目录。在线新增、下线和删除只有在实现与对应验收都完成后，才能改写为可用。

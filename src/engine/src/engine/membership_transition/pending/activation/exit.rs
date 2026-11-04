@@ -187,6 +187,7 @@ impl ExitCore {
     pub(in crate::engine::membership_transition) fn intent(&self) -> Result<TransitionIntent> {
         let verified = self.joint.verify()?;
         let intent = verified.intent;
+        self.archive.verify_scope(&intent)?;
         let effect = intent.effect.as_ref().ok_or_else(|| {
             Error::new(
                 ErrorCode::PublicationInvalid,
@@ -494,3 +495,7 @@ impl AdmittedDiskExitPublication {
 #[cfg(test)]
 #[path = "../../../../../../../test/engine/unit/engine/disk_exit_publication_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../../../../test/engine/unit/engine/membership_retained_exit_adversarial_tests.rs"]
+mod retained_exit_adversarial_tests;

@@ -15,6 +15,7 @@ crate 入口在编译期拒绝非 Linux、非 x86_64 或非 64 位目标；内�
 | `sqlite` | SQLx 0.9 索引连接、WAL/FULL/外键、defensive、原生连接限额、完整性及快照检查 |
 | `schema_identity` | 索引表结构身份和确定性指纹 |
 | `secret` | 默认脱敏、不可序列化、释放时清零的秘密类型 |
+| `disk_smart` | 已持有块设备的同步只读 NVMe／SAT 健康命令、固定缓冲区与准确完成错误 |
 
 `sqlite::block_on_sqlite_connection` 支持同步核心执行直接 `SqliteConnection` 操作；不支持连接池、网络、Tokio 定时器或递归调用。同步 owner 可以跨调用持有直接连接；换文件或释放其保护锁前必须显式 `Connection::close().await`，不能在 future 中遗失连接所有权。`open_index_connection` 固定索引连接策略并启用 defensive；`create_if_missing=false` 不允许隐式新建数据库。 直接连接、连接池和快照连接的错误映射仅解包已识别的 `ConnectionLimitError`；其他 SQLx 错误原样保留，包括 I/O 的原始 errno 和非限额来源，不按 `ErrorKind` 重建。
 
@@ -195,3 +196,15 @@ reader 回调已发生的名称替换由检查拒绝，失败清理不删除观�
 `rustix/use-libc` 隔离产物，覆盖 public/payload 的 rename 前 EIO、真实 rename
 后 EIO 与真实 EEXIST。断言阶段、原 errno、源／目标字节与现场保留，不冒充
 生产 direct-syscall 后端的 rename 注入或真实 NFS／物理断电验收。
+
+## SMART 设备命令的进程所有权
+
+`disk_smart` 只接受已验证为块设备的借用 FD，提供固定 NVMe Identify／Health Log 及
+SAT 电源检查、标识和 SMART 只读命令。它不打开设备路径、不创建子进程、不提供通用
+透传，也不更改设备设置。调用方在每次同步 ioctl 实际返回之前保留设备及目录准入，
+取消和驱动期限都不能提前释放所有权。
+
+服务端把 ATA 固定原始回复交给官方 smartctl 离线解码，保留型号／固件数据库语义；
+解码器不接收目标设备 FD 或路径。准确命令、资源上限、Linux／smartmontools 版本化
+来源及待执行测试见 [SMART 查询生命周期边界](../validation/smart-query-lifetime.md)。
+源码及格式检查不代表真实设备或跨进程重新准入已验收。

@@ -24,7 +24,7 @@ file-manager-root 的普通保存已接入 `prepare_file_write`、文件分支�
 
 新 repository/disk-root 可以使用当前 Enabled 一级登记作为 owner。新 scope 必须是本次新建的 repo/history/main/empty root commit，没有历史 entries、pending version 或父 commit；原 repository 的 helper 仍继承真实可写 main。新建操作先核验当前路由，旧成功 receipt 则按原身份/请求重放，不被后来退出改写含义。未使用的 create_disk_root operation 不得靠历史 Config 找到已退出 root 并当作当前成功。
 
-以下操作本批仍在 planner 调用任何变更闭包前拒绝：批量移动/复制、merge、目录/文件选择、历史导入/历史 workspace、从旧 commit 创建分支及其它未获当前 namespace 准入的 mutation。重叠 upload＋Rename/Delete 仍在版本构建前返回 WorkspaceDependencyBusy，可先分别提交；无关路径的 staged upload 与 Rename 可同批提交。普通 workspace commit、上述 namespace 操作、新空仓/磁盘根、当前 directory.scope.initialize、placement.configure、纯 file/version note 与 branch label、placement/protection 策略更新和认证状态更新已允许。这是精确可见的临时能力边界，不是最终产品限制；跨 scope 的 relocation/import 必须先补真实投影语义，不能只移除 gate。
+以下操作本批仍在 planner 调用任何变更闭包前拒绝：批量移动/复制、merge、目录/文件选择、历史导入/历史 workspace、从旧 commit 创建分支及其它未获当前 namespace 准入的 mutation。同次上传＋Rename 已接新版本与准确 occurrence 证明；若后续 Delete/DeleteTree 会丢弃某份上传，仍在版本构建前返回 WorkspaceDependencyBusy 并保留暂存。普通 workspace commit、上述 namespace 操作、新空仓/磁盘根、当前 directory.scope.initialize、placement.configure、纯 file/version note 与 branch label、placement/protection 策略更新和认证状态更新已允许。这是精确可见的临时能力边界，不是最终产品限制；跨 scope 的 relocation/import 必须先补真实投影语义，不能只移除 gate。
 
 ## 不导入内容的元数据编辑
 
@@ -58,7 +58,7 @@ file note 和 file-branch label 只操作实际当前投影中仍存在的 ident
 - DeleteTree 只操作当前保留条目，保留历史版本。
 - 旧 workspace、旧 entry ID、错误 principal/fence 拒绝；永久 receipt 可恢复正常和 cold workspace 基线。
 - Rename 隐藏同名目的地、case-only/嵌套、链式 Rename/DeleteTree、无关 upload、不同版本 alias、独立 file-branch 保存及跨 disk-root 隔离；反序列化 State 通过恢复安装入口重验正负例。
-- 历史分支/工作区导入在修改前拒绝；重叠 upload＋Rename/Delete 保留精确拒绝边界。
+- 历史分支/工作区导入在修改前拒绝；上传＋Rename 保留新正文和来源，上传最终被 Delete/DeleteTree 消耗则保留精确拒绝边界。
 - 当前 Enabled owner 上新 repository 与 disk-root 可新建并保存；Disabled/Detached owner 拒绝，旧成功创建 receipt 仍可重放；非空/历史 root 不能借新建 scope 取得写权。
 - 显式目录初始化按当前 identity 捕获内容与子目录 refs，不用旧路径复活旧选择；directory label 保留全部 snapshot 数据，变更同名/原 tree 的负例拒绝。
 - Disabled 保留列表与登记但拒绝目标写路由；Detached 不再登记；可显式更新到保留 primary 并写入。
@@ -75,4 +75,6 @@ file note 和 file-branch label 只操作实际当前投影中仍存在的 ident
 
 Add/Abort 通过 `prepare_continuation` 保留当前 entries 与 guards，重绑本代 registry/source；每代使用本代准确 mask（Add/Abort 无新 mask），不会错误要求上一动作的 mask。每次准入记录本代 activation sequence，不能拿 Abort 继承的相同 registry 冒充新一代 D3。恢复必须由正式 archive verifier 依次认证并重放历史普通发布和每个规定 activation，到达准确新 source 后才可安装当前 Live 证明；仅有 raw State、旧 registry root 或请求的 mask 均不足。
 
-这些工厂依赖生命周期实现的完整 registry continuation、archive replay 和 Live/Archived 证明区分，尚未编译或运行验证。批量、merge、选择和历史导入仍按实际 planner gate 判断；解除 gate 必须先接好对应身份和 scope 的真实语义。Rename 与新建 empty root 的 source 已接通，真实生命周期→Add→新盘建仓/保存仍须统一端到端验证。
+这些工厂依赖生命周期实现的完整 registry continuation、archive replay 和 Live/Archived 证明区分，尚未编译或运行验证。当前文件分支 merge/选择、目录选择与 selected-head 批量已有精确来源消费者；完整历史导入仍按实际 planner gate 拒绝。投影 selection tree 不等于 branch head 的后续批量仍在闭合，不能套用原 head 消费者。解除 gate 必须先接好对应身份和 scope 的真实语义。Rename 与新建 empty root 的 source 已接通，真实生命周期→Add→新盘建仓/保存仍须统一端到端验证。
+
+同次上传与 Rename 的新版本、路径节点及恢复证明见 [工作区写入与改名](workspace-rename-writes.md)。上传被 Delete/DeleteTree 消耗仍保留明确拒绝，不能猜测未记录的用户操作顺序。

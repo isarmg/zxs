@@ -89,6 +89,19 @@ impl MembershipJointDecisionStatus {
             && self.certificate_members.len() == self.union_members
             && self.ready_data_disks.len() == self.added_data_disks
     }
+
+    /// Exit admission retains both configured quorums and a complete copy on
+    /// every target member. An absent old-only member is not counted as ready.
+    pub(in crate::engine::membership_transition) fn retained_certificates_synchronized(
+        &self,
+    ) -> bool {
+        let (old, target) = self.certificate_quorum_counts();
+        self.joint_quorum_accepted()
+            && self.synchronized_target_votes == self.target_members
+            && old >= self.original_quorum
+            && target == self.target_members
+            && self.ready_data_disks.len() == self.added_data_disks
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +112,8 @@ enum JointFormat {
     Devices,
     #[serialization(rename = "fenced-exit-control-slot-decision")]
     ExitControl,
+    #[serialization(rename = "retained-exit-quorum-slot-decision")]
+    RetainedExitQuorum,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -225,7 +240,8 @@ impl JointProgress {
                 original_quorum: config.metadata_quorum(),
                 synchronized_original_votes: 0,
                 target_members: fence.intent.target.metadata_members().len(),
-                union_members: pending.members.len(),
+                union_members: fence.intent.target.metadata_members().len()
+                    + fence.intent.old_only().count(),
                 target_quorum: fence.intent.target.metadata_quorum(),
                 added_data_disks: pending.data_disks.len(),
                 ready_data_disks: pending.ready_data_disks.clone(),

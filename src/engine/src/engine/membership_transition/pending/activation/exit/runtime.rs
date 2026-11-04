@@ -13,6 +13,9 @@ pub(in crate::engine) struct PendingDiskExit {
 pub(super) enum ExitIoOwner {
     Live(DiskIoBinding),
     Recovered(crate::disk::RecoveredDiskIo),
+    /// No target resource was admitted. A durable stop and process-wide logical
+    /// exclusion are still required before this can become Recovered.
+    Unopened,
 }
 
 impl Engine {
@@ -59,12 +62,33 @@ impl Engine {
             .as_ref()
             .expect("invariant: exit effect");
         let target = effect.identity(&generation.intent.origin.config().pool_id);
+        let forbidden = generation.portable.forbidden_disk_ids()?;
+        let allowed = generation
+            .intent
+            .target
+            .disks
+            .iter()
+            .filter(|disk| !forbidden.contains(&disk.disk_id))
+            .map(|disk| disk.disk_id.clone())
+            .collect();
+        let config = generation
+            .intent
+            .target
+            .clone()
+            .with_workspace_limits(Some(self.config.effective_workspace_limits()))?
+            .with_generation(Arc::clone(&generation))?
+            .restrict_io_disks(allowed)?;
+        let unopened = matches!(
+            pending.ownership.get(&target.disk_id),
+            Some(ExitIoOwner::Unopened)
+        );
         let binding = match pending
             .ownership
             .get(&target.disk_id)
             .expect("invariant: prepared target closure")
         {
             ExitIoOwner::Live(binding) => Some(binding.clone()),
+            ExitIoOwner::Unopened => None,
             ExitIoOwner::Recovered(guard) if guard.identity() == &target => None,
             ExitIoOwner::Recovered(_) => {
                 return Err(Error::new(
@@ -83,6 +107,9 @@ impl Engine {
             Some(_) => {
                 self.synchronize_disk_exit_stop(&identity, stop_operation, &stop_transition)?
             }
+            None if unopened => {
+                self.synchronize_disk_exit_stop(&identity, stop_operation, &stop_transition)?
+            }
             None => self.recover_disk_exit_stop(&identity, stop_operation, &stop_transition)?,
         };
         if !stop.matches(&identity, stop_operation, &stop_transition) {
@@ -90,6 +117,15 @@ impl Engine {
                 ErrorCode::RecoveryRequired,
                 "durable exit stop differs",
             ));
+        }
+        if unopened {
+            let recovered = self.recover_disk_exit_io_for_config(&stop, &target, &config)?;
+            let owner = crate::disk::RecoveredDiskIo::admit(&recovered)?;
+            self.pending_disk_exit
+                .as_mut()
+                .expect("invariant: prepared exit runtime")
+                .ownership
+                .insert(target.disk_id.clone(), ExitIoOwner::Recovered(owner));
         }
         drop(stop);
         #[cfg(feature = "fault-injection")]
@@ -108,22 +144,6 @@ impl Engine {
         } else {
             self.pending_membership = None;
         }
-        let forbidden = generation.portable.forbidden_disk_ids()?;
-        let allowed = generation
-            .intent
-            .target
-            .disks
-            .iter()
-            .filter(|disk| !forbidden.contains(&disk.disk_id))
-            .map(|disk| disk.disk_id.clone())
-            .collect();
-        let config = generation
-            .intent
-            .target
-            .clone()
-            .with_workspace_limits(Some(self.config.effective_workspace_limits()))?
-            .with_generation(Arc::clone(&generation))?
-            .restrict_io_disks(allowed)?;
         let handles = self.disk_resources.handles().map(Arc::clone).collect();
         self.disk_resources = Arc::new(DiskResources::generation_handles(&config, handles)?);
         self.config = config;
@@ -161,7 +181,7 @@ impl Engine {
             .as_ref()
             .expect("invariant: verified joint")
             .status;
-        if !status.all_certificates_synchronized() {
+        if !status.retained_certificates_synchronized() {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 "exit driver requires complete independent control installation before stopping a root",
@@ -250,7 +270,7 @@ impl Engine {
             .iter()
             .find(|disk| disk.disk_id == effect.disk_id)
             .expect("invariant: exit target registered");
-        let binding = if self.config.excludes_io_disk(&disk.disk_id) {
+        let owner = if self.config.excludes_io_disk(&disk.disk_id) {
             let target = effect.identity(&self.config.pool_id);
             if !self.pending_disk_exit.as_ref().is_some_and(|pending| {
                 matches!(pending.ownership.get(&disk.disk_id), Some(ExitIoOwner::Recovered(guard)) if guard.identity() == &target)
@@ -259,21 +279,31 @@ impl Engine {
                     "disabled target lacks its retained logical I/O exclusion"));
             }
             None
+        } else if (generation.intent.fence_scope.is_some() || !disk.metadata_member)
+            && self.disk_resources.available(disk).is_none()
+        {
+            Some(ExitIoOwner::Unopened)
         } else {
-            Some(self.disk_resources.get(disk)?.root.io_binding()?.clone())
+            Some(ExitIoOwner::Live(
+                self.disk_resources.get(disk)?.root.io_binding()?.clone(),
+            ))
         };
-        let fence = self
-            .membership_fence
-            .as_ref()
-            .expect("invariant: exit fence");
+        let config = self.config.clone();
         // Prepare every retained root without touching user bodies. The authority
         // name is separate from the active marker; before stop, ordinary restart
         // can still admit the old fenced generation.
-        for disk in self
-            .config
+        for disk in config
             .io_disks()
             .filter(|disk| disk.disk_id != effect.disk_id)
         {
+            let pending = self
+                .pending_membership
+                .as_ref()
+                .expect("invariant: verified joint resources");
+            let fence = self
+                .membership_fence
+                .as_ref()
+                .expect("invariant: exit fence");
             let root = &self.disk_resources.get(disk)?.root;
             admission::verify_named_root(root)?;
             self._locks.verify_disk(disk, root)?;
@@ -305,7 +335,7 @@ impl Engine {
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!("after_disk_exit_prepared_{}", disk.disk_id))?;
         }
-        if binding.is_some()
+        if owner.is_some()
             && self
                 .pending_disk_exit
                 .as_ref()
@@ -321,8 +351,8 @@ impl Engine {
             .take()
             .map(|pending| pending.ownership)
             .unwrap_or_default();
-        if let Some(binding) = binding {
-            ownership.insert(effect.disk_id.clone(), ExitIoOwner::Live(binding));
+        if let Some(owner) = owner {
+            ownership.insert(effect.disk_id.clone(), owner);
         }
         self.pending_disk_exit = Some(PendingDiskExit {
             generation,
@@ -355,7 +385,8 @@ impl Engine {
         }
         let transition = object_hash(INTENT_KIND, &generation.intent)?;
         let verified = core.joint.verify()?;
-        for disk in self.config.io_disks() {
+        let config = self.config.clone();
+        for disk in config.io_disks() {
             let root = &self.disk_resources.get(disk)?.root;
             admission::verify_named_root(root)?;
             self._locks.verify_disk(disk, root)?;

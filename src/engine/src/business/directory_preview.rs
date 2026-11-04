@@ -3,13 +3,12 @@
 use super::*;
 
 pub struct DirectoryBranchPreview {
-    branches: storage_contract::TrackedMap<DirectoryBranch>,
-    branch_id: String,
+    branch: DirectoryBranch,
     path: String,
 }
 impl DirectoryBranchPreview {
     pub fn branch(&self) -> &DirectoryBranch {
-        &self.branches[&self.branch_id]
+        &self.branch
     }
     pub fn path(&self) -> &str {
         &self.path
@@ -87,7 +86,13 @@ impl Engine {
                 "directory branch changed; refresh before browsing",
             ));
         }
-        let path = if branch.directory_id == repository {
+        let projection = self
+            .admitted_current_namespaces()?
+            .map(|view| view.directory_projection(&self.state, branch_id))
+            .transpose()?;
+        let path = if let Some(projection) = &projection {
+            projection.path().to_owned()
+        } else if branch.directory_id == repository {
             String::new()
         } else {
             self.list_tree_ref(&repo.main_branch_id)?
@@ -103,8 +108,9 @@ impl Engine {
                 .to_owned()
         };
         Ok(DirectoryBranchPreview {
-            branches: self.state.directory_branches.clone(),
-            branch_id: branch_id.into(),
+            branch: projection
+                .as_ref()
+                .map_or_else(|| branch.clone(), |projection| projection.branch().clone()),
             path,
         })
     }
@@ -165,6 +171,7 @@ impl Engine {
                     ));
                 }
                 super::directory::select_change(
+                    engine,
                     state,
                     request.repository_id,
                     request.directory_branch_id,

@@ -214,26 +214,8 @@ pub(crate) fn synchronize_directory_edits(
     Ok(())
 }
 
-/// Publish one selected file into its directory. No sibling entry or payload is
-/// copied, replaced or switched by this operation.
-pub(crate) fn publish_selected_file(
-    state: &mut State,
-    branch_id: &str,
-    principal: &str,
-    operation: OperationId,
-) -> Result<String> {
-    publish_selected_file_at(state, branch_id, None, principal, operation)
-}
-pub(crate) fn publish_selected_file_at(
-    state: &mut State,
-    branch_id: &str,
-    path: Option<&name_policy::PortablePath>,
-    principal: &str,
-    operation: OperationId,
-) -> Result<String> {
-    publish_selected_file_at_projected(state, branch_id, path, principal, operation, None)
-}
-
+/// Publish a workspace's validated file draft into its current owning directory.
+/// User selections use selected_current_file instead of taking this draft path.
 pub(crate) fn publish_selected_file_at_projected(
     state: &mut State,
     branch_id: &str,
@@ -265,6 +247,55 @@ pub(crate) fn publish_selected_file_at_projected(
                 "file branch content missing",
             )
         })?;
+    publish_selected_file_source(
+        state,
+        SelectedFile { branch, source },
+        path,
+        principal,
+        operation,
+        view,
+    )
+}
+
+struct SelectedFile {
+    branch: Branch,
+    source: Entry,
+}
+
+/// Selection reads an admitted current file namespace. Workspace publication
+/// uses the separate draft-source wrapper above after validating its own write.
+fn selected_current_file(engine: &Engine, branch: &Branch, file: &str) -> Result<Entry> {
+    if let Some(view) = engine.admitted_current_namespaces()? {
+        view.require_branch_write(engine.state(), &branch.branch_id)?;
+    }
+    engine
+        .namespace_snapshot(&branch.branch_id)?
+        .entries()
+        .iter()
+        .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == file)
+        .cloned()
+        .ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::FileNotFound,
+                "file is absent from the current branch namespace",
+            )
+        })
+}
+
+fn publish_selected_file_source(
+    state: &mut State,
+    selected: SelectedFile,
+    path: Option<&name_policy::PortablePath>,
+    principal: &str,
+    operation: OperationId,
+    view: Option<&crate::engine::CurrentNamespaces>,
+) -> Result<String> {
+    let SelectedFile { branch, source } = selected;
+    let branch_id = branch.branch_id.as_str();
+    let file_id = branch
+        .file_id
+        .as_deref()
+        .expect("invariant: selected file has an independent branch");
     let repository = state
         .repositories
         .values()
@@ -852,8 +883,11 @@ impl Engine {
                         "default namespace changed; refresh before setting the default",
                     ));
                 }
-                let current = &state.commits[&main.head_commit_id];
-                if !find_unordered_key(&current.entries, request.path.key()).is_some_and(|entry| {
+                if let Some(view) = engine.admitted_current_namespaces()? {
+                    view.require_branch_write(state, &repo.main_branch_id)?;
+                }
+                let current = engine.namespace_snapshot(&main.branch_id)?;
+                if !find_unordered_key(current.entries(), request.path.key()).is_some_and(|entry| {
                     entry.kind == NamespaceEntryKind::File && entry.file_id == request.file_id
                 }) {
                     return Err(Error::new(
@@ -880,16 +914,7 @@ impl Engine {
                         "default requires an active file branch",
                     ));
                 }
-                let entry = state.commits[&branch.head_commit_id]
-                    .entries
-                    .iter()
-                    .find(|entry| entry.file_id == request.file_id)
-                    .ok_or_else(|| {
-                        Error::new(
-                            storage_contract::ErrorCode::StateInvalid,
-                            "file branch entry missing",
-                        )
-                    })?;
+                let entry = selected_current_file(engine, branch, request.file_id)?;
                 let node = branch.file_node_id.as_deref().unwrap_or(&entry.version_id);
                 if node != request.expected_node_id {
                     return Err(Error::new(
@@ -901,12 +926,17 @@ impl Engine {
                     engine.valid_replica(&entry.version_id)?;
                 }
                 let history = branch.history_tree_id.clone();
-                let commit = publish_selected_file_at(
+                let selected = SelectedFile {
+                    branch: branch.clone(),
+                    source: entry,
+                };
+                let commit = publish_selected_file_source(
                     state,
-                    request.branch_id,
+                    selected,
                     Some(request.path),
                     request.principal,
                     request.operation_id,
+                    engine.current_namespaces.as_deref(),
                 )?;
                 Ok(json!({
                     "file_id": request.file_id,
@@ -938,9 +968,11 @@ impl Engine {
                 engine.repository_for_history(&repo.history_tree_id)?;
                 let main = state.branches.get(&repo.main_branch_id)
                     .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "repository main branch missing"))?;
-                let current = state.commits.get(&main.head_commit_id)
-                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "repository head missing"))?;
-                if !find_unordered_key(&current.entries, path.key()).is_some_and(|e| e.kind == NamespaceEntryKind::File && e.file_id == file_id) {
+                if let Some(view) = engine.admitted_current_namespaces()? {
+                    view.require_branch_write(state, &repo.main_branch_id)?;
+                }
+                let current = engine.namespace_snapshot(&main.branch_id)?;
+                if !find_unordered_key(current.entries(), path.key()).is_some_and(|e| e.kind == NamespaceEntryKind::File && e.file_id == file_id) {
                     return Err(Error::new(storage_contract::ErrorCode::FileNotFound, "file/path identity differs"));
                 }
                 let branch = state.branches.get(branch_id).cloned()
@@ -950,17 +982,15 @@ impl Engine {
                 if branch.state != BranchState::Active {
                     return Err(Error::new(storage_contract::ErrorCode::BranchNotActive, "merged file aliases are read-only; select an active branch"));
                 }
-                let selected = state.commits.get(&branch.head_commit_id)
-                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "file branch head missing"))?
-                    .entries.iter().find(|e| e.kind == NamespaceEntryKind::File && e.file_id == file_id)
-                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "file branch entry missing"))?;
-                // Pending branches retain frozen references rather than requiring
-                // a fresh content replica for their metadata-only selection.
+                let selected = selected_current_file(engine, &branch, file_id)?;
+                // A pending selection preserves inheritance and does not read
+                // its body. A materialized selection needs a real live replica.
                 if !branch.pending_file_versions.contains_key(file_id) {
                     engine.valid_replica(&selected.version_id)?;
                 }
-                let commit = publish_selected_file_at(state, branch_id, Some(path), principal, operation)?;
-                Ok(json!({"file_id":file_id,"branch_id":branch_id,"commit_id":commit,"history_tree_id":branch.history_tree_id,"path":path.as_str()}))
+                let history = branch.history_tree_id.clone();
+                let commit = publish_selected_file_source(state, SelectedFile { branch, source: selected }, Some(path), principal, operation, engine.current_namespaces.as_deref())?;
+                Ok(json!({"file_id":file_id,"branch_id":branch_id,"commit_id":commit,"history_tree_id":history,"path":path.as_str()}))
             },
         )
     }
@@ -981,16 +1011,24 @@ impl Engine {
                 if branch.state != BranchState::Active {
                     return Err(Error::new(storage_contract::ErrorCode::BranchNotActive, "merged file aliases are read-only; select an active branch"));
                 }
-                engine.repository_for_history(&branch.history_tree_id)?;
-                let selected = state.commits.get(&branch.head_commit_id)
-                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "file branch head missing"))?
-                    .entries.iter().find(|e| e.kind == NamespaceEntryKind::File && e.file_id == file_id)
-                    .ok_or_else(|| Error::new(storage_contract::ErrorCode::StateInvalid, "file branch entry missing"))?;
+                let repository = engine.repository_for_history(&branch.history_tree_id)?;
+                if let Some(view) = engine.admitted_current_namespaces()? {
+                    view.require_branch_write(state, &repository.main_branch_id)?;
+                }
+                if !engine.namespace_snapshot(&repository.main_branch_id)?.entries().iter().any(|entry| {
+                    entry.kind == NamespaceEntryKind::File && entry.file_id == file_id
+                }) {
+                    return Err(Error::new(storage_contract::ErrorCode::FileNotFound, "file is absent from the current owning namespace"));
+                }
+                let selected = selected_current_file(engine, &branch, file_id)?;
+                // A pending selection preserves inheritance and does not read
+                // its body. A materialized selection needs a real live replica.
                 if !branch.pending_file_versions.contains_key(file_id) {
                     engine.valid_replica(&selected.version_id)?;
                 }
-                let commit = publish_selected_file(state, branch_id, principal, operation)?;
-                Ok(json!({"file_id":file_id,"branch_id":branch_id,"commit_id":commit,"history_tree_id":branch.history_tree_id}))
+                let history = branch.history_tree_id.clone();
+                let commit = publish_selected_file_source(state, SelectedFile { branch, source: selected }, None, principal, operation, engine.current_namespaces.as_deref())?;
+                Ok(json!({"file_id":file_id,"branch_id":branch_id,"commit_id":commit,"history_tree_id":history}))
             },
         )
     }

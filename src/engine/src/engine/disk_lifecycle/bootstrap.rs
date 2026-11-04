@@ -14,7 +14,7 @@ mod format;
 pub(crate) mod runtime;
 pub(crate) mod store;
 use format::{Head, Record, RootRecord};
-pub(crate) use runtime::{DurableDiskStop, RecoveredDiskStop};
+pub(crate) use runtime::RecoveredDiskStop;
 
 use crate::{Config, OperationId, engine::disk_registry::DiskRegistrationIdentity};
 use platform_io::fs_safety::linux::FileIdentity;

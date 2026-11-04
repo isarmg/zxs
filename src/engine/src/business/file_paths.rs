@@ -68,6 +68,34 @@ pub(crate) fn rename_node(
     source_node(state, &old.file_id, &old.version_id, &parent)?;
     let advance_head =
         file_nodes::branch_head(state, &context.branch_id).is_ok_and(|head| head == parent);
+    let parent = if new.version_id == old.version_id {
+        parent
+    } else {
+        // A single normal save may write and rename one visible occurrence.
+        // The path event follows that actual new body, whose immutable source
+        // edge already preserves the prior node/version ancestry.
+        let version = state.versions.get(&new.version_id).ok_or_else(|| {
+            Error::new(
+                storage_contract::ErrorCode::VersionNotFound,
+                "renamed upload version missing",
+            )
+        })?;
+        if new.entry_id != old.entry_id
+            || new.file_id != old.file_id
+            || version.file_id != old.file_id
+            || version.history_tree_id != repo.history_tree_id
+            || version.version_sequence != state.sequence
+            || version.logical_size != new.size
+            || version.source_version_ids.len() != 1
+            || version.source_version_ids[0] != old.version_id
+        {
+            return Err(Error::new(
+                storage_contract::ErrorCode::WorkspaceChanged,
+                "renamed upload does not continue the exact visible source body",
+            ));
+        }
+        new.version_id.clone()
+    };
     let node_id = new_id("fnode")?;
     state.file_path_nodes.insert(
         node_id.clone(),
@@ -75,7 +103,7 @@ pub(crate) fn rename_node(
             node_id: node_id.clone(),
             history_tree_id: repo.history_tree_id,
             file_id: old.file_id.clone(),
-            version_id: old.version_id.clone(),
+            version_id: new.version_id.clone(),
             parent_node_ids: vec![parent],
             branch_id: context.branch_id.clone(),
             path: new.path().to_owned(),
@@ -91,7 +119,7 @@ pub(crate) fn rename_node(
             state,
             &context.branch_id,
             &node_id,
-            false,
+            new.version_id != old.version_id,
             principal,
             operation,
         )?;

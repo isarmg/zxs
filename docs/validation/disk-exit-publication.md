@@ -39,12 +39,12 @@ Engine 将所有历史 `RecoveredDiskIo` 按 disk identity 保留至自身释放
 
 ## 明确尚未闭合的范围
 
-- 本驱动准备仍要求原成员和控制参与者完整可用；即使可搬运联合证书能够满足合法两侧多数，尚未实现目标已经缺席时的完整采集驱动。
+- 缺席退出目标的采集驱动已增加源码接线：唯一 old-only voter 缺席时，以显式 scope 绑定原固定多数、完整冻结历史和全部 retained target 控制材料；data-only 目标缺席沿完整原 metadata 格式。另一 retained metadata 成员缺席仍未支持。证明、恢复与尚未执行的回归边界见[缺席退出目标](missing-exit-members.md)。
 - 重新启用和重新登记仍未实现；不会因旧目录重新出现而恢复登记、IO 或历史身份。后继 Add 只能追加新的 disk/slot/binding，不能改写历史行或重用已退出身份。
 - 最后 voter 的管理终止池 authority 未实现，在任何 fence 或 stop 写入前拒绝，不能产生 N=0/Q=0 活池。
 - 当前消费者只开放实际已经准入的写流程；尚未接入的 merge/rebase/历史导入等入口保持明确拒绝。目录可以在同一文件系统，未增加设备管理、挂载、格式化或物理擦除。
 - Exit portable bundle 遵守既有单对象 MAX_METADATA 上限；超限在 stop 前失败。尚未做大规模分页便携证据封装和性能验收。
-- SMART 的受管子进程责任目前只在同一服务进程内可证明。服务崩溃后，旧外部子进程可能仍存活或停留于内核 I/O；新进程的逻辑 gate 不证明该尾部已结束。尚未实现跨服务进程的存活与排空证明，不能将本轮逻辑目录关闭宣称为覆盖该故障。
+- SMART 设备 I/O 已改为服务内受管同步 NVMe/SAT 查询；外部 smartctl 仅从 stdin 离线解释回复，不持有目标路径或设备 FD。跨服务进程重准入依赖内核同步命令结束及现有 writer ownership，仍需真实进程崩溃与硬件故障验收，不能以源码改动宣称已验证。详见 [SMART 生命周期](smart-query-lifetime.md)。
 
 ## 本轮待执行回归源码
 

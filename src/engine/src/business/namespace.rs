@@ -118,6 +118,42 @@ pub(crate) fn apply_workspace_namespace(
     }
     Ok(deleted)
 }
+/// Normal workspaces preserve every sealed upload through ordered renames.
+/// Manifests do not record the order between uploads and deletion actions, so
+/// a save cannot silently discard an upload. Track typed locations only; actual
+/// namespace collision/shape validation remains in apply_workspace_namespace.
+pub(crate) fn workspace_upload_locations(
+    current: &[Entry],
+    workspace: &Workspace,
+) -> Result<BTreeMap<String, name_policy::PortablePath>> {
+    workspace.files.values().map(|file| {
+        let mut path = current.binary_search_by(|entry| entry.lookup_key().cmp(file.path.key()))
+            .ok().map(|index| current[index].path.clone()).unwrap_or_else(|| file.path.clone());
+        for operation in &workspace.namespace_operations {
+            match operation {
+                NamespaceOperation::Mkdir { .. } => {}
+                NamespaceOperation::Delete { .. } if path.key() != operation.key() => {}
+                NamespaceOperation::DeleteTree { .. }
+                    if path.key() != operation.key() && !is_descendant(path.key(), operation.key()) => {}
+                NamespaceOperation::Delete { .. } | NamespaceOperation::DeleteTree { .. } => {
+                    return Err(Error::new(
+                        storage_contract::ErrorCode::WorkspaceDependencyBusy,
+                        "namespace edits would discard a sealed upload; staged bytes are preserved",
+                    ));
+                }
+                NamespaceOperation::Rename { source, destination } => {
+                    if path.key() == source.key() {
+                        path = destination.clone();
+                    } else if is_descendant(path.key(), source.key()) {
+                        path = path.rebase(source.as_str().split('/').count(), destination)?;
+                    }
+                }
+            }
+        }
+        Ok((file.item_id.clone(), path))
+    }).collect()
+}
+
 pub(crate) fn validate_workspace_dependencies(workspace: &Workspace) -> Result<()> {
     let overlaps = |left: &str, right: &str| {
         left == right || is_descendant(left, right) || is_descendant(right, left)

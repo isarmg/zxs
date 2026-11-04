@@ -45,6 +45,12 @@ impl VerifiedAbortArchive {
                 .load(INTENT_KIND, &expected.transition_hash)?
                 .into_value(),
         )?;
+        if intent.fence_scope.is_some() {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "retained Exit quorum archive cannot authorize Abort",
+            ));
+        }
         let entries =
             crate::metadata_map::read_map(&root.members, |kind, hash| store.load(kind, hash))?;
         let namespace = intent
@@ -227,6 +233,13 @@ impl PortableAbortArchive {
         };
         let intent: TransitionIntent =
             json_codec::from_value(load(INTENT_KIND, transition)?.into_value())?;
+        root.verify_scope(&intent)?;
+        if intent.fence_scope.is_some() {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "retained Exit quorum archive cannot authorize Abort",
+            ));
+        }
         let entries = crate::metadata_map::read_map(&root.members, &mut load)?;
         let config = intent.origin.config();
         if entries.len() != config.metadata_members().len() || self.seals.len() != entries.len() {

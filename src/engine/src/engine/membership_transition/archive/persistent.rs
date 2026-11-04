@@ -19,10 +19,20 @@ const EVIDENCE_DIRECTORY: &str = "authority-evidence";
 #[path = "../abort/archive_view.rs"]
 pub(in crate::engine::membership_transition) mod abort_view;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum Format {
     #[serialization(rename = "frozen-control-metadata")]
     FrozenControlMetadata,
+    #[serialization(rename = "retained-exit-quorum-control-metadata")]
+    RetainedExitQuorum,
+}
+impl Format {
+    fn for_intent(intent: &TransitionIntent) -> Self {
+        match intent.fence_scope {
+            None => Self::FrozenControlMetadata,
+            Some(FenceScope::RetainedExitQuorum) => Self::RetainedExitQuorum,
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -37,6 +47,23 @@ pub(in crate::engine::membership_transition) struct ArchiveRoot {
     transition_hash: String,
     members: Reference,
     pub(in crate::engine::membership_transition) publication_seals: Reference,
+}
+impl ArchiveRoot {
+    pub(in crate::engine::membership_transition) fn verify_scope(
+        &self,
+        intent: &TransitionIntent,
+    ) -> Result<()> {
+        intent.verify_fence_scope()?;
+        if self.format != Format::for_intent(intent)
+            || self.transition_hash != object_hash(INTENT_KIND, intent)?
+        {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "archive proof scope differs from its exact transition",
+            ));
+        }
+        Ok(())
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -80,7 +107,7 @@ pub(super) fn predecessor_object(
     let disk = engine
         .config
         .metadata_members()
-        .next()
+        .find(|disk| engine.disk_resources.available(disk).is_some())
         .expect("invariant: fixed metadata membership");
     let store = ArchiveStore {
         root: engine.disk_resources.get(disk)?.root.private_child(
@@ -92,7 +119,7 @@ pub(super) fn predecessor_object(
 impl ArchiveStore {
     /// Destination must already be a private, empty directory or this exact
     /// in-progress binding. No chmod, mounting, overwrites or foreign cleanup.
-    fn admit(root: DiskRoot, transition: &str) -> Result<(Self, AdvisoryLock)> {
+    fn admit(root: DiskRoot, transition: &str, format: Format) -> Result<(Self, AdvisoryLock)> {
         let store = Self { root };
         let names = store
             .root
@@ -105,7 +132,7 @@ impl ArchiveStore {
                     .root
                     .read_bytes(&store.path(BINDING_FILE), MAX_METADATA)?,
             )?;
-            if binding.transition_hash != transition {
+            if binding.transition_hash != transition || binding.format != format {
                 return Err(Error::new(
                     ErrorCode::ConfigConflict,
                     "archive belongs to another transition",
@@ -142,7 +169,7 @@ impl ArchiveStore {
         store.root.write_json(
             &store.path(BINDING_FILE),
             &ArchiveBinding {
-                format: Format::FrozenControlMetadata,
+                format,
                 transition_hash: transition.to_owned(),
             },
             false,
@@ -570,6 +597,15 @@ impl Engine {
     }
 
     fn admit_control_archive_directory(&self, destination: &Path) -> Result<DiskRoot> {
+        if self
+            .membership_fence
+            .as_ref()
+            .is_some_and(|fence| fence.intent.fence_scope.is_some())
+        {
+            // The scoped journal admission separately checks every retained
+            // named root. Do not probe the explicitly absent departing member.
+            return self.admit_abort_control_archive_directory(destination);
+        }
         let destination = DiskRoot::open(destination)?;
         let destination_identity =
             FileIdentity::from_fd(destination.directory(destination.path())?)?;
@@ -615,9 +651,10 @@ impl Engine {
             )
         })?;
         self.require_control_archive_location(&destination, &fence.intent)?;
+        let format = Format::for_intent(&fence.intent);
         let inspected = self.inspect_membership_metadata_archive()?;
         let destination = self.admit_control_archive_directory(&destination)?;
-        let (store, _lock) = ArchiveStore::admit(destination, &inspected.transition_hash)?;
+        let (store, _lock) = ArchiveStore::admit(destination, &inspected.transition_hash, format)?;
         if let Some(generation) = self.config.generation() {
             let (previous, previous_intent) = generation
                 .portable
@@ -628,7 +665,7 @@ impl Engine {
             let disk = self
                 .config
                 .metadata_members()
-                .next()
+                .find(|disk| self.disk_resources.available(disk).is_some())
                 .expect("invariant: fixed metadata membership");
             let source = ArchiveStore {
                 root: self.disk_resources.get(disk)?.root.private_child(
@@ -666,7 +703,7 @@ impl Engine {
             .expect("invariant: archive requires fence");
         let mut source = LiveSource {
             engine: self,
-            members: self.members(),
+            members: fence.intent.fence_members_at(&self.config)?,
             destination: Some(&store),
             seals: BTreeMap::new(),
             copied: BTreeSet::new(),
@@ -684,7 +721,7 @@ impl Engine {
             .map(|(key, hash)| (key, hash.into()))
             .collect();
         let root = ArchiveRoot {
-            format: Format::FrozenControlMetadata,
+            format,
             transition_hash: inspected.transition_hash.clone(),
             members: store.map(members)?,
             publication_seals: store.map(seals)?,
@@ -888,7 +925,8 @@ impl PendingControlArchive {
         // Retain the archive advisory lock and every copy/sync/cleanup tail
         // through one admitted responsibility on an already-bound old root.
         let activity = root.retain_io_activity()?;
-        let (destination, lock) = ArchiveStore::admit(root, &self.root.transition_hash)?;
+        let (destination, lock) =
+            ArchiveStore::admit(root, &self.root.transition_hash, self.root.format)?;
         let copied = verify_root_copying(
             &self.store,
             &self.root,
@@ -1046,12 +1084,7 @@ fn verify_epoch(
     root: &ArchiveRoot,
     intent: TransitionIntent,
 ) -> Result<MembershipArchiveInspection> {
-    if root.transition_hash != object_hash(INTENT_KIND, &intent)? {
-        return Err(Error::new(
-            ErrorCode::ObjectCorrupt,
-            "frozen epoch root selects another transition",
-        ));
-    }
+    root.verify_scope(&intent)?;
     let epoch = FrozenEpoch::read(&intent, source)?;
     let config = epoch.config;
     Engine::require_actor(&intent.principal)?;
@@ -1070,7 +1103,8 @@ fn verify_epoch(
         .map(|_| root.transition_hash.clone());
     let members =
         crate::metadata_map::read_map(&root.members, |kind, hash| source.object(kind, hash))?;
-    if members.len() != config.metadata_members().len() {
+    let selected = intent.fence_members();
+    if members.len() != selected.len() {
         return Err(Error::new(
             ErrorCode::ConfigConflict,
             "archive original member set differs",
@@ -1078,7 +1112,7 @@ fn verify_epoch(
     }
     let mut receipts = BTreeMap::new();
     let mut journals = Vec::new();
-    for disk in config.metadata_members() {
+    for disk in &selected {
         let member: ArchivedMember = json_codec::from_value(
             members
                 .get(&disk.disk_id)

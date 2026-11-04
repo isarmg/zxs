@@ -485,6 +485,7 @@ impl Engine {
 pub(in crate::engine::membership_transition) fn verify_intent_roots(
     intent: &TransitionIntent,
 ) -> Result<()> {
+    intent.verify_fence_scope()?;
     let additions = intent
         .target
         .disks

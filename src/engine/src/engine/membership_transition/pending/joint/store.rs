@@ -65,7 +65,9 @@ impl PreparedProposal {
                     .clone(),
             )
         };
-        let format = if fence.intent.effect.is_some() {
+        let format = if fence.intent.fence_scope.is_some() {
+            JointFormat::RetainedExitQuorum
+        } else if fence.intent.effect.is_some() {
             JointFormat::ExitControl
         } else if pending.data_disks.is_empty() {
             JointFormat::Joint
@@ -393,7 +395,12 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
     reservation::verify_intent_roots(&intent)?;
     let config = intent.origin.config();
     validate_transition_target(config, &intent.target, intent.effect.as_ref())?;
-    if (proposal.format == JointFormat::ExitControl) != intent.effect.is_some() {
+    if matches!(
+        proposal.format,
+        JointFormat::ExitControl | JointFormat::RetainedExitQuorum
+    ) != intent.effect.is_some()
+        || (proposal.format == JointFormat::RetainedExitQuorum) != intent.fence_scope.is_some()
+    {
         return Err(Error::new(
             ErrorCode::ConfigConflict,
             "joint effect and certificate purpose differ",
@@ -415,7 +422,8 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
         crate::metadata_map::read_map(&proposal.original_members, |kind, hash| load(kind, hash))?;
     let targets =
         crate::metadata_map::read_map(&proposal.target_members, |kind, hash| load(kind, hash))?;
-    if originals.len() != config.metadata_members().len()
+    let original_members = intent.fence_members();
+    if originals.len() != original_members.len()
         || targets.len() != intent.target.metadata_members().len()
     {
         return Err(Error::new(
@@ -435,7 +443,12 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
             ));
         }
     };
-    if old_only.len() != intent.old_only().count()
+    let old_only_count = if intent.fence_scope.is_some() {
+        0
+    } else {
+        intent.old_only().count()
+    };
+    if old_only.len() != old_only_count
         || (old_only.is_empty() && proposal.old_only_members.is_some())
     {
         return Err(missing_member());
@@ -502,7 +515,7 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
         }
         dependencies.insert(disk.disk_id.clone(), dependency);
     }
-    for disk in config.metadata_members() {
+    for disk in &original_members {
         if !originals.contains_key(&disk.disk_id) || !dependencies.contains_key(&disk.disk_id) {
             return Err(missing_member());
         }
@@ -516,7 +529,9 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
         })
         .collect::<Vec<_>>();
     let data_values = match (&proposal.format, &proposal.data_disks) {
-        (JointFormat::Joint | JointFormat::ExitControl, None) if added_data.is_empty() => {
+        (JointFormat::Joint | JointFormat::ExitControl | JointFormat::RetainedExitQuorum, None)
+            if added_data.is_empty() =>
+        {
             json_codec::Map::new()
         }
         (JointFormat::Devices, Some(reference)) if !added_data.is_empty() => {
