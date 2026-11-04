@@ -1,5 +1,6 @@
 //! Read-only control-evidence closure inspection, not an installed archive or
 //! target-member readiness. Historical votes always keep their original owner.
+use super::pending::activation::{AUTHORITY_KIND, PortableAuthority};
 use super::*;
 use crate::publication_evidence::{verified_graph_object_at, verified_publication_seal_at};
 use std::{
@@ -40,7 +41,7 @@ pub struct MembershipJournalInspection {
 /// Only exact hashes in the authenticated original publication chain resolve.
 /// A sequence comparison alone never chooses a historical membership.
 struct VerifiedFrozenPrefix<'a> {
-    config: &'a ValidatedConfig,
+    epoch: &'a FrozenEpoch<'a>,
     publications: &'a BTreeMap<u64, String>,
 }
 impl VerifiedFrozenPrefix<'_> {
@@ -57,13 +58,102 @@ impl VerifiedFrozenPrefix<'_> {
                 "candidate is outside the exact frozen publication prefix",
             ));
         }
-        self.config.verify_candidate_membership(candidate)
+        self.epoch.verify_candidate(candidate)
+    }
+}
+
+struct FrozenEpoch<'a> {
+    config: &'a ValidatedConfig,
+    genesis: ValidatedConfig,
+    authority_hash: Option<String>,
+    previous_snapshot: Option<String>,
+    first_sequence: u64,
+    activation: Option<(PortableAuthority, std::sync::Arc<State>)>,
+}
+impl<'a> FrozenEpoch<'a> {
+    fn read(intent: &'a TransitionIntent, source: &mut impl ControlSource) -> Result<Self> {
+        let config = intent.origin.config();
+        match intent.origin.predecessor() {
+            None => Ok(Self {
+                config,
+                genesis: config.clone(),
+                authority_hash: None,
+                previous_snapshot: None,
+                first_sequence: 0,
+                activation: None,
+            }),
+            Some(hash) => {
+                let predecessor = PortableAuthority::load(hash, |kind, hash| {
+                    source.predecessor_object(kind, hash)
+                })?;
+                let previous = predecessor.intent()?;
+                if !pending::activation::authority_config_matches(config, &previous.target)
+                    || intent
+                        .boundary
+                        .as_ref()
+                        .is_none_or(|boundary| boundary.sequence <= previous.fence_sequence)
+                {
+                    return Err(Error::new(
+                        ErrorCode::LogFork,
+                        "frozen successor has no completed predecessor",
+                    ));
+                }
+                let archive = predecessor
+                    .archives()?
+                    .pop()
+                    .expect("invariant: predecessor archive")
+                    .0;
+                let base = persistent::frozen_state_with(&archive, &previous, |kind, hash| {
+                    source.predecessor_object(kind, hash)
+                })?;
+                Ok(Self {
+                    config,
+                    genesis: predecessor.genesis_config()?,
+                    authority_hash: Some(hash.to_owned()),
+                    previous_snapshot: previous.boundary.map(|boundary| boundary.snapshot_hash),
+                    first_sequence: previous.fence_sequence.checked_add(1).ok_or_else(|| {
+                        Error::new(ErrorCode::ResourceLimit, "frozen epoch sequence exhausted")
+                    })?,
+                    activation: Some((predecessor, std::sync::Arc::new(base))),
+                })
+            }
+        }
+    }
+    fn verify_candidate(&self, candidate: &Candidate) -> Result<()> {
+        if candidate.generation() != self.authority_hash.as_deref()
+            || candidate.sequence < self.first_sequence
+        {
+            return Err(Error::new(
+                ErrorCode::PublicationInvalid,
+                "candidate belongs to another frozen epoch",
+            ));
+        }
+        self.config.verify_original_candidate_membership(candidate)
+    }
+    fn verify_activation(&self, candidate: &Candidate) -> Result<()> {
+        if candidate.sequence == self.first_sequence
+            && let Some((portable, base)) = &self.activation
+        {
+            pending::activation::verify_frozen_activation(
+                portable,
+                std::sync::Arc::clone(base),
+                candidate,
+            )?;
+        }
+        Ok(())
     }
 }
 
 /// The two consumers share semantic admission; archive reads have no fallback.
 trait ControlSource {
     fn object(&mut self, kind: &'static str, hash: &str) -> Result<AuthenticatedMetadataObject>;
+    fn predecessor_object(
+        &mut self,
+        kind: &'static str,
+        hash: &str,
+    ) -> Result<AuthenticatedMetadataObject> {
+        self.object(kind, hash)
+    }
     fn seal(&mut self, candidate: &Candidate, publication: &Publication)
     -> Result<PublicationSeal>;
     fn journal(&self, disk: &DiskConfig) -> Result<File>;
@@ -82,8 +172,46 @@ impl ControlSource for LiveSource<'_> {
     }
 
     fn object(&mut self, kind: &'static str, hash: &str) -> Result<AuthenticatedMetadataObject> {
-        let object =
-            verified_graph_object_at(&self.engine.disk_resources, &self.members, kind, hash)?;
+        let object = if kind == AUTHORITY_KIND {
+            let authority = self.engine.config.generation().ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ObjectCorrupt,
+                    "Genesis has no predecessor authority",
+                )
+            })?;
+            let object = authority
+                .portable
+                .node_objects()?
+                .into_iter()
+                .find(|object| object.hash == hash)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::ObjectCorrupt,
+                        "authority node is outside admitted lineage",
+                    )
+                })?;
+            AuthenticatedMetadataObject::authenticate(kind, hash, decode_strict(object.bytes())?)?
+        } else {
+            verified_graph_object_at(&self.engine.disk_resources, &self.members, kind, hash)?
+        };
+        if let Some(destination) = self.destination
+            && self
+                .copied
+                .insert((object.kind(), object.hash().to_owned()))
+        {
+            destination.object_bytes(object.kind(), object.hash(), object.bytes())?;
+        }
+        Ok(object)
+    }
+    fn predecessor_object(
+        &mut self,
+        kind: &'static str,
+        hash: &str,
+    ) -> Result<AuthenticatedMetadataObject> {
+        if kind == AUTHORITY_KIND {
+            return self.object(kind, hash);
+        }
+        let object = persistent::predecessor_object(self.engine, kind, hash)?;
         if let Some(destination) = self.destination
             && self
                 .copied
@@ -119,11 +247,11 @@ impl ControlSource for LiveSource<'_> {
             .disk_resources
             .get(disk)?
             .root
-            .open_regular(&log_path(disk))
+            .open_regular(&pending::activation::log_path(&self.engine.config, disk))
     }
 }
 struct Inspection<'a, S> {
-    config: &'a ValidatedConfig,
+    epoch: &'a FrozenEpoch<'a>,
     source: &'a mut S,
     members: Vec<DiskConfig>,
     objects: BTreeSet<(&'static str, String)>,
@@ -156,8 +284,11 @@ impl<S: ControlSource> Inspection<'_, S> {
     fn candidate(&mut self, hash: &str) -> Result<Candidate> {
         let object = self.object("candidate", hash)?;
         let candidate: Candidate = json_codec::from_value(object.into_value())?;
-        self.config.verify_candidate_membership(&candidate)?;
+        self.epoch.verify_candidate(&candidate)?;
         if self.candidates.insert(hash.to_owned()) {
+            self.source.observe(0)?;
+            self.epoch.verify_activation(&candidate)?;
+            self.source.observe(0)?;
             let snapshot: Snapshot = json_codec::from_value(
                 self.object("snapshot", &candidate.snapshot_hash)?
                     .into_value(),
@@ -217,7 +348,7 @@ impl<S: ControlSource> Inspection<'_, S> {
                     && if finalize.recovery_id.is_none() {
                         seen.len() == self.members.len()
                     } else {
-                        seen.len() >= self.config.metadata_quorum()
+                        seen.len() >= self.epoch.config.metadata_quorum()
                     }
             }
             RecordType::Reprotect => {
@@ -335,10 +466,11 @@ fn inspect_control(
     fence: &AdmittedFence,
     source: &mut impl ControlSource,
 ) -> Result<MembershipArchiveInspection> {
+    let epoch = FrozenEpoch::read(&fence.intent, source)?;
     let mut members = config.metadata_members().cloned().collect::<Vec<_>>();
     members.sort_by(|left, right| left.disk_id.cmp(&right.disk_id));
     let mut inspection = Inspection {
-        config,
+        epoch: &epoch,
         source,
         members: members.clone(),
         objects: BTreeSet::new(),
@@ -357,7 +489,7 @@ fn inspect_control(
             digest: &mut digest,
         });
         let mut publications = BTreeMap::new();
-        let mut previous_snapshot = None;
+        let mut previous_snapshot = epoch.previous_snapshot.clone();
         let mut last = None;
         loop {
             inspection.source.observe(0)?;
@@ -399,7 +531,7 @@ fn inspect_control(
                     }
                     if let Some(prefix) = &prefix {
                         VerifiedFrozenPrefix {
-                            config,
+                            epoch: &epoch,
                             publications: prefix,
                         }
                         .verify_candidate(&candidate)?;
@@ -469,10 +601,11 @@ fn inspect_control(
             content_hash,
         });
         let expected_boundary = fence.intent.boundary.as_ref();
-        if publications
-            .last_key_value()
-            .map(|(sequence, hash)| (*sequence, hash.as_str()))
-            != expected_boundary.map(|base| (base.sequence, base.candidate_hash.as_str()))
+        if (epoch.activation.is_some() && !publications.contains_key(&epoch.first_sequence))
+            || publications
+                .last_key_value()
+                .map(|(sequence, hash)| (*sequence, hash.as_str()))
+                != expected_boundary.map(|base| (base.sequence, base.candidate_hash.as_str()))
             || previous_snapshot.as_deref()
                 != expected_boundary.map(|base| base.snapshot_hash.as_str())
         {

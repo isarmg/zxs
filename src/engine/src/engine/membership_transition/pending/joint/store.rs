@@ -12,7 +12,7 @@ impl PreparedProposal {
         fence: &AdmittedFence,
         checked: &[CheckedMember],
     ) -> Result<Self> {
-        let Origin::Genesis { config } = &fence.intent.origin;
+        let config = fence.intent.origin.config();
         let mut encoder = Encoder::new(MAX_METADATA);
         encoder.object(INTENT_KIND, &fence.intent)?;
         let mut original = json_codec::Map::new();
@@ -322,7 +322,7 @@ fn typed<T: for<'de> Deserialize<'de>>(
 fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<VerifiedProposal> {
     let proposal: Proposal = typed(load, PROPOSAL_KIND, expected)?;
     let intent: TransitionIntent = typed(load, INTENT_KIND, &proposal.transition_hash)?;
-    let Origin::Genesis { config } = &intent.origin;
+    let config = intent.origin.config();
     if proposal.original_config_hash != object_hash("membership-original", config)?
         || proposal.target_config_hash != object_hash("membership-target", &intent.target)?
         || proposal.operation_id != intent.operation_id
@@ -431,7 +431,7 @@ fn verify_certificate_with(
             "joint certificate requires every target vote",
         ));
     }
-    let Origin::Genesis { config } = &verified.intent.origin;
+    let config = verified.intent.origin.config();
     let mut checked_votes = BTreeMap::new();
     let mut old_votes = 0;
     let mut target_votes = 0;
@@ -568,7 +568,14 @@ fn verify_target(
     }
     match (&enrollment.origin, &dependency.seal) {
         (EnrollmentOrigin::Retained { original_seal_hash }, MemberSeal::Retained { seal }) => {
+            let expected_format = match intent.origin.predecessor() {
+                Some(hash) => DiskSealFormat::MembershipGeneration {
+                    authority_hash: hash.to_owned(),
+                },
+                None => DiskSealFormat::ManagedDirectory,
+            };
             if object_hash("membership-original-seal", seal)? != *original_seal_hash
+                || seal.format != expected_format
                 || seal.pool_id != identity.pool_id
                 || seal.disk_id != identity.disk_id
                 || seal.slot_id != identity.slot_id

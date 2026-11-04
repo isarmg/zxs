@@ -677,18 +677,29 @@ impl Engine {
                 .and_modify(|(_, n)| *n += 1)
                 .or_insert((config, 1));
         }
+        let generation_config = if configs
+            .values()
+            .any(|(config, _)| config.generation().is_some())
+        {
+            Some(membership_transition::pending::activation::latest_restore_config(&configs)?)
+        } else {
+            None
+        };
         let mut agreed = configs
             .into_values()
             .filter(|(c, n)| *n >= c.metadata_quorum())
             .map(|(c, _)| c);
-        let config = agreed.next().ok_or_else(|| {
-            let message = "a configured metadata majority does not agree on pool configuration";
-            match anchor_failure {
-                Some(source) => source.context(ErrorCode::ConfigConflict, message),
-                None => Error::new(ErrorCode::ConfigConflict, message),
-            }
-        })?;
-        if agreed.next().is_some()
+        let config = generation_config
+            .clone()
+            .or_else(|| agreed.next())
+            .ok_or_else(|| {
+                let message = "a configured metadata majority does not agree on pool configuration";
+                match anchor_failure {
+                    Some(source) => source.context(ErrorCode::ConfigConflict, message),
+                    None => Error::new(ErrorCode::ConfigConflict, message),
+                }
+            })?;
+        if (generation_config.is_none() && agreed.next().is_some())
             || seals.keys().any(|id| {
                 !config
                     .disks

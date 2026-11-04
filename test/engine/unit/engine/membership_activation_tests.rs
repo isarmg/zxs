@@ -913,3 +913,371 @@ fn membership_activation_reconciles_old_and_new_workspace_completion_contexts() 
         );
     }
 }
+
+fn prepare_successor(engine: &mut Engine, root: &Path, label: &str) -> (Config, OperationId) {
+    let mut target = (*engine.config).clone();
+    let count = target.disks.len() + 1;
+    let added = Config::development((0..count).map(|n| root.join(format!("{label}-new-{n}"))))
+        .unwrap()
+        .disks
+        .pop()
+        .unwrap();
+    private_dir(&added.root).unwrap();
+    target.disks.push(added.clone());
+    let operation = OperationId::generate().unwrap();
+    engine
+        .begin_membership_handoff(target.clone(), "admin", operation)
+        .unwrap();
+    let archive = root.join(format!("{label}-archive"));
+    private_dir(&archive).unwrap();
+    let certificate = engine.build_membership_control_archive(&archive).unwrap();
+    engine
+        .enroll_pending_members(
+            &archive,
+            &certificate.root_hash,
+            vec![PendingMemberDirectory {
+                disk_id: added.disk_id,
+                directory: File::open(&added.root).unwrap(),
+            }],
+        )
+        .unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    (target, operation)
+}
+
+#[test]
+fn membership_activation_successive_additions_keep_each_epoch_and_standalone_proofs() {
+    let mut fixture = Fixture::new();
+    let first = fixture.engine.activate_pending_membership().unwrap();
+    let first_hash = fixture.engine.config.generation_hash().unwrap().to_owned();
+    let middle = write_body(&mut fixture.engine, &fixture.branch, b"middle epoch");
+    let primary = fixture.original.disks[0].clone();
+    let proof_paths = [&fixture.version, &middle]
+        .map(|id| version_dir(&primary, &fixture.history, id).join("publication-proof.json"));
+    let proofs = proof_paths
+        .iter()
+        .map(|path| fs::read(path).unwrap())
+        .collect::<Vec<_>>();
+    let original_operations = fixture.engine.state.operations.clone();
+    let (target, second_operation) =
+        prepare_successor(&mut fixture.engine, fixture.temp.path(), "second");
+    let joint = fixture.engine.membership_joint_decision_status().unwrap();
+    assert_eq!((joint.original_members, joint.original_quorum), (3, 2));
+    assert_eq!((joint.target_members, joint.target_quorum), (4, 3));
+    assert!(joint.all_certificates_synchronized());
+    let frozen = fixture
+        .engine
+        .members()
+        .iter()
+        .map(|disk| {
+            let path = log_path(&fixture.engine.config, disk);
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+    let second = fixture.engine.activate_pending_membership().unwrap();
+    assert_eq!(second.operation_id, second_operation);
+    assert_eq!(second.result["membership_epoch"], "3");
+    assert_eq!(fixture.engine.config.metadata_members().len(), 4);
+    assert_eq!(fixture.engine.config.metadata_quorum(), 3);
+    assert_eq!(fixture.engine.state.topology_generation, 3);
+    let generation = fixture.engine.config.generation().unwrap();
+    assert_eq!(
+        generation.intent.origin.predecessor(),
+        Some(first_hash.as_str())
+    );
+    assert_eq!(generation.portable.lineage().unwrap().len(), 2);
+    for (operation, result) in original_operations.iter() {
+        assert_eq!(&fixture.engine.state.operations[operation], result);
+    }
+    let latest = write_body(&mut fixture.engine, &fixture.branch, b"latest epoch");
+    for (path, bytes) in &frozen {
+        assert_eq!(fs::read(path).unwrap(), *bytes);
+    }
+    for (path, bytes) in proof_paths.iter().zip(proofs) {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    fixture
+        .engine
+        .export_history_package(&fixture.history, &fixture.temp.path().join("third-package"))
+        .unwrap();
+    let Fixture {
+        temp,
+        engine,
+        version,
+        ..
+    } = fixture;
+    drop(engine);
+    let mut reopened = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(
+        reopened
+            .operation_record(first.operation_id)
+            .unwrap()
+            .result(),
+        &first
+    );
+    assert_eq!(reopened.activate_pending_membership().unwrap(), second);
+    assert!(
+        reopened
+            .scrub(&crate::engine::IntegrityScrubCancellation::new())
+            .unwrap()
+            .is_healthy()
+    );
+    drop(reopened);
+    fs::rename(temp.path().join("system"), temp.path().join("lost-system")).unwrap();
+    for (index, disk) in target
+        .disks
+        .iter()
+        .filter(|disk| disk.metadata_member)
+        .enumerate()
+    {
+        fs::rename(&disk.root, temp.path().join(format!("hidden-{index}"))).unwrap();
+    }
+    let marker = primary.root.join(GENERATION_FILE);
+    let marker_bytes = fs::read(&marker).unwrap();
+    let mut incomplete: json_codec::Value = decode_strict(&marker_bytes).unwrap();
+    incomplete["predecessors"]
+        .as_object_mut()
+        .unwrap()
+        .remove(&first_hash);
+    fs::write(&marker, json_codec::to_vec(&incomplete).unwrap()).unwrap();
+    assert!(
+        offline_export(
+            &primary.root,
+            &latest,
+            &temp.path().join("missing-predecessor")
+        )
+        .is_err()
+    );
+    fs::write(&marker, marker_bytes).unwrap();
+    let import_version = latest.clone();
+    for (id, expected) in [
+        (version, b"before membership".as_slice()),
+        (middle, b"middle epoch".as_slice()),
+        (latest, b"latest epoch".as_slice()),
+    ] {
+        let output = temp.path().join(format!("standalone-{id}"));
+        offline_export(&primary.root, &id, &output).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), expected);
+    }
+    crate::history_package::offline_check_history_package(&temp.path().join("old-package"))
+        .unwrap();
+    crate::history_package::offline_check_history_package(&temp.path().join("third-package"))
+        .unwrap();
+    let mut imported = Engine::initialize(
+        &temp.path().join("imported-system"),
+        Config::development([temp.path().join("imported-disk")]).unwrap(),
+    )
+    .unwrap();
+    imported
+        .restore_history_package(
+            &temp.path().join("third-package"),
+            "P01",
+            1,
+            "admin",
+            OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let output = temp.path().join("imported-latest");
+    imported.export_version(&import_version, &output).unwrap();
+    assert_eq!(fs::read(output).unwrap(), b"latest epoch");
+}
+
+#[test]
+fn membership_activation_successor_failure_boundaries_resume_without_regressing() {
+    for stage in [
+        "marker",
+        "seal",
+        "after_prepare_1",
+        "after_accept_1",
+        "after_finalize",
+        "after_publication_1",
+        "before_membership_activation_projection",
+    ] {
+        let mut fixture = Fixture::new();
+        let first = fixture.engine.activate_pending_membership().unwrap();
+        let version = write_body(
+            &mut fixture.engine,
+            &fixture.branch,
+            b"before successor crash",
+        );
+        let (target, operation) =
+            prepare_successor(&mut fixture.engine, fixture.temp.path(), "crash");
+        let point = match stage {
+            "marker" => format!(
+                "after_membership_activation_marker_{}",
+                target.disks[0].disk_id
+            ),
+            "seal" => format!(
+                "after_membership_activation_seal_{}",
+                target.disks[0].disk_id
+            ),
+            other => other.to_owned(),
+        };
+        fixture.engine.inject_fault_once(&point);
+        assert!(
+            fixture.engine.activate_pending_membership().is_err(),
+            "{point}"
+        );
+        let Fixture { temp, engine, .. } = fixture;
+        drop(engine);
+        let mut reopened = if matches!(stage, "marker" | "seal") {
+            assert!(Engine::open(&temp.path().join("system")).is_err());
+            Engine::resume_membership_activation(&temp.path().join("system")).unwrap()
+        } else {
+            Engine::open(&temp.path().join("system")).unwrap()
+        };
+        assert_eq!(reopened.state.topology_generation, 3, "{point}");
+        assert_eq!(reopened.config.metadata_members().len(), 4);
+        assert_eq!(reopened.config.metadata_quorum(), 3);
+        assert!(!reopened.blocked, "{point}");
+        assert_eq!(
+            reopened
+                .operation_record(first.operation_id)
+                .unwrap()
+                .result(),
+            &first
+        );
+        let result = reopened
+            .operation_record(operation)
+            .unwrap()
+            .result()
+            .clone();
+        assert_eq!(result.result["membership_epoch"], "3");
+        assert_eq!(reopened.activate_pending_membership().unwrap(), result);
+        reopened.open_content(&version).unwrap();
+    }
+}
+
+#[test]
+fn membership_activation_successor_fence_reopens_read_only_before_enrollment() {
+    let mut fixture = Fixture::new();
+    fixture.engine.activate_pending_membership().unwrap();
+    let mut target = (*fixture.engine.config).clone();
+    let added = Config::development((0..5).map(|n| fixture.temp.path().join(format!("later-{n}"))))
+        .unwrap()
+        .disks
+        .pop()
+        .unwrap();
+    private_dir(&added.root).unwrap();
+    target.disks.push(added.clone());
+    fixture.engine.inject_fault_once("after_membership_fence_1");
+    let operation = OperationId::generate().unwrap();
+    assert!(
+        fixture
+            .engine
+            .begin_membership_handoff(target.clone(), "admin", operation)
+            .is_err()
+    );
+    let Fixture { temp, engine, .. } = fixture;
+    drop(engine);
+    let mut reopened = Engine::open(&temp.path().join("system")).unwrap();
+    assert!(reopened.blocked);
+    assert_eq!(
+        reopened.membership_fence_status().unwrap().operation_id,
+        operation
+    );
+    assert!(fs::read_dir(&added.root).unwrap().next().is_none());
+    let status = reopened
+        .begin_membership_handoff(target, "admin", operation)
+        .unwrap();
+    assert!(status.all_members_fenced());
+}
+
+#[test]
+fn membership_activation_successor_system_loss_uses_rebound_target_majority() {
+    let mut fixture = Fixture::new();
+    let first = fixture.engine.activate_pending_membership().unwrap();
+    let (target, _) = prepare_successor(&mut fixture.engine, fixture.temp.path(), "restore");
+    let second = fixture.engine.activate_pending_membership().unwrap();
+    let version = write_body(
+        &mut fixture.engine,
+        &fixture.branch,
+        b"restored third epoch",
+    );
+    let Fixture { temp, engine, .. } = fixture;
+    drop(engine);
+    fs::rename(temp.path().join("system"), temp.path().join("lost-system")).unwrap();
+    let mut roots = Vec::new();
+    for (index, disk) in target
+        .disks
+        .iter()
+        .filter(|disk| disk.metadata_member)
+        .enumerate()
+    {
+        let moved = temp.path().join(format!("rebound-{index}"));
+        fs::rename(&disk.root, &moved).unwrap();
+        if index != 0 {
+            roots.push(moved);
+        }
+    }
+    let mut restored = Engine::restore_from_disks(&temp.path().join("restored"), &roots).unwrap();
+    assert_eq!(restored.config.metadata_members().len(), 4);
+    assert_eq!(restored.config.metadata_quorum(), 3);
+    assert_eq!(restored.config.membership_epoch(), 3);
+    assert_eq!(restored.state.topology_generation, 3);
+    assert!(restored.blocked);
+    assert_eq!(
+        restored
+            .operation_record(first.operation_id)
+            .unwrap()
+            .result(),
+        &first
+    );
+    assert_eq!(
+        restored
+            .operation_record(second.operation_id)
+            .unwrap()
+            .result(),
+        &second
+    );
+    restored.open_content(&version).unwrap();
+    assert!(
+        restored
+            .create_repository(
+                &RepositoryName::parse("blocked").unwrap(),
+                "P01",
+                1,
+                "admin",
+                OperationId::generate().unwrap()
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn membership_activation_successor_missing_ancestor_archive_is_isolated_without_repair() {
+    let mut fixture = Fixture::new();
+    fixture.engine.activate_pending_membership().unwrap();
+    prepare_successor(&mut fixture.engine, fixture.temp.path(), "missing");
+    let second = fixture.engine.activate_pending_membership().unwrap();
+    let generation = fixture.engine.config.generation().unwrap();
+    let (ancestor, _) = generation.portable.archives().unwrap().remove(0);
+    let hash = object_hash("membership-control-archive", &ancestor).unwrap();
+    let transition = object_hash(INTENT_KIND, &generation.intent).unwrap();
+    let bad = fixture.engine.members()[0].clone();
+    let path = member_directory(&bad, &transition)
+        .join(CONTROL_ARCHIVE_DIRECTORY)
+        .join("objects/membership-control-archive")
+        .join(&hash[..2])
+        .join(format!("{hash}.json"));
+    fs::write(&path, b"broken ancestor root").unwrap();
+    let before = files(&bad.root);
+    let Fixture { temp, engine, .. } = fixture;
+    drop(engine);
+    let mut reopened = Engine::open(&temp.path().join("system")).unwrap();
+    assert_eq!(reopened.config.metadata_members().len(), 4);
+    assert_eq!(reopened.config.metadata_quorum(), 3);
+    assert_eq!(reopened.state.topology_generation, 3);
+    assert!(reopened.blocked);
+    assert!(reopened.disk_resources.available(&bad).is_none());
+    assert_eq!(
+        reopened
+            .operation_record(second.operation_id)
+            .unwrap()
+            .result(),
+        &second
+    );
+    assert_eq!(reopened.take_recovery_warnings().seals.len(), 1);
+    assert_eq!(files(&bad.root), before);
+}

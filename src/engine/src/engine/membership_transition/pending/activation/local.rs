@@ -37,7 +37,7 @@ pub(crate) fn verify_local_membership(
                     ));
                 }
                 let intent = portable.intent()?;
-                let Origin::Genesis { config: original } = &intent.origin;
+                let original = portable.genesis_config()?;
                 original.verify_saved_metadata_membership(&saved)?;
                 Ok((portable, intent))
             })();
@@ -47,22 +47,21 @@ pub(crate) fn verify_local_membership(
                 Some(metadata) => metadata.observe(authority)?,
                 None => authority?,
             };
-            let Origin::Genesis { config: original } = &intent.origin;
             match candidate.generation() {
-                Some(_) => {
+                Some(hash) if hash == authority_hash => {
                     portable.verify_candidate(candidate)?;
                 }
-                None => {
-                    original.verify_candidate_membership(candidate)?;
+                _ => {
+                    let (archive, fence_sequence) = portable.frozen_archive(candidate)?;
                     let hash = object_hash("candidate", candidate)?;
                     let proof: crate::metadata_map::InclusionProof = decode_strict(&read(
                         &root
                             .join("metadata/membership-history")
                             .join(format!("{hash}.json")),
                     )?)?;
-                    let value = proof.verify(&portable.archive.publication_seals, &hash)?;
+                    let value = proof.verify(&archive.publication_seals, &hash)?;
                     if value.as_ref().and_then(json_codec::Value::as_str).is_none()
-                        || candidate.sequence >= intent.fence_sequence
+                        || candidate.sequence >= fence_sequence
                     {
                         return Err(Error::new(
                             ErrorCode::PublicationInvalid,

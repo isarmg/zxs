@@ -1,6 +1,54 @@
 //! Read-only generation discovery/admission and explicit crash resume.
 use super::*;
 
+pub(crate) fn latest_restore_config(
+    configs: &BTreeMap<String, (ValidatedConfig, usize)>,
+) -> Result<ValidatedConfig> {
+    let mut selected: Option<&(ValidatedConfig, usize)> = None;
+    for candidate in configs
+        .values()
+        .filter(|(config, _)| config.generation().is_some())
+    {
+        match selected {
+            None => selected = Some(candidate),
+            Some(previous) => {
+                let current = candidate
+                    .0
+                    .generation()
+                    .expect("invariant: generation filtered");
+                let old = previous
+                    .0
+                    .generation()
+                    .expect("invariant: selected generation");
+                if current.portable.contains(&old.hash)? {
+                    selected = Some(candidate);
+                } else if !old.portable.contains(&current.hash)? {
+                    return Err(Error::new(
+                        ErrorCode::LogFork,
+                        "restore roots contain conflicting generation chains",
+                    ));
+                }
+            }
+        }
+    }
+    let (config, count) = selected.expect("invariant: caller found a generation anchor");
+    let generation = config.generation().expect("invariant: selected generation");
+    for (other, _) in configs.values() {
+        if other.generation().is_none() {
+            generation
+                .original
+                .verify_saved_metadata_membership(other)?;
+        }
+    }
+    if *count < config.metadata_quorum() {
+        return Err(Error::new(
+            ErrorCode::MetadataQuorumUnavailable,
+            "latest generation has no fixed metadata majority; older anchors cannot authorize rollback",
+        ));
+    }
+    Ok(config.clone())
+}
+
 /// Read-only discovery. Config is a projection and cannot choose an authority.
 /// A conflicting or damaged visible marker never falls back to the old epoch.
 pub(crate) fn discover(config: ValidatedConfig) -> Result<ValidatedConfig> {
@@ -13,30 +61,34 @@ pub(crate) fn discover(config: ValidatedConfig) -> Result<ValidatedConfig> {
             continue;
         }
         let root = DiskRoot::open(&disk.root)?;
-        // A stale system projection knows the original roots. Its actual fence
-        // points to the target addresses even if this root's new marker is bad.
-        if config.generation().is_none()
-            && config
-                .disks
-                .iter()
-                .any(|old| old.disk_id == disk.disk_id && old.metadata_member)
+        // Routing hints never authorize admission. Read each held root's own
+        // generation namespace; stale system projections must find a later fence.
+        if config
+            .disks
+            .iter()
+            .any(|old| old.disk_id == disk.disk_id && old.metadata_member)
         {
-            let old_log = crate::journal::scan_at(&root, &disk);
-            if let Ok(scan) = old_log {
-                for (record, _) in scan
-                    .records
-                    .iter()
-                    .filter(|(record, _)| record.record_type == RecordType::MembershipFence)
-                {
-                    let intent = load_object_at::<TransitionIntent>(
-                        &root,
-                        &disk,
-                        INTENT_KIND,
-                        &record.object_hash,
-                    );
-                    if let Ok(intent) = intent {
-                        let Origin::Genesis { config: original } = &intent.origin;
-                        if config.same_metadata_membership(original) {
+            let mut paths = vec![crate::journal::log_path(&disk)];
+            if let Ok(seal) =
+                root.read_json_observed::<DiskSeal>(&disk.root.join("disk.json"), &mut |_| Ok(()))
+                && let DiskSealFormat::MembershipGeneration { authority_hash } = seal.format
+            {
+                paths.push(generation_directory(&disk, &authority_hash).join("journal.bin"));
+            }
+            for path in paths {
+                if let Ok(scan) = crate::journal::scan_path_at(&root, &path) {
+                    for (record, _) in scan
+                        .records
+                        .iter()
+                        .filter(|(record, _)| record.record_type == RecordType::MembershipFence)
+                    {
+                        if let Ok(intent) = load_object_at::<TransitionIntent>(
+                            &root,
+                            &disk,
+                            INTENT_KIND,
+                            &record.object_hash,
+                        ) && config.same_metadata_membership(intent.origin.config())
+                        {
                             pending.extend(
                                 intent
                                     .target
@@ -88,10 +140,11 @@ pub(crate) fn discover(config: ValidatedConfig) -> Result<ValidatedConfig> {
             let authority: PortableAuthority =
                 decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
             let intent = authority.intent()?;
-            let Origin::Genesis { config: original } = &intent.origin;
-            if !config.same_metadata_membership(original)
-                && !config.same_metadata_membership(&intent.target)
-            {
+            let lineage = authority.lineage()?;
+            if !lineage.iter().any(|(_, epoch)| {
+                config.same_metadata_membership(epoch.origin.config())
+                    || config.same_metadata_membership(&epoch.target)
+            }) {
                 return Err(Error::new(
                     ErrorCode::ConfigConflict,
                     "system projection differs from generation lineage",
@@ -114,15 +167,20 @@ pub(crate) fn discover(config: ValidatedConfig) -> Result<ValidatedConfig> {
         })();
         match candidate {
             Ok(Some(authority)) => {
-                if let Some(previous) = &selected
-                    && previous.hash()? != authority.hash()?
-                {
-                    return Err(Error::new(
-                        ErrorCode::LogFork,
-                        "roots select conflicting generation authorities",
-                    ));
+                if let Some(previous) = &selected {
+                    let previous_hash = previous.hash()?;
+                    let hash = authority.hash()?;
+                    if previous_hash == hash || authority.contains(&previous_hash)? {
+                        selected = Some(authority);
+                    } else if !previous.contains(&hash)? {
+                        return Err(Error::new(
+                            ErrorCode::LogFork,
+                            "roots select conflicting generation authorities",
+                        ));
+                    }
+                } else {
+                    selected = Some(authority);
                 }
-                selected = Some(authority);
             }
             Ok(None) => (),
             Err(error) => {
@@ -146,7 +204,8 @@ fn admit_discovered(
     let intent = portable.intent()?;
     let hash = portable.hash()?;
     let transition = object_hash(INTENT_KIND, &intent)?;
-    let Origin::Genesis { config: original } = &intent.origin;
+    let original = portable.genesis_config()?;
+    let epoch = portable.epoch()?;
     let mut target = intent.target.clone();
     let roots = target
         .disks
@@ -200,8 +259,9 @@ fn admit_discovered(
         hash,
         portable,
         intent: intent.clone(),
-        original: original.clone(),
+        original,
         history,
+        epoch,
         base: Arc::new(state),
     });
     target.with_generation(generation)
@@ -226,8 +286,7 @@ pub(crate) fn restore_anchor(
     };
     let portable: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
     let intent = portable.intent()?;
-    let Origin::Genesis { config } = &intent.origin;
-    original.verify_saved_metadata_membership(config)?;
+    original.verify_saved_metadata_membership(&portable.genesis_config()?)?;
     let target = intent.target.clone();
     let paths = target
         .disks

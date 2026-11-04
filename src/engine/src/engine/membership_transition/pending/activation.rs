@@ -1,4 +1,4 @@
-//! First pure-add generation. The joint authority is portable, while activation
+//! Hash-linked pure-add generations. The joint authority is portable, while activation
 //! additionally requires held roots, local control archives and actual journals.
 use super::*;
 use crate::engine::membership_transition::archive::persistent::{
@@ -6,15 +6,12 @@ use crate::engine::membership_transition::archive::persistent::{
 };
 use joint::store::PortableJoint;
 
-const AUTHORITY_KIND: &str = "membership-generation";
+pub(in crate::engine::membership_transition) const AUTHORITY_KIND: &str = "membership-generation";
 const GENERATION_FILE: &str = "metadata/pool-membership/generation.json";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serialization(deny_unknown_fields)]
-pub(crate) struct PortableAuthority {
-    joint: PortableJoint,
-    archive: ArchiveRoot,
-}
+mod authority;
+pub(crate) use authority::PortableAuthority;
+pub(in crate::engine::membership_transition) use authority::same_config_projection as authority_config_matches;
 #[derive(Clone, Debug)]
 pub(crate) struct Generation {
     pub(crate) hash: String,
@@ -22,71 +19,12 @@ pub(crate) struct Generation {
     intent: TransitionIntent,
     original: ValidatedConfig,
     history: BTreeMap<u64, String>,
+    epoch: u64,
     pub(crate) base: Arc<State>,
-}
-impl PortableAuthority {
-    fn intent(&self) -> Result<TransitionIntent> {
-        let verified = self.joint.verify()?;
-        if object_hash("membership-control-archive", &self.archive)?
-            != verified.proposal.control_archive_root
-        {
-            return Err(Error::new(
-                ErrorCode::ObjectCorrupt,
-                "generation archive differs from joint authority",
-            ));
-        }
-        let Origin::Genesis { config: original } = &verified.intent.origin;
-        let target = &verified.intent.target;
-        if !admission::same_settings(original, target)
-            || original.disks.iter().any(|old| {
-                !target
-                    .disks
-                    .iter()
-                    .any(|new| admission::same_disk(old, new))
-            })
-            || target.disks.len() <= original.disks.len()
-            || target
-                .disks
-                .iter()
-                .filter(|disk| !original.disks.iter().any(|old| old.disk_id == disk.disk_id))
-                .any(|disk| !disk.metadata_member || disk.binding_generation != 1)
-        {
-            return Err(Error::new(
-                ErrorCode::ConfigConflict,
-                "generation authority is not a first pure addition",
-            ));
-        }
-        Ok(verified.intent)
-    }
-    pub(crate) fn hash(&self) -> Result<String> {
-        Ok(object_hash(AUTHORITY_KIND, self)?)
-    }
-    fn archive_hash(&self) -> Result<String> {
-        Ok(object_hash("membership-control-archive", &self.archive)?)
-    }
-    pub(crate) fn verify_candidate(&self, candidate: &Candidate) -> Result<ValidatedConfig> {
-        let intent = self.intent()?;
-        if candidate.generation() != Some(self.hash()?.as_str())
-            || candidate.sequence <= intent.fence_sequence
-        {
-            return Err(Error::new(
-                ErrorCode::PublicationInvalid,
-                "candidate does not bind this generation authority",
-            ));
-        }
-        intent
-            .target
-            .verify_original_candidate_membership(candidate)?;
-        Ok(intent.target)
-    }
 }
 impl Generation {
     pub(crate) fn membership_epoch(&self) -> u64 {
-        // The admitted protocol supports only the first successor of Genesis.
-        // A future origin must define its own epoch rather than reuse topology.
-        match &self.intent.origin {
-            Origin::Genesis { .. } => 2,
-        }
+        self.epoch
     }
     pub(crate) fn verify_candidate(&self, candidate: &Candidate) -> Result<()> {
         match candidate.generation() {
@@ -95,10 +33,10 @@ impl Generation {
                     .target
                     .verify_original_candidate_membership(candidate)
             }
-            None if self.history.get(&candidate.sequence)
+            _ if self.history.get(&candidate.sequence)
                 == Some(&object_hash("candidate", candidate)?) =>
             {
-                self.original.verify_candidate_membership(candidate)
+                self.portable.verify_ancestor_candidate(candidate)
             }
             _ => Err(Error::new(
                 ErrorCode::PublicationInvalid,
@@ -177,6 +115,22 @@ impl Generation {
         &self.original
     }
 }
+pub(in crate::engine::membership_transition) fn verify_frozen_activation(
+    portable: &PortableAuthority,
+    base: Arc<State>,
+    candidate: &Candidate,
+) -> Result<()> {
+    let generation = Generation {
+        hash: portable.hash()?,
+        portable: portable.clone(),
+        intent: portable.intent()?,
+        original: portable.genesis_config()?,
+        history: BTreeMap::new(),
+        epoch: portable.epoch()?,
+        base,
+    };
+    generation.verify_activation_candidate(candidate)
+}
 
 pub(crate) fn generation_directory(disk: &DiskConfig, hash: &str) -> PathBuf {
     disk.root.join("metadata/membership-generations").join(hash)
@@ -193,7 +147,7 @@ mod publication;
 mod recovery;
 pub(crate) use local::verify_local_membership;
 pub(crate) use publication::predecessor_seal_matches;
-pub(crate) use recovery::{discover, restore_anchor};
+pub(crate) use recovery::{discover, latest_restore_config, restore_anchor};
 
 impl Generation {
     pub(crate) fn verify_activation_candidate(&self, candidate: &Candidate) -> Result<()> {

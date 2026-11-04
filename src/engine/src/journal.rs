@@ -126,7 +126,7 @@ pub(crate) fn scan_configured_at(
         &crate::engine::membership_transition::pending::activation::log_path(config, d),
     )
 }
-fn scan_path_at(root: &DiskRoot, path: &Path) -> Result<Scan> {
+pub(crate) fn scan_path_at(root: &DiskRoot, path: &Path) -> Result<Scan> {
     match root.open_optional_regular(path)? {
         Some(file) => scan_frames(BufReader::new(file)),
         None => Ok(Scan {

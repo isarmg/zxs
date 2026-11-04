@@ -1,6 +1,6 @@
-//! First pure-add handoff: original fence, independent archive, pending joint
-//! authority and explicit generation activation. Successor/removal transitions
-//! remain unsupported; the fence alone never grants target write authority.
+//! Pure-add handoff: generation-owned fence, independent archive, pending joint
+//! authority and explicit activation. Removal remains unsupported; a fence alone
+//! never grants target write authority.
 use super::{Engine, ValidatedConfig, recovery_checkpoint::Records};
 use crate::{disk::*, journal::*, publication_evidence::verified_object_at, *};
 use data_serialization::{Deserialize, Serialize};
@@ -19,12 +19,34 @@ pub use pending::{
 
 const INTENT_KIND: &str = "membership-transition";
 
-/// This stage admits only an original pool's first handoff. A later completed
-/// transition requires its own authenticated predecessor, not a default genesis.
+/// Genesis and a completed predecessor are distinct authority origins.
+/// A successor must carry the exact predecessor hash; it cannot restart Genesis.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serialization(tag = "kind", deny_unknown_fields)]
 enum Origin {
-    Genesis { config: ValidatedConfig },
+    Genesis {
+        config: ValidatedConfig,
+    },
+    Successor {
+        config: ValidatedConfig,
+        predecessor_authority_hash: String,
+    },
+}
+impl Origin {
+    fn config(&self) -> &ValidatedConfig {
+        match self {
+            Self::Genesis { config } | Self::Successor { config, .. } => config,
+        }
+    }
+    fn predecessor(&self) -> Option<&str> {
+        match self {
+            Self::Genesis { .. } => None,
+            Self::Successor {
+                predecessor_authority_hash,
+                ..
+            } => Some(predecessor_authority_hash),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,8 +120,8 @@ impl Engine {
     }
 
     /// Experimental first barrier, not an add/remove operation. It permanently
-    /// pauses old business decisions. First pure-add activation is explicit;
-    /// cancellation and subsequent membership transitions are not supported.
+    /// pauses that generation's business decisions. Pure-add activation is explicit;
+    /// cancellation and removal are not supported.
     /// It writes only the existing members. Target paths are not opened or created.
     /// A failed append may have persisted: inspect/reopen and retry the same intent.
     pub fn begin_membership_handoff(
@@ -108,12 +130,6 @@ impl Engine {
         principal: &str,
         operation_id: OperationId,
     ) -> Result<MembershipFenceStatus> {
-        if self.config.generation().is_some() {
-            return Err(Error::new(
-                ErrorCode::ConfigConflict,
-                "repeated membership transitions are not supported by the first-add protocol",
-            ));
-        }
         Self::require_actor(principal)?;
         self.require_no_commit_preparation()?;
         let target = ValidatedConfig::try_from(target)?;
@@ -146,8 +162,14 @@ impl Engine {
             let intent = TransitionIntent {
                 operation_id,
                 principal: principal.to_owned(),
-                origin: Origin::Genesis {
-                    config: self.config.clone(),
+                origin: match self.config.generation_hash() {
+                    Some(hash) => Origin::Successor {
+                        config: self.config.clone(),
+                        predecessor_authority_hash: hash.to_owned(),
+                    },
+                    None => Origin::Genesis {
+                        config: self.config.clone(),
+                    },
                 },
                 target,
                 boundary: self.handoff_boundary()?,
@@ -194,11 +216,8 @@ impl Engine {
                 disk,
                 &self.metadata_integrity,
             )?;
-            let saved: ValidatedConfig = self.disk_resources.get(disk)?.root.read_json_observed(
-                &disk.root.join("metadata/pool-membership/config.json"),
-                &mut |_| Ok(()),
-            )?;
-            self.config.verify_saved_metadata_membership(&saved)?;
+            self.config
+                .verify_root_membership(&self.disk_resources.get(disk)?.root, disk)?;
             if self
                 .journals
                 .get(&disk.disk_id)
@@ -222,7 +241,7 @@ impl Engine {
             .metadata_members()
             .next()
             .expect("invariant: nonempty membership");
-        let scan = scan_at(&self.disk_resources.get(disk)?.root, disk)?;
+        let scan = scan_configured_at(&self.disk_resources.get(disk)?.root, disk, &self.config)?;
         let record = scan
             .records
             .iter()
@@ -313,16 +332,27 @@ impl Engine {
         let Some(first) = fences.first() else {
             return Ok(());
         };
-        if self.config.generation().is_some() {
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "a later generation fence blocks this first-add implementation",
-            ));
-        }
         let hash = &first.record.object_hash;
         let intent: TransitionIntent =
-            verified_object_at(&self.disk_resources, online, INTENT_KIND, hash)?;
-        let Origin::Genesis { config } = &intent.origin;
+            verified_object_at(&self.disk_resources, online, INTENT_KIND, hash).map_err(
+                |error| {
+                    if self.config.generation().is_some() {
+                        error.context(
+                            ErrorCode::RecoveryRequired,
+                            "later fence requires its exact transition intent",
+                        )
+                    } else {
+                        error
+                    }
+                },
+            )?;
+        let config = intent.origin.config();
+        if intent.origin.predecessor() != self.config.generation_hash() {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "fence belongs to another membership generation",
+            ));
+        }
         self.config.verify_saved_metadata_membership(config)?;
         self.validate_handoff_target(&intent.target)?;
         Self::require_actor(&intent.principal)?;

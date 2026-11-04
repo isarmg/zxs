@@ -150,7 +150,7 @@ impl JointProgress {
         proposal: &PreparedProposal,
         fence: &AdmittedFence,
     ) -> Self {
-        let Origin::Genesis { config } = &fence.intent.origin;
+        let config = fence.intent.origin.config();
         Self {
             original: config
                 .metadata_members()

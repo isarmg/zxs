@@ -51,6 +51,35 @@ pub struct MembershipControlArchive {
 pub(super) struct ArchiveStore {
     root: DiskRoot,
 }
+pub(super) fn predecessor_object(
+    engine: &Engine,
+    kind: &'static str,
+    hash: &str,
+) -> Result<AuthenticatedMetadataObject> {
+    let generation = engine.config.generation().ok_or_else(|| {
+        Error::new(
+            ErrorCode::ObjectCorrupt,
+            "Genesis has no predecessor archive",
+        )
+    })?;
+    let (_, intent) = generation
+        .portable
+        .archives()?
+        .pop()
+        .expect("invariant: generation archive");
+    let transition = object_hash(INTENT_KIND, &intent)?;
+    let disk = engine
+        .config
+        .metadata_members()
+        .next()
+        .expect("invariant: fixed metadata membership");
+    let store = ArchiveStore {
+        root: engine.disk_resources.get(disk)?.root.private_child(
+            &pending::member_directory(disk, &transition).join(pending::CONTROL_ARCHIVE_DIRECTORY),
+        )?,
+    };
+    store.load(kind, hash)
+}
 impl ArchiveStore {
     /// Destination must already be a private, empty directory or this exact
     /// in-progress binding. No chmod, mounting, overwrites or foreign cleanup.
@@ -152,9 +181,10 @@ impl ArchiveStore {
     }
     // Components come from the independently validated original Config, not
     // from a file path in the archive manifest. This is never an active journal.
-    fn member_directory(&self, disk: &DiskConfig) -> PathBuf {
-        self.path("journals")
-            .join(&disk.disk_id)
+    fn member_directory(&self, disk: &DiskConfig, transition: Option<&str>) -> PathBuf {
+        let root = self.path("journals");
+        let root = transition.map_or_else(|| root.clone(), |hash| root.join(hash));
+        root.join(&disk.disk_id)
             .join(&disk.slot_id)
             .join(disk.binding_generation.to_string())
     }
@@ -180,13 +210,27 @@ impl ArchiveStore {
             .find(|disk| disk.disk_id == journal.disk_id)
             .expect("invariant: inspection returned an original member");
         let handle = engine.disk_resources.get(disk)?;
-        let directory = self.member_directory(disk);
+        let transition = engine
+            .membership_fence
+            .as_ref()
+            .expect("invariant: archived member is fenced");
+        let namespace = transition
+            .intent
+            .origin
+            .predecessor()
+            .map(|_| transition.hash.as_str());
+        let directory = self.member_directory(disk, namespace);
         let config = handle.root.read_bytes(
             &disk.root.join("metadata/pool-membership/config.json"),
             MAX_METADATA,
         )?;
         let saved: ValidatedConfig = decode_strict(&config)?;
-        engine.config.verify_saved_metadata_membership(&saved)?;
+        match engine.config.generation() {
+            Some(generation) => generation
+                .original()
+                .verify_saved_metadata_membership(&saved)?,
+            None => engine.config.verify_saved_metadata_membership(&saved)?,
+        }
         let seal = handle
             .root
             .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
@@ -197,7 +241,9 @@ impl ArchiveStore {
             .write_atomic(&directory.join("disk.json"), &seal, false)?;
         self.copy_journal(
             &directory,
-            handle.root.open_regular(&log_path(disk))?,
+            handle
+                .root
+                .open_regular(&pending::activation::log_path(&engine.config, disk))?,
             journal,
         )?;
         Ok(ArchivedMember {
@@ -281,15 +327,11 @@ struct ArchivedSource<'a> {
     seals: BTreeMap<String, String>,
     destination: Option<&'a ArchiveStore>,
     copied: BTreeSet<(&'static str, String)>,
+    namespace: Option<String>,
 }
-impl ControlSource for ArchivedSource<'_> {
-    fn observe(&mut self, bytes: usize) -> Result<()> {
-        (self.observe)(bytes)
-    }
-    fn object(&mut self, kind: &'static str, hash: &str) -> Result<AuthenticatedMetadataObject> {
-        (self.observe)(0)?;
-        let object = self.store.load_observed(kind, hash, self.observe)?;
-        let address = (kind, hash.to_owned());
+impl ArchivedSource<'_> {
+    fn remember(&mut self, object: &AuthenticatedMetadataObject) -> Result<()> {
+        let address = (object.kind(), object.hash().to_owned());
         if !self.copied.contains(&address) {
             if self
                 .object_budget
@@ -301,12 +343,21 @@ impl ControlSource for ArchivedSource<'_> {
                 ));
             }
             if let Some(destination) = self.destination {
-                destination.object_bytes(kind, hash, object.bytes())?;
+                destination.object_bytes(object.kind(), object.hash(), object.bytes())?;
             }
-            if self.destination.is_some() || self.object_budget.is_some() {
-                self.copied.insert(address);
-            }
+            self.copied.insert(address);
         }
+        Ok(())
+    }
+}
+impl ControlSource for ArchivedSource<'_> {
+    fn observe(&mut self, bytes: usize) -> Result<()> {
+        (self.observe)(bytes)
+    }
+    fn object(&mut self, kind: &'static str, hash: &str) -> Result<AuthenticatedMetadataObject> {
+        (self.observe)(0)?;
+        let object = self.store.load_observed(kind, hash, self.observe)?;
+        self.remember(&object)?;
         Ok(object)
     }
     fn seal(
@@ -327,9 +378,12 @@ impl ControlSource for ArchivedSource<'_> {
         Ok(seal)
     }
     fn journal(&self, disk: &DiskConfig) -> Result<File> {
-        self.store
-            .root
-            .open_regular(&self.store.member_directory(disk).join("journal.bin"))
+        self.store.root.open_regular(
+            &self
+                .store
+                .member_directory(disk, self.namespace.as_deref())
+                .join("journal.bin"),
+        )
     }
 }
 
@@ -401,6 +455,36 @@ impl Engine {
         let inspected = self.inspect_membership_metadata_archive()?;
         let destination = self.admit_control_archive_directory(&destination)?;
         let (store, _lock) = ArchiveStore::admit(destination, &inspected.transition_hash)?;
+        if let Some(generation) = self.config.generation() {
+            let (previous, previous_intent) = generation
+                .portable
+                .archives()?
+                .pop()
+                .expect("invariant: active authority has its frozen archive");
+            let transition = object_hash(INTENT_KIND, &previous_intent)?;
+            let disk = self
+                .config
+                .metadata_members()
+                .next()
+                .expect("invariant: fixed metadata membership");
+            let source = ArchiveStore {
+                root: self.disk_resources.get(disk)?.root.private_child(
+                    &pending::member_directory(disk, &transition)
+                        .join(pending::CONTROL_ARCHIVE_DIRECTORY),
+                )?,
+            };
+            verify_root_copying(
+                &source,
+                &previous,
+                &transition,
+                Some(&store),
+                &mut |_| Ok(()),
+                None,
+            )?;
+            for object in generation.portable.node_objects()? {
+                store.object_bytes(object.kind(), &object.hash, object.bytes())?;
+            }
+        }
         let mut members = json_codec::Map::new();
         for journal in &inspected.journals {
             members.insert(
@@ -626,9 +710,10 @@ impl ArchiveStore {
         source: &Self,
         disk: &DiskConfig,
         member: &ArchivedMember,
+        namespace: Option<&str>,
     ) -> Result<()> {
-        let from = source.member_directory(disk);
-        let to = self.member_directory(disk);
+        let from = source.member_directory(disk, namespace);
+        let to = self.member_directory(disk, namespace);
         for name in ["config.json", "disk.json"] {
             let bytes = source.root.read_bytes(&from.join(name), MAX_METADATA)?;
             self.root.write_atomic(&to.join(name), &bytes, false)?;
@@ -699,10 +784,52 @@ fn verify_root_copying(
             "archive transition differs from trusted binding",
         ));
     }
-    observe(0)?;
-    let intent_object = store.load_observed(INTENT_KIND, expected_transition, observe)?;
-    let intent: TransitionIntent = json_codec::from_value(intent_object.into_value())?;
-    let Origin::Genesis { config } = &intent.origin;
+    let mut source = ArchivedSource {
+        store,
+        observe,
+        object_budget,
+        seals: BTreeMap::new(),
+        destination,
+        copied: BTreeSet::new(),
+        namespace: None,
+    };
+    source.observe(0)?;
+    let intent: TransitionIntent = json_codec::from_value(
+        source
+            .object(INTENT_KIND, expected_transition)?
+            .into_value(),
+    )?;
+    if let Some(hash) = intent.origin.predecessor() {
+        let predecessor = PortableAuthority::load(hash, |kind, hash| source.object(kind, hash))?;
+        for (previous, previous_intent) in predecessor.archives()? {
+            let hash = object_hash(ROOT_KIND, &previous)?;
+            let stored = source.object(ROOT_KIND, &hash)?;
+            let previous: ArchiveRoot = json_codec::from_value(stored.into_value())?;
+            verify_epoch(&mut source, &previous, previous_intent)?;
+        }
+    }
+    let value = AuthenticatedMetadataObject::authenticate(
+        ROOT_KIND,
+        &object_hash(ROOT_KIND, root)?,
+        json_codec::to_value(root)?,
+    )?;
+    source.remember(&value)?;
+    verify_epoch(&mut source, root, intent)
+}
+
+fn verify_epoch(
+    source: &mut ArchivedSource<'_>,
+    root: &ArchiveRoot,
+    intent: TransitionIntent,
+) -> Result<MembershipArchiveInspection> {
+    if root.transition_hash != object_hash(INTENT_KIND, &intent)? {
+        return Err(Error::new(
+            ErrorCode::ObjectCorrupt,
+            "frozen epoch root selects another transition",
+        ));
+    }
+    let epoch = FrozenEpoch::read(&intent, source)?;
+    let config = epoch.config;
     Engine::require_actor(&intent.principal)?;
     if config.pool_id != intent.target.pool_id
         || config.same_metadata_membership(&intent.target)
@@ -714,14 +841,10 @@ fn verify_root_copying(
             "invalid archived transition intent",
         ));
     }
-    let mut source = ArchivedSource {
-        store,
-        observe,
-        object_budget,
-        seals: BTreeMap::new(),
-        destination,
-        copied: BTreeSet::new(),
-    };
+    source.namespace = intent
+        .origin
+        .predecessor()
+        .map(|_| root.transition_hash.clone());
     let members =
         crate::metadata_map::read_map(&root.members, |kind, hash| source.object(kind, hash))?;
     if members.len() != config.metadata_members().len() {
@@ -741,9 +864,21 @@ fn verify_root_copying(
                 })?
                 .clone(),
         )?;
-        verify_member(store, config, disk, &member, source.observe)?;
-        if let Some(destination) = destination {
-            destination.copy_archived_member(store, disk, &member)?;
+        verify_member(
+            source.store,
+            &epoch,
+            disk,
+            &member,
+            source.namespace.as_deref(),
+            source.observe,
+        )?;
+        if let Some(destination) = source.destination {
+            destination.copy_archived_member(
+                source.store,
+                disk,
+                &member,
+                source.namespace.as_deref(),
+            )?;
         }
         receipts.insert(disk.disk_id.clone(), member.fence);
         journals.push(member.journal);
@@ -759,10 +894,10 @@ fn verify_root_copying(
     let config = config.clone();
     let fence = AdmittedFence {
         intent,
-        hash: expected_transition.to_owned(),
+        hash: root.transition_hash.clone(),
         receipts,
     };
-    let inspected = inspect_control(&config, &fence, &mut source)?;
+    let inspected = inspect_control(&config, &fence, source)?;
     if inspected.journals != journals || inspected.published_candidates != source.seals.len() {
         return Err(Error::new(
             ErrorCode::ObjectCorrupt,
@@ -774,12 +909,14 @@ fn verify_root_copying(
 
 fn verify_member(
     store: &ArchiveStore,
-    config: &ValidatedConfig,
+    epoch: &FrozenEpoch<'_>,
     disk: &DiskConfig,
     member: &ArchivedMember,
+    namespace: Option<&str>,
     observe: &mut dyn FnMut(usize) -> Result<()>,
 ) -> Result<()> {
-    let directory = store.member_directory(disk);
+    let config = epoch.config;
+    let directory = store.member_directory(disk, namespace);
     observe(0)?;
     let config_bytes = store.root.read_bytes_observed(
         &directory.join("config.json"),
@@ -800,8 +937,20 @@ fn verify_member(
         ));
     }
     let saved: ValidatedConfig = decode_strict(&config_bytes)?;
-    config.verify_saved_metadata_membership(&saved)?;
+    epoch.genesis.verify_saved_metadata_membership(&saved)?;
     let seal = decode_seal(&seal_bytes)?;
+    let expected_format = match &epoch.authority_hash {
+        Some(hash) => DiskSealFormat::MembershipGeneration {
+            authority_hash: hash.clone(),
+        },
+        None => DiskSealFormat::ManagedDirectory,
+    };
+    if seal.format != expected_format {
+        return Err(Error::new(
+            ErrorCode::DiskIdentityMismatch,
+            "archived seal belongs to another generation",
+        ));
+    }
     if seal.pool_id != config.pool_id
         || seal.disk_id != disk.disk_id
         || seal.slot_id != disk.slot_id
@@ -835,35 +984,51 @@ impl PendingControlArchive {
         disk: &DiskConfig,
         fence: &AdmittedFence,
     ) -> Result<()> {
-        let mut source = ActiveObjects {
-            store: &self.store,
-            root,
-            disk,
-            seals: archive_seals(&self.store, &self.root)?,
-        };
-        if disk.metadata_member {
-            inspect_control(
-                &match &fence.intent.origin {
-                    Origin::Genesis { config } => config.clone(),
-                },
-                fence,
-                &mut source,
-            )?;
-        }
-        for hash in source.seals.keys() {
-            let (_, proof) = crate::metadata_map::read_proof(
-                &self.root.publication_seals,
-                hash,
-                |kind, hash| self.store.load(kind, hash),
-            )?;
-            root.write_json(
-                &disk
-                    .root
-                    .join("metadata/membership-history")
-                    .join(format!("{hash}.json")),
-                &proof,
-                false,
-            )?;
+        for (epoch, intent) in archive_epochs(&self.store, &self.root, &fence.intent)? {
+            let mut source = ActiveObjects {
+                store: &self.store,
+                root,
+                disk,
+                seals: archive_seals(&self.store, &epoch)?,
+                namespace: intent
+                    .origin
+                    .predecessor()
+                    .map(|_| epoch.transition_hash.clone()),
+            };
+            if disk.metadata_member {
+                let members = crate::metadata_map::read_map(&epoch.members, |kind, hash| {
+                    self.store.load(kind, hash)
+                })?;
+                let receipts = members
+                    .into_iter()
+                    .map(|(id, value)| {
+                        let member: ArchivedMember = json_codec::from_value(value)?;
+                        Ok((id, member.fence))
+                    })
+                    .collect::<Result<BTreeMap<_, _>>>()?;
+                let original = intent.origin.config().clone();
+                let archived_fence = AdmittedFence {
+                    intent,
+                    hash: epoch.transition_hash.clone(),
+                    receipts,
+                };
+                inspect_control(&original, &archived_fence, &mut source)?;
+            }
+            for hash in source.seals.keys() {
+                let (_, proof) = crate::metadata_map::read_proof(
+                    &epoch.publication_seals,
+                    hash,
+                    |kind, hash| self.store.load(kind, hash),
+                )?;
+                root.write_json(
+                    &disk
+                        .root
+                        .join("metadata/membership-history")
+                        .join(format!("{hash}.json")),
+                    &proof,
+                    false,
+                )?;
+            }
         }
         Ok(())
     }
@@ -885,28 +1050,39 @@ fn generation_base(
     root: &ArchiveRoot,
     intent: &TransitionIntent,
 ) -> Result<(State, BTreeMap<u64, String>)> {
-    let seals = archive_seals(store, root)?;
     let mut history = BTreeMap::new();
-    for hash in seals.keys() {
-        let candidate: Candidate =
-            json_codec::from_value(store.load("candidate", hash)?.into_value())?;
-        if history.insert(candidate.sequence, hash.clone()).is_some() {
-            return Err(Error::new(
-                ErrorCode::LogFork,
-                "archived generation repeats publication sequence",
-            ));
+    for (epoch, _) in archive_epochs(store, root, intent)? {
+        for hash in archive_seals(store, &epoch)?.keys() {
+            let candidate: Candidate =
+                json_codec::from_value(store.load("candidate", hash)?.into_value())?;
+            if history.insert(candidate.sequence, hash.clone()).is_some() {
+                return Err(Error::new(
+                    ErrorCode::LogFork,
+                    "archived generations repeat publication sequence",
+                ));
+            }
         }
     }
+    let state = frozen_state_with(root, intent, |kind, hash| store.load(kind, hash))?;
+    Ok((state, history))
+}
+
+pub(super) fn frozen_state_with(
+    root: &ArchiveRoot,
+    intent: &TransitionIntent,
+    mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,
+) -> Result<State> {
+    let seals =
+        crate::metadata_map::read_map(&root.publication_seals, |kind, hash| load(kind, hash))?
+            .into_iter()
+            .map(|(key, value)| Ok((key, json_codec::from_value(value)?)))
+            .collect::<Result<BTreeMap<String, String>>>()?;
     let state = match &intent.boundary {
         Some(boundary) => {
-            let snapshot: Snapshot = json_codec::from_value(
-                store
-                    .load("snapshot", &boundary.snapshot_hash)?
-                    .into_value(),
-            )?;
+            let snapshot: Snapshot =
+                json_codec::from_value(load("snapshot", &boundary.snapshot_hash)?.into_value())?;
             let mut state =
-                resolve_admitted_snapshot(snapshot, |kind, hash| store.load(kind, hash))?
-                    .into_state();
+                resolve_admitted_snapshot(snapshot, |kind, hash| load(kind, hash))?.into_state();
             // The exact disk snapshot predates an explicit degraded outcome.
             // Reproduce ordinary recovery's visible-operation overlay without
             // relabelling that original snapshot or changing any stored bytes.
@@ -917,17 +1093,11 @@ fn generation_base(
                 )
             })?;
             let seal: PublicationSeal =
-                json_codec::from_value(store.load(SEAL_KIND, seal_hash)?.into_value())?;
-            let candidate: Candidate = json_codec::from_value(
-                store
-                    .load("candidate", &boundary.candidate_hash)?
-                    .into_value(),
-            )?;
-            let publication: Publication = json_codec::from_value(
-                store
-                    .load("publication", &seal.publication_hash)?
-                    .into_value(),
-            )?;
+                json_codec::from_value(load(SEAL_KIND, seal_hash)?.into_value())?;
+            let candidate: Candidate =
+                json_codec::from_value(load("candidate", &boundary.candidate_hash)?.into_value())?;
+            let publication: Publication =
+                json_codec::from_value(load("publication", &seal.publication_hash)?.into_value())?;
             verify_publication_seal(&candidate, &publication, &seal)?;
             if publication.recovery.is_some() {
                 state
@@ -936,18 +1106,40 @@ fn generation_base(
             }
             state
         }
+        None if intent.origin.predecessor().is_some() => {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "successor archive has no published boundary",
+            ));
+        }
         None => State {
             topology_generation: 1,
             ..State::default()
         },
     };
-    Ok((state, history))
+    Ok(state)
+}
+
+fn archive_epochs(
+    store: &ArchiveStore,
+    root: &ArchiveRoot,
+    intent: &TransitionIntent,
+) -> Result<Vec<(ArchiveRoot, TransitionIntent)>> {
+    let mut epochs = match intent.origin.predecessor() {
+        Some(hash) => {
+            PortableAuthority::load(hash, |kind, hash| store.load(kind, hash))?.archives()?
+        }
+        None => Vec::new(),
+    };
+    epochs.push((root.clone(), intent.clone()));
+    Ok(epochs)
 }
 struct ActiveObjects<'a> {
     store: &'a ArchiveStore,
     root: &'a DiskRoot,
     disk: &'a DiskConfig,
     seals: BTreeMap<String, String>,
+    namespace: Option<String>,
 }
 impl ControlSource for ActiveObjects<'_> {
     fn observe(&mut self, _bytes: usize) -> Result<()> {
@@ -980,9 +1172,12 @@ impl ControlSource for ActiveObjects<'_> {
         Ok(seal)
     }
     fn journal(&self, disk: &DiskConfig) -> Result<File> {
-        self.store
-            .root
-            .open_regular(&self.store.member_directory(disk).join("journal.bin"))
+        self.store.root.open_regular(
+            &self
+                .store
+                .member_directory(disk, self.namespace.as_deref())
+                .join("journal.bin"),
+        )
     }
 }
 pub(in crate::engine::membership_transition) fn read_generation_base(

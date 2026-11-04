@@ -6,13 +6,12 @@
 
 ## 当前证据状态
 
-截至 2026-11-04，最终批次尚未在 GitHub Actions 执行，不能报告最终源码通过。
+首次批次已在 GitHub 验证成功：提交 `8272f0ea4f8cfe2ce7c4d3c2d7fbc671c0aea417`，运行 [41803829462](https://github.com/isarmg/zxs/actions/runs/41803829462)，2026-11-04 终态为 success。
 
-- 中间源码构建的单元测试 binary：16 个激活测试中 15 通过、1 失败。失败的 workspace 镜像用例原先覆盖同一文件，未真正改变选择上下文；当前源码已改成新增文件并在提交后切换文件分支，尚待重编执行。
-- 同一中间 binary 的受影响过滤已通过：membership 95（另有 1 个原有忽略 fixture）、普通 recovery 28、proof decoding 7、journal scanner 10、workspace storage 10、history package 33、scrub 58。七个先前回归均已定向通过，分别涉及盘身份错误、共享证明故障通知和 pending 故障恢复。这些过滤存在交集，不能累加为独立用例总数。
-- 更早的一次广泛回归被主动中断，未完成，不作为本批次通过证据。最终格式、生产构建、Clippy 和所有定向结果以提交绑定的 Actions 输出为准。
-- 最后源码新增或修订的 degraded 永久结果覆盖、继承的 `AcknowledgedUnavailable`、真实 workspace 旧镜像恢复、旧/新历史包独立 import、成员 epoch 结果断言均未执行。不得以中间 binary 的结果替代。
-- 本地重型验证已停止；后续按源码批次交给 GitHub Actions，不逐处修复重跑完整 CI。
+- 激活 17、成员协议 95（另有 1 个既存忽略 fixture）、恢复 28、降级恢复 23、proof 7、scanner 10、workspace 10、history package 33、scrub 58、identity 4、provenance 1 均通过。过滤存在交集，不能相加当作独立总数。
+- 不启用故障注入的生产检查、严格 Clippy、包格式、架构、workflow 和文档契约门禁均通过。
+- workspace 真实选择上下文、旧/新独立 package import、降级结果覆盖、继承不可用摘要与 epoch 断言已由上述最终提交执行，不再引用中间 15/16 binary 作为验收。更早的广泛回归中断不属于这项成功证据。
+- 本地不再编译或运行重型验证。当前正在编写的[重复添加批次](repeated-membership-activation.md)尚未验证，这次成功不外推到后继代际、计划下线、API/Web 或真实部署。
 
 ## GitHub 验证入口
 
@@ -43,6 +42,6 @@
 
 ## 明确不包含
 
-重复成员迁移仍拒绝，后继不能冒称 Genesis。下线、排空、删除、退休成员返回、一般多代链和 UI/API 仍未实现。纯添加不移动原正文、不更改原路由，也不声称新增正文副本。
+本首次批次尚未支持重复成员迁移；后续实验必须使用独立 Successor 权威，不能冒称 Genesis。下线、排空、删除、退休成员返回、一般多代链和 UI/API 仍未实现。纯添加不移动原正文、不更改原路由，也不声称新增正文副本。
 
 便携证书聚合容器以现有 64 MiB 元数据上限预检；没有完成大规模实际成员激活或吞吐验收。临时目录故障测试不证明物理掉电、硬件缓存、跨主机 fencing、恶意回滚或克隆设备安全。复杂度与同步预算见 ADR；本批次没有短暂停或性能提升承诺。

@@ -11,7 +11,7 @@ impl Engine {
                 "pending members require original fence",
             )
         })?;
-        let Origin::Genesis { config: origin } = &fence.intent.origin;
+        let origin = fence.intent.origin.config();
         let target = &fence.intent.target;
         if !same_settings(origin, target) || !same_settings(origin, &self.config) {
             return Err(unsupported());

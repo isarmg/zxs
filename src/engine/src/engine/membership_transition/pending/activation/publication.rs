@@ -1,5 +1,41 @@
-//! Explicit first-generation resource promotion and prescribed publication.
+//! Explicit generation resource promotion and prescribed publication.
 use super::*;
+
+fn install_marker(root: &DiskRoot, disk: &DiskConfig, generation: &Generation) -> Result<()> {
+    let path = disk.root.join(GENERATION_FILE);
+    let file = if root
+        .optional_metadata(&disk.root.join("metadata/pool-membership"))?
+        .is_some()
+    {
+        root.open_optional_regular(&path)?
+    } else {
+        None
+    };
+    let replace = match file {
+        Some(file) => {
+            let previous: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
+            previous.intent()?;
+            let hash = previous.hash()?;
+            if hash != generation.hash
+                && Some(hash.as_str()) != generation.intent.origin.predecessor()
+            {
+                return Err(Error::new(
+                    ErrorCode::LogFork,
+                    "generation marker is not this authority or its exact predecessor",
+                ));
+            }
+            hash != generation.hash
+        }
+        None => false,
+    };
+    root.private_dir(&generation_directory(disk, &generation.hash))?;
+    root.write_json(
+        &generation_directory(disk, &generation.hash).join("authority.json"),
+        &generation.portable,
+        false,
+    )?;
+    root.write_json(&path, &generation.portable, replace)
+}
 
 pub(crate) fn predecessor_seal_matches(
     config: &ValidatedConfig,
@@ -19,9 +55,16 @@ pub(crate) fn predecessor_seal_matches(
             return validate_stored_seal(&stored, expected);
         }
         let mut predecessor = expected.clone();
-        predecessor.format = DiskSealFormat::ManagedDirectory;
+        predecessor.format = match generation.intent.origin.predecessor() {
+            Some(hash) => DiskSealFormat::MembershipGeneration {
+                authority_hash: hash.to_owned(),
+            },
+            None => DiskSealFormat::ManagedDirectory,
+        };
         generation
-            .original
+            .intent
+            .origin
+            .config()
             .disks
             .iter()
             .find(|old| old.disk_id == disk.disk_id)
@@ -40,7 +83,9 @@ pub(crate) fn predecessor_seal_matches(
             != object_hash("membership-target", &generation.intent.target)?
         || pending.control_archive_root != generation.portable.archive_hash()?
         || generation
-            .original
+            .intent
+            .origin
+            .config()
             .disks
             .iter()
             .any(|old| old.disk_id == disk.disk_id)
@@ -54,10 +99,10 @@ pub(crate) fn predecessor_seal_matches(
 }
 
 impl Engine {
-    /// Complete the first pure metadata addition. No payload copies or placement
+    /// Complete the pending pure metadata addition. No payload copies or placement
     /// changes are claimed; original routes and every body remain in place.
     pub fn activate_pending_membership(&mut self) -> Result<OperationResult> {
-        if self.config.generation().is_some() {
+        if self.config.generation().is_some() && self.membership_fence.is_none() {
             if self.generation_activation_published() {
                 return self.complete_generation_activation();
             }
@@ -71,8 +116,9 @@ impl Engine {
             return self.complete_generation_activation();
         }
         self.require_no_commit_preparation()?;
+        let previous = self.config.generation_hash().map(str::to_owned);
         let discovered = discover(self.config.clone())?;
-        if discovered.generation().is_some() {
+        if discovered.generation_hash() != self.config.generation_hash() {
             let pending = self.pending_membership.take().ok_or_else(|| {
                 Error::new(
                     ErrorCode::RecoveryRequired,
@@ -80,7 +126,7 @@ impl Engine {
                 )
             })?;
             let result = self.resume_prepared_generation(discovered, &pending);
-            if result.is_err() && self.config.generation().is_none() {
+            if result.is_err() && self.config.generation_hash() == previous.as_deref() {
                 self.pending_membership = Some(pending);
             }
             return result;
@@ -93,7 +139,7 @@ impl Engine {
             )
         })?;
         let result = self.activate_pending(&mut pending);
-        if result.is_err() && self.config.generation().is_none() {
+        if result.is_err() && self.config.generation_hash() == previous.as_deref() {
             self.pending_membership = Some(pending);
         }
         result
@@ -170,29 +216,38 @@ impl Engine {
             &status.proposal_hash,
             false,
         )?;
-        let portable = PortableAuthority {
-            joint: store.portable(
+        let portable = PortableAuthority::new(
+            store.portable(
                 status
                     .certificate_hash
                     .as_deref()
                     .expect("invariant: complete certificate"),
                 &status.proposal_hash,
             )?,
-            archive: pending.source.generation_root(),
-        };
+            pending.source.generation_root(),
+            self.config
+                .generation()
+                .map(|generation| &generation.portable),
+        )?;
         let intent = portable.intent()?;
         let (base, history) = pending.source.generation_base(&intent)?;
-        let Origin::Genesis { config: original } = &intent.origin;
+        let original = portable.genesis_config()?;
+        let epoch = portable.epoch()?;
         let generation = Arc::new(Generation {
             hash: portable.hash()?,
             portable,
             intent: intent.clone(),
-            original: original.clone(),
+            original,
             history,
+            epoch,
             base: Arc::new(base),
         });
         generation.next_state()?;
-        PreparedMetadataObject::new(AUTHORITY_KIND, &generation.portable, MAX_METADATA)?;
+        PreparedMetadataObject::new(
+            "membership-generation-bundle",
+            &generation.portable,
+            MAX_METADATA,
+        )?;
         let config = intent
             .target
             .clone()
@@ -230,11 +285,7 @@ impl Engine {
                 .expect("invariant: activation owns every root")
                 .root;
             admission::verify_named_root(root)?;
-            root.write_json(
-                &disk.root.join(GENERATION_FILE),
-                &generation.portable,
-                false,
-            )?;
+            install_marker(root, disk, &generation)?;
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!(
                 "after_membership_activation_marker_{}",
@@ -341,11 +392,7 @@ impl Engine {
                 &generation.original,
                 false,
             )?;
-            handle.root.write_json(
-                &disk.root.join(GENERATION_FILE),
-                &generation.portable,
-                false,
-            )?;
+            install_marker(&handle.root, disk, &generation)?;
             handle
                 .root
                 .private_dir(&generation_directory(disk, &generation.hash))?;

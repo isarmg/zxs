@@ -13,7 +13,7 @@ pub(crate) mod activation;
 mod admission;
 mod joint;
 pub use joint::{MembershipJointDecisionStatus, MembershipJointVote};
-const CONTROL_ARCHIVE_DIRECTORY: &str = "control-archive";
+pub(super) const CONTROL_ARCHIVE_DIRECTORY: &str = "control-archive";
 const ENROLLMENT_KIND: &str = "membership-pending-member";
 const BOOTSTRAP_KIND: &str = "member-control-bootstrap";
 const PENDING_SEAL_KIND: &str = "membership-pending-seal";
@@ -300,7 +300,7 @@ impl Engine {
     }
 }
 
-fn member_directory(disk: &DiskConfig, transition: &str) -> PathBuf {
+pub(super) fn member_directory(disk: &DiskConfig, transition: &str) -> PathBuf {
     disk.root
         .join("metadata/membership-pending")
         .join(transition)
