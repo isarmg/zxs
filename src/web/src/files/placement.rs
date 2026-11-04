@@ -102,7 +102,7 @@ fn read_configuration(value: Value, draft: &Draft) -> Result<Configuration, api:
             .targets
             .iter()
             .any(|target| target.slot_id.is_empty() || target.root.is_empty())
-        || !unique_targets.contains(&configuration.primary_slot_id)
+        || name_policy::validate_slot(&configuration.primary_slot_id).is_err()
     {
         return Err(decode_error(
             <json_codec::Error as data_serialization::de::Error>::custom(
@@ -192,7 +192,12 @@ fn complete_load(
                 .placement
                 .as_mut()
                 .expect("invariant: matching placement draft remains current");
-            draft.selected = configuration.primary_slot_id.clone();
+            draft.selected = configuration
+                .targets
+                .iter()
+                .find(|target| target.slot_id == configuration.primary_slot_id)
+                .map(|target| target.slot_id.clone())
+                .unwrap_or_default();
             draft.configuration = Some(configuration);
             draft.loading = false;
         }),
@@ -226,8 +231,8 @@ fn request(draft: &Draft) -> Result<Value, String> {
         .any(|target| target.slot_id == draft.selected && target.unavailable_reason.is_none())
     {
         return Err(t(
-            "请选择能满足此范围备份份数和已设置前缀的主盘。",
-            "Choose a primary that supports this scope’s backup counts and configured prefixes.",
+            "请选择当前可写且能满足此范围备份份数和已设置前缀的主盘。",
+            "Choose a writable primary that supports this scope’s backup counts and configured prefixes.",
         ));
     }
     Ok(
@@ -277,6 +282,10 @@ fn options(configuration: &Configuration) -> Vec<SelectOption> {
                         None => String::new(),
                         Some(storage_contract::PrimaryPlacementBlock::InsufficientCopies) =>
                             format!(" · {}", t("备份链份数不足", "Insufficient backup copies")),
+                        Some(storage_contract::PrimaryPlacementBlock::RouteUnavailable) => format!(
+                            " · {}",
+                            t("存储链已下线或移除", "Storage route is offline or removed")
+                        ),
                         Some(storage_contract::PrimaryPlacementBlock::MissingBackupPrefixes) =>
                             format!(
                                 " · {}",
@@ -337,7 +346,10 @@ pub(crate) fn view(state: RwSignal<State>) -> impl IntoView {
                     draft.configuration.as_ref().map(|configuration|format!("{} / {}",configuration.repository_name,path)).unwrap_or_else(||path.into())
                 }).unwrap_or_default())}</p>
                 <p class="zxs-row">{t("只决定此目录及子目录后续新版本使用的主盘，不搬移已有版本，也不改变备份份数或备份前缀。子目录已有的独立主盘规则继续生效。", "This sets the primary for future versions in this folder and its subfolders. Existing versions stay where they are, and backup counts and prefixes stay unchanged. Independent child placement rules still apply.")}</p>
-                <p class="zxs-row">{t("目标备份盘缺少前缀时不能切换；此处不会自动改写备份设置。", "A target with missing backup prefixes cannot be selected. This editor does not change backup settings automatically.")}</p>
+                <p class="zxs-row">{t("存储链含已下线或移除的目录，或目标备份盘缺少前缀时不能切换；此处不会自动改写备份设置。", "A route with offline or removed storage directories, or missing backup prefixes, cannot be selected. This editor does not change backup settings automatically.")}</p>
+                <Show when=move ||state.with(|s|s.files.placement.as_ref().and_then(|draft|draft.configuration.as_ref()).is_some_and(|configuration|!configuration.targets.iter().any(|target|target.slot_id==configuration.primary_slot_id)))>
+                    <p class="zxs-row">{t("原主盘已移除，请选择当前已登记的主盘。旧版本和原规则保留，保存后只改变后续版本。", "The previous primary was removed. Choose a registered primary. Saving changes only future placement. Existing versions stay in place.")}</p>
+                </Show>
                 <p class="zxs-row">{t("规则按当前目录路径生效；目录改名或移动后，请在新位置重新检查主盘规则。", "The rule applies to the current folder path. After renaming or moving the folder, review placement at its new location.")}</p>
                 <Show when=move ||state.with(|s|s.files.placement.as_ref().is_some_and(|draft|draft.loading))><LoadingState/></Show>
                 <Show when=move ||state.with(|s|s.files.placement.as_ref().is_some_and(|draft|draft.configuration.as_ref().is_some_and(|configuration|configuration.inherited)))>

@@ -2,8 +2,10 @@
 //!
 //! This is admission and drain accounting, not a persisted offline decision. The
 //! coordinator must cover every consumer before it can advertise a disk as disabled.
-//! Control transitions are currently compiled only for tests/fault injection;
-//! normal builds retain real file ownership and fail-closed accounting.
+//! Production lifecycle coordinators can close admission and retain a proof of
+//! final resource closure. The proof alone grants no persistent exit authority.
+mod observation;
+pub use observation::{DiskObservationAccess, DiskObservationDirectory, DiskObservationMount};
 mod upload;
 pub(crate) use upload::{UploadFinish, UploadIo};
 mod journal;
@@ -60,9 +62,41 @@ struct DiskIoGate {
     state: Mutex<GateState>,
 }
 
-fn binding_gates() -> &'static Mutex<BTreeMap<DiskIoIdentity, Weak<DiskIoGate>>> {
-    static GATES: OnceLock<Mutex<BTreeMap<DiskIoIdentity, Weak<DiskIoGate>>>> = OnceLock::new();
-    GATES.get_or_init(|| Mutex::new(BTreeMap::new()))
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct LogicalDiskIdentity {
+    pool_id: String,
+    disk_id: String,
+    slot_id: String,
+    binding_generation: u64,
+}
+impl From<&DiskIoIdentity> for LogicalDiskIdentity {
+    fn from(value: &DiskIoIdentity) -> Self {
+        Self {
+            pool_id: value.pool_id.clone(),
+            disk_id: value.disk_id.clone(),
+            slot_id: value.slot_id.clone(),
+            binding_generation: value.binding_generation,
+        }
+    }
+}
+impl From<&crate::DiskRegistrationIdentity> for LogicalDiskIdentity {
+    fn from(value: &crate::DiskRegistrationIdentity) -> Self {
+        Self {
+            pool_id: value.pool_id.clone(),
+            disk_id: value.disk_id.clone(),
+            slot_id: value.slot_id.clone(),
+            binding_generation: value.binding_generation,
+        }
+    }
+}
+#[derive(Default)]
+struct BindingRegistry {
+    gates: BTreeMap<DiskIoIdentity, Weak<DiskIoGate>>,
+    stopped: BTreeMap<LogicalDiskIdentity, Weak<LogicalDiskStop>>,
+}
+fn binding_gates() -> &'static Mutex<BindingRegistry> {
+    static GATES: OnceLock<Mutex<BindingRegistry>> = OnceLock::new();
+    GATES.get_or_init(|| Mutex::new(BindingRegistry::default()))
 }
 
 impl Drop for DiskIoGate {
@@ -72,10 +106,11 @@ impl Drop for DiskIoGate {
                 // Another opener may have replaced an expired weak entry while
                 // this last owner's destructor was waiting for the registry.
                 if gates
+                    .gates
                     .get(&self.identity)
                     .is_some_and(|gate| std::ptr::eq(gate.as_ptr(), std::ptr::from_ref(self)))
                 {
-                    gates.remove(&self.identity);
+                    gates.gates.remove(&self.identity);
                 }
             }
             Err(_) => tracing::error!("disk I/O binding registry poisoned during cleanup"),
@@ -88,7 +123,6 @@ struct GateState {
     authority: ValidatedConfig,
     phase: Phase,
     ordinary: usize,
-    #[cfg(any(test, feature = "fault-injection"))]
     control: usize,
     failed: bool,
     resources: BTreeMap<usize, Weak<dyn RevocableResource>>,
@@ -103,19 +137,15 @@ struct GateState {
 #[derive(Debug)]
 enum Phase {
     Active,
-    #[cfg(any(test, feature = "fault-injection"))]
     Quiescing(Arc<()>),
-    #[cfg(any(test, feature = "fault-injection"))]
     Closing,
-    #[cfg(any(test, feature = "fault-injection"))]
-    Closed,
+    Closed(Arc<()>),
 }
 
 impl Phase {
     fn allows(&self, responsibility: Responsibility) -> bool {
         match responsibility {
             Responsibility::Ordinary => matches!(self, Self::Active),
-            #[cfg(any(test, feature = "fault-injection"))]
             Responsibility::Control => matches!(self, Self::Quiescing(_)),
         }
     }
@@ -180,7 +210,20 @@ impl DiskIoBinding {
                 "disk I/O binding registry poisoned",
             )
         })?;
-        let gate = match gates.get(&identity).and_then(Weak::upgrade) {
+        // The registry lock linearizes recovered exclusion with creation of
+        // every physical incarnation of the same logical binding. Do not
+        // upgrade the weak stop while locked: its last Drop takes this lock.
+        if gates
+            .stopped
+            .get(&LogicalDiskIdentity::from(&identity))
+            .is_some_and(|stop| stop.strong_count() != 0)
+        {
+            return Err(Error::new(
+                ErrorCode::DiskUnavailable,
+                "recovered disk stop forbids a new I/O admission domain",
+            ));
+        }
+        let gate = match gates.gates.get(&identity).and_then(Weak::upgrade) {
             Some(gate) => gate,
             None => {
                 let gate = Arc::new(DiskIoGate {
@@ -189,7 +232,6 @@ impl DiskIoBinding {
                         authority: authority.clone(),
                         phase: Phase::Active,
                         ordinary: 0,
-                        #[cfg(any(test, feature = "fault-injection"))]
                         control: 0,
                         failed: false,
                         resources: BTreeMap::new(),
@@ -199,7 +241,7 @@ impl DiskIoBinding {
                         active_fence: None,
                     }),
                 });
-                gates.insert(identity, Arc::downgrade(&gate));
+                gates.gates.insert(identity, Arc::downgrade(&gate));
                 gate
             }
         };
@@ -371,14 +413,39 @@ impl DiskIoBinding {
             quiescing: !matches!(state.phase, Phase::Active),
             ordinary: state.ordinary,
             control: state.control,
-            resources_closed: matches!(state.phase, Phase::Closed),
+            resources_closed: matches!(state.phase, Phase::Closed(_)),
         })
+    }
+
+    /// In-memory evidence of actual final descriptor and writer-lock closure.
+    /// Holding it prevents a new admission domain for this physical binding.
+    /// It does not authorize changing durable registration or configured quorum.
+    pub(crate) fn closed_proof(&self) -> Result<ClosedDiskIo> {
+        let state = self.gate.state()?;
+        if !same_authority(&state.authority, &self.authority) {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "stale disk I/O authority cannot certify final closure",
+            ));
+        }
+        match &state.phase {
+            Phase::Closed(transition) if state.ordinary == 0 && state.control == 0 => {
+                Ok(ClosedDiskIo {
+                    gate: Arc::clone(&self.gate),
+                    transition: Arc::clone(transition),
+                })
+            }
+            _ => Err(Error::new(
+                ErrorCode::DiskUnavailable,
+                "disk I/O closure is waiting for operation and resource cleanup",
+            )),
+        }
     }
 
     /// Close normal admission and reserve exactly one control responsibility in
     /// the same critical section. Repeated requests never mint another permit.
-    /// No ordinary public Engine/API operation currently calls this primitive.
-    #[cfg(any(test, feature = "fault-injection"))]
+    /// The caller persists the stop barrier before invoking this irreversible
+    /// runtime gate; this method performs no membership or registry publication.
     pub(crate) fn begin_quiesce(&self) -> Result<Option<DiskIoTransition>> {
         let mut state = self.gate.state()?;
         if !same_authority(&state.authority, &self.authority) {
@@ -398,9 +465,11 @@ impl DiskIoBinding {
         }
         let resources = std::mem::take(&mut state.resources);
         let controller = DiskIoTransition {
+            #[cfg(any(test, feature = "fault-injection"))]
             gate: Arc::clone(&self.gate),
+            #[cfg(any(test, feature = "fault-injection"))]
             transition,
-            control: Some(self.lease(Responsibility::Control)),
+            _control: Some(self.lease(Responsibility::Control)),
         };
         // Never acquire a resource mutex while holding the gate. Resource I/O
         // holds its own mutex and then checks the gate, in that fixed order.
@@ -412,6 +481,126 @@ impl DiskIoBinding {
             resource.revoke();
         }
         Ok(Some(controller))
+    }
+}
+
+/// Non-forgeable capability for one completely closed runtime domain. No
+/// constructor, descriptor or reactivation operation is exported.
+#[derive(Clone, Debug)]
+pub(crate) struct ClosedDiskIo {
+    gate: Arc<DiskIoGate>,
+    transition: Arc<()>,
+}
+impl ClosedDiskIo {
+    pub(crate) fn identity(&self) -> &DiskIoIdentity {
+        &self.gate.identity
+    }
+
+    pub(super) fn verify_binding(&self, binding: &DiskIoBinding) -> Result<()> {
+        if !Arc::ptr_eq(&self.gate, &binding.gate) {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "closure proof belongs to another disk I/O domain",
+            ));
+        }
+        let state = self.gate.state()?;
+        if !matches!(&state.phase, Phase::Closed(id) if Arc::ptr_eq(id, &self.transition)) {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "closure proof no longer names the final disk transition",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct LogicalDiskStop {
+    identity: crate::DiskRegistrationIdentity,
+    key: LogicalDiskIdentity,
+}
+impl Drop for LogicalDiskStop {
+    fn drop(&mut self) {
+        match binding_gates().lock() {
+            Ok(mut registry) => {
+                if registry
+                    .stopped
+                    .get(&self.key)
+                    .is_some_and(|stop| std::ptr::eq(stop.as_ptr(), std::ptr::from_ref(self)))
+                {
+                    registry.stopped.remove(&self.key);
+                }
+            }
+            Err(_) => tracing::error!("disk recovered-stop registry poisoned during cleanup"),
+        }
+    }
+}
+
+/// A restricted startup's separately authenticated stop plus process-wide
+/// absence of a live logical I/O domain. Retain for the Engine's entire life,
+/// including after its pending exit is published. This performs no target I/O.
+#[derive(Debug)]
+pub(crate) struct RecoveredDiskIo {
+    stop: Arc<LogicalDiskStop>,
+    _domains: Vec<Arc<DiskIoGate>>,
+}
+impl RecoveredDiskIo {
+    pub(crate) fn admit(stop: &crate::engine::RecoveredDiskStop) -> Result<Self> {
+        Self::admit_identity(stop.identity())
+    }
+    pub(crate) fn identity(&self) -> &crate::DiskRegistrationIdentity {
+        &self.stop.identity
+    }
+    fn admit_identity(identity: &crate::DiskRegistrationIdentity) -> Result<Self> {
+        let key = LogicalDiskIdentity::from(identity);
+        let mut registry = binding_gates().lock().map_err(|_| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "disk I/O binding registry poisoned",
+            )
+        })?;
+        // Keep upgraded gates alive until AFTER unlocking even on failure.
+        // Their final destructor also owns this registry lock.
+        let domains: Vec<_> = registry
+            .gates
+            .iter()
+            .filter(|(physical, _)| LogicalDiskIdentity::from(*physical) == key)
+            .filter_map(|(_, gate)| gate.upgrade())
+            .collect();
+        let admitted = (|| {
+            for gate in &domains {
+                let state = gate.state()?;
+                if !matches!(state.phase, Phase::Closed(_))
+                    || state.ordinary != 0
+                    || state.control != 0
+                {
+                    return Err(Error::new(
+                        ErrorCode::DiskUnavailable,
+                        "recovered disk stop is waiting for an earlier logical I/O domain to close",
+                    ));
+                }
+            }
+            if let Some(existing) = registry.stopped.get(&key).and_then(Weak::upgrade) {
+                return Ok(existing);
+            }
+            let stop = Arc::new(LogicalDiskStop {
+                identity: identity.clone(),
+                key: key.clone(),
+            });
+            registry.stopped.insert(key, Arc::downgrade(&stop));
+            Ok(stop)
+        })();
+        drop(registry);
+        match admitted {
+            Ok(stop) => Ok(Self {
+                stop,
+                _domains: domains,
+            }),
+            Err(error) => {
+                drop(domains);
+                Err(error)
+            }
+        }
     }
 }
 
@@ -427,7 +616,6 @@ fn same_authority(left: &ValidatedConfig, right: &ValidatedConfig) -> bool {
 #[derive(Clone, Copy, Debug)]
 enum Responsibility {
     Ordinary,
-    #[cfg(any(test, feature = "fault-injection"))]
     Control,
 }
 
@@ -449,7 +637,6 @@ impl Drop for LeaseOwner {
         };
         let count = match self.responsibility {
             Responsibility::Ordinary => &mut state.ordinary,
-            #[cfg(any(test, feature = "fault-injection"))]
             Responsibility::Control => &mut state.control,
         };
         if *count == 0 {
@@ -459,27 +646,29 @@ impl Drop for LeaseOwner {
             *count -= 1;
         }
         let idle = state.ordinary == 0;
-        #[cfg(any(test, feature = "fault-injection"))]
         let idle = idle && state.control == 0;
         let released = if idle && !state.failed {
             state.active_fence.take()
         } else {
             None
         };
-        #[cfg(any(test, feature = "fault-injection"))]
         let terminal = if idle && !state.failed && matches!(state.phase, Phase::Quiescing(_)) {
+            let transition = match &state.phase {
+                Phase::Quiescing(id) => Arc::clone(id),
+                _ => unreachable!("invariant: terminal close starts from quiescing"),
+            };
             state.phase = Phase::Closing;
             Some((
                 std::mem::take(&mut state.roots),
                 state.fence_descriptor.clone(),
+                transition,
             ))
         } else {
             None
         };
         // No destructor, filesystem work or resource lock under the gate lock.
         drop(state);
-        #[cfg(any(test, feature = "fault-injection"))]
-        if let Some((roots, fence)) = terminal {
+        if let Some((roots, fence, transition)) = terminal {
             for root in roots.into_values() {
                 root.close();
             }
@@ -487,7 +676,7 @@ impl Drop for LeaseOwner {
                 fence.close();
             }
             match self.binding.gate.state.lock() {
-                Ok(mut state) => state.phase = Phase::Closed,
+                Ok(mut state) => state.phase = Phase::Closed(transition),
                 Err(_) => tracing::error!("disk final close found poisoned admission"),
             }
         }
@@ -549,7 +738,6 @@ impl DiskIoLease {
                         false
                     }
                 }
-                #[cfg(any(test, feature = "fault-injection"))]
                 Responsibility::Control => matches!(state.phase, Phase::Quiescing(_)),
             },
             Err(_) => false,
@@ -575,11 +763,12 @@ impl DiskIoLease {
 
 /// This exact controller has one control lease, not a switch that permits new
 /// work indefinitely. Dropping an unused controller retires its reserved lease.
-#[cfg(any(test, feature = "fault-injection"))]
 pub(crate) struct DiskIoTransition {
+    #[cfg(any(test, feature = "fault-injection"))]
     gate: Arc<DiskIoGate>,
+    #[cfg(any(test, feature = "fault-injection"))]
     transition: Arc<()>,
-    control: Option<DiskIoLease>,
+    _control: Option<DiskIoLease>,
 }
 
 #[cfg(any(test, feature = "fault-injection"))]
@@ -626,7 +815,7 @@ impl DiskIoTransition {
     }
 
     fn consume_control(&mut self) -> Result<DiskIoLease> {
-        self.control.take().ok_or_else(|| {
+        self._control.take().ok_or_else(|| {
             Error::new(
                 ErrorCode::ConfigConflict,
                 "control lease has already been consumed",

@@ -272,6 +272,7 @@ fn narrow_window_fields_preserve_all_collection_projections() {
         .projected_for(&broad.state.0, &state.0);
     let narrow = MetadataView {
         state,
+        current_namespaces: crate::engine::NamespaceReadView::Initial,
         history_window_roots,
         history_action_max_entries: broad.history_action_max_entries,
     };

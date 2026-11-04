@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "retained_metadata_tests.rs"]
+mod retained_metadata;
+
 #[test]
 fn preparation_conflicts_retain_retryable_contract() {
     for code in [

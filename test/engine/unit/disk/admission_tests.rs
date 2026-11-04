@@ -21,10 +21,10 @@ fn typed_parent_io_handles_root_children_and_missing_nested_directories() {
         let mut bytes = Vec::new();
         source.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, b"owned");
-        assert!(root.open_optional_regular(&path).unwrap().is_some());
+        assert!(root.open_optional_read_regular(&path).unwrap().is_some());
         assert!(root.optional_metadata(&path).unwrap().unwrap().is_file());
         root.remove_file_synced(&path).unwrap();
-        assert!(root.open_optional_regular(&path).unwrap().is_none());
+        assert!(root.open_optional_read_regular(&path).unwrap().is_none());
     }
     assert_eq!(
         fs::metadata(temporary.path().join("missing/nested"))
@@ -51,11 +51,11 @@ fn immutable_existing_bytes_keep_collision_and_leaf_absence_semantics() {
     }
     let absent_parent = temporary.path().join("absent");
     let error = root
-        .open_optional_regular(&absent_parent.join("object"))
+        .open_optional_read_regular(&absent_parent.join("object"))
         .unwrap_err();
     assert!(matches!(error, Error::Filesystem(_)));
     assert!(
-        root.open_optional_regular(&temporary.path().join("absent-leaf"))
+        root.open_optional_read_regular(&temporary.path().join("absent-leaf"))
             .unwrap()
             .is_none()
     );

@@ -19,14 +19,19 @@ mod file_stamp;
 mod historical_save;
 pub use engine::{
     DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
-    DiskRegistrationIdentity, DiskRegistryCommitment, FrozenDeregistrationBoundary,
-    HistoricalDiskDefinition, ImpactPage, ImpactPageSize, NamespaceDeregistrationPreview,
-    NamespaceOccurrenceImpact, NamespaceOccurrenceScan, OccurrenceVisibility, PreparedDiskRegistry,
-    RegisteredDisk, RegisteredHolders, RegistrationEffect, RegistrationMode, RegistryExitEffect,
-    RegistryExitRequest, TargetPlacementRole, VerifiedDiskRegistry, VerifiedRegistryCandidate,
-    VerifiedRegistryPublication, VersionDeregistrationImpact, VersionImpactScan,
+    DirectoryNamespaceView, DiskExitPhase, DiskExitStatus, DiskRegistrationIdentity,
+    DiskRegistryCommitment, FrozenDeregistrationBoundary, HistoricalDiskDefinition, ImpactPage,
+    ImpactPageSize, NamespaceDeregistrationPreview, NamespaceEntries, NamespaceOccurrenceImpact,
+    NamespaceOccurrenceScan, NamespaceSnapshot, NamespaceSnapshotWitness, OccurrenceVisibility,
+    PreparedDiskRegistry, RegisteredDisk, RegisteredHolders, RegistrationEffect, RegistrationMode,
+    RegistryExitEffect, RegistryExitRequest, TargetPlacementRole, VerifiedDiskRegistry,
+    VerifiedRegistryCandidate, VerifiedRegistryPublication, VersionDeregistrationImpact,
+    VersionImpactScan,
 };
-pub use engine::{DirectoryHistoryRead, PreparedWorkspaceCommit, WorkspaceCommitPreparation};
+pub use engine::{
+    DirectoryHistoryRead, InitialActivationProbeGuard, PreparedWorkspaceCommit,
+    WorkspaceCommitPreparation,
+};
 mod history_package;
 mod journal;
 #[cfg(feature = "fault-injection")]
@@ -46,7 +51,10 @@ pub use business::{
     validate_branch_name,
 };
 pub use degraded_recovery::RecoveryPlan;
-pub use disk::{DiskFile, offline_check, offline_export};
+pub use disk::{
+    DiskFile, DiskObservationAccess, DiskObservationDirectory, DiskObservationMount, offline_check,
+    offline_export,
+};
 #[cfg(feature = "fault-injection")]
 pub use engine::DiskQuiesceFault;
 pub use engine::{

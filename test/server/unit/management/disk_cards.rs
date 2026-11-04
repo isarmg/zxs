@@ -442,3 +442,40 @@ fn note_survives_management_and_engine_reopen_without_entering_the_data_seal() {
     assert_eq!(card.note, "重启后保留\nlocal system note");
     assert_eq!(fs::read(disk_root.join("disk.json")).unwrap(), seal);
 }
+
+#[test]
+fn stopped_production_directory_keeps_unknown_card_without_reopening_target() {
+    let fixture = fixture_for_mode(storage_contract::Mode::Production);
+    let backend = fixture.backend.inner.backend().unwrap();
+    let mut stop = backend
+        .with_disk_registration(&fixture.identity, "P01", |_, engine| {
+            engine
+                .inject_disk_quiesce("P01")
+                .map_err(ApiError::invalid_source)
+        })
+        .unwrap();
+    stop.release_control();
+    assert!(stop.is_drained().unwrap());
+    fs::rename(
+        &fixture.disk_root,
+        fixture._root.path().join("stopped-disk"),
+    )
+    .unwrap();
+    let details = fixture
+        .backend
+        .disk_details(&fixture.identity, "P01")
+        .unwrap();
+    assert_eq!(details.disk_id, fixture.disk_id);
+    assert_eq!(details.root_path, fixture.disk_root.to_str().unwrap());
+    assert_eq!(details.mapping, DiskMapping::Unknown);
+    assert_eq!(
+        details.health,
+        DiskHealth::Unavailable {
+            reason: DiskHealthUnavailable::MappingUnknown,
+        }
+    );
+    assert_eq!(details.capacity_bytes, None);
+    assert_eq!(details.device_path, None);
+    assert_eq!(details.mount_path, None);
+    assert!(stop.is_drained().unwrap());
+}

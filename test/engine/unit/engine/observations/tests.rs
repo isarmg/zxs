@@ -280,6 +280,8 @@ fn metadata_probe_observes_current_identity_without_engine_or_capacity_accountin
     let error = probe.verify().unwrap_err();
     assert!(std::error::Error::source(&error).is_some());
     std::fs::create_dir(member).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(member, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(probe.verify().is_err());
     // Even a copied, otherwise valid seal must not bless a replacement root.
     std::fs::copy(removed.join("disk.json"), member.join("disk.json")).unwrap();
@@ -357,7 +359,12 @@ fn zero_capacity_is_a_successful_sample_not_an_unavailable_status() {
     let mut observed = engine.prepare_disk_observation().sample().pop().unwrap();
     // Linux nsfs reports real zero capacity, not an observation failure.
     let namespace = std::fs::File::open("/proc/self/ns/mnt").unwrap();
-    observed.capacity = Ok(filesystem_capacity(&namespace).unwrap());
+    let stat = rustix::fs::fstatvfs(&namespace).unwrap();
+    observed.capacity = Ok((
+        stat.f_blocks * stat.f_frsize,
+        stat.f_bavail * stat.f_frsize,
+        (stat.f_blocks - stat.f_bfree) * stat.f_frsize,
+    ));
     assert_eq!(observed.capacity.as_ref().unwrap(), &(0, 0, 0));
     let status = observed.into_status().unwrap();
     assert!(status.online);
@@ -492,4 +499,265 @@ fn disk_observation_directory_rejects_reused_seal_and_missing_seal_without_fenci
     );
     assert_eq!(std::fs::read(disk_root.join("disk.json")).unwrap(), seal);
     assert!(!engine.is_read_only());
+}
+
+fn observation_fixture() -> (tempfile::TempDir, Engine) {
+    let root = tempfile::tempdir().unwrap();
+    let engine = Engine::initialize(
+        &root.path().join("system"),
+        Config::development([root.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
+    (root, engine)
+}
+
+fn observation_descriptors(path: &std::path::Path) -> usize {
+    std::fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|entry| match std::fs::read_link(entry) {
+            Ok(target) => target == path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => panic!("cannot inspect observation descriptor: {error}"),
+        })
+        .count()
+}
+
+#[test]
+fn stopped_observation_snapshots_refuse_missing_target_before_probe_and_keep_epoch() {
+    let (root, engine) = observation_fixture();
+    let plan = engine.prepare_disk_observation();
+    let probe = engine.prepare_metadata_member_probe();
+    let epoch = engine.metadata_integrity.capture();
+    let disk = &engine.config.disks[0];
+    let binding = engine
+        .disk_resources
+        .get(disk)
+        .unwrap()
+        .root
+        .io_binding()
+        .unwrap();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.status().unwrap().drained());
+    std::fs::rename(&disk.root, root.path().join("removed")).unwrap();
+    let observed = plan.sample().pop().unwrap();
+    assert!(!observed.status.online);
+    let failure = observed.capacity.unwrap_err();
+    assert_eq!(failure.stage, DiskObservationStage::Seal);
+    // Opening/statting the missing name would produce IoError. Admission wins
+    // before the first target operation on each captured and current entry point.
+    assert_eq!(failure.source.code(), ErrorCode::DiskUnavailable);
+    assert_eq!(
+        probe.verify().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert_eq!(
+        engine.disk_capacity("P01").unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert_eq!(
+        engine
+            .open_disk_observation_directory("P01")
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert!(epoch.matches(&engine.metadata_integrity));
+    assert!(binding.status().unwrap().drained());
+}
+
+#[test]
+fn idle_observation_and_queued_worker_clones_close_without_caller_poll() {
+    let (_root, engine) = observation_fixture();
+    let disk = &engine.config.disks[0];
+    let binding = engine
+        .disk_resources
+        .get(disk)
+        .unwrap()
+        .root
+        .io_binding()
+        .unwrap();
+    let baseline = binding.status().unwrap().ordinary;
+    let observed = engine.open_disk_observation_directory("P01").unwrap();
+    let queued = observed.try_clone().unwrap();
+    assert!(observation_descriptors(&disk.root) >= 3);
+    assert_eq!(binding.status().unwrap().ordinary, baseline + 1);
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.status().unwrap().drained());
+    assert_eq!(observation_descriptors(&disk.root), 0);
+    assert_eq!(
+        observed.metadata().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert_eq!(
+        queued.try_clone().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    let entered = std::cell::Cell::new(false);
+    assert_eq!(
+        queued
+            .observe(|_| {
+                entered.set(true);
+                Ok(())
+            })
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert!(!entered.get());
+}
+
+#[test]
+fn observation_worker_tail_stays_counted_after_receiver_and_caller_are_gone() {
+    use std::sync::{Arc, Barrier, mpsc};
+    let (_root, engine) = observation_fixture();
+    let observed = engine.open_disk_observation_directory("P01").unwrap();
+    let worker_directory = observed.try_clone().unwrap();
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let (send, receive) = mpsc::sync_channel(1);
+    let worker_entered = Arc::clone(&entered);
+    let worker_release = Arc::clone(&release);
+    let worker = std::thread::spawn(move || {
+        let result = worker_directory.observe(|access| {
+            access.metadata()?;
+            worker_entered.wait();
+            worker_release.wait();
+            assert_eq!(
+                access.metadata().unwrap_err().code(),
+                ErrorCode::DiskUnavailable
+            );
+            // This controlled tail models the synchronous cleanup of owned
+            // device files / a child process, not a blocked physical ioctl.
+            Ok(())
+        });
+        assert_eq!(result.unwrap_err().code(), ErrorCode::DiskUnavailable);
+        assert!(send.send(()).is_err());
+        worker_directory
+    });
+    entered.wait();
+    drop(receive);
+    drop(observed);
+    let disk = &engine.config.disks[0];
+    let binding = engine
+        .disk_resources
+        .get(disk)
+        .unwrap()
+        .root
+        .io_binding()
+        .unwrap();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert_eq!(binding.status().unwrap().ordinary, 1);
+    assert!(!binding.status().unwrap().drained());
+    assert!(binding.closed_proof().is_err());
+    assert!(observation_descriptors(&disk.root) > 0);
+    release.wait();
+    let completed = worker.join().unwrap();
+    assert!(binding.status().unwrap().drained());
+    binding.closed_proof().unwrap();
+    assert_eq!(observation_descriptors(&disk.root), 0);
+    assert_eq!(
+        completed.metadata().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+}
+
+#[test]
+fn disabled_observation_row_keeps_identity_and_unknown_capacity_without_faulting() {
+    let (root, engine) = observation_fixture();
+    let mut plan = engine.prepare_disk_observation();
+    let epoch = engine.metadata_integrity.capture();
+    plan.disks[0].registration_mode = RegistrationMode::Disabled;
+    std::fs::rename(&engine.config.disks[0].root, root.path().join("removed")).unwrap();
+    let row = plan.sample().pop().unwrap();
+    assert_eq!(row.status.disk_id, engine.config.disks[0].disk_id);
+    assert!(!row.status.online);
+    assert_eq!(
+        row.capacity.unwrap_err().source.code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert!(epoch.matches(&engine.metadata_integrity));
+}
+
+#[test]
+fn published_exit_observations_use_current_rows_and_voters_without_reopening_target() {
+    for action in [
+        MembershipExitAction::PlannedOffline,
+        MembershipExitAction::Deregister,
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let config =
+            Config::development((0..3).map(|n| root.path().join(format!("disk-{n}")))).unwrap();
+        let mut engine = Engine::initialize(&root.path().join("system"), config.clone()).unwrap();
+        engine
+            .create_repository(
+                &RepositoryName::parse("observed-exit").unwrap(),
+                "P01",
+                1,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        let old_plan = engine.prepare_disk_observation();
+        let old_probe = engine.prepare_metadata_member_probe();
+        let target = &config.disks[0];
+        engine
+            .begin_disk_exit(
+                &target.disk_id,
+                action,
+                "admin",
+                OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        let archive = engine.build_managed_membership_control_archive().unwrap();
+        engine
+            .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
+            .unwrap();
+        engine.resume_membership_joint_decision().unwrap();
+        engine.activate_pending_disk_exit().unwrap();
+        std::fs::rename(&target.root, root.path().join("retired-target")).unwrap();
+        let rows = engine.prepare_disk_observation().sample();
+        let row = rows.iter().find(|row| row.status.disk_id == target.disk_id);
+        match action {
+            MembershipExitAction::PlannedOffline => {
+                assert_eq!(rows.len(), 3);
+                let row = row.unwrap();
+                assert!(!row.status.online);
+                assert!(!row.status.metadata_member);
+                assert_eq!(
+                    row.capacity.as_ref().unwrap_err().source.code(),
+                    ErrorCode::DiskUnavailable
+                );
+                assert_eq!(
+                    engine.disk_capacity("P01").unwrap_err().code(),
+                    ErrorCode::DiskUnavailable
+                );
+            }
+            MembershipExitAction::Deregister => {
+                assert_eq!(rows.len(), 2);
+                assert!(row.is_none());
+                assert_eq!(
+                    engine.disk_capacity("P01").unwrap_err().code(),
+                    ErrorCode::SlotNotFound
+                );
+            }
+        }
+        let probe = engine.prepare_metadata_member_probe();
+        assert_eq!(probe.member_count(), 2);
+        probe.verify().unwrap();
+        let stale = old_plan
+            .sample()
+            .into_iter()
+            .find(|row| row.status.disk_id == target.disk_id)
+            .unwrap();
+        assert!(!stale.status.online);
+        assert_eq!(
+            stale.capacity.unwrap_err().source.code(),
+            ErrorCode::DiskUnavailable
+        );
+        assert_eq!(
+            old_probe.verify().unwrap_err().code(),
+            ErrorCode::DiskUnavailable
+        );
+    }
 }

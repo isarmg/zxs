@@ -1056,6 +1056,10 @@ fn prepare_names_inner(
                 })?;
             let held = match resources.available(disk) {
                 Some(held) => held,
+                // Disabled/deregistered placements remain historical facts. Their
+                // derived cache is not an obligation to reopen an excluded root.
+                // Missing ordinary resources still fail new publication below.
+                None if config.excludes_io_disk(&disk.disk_id) => continue,
                 None if historical => continue,
                 None => resources.get(disk)?,
             };

@@ -19,6 +19,7 @@ pub struct PlacementConfigurationSnapshot {
     pub scope: PlacementScope,
     pub rule_id: Option<String>,
     pub generation: u64,
+    /// The effective path rule may still name a detached slot absent from targets.
     pub primary_slot_id: String,
     pub inherited: bool,
     pub required_copies: u32,
@@ -38,4 +39,6 @@ pub struct PlacementConfigurationSnapshot {
 pub enum PrimaryPlacementBlock {
     InsufficientCopies,
     MissingBackupPrefixes,
+    /// A required registration is disabled or detached, not a health probe.
+    RouteUnavailable,
 }

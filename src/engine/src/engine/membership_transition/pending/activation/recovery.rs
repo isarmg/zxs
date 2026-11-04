@@ -1,11 +1,8 @@
 //! Read-only generation discovery/admission and explicit crash resume.
 use super::*;
 
-#[allow(
-    dead_code,
-    reason = "restricted read-only discovery awaits Engine startup integration"
-)]
 mod restricted;
+pub(crate) use restricted::{discover_startup, discover_startup_in_store};
 
 pub(crate) fn latest_restore_config(
     configs: &BTreeMap<String, (ValidatedConfig, usize)>,
@@ -73,7 +70,7 @@ fn discover_unrestricted_legacy(config: ValidatedConfig) -> Result<ValidatedConf
     let mut selected = None;
     let mut damaged_marker = None;
     let mut authenticated_markers = BTreeMap::new();
-    let mut pending = config.disks.clone();
+    let mut pending = config.io_disks().cloned().collect::<Vec<_>>();
     let mut visited = BTreeSet::new();
     while !pending.is_empty() {
         let mut held = Vec::with_capacity(pending.len());
@@ -220,19 +217,25 @@ fn marker_at(
     disk: &DiskConfig,
     projected: &ValidatedConfig,
 ) -> Result<Option<PortableAuthority>> {
-    let directory = disk.root.join("metadata/pool-membership");
-    let file = if root
-        .optional_metadata(&disk.root.join("metadata"))?
-        .is_some()
+    marker_path_at(root, &disk.root, projected)
+}
+
+fn marker_path_at(
+    root: &DiskRoot,
+    path: &Path,
+    projected: &ValidatedConfig,
+) -> Result<Option<PortableAuthority>> {
+    let directory = path.join("metadata/pool-membership");
+    let file = if root.optional_metadata(&path.join("metadata"))?.is_some()
         && root.optional_metadata(&directory)?.is_some()
     {
         root.directory(&directory)?;
-        root.open_optional_read_regular(&disk.root.join(GENERATION_FILE))?
+        root.open_optional_read_regular(&path.join(GENERATION_FILE))?
     } else {
         None
     };
     let Some(file) = file else {
-        if let Some(file) = root.open_optional_read_regular(&disk.root.join("disk.json"))? {
+        if let Some(file) = root.open_optional_read_regular(&path.join("disk.json"))? {
             let bytes = read_file_bytes(file, MAX_METADATA)?;
             let value: json_codec::Value = decode_strict(&bytes)?;
             if value.get("format").and_then(json_codec::Value::as_str) == Some("membership-pending")
@@ -350,7 +353,8 @@ fn admit_discovered(
         epoch,
         base: Arc::new(state),
     });
-    target.with_generation(generation)
+    let portable = generation.portable.clone();
+    portable.restrict_io(target.with_generation(generation)?)
 }
 
 /// A held root may still have its exact predecessor seal during interrupted
@@ -384,7 +388,39 @@ pub(crate) fn restore_anchor(
             }
         })
         .collect();
-    admit_discovered(portable, &target.with_disk_roots(paths)?)
+    let target = target.with_disk_roots(paths)?;
+    let intent = portable.intent()?;
+    let transition = object_hash(INTENT_KIND, &intent)?;
+    let disk = target
+        .metadata_members()
+        .find(|disk| disk.disk_id == seal.disk_id)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorCode::ConfigConflict,
+                "explicit restore root is not an authenticated current metadata member",
+            )
+        })?;
+    // Only this explicitly supplied retained root is an I/O authority here.
+    // The saved configuration's other addresses are never recovery probes.
+    let (state, history) = read_generation_base(
+        root.private_child(&member_directory(disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY))?,
+        &portable.archive_hash()?,
+        &transition,
+        &intent,
+    )?;
+    portable.verify_registry_source(&state)?;
+    let generation = Arc::new(Generation {
+        hash: portable.hash()?,
+        workspace_roots: portable.workspace_root_aliases()?,
+        original: portable.genesis_config()?,
+        epoch: portable.epoch()?,
+        portable,
+        intent,
+        history,
+        base: Arc::new(state),
+    });
+    let portable = generation.portable.clone();
+    portable.restrict_io(target.with_generation(generation)?)
 }
 impl ValidatedConfig {
     pub(crate) fn verify_root_membership(&self, root: &DiskRoot, disk: &DiskConfig) -> Result<()> {
@@ -420,6 +456,9 @@ impl Engine {
         let Some(generation) = self.config.generation().cloned() else {
             return Ok(Vec::new());
         };
+        generation
+            .portable
+            .verify_registry_source(&generation.base)?;
         let mut warnings = Vec::new();
         let mut rejected = std::collections::BTreeSet::new();
         for disk in self.config.metadata_members() {
@@ -462,6 +501,9 @@ impl Engine {
                         &joint.proposal_hash,
                         disk,
                     )?;
+                }
+                if generation.portable.exit_registry().is_some() {
+                    require_abort_journal(&handle.root, disk, &generation.hash)?;
                 }
                 read_generation_base(
                     parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?,
@@ -539,7 +581,7 @@ impl Engine {
 }
 
 fn require_abort_journal(root: &DiskRoot, disk: &DiskConfig, hash: &str) -> Result<()> {
-    // Abort installs this durable empty leaf before publishing its marker.
+    // Abort and Exit install this durable empty leaf before their active marker.
     // A healthy frozen archive cannot recreate a lost current-generation log.
     root.open_read_regular(&generation_directory(disk, hash).join("journal.bin"))
         .map(|_| ())
@@ -547,7 +589,7 @@ fn require_abort_journal(root: &DiskRoot, disk: &DiskConfig, hash: &str) -> Resu
             source.context(
                 ErrorCode::RecoveryRequired,
                 format!(
-                    "Abort generation journal is unavailable for {}",
+                    "control generation journal is unavailable for {}",
                     disk.disk_id
                 ),
             )
@@ -569,20 +611,18 @@ fn activation_namespace_present(
         && root
             .optional_metadata(&generation_directory(disk, &generation.hash))?
             .is_some()
-    {
-        if !generation.portable.is_abort()
+        && (!(generation.portable.is_abort() || generation.portable.exit_registry().is_some())
             || root
                 .open_optional_read_regular(
                     &generation_directory(disk, &generation.hash).join("journal.bin"),
                 )?
-                .is_some()
-        {
-            return Ok(true);
-        }
-        // An unmarked staging directory may precede the first durable leaf.
-        // A current marker or active seal below makes absence corruption, not
-        // permission to reconstruct an empty journal from the frozen base.
+                .is_some())
+    {
+        return Ok(true);
     }
+    // An unmarked staging directory may precede the first durable leaf.
+    // A current marker or active seal below makes absence corruption, not
+    // permission to reconstruct an empty journal from the frozen base.
     let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
     let expected = identity_at(config, disk, &root.directory(root.path())?)?;
     predecessor_seal_matches(config, disk, root, &bytes, &expected)?;
@@ -626,10 +666,8 @@ impl Engine {
     /// Explicit retry after a crash during prepared markers or seal promotion.
     /// Routine open remains read-only at this boundary and never adopts pending roots.
     pub fn resume_membership_activation(root: &Path) -> Result<Self> {
-        let root = existing_private_dir(root)?.path().to_path_buf();
-        let config = discover(ValidatedConfig::try_from(read_json::<Config>(
-            &root.join("config.json"),
-        )?)?)?;
+        let (root, projected) = Self::recovery_projection(root, None)?;
+        let (config, bootstrap) = discover_startup(&root, projected)?;
         if config.generation().is_none() {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -664,11 +702,14 @@ impl Engine {
             }
         }
         let mut engine = Self::prepare_recovery_resources(root, config, resources)?;
+        drop(bootstrap);
+        engine.admit_disk_exit_io_exclusion()?;
         engine.promote_generation_resources()?;
         let mut prepared = engine.prepare_recovery()?;
         engine.preflight_workspace_receipts(&mut prepared)?;
         engine.recover_prepared(crate::engine::RecoveryMode::CompletePending, prepared)?;
         engine.complete_generation_activation()?;
+        engine.restore_current_disk_exit()?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)

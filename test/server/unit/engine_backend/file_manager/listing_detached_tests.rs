@@ -438,11 +438,10 @@ fn primary_scan_preserves_virtual_root_recursive_counts_unicode_and_directory_ch
 
 #[tokio::test]
 async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_worker_exits() {
-    let (root, backend, auth, _token, identity, _repo) = fixture();
-    // This record is outside the resolved namespace. Its lifetime demonstrates
-    // that the required commits table survives, not just the explicit head handle.
-    // Unused version records, in contrast, must not be pinned by this request.
-    let (old_record, old_version) = backend.test_with_engine_locked(|engine| {
+    let (root, backend, auth, _token, identity, repo) = fixture();
+    // The scan owns its exact namespace, not an unrelated historical commit table
+    // or version records. Cancellation still retains the worker and its permit.
+    let (old_record, old_version, required_head) = backend.test_with_engine_locked(|engine| {
         let other = engine
             .create_repository(
                 &storage_contract::RepositoryName::parse("Other").unwrap(),
@@ -456,6 +455,13 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
         (
             Arc::downgrade(&engine.state().commits.get_shared(head).unwrap()),
             Arc::downgrade(engine.state().versions.shared_values().next().unwrap()),
+            Arc::downgrade(
+                &engine
+                    .state()
+                    .commits
+                    .get_shared(&engine.state().branches[&repo.main_branch_id].head_commit_id)
+                    .unwrap(),
+            ),
         )
     });
     let spare = Engine::initialize(
@@ -482,8 +488,9 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
     waiter.abort();
     assert!(waiter.await.unwrap_err().is_cancelled());
     backend.test_with_engine_locked(|engine| *engine = spare);
-    assert!(old_record.upgrade().is_some());
+    assert!(old_record.upgrade().is_none());
     assert!(old_version.upgrade().is_none());
+    assert!(required_head.upgrade().is_some());
     assert!(auth_owner.upgrade().is_some());
     assert_eq!(slots.available_permits(), 0);
     assert!(slots.clone().try_acquire_owned().is_err());
@@ -496,19 +503,33 @@ async fn canceled_primary_listing_retains_existing_slot_auth_and_view_until_work
     .await
     .unwrap();
     assert!(old_record.upgrade().is_none());
+    assert!(required_head.upgrade().is_none());
     assert_eq!(slots.available_permits(), 1);
 }
 
 #[test]
-fn listing_projection_shares_only_its_five_required_tables() {
-    let mut state = storage_contract::State::default();
+fn listing_projection_shares_only_required_tables_and_exact_namespace_owners() {
+    let (_root, backend, auth, _token, _identity, repo) = fixture();
+    let (mut state, view) = {
+        let engine = backend.engine.lock().unwrap();
+        (
+            engine.state().clone(),
+            ListingMetadata::capture(&engine, "P01", true).unwrap(),
+        )
+    };
+    drop(auth);
+    drop(backend);
     let versions = std::ptr::from_ref(&*state.versions);
     let placements = std::ptr::from_ref(&*state.placements);
     let content_states = std::ptr::from_ref(&*state.content_states);
-    let view = ListingMetadata::capture(&state);
+    let branches = std::ptr::from_ref(&*state.branches);
+    let commits = std::ptr::from_ref(&*state.commits);
     assert!(std::ptr::eq(&*view.repositories, &*state.repositories));
-    assert!(std::ptr::eq(&*view.branches, &*state.branches));
-    assert!(std::ptr::eq(&*view.commits, &*state.commits));
+    assert_eq!(view.namespaces.len(), 1);
+    assert_eq!(
+        view.namespaces[&repo.repository_id].branch_id(),
+        repo.main_branch_id
+    );
     assert!(std::ptr::eq(
         &*view.directory_branches,
         &*state.directory_branches
@@ -517,18 +538,20 @@ fn listing_projection_shares_only_its_five_required_tables() {
         &*view.directory_selections,
         &*state.directory_selections
     ));
-    // Even while the request lives, unrelated tables remain uniquely owned:
-    // Arc::make_mut does not allocate a replacement table when they are edited.
     state.versions.extend_shared(&Default::default());
     state.placements.clear();
     state.content_states.clear();
+    state.branches.clear();
+    state.commits.extend_shared(&Default::default());
     assert_eq!(versions, std::ptr::from_ref(&*state.versions));
     assert_eq!(placements, std::ptr::from_ref(&*state.placements));
     assert_eq!(content_states, std::ptr::from_ref(&*state.content_states));
+    assert_eq!(branches, std::ptr::from_ref(&*state.branches));
+    assert_eq!(commits, std::ptr::from_ref(&*state.commits));
     state
         .directory_selections
-        .insert("directory".into(), "new-selection".into());
-    assert!(view.directory_selections.is_empty());
+        .insert("new-test-directory".into(), "new-selection".into());
+    assert!(!view.directory_selections.contains_key("new-test-directory"));
     assert!(!std::ptr::eq(
         &*view.directory_selections,
         &*state.directory_selections

@@ -282,6 +282,7 @@ pub(super) fn fixture() -> MetadataView {
         BTreeMap::from([(HISTORY.into(), ROOT.into())]),
     ));
     MetadataView {
+        current_namespaces: crate::engine::NamespaceReadView::Initial,
         state: super::super::BusinessMetadataProjection(state),
         history_window_roots,
         history_action_max_entries: 123,

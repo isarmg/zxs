@@ -6,7 +6,50 @@ use storage_contract::{Branch, BranchState};
 pub(super) fn capture(state: &State, branch: &Branch) -> BranchSnapshot {
     capture_owned(state, branch.clone())
 }
-pub(super) fn capture_owned(state: &State, branch: Branch) -> BranchSnapshot {
+pub(super) fn capture_current(
+    engine: &storage_engine::Engine,
+    branch: &Branch,
+) -> Result<BranchSnapshot, crate::ApiError> {
+    // The repository branch catalog still reports migrated records as history;
+    // direct branch admission rejects them before calling this projection.
+    if branch.state == BranchState::Migrated {
+        return Ok(capture(engine.state(), branch));
+    }
+    let namespace = engine
+        .namespace_tree(&branch.branch_id)
+        .map_err(super::error)?;
+    let commit = &engine.state().commits[&branch.head_commit_id];
+    let pending = super::wire::PendingSources::new(
+        engine,
+        &branch.branch_id,
+        commit,
+        super::wire::PendingScope::Current(namespace),
+    )
+    .pending_versions();
+    Ok(capture_entries(
+        engine.state(),
+        branch.clone(),
+        namespace.entries(),
+        pending,
+    ))
+}
+
+pub(super) fn capture_owned(state: &State, mut branch: Branch) -> BranchSnapshot {
+    let snapshot = state
+        .commits
+        .get(&branch.head_commit_id)
+        .expect("invariant: admitted branch head references an existing commit");
+    let mut pending = snapshot.pending_file_versions.clone();
+    pending.extend(std::mem::take(&mut branch.pending_file_versions));
+    capture_entries(state, branch, &snapshot.entries, pending)
+}
+
+fn capture_entries(
+    state: &State,
+    branch: Branch,
+    entries: &[storage_contract::Entry],
+    pending: std::collections::BTreeMap<String, String>,
+) -> BranchSnapshot {
     let Branch {
         branch_id,
         history_tree_id,
@@ -16,19 +59,12 @@ pub(super) fn capture_owned(state: &State, branch: Branch) -> BranchSnapshot {
         branch_kind,
         file_id,
         file_node_id,
-        pending_file_versions,
+        pending_file_versions: _,
         generation,
         state: branch_state,
     } = branch;
-    let snapshot = state
-        .commits
-        .get(&head_commit_id)
-        .expect("invariant: admitted branch head references an existing commit");
-    let mut pending = snapshot.pending_file_versions.clone();
-    pending.extend(pending_file_versions);
     let file = file_id.as_ref().map(|file| {
-        let visible = snapshot
-            .entries
+        let visible = entries
             .iter()
             .find(|entry| &entry.file_id == file)
             .map(|entry| entry.version_id.as_str());

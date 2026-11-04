@@ -34,22 +34,22 @@ pub(crate) struct StoredAddition {
 pub(crate) fn configuration_digest(config: &Config) -> String {
     digest(config)
 }
-fn digest(value: &impl Serialize) -> String {
+pub(crate) fn digest(value: &impl Serialize) -> String {
     let bytes = json_codec::to_vec(value).expect("invariant: typed addition serializes");
     blake3::hash(&bytes).to_hex().to_string()
 }
-fn storage_error(source: platform_io::fs_safety::Error) -> ApiError {
+pub(super) fn storage_error(source: platform_io::fs_safety::Error) -> ApiError {
     ApiError::new(
         http::StatusCode::INTERNAL_SERVER_ERROR,
         ErrorCode::IoError,
-        "storage addition control record could not be read or synchronized",
+        "storage lifecycle control record could not be read or synchronized",
     )
     .with_source(source)
 }
-fn name(operation: OperationId) -> EntryName {
+pub(super) fn name(operation: OperationId) -> EntryName {
     EntryName::new(format!("{operation}.json")).expect("invariant: typed operation is a filename")
 }
-fn read<T: DeserializeOwned>(
+pub(super) fn read<T: DeserializeOwned>(
     directory: &PrivateDirectory,
     name: &EntryName,
 ) -> Result<Option<T>, ApiError> {
@@ -89,8 +89,7 @@ fn read_record(
         || digest(&preview) != saved_digest
         || preview.pool_id != record.target.pool_id
         || preview.added_directories != preview.request.additions.len()
-        || (record.status.state == AdditionState::Completed)
-            != (record.status.phase == AdditionPhase::Completed)
+        || !valid_status(&record.status, record.archive.as_ref())
     {
         return Err(corrupt());
     }
@@ -137,7 +136,56 @@ fn read_record(
     Ok(Some(record))
 }
 
-fn write(
+fn running_state(continuation: AdditionContinuation) -> AdditionState {
+    match continuation {
+        AdditionContinuation::Add => AdditionState::Adding,
+        AdditionContinuation::Cancel => AdditionState::Cancelling,
+    }
+}
+
+fn finish(record: &mut StoredAddition, result: storage_contract::OperationResult) {
+    let cancelled = result.kind == "membership-add-cancelled";
+    record.status.state = if cancelled {
+        AdditionState::Cancelled
+    } else {
+        AdditionState::Completed
+    };
+    record.status.phase = if cancelled {
+        AdditionPhase::Cancelled
+    } else {
+        AdditionPhase::Completed
+    };
+    record.status.continuation = if cancelled {
+        AdditionContinuation::Cancel
+    } else {
+        AdditionContinuation::Add
+    };
+    record.status.result = Some(result);
+    record.status.failure = None;
+}
+
+fn valid_status(status: &AdditionStatus, archive: Option<&ArchiveBinding>) -> bool {
+    if (status.state == AdditionState::Completed) != (status.phase == AdditionPhase::Completed)
+        || (status.state == AdditionState::Cancelled) != (status.phase == AdditionPhase::Cancelled)
+        || status.state.is_terminal() != status.result.is_some()
+        || (status.state.is_terminal() && status.failure.is_some())
+    {
+        return false;
+    }
+    status.result.as_ref().is_none_or(|result| {
+        result.operation_id == status.operation_id
+            && result.commit_state == storage_contract::CommitState::Published
+            && result.kind
+                == if status.state == AdditionState::Cancelled {
+                    "membership-add-cancelled"
+                } else {
+                    "membership-add"
+                }
+            && archive.is_some_and(|binding| result.request_digest == binding.transition_hash)
+    })
+}
+
+pub(super) fn write(
     directory: &PrivateDirectory,
     name: &EntryName,
     value: &impl Serialize,
@@ -150,7 +198,7 @@ fn write(
     }
     AtomicFile::replace(directory, &name.as_relative(), &bytes).map_err(storage_error)
 }
-fn latest_name() -> EntryName {
+pub(super) fn latest_name() -> EntryName {
     EntryName::new("latest.json").expect("invariant: static addition pointer")
 }
 fn save(directory: &PrivateDirectory, record: &StoredAddition) -> Result<(), ApiError> {
@@ -161,7 +209,7 @@ fn conflict(message: &'static str) -> ApiError {
 }
 
 impl Inner {
-    fn addition_backend(&self) -> Result<Arc<EngineBackend>, ApiError> {
+    pub(super) fn addition_backend(&self) -> Result<Arc<EngineBackend>, ApiError> {
         self.ensure_running()?;
         // A fenced pool is deliberately not ready for ordinary business writes.
         // Retain its exact engine for authorized recovery of this operation.
@@ -224,6 +272,7 @@ impl ManagementBackend {
         };
         let backend = self.inner.addition_backend()?;
         if action == "disk_add_preview" {
+            self.require_settled_exit()?;
             let request: AdditionRequest =
                 json_codec::from_value(input).map_err(ApiError::invalid_source)?;
             let (preview, _, _) = self.prepare_addition(
@@ -257,6 +306,7 @@ impl ManagementBackend {
                 }
                 saved
             } else {
+                self.require_settled_exit()?;
                 self.require_settled_addition(&directory)?;
                 let (preview, target, directories) = self.prepare_addition(
                     &backend,
@@ -282,6 +332,8 @@ impl ManagementBackend {
                         operation_id: operation,
                         state: AdditionState::Adding,
                         phase: AdditionPhase::Prepared,
+                        continuation: AdditionContinuation::Add,
+                        result: None,
                         preview,
                         failure: None,
                     },
@@ -289,23 +341,45 @@ impl ManagementBackend {
                 save(&directory, &record)?;
                 record
             }
-        } else if action == "disk_add_resume" {
-            let request: AdditionResume =
-                json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-            read_record(&directory, request.operation_id)?.ok_or_else(|| {
+        } else if matches!(action, "disk_add_resume" | "disk_add_cancel") {
+            let (operation, continuation, preview_digest) = if action == "disk_add_cancel" {
+                let request: AdditionCancel =
+                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+                (
+                    request.operation_id,
+                    AdditionContinuation::Cancel,
+                    Some(request.preview_digest),
+                )
+            } else {
+                let request: AdditionResume =
+                    json_codec::from_value(input).map_err(ApiError::invalid_source)?;
+                (request.operation_id, request.continuation, None)
+            };
+            let mut saved = read_record(&directory, operation)?.ok_or_else(|| {
                 ApiError::new(
                     http::StatusCode::NOT_FOUND,
                     ErrorCode::OperationNotFound,
                     "storage addition was not found",
                 )
-            })?
+            })?;
+            if preview_digest.is_some_and(|digest| digest != saved.status.preview.preview_digest) {
+                return Err(conflict(
+                    "cancellation does not bind the original addition preview",
+                ));
+            }
+            if !saved.status.state.is_terminal() {
+                saved.status.continuation = continuation;
+            }
+            saved
         } else {
             return Err(ApiError::invalid("unknown storage addition action"));
         };
         if record.principal != identity.principal {
             return Err(ApiError::forbidden());
         }
-        if record.status.state == AdditionState::Completed {
+        // Even exact terminal replay requires a currently valid system session.
+        backend.addition_configuration(identity)?;
+        if record.status.state.is_terminal() {
             return Ok(
                 json_codec::to_value(record.status).expect("invariant: addition status serializes")
             );
@@ -324,6 +398,18 @@ impl ManagementBackend {
                 "this pending operation belongs to a different pool configuration",
             ));
         }
+        if let Some(result) = backend.storage_addition_result(identity, &record)? {
+            finish(&mut record, result);
+            save(&directory, &record)?;
+            return Ok(
+                json_codec::to_value(record.status).expect("invariant: addition status serializes")
+            );
+        }
+        // Save the selected continuation before any irreversible shared-slot vote.
+        // Retrying an old commit body retains this choice rather than undoing Cancel.
+        record.status.state = running_state(record.status.continuation);
+        record.status.failure = None;
+        save(&directory, &record)?;
         write(&directory, &latest_name(), &record.status.operation_id)?;
         let intent = record.clone();
         let outcome =
@@ -332,15 +418,13 @@ impl ManagementBackend {
                     record.archive = Some(archive);
                 }
                 record.status.phase = phase;
-                record.status.state = AdditionState::Adding;
+                record.status.state = running_state(record.status.continuation);
                 record.status.failure = None;
                 save(&directory, &record)
             });
         match outcome {
-            Ok(_) => {
-                record.status.phase = AdditionPhase::Completed;
-                record.status.state = AdditionState::Completed;
-                record.status.failure = None;
+            Ok(result) => {
+                finish(&mut record, result);
                 save(&directory, &record)?;
                 self.inner
                     .disk_observation
@@ -373,6 +457,20 @@ impl ManagementBackend {
         }
     }
 
+    pub(super) fn require_no_pending_addition(&self) -> Result<(), ApiError> {
+        let directory =
+            match PrivateDirectory::open_existing(self.inner.management_root.join(DIRECTORY)) {
+                Ok(directory) => directory,
+                Err(platform_io::fs_safety::Error::Io(error))
+                    if error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(storage_error(error)),
+            };
+        self.require_settled_addition(&directory)
+    }
+
     fn require_settled_addition(&self, directory: &PrivateDirectory) -> Result<(), ApiError> {
         if let Some(operation) = read::<OperationId>(directory, &latest_name())? {
             let record: StoredAddition = read_record(directory, operation)?.ok_or_else(|| {
@@ -381,7 +479,7 @@ impl ManagementBackend {
                     "latest addition intent is missing",
                 )
             })?;
-            if record.status.state != AdditionState::Completed {
+            if !record.status.state.is_terminal() {
                 return Err(ApiError::conflict(
                     ErrorCode::RecoveryRequired,
                     "continue the original pending addition before starting another plan",
@@ -435,8 +533,15 @@ impl ManagementBackend {
             Err(std::sync::TryLockError::WouldBlock) => true,
             Err(std::sync::TryLockError::Poisoned(_)) => false,
         };
-        if !running && record.status.state == AdditionState::Adding {
-            record.status.state = AdditionState::RecoveryRequired;
+        if !running && !record.status.state.is_terminal() {
+            let backend = crate::lock(&self.inner.state).backend.clone();
+            if let Some(backend) = backend
+                && let Some(result) = backend.storage_addition_result(identity, &record)?
+            {
+                finish(&mut record, result);
+            } else {
+                record.status.state = AdditionState::RecoveryRequired;
+            }
         }
         Ok(AdditionStatusResponse {
             operation: Some(record.status),
@@ -511,43 +616,20 @@ impl ManagementBackend {
     }
 }
 
-/// The setup receipt stays immutable. A later configuration is admissible only
-/// when a durable authorized addition binds it and retains the genesis settings.
-/// Engine::open must still verify the complete membership authority and receipts.
-pub(crate) fn admits_configuration(
+pub(super) fn configuration_edges(
     root: &Path,
-    current: &Config,
-    initial: &Config,
-) -> Result<bool, ApiError> {
-    let directory = match PrivateDirectory::open_existing(root.join(DIRECTORY)) {
-        Ok(directory) => directory,
-        Err(platform_io::fs_safety::Error::Io(error))
-            if error.kind() == std::io::ErrorKind::NotFound =>
-        {
-            return Ok(false);
+    chain: &mut super::storage_configuration::ConfigurationChain,
+) -> Result<(), ApiError> {
+    super::storage_configuration::records(&root.join(DIRECTORY), read_record, |record, latest| {
+        let original = record.status.preview.configuration_digest;
+        let target = configuration_digest(&record.target);
+        if latest {
+            chain.tip(original.clone());
+            chain.tip(target.clone());
         }
-        Err(error) => return Err(storage_error(error)),
-    };
-    let Some(operation) = read::<OperationId>(&directory, &latest_name())? else {
-        return Ok(false);
-    };
-    let record: StoredAddition = read_record(&directory, operation)?.ok_or_else(|| {
-        ApiError::conflict(
-            ErrorCode::RecoveryRequired,
-            "authorized addition intent is missing",
-        )
-    })?;
-    let current_digest = configuration_digest(current);
-    if current_digest != configuration_digest(&record.target)
-        && current_digest != record.status.preview.configuration_digest
-    {
-        return Ok(false);
-    }
-    let mut original = current.clone();
-    original
-        .disks
-        .retain(|disk| initial.disks.iter().any(|old| old.disk_id == disk.disk_id));
-    Ok(configuration_digest(&original) == configuration_digest(initial))
+        chain.edge(original, target);
+        Ok(())
+    })
 }
 
 #[cfg(test)]

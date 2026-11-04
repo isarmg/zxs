@@ -538,6 +538,16 @@ fn card(state: RwSignal<State>, slot: String) -> impl IntoView {
                     </section>
                 }
             })}
+            <div class="zxs-flow">
+                <button class="zxs-button" disabled=move ||state.with(|s|!super::storage::lifecycle::can_preview(s)) on:click=move |_|{
+                    let disk=state.with_untracked(|s|s.admin_console.disks.cards.get(&slot.get_value()).map(|card|card.disk_id.clone()));
+                    if let Some(disk)=disk { super::storage::lifecycle::preview(state,slot.get_value(),disk,storage_contract::storage_lifecycle::ExitAction::PlannedOffline); }
+                }>{t("预览下线", "Preview offline")}</button>
+                <button class="zxs-button" disabled=move ||state.with(|s|!super::storage::lifecycle::can_preview(s)) on:click=move |_|{
+                    let disk=state.with_untracked(|s|s.admin_console.disks.cards.get(&slot.get_value()).map(|card|card.disk_id.clone()));
+                    if let Some(disk)=disk { super::storage::lifecycle::preview(state,slot.get_value(),disk,storage_contract::storage_lifecycle::ExitAction::Deregister); }
+                }>{t("预览注销", "Preview deregistration")}</button>
+            </div>
             <Show when=move ||details.get().is_some()>
                 <p class="zxs-row">{t("备注","Note")}</p>
                 <Show when=move ||!editing.get()>
@@ -576,6 +586,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         {move ||state.with(|s|s.admin_console.disks.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
         <Show when=move ||state.with(|s|s.admin_console.disks.loaded&&s.admin_console.disks.cards.is_empty())><EmptyState message=t("没有已登记的硬盘。","No disks are registered.")/></Show>
         <For each=move ||state.with(|s|s.admin_console.disks.cards.keys().cloned().collect::<Vec<_>>()) key=|slot|slot.clone() children=move |slot|card(state,slot)/>
+        {super::storage::lifecycle::view(state)}
     </section>}
 }
 

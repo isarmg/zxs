@@ -1,7 +1,6 @@
 //! Verified replicas, read leases, offline export and disk observations.
 use super::provenance::MetadataReadContext;
 use super::{Engine, OpenedContent, ReadLease, ReadSource};
-use crate::journal::verify_local_publication_in_context;
 use crate::{disk::*, *};
 use std::path::Path;
 use std::{io::Read, path::PathBuf, sync::Arc};
@@ -424,29 +423,7 @@ impl ContentReadPlan {
         let healthy = self
             .disks
             .iter()
-            .filter(|disk| {
-                let directory = version_dir(
-                    disk,
-                    &self.version.history_tree_id,
-                    &self.version.version_id,
-                );
-                let identity = validate_seal(&self.config, disk);
-                let identity = if disk.metadata_member {
-                    self.metadata_integrity.observe(identity)
-                } else {
-                    identity
-                };
-                let Ok(identity) = identity else {
-                    return false;
-                };
-                let metadata = disk.metadata_member.then(|| {
-                    self.metadata_integrity
-                        .read_context(&self.config, &identity)
-                });
-                verify_local_publication_in_context(&directory, &self.version, metadata.as_ref())
-                    .is_ok()
-                    && verify_payload(&directory, &self.version).is_ok()
-            })
+            .filter(|disk| self.observe_replica_health(disk).is_ok())
             .count();
         if healthy == 0 {
             storage_contract::CurrentHealth::Unavailable
@@ -455,6 +432,28 @@ impl ContentReadPlan {
         } else {
             storage_contract::CurrentHealth::Healthy
         }
+    }
+
+    /// Health is a named-directory observation, but it is still an operation on
+    /// an admitted binding. A detached pre-exit plan cannot reopen its old path.
+    fn observe_replica_health(&self, disk: &DiskConfig) -> Result<()> {
+        let handle = self.disk_resources.get(disk)?;
+        let lease = handle.root.admit_io()?;
+        lease.check_running()?;
+        let identity = validate_seal_observed(&self.config, disk, &mut |_| lease.check_running())
+            .and_then(|identity| validate_stored_seal(&handle.seal, &identity));
+        if disk.metadata_member {
+            self.metadata_integrity.observe(identity)?;
+        } else {
+            identity?;
+        }
+        lease.check_running()?;
+        // Named identity observation must not turn later proof/body reads into
+        // raw pathname opens. Both verifiers retain the same managed binding.
+        let (handle, directory, proof_lease) = self.authenticate_replica(disk)?;
+        drop(handle.verify_payload(&directory, &self.version)?);
+        proof_lease.check_running()?;
+        lease.check_running()
     }
 
     /// Encoded proof size for admission before allocating or reading disk bytes.

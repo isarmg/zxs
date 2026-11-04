@@ -90,7 +90,7 @@ fn placement_configuration_rejects_wrong_scope_missing_fields_and_inconsistent_b
         ("rule_id", json!("")),
         ("inherited", json!(false)),
         ("required_copies", json!(0)),
-        ("primary_slot_id", json!("B01")),
+        ("primary_slot_id", json!("invalid slot")),
         ("targets", json!([])),
         (
             "targets",
@@ -210,4 +210,48 @@ fn placement_configuration_unknown_outcomes_keep_draft_until_matching_receipt() 
     );
     assert!(model.placement.is_none());
     assert!(!model.publications.contains_key(&review::Kind::Placement));
+}
+
+#[test]
+fn placement_configuration_keeps_removed_primary_as_history_without_offering_it() {
+    let mut value = response();
+    value["primary_slot_id"] = "P03".into();
+    let configuration = read_configuration(value, &draft()).unwrap();
+    assert_eq!(configuration.primary_slot_id, "P03");
+    assert!(
+        options(&configuration)
+            .iter()
+            .all(|option| option.value != "P03")
+    );
+    let mut draft = ready();
+    draft.configuration = Some(configuration);
+    draft.selected = "P03".into();
+    assert!(request(&draft).is_err());
+    draft.selected = "P01".into();
+    assert_eq!(request(&draft).unwrap()["primary_slot_id"], "P01");
+    Owner::new().with(|| {
+        let state = RwSignal::new(State {
+            authenticated: true,
+            session_epoch: 7,
+            ..Default::default()
+        });
+        state.update(|s| s.files.placement = Some(draft.clone()));
+        complete_load(state, 7, "draft", Ok(draft.configuration.clone().unwrap()));
+        assert!(state.with_untracked(|s| s.files.placement.as_ref().unwrap().selected.is_empty()));
+    });
+}
+
+#[test]
+fn placement_configuration_route_unavailable_is_typed_and_never_selectable() {
+    let mut value = response();
+    value["targets"][0]["unavailable_reason"] = "route_unavailable".into();
+    let configuration = read_configuration(value, &draft()).unwrap();
+    assert_eq!(
+        configuration.targets[0].unavailable_reason,
+        Some(storage_contract::PrimaryPlacementBlock::RouteUnavailable)
+    );
+    assert!(options(&configuration)[0].disabled);
+    let mut draft = ready();
+    draft.configuration = Some(configuration);
+    assert!(request(&draft).is_err());
 }

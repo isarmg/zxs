@@ -96,7 +96,7 @@ struct DirectoryHandle {
 
 #[derive(Clone)]
 struct DirectoryCursor {
-    commit_id: String,
+    snapshot: crate::DirectoryReadSnapshot,
     after: Option<String>,
 }
 

@@ -18,6 +18,7 @@ use crate::{
 use data_serialization::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod continuation;
 pub(in crate::engine) mod projection;
 use projection::WriteProjection;
 
@@ -145,11 +146,12 @@ struct MaskState {
 
 /// The Engine borrow freezes all source tables. The registry must equal the
 /// entire admitted base, not merely have a plausible hash or matching voter IDs.
-/// This first-stage source deliberately rejects unactivated successor registries.
-/// A later activation path must establish its own admitted current-source proof.
+/// A continuation also borrows the already admitted predecessor view; raw
+/// historical heads cannot reconstruct its earlier occurrence removals.
 pub(in crate::engine) struct FrozenDetachSource<'a> {
-    engine: &'a Engine,
+    state: &'a crate::State,
     registry: &'a VerifiedDiskRegistry,
+    prior: Option<&'a super::super::current::CurrentNamespaces>,
     preview: DeregistrationPreview<'a>,
     known_file_ids: BTreeSet<&'a str>,
     known_entry_ids: BTreeSet<&'a str>,
@@ -161,9 +163,43 @@ impl<'a> FrozenDetachSource<'a> {
         registry: &'a VerifiedDiskRegistry,
         target: &DiskRegistrationIdentity,
     ) -> ProjectionResult<Self> {
-        if registry.state != engine.disk_registry_base_state() {
+        if let Some(prior) = &engine.current_namespaces {
+            return Self::capture_current(
+                &engine.state,
+                &engine.config,
+                engine
+                    .snapshot
+                    .as_deref()
+                    .ok_or(ProjectionError::BaselineMismatch)?,
+                engine
+                    .config
+                    .generation_hash()
+                    .ok_or(ProjectionError::BaselineMismatch)?,
+                prior,
+                registry,
+                target,
+            );
+        }
+        Self::capture_state(
+            &engine.state,
+            &engine.config,
+            engine.snapshot.as_deref(),
+            engine.config.generation_hash(),
+            registry,
+            target,
+        )
+    }
+    pub(in crate::engine) fn capture_state(
+        state: &'a crate::State,
+        config: &'a crate::ValidatedConfig,
+        snapshot: Option<&'a str>,
+        source_authority: Option<&str>,
+        registry: &'a VerifiedDiskRegistry,
+        target: &DiskRegistrationIdentity,
+    ) -> ProjectionResult<Self> {
+        if !registry.matches_frozen_source(config, state, snapshot, source_authority) {
             return Err(ProjectionError::SourceMismatch(
-                "registry is not the admitted base",
+                "registry is not the authenticated frozen base",
             ));
         }
         if registry.state.source.snapshot_hash.is_none() {
@@ -171,61 +207,116 @@ impl<'a> FrozenDetachSource<'a> {
                 "source has no published snapshot",
             ));
         }
-        let preview = engine.preview_disk_deregistration(target)?;
-        let known_file_ids = engine
-            .state
+        Self::capture_verified(state, config, snapshot, registry, target, None)
+    }
+
+    pub(in crate::engine) fn capture_current(
+        state: &'a crate::State,
+        config: &'a crate::ValidatedConfig,
+        snapshot: &'a str,
+        authority: &str,
+        prior: &'a super::super::current::CurrentNamespaces,
+        registry: &'a VerifiedDiskRegistry,
+        target: &DiskRegistrationIdentity,
+    ) -> ProjectionResult<Self> {
+        if !prior.matches_source(state)
+            || !registry.matches_current_source(
+                &prior.registry_state,
+                config,
+                state,
+                snapshot,
+                authority,
+            )?
+        {
+            return Err(ProjectionError::SourceMismatch(
+                "registry continuation differs from its admitted current namespace source",
+            ));
+        }
+        Self::capture_verified(state, config, Some(snapshot), registry, target, Some(prior))
+    }
+
+    fn capture_verified(
+        state: &'a crate::State,
+        config: &'a crate::ValidatedConfig,
+        snapshot: Option<&'a str>,
+        registry: &'a VerifiedDiskRegistry,
+        target: &DiskRegistrationIdentity,
+        prior: Option<&'a super::super::current::CurrentNamespaces>,
+    ) -> ProjectionResult<Self> {
+        let preview = match prior {
+            Some(prior) => DeregistrationPreview::capture_projected(
+                state,
+                super::super::CurrentDiskRegistry::from_verified(config, registry),
+                snapshot,
+                target,
+                Some(prior),
+            )?,
+            None => DeregistrationPreview::capture(
+                state,
+                super::super::CurrentDiskRegistry::from_config(config),
+                snapshot,
+                target,
+            )?,
+        };
+        let known_file_ids = state
             .versions
             .values()
             .map(|version| version.file_id.as_str())
             .chain(
-                engine
-                    .state
+                state
                     .branches
                     .values()
                     .flat_map(|branch| branch.pending_file_versions.keys().map(String::as_str)),
             )
             .chain(
-                engine
-                    .state
+                state
                     .commits
                     .values()
                     .flat_map(|commit| commit.pending_file_versions.keys().map(String::as_str)),
             )
+            .chain(
+                prior
+                    .into_iter()
+                    .flat_map(|view| view.known_files.iter().map(String::as_str)),
+            )
             .collect();
-        let known_entry_ids =
-            engine
-                .state
-                .commits
-                .values()
-                .flat_map(|commit| commit.entries.iter().map(|entry| entry.entry_id.as_str()))
-                .chain(
-                    engine.state.directory_branches.values().flat_map(|branch| {
-                        branch.entries.iter().map(|entry| entry.entry_id.as_str())
-                    }),
-                )
-                .chain(
-                    engine
-                        .state
-                        .directory_trees
-                        .values()
-                        .flat_map(|tree| tree.entries.iter().map(|entry| entry.entry_id.as_str())),
-                )
-                .collect();
-        let pending_version_ids =
-            engine
-                .state
-                .branches
-                .values()
-                .flat_map(|branch| branch.pending_file_versions.values().map(String::as_str))
-                .chain(
-                    engine.state.commits.values().flat_map(|commit| {
-                        commit.pending_file_versions.values().map(String::as_str)
-                    }),
-                )
-                .collect();
+        let known_entry_ids = state
+            .commits
+            .values()
+            .flat_map(|commit| commit.entries.iter().map(|entry| entry.entry_id.as_str()))
+            .chain(
+                state
+                    .directory_branches
+                    .values()
+                    .flat_map(|branch| branch.entries.iter().map(|entry| entry.entry_id.as_str())),
+            )
+            .chain(
+                state
+                    .directory_trees
+                    .values()
+                    .flat_map(|tree| tree.entries.iter().map(|entry| entry.entry_id.as_str())),
+            )
+            .chain(
+                prior
+                    .into_iter()
+                    .flat_map(|view| view.known_entries.iter().map(String::as_str)),
+            )
+            .collect();
+        let pending_version_ids = state
+            .branches
+            .values()
+            .flat_map(|branch| branch.pending_file_versions.values().map(String::as_str))
+            .chain(
+                state
+                    .commits
+                    .values()
+                    .flat_map(|commit| commit.pending_file_versions.values().map(String::as_str)),
+            )
+            .collect();
         Ok(Self {
-            engine,
+            state,
             registry,
+            prior,
             preview,
             known_file_ids,
             known_entry_ids,
@@ -300,11 +391,7 @@ pub(in crate::engine) struct VerifiedOccurrenceMask<'s, 'e> {
     state: MaskState,
 }
 impl<'s, 'e> VerifiedOccurrenceMask<'s, 'e> {
-    pub(in crate::engine) fn project(
-        &self,
-        successor: &VerifiedDiskRegistry,
-        scope: &NamespaceScope,
-    ) -> ProjectionResult<WriteProjection<'s, 'e>> {
+    fn require_successor(&self, successor: &VerifiedDiskRegistry) -> ProjectionResult<()> {
         let pending = successor
             .state
             .pending_exit
@@ -324,6 +411,15 @@ impl<'s, 'e> VerifiedOccurrenceMask<'s, 'e> {
         {
             return Err(ProjectionError::BaselineMismatch);
         }
+        Ok(())
+    }
+
+    pub(in crate::engine) fn project(
+        &self,
+        successor: &VerifiedDiskRegistry,
+        scope: &NamespaceScope,
+    ) -> ProjectionResult<WriteProjection<'s, 'e>> {
+        self.require_successor(successor)?;
         let mask = self
             .state
             .scopes
@@ -337,6 +433,163 @@ impl<'s, 'e> VerifiedOccurrenceMask<'s, 'e> {
             mask,
             namespace.entries(),
         ))
+    }
+}
+
+impl VerifiedOccurrenceMask<'_, '_> {
+    pub(in crate::engine) fn prepare_current_namespaces(
+        &self,
+        successor: &VerifiedDiskRegistry,
+    ) -> ProjectionResult<super::super::current::PreparedCurrentNamespaces> {
+        self.require_successor(successor)?;
+        self.source
+            .own_current_namespaces(successor, Some(&self.hash), Some(&self.state.scopes))
+    }
+}
+impl FrozenDetachSource<'_> {
+    pub(in crate::engine) fn prepare_disabled_namespaces(
+        &self,
+        successor: &VerifiedDiskRegistry,
+    ) -> ProjectionResult<super::super::current::PreparedCurrentNamespaces> {
+        let pending = successor
+            .state
+            .pending_exit
+            .as_ref()
+            .ok_or(ProjectionError::BaselineMismatch)?;
+        if successor.state.predecessor.as_ref() != Some(self.registry.commitment())
+            || successor.state.source != self.registry.state.source
+            || pending.target != self.preview.target().identity()
+            || !matches!(pending.effect, RegistryExitEffect::Disable)
+            || successor.commitment.view_generation()
+                != self
+                    .registry
+                    .commitment
+                    .view_generation()
+                    .checked_add(1)
+                    .ok_or(ProjectionError::BaselineMismatch)?
+        {
+            return Err(ProjectionError::BaselineMismatch);
+        }
+        self.own_current_namespaces(successor, None, None)
+    }
+
+    fn own_current_namespaces(
+        &self,
+        successor: &VerifiedDiskRegistry,
+        mask_hash: Option<&str>,
+        masks: Option<&BTreeMap<String, ScopeMask>>,
+    ) -> ProjectionResult<super::super::current::PreparedCurrentNamespaces> {
+        use super::super::current::{CurrentNamespaces, CurrentScope, PreparedCurrentNamespaces};
+        use std::sync::Arc;
+        let mut branches = BTreeMap::new();
+        let mut directories = BTreeMap::new();
+        for scope in self.preview.namespaces() {
+            let owned: NamespaceScope = scope.into();
+            let target = match &owned {
+                NamespaceScope::BranchHead(id) => (&mut branches, id),
+                NamespaceScope::DirectoryHead(id) => (&mut directories, id),
+                NamespaceScope::Commit(_) | NamespaceScope::DirectoryTree(_) => continue,
+            };
+            let namespace = self.preview.namespace(scope)?;
+            let mask = masks.map(|masks| {
+                &masks[&owned
+                    .key()
+                    .expect("invariant: an admitted scope serializes")]
+            });
+            let entries: Vec<Entry> = namespace
+                .entries()
+                .iter()
+                .filter(|entry| {
+                    mask.is_none_or(|mask| !mask.hidden.contains_key(entry.lookup_key()))
+                })
+                .cloned()
+                .collect();
+            let prior_scope = self.prior.and_then(|prior| match &owned {
+                NamespaceScope::BranchHead(id) => prior.branches.get(id),
+                NamespaceScope::DirectoryHead(id) => prior.directories.get(id),
+                NamespaceScope::Commit(_) | NamespaceScope::DirectoryTree(_) => None,
+            });
+            let writable = namespace.owner_writable_after()
+                && prior_scope.is_none_or(|scope| scope.writable)
+                && mask.is_none_or(|mask| {
+                    mask.binding.disposition == ScopeDisposition::RegisteredNamespace
+                });
+            let mut hidden_paths = prior_scope
+                .filter(|scope| scope.head == scope.source_head)
+                .map(|scope| scope.hidden_paths.clone())
+                .unwrap_or_default();
+            if let Some(mask) = mask {
+                hidden_paths.extend(mask.hidden.keys().cloned());
+            }
+            let entries = Arc::new(entries);
+            target.0.insert(
+                target.1.clone(),
+                Arc::new(CurrentScope {
+                    source_head: namespace.frozen_head_id().to_owned(),
+                    source_entries: Arc::clone(&entries),
+                    head: namespace.frozen_head_id().to_owned(),
+                    entries,
+                    writable,
+                    hidden_paths,
+                }),
+            );
+        }
+        let mut unavailable_versions = self
+            .prior
+            .map(|prior| (*prior.unavailable_versions).clone())
+            .unwrap_or_default();
+        if masks.is_some() {
+            for id in self.state.versions.keys() {
+                if self
+                    .preview
+                    .version(id)?
+                    .remaining_holders
+                    .iter()
+                    .next()
+                    .is_none()
+                {
+                    unavailable_versions.insert(id.clone());
+                }
+            }
+            unavailable_versions.extend(
+                self.pending_version_ids
+                    .iter()
+                    .filter(|id| !self.state.versions.contains_key(**id))
+                    .map(|id| (*id).to_owned()),
+            );
+        }
+        Ok(PreparedCurrentNamespaces {
+            view: CurrentNamespaces {
+                registry: successor.commitment.clone(),
+                registry_state: Arc::new(successor.clone()),
+                mask_hash: mask_hash.map(str::to_owned),
+                source_snapshot: self
+                    .registry
+                    .state
+                    .source
+                    .snapshot_hash
+                    .clone()
+                    .ok_or(ProjectionError::BaselineMismatch)?,
+                source_sequence: self.state.sequence,
+                activation_sequence: self.state.sequence,
+                source_business_generation: self.state.business_generation,
+                branches: Arc::new(branches),
+                directories: Arc::new(directories),
+                known_entries: Arc::new(
+                    self.known_entry_ids
+                        .iter()
+                        .map(|id| (*id).to_owned())
+                        .collect(),
+                ),
+                known_files: Arc::new(
+                    self.known_file_ids
+                        .iter()
+                        .map(|id| (*id).to_owned())
+                        .collect(),
+                ),
+                unavailable_versions: Arc::new(unavailable_versions),
+            },
+        })
     }
 }
 
@@ -367,7 +620,7 @@ fn scope_mask(namespace: &NamespaceDeregistrationPreview<'_>) -> ProjectionResul
         binding: ScopeBinding {
             scope: namespace.scope().into(),
             frozen_head_id: namespace.frozen_head_id().into(),
-            owner: namespace.namespace_owner().identity(),
+            owner: namespace.namespace_owner().clone(),
             entries_hash: object_hash("disk-occurrence-entries", &entries).map_err(Error::from)?,
             disposition: namespace.root_visibility_after()?.into(),
         },

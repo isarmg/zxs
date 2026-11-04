@@ -137,7 +137,7 @@ impl Session {
                     selection: crate::DirectorySelection::Capture,
                 },
             )?;
-            let commit_id = snapshot.commit_id;
+            let snapshot = snapshot.snapshot;
             let file =
                 File::open(self.shared.spool.join("empty-directory")).map_err(ApiError::io)?;
             let fd = OwnedFd::from(file.try_clone().map_err(ApiError::io)?);
@@ -148,7 +148,7 @@ impl Session {
                     entry_id: entry_id.clone(),
                     path: path.clone(),
                     cursor: Some(DirectoryCursor {
-                        commit_id,
+                        snapshot,
                         after: None,
                     }),
                 }),

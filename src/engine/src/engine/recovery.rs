@@ -306,7 +306,11 @@ impl Engine {
             scanned_journals.insert(disk.disk_id.clone(), scanned);
             self.journals.insert(disk.disk_id.clone(), writer);
         }
-        let checkpoint = if can_repair && !torn_tail {
+        let exit_generation = self
+            .config
+            .generation()
+            .is_some_and(|generation| generation.portable.exit_registry().is_some());
+        let checkpoint = if can_repair && !torn_tail && !exit_generation {
             match super::recovery_checkpoint::load(self, &prefixes, &records) {
                 Ok(checkpoint) => checkpoint.filter(|c| {
                     records
@@ -438,9 +442,10 @@ impl Engine {
                         .recovery
                         .as_ref()
                         .map(|_| publication.result.clone());
-                    self.state = std::sync::Arc::new(
+                    self.install_recovered_namespace_state(
                         admitted.into_visible_state(candidate.operation_id, recovered_result),
-                    );
+                        candidate.snapshot_hash.clone(),
+                    )?;
                     self.bind_recovered_history_roots(roots);
                 }
                 self.snapshot = Some(candidate.snapshot_hash.clone());
@@ -565,9 +570,10 @@ impl Engine {
                 } else {
                     self.complete_candidate(&candidate, &hash, next, None)?;
                 }
-                self.state = std::sync::Arc::new(
+                self.install_recovered_namespace_state(
                     admitted.into_visible_state(candidate.operation_id, recovered_result),
-                );
+                    candidate.snapshot_hash.clone(),
+                )?;
                 self.bind_recovered_history_roots(roots);
                 self.snapshot = Some(candidate.snapshot_hash.clone());
             } else if let Some(p) = publication {
@@ -599,9 +605,10 @@ impl Engine {
                     break;
                 }
                 let recovered_result = p.recovery.as_ref().map(|_| p.result.clone());
-                self.state = std::sync::Arc::new(
+                self.install_recovered_namespace_state(
                     admitted.into_visible_state(candidate.operation_id, recovered_result),
-                );
+                    candidate.snapshot_hash.clone(),
+                )?;
                 self.bind_recovered_history_roots(roots);
                 self.snapshot = Some(candidate.snapshot_hash.clone());
                 self.blocked = true;
@@ -625,6 +632,7 @@ impl Engine {
         } else if self.journals.values().any(JournalWriter::needs_recovery) {
             self.blocked = true;
         }
+        self.restore_namespace_workspace_baselines()?;
         if fenced {
             return Ok(());
         }
@@ -632,9 +640,10 @@ impl Engine {
         // Optional acceleration only. Failure to create a checkpoint must never
         // fail or roll back an otherwise verified recovery. Existing checkpoints
         // become ineligible whenever their journal/coverage hashes differ.
-        if checkpoint
-            .as_ref()
-            .is_none_or(|c| c.sequence < self.state.sequence)
+        if !exit_generation
+            && checkpoint
+                .as_ref()
+                .is_none_or(|c| c.sequence < self.state.sequence)
             && let Err(error) = super::recovery_checkpoint::save(self, &scanned_journals)
         {
             self.recovery_warnings.checkpoint_save = Some(error);

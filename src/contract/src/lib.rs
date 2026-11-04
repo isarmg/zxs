@@ -12,6 +12,7 @@ mod integer_json;
 pub mod smb_account;
 pub mod storage_addition;
 pub mod storage_directories;
+pub mod storage_lifecycle;
 pub use content_hash::{ContentHash, ParseContentHashError};
 mod operation_id;
 mod operation_outcome;

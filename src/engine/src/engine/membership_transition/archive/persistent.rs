@@ -6,6 +6,9 @@ use platform_io::fs_safety::linux::FileIdentity;
 use platform_io::fs_safety::{AdvisoryLock, RelativePath};
 use std::path::{Path, PathBuf};
 
+#[path = "namespace_replay.rs"]
+pub(in crate::engine::membership_transition) mod namespace_replay;
+
 const ROOT_KIND: &str = "membership-control-archive";
 pub(super) const SEAL_KIND: &str = "membership-publication-seal";
 const ROOT_FILE: &str = "archive-root.json";
@@ -571,15 +574,19 @@ impl Engine {
         let destination_identity =
             FileIdentity::from_fd(destination.directory(destination.path())?)?;
         for handle in self.disk_resources.handles() {
+            let activity = handle.root.admit_io()?;
+            let held_identity = FileIdentity::from_fd(handle.root.directory(handle.root.path())?)?;
+            activity.check_running()?;
             let named = DiskRoot::open(handle.root.path())?;
             let named_identity = FileIdentity::from_fd(named.directory(named.path())?)?;
-            let held_identity = FileIdentity::from_fd(handle.root.directory(handle.root.path())?)?;
             if named_identity != held_identity || destination_identity == held_identity {
                 return Err(Error::new(
                     ErrorCode::DiskIdentityMismatch,
                     "original directory moved or aliases archive destination",
                 ));
             }
+            activity.check_running()?;
+            // `named` drops before its activity on success and every error.
         }
         let system = DiskRoot::open(&self.root)?;
         let named_lock = system.open_regular(&self.root.join("writer.lock"))?;
@@ -1512,3 +1519,7 @@ pub(in crate::engine) fn verify_generation_archive_observed(
         Some(maximum_objects),
     )
 }
+
+#[cfg(test)]
+#[path = "../../../../../../test/engine/unit/engine/membership_control_probe_tests.rs"]
+mod control_probe_tests;

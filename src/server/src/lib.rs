@@ -188,8 +188,8 @@ pub use backend_workspace::{
 };
 mod http_workspace;
 pub use backend_read::{
-    DirectorySelection, DirectorySnapshot, DownloadContext, ReadContent, ReadDirectory, ReadTree,
-    ResolveEntry, ResolvedEntry, TreeSnapshot, VersionSnapshot,
+    DirectoryReadSnapshot, DirectorySelection, DirectorySnapshot, DownloadContext, ReadContent,
+    ReadDirectory, ReadTree, ResolveEntry, ResolvedEntry, TreeSnapshot, VersionSnapshot,
 };
 use http_workspace::{abort, commit, namespace, seal, workspace, workspace_info, write_session};
 mod http_read;

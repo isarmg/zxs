@@ -1,10 +1,12 @@
 //! Conservative durable replay checkpoint. Journals remain authoritative.
 //!
-//! All configured trusted members must agree on a checkpoint whose tips occur in the
-//! fully verified journal prefixes. Covered metadata/proofs and sensitive layout
+//! All fixed trusted metadata members must agree on a checkpoint whose tips occur
+//! in the fully verified journal prefixes. Covered metadata/proofs and sensitive layout
 //! are reverified; unrelated append-only additions permit normal suffix replay.
 //! Missing or changed covered dependencies fall back to full repair. This bounds
 //! historical state decoding, not verification work or total startup time.
+//! Registry-bearing generations require authoritative replay until checkpoints
+//! can restore the admitted current namespace, not merely its raw snapshot.
 use super::Engine;
 use crate::journal::RecordType;
 use crate::{disk::*, journal::*, *};
@@ -18,7 +20,7 @@ use std::{
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct Checkpoint {
-    config_hash: String,
+    context: CheckpointContext,
     pub sequence: u64,
     pub candidate_hash: String,
     pub snapshot_hash: String,
@@ -26,6 +28,75 @@ pub(super) struct Checkpoint {
     coverage: BTreeMap<String, Vec<CoverageEntry>>,
     version_ids: BTreeSet<String>,
 }
+
+/// Persisted equality binding, never a source of membership or I/O authority.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serialization(deny_unknown_fields)]
+struct CheckpointContext {
+    config_hash: String,
+    authority: CheckpointAuthority,
+    io_disk_ids: BTreeSet<String>,
+    metadata_disk_ids: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serialization(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+enum CheckpointAuthority {
+    Genesis,
+    Generation { hash: String },
+}
+
+/// Only a live admitted Engine can choose the scope. Keep its immutable borrow
+/// through verification/save so a serialized context cannot widen that scope.
+struct CheckpointScope<'a> {
+    engine: &'a Engine,
+    context: CheckpointContext,
+    members: Vec<DiskConfig>,
+}
+
+impl<'a> CheckpointScope<'a> {
+    fn admit(engine: &'a Engine) -> Result<Option<Self>> {
+        // A registry commitment alone cannot reconstruct the masked current
+        // entries from a late historical snapshot. Even an already installed
+        // view must replay D3 after restart; do not read or write an unusable
+        // acceleration file. Successor Add/Abort generations can inherit it.
+        if engine.membership_fence.is_some()
+            || engine.pending_disk_exit.is_some()
+            || engine
+                .config
+                .generation()
+                .is_some_and(|generation| generation.portable.exit_registry().is_some())
+            || engine
+                .config
+                .disks
+                .iter()
+                .any(|disk| engine.config.excludes_io_disk(&disk.disk_id))
+        {
+            return Ok(None);
+        }
+        let members = engine.members();
+        let authority = match engine.config.generation_hash() {
+            None => CheckpointAuthority::Genesis,
+            Some(hash) => CheckpointAuthority::Generation { hash: hash.into() },
+        };
+        Ok(Some(Self {
+            engine,
+            context: CheckpointContext {
+                config_hash: object_hash("replay-config", &engine.config)?,
+                authority,
+                io_disk_ids: engine
+                    .config
+                    .io_disks()
+                    .map(|disk| disk.disk_id.clone())
+                    .collect(),
+                // Fixed voters, never a projection of currently available I/O.
+                metadata_disk_ids: members.iter().map(|disk| disk.disk_id.clone()).collect(),
+            },
+            members,
+        }))
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 struct Envelope {
@@ -331,12 +402,13 @@ fn inventory(
     Ok(())
 }
 fn coverage(
-    engine: &Engine,
+    scope: &CheckpointScope<'_>,
     absent: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<BTreeMap<String, Vec<CoverageEntry>>> {
+    let engine = scope.engine;
     let mut out = BTreeMap::new();
     let mut budget = 0;
-    for d in &engine.config.disks {
+    for d in engine.config.io_disks() {
         let root = &engine.disk_resources.get(d)?.root;
         let mut entries = Vec::new();
         inventory(root, Path::new("metadata"), &mut entries, &mut budget)?;
@@ -433,15 +505,20 @@ fn suffix_rebuilt_containers(
     Ok(out)
 }
 fn verify_coverage(
-    engine: &Engine,
+    scope: &CheckpointScope<'_>,
     checkpoint: &Checkpoint,
     rebuilt: &BTreeSet<(String, String)>,
 ) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
-    if checkpoint.coverage.len() != engine.config.disks.len() {
+    let engine = scope.engine;
+    if !checkpoint
+        .coverage
+        .keys()
+        .eq(scope.context.io_disk_ids.iter())
+    {
         return Err(CheckpointError::Members.into());
     }
-    for d in &engine.config.disks {
+    for d in engine.config.io_disks() {
         let root = &checkpoint_disk(engine, d)?.root;
         let entries = checkpoint
             .coverage
@@ -566,9 +643,11 @@ pub(super) fn load(
     prefixes: &BTreeMap<String, BTreeSet<String>>,
     records: &Records,
 ) -> Result<Option<Checkpoint>> {
-    let members = engine.members();
+    let Some(scope) = CheckpointScope::admit(engine)? else {
+        return Ok(None);
+    };
     let mut chosen = None;
-    for d in &members {
+    for d in &scope.members {
         let Some(file) = engine
             .disk_resources
             .get(d)?
@@ -579,8 +658,11 @@ pub(super) fn load(
         };
         let envelope: Envelope = decode_strict(&checkpoint_bytes(file, MAX_CHECKPOINT_BYTES)?)?;
         let checkpoint = envelope.checkpoint;
-        if checkpoint.config_hash != object_hash("replay-config", &engine.config)?
-            || checkpoint.tips.len() != members.len()
+        if checkpoint.context != scope.context
+            || !checkpoint
+                .tips
+                .keys()
+                .eq(scope.context.metadata_disk_ids.iter())
             || !checkpoint
                 .tips
                 .iter()
@@ -597,7 +679,7 @@ pub(super) fn load(
     };
     let verified = (|| {
         let rebuilt = suffix_rebuilt_containers(engine, &checkpoint, records)?;
-        verify_coverage(engine, &checkpoint, &rebuilt)
+        verify_coverage(&scope, &checkpoint, &rebuilt)
     })();
     match verified {
         Ok(()) => Ok(Some(checkpoint)),
@@ -613,15 +695,18 @@ pub(super) fn save(
     if engine.blocked || engine.snapshot.is_none() {
         return Ok(());
     }
-    for disk in &engine.config.disks {
+    let Some(scope) = CheckpointScope::admit(engine)? else {
+        return Ok(());
+    };
+    for disk in engine.config.io_disks() {
         checkpoint_disk(engine, disk)?;
     }
     let mut tips = BTreeMap::new();
     let mut candidate = None;
     let mut absent = BTreeMap::<String, BTreeSet<String>>::new();
     let mut version_ids = BTreeSet::new();
-    for d in engine.members() {
-        let root = &engine.disk_resources.get(&d)?.root;
+    for d in &scope.members {
+        let root = &engine.disk_resources.get(d)?.root;
         let records = &scanned_journals[&d.disk_id];
         // Preserve absences that made historical recovery skip local proof or
         // container work. Restoring such a prefix path requires full repair.
@@ -629,7 +714,7 @@ pub(super) fn save(
             .iter()
             .filter(|(r, _)| r.record_type == RecordType::Publication)
         {
-            let c: Candidate = load_object_at(root, &d, "candidate", &record.candidate_hash)?;
+            let c: Candidate = load_object_at(root, d, "candidate", &record.candidate_hash)?;
             for evidence in &c.versions {
                 version_ids.insert(evidence.version.version_id.clone());
                 if version_ids.len() > MAX_COVERAGE_ENTRIES {
@@ -641,6 +726,9 @@ pub(super) fn save(
                 }
                 for slot in &evidence.placement.route_slot_ids {
                     let target = engine.disk(slot)?;
+                    if engine.config.excludes_io_disk(&target.disk_id) {
+                        continue;
+                    }
                     let target_root = &engine.disk_resources.get(target)?.root;
                     let history = Path::new("histories").join(&evidence.version.history_tree_id);
                     for relative in [
@@ -696,8 +784,9 @@ pub(super) fn save(
     let Some((sequence, candidate_hash)) = candidate else {
         return Ok(());
     };
+    let coverage = coverage(&scope, &absent)?;
     let checkpoint = Checkpoint {
-        config_hash: object_hash("replay-config", &engine.config)?,
+        context: scope.context,
         sequence,
         candidate_hash,
         snapshot_hash: engine
@@ -705,7 +794,7 @@ pub(super) fn save(
             .clone()
             .expect("invariant: checkpoint save requires a snapshot"),
         tips,
-        coverage: coverage(engine, &absent)?,
+        coverage,
         version_ids,
     };
     let envelope = Envelope {
@@ -713,12 +802,12 @@ pub(super) fn save(
         checkpoint,
     };
     let bytes = encode_metadata(&envelope, MAX_CHECKPOINT_BYTES)?;
-    for d in engine.members() {
+    for d in &scope.members {
         engine
             .disk_resources
-            .get(&d)?
+            .get(d)?
             .root
-            .write_atomic(&path(&d), &bytes, true)?;
+            .write_atomic(&path(d), &bytes, true)?;
     }
     Ok(())
 }

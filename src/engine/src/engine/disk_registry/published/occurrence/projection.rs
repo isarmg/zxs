@@ -82,7 +82,6 @@ impl<'s, 'e> WriteProjection<'s, 'e> {
             NamespaceScope::BranchHead(id) => {
                 let branch = self
                     .source
-                    .engine
                     .state
                     .branches
                     .get(id)
@@ -157,7 +156,7 @@ impl<'s, 'e> WriteProjection<'s, 'e> {
                 return Err(ProjectionError::IdentityReuse(entry.entry_id.clone()));
             }
             if entry.kind == NamespaceEntryKind::File {
-                if let Some(version) = self.source.engine.state.versions.get(&entry.version_id) {
+                if let Some(version) = self.source.state.versions.get(&entry.version_id) {
                     let impact = self.source.preview.version(&entry.version_id)?;
                     if version.file_id != entry.file_id
                         || impact.remaining_holders.iter().next().is_none()

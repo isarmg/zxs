@@ -472,10 +472,6 @@ impl DiskRoot {
         self.operation()?.open_regular(path)
     }
 
-    pub(crate) fn open_optional_regular(&self, path: &Path) -> Result<Option<File>> {
-        self.operation()?.open_optional_regular(path)
-    }
-
     pub(crate) fn private_directory(&self, path: &Path) -> Result<PrivateDirectory> {
         self.operation()?.private_directory(path)
     }
@@ -1045,7 +1041,7 @@ pub(crate) struct DiskResources {
 impl DiskResources {
     pub(crate) fn open(config: &ValidatedConfig, sealed: bool) -> Result<Self> {
         let mut disks = BTreeMap::new();
-        for disk in &config.disks {
+        for disk in config.io_disks() {
             if sealed && disk_unavailable(disk)? {
                 continue;
             }
@@ -1057,7 +1053,7 @@ impl DiskResources {
 
     pub(crate) fn open_activation(config: &ValidatedConfig) -> Result<Self> {
         let mut disks = BTreeMap::new();
-        for disk in &config.disks {
+        for disk in config.io_disks() {
             let root = DiskRoot::open(&disk.root)?;
             let seal = identity_at(config, disk, &root.directory(root.path())?)?;
             let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
@@ -1108,7 +1104,7 @@ impl DiskResources {
     }
 
     pub(crate) fn recover_held(config: &ValidatedConfig, directories: Vec<File>) -> Result<Self> {
-        if directories.len() != config.disks.len() {
+        if directories.len() != config.io_disks().count() {
             return Err(Error::new(
                 ErrorCode::ConfigInvalid,
                 "held recovery directory count differs from configuration",
@@ -1116,7 +1112,7 @@ impl DiskResources {
         }
         let mut disks = BTreeMap::new();
         let mut identities = BTreeSet::new();
-        for (disk, directory) in config.disks.iter().zip(directories) {
+        for (disk, directory) in config.io_disks().zip(directories) {
             let root = DiskRoot::from_directory(disk.root.clone(), directory)?;
             let identity = root.operation()?.held().identity();
             if !identities.insert((identity.device, identity.inode)) {
@@ -1186,6 +1182,27 @@ impl DiskResources {
                 .map(|(id, handle)| (id.clone(), Arc::clone(handle)))
                 .collect(),
         }
+    }
+
+    /// Unlike rejected recovery resources, lifecycle retirement requires the
+    /// exact runtime closure proof. Historical config entries remain unchanged.
+    pub(crate) fn excluding_closed(&self, closed: &ClosedDiskIo) -> Result<Self> {
+        let disk_id = &closed.identity().disk_id;
+        let handle = self.disks.get(disk_id).ok_or_else(|| {
+            Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "closed disk is not among the admitted resources",
+            )
+        })?;
+        closed.verify_binding(handle.root.io_binding()?)?;
+        Ok(Self {
+            disks: self
+                .disks
+                .iter()
+                .filter(|(id, _)| *id != disk_id)
+                .map(|(id, handle)| (id.clone(), Arc::clone(handle)))
+                .collect(),
+        })
     }
 
     pub(crate) fn handles(&self) -> impl Iterator<Item = &Arc<DiskHandle>> {

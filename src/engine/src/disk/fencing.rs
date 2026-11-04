@@ -1,5 +1,5 @@
 //! Typed ownership of acquired writer locks. Cloning never duplicates an FD.
-use super::{DiskIoBinding, DiskIoLease, DiskRoot};
+use super::{ClosedDiskIo, DiskIoBinding, DiskIoLease, DiskRoot};
 use crate::{Error, ErrorCode, Result};
 use platform_io::fs_safety::linux::FileIdentity;
 use std::{
@@ -175,7 +175,33 @@ impl WriterLocks {
         Ok(())
     }
 
-    pub(crate) fn require_all(&self, disks: &[crate::DiskConfig]) -> Result<()> {
+    /// Remove only the writer whose physical admission domain has completed
+    /// every descriptor and lock tail. Other disk locks and the system lock are
+    /// retained unchanged; this operation never opens the retired root.
+    pub(crate) fn excluding_closed(&self, closed: &ClosedDiskIo) -> Result<Self> {
+        let disk_id = &closed.identity().disk_id;
+        let writer = self.disks.get(disk_id).ok_or_else(|| {
+            Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "closed disk is not among the held writer locks",
+            )
+        })?;
+        closed.verify_binding(&writer.binding)?;
+        Ok(Self {
+            system: Arc::clone(&self.system),
+            disks: self
+                .disks
+                .iter()
+                .filter(|(id, _)| *id != disk_id)
+                .map(|(id, writer)| (id.clone(), writer.clone()))
+                .collect(),
+        })
+    }
+
+    pub(crate) fn require_all<'a>(
+        &self,
+        disks: impl IntoIterator<Item = &'a crate::DiskConfig>,
+    ) -> Result<()> {
         for disk in disks {
             self.disks
                 .get(&disk.disk_id)

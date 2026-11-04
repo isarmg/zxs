@@ -1369,3 +1369,48 @@ fn payload_verification_cancellation_cannot_return_a_verified_file() {
     );
     assert!(binding.status().unwrap().drained());
 }
+
+#[test]
+fn version_health_does_not_reopen_a_quiesced_replica_from_a_stale_plan() {
+    let (_temp, engine, version_id) = committed_fixture();
+    let plan = engine.prepare_content(&version_id).unwrap();
+    let disk = &engine.config.disks[0];
+    let binding = engine
+        .disk_resources
+        .get(disk)
+        .unwrap()
+        .root
+        .io_binding()
+        .unwrap()
+        .clone();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    let closed = binding.closed_proof().unwrap();
+    // If the stale plan reaches this name, seal corruption would invalidate the
+    // shared metadata epoch. Closed admission must win before that first read.
+    fs::write(disk.root.join("disk.json"), b"forbidden observation").unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    assert_eq!(plan.health(3), storage_contract::CurrentHealth::Degraded);
+    assert!(epoch.matches(&engine.metadata_integrity));
+    assert_eq!(closed.identity().disk_id, disk.disk_id);
+    assert_eq!(
+        fs::read(disk.root.join("disk.json")).unwrap(),
+        b"forbidden observation"
+    );
+}
+
+#[test]
+fn version_health_never_readmits_a_returned_replica_by_its_name() {
+    let (temp, engine, version_id) = committed_fixture();
+    let disk = engine.config.disks[0].clone();
+    drop(engine);
+    let absent = temp.path().join("temporarily-absent-replica");
+    fs::rename(&disk.root, &absent).unwrap();
+    let engine = Engine::open(&temp.path().join("state")).unwrap();
+    assert!(engine.disk_resources.available(&disk).is_none());
+    let plan = engine.prepare_content(&version_id).unwrap();
+    fs::rename(&absent, &disk.root).unwrap();
+    let epoch = engine.metadata_integrity.capture();
+    assert_eq!(plan.health(3), storage_contract::CurrentHealth::Degraded);
+    assert!(epoch.matches(&engine.metadata_integrity));
+    assert!(engine.disk_resources.available(&disk).is_none());
+}

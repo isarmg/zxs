@@ -2,15 +2,12 @@
 use std::{
     fs::{self, File},
     io::{self, Read},
-    os::{
-        fd::BorrowedFd,
-        unix::fs::{FileTypeExt, MetadataExt},
-    },
+    os::unix::fs::{FileTypeExt, MetadataExt},
     path::{Component, Path, PathBuf},
 };
 
 use error_definition::Error;
-use rustix::fs::{AtFlags, StatxFlags};
+use storage_engine::DiskObservationAccess;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum HardwareMapping {
@@ -60,6 +57,12 @@ enum ObservationError {
     Invalid { path: PathBuf, detail: &'static str },
     #[error("mount ID {0} is no longer present in mountinfo")]
     MountMissing(u64),
+    #[error("observe registered directory {path}")]
+    Directory {
+        path: PathBuf,
+        #[source]
+        source: storage_engine::Error,
+    },
 }
 
 struct ObservationPaths<'a> {
@@ -94,8 +97,8 @@ impl ObservationReport {
 
 /// `root_path` is diagnostic text only; all filesystem observations start from
 /// the caller's verified, held directory descriptor, never its replaceable name.
-pub(crate) fn observe(root: &Path, root_fd: BorrowedFd<'_>) -> HardwareObservation {
-    let root_mount = match read_root_mount(root, root_fd) {
+pub(crate) fn observe(root: &Path, directory: &DiskObservationAccess<'_>) -> HardwareObservation {
+    let root_mount = match read_root_mount(root, directory) {
         Ok(value) => value,
         Err(error) => {
             tracing::debug!(root = %root.display(), error = ?error, "disk hardware observation unavailable");
@@ -117,21 +120,20 @@ pub(crate) fn observe(root: &Path, root_fd: BorrowedFd<'_>) -> HardwareObservati
     report.value
 }
 
-fn read_root_mount(root: &Path, root_fd: BorrowedFd<'_>) -> Result<RootMount, ObservationError> {
-    let stat = rustix::fs::statx(
-        root_fd,
-        "",
-        AtFlags::EMPTY_PATH | AtFlags::NO_AUTOMOUNT,
-        StatxFlags::MNT_ID,
-    )
-    .map_err(|source| io_error("statx disk root", root, source.into()))?;
-    if stat.stx_mask & StatxFlags::MNT_ID.bits() == 0 {
-        return Err(invalid(root, "kernel did not return a mount ID"));
-    }
+fn read_root_mount(
+    root: &Path,
+    directory: &DiskObservationAccess<'_>,
+) -> Result<RootMount, ObservationError> {
+    let mount = directory
+        .mount()
+        .map_err(|source| ObservationError::Directory {
+            path: root.to_owned(),
+            source,
+        })?;
     Ok(RootMount {
-        id: stat.stx_mnt_id,
-        major: stat.stx_dev_major,
-        minor: stat.stx_dev_minor,
+        id: mount.mount_id,
+        major: mount.device_major,
+        minor: mount.device_minor,
     })
 }
 

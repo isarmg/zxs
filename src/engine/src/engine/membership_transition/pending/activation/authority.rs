@@ -9,6 +9,8 @@ use std::collections::BTreeSet;
 pub(crate) struct AuthorityNode {
     pub(super) joint: PortableJoint,
     pub(super) archive: ArchiveRoot,
+    #[serialization(default, skip_serializing_if = "Option::is_none")]
+    registry: Option<registry::RegistryContinuation>,
 }
 
 /// The variants have disjoint strict schemas: Add has only joint/archive and
@@ -19,6 +21,7 @@ pub(crate) struct AuthorityNode {
 enum AuthorityCore {
     Add(AuthorityNode),
     Abort(AbortCore),
+    Exit(exit::ExitCore),
 }
 
 pub(in crate::engine::membership_transition) trait AuthorityResolver {
@@ -30,11 +33,13 @@ impl AuthorityCore {
         match self {
             Self::Add(node) => &node.archive,
             Self::Abort(core) => &core.archive,
+            Self::Exit(core) => &core.archive,
         }
     }
     fn intent(&self, evidence: Option<&AbortAuthorityEvidence>) -> Result<TransitionIntent> {
         match (self, evidence) {
             (Self::Add(node), None) => node.intent(),
+            (Self::Exit(core), None) => core.intent(),
             (Self::Abort(core), Some(evidence)) => evidence.verify(core),
             _ => Err(Error::new(
                 ErrorCode::ObjectCorrupt,
@@ -44,7 +49,7 @@ impl AuthorityCore {
     }
     fn effective_config<'a>(&self, intent: &'a TransitionIntent) -> &'a ValidatedConfig {
         match self {
-            Self::Add(_) => &intent.target,
+            Self::Add(_) | Self::Exit(_) => &intent.target,
             Self::Abort(_) => intent.origin.config(),
         }
     }
@@ -104,7 +109,7 @@ struct EvidenceChain {
 enum StoredAuthority {
     Evidence(EvidenceChain),
     Chain(Chain),
-    Genesis(AuthorityNode),
+    Genesis(AuthorityCore),
 }
 
 impl Serialize for PortableAuthority {
@@ -156,7 +161,7 @@ impl<'de> Deserialize<'de> for PortableAuthority {
                 }
             }
             StoredAuthority::Genesis(head) => Self {
-                head: AuthorityCore::Add(head),
+                head,
                 predecessors: BTreeMap::new(),
                 evidence: BTreeMap::new(),
             },
@@ -222,6 +227,9 @@ impl AuthorityNode {
                 "generation authority is not a pure addition",
             ));
         }
+        if let Some(registry) = &self.registry {
+            registry.verify(&verified.intent, &verified.intent.target)?;
+        }
         Ok(verified.intent)
     }
 }
@@ -231,6 +239,7 @@ impl PortableAuthority {
     pub(super) fn add_joint(&self) -> Result<&PortableJoint> {
         match &self.head {
             AuthorityCore::Add(node) => Ok(&node.joint),
+            AuthorityCore::Exit(core) => Ok(&core.joint),
             AuthorityCore::Abort(_) => Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 "Abort authority has no Joint addition certificate",
@@ -259,10 +268,222 @@ impl PortableAuthority {
             AuthorityCore::Abort(core) => {
                 self.evidence[&self.hash()?].verify_member(core, root, disk)
             }
-            AuthorityCore::Add(_) => Err(Error::new(
+            AuthorityCore::Add(_) | AuthorityCore::Exit(_) => Err(Error::new(
                 ErrorCode::ConfigConflict,
                 "expected Abort authority",
             )),
+        }
+    }
+
+    pub(in crate::engine) fn is_exit(&self) -> bool {
+        matches!(self.head, AuthorityCore::Exit(_))
+    }
+    pub(in crate::engine) fn exit_registry(&self) -> Option<&crate::DiskRegistryCommitment> {
+        self.registry_at(&self.head)
+            .expect("invariant: admitted authority lineage")
+    }
+
+    fn registry_at<'a>(
+        &'a self,
+        node: &'a AuthorityCore,
+    ) -> Result<Option<&'a crate::DiskRegistryCommitment>> {
+        match node {
+            AuthorityCore::Add(node) => Ok(node
+                .registry
+                .as_ref()
+                .map(registry::RegistryContinuation::registry)),
+            AuthorityCore::Exit(core) => Ok(Some(core.registry())),
+            AuthorityCore::Abort(_) => {
+                let hash = object_hash(AUTHORITY_KIND, node)?;
+                let intent = node.intent(self.evidence.get(&hash))?;
+                match intent.origin.predecessor() {
+                    Some(parent) => self.registry_at(self.node(parent)?),
+                    None => Ok(None),
+                }
+            }
+        }
+    }
+
+    pub(in crate::engine) fn verified_registry(
+        &self,
+    ) -> Result<Option<crate::VerifiedDiskRegistry>> {
+        self.lineage()?;
+        self.registry_for_node(&self.head)
+    }
+
+    fn registry_for_node(
+        &self,
+        node: &AuthorityCore,
+    ) -> Result<Option<crate::VerifiedDiskRegistry>> {
+        match node {
+            AuthorityCore::Add(node) => node
+                .registry
+                .as_ref()
+                .map(|registry| {
+                    let intent = node.intent()?;
+                    registry.verify(&intent, &intent.target)
+                })
+                .transpose(),
+            AuthorityCore::Exit(core) => core.verified_registry().map(Some),
+            AuthorityCore::Abort(_) => {
+                let hash = object_hash(AUTHORITY_KIND, node)?;
+                let intent = node.intent(self.evidence.get(&hash))?;
+                match intent.origin.predecessor() {
+                    Some(hash) => self.registry_for_node(self.node(hash)?),
+                    None => Ok(None),
+                }
+            }
+        }
+    }
+    pub(in crate::engine) fn verify_registry_source(&self, source: &State) -> Result<()> {
+        match &self.head {
+            AuthorityCore::Add(node) => {
+                if let Some(registry) = &node.registry {
+                    registry.verify_source(&self.intent()?, source)?;
+                }
+            }
+            AuthorityCore::Exit(core) => {
+                core.registry_from_source(source)?;
+            }
+            AuthorityCore::Abort(_) => (),
+        }
+        Ok(())
+    }
+
+    pub(in crate::engine) fn restrict_io(
+        &self,
+        config: ValidatedConfig,
+    ) -> Result<ValidatedConfig> {
+        let forbidden = self.forbidden_disk_ids()?;
+        if forbidden.is_empty() {
+            return Ok(config);
+        }
+        let allowed = config
+            .io_disks()
+            .filter(|disk| !forbidden.contains(&disk.disk_id))
+            .map(|disk| disk.disk_id.clone())
+            .collect();
+        config.restrict_io_disks(allowed)
+    }
+
+    pub(super) fn prepare_namespace_activation(
+        &self,
+        source: &State,
+        previous: Option<&crate::engine::disk_registry::current::CurrentNamespaces>,
+    ) -> Result<crate::engine::disk_registry::current::PreparedCurrentNamespaces> {
+        let intent = self.intent()?;
+        if let AuthorityCore::Exit(core) = &self.head {
+            return core.current_namespaces(source, previous);
+        }
+        if let AuthorityCore::Add(node) = &self.head
+            && let Some(registry) = &node.registry
+        {
+            registry.verify_source(&intent, source)?;
+        }
+        let registry = self.verified_registry()?.ok_or_else(|| {
+            Error::new(
+                ErrorCode::PublicationInvalid,
+                "namespace continuation lacks a registry",
+            )
+        })?;
+        let snapshot = intent.boundary.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::PublicationInvalid,
+                "namespace continuation lacks its source",
+            )
+        })?;
+        previous
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "namespace continuation lacks the fully replayed predecessor view",
+                )
+            })?
+            .prepare_continuation(source, &snapshot.snapshot_hash, &registry)
+    }
+
+    pub(super) fn activation_mask_hash(&self) -> Result<Option<String>> {
+        let Some(core) = self.exit_core() else {
+            return Ok(None);
+        };
+        let registry = core.verified_registry()?;
+        Ok(
+            match &registry
+                .pending_exit()
+                .expect("invariant: verified exit request")
+                .effect
+            {
+                crate::RegistryExitEffect::Disable => None,
+                crate::RegistryExitEffect::Detach {
+                    occurrence_mask_hash,
+                } => Some(occurrence_mask_hash.clone()),
+            },
+        )
+    }
+
+    pub(in crate::engine) fn exit_core(&self) -> Option<&exit::ExitCore> {
+        match &self.head {
+            AuthorityCore::Exit(core) => Some(core),
+            _ => None,
+        }
+    }
+    pub(in crate::engine) fn bootstrap_stops(
+        &self,
+    ) -> Result<Vec<(crate::DiskRegistrationIdentity, OperationId, String)>> {
+        let mut stops = BTreeMap::new();
+        for (hash, intent) in self.lineage()? {
+            if matches!(self.node(&hash)?, AuthorityCore::Exit(_)) {
+                let effect = intent
+                    .effect
+                    .as_ref()
+                    .expect("invariant: verified exit effect");
+                let binding = effect.identity(&intent.origin.config().pool_id);
+                if let Some((previous, _, _)) = stops.get(&binding.disk_id) {
+                    if previous != &binding {
+                        return Err(Error::new(
+                            ErrorCode::PublicationInvalid,
+                            "stopped logical disk is rebound in authority lineage",
+                        ));
+                    }
+                } else {
+                    let transition = object_hash(INTENT_KIND, &intent)?;
+                    stops.insert(
+                        binding.disk_id.clone(),
+                        (binding, intent.operation_id, transition),
+                    );
+                }
+            }
+        }
+        Ok(stops.into_values().collect())
+    }
+
+    pub(in crate::engine) fn forbidden_disk_ids(&self) -> Result<BTreeSet<String>> {
+        Ok(self
+            .bootstrap_stops()?
+            .into_iter()
+            .map(|(binding, _, _)| binding.disk_id)
+            .collect())
+    }
+
+    pub(in crate::engine) fn verify_bootstrap_stop(
+        &self,
+        binding: &crate::DiskRegistrationIdentity,
+        operation_id: OperationId,
+        intent_hash: &str,
+    ) -> Result<()> {
+        if self
+            .bootstrap_stops()?
+            .iter()
+            .any(|(identity, operation, hash)| {
+                identity == binding && *operation == operation_id && hash == intent_hash
+            })
+        {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "bootstrap stop has no exact first authenticated exit authority",
+            ))
         }
     }
 
@@ -388,6 +609,7 @@ impl PortableAuthority {
         joint: PortableJoint,
         archive: ArchiveRoot,
         predecessor: Option<&Self>,
+        registry: Option<registry::RegistryContinuation>,
     ) -> Result<Self> {
         let mut predecessors = BTreeMap::new();
         let mut evidence = BTreeMap::new();
@@ -397,7 +619,28 @@ impl PortableAuthority {
             evidence = previous.evidence.clone();
         }
         let authority = Self {
-            head: AuthorityCore::Add(AuthorityNode { joint, archive }),
+            head: AuthorityCore::Add(AuthorityNode {
+                joint,
+                archive,
+                registry,
+            }),
+            predecessors,
+            evidence,
+        };
+        authority.lineage()?;
+        Ok(authority)
+    }
+
+    pub(super) fn new_exit(core: exit::ExitCore, predecessor: Option<&Self>) -> Result<Self> {
+        let mut predecessors = BTreeMap::new();
+        let mut evidence = BTreeMap::new();
+        if let Some(previous) = predecessor {
+            predecessors = previous.predecessors.clone();
+            predecessors.insert(previous.hash()?, previous.head.clone());
+            evidence = previous.evidence.clone();
+        }
+        let authority = Self {
+            head: AuthorityCore::Exit(core),
             predecessors,
             evidence,
         };
@@ -460,6 +703,31 @@ impl PortableAuthority {
                 return Err(Error::new(
                     ErrorCode::LogFork,
                     "successor does not extend its exact predecessor",
+                ));
+            }
+        }
+        // Registry ancestry is checked separately from membership ancestry. A
+        // successor cannot silently re-enable or resurrect a historical binding.
+        for (hash, intent) in &chain {
+            let node = self.node(hash)?;
+            let previous = intent
+                .origin
+                .predecessor()
+                .map(|parent| self.node(parent).and_then(|node| self.registry_at(node)))
+                .transpose()?
+                .flatten();
+            let carried = match node {
+                AuthorityCore::Add(node) => node
+                    .registry
+                    .as_ref()
+                    .map(registry::RegistryContinuation::parent),
+                AuthorityCore::Exit(core) => core.registry_parent(),
+                AuthorityCore::Abort(_) => previous,
+            };
+            if carried != previous {
+                return Err(Error::new(
+                    ErrorCode::PublicationInvalid,
+                    "membership successor does not continue its exact registry predecessor",
                 ));
             }
         }
@@ -539,7 +807,7 @@ impl PortableAuthority {
 
     pub(super) fn verify_ancestor_candidate(&self, candidate: &Candidate) -> Result<()> {
         let chain = self.lineage()?;
-        let config = match candidate.generation() {
+        match candidate.generation() {
             Some(hash) => {
                 let intent = &chain
                     .iter()
@@ -551,25 +819,28 @@ impl PortableAuthority {
                         )
                     })?
                     .1;
-                self.node(hash)?.effective_config(intent)
+                let node = self.node(hash)?;
+                match self.registry_for_node(node)? {
+                    Some(registry) => registry.verify_lifecycle_candidate(candidate, hash),
+                    None => node
+                        .effective_config(intent)
+                        .verify_original_candidate_membership(candidate),
+                }
             }
             None => chain
                 .first()
                 .expect("invariant: lineage contains Genesis")
                 .1
                 .origin
-                .config(),
-        };
-        config.verify_original_candidate_membership(candidate)
+                .config()
+                .verify_original_candidate_membership(candidate),
+        }
     }
 
     pub(super) fn frozen_archive(&self, candidate: &Candidate) -> Result<(ArchiveRoot, u64)> {
         for (archive, intent) in self.archives()? {
             if intent.origin.predecessor() == candidate.generation() {
-                intent
-                    .origin
-                    .config()
-                    .verify_original_candidate_membership(candidate)?;
+                self.verify_ancestor_candidate(candidate)?;
                 return Ok((archive, intent.fence_sequence));
             }
         }
@@ -590,7 +861,10 @@ impl PortableAuthority {
             ));
         }
         let config = self.head.effective_config(&intent);
-        config.verify_original_candidate_membership(candidate)?;
+        match self.registry_for_node(&self.head)? {
+            Some(registry) => registry.verify_lifecycle_candidate(candidate, &self.hash()?)?,
+            None => config.verify_original_candidate_membership(candidate)?,
+        }
         Ok(config.clone())
     }
 

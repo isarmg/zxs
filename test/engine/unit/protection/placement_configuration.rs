@@ -372,3 +372,66 @@ fn placement_configuration_requires_destination_backup_prefixes_before_switching
             .any(|placement| placement.route_slot_ids == ["P02", "B02"])
     );
 }
+
+#[test]
+fn placement_configuration_current_policy_resolver_preserves_identity_and_retained_bindings() {
+    let (_temp, mut engine, repo) = fixture();
+    engine
+        .configure_backups(BackupConfigurationRequest {
+            repository_id: &repo.repository_id,
+            path: "docs",
+            target_copies: 3,
+            backup_prefixes: &std::collections::BTreeMap::from([
+                ("B01".into(), "backup".into()),
+                ("C01".into(), "cold".into()),
+            ]),
+            expected_generation: 0,
+            principal: "admin",
+            operation_id: OperationId::generate().unwrap(),
+        })
+        .unwrap();
+    let state = engine.state();
+    let tree = engine.namespace_tree(&repo.main_branch_id).unwrap();
+    let directory = tree.get("docs").unwrap();
+    let file = tree.get("docs/a.txt").unwrap();
+    let policy = &state.protection_policies[&state.file_backup_policies[&file.file_id]];
+    assert_eq!(backup_paths::scope_path(state, policy), Some("docs"));
+    assert_eq!(backup_paths::scope_path_in(&[], policy), None);
+
+    // Pure resolver inputs, not an admission token: the same spelling with a
+    // fresh directory/file identity must not reuse the historical scope policy.
+    let mut fresh_directory = directory.clone();
+    fresh_directory.entry_id = new_id("entry").unwrap();
+    let mut fresh_file = file.clone();
+    fresh_file.entry_id = new_id("entry").unwrap();
+    fresh_file.file_id = new_id("file").unwrap();
+    let current = [fresh_directory, fresh_file];
+    assert_eq!(backup_paths::scope_path_in(&current, policy), None);
+    assert!(
+        backup_paths::effective_policy_in(state, &current, &repo.repository_id, None, "docs/a.txt")
+            .is_none()
+    );
+    assert!(
+        backup_paths::effective_policy_in(
+            state,
+            &current,
+            &repo.repository_id,
+            None,
+            "docs/future.txt"
+        )
+        .is_none()
+    );
+    assert_eq!(
+        backup_paths::effective_policy_in(
+            state,
+            &current,
+            &repo.repository_id,
+            Some(&file.file_id),
+            "retained/alias"
+        )
+        .unwrap()
+        .policy_id,
+        policy.policy_id
+    );
+    assert_eq!(backup_paths::scope_path(state, policy), Some("docs"));
+}

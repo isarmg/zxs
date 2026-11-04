@@ -91,6 +91,7 @@ impl PublishedDependencyReuse {
 /// An owned preparation, never serializable or constructible by callers.
 pub(crate) struct DetachedPublication {
     next: State,
+    next_current_namespaces: Option<std::sync::Arc<super::CurrentNamespaces>>,
     candidate: Candidate,
     result: OperationResult,
     verified: VerifiedPayloadSet,
@@ -172,6 +173,7 @@ impl Engine {
         }
         let DetachedPublication {
             next,
+            next_current_namespaces,
             candidate,
             result,
             verified,
@@ -296,6 +298,7 @@ impl Engine {
                 .retryable());
         }
         let previous = std::mem::replace(&mut self.state, std::sync::Arc::new(next));
+        self.current_namespaces = next_current_namespaces;
         self.history_window_roots = Some(super::history_window::HistoryRootBindings::published(
             &self.state,
             history_basis.clone(),
@@ -875,6 +878,10 @@ impl crate::engine::PlanningContext<'_> {
         maximum: usize,
         cache_maximum: usize,
     ) -> Result<DetachedPublication> {
+        let next_current_namespaces = self
+            .current_namespaces
+            .map(|view| view.advance(self.state, &next).map(std::sync::Arc::new))
+            .transpose()?;
         let metadata_epoch = self.metadata_integrity.capture();
         let members = self.members();
         let mut required = BTreeMap::<String, u64>::new();
@@ -1016,34 +1023,45 @@ impl crate::engine::PlanningContext<'_> {
                 .reference(),
             "incremental history roots differ from complete projection",
         );
-        let candidate = Candidate::new(
-            CandidateData {
-                pool_id: self.config.pool_id.clone(),
-                sequence: next.sequence,
-                transaction_id: match self
-                    .config
-                    .generation()
-                    .and_then(|generation| generation.transaction_id(result.operation_id))
-                {
-                    Some(id) => id,
-                    None => new_id("tx")?,
-                },
-                operation_id: result.operation_id,
-                request_digest: result.request_digest.clone(),
-                previous_snapshot: self.snapshot.clone(),
-                snapshot_hash,
-                versions: prepared
-                    .iter()
-                    .map(|p| VersionEvidence {
-                        version: p.version.clone(),
-                        placement: p.placement.clone(),
-                    })
-                    .collect(),
-                metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
-                history_roots: history_basis.reference().clone(),
+        let candidate_data = CandidateData {
+            pool_id: self.config.pool_id.clone(),
+            sequence: next.sequence,
+            transaction_id: match self
+                .config
+                .generation()
+                .and_then(|generation| generation.transaction_id(result.operation_id))
+            {
+                Some(id) => id,
+                None => new_id("tx")?,
             },
-            self.config.generation_hash(),
-        );
+            operation_id: result.operation_id,
+            request_digest: result.request_digest.clone(),
+            previous_snapshot: self.snapshot.clone(),
+            snapshot_hash,
+            versions: prepared
+                .iter()
+                .map(|p| VersionEvidence {
+                    version: p.version.clone(),
+                    placement: p.placement.clone(),
+                })
+                .collect(),
+            metadata_disk_ids: members.iter().map(|d| d.disk_id.clone()).collect(),
+            history_roots: history_basis.reference().clone(),
+        };
+        let candidate = match self
+            .config
+            .generation()
+            .and_then(|generation| generation.portable.exit_registry())
+        {
+            Some(registry) => Candidate::new_with_registry(
+                candidate_data,
+                self.config
+                    .generation_hash()
+                    .expect("invariant: registry belongs to an admitted exit generation"),
+                registry,
+            ),
+            None => Candidate::new(candidate_data, self.config.generation_hash()),
+        };
         crate::metadata_budget::preflight_publication_prepared(
             self,
             &candidate,
@@ -1104,6 +1122,7 @@ impl crate::engine::PlanningContext<'_> {
         let history_owners = projection.into_owners();
         Ok(DetachedPublication {
             next,
+            next_current_namespaces,
             candidate,
             result,
             verified,

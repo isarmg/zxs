@@ -21,6 +21,10 @@ pub(crate) fn protected_routes() -> Router<AppState> {
         .route("/api/admin/disks/preview", post(addition_preview))
         .route("/api/admin/disks/addition", get(addition_status))
         .route("/api/admin/disks/addition/resume", post(addition_resume))
+        .route("/api/admin/disks/addition/cancel", post(addition_cancel))
+        .route("/api/admin/disks/exit/preview", post(exit_preview))
+        .route("/api/admin/disks/exit", get(exit_status).post(exit_commit))
+        .route("/api/admin/disks/exit/resume", post(exit_resume))
         .route(
             "/api/admin/storage/discovery-root",
             get(discovery_root).put(set_discovery_root),
@@ -233,7 +237,7 @@ async fn protected_mutation(
     let limit = match action {
         "activate" => MAX_ACTIVATION_BODY_BYTES,
         "disk_add_preview" => crate::JSON_BODY_LIMIT,
-        "set_discovery_root" => MAX_DIRECTORY_BODY_BYTES,
+        "set_discovery_root" | "disk_exit_commit" => MAX_DIRECTORY_BODY_BYTES,
         _ => super::MAX_SETUP_BODY_BYTES,
     };
     let input = body(request, limit).await?;
@@ -372,6 +376,12 @@ async fn addition_preview(
 ) -> Result<Json<Value>, ApiError> {
     protected_mutation(state, request, "disk_add_preview").await
 }
+async fn addition_cancel(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "disk_add_cancel").await
+}
 async fn addition_resume(
     State(state): State<AppState>,
     request: Request,
@@ -396,6 +406,45 @@ async fn addition_status(
     dispatch(
         state,
         "disk_add_status",
+        json!({"operation_id":query.operation_id}),
+        None,
+        Some(identity),
+    )
+    .await
+    .map(Json)
+}
+
+async fn exit_preview(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "disk_exit_preview").await
+}
+async fn exit_commit(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "disk_exit_commit").await
+}
+async fn exit_resume(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "disk_exit_resume").await
+}
+async fn exit_status(
+    State(state): State<AppState>,
+    crate::http_boundary::ApiQuery(query): crate::http_boundary::ApiQuery<AdditionQuery>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    dispatch(
+        state,
+        "disk_exit_status",
         json!({"operation_id":query.operation_id}),
         None,
         Some(identity),

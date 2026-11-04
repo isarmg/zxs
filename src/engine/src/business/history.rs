@@ -28,6 +28,16 @@ fn branch_contains_commit(state: &State, branch: &Branch, target: &str) -> Resul
 impl Engine {
     /// The frozen readable parent of a file that has no branch-owned body yet.
     pub fn pending_file_source(&self, branch_id: &str, file_id: &str) -> Option<&str> {
+        match self.namespace_read_view() {
+            crate::engine::NamespaceReadView::AwaitingPublication => return None,
+            crate::engine::NamespaceReadView::Published(view) => {
+                let branch = self.state.branches.get(branch_id)?;
+                if !view.contains_file(branch_id, &branch.head_commit_id, file_id) {
+                    return None;
+                }
+            }
+            crate::engine::NamespaceReadView::Initial => {}
+        }
         super::file::pending_file_source(&self.state, branch_id, file_id)
     }
 
@@ -43,7 +53,18 @@ impl Engine {
                 "branch not found",
             )
         })?;
-        self.list_tree_at_ref(branch_id, &branch.head_commit_id)
+        let commit = self
+            .state
+            .commits
+            .get(&branch.head_commit_id)
+            .ok_or_else(|| Error::new(ErrorCode::StateInvalid, "branch HEAD missing"))?;
+        if branch.state == BranchState::Migrated {
+            return Err(Error::new(
+                ErrorCode::TreeMoved,
+                "branch moved to another history",
+            ));
+        }
+        self.current_branch_entries(branch_id, commit)
     }
 
     /// An unwritten snapshot reads its frozen parent versions. Reservation

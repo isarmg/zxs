@@ -6844,7 +6844,8 @@
           "enum": [
             null,
             "insufficient_copies",
-            "missing_backup_prefixes"
+            "missing_backup_prefixes",
+            "route_unavailable"
           ]
         }
       },
@@ -6854,7 +6855,7 @@
         "unavailable_reason"
       ],
       "additionalProperties": false,
-      "description": "一级盘候选及登记物理根。null 表示可选；insufficient_copies 表示完整副本链不足，missing_backup_prefixes 表示目标链所需备份逻辑前缀未配置。"
+      "description": "当前已登记的一级盘候选及其根路径，不含已移除登记。null 表示可选；insufficient_copies 表示完整副本链不足，missing_backup_prefixes 表示目标链所需备份逻辑前缀未配置，route_unavailable 表示所需存储链含已下线或移除的目录。"
     },
     "PlacementConfigurationResponse": {
       "type": "object",

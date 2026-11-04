@@ -13,6 +13,7 @@ struct Fixture {
     config: ValidatedConfig,
     resources: Arc<DiskResources>,
     state: Arc<State>,
+    namespace_baselines: BTreeMap<String, crate::engine::WorkspaceNamespaceBaseline>,
     snapshot: Option<String>,
     integrity: Arc<crate::engine::provenance::MetadataIntegrity>,
 }
@@ -29,6 +30,7 @@ impl Fixture {
             config,
             resources,
             state: Arc::new(State::default()),
+            namespace_baselines: BTreeMap::new(),
             snapshot: None,
             integrity: Arc::default(),
         }
@@ -40,6 +42,8 @@ impl Fixture {
             config: &self.config,
             disk_resources: &self.resources,
             state: &self.state,
+            current_namespaces: None,
+            workspace_namespace_baselines: &self.namespace_baselines,
             snapshot: &self.snapshot,
             next_slot: 1,
             blocked: false,

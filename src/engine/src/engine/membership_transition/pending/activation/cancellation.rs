@@ -22,6 +22,12 @@ impl Engine {
             base: Arc::new(base),
         });
         generation.next_state()?;
+        if generation.portable.exit_registry().is_some() {
+            generation.portable.prepare_namespace_activation(
+                &generation.base,
+                self.current_namespaces.as_deref(),
+            )?;
+        }
         PreparedMetadataObject::new(
             "membership-generation-bundle",
             &generation.portable,
@@ -45,6 +51,7 @@ impl Engine {
             .with_disk_roots(roots)?
             .with_workspace_limits(Some(self.config.effective_workspace_limits()))?
             .with_generation(Arc::clone(&generation))?;
+        let config = generation.portable.restrict_io(config)?;
         let fence = self
             .membership_fence
             .as_ref()
@@ -143,6 +150,7 @@ impl Engine {
         let snapshot = generation.snapshot();
         let sequence = generation.first_sequence()?;
         self.config = config;
+        self.current_namespaces = None;
         self.disk_resources = Arc::new(resources);
         // No original journal is modified. Only the new G gets a writer later.
         self.journals.clear();

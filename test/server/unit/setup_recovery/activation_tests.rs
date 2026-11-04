@@ -407,6 +407,335 @@ fn complete_genesis_without_ready_receipt_is_checked_and_completed_not_reinitial
     );
 }
 
+fn activated_engine(service: &SetupRecovery, data_only_target: bool) -> Engine {
+    initialize(service);
+    let request = request(service, &["one", "two", "three"]);
+    let mut config = Config::development(
+        request
+            .selections
+            .iter()
+            .map(|selection| PathBuf::from(&selection.root_path)),
+    )
+    .unwrap();
+    config.disks[0].metadata_member = !data_only_target;
+    let intent = StorageActivationIntent {
+        format: ActivationFormat::InitialStorage,
+        config: ValidatedConfig::try_from(config).unwrap(),
+        selections: request.selections,
+    };
+    service.write_control(ACTIVATION_INTENT, &intent).unwrap();
+    let directories = service.activation_directories(&intent).unwrap();
+    let engine =
+        Engine::initialize_held(&service.data_root, intent.config.clone(), directories).unwrap();
+    service
+        .write_activation_ready(&intent, service.activation_seals(&intent).unwrap())
+        .unwrap();
+    service
+        .write_control(
+            ACTIVATION_COMPLETE,
+            &StorageActivationComplete {
+                intent_digest: value_digest(&intent).unwrap(),
+            },
+        )
+        .unwrap();
+    engine
+}
+
+fn publish_activation_source(engine: &mut Engine) {
+    let slot = engine.config().disks[0].slot_id.clone();
+    engine
+        .create_repository(
+            &storage_contract::RepositoryName::parse("activation-exit-source").unwrap(),
+            &slot,
+            1,
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+}
+
+fn exit_activation_target(engine: &mut Engine, action: storage_engine::MembershipExitAction) {
+    publish_activation_source(engine);
+    let disk = engine.config().disks[0].clone();
+    engine
+        .begin_disk_exit(
+            &disk.disk_id,
+            action,
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let archive = engine.build_managed_membership_control_archive().unwrap();
+    engine
+        .enroll_pending_members(&archive.archive_path, &archive.root_hash, Vec::new())
+        .unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    engine.activate_pending_disk_exit().unwrap();
+}
+
+fn add_activation_successor(engine: &mut Engine, base: &Path) {
+    publish_activation_source(engine);
+    let mut target = engine.config().clone();
+    let additions =
+        Config::development((0..4).map(|index| base.join(format!("added-{index}")))).unwrap();
+    let added = additions.disks.into_iter().nth(3).unwrap();
+    fs::create_dir(&added.root).unwrap();
+    fs::set_permissions(&added.root, fs::Permissions::from_mode(0o700)).unwrap();
+    target.disks.push(added.clone());
+    engine
+        .begin_membership_handoff(
+            target,
+            "admin",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let archive = engine.build_managed_membership_control_archive().unwrap();
+    engine
+        .enroll_pending_members(
+            &archive.archive_path,
+            &archive.root_hash,
+            vec![storage_engine::PendingMemberDirectory {
+                disk_id: added.disk_id,
+                directory: File::open(added.root).unwrap(),
+            }],
+        )
+        .unwrap();
+    engine.resume_membership_joint_decision().unwrap();
+    engine.activate_pending_membership().unwrap();
+}
+
+fn lose_activation_completion(service: &SetupRecovery, mode: &str) {
+    let path = service.data_root.join(ACTIVATION_COMPLETE);
+    if mode == "missing" {
+        fs::remove_file(path).unwrap();
+        return;
+    }
+    let bytes = match mode {
+        "corrupt" => b"{incomplete".to_vec(),
+        "mismatched" => json_codec::to_vec(&StorageActivationComplete {
+            intent_digest: "0".repeat(64),
+        })
+        .unwrap(),
+        other => panic!("unknown completion loss: {other}"),
+    };
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
+}
+
+#[test]
+fn lifecycle_exit_cannot_replay_original_activation_selections_with_stale_or_equal_config() {
+    for data_only in [false, true] {
+        for action in [
+            storage_engine::MembershipExitAction::PlannedOffline,
+            storage_engine::MembershipExitAction::Deregister,
+        ] {
+            let f = fixture();
+            let mut engine = activated_engine(&f.service, data_only);
+            let original = fs::read(f.service.data_root.join("config.json")).unwrap();
+            exit_activation_target(&mut engine, action);
+            if data_only {
+                let initial: Config = json_codec::from_slice(&original).unwrap();
+                assert_eq!(
+                    value_digest(engine.config()).unwrap(),
+                    value_digest(&initial).unwrap(),
+                );
+                // A data-only Exit changes authority/registration, not Config.
+                assert!(f.service.activation_admitted().is_ok());
+            }
+            drop(engine);
+            fs::write(f.service.data_root.join("config.json"), original).unwrap();
+            let detached = f._temp.path().join("physically-detached");
+            fs::rename(&f.service.disks["one"], &detached).unwrap();
+            let seal = fs::read(detached.join("disk.json")).unwrap();
+            for receipt in ["missing", "corrupt", "mismatched"] {
+                lose_activation_completion(&f.service, receipt);
+                let status = f.service.storage_status();
+                assert!(!status.completion_available);
+                assert_ne!(status.state, StorageActivationState::Active);
+                assert!(
+                    f.service
+                        .complete_activation(&admin(), |_| Ok(()), |_| panic!("replayed genesis"),)
+                        .is_err()
+                );
+            }
+            assert_eq!(fs::read(detached.join("disk.json")).unwrap(), seal);
+        }
+    }
+}
+
+#[test]
+fn initial_probe_guard_survives_until_real_held_resources_and_writer_lock_take_over() {
+    let f = fixture();
+    let engine = activated_engine(&f.service, false);
+    drop(engine);
+    lose_activation_completion(&f.service, "missing");
+    let proof = f.service.activation_proof().unwrap();
+    assert!(
+        Engine::begin_initial_activation_probe(&f.service.data_root, &proof.intent.config).is_err()
+    );
+    let directories = f.service.activation_directories(&proof.intent).unwrap();
+    let engine =
+        Engine::open_initial_activation_for_recovery_held(proof.probe, None, directories).unwrap();
+    assert!(Engine::open(&f.service.data_root).is_err());
+    drop(engine);
+    f.service
+        .complete_activation(&admin(), |_| Ok(()), |_| Ok(()))
+        .unwrap();
+    assert!(f.service.activation_admitted().is_ok());
+}
+
+fn target_directory_handles(path: &Path) -> usize {
+    fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter(
+            |entry| match fs::read_link(entry.as_ref().unwrap().path()) {
+                Ok(target) => target == path,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => panic!("cannot inspect probe descriptor: {error}"),
+            },
+        )
+        .count()
+}
+
+#[test]
+fn failed_initial_probe_transfer_releases_raw_directories_and_the_guard() {
+    let f = fixture();
+    drop(activated_engine(&f.service, false));
+    lose_activation_completion(&f.service, "missing");
+    let proof = f.service.activation_proof().unwrap();
+    let directories = f.service.activation_directories(&proof.intent).unwrap();
+    assert_eq!(target_directory_handles(&f.service.disks["one"]), 1);
+    let path = f.service.data_root.join("config.json");
+    let original = fs::read(&path).unwrap();
+    let mut changed: Config = json_codec::from_slice(&original).unwrap();
+    changed.max_workspaces += 1;
+    fs::write(&path, json_codec::to_vec(&changed).unwrap()).unwrap();
+    assert!(
+        Engine::open_initial_activation_for_recovery_held(proof.probe, None, directories).is_err()
+    );
+    assert_eq!(target_directory_handles(&f.service.disks["one"]), 0);
+    let guard =
+        Engine::begin_initial_activation_probe(&f.service.data_root, &proof.intent.config).unwrap();
+    drop(guard);
+    fs::write(path, original).unwrap();
+    f.service
+        .complete_activation(&admin(), |_| Ok(()), |_| Ok(()))
+        .unwrap();
+}
+
+fn damage_activation_locator(service: &SetupRecovery, mode: &str) {
+    let locator = service.data_root.join("bootstrap-discovery");
+    match mode {
+        "intact" => (),
+        "missing" => fs::rename(&locator, service.data_root.join("lost-locator")).unwrap(),
+        "head-missing" => fs::remove_file(locator.join("head.json")).unwrap(),
+        "history-missing" => {
+            fs::remove_file(locator.join("record-00000000000000000001.json")).unwrap()
+        }
+        "head-corrupt" => fs::write(locator.join("head.json"), b"{incomplete").unwrap(),
+        "dangling-record" => {
+            fs::write(locator.join("record-00000000000000000003.json"), b"orphan").unwrap()
+        }
+        other => panic!("unknown locator damage: {other}"),
+    }
+}
+
+/// Isolated libc observer checks the actual first selection stat, including an
+/// explicit negative control against the physically removed target pathname.
+#[test]
+#[ignore = "requires activation-probe-io.sh and its child-only first-stat observer"]
+fn activation_completion_never_probes_stopped_or_uncertain_initial_roots() {
+    let base = PathBuf::from(std::env::var_os("ZXS_ACTIVATION_PROBE_BASE").unwrap());
+    let trigger = PathBuf::from(std::env::var_os("ZXS_ACTIVATION_PROBE_TRIGGER").unwrap());
+    let log = PathBuf::from(std::env::var_os("ZXS_ACTIVATION_PROBE_LOG").unwrap());
+    let action = std::env::var("ZXS_ACTIVATION_PROBE_ACTION").unwrap();
+    let receipt = std::env::var("ZXS_ACTIVATION_PROBE_RECEIPT").unwrap();
+    let locator = std::env::var("ZXS_ACTIVATION_PROBE_LOCATOR").unwrap();
+    let data_only = std::env::var("ZXS_ACTIVATION_PROBE_DATA_ONLY").unwrap() == "1";
+    let service = service_at(&base, &["one", "two", "three"]);
+    let mut engine = activated_engine(&service, data_only);
+    let original = fs::read(service.data_root.join("config.json")).unwrap();
+    match action.as_str() {
+        "initial" => (),
+        "add" => add_activation_successor(&mut engine, &base),
+        "offline" => exit_activation_target(
+            &mut engine,
+            storage_engine::MembershipExitAction::PlannedOffline,
+        ),
+        "deregister" => exit_activation_target(
+            &mut engine,
+            storage_engine::MembershipExitAction::Deregister,
+        ),
+        other => panic!("unknown lifecycle action: {other}"),
+    }
+    if data_only && action != "add" {
+        let initial: Config = json_codec::from_slice(&original).unwrap();
+        assert_eq!(
+            value_digest(engine.config()).unwrap(),
+            value_digest(&initial).unwrap(),
+        );
+    }
+    drop(engine);
+    // Both stale and byte-equivalent Config projections must stay restricted.
+    fs::write(service.data_root.join("config.json"), original).unwrap();
+    let permits_completion = action == "initial" && locator == "intact";
+    if !permits_completion {
+        fs::rename(&service.disks["one"], base.join("physically-detached")).unwrap();
+    }
+    lose_activation_completion(&service, &receipt);
+    damage_activation_locator(&service, &locator);
+    fs::write(&log, b"").unwrap();
+    fs::write(&trigger, b"observe first selection stat").unwrap();
+    let status = service.storage_status();
+    assert_eq!(status.completion_available, permits_completion);
+    let completed = service.complete_activation(
+        &admin(),
+        |_| Ok(()),
+        |_| {
+            assert!(
+                permits_completion,
+                "lifecycle fallback reached installation"
+            );
+            Ok(())
+        },
+    );
+    if permits_completion {
+        completed.unwrap();
+        assert!(service.activation_admitted().is_ok());
+        assert!(
+            !fs::read(&log).unwrap().is_empty(),
+            "positive probe was not observed",
+        );
+    } else {
+        assert!(completed.is_err());
+        assert!(
+            fs::read(&log).unwrap().is_empty(),
+            "attempted a forbidden initial target stat",
+        );
+    }
+    // Calibrate the exact boundary used by activation_seals even for ENOENT.
+    fs::write(&log, b"").unwrap();
+    assert_eq!(
+        checked_directory(&service.disks["one"]).is_ok(),
+        permits_completion,
+    );
+    assert!(
+        !fs::read(&log).unwrap().is_empty(),
+        "first-stat observer was inactive",
+    );
+    fs::remove_file(&trigger).unwrap();
+    println!(
+        "ZXS_ACTIVATION_PROBE_COMPLETE action={action} receipt={receipt} locator={locator} data_only={data_only}"
+    );
+}
+
 #[test]
 fn account_generation_cannot_admit_a_pool_with_lost_activation_evidence() {
     let f = fixture();

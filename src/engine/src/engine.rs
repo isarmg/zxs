@@ -10,13 +10,19 @@ use std::{
 mod config;
 pub use config::ValidatedConfig;
 mod disk_registry;
+pub(crate) use disk_registry::current::{
+    CurrentNamespaces, NamespaceReadView, WorkspaceNamespaceBaseline,
+};
 pub use disk_registry::{
-    DiskRegistrationIdentity, DiskRegistryCommitment, HistoricalDiskDefinition,
+    DirectoryNamespaceView, DiskRegistrationIdentity, DiskRegistryCommitment,
+    HistoricalDiskDefinition, NamespaceEntries, NamespaceSnapshot, NamespaceSnapshotWitness,
     PreparedDiskRegistry, RegisteredDisk, RegistrationMode, RegistryExitEffect,
     RegistryExitRequest, VerifiedDiskRegistry, VerifiedRegistryCandidate,
     VerifiedRegistryPublication,
 };
 mod disk_lifecycle;
+pub(crate) use disk_lifecycle::bootstrap::RecoveredDiskStop;
+pub use disk_lifecycle::bootstrap::runtime::InitialActivationProbeGuard;
 pub use disk_lifecycle::{
     DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
     FrozenDeregistrationBoundary, ImpactPage, ImpactPageSize, NamespaceDeregistrationPreview,
@@ -58,11 +64,11 @@ mod history_window;
 pub use history_window::{FileHistorySourceRead, HistoryWindowCancellation, HistoryWindowRead};
 pub(crate) mod membership_transition;
 pub use membership_transition::{
-    MembershipAbortStatus, MembershipArchiveInspection, MembershipControlArchive,
-    MembershipExitAction, MembershipFenceStatus, MembershipJointDecisionStatus,
-    MembershipJointRole, MembershipJointVote, MembershipJournalInspection,
-    PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
-    verify_membership_control_archive,
+    DiskExitPhase, DiskExitStatus, MembershipAbortStatus, MembershipArchiveInspection,
+    MembershipControlArchive, MembershipExitAction, MembershipFenceStatus,
+    MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
+    MembershipJournalInspection, PendingMemberControlReceipt, PendingMemberDirectory,
+    PendingMembershipStatus, verify_membership_control_archive,
 };
 mod recovery;
 use recovery::RecoveryMode;
@@ -136,10 +142,13 @@ pub struct Engine {
     // Derived lookup only: the published State still proves every historical
     // plan, actor and request binding before a workspace can retire.
     historical_workspace_operations: BTreeMap<String, OperationId>,
+    pub(crate) current_namespaces: Option<Arc<CurrentNamespaces>>,
+    pub(crate) workspace_namespace_baselines: BTreeMap<String, WorkspaceNamespaceBaseline>,
     workspace_budget: workspace_budget::WorkspaceBudget,
     pub(crate) blocked: bool,
     membership_fence: Option<membership_transition::AdmittedFence>,
     pending_membership: Option<membership_transition::pending::PendingMembership>,
+    pending_disk_exit: Option<membership_transition::pending::activation::exit::PendingDiskExit>,
     pub(crate) snapshot: Option<String>,
     published_state_base: Option<Arc<publication::PublishedStateBase>>,
     history_window_roots: Option<Arc<history_window::HistoryRootBindings>>,
@@ -164,6 +173,7 @@ struct BusinessMetadataProjection(Arc<State>);
 
 pub struct MetadataView {
     state: BusinessMetadataProjection,
+    pub(crate) current_namespaces: NamespaceReadView,
     history_window_roots: Option<Arc<history_window::HistoryRootBindings>>,
     history_action_max_entries: usize,
 }
@@ -472,6 +482,7 @@ impl Engine {
                 false,
             )?;
         }
+        disk_lifecycle::bootstrap::runtime::initialize(&root, &config, &disk_resources)?;
         write_json(&root.join("config.json"), &config, false)?;
         private_dir(&root.join("workspaces"))?;
         let state = State {
@@ -498,11 +509,14 @@ impl Engine {
             disk_resources,
             state: Arc::new(state),
             workspaces: BTreeMap::new(),
+            current_namespaces: None,
+            workspace_namespace_baselines: BTreeMap::new(),
             historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
             membership_fence: None,
             pending_membership: None,
+            pending_disk_exit: None,
             snapshot: None,
             published_state_base: None,
             history_window_roots: None,
@@ -553,12 +567,17 @@ impl Engine {
         workspace_limits: Option<RetainedWorkspaceLimits>,
         directories: Vec<File>,
     ) -> Result<Self> {
-        let root = existing_private_dir(root)?.path().to_path_buf();
-        let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
-            .with_workspace_limits(workspace_limits)?;
-        let config = membership_transition::pending::activation::discover(config)?;
+        let (root, config) = Self::recovery_projection(root, workspace_limits)?;
+        let (config, bootstrap) =
+            membership_transition::pending::activation::discover_startup(&root, config)?;
         let resources = Arc::new(DiskResources::recover_held(&config, directories)?);
-        let mut engine = Self::prepare_recovery_resources(root, config, resources)?;
+        let engine = Self::prepare_recovery_resources(root, config, resources)?;
+        drop(bootstrap);
+        Self::finish_held_recovery(engine)
+    }
+
+    fn finish_held_recovery(mut engine: Self) -> Result<Self> {
+        engine.admit_disk_exit_io_exclusion()?;
         let warnings = engine.prepare_generation_resources()?;
         let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
         engine.preflight_workspace_receipts(&mut prepared)?;
@@ -566,9 +585,26 @@ impl Engine {
         if engine.config.generation().is_some() && !engine.generation_activation_published() {
             engine.blocked = true;
         }
+        engine.restore_current_disk_exit()?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
+    }
+
+    fn recovery_projection(
+        root: &Path,
+        workspace_limits: Option<RetainedWorkspaceLimits>,
+    ) -> Result<(PathBuf, ValidatedConfig)> {
+        let root = existing_private_dir(root).map_err(|source| source.context(
+            ErrorCode::RecoveryRequired,
+            "system state is unavailable; use explicit retained metadata roots for management recovery",
+        ))?.path().to_path_buf();
+        let config = read_json::<Config>(&root.join("config.json")).map_err(|source| source.context(
+            ErrorCode::RecoveryRequired,
+            "system projection is unavailable; use explicit retained metadata roots for management recovery",
+        ))?;
+        let config = ValidatedConfig::try_from(config)?.with_workspace_limits(workspace_limits)?;
+        Ok((root, config))
     }
 
     fn open_mode(
@@ -576,9 +612,7 @@ impl Engine {
         mode: RecoveryMode,
         workspace_limits: Option<RetainedWorkspaceLimits>,
     ) -> Result<Self> {
-        let root = existing_private_dir(root)?.path().to_path_buf();
-        let config = ValidatedConfig::try_from(read_json::<Config>(&root.join("config.json"))?)?
-            .with_workspace_limits(workspace_limits)?;
+        let (root, config) = Self::recovery_projection(root, workspace_limits)?;
         let (mut engine, warnings) = Self::prepare_workspace_recovery(root, config)?;
         let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
         engine.preflight_workspace_receipts(&mut prepared)?;
@@ -590,6 +624,7 @@ impl Engine {
                 engine.blocked = true;
             }
         }
+        engine.restore_current_disk_exit()?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
@@ -603,7 +638,20 @@ impl Engine {
         root: PathBuf,
         config: ValidatedConfig,
     ) -> Result<(Self, Vec<RecoverySealFailure>)> {
-        let config = membership_transition::pending::activation::discover(config)?;
+        let (config, bootstrap) =
+            membership_transition::pending::activation::discover_startup(&root, config)?;
+        let (mut engine, warnings) = Self::prepare_retained_workspace_recovery(root, config)?;
+        drop(bootstrap);
+        engine.admit_disk_exit_io_exclusion()?;
+        Ok((engine, warnings))
+    }
+
+    /// Only already authenticated startup probes or explicit retained-root
+    /// recovery may enter here. Config's unlisted addresses remain forbidden.
+    fn prepare_retained_workspace_recovery(
+        root: PathBuf,
+        config: ValidatedConfig,
+    ) -> Result<(Self, Vec<RecoverySealFailure>)> {
         let disk_resources = Arc::new(DiskResources::open(&config, true)?);
         let mut engine = Self::prepare_recovery_resources(root, config, disk_resources)?;
         let warnings = engine.prepare_generation_resources()?;
@@ -625,11 +673,14 @@ impl Engine {
                 ..State::default()
             }),
             workspaces: BTreeMap::new(),
+            current_namespaces: None,
+            workspace_namespace_baselines: BTreeMap::new(),
             historical_workspace_operations: BTreeMap::new(),
             workspace_budget: workspace_budget::WorkspaceBudget::default(),
             blocked: false,
             membership_fence: None,
             pending_membership: None,
+            pending_disk_exit: None,
             snapshot: None,
             published_state_base: None,
             history_window_roots: None,
@@ -758,10 +809,28 @@ impl Engine {
         {
             validate_seal(&config, member)?;
         }
-        let config = config.with_workspace_limits(workspace_limits)?;
+        let forbidden = config
+            .generation()
+            .map(|generation| generation.portable.forbidden_disk_ids())
+            .transpose()?
+            .unwrap_or_default();
+        let allowed = seals
+            .keys()
+            .filter(|id| !forbidden.contains(*id))
+            .cloned()
+            .collect();
+        let config = config
+            .with_workspace_limits(workspace_limits)?
+            .restrict_io_disks(allowed)?;
         private_dir(root)?;
         let root = existing_private_dir(root)?.path().to_path_buf();
-        let (mut engine, warnings) = Self::prepare_workspace_recovery(root, config)?;
+        let (mut engine, warnings) = Self::prepare_retained_workspace_recovery(root, config)?;
+        disk_lifecycle::bootstrap::runtime::initialize(
+            &engine.root,
+            &engine.config,
+            &engine.disk_resources,
+        )?;
+        engine.admit_disk_exit_io_exclusion()?;
         let mut prepared = engine.prepare_recovery_with_warnings(warnings)?;
         engine.preflight_workspace_receipts(&mut prepared)?;
         // A quota failure must not publish a system configuration or replay any
@@ -773,16 +842,32 @@ impl Engine {
         if engine.config.generation().is_some() {
             engine.complete_generation_activation()?;
         }
+        engine.restore_current_disk_exit()?;
         engine.load_workspaces()?;
         engine.rebuild_index()?;
         Ok(engine)
     }
     pub(crate) fn require_recovery_locks(&self) -> Result<()> {
-        self._locks.require_all(&self.config.disks)?;
-        if self._locks.len() != self.config.disks.len() + 1 {
+        let admitted_exit = self.current_namespaces.as_ref().is_some_and(|view| {
+            self.config
+                .generation()
+                .and_then(|generation| generation.portable.exit_registry())
+                == Some(view.registry())
+        }) || self.disk_exit_io_exclusion_admitted()?;
+        let required_disks = if admitted_exit {
+            // The durable exit proof installed this registry together with the
+            // target's closed gate. Historical Config entries cannot demand a
+            // lock on that retired binding, or implicitly reopen its root.
+            self._locks.require_all(self.config.io_disks())?;
+            self.config.io_disks().count()
+        } else {
+            self._locks.require_all(&self.config.disks)?;
+            self.config.disks.len()
+        };
+        if self._locks.len() != required_disks + 1 {
             return Err(Error::new(
                 storage_contract::ErrorCode::RecoveryRequired,
-                "recovery requires every original disk and its exclusive OS writer lock",
+                "recovery requires every admitted disk and its exclusive OS writer lock",
             ));
         }
         if self.journals.len()
@@ -823,6 +908,7 @@ impl Engine {
             .and_then(|roots| roots.projected_for(&self.state, &state.0));
         MetadataView {
             state,
+            current_namespaces: self.namespace_read_view(),
             history_window_roots,
             history_action_max_entries: self.config.max_entries,
         }

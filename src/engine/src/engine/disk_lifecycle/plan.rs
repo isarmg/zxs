@@ -25,7 +25,7 @@ pub enum DeregistrationPlanError {
     VersionNotFound(String),
     #[error("placement missing for version {0}")]
     PlacementMissing(String),
-    #[error("placement of {version_id} names unregistered slot {slot_id}")]
+    #[error("placement of {version_id} names unknown historical slot {slot_id}")]
     PlacementSlotNotRegistered { version_id: String, slot_id: String },
     #[error(
         "placement of {version_id} has binding {placement_generation:?}, expected {registered:?}"
@@ -40,6 +40,8 @@ pub enum DeregistrationPlanError {
         version_id: String,
         reason: &'static str,
     },
+    #[error("current namespace has not been admitted for the frozen source")]
+    CurrentNamespaceUnavailable,
     #[error("namespace not found: {0}")]
     NamespaceNotFound(String),
     #[error("namespace graph reference missing: {0}")]
@@ -113,6 +115,7 @@ pub struct DeregistrationPreview<'a> {
     target: RegisteredDisk<'a>,
     boundary: FrozenDeregistrationBoundary<'a>,
     graph: ContentGraph<'a>,
+    current: Option<&'a super::super::CurrentNamespaces>,
 }
 impl Engine {
     /// Preview metadata effects without touching any disk, even an unavailable
@@ -122,11 +125,16 @@ impl Engine {
         &self,
         target: &DiskRegistrationIdentity,
     ) -> PlanResult<DeregistrationPreview<'_>> {
-        DeregistrationPreview::capture(
+        let current = match self.admitted_current_namespaces() {
+            Ok(current) => current,
+            Err(_) => return Err(DeregistrationPlanError::CurrentNamespaceUnavailable),
+        };
+        DeregistrationPreview::capture_projected(
             &self.state,
             CurrentDiskRegistry::from_engine(self),
             self.snapshot.as_deref(),
             target,
+            current,
         )
     }
 }
@@ -137,6 +145,19 @@ impl<'a> DeregistrationPreview<'a> {
         snapshot: Option<&'a str>,
         target: &DiskRegistrationIdentity,
     ) -> PlanResult<Self> {
+        Self::capture_projected(state, registry, snapshot, target, None)
+    }
+
+    pub(in crate::engine) fn capture_projected(
+        state: &'a State,
+        registry: CurrentDiskRegistry<'a>,
+        snapshot: Option<&'a str>,
+        target: &DiskRegistrationIdentity,
+        current: Option<&'a super::super::CurrentNamespaces>,
+    ) -> PlanResult<Self> {
+        if current.is_some_and(|view| !view.matches_source(state)) {
+            return Err(DeregistrationPlanError::CurrentNamespaceUnavailable);
+        }
         let registered = registry
             .slot(&target.slot_id)
             .ok_or_else(|| DeregistrationPlanError::TargetNotRegistered(target.slot_id.clone()))?;
@@ -152,6 +173,7 @@ impl<'a> DeregistrationPreview<'a> {
         }
         Ok(Self {
             registry,
+            current,
             target: registered,
             boundary: FrozenDeregistrationBoundary {
                 sequence: state.sequence,
@@ -207,8 +229,8 @@ impl<'a> DeregistrationPreview<'a> {
         self.target
     }
     /// Registration is independent of health/Enabled/Disabled and voter status.
-    /// Current Config has no durable Disabled field; this API neither invents nor
-    /// changes an I/O mode. Every retained admitted registration is counted.
+    /// Every retained admitted registration is counted, including Disabled.
+    /// Historical placement membership is not current registration or health.
     pub fn remaining_registered_disks(&self) -> impl Iterator<Item = RegisteredDisk<'a>> {
         let target = self.target;
         self.registry.disks().filter(move |disk| *disk != target)
@@ -284,7 +306,7 @@ impl<'a> DeregistrationPreview<'a> {
             if placement.route_slot_ids[..index].contains(slot) {
                 return Err(invalid("duplicate route slot"));
             }
-            let registered = self.registry.slot(slot).ok_or_else(|| {
+            let registered = self.registry.historical_identity(slot).ok_or_else(|| {
                 DeregistrationPlanError::PlacementSlotNotRegistered {
                     version_id: version.version_id.clone(),
                     slot_id: slot.clone(),
@@ -294,7 +316,7 @@ impl<'a> DeregistrationPreview<'a> {
             if generation != Some(registered.binding_generation) {
                 return Err(DeregistrationPlanError::PlacementBindingMismatch {
                     version_id: version.version_id.clone(),
-                    registered: Box::new(registered.identity()),
+                    registered: Box::new(registered),
                     placement_generation: generation,
                 });
             }
@@ -337,11 +359,9 @@ impl<'a> RegisteredHolders<'a> {
             .route_slot_ids
             .iter()
             .filter_map(move |slot| {
-                let disk = self
-                    .registry
+                self.registry
                     .slot(slot)
-                    .expect("invariant: impact validates every placement binding");
-                (disk != self.excluded).then_some(disk)
+                    .filter(|disk| *disk != self.excluded)
             })
     }
 }
@@ -396,7 +416,7 @@ pub struct NamespaceDeregistrationPreview<'a> {
     plan: &'a DeregistrationPreview<'a>,
     scope: DeregistrationNamespace<'a>,
     frozen_head_id: &'a str,
-    namespace_owner: RegisteredDisk<'a>,
+    namespace_owner: DiskRegistrationIdentity,
     entries: &'a [Entry],
 }
 pub struct NamespaceOccurrenceImpact<'a> {
@@ -426,7 +446,10 @@ impl<'a> DeregistrationPreview<'a> {
                 (
                     DeregistrationNamespace::BranchHead(branch.branch_id.as_str()),
                     commit.commit_id.as_str(),
-                    commit.entries.as_slice(),
+                    self.current.map_or(commit.entries.as_slice(), |view| {
+                        view.branch_entries(id, &commit.commit_id)
+                            .expect("invariant: captured current view matches every source head")
+                    }),
                     self.repository_for_history(&branch.history_tree_id)?,
                 )
             }
@@ -448,7 +471,10 @@ impl<'a> DeregistrationPreview<'a> {
                 (
                     DeregistrationNamespace::DirectoryHead(branch.directory_branch_id.as_str()),
                     branch.head_tree_id.as_str(),
-                    branch.entries.as_slice(),
+                    self.current.map_or(branch.entries.as_slice(), |view| {
+                        view.directory_entries(id, &branch.head_tree_id)
+                            .expect("invariant: captured current view matches every source head")
+                    }),
                     self.repository(&branch.repository_id)?,
                 )
             }
@@ -473,7 +499,7 @@ impl<'a> DeregistrationPreview<'a> {
         };
         let owner = self
             .registry
-            .slot(&repository.primary_slot_id)
+            .historical_identity(&repository.primary_slot_id)
             .ok_or_else(|| {
                 DeregistrationPlanError::NamespaceReferenceMissing(
                     repository.primary_slot_id.clone(),
@@ -512,11 +538,24 @@ impl<'a> NamespaceDeregistrationPreview<'a> {
     pub fn frozen_head_id(&self) -> &'a str {
         self.frozen_head_id
     }
-    pub fn namespace_owner(&self) -> RegisteredDisk<'a> {
-        self.namespace_owner
+    /// Historical owner identity. Its registration may already have been removed.
+    pub fn namespace_owner(&self) -> &DiskRegistrationIdentity {
+        &self.namespace_owner
     }
     fn owner_remains(&self) -> bool {
-        self.namespace_owner != self.plan.target
+        self.plan
+            .registry
+            .slot(&self.namespace_owner.slot_id)
+            .is_some_and(|owner| owner != self.plan.target)
+    }
+    pub(in crate::engine) fn owner_writable_after(&self) -> bool {
+        self.plan
+            .registry
+            .slot(&self.namespace_owner.slot_id)
+            .is_some_and(|owner| {
+                owner != self.plan.target
+                    && owner.registration_mode == super::super::RegistrationMode::Enabled
+            })
     }
     fn retained_file(&self, entry: &Entry) -> PlanResult<bool> {
         Ok(self

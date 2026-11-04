@@ -611,3 +611,50 @@ fn bootstrap_locator_control_identity_alias_is_rejected_even_at_another_address(
             .exists()
     );
 }
+
+#[test]
+fn bootstrap_root_expansion_keeps_all_previous_stops_and_never_rebinds() {
+    let mut fixture = Fixture::new();
+    let stopped = fixture.stop();
+    let additions = Config::development(
+        (0..4).map(|index| fixture._temporary.path().join(format!("new-{index}"))),
+    )
+    .unwrap();
+    let mut expanded = fixture.config.clone();
+    let added = additions.disks[3].clone();
+    private_dir(&added.root);
+    expanded.disks.push(added.clone());
+    let observation = RootObservation::capture(
+        &binding(&expanded, 3),
+        &added.root,
+        &File::open(&added.root).unwrap(),
+        true,
+    )
+    .unwrap();
+    let extended = fixture
+        .store
+        .append_roots(&stopped, vec![observation])
+        .unwrap();
+    assert_eq!(extended.generation(), 3);
+    assert_eq!(extended.stop_hints().count(), 1);
+    assert!(extended.excludes_binding(&fixture.binding(0)));
+    let reloaded = fixture.store.reload(&fixture.config.pool_id).unwrap();
+    assert_eq!(reloaded.generation(), extended.generation());
+    assert!(!selected_paths(&reloaded, &expanded).contains(&fixture.config.disks[0].root));
+    assert!(selected_paths(&reloaded, &expanded).contains(&added.root));
+    let mut replacement = fixture.config.clone();
+    replacement.disks[0].root = added.root.clone();
+    let observation = RootObservation::capture(
+        &binding(&replacement, 0),
+        &added.root,
+        &File::open(&added.root).unwrap(),
+        true,
+    )
+    .unwrap();
+    assert!(
+        fixture
+            .store
+            .append_roots(&reloaded, vec![observation])
+            .is_err()
+    );
+}

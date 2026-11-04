@@ -184,6 +184,19 @@ fn tree_projection_is_frozen_and_preserves_admission_and_wire_shape() {
     );
 }
 
+fn pending_sources<'a>(
+    engine: &'a Engine,
+    branch: &'a str,
+    commit: &'a storage_contract::Commit,
+) -> PendingSources<'a> {
+    let scope = if engine.state().branches[branch].head_commit_id == commit.commit_id {
+        PendingScope::Current(engine.namespace_tree(branch).unwrap())
+    } else {
+        PendingScope::Historical
+    };
+    PendingSources::new(engine, branch, commit, scope)
+}
+
 // Exact pre-optimization behavior used to compare the request-local resolver.
 fn legacy_pending_entry_source<'a>(
     engine: &'a Engine,
@@ -274,7 +287,7 @@ fn canonical_tree_resolution_eliminates_repeated_entry_matching_at_scale() {
     let (_root, engine, repo, _) = fixture();
     for count in [100, 1_000, 10_000] {
         let commit = synthetic_commit(&engine, &repo, count);
-        let resolver = PendingSources::new(&engine, &repo.main_branch_id, &commit);
+        let resolver = pending_sources(&engine, &repo.main_branch_id, &commit);
         let optimized = resolver.pending_versions();
         assert_eq!(
             resolver.matching_visits(),
@@ -315,7 +328,7 @@ fn checked_entries_and_noncanonical_snapshots_preserve_original_first_match() {
     duplicate.version_id = "different-version".into();
     commit.entries.insert(1, duplicate.clone());
     commit.entries.swap(2, 3);
-    let resolver = PendingSources::new(&engine, &repo.main_branch_id, &commit);
+    let resolver = pending_sources(&engine, &repo.main_branch_id, &commit);
     let expected: BTreeMap<_, _> = commit
         .entries
         .iter()
@@ -410,7 +423,7 @@ fn real_current_and_historical_tree_sources_match_previous_wire_output() {
         );
         for entry in &commit.entries {
             assert_eq!(
-                PendingSources::new(&engine, &repo.main_branch_id, commit).checked(entry),
+                pending_sources(&engine, &repo.main_branch_id, commit).checked(entry),
                 legacy_pending_entry_source(&engine, &repo.main_branch_id, commit, entry)
             );
             if commit_id == &current {
@@ -553,7 +566,7 @@ fn inherited_directory_context_keeps_first_match_and_historical_sources() {
         engine.file_context_for_current_entry(&repo.repository_id, original),
         Some(std::borrow::Cow::Borrowed(_))
     ));
-    let resolver = PendingSources::new(&engine, &repo.main_branch_id, commit);
+    let resolver = pending_sources(&engine, &repo.main_branch_id, commit);
     assert_eq!(
         resolver.checked(original),
         Some(original.version_id.as_str())
@@ -642,7 +655,7 @@ fn directory_mtime_uses_the_page_version_even_when_another_version_has_the_same_
     state.versions.get_mut(&new.version_id).unwrap().created_at = "2001-01-01T00:00:00Z".into();
     for (entry, seconds) in [(old, 946_684_800), (new, 978_307_200)] {
         let version = entry.version_id.clone();
-        let page = DirectorySnapshot::page(&state, "frozen", &[entry], "", None).unwrap();
+        let page = DirectoryPageProjection::page(&state, "frozen", &[entry], "", None).unwrap();
         assert_eq!(page.entries[0].entry.version_id, version);
         assert_eq!(
             page.entries[0].mtime,
@@ -675,7 +688,7 @@ fn large_directory_is_paginated_by_actual_bytes_and_count_without_full_tree_copi
     let mut after = None;
     let mut seen = Vec::new();
     loop {
-        let page = DirectorySnapshot::page(
+        let page = DirectoryPageProjection::page(
             &state,
             "commit_00000000000000000000000000000000",
             &entries,
@@ -722,7 +735,7 @@ fn directory_byte_bound_applies_to_utf8_and_long_paths_before_the_count_limit() 
     for entry in &entries {
         name_policy::validate_path(&entry.path).unwrap();
     }
-    let page = DirectorySnapshot::page(
+    let page = DirectoryPageProjection::page(
         &directory_page_state(&entries),
         "commit_00000000000000000000000000000000",
         &entries,
@@ -977,7 +990,7 @@ fn typed_directory_reads_pin_snapshots_and_refresh_on_restart() {
         save_projection_file(&mut engine, &repo.main_branch_id, "after.txt", b"second");
     }
     let pinned = read(crate::DirectorySelection::Page {
-        commit: Some(&captured.commit_id),
+        snapshot: Some(&captured.snapshot),
         after: None,
     })
     .unwrap();
@@ -991,7 +1004,7 @@ fn typed_directory_reads_pin_snapshots_and_refresh_on_restart() {
         vec!["before.txt"]
     );
     let restarted = read(crate::DirectorySelection::Page {
-        commit: None,
+        snapshot: None,
         after: None,
     })
     .unwrap();
@@ -1005,7 +1018,7 @@ fn typed_directory_reads_pin_snapshots_and_refresh_on_restart() {
         vec!["after.txt", "before.txt"]
     );
     let exhausted = read(crate::DirectorySelection::Page {
-        commit: Some(&restarted.commit_id),
+        snapshot: Some(&restarted.snapshot),
         after: Some("before.txt"),
     })
     .unwrap();

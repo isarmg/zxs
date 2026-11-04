@@ -20,6 +20,9 @@ pub(crate) struct PlanningContext<'a> {
     pub(crate) config: &'a ValidatedConfig,
     pub(crate) disk_resources: &'a Arc<DiskResources>,
     pub(crate) state: &'a Arc<State>,
+    pub(crate) current_namespaces: Option<&'a Arc<super::CurrentNamespaces>>,
+    pub(crate) workspace_namespace_baselines:
+        &'a std::collections::BTreeMap<String, super::WorkspaceNamespaceBaseline>,
     pub(crate) snapshot: &'a Option<String>,
     pub(crate) next_slot: u64,
     pub(crate) blocked: bool,
@@ -36,6 +39,8 @@ impl Engine {
             config: &self.config,
             disk_resources: &self.disk_resources,
             state: &self.state,
+            current_namespaces: self.current_namespaces.as_ref(),
+            workspace_namespace_baselines: &self.workspace_namespace_baselines,
             snapshot: &self.snapshot,
             next_slot: self.next_slot,
             blocked: self.blocked,
@@ -78,6 +83,9 @@ impl<'a> PlanningContext<'a> {
                 "placement requires a primary slot and at least one copy",
             ));
         }
+        if let Some(view) = self.current_namespaces {
+            view.require_write_slot(&first.slot_id)?;
+        }
         let mut route = vec![first.slot_id.clone()];
         let mut current = first;
         while route.len() < copies as usize {
@@ -97,6 +105,9 @@ impl<'a> PlanningContext<'a> {
                         "requested copies exceed the configured fixed route",
                     )
                 })?;
+            if let Some(view) = self.current_namespaces {
+                view.require_write_slot(&next.slot_id)?;
+            }
             route.push(next.slot_id.clone());
             current = next;
         }
@@ -181,6 +192,15 @@ impl<'a> PlanningContext<'a> {
     where
         F: FnOnce(&Self, &mut State, &mut Vec<Prepared>) -> Result<json_codec::Value>,
     {
+        if let Some(view) = self.current_namespaces {
+            view.require_operation(kind)?;
+        } else if self
+            .config
+            .generation()
+            .is_some_and(|generation| generation.portable.exit_registry().is_some())
+        {
+            return Err(super::disk_registry::current::pending_publication());
+        }
         // Published and planning views share only the immutable base. Every
         // mutation still owns an independent next State until publication.
         let mut next = self.state.as_ref().clone();

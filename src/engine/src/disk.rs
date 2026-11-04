@@ -12,8 +12,12 @@ use std::{
 };
 
 mod admission;
-pub use admission::DiskFile;
-pub(crate) use admission::{DiskIoBinding, DiskIoLease, JournalIo, UploadFinish, UploadIo};
+pub(crate) use admission::{
+    ClosedDiskIo, DiskIoBinding, DiskIoLease, JournalIo, RecoveredDiskIo, UploadFinish, UploadIo,
+};
+pub use admission::{
+    DiskFile, DiskObservationAccess, DiskObservationDirectory, DiskObservationMount,
+};
 mod owned;
 pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
 mod fencing;

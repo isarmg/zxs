@@ -48,11 +48,13 @@ O(log 活跃资源数) 注册。每次 next 使用一次资源 mutex、准入检
 检查，系统调用期间不持 gate mutex；没有新增文件同步、目录同步或全目录物化。
 未绑定 stream 不增加 gate 或资源 mutex。保留原目录缓冲预算，不改变枚举顺序。
 
-## 明确未覆盖的返回生命周期
+## 本阶段曾未覆盖的返回生命周期
 
-以下接口现在只覆盖打开、验证及其失败清理；成功返回后的原始资源仍需迁移：
+以下保留本阶段的原始审阅范围，不代表后续生命周期整合仍使用这些原始入口。后续实际关闭与恢复边界见 [退出发布接线](disk-exit-publication.md)。无消费者的 `DiskRoot::open_optional_regular` 已删除；实际可选读取使用受管入口。
 
-- `directory`、`open_regular`、`open_optional_regular` 返回的 `File`。
+在本阶段完成时，以下接口只覆盖打开、验证及其失败清理；成功返回后的原始资源仍需迁移：
+
+- `directory`、`open_regular` 返回的 `File`。
 - `private_directory` 返回的 `PrivateDirectory`。
 - 根及派生根长期持有的目录 FD。
 - `lock_file` 的返回文件和已持有 writer 锁。writer 锁必须保持到认证 fence 之后，

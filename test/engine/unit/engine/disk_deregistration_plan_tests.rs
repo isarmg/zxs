@@ -235,9 +235,7 @@ impl Fixture {
             .insert(branch.directory_branch_id.clone(), branch);
     }
     fn registry(&self) -> CurrentDiskRegistry<'_> {
-        CurrentDiskRegistry {
-            config: &self.config,
-        }
+        CurrentDiskRegistry::from_config(&self.config)
     }
     fn preview(&self, slot: &str) -> DeregistrationPreview<'_> {
         let registry = self.registry();

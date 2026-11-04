@@ -1,9 +1,5 @@
-//! Lifecycle planning and restrictive bootstrap storage primitives.
-//! Neither primitive implements deregistration or changes membership authority.
-#[allow(
-    dead_code,
-    reason = "restrictive bootstrap primitive awaits the production discovery gate"
-)]
+//! Lifecycle planning, restrictive startup admission and verified publication.
+//! Stop hints restrict I/O; independently verified generations supply authority.
 pub(crate) mod bootstrap;
 mod plan;
 pub use plan::{
@@ -12,3 +8,5 @@ pub use plan::{
     NamespaceOccurrenceImpact, NamespaceOccurrenceScan, OccurrenceVisibility, RegisteredHolders,
     RegistrationEffect, TargetPlacementRole, VersionDeregistrationImpact, VersionImpactScan,
 };
+
+pub(in crate::engine) use super::membership_transition::pending::activation::exit::AdmittedDiskExitPublication;

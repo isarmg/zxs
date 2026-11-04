@@ -1,9 +1,10 @@
-//! Fixed probe set, read-only local evidence. This is not Engine admission.
-//! Nothing here reconciles pending stop intents, proves latest publication, or
-//! activates an exit generation. Abort evidence retains the original fixed N/Q.
+//! Fixed-probe authority reconstruction before Engine resource admission.
+//! Publication replay remains a separate gate; probes never choose a new N/Q.
 use super::*;
 use crate::engine::disk_lifecycle::bootstrap::{
-    BootstrapError, ReadProbe, RestrictedProbes, store::BootstrapStore,
+    BootstrapError, LoadedLocator, ReadProbe, RestrictedProbes, StopHint,
+    runtime::{management_error, open_store},
+    store::BootstrapStore,
 };
 
 #[derive(Debug, error_definition::Error)]
@@ -14,17 +15,20 @@ pub(crate) enum RestrictedDiscoveryFailure {
     Verification(#[from] Error),
 }
 
-/// A read-only observation, deliberately without Config, State, root handles,
-/// admission conversion, or write capability. The effective N/Q comes from the
-/// authenticated authority; the probe count never changes its denominator.
+/// Independently verified authority and local evidence. The private Config is
+/// handed to startup only after stop reconciliation. The fixed N/Q comes from
+/// authenticated member records, never from the locator or number of probes.
 #[derive(Debug)]
 pub(crate) struct RestrictedGenerationEvidence {
+    config: ValidatedConfig,
+    #[cfg(test)]
     authority_hash: String,
     metadata_members: usize,
     metadata_quorum: usize,
     verified_members: Vec<String>,
     rejected_members: Vec<(String, Error)>,
 }
+#[cfg(test)]
 impl RestrictedGenerationEvidence {
     pub(crate) fn authority_hash(&self) -> &str {
         &self.authority_hash
@@ -43,24 +47,75 @@ impl RestrictedGenerationEvidence {
     }
 }
 
-impl BootstrapStore {
-    /// Failure to load/select returns before the first storage-root syscall.
-    /// The caller opens protected system state separately; missing system state
-    /// is management-only, never permission to create a locator from old Config.
-    pub(crate) fn discover_generation(
-        &self,
-        config: &ValidatedConfig,
-    ) -> std::result::Result<RestrictedGenerationEvidence, RestrictedDiscoveryFailure> {
-        discover_store_with_io(self, config, &mut NamedRootIo)
-    }
+pub(crate) fn discover_startup(
+    root: &Path,
+    projected: ValidatedConfig,
+) -> Result<(ValidatedConfig, BootstrapStore)> {
+    discover_startup_with_io(root, projected, &mut NamedRootIo)
 }
-impl RestrictedProbes<'_> {
-    pub(crate) fn discover_generation(
-        self,
-        config: &ValidatedConfig,
-    ) -> Result<RestrictedGenerationEvidence> {
-        discover_with_io(self, config, &mut NamedRootIo)
+
+fn discover_startup_with_io(
+    root: &Path,
+    projected: ValidatedConfig,
+    io: &mut impl RootIo,
+) -> Result<(ValidatedConfig, BootstrapStore)> {
+    let store = open_store(root)?;
+    let config = discover_startup_in_store_with_io(&store, projected, io)?;
+    Ok((config, store))
+}
+
+pub(crate) fn discover_startup_in_store(
+    store: &BootstrapStore,
+    projected: ValidatedConfig,
+) -> Result<ValidatedConfig> {
+    discover_startup_in_store_with_io(store, projected, &mut NamedRootIo)
+}
+
+fn discover_startup_in_store_with_io(
+    store: &BootstrapStore,
+    projected: ValidatedConfig,
+    io: &mut impl RootIo,
+) -> Result<ValidatedConfig> {
+    let locator = store.reload(&projected.pool_id).map_err(management_error)?;
+    let evidence =
+        discover_locator_with_io(&locator, &projected, io).map_err(|error| match error {
+            RestrictedDiscoveryFailure::Bootstrap(error) => management_error(error),
+            RestrictedDiscoveryFailure::Verification(error) => error,
+        })?;
+    for stop in locator.stop_hints() {
+        let generation = evidence.config.generation().ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "pending bootstrap stop requires explicit retained-root management recovery",
+            )
+        })?;
+        generation.portable.verify_bootstrap_stop(
+            &crate::DiskRegistrationIdentity {
+                pool_id: stop.pool_id.into(),
+                disk_id: stop.disk_id.into(),
+                slot_id: stop.slot_id.into(),
+                binding_generation: stop.binding_generation,
+            },
+            stop.operation_id,
+            &stop.intent_digest.to_string(),
+        )?;
     }
+    let forbidden = evidence
+        .config
+        .generation()
+        .map(|generation| generation.portable.forbidden_disk_ids())
+        .transpose()?
+        .unwrap_or_default();
+    let config = locator.restrict_config(evidence.config, &projected)?;
+    let allowed = config
+        .io_disks()
+        .filter(|disk| !forbidden.contains(&disk.disk_id))
+        .map(|disk| disk.disk_id.clone())
+        .collect();
+    let config = config
+        .restrict_io_disks(allowed)?
+        .with_workspace_limits(Some(projected.effective_workspace_limits()))?;
+    Ok(config)
 }
 
 // The only named storage-root I/O boundary. In contrast to disk_unavailable,
@@ -81,7 +136,7 @@ impl RootIo for NamedRootIo {
 }
 struct ProbeCandidate<'a> {
     probe: ReadProbe<'a>,
-    disk: DiskConfig,
+    disk: Option<DiskConfig>,
 }
 struct HeldCandidate {
     disk: DiskConfig,
@@ -100,16 +155,12 @@ fn candidates<'a>(
             .disks
             .iter()
             .find(|disk| disk.disk_id == probe.disk_id());
-        let Some(disk) = disk else {
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "restricted binding is absent",
-            ));
-        };
         if binding.pool_id != config.pool_id
-            || binding.slot_id != disk.slot_id
-            || binding.binding_generation != disk.binding_generation
-            || disk.root.as_os_str() != probe.path().as_os_str()
+            || disk.is_some_and(|disk| {
+                binding.slot_id != disk.slot_id
+                    || binding.binding_generation != disk.binding_generation
+                    || disk.root.as_os_str() != probe.path().as_os_str()
+            })
         {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -118,25 +169,50 @@ fn candidates<'a>(
         }
         candidates.push(ProbeCandidate {
             probe,
-            disk: disk.clone(),
+            disk: disk.cloned(),
         });
         Ok(())
     })?;
     Ok(candidates)
 }
 
+#[cfg(test)]
 fn discover_store_with_io(
     store: &BootstrapStore,
     config: &ValidatedConfig,
     io: &mut impl RootIo,
 ) -> std::result::Result<RestrictedGenerationEvidence, RestrictedDiscoveryFailure> {
     let locator = store.reload(&config.pool_id)?;
-    Ok(discover_with_io(locator.select(config)?, config, io)?)
+    discover_locator_with_io(&locator, config, io)
 }
 
+fn discover_locator_with_io(
+    locator: &LoadedLocator,
+    config: &ValidatedConfig,
+    io: &mut impl RootIo,
+) -> std::result::Result<RestrictedGenerationEvidence, RestrictedDiscoveryFailure> {
+    let hints: Vec<_> = locator.stop_hints().collect();
+    Ok(discover_probes_with_io(
+        locator.select(config)?,
+        config,
+        &hints,
+        io,
+    )?)
+}
+
+#[cfg(test)]
 fn discover_with_io(
     probes: RestrictedProbes<'_>,
     config: &ValidatedConfig,
+    io: &mut impl RootIo,
+) -> Result<RestrictedGenerationEvidence> {
+    discover_probes_with_io(probes, config, &[], io)
+}
+
+fn discover_probes_with_io(
+    probes: RestrictedProbes<'_>,
+    config: &ValidatedConfig,
+    stops: &[StopHint<'_>],
     io: &mut impl RootIo,
 ) -> Result<RestrictedGenerationEvidence> {
     // Construct the complete immutable candidate list before any root I/O.
@@ -144,6 +220,7 @@ fn discover_with_io(
     let candidates = candidates(probes, config)?;
     let mut held = Vec::with_capacity(candidates.len());
     let mut selected = None;
+    let mut damaged = Vec::new();
     for ProbeCandidate { probe, disk } in candidates {
         match io.stat(probe) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -158,7 +235,46 @@ fn discover_with_io(
             ));
         }
         // Identity is checked before the first seal/marker/archive read.
-        let marker = marker_at(&root, &disk, config)?;
+        let marker = match discover_root_authority(&root, probe.path(), config, stops) {
+            Ok(marker) => marker,
+            Err(error)
+                if matches!(
+                    error.code(),
+                    ErrorCode::InvalidJson | ErrorCode::ObjectCorrupt
+                ) =>
+            {
+                damaged.push((probe.disk_id().to_owned(), error));
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let disk = match disk {
+            Some(disk) => disk,
+            None => {
+                let Some(authority) = &marker else {
+                    continue;
+                };
+                let effective = authority.effective_config()?;
+                let binding = probe.binding();
+                let mut disk = effective
+                    .disks
+                    .iter()
+                    .find(|disk| {
+                        disk.disk_id == binding.disk_id
+                            && disk.slot_id == binding.slot_id
+                            && disk.binding_generation == binding.binding_generation
+                    })
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::RecoveryRequired,
+                            "recorded new root is outside authenticated successor",
+                        )
+                    })?;
+                disk.root = probe.path().to_path_buf();
+                disk
+            }
+        };
         let authority_hash = marker.as_ref().map(PortableAuthority::hash).transpose()?;
         if let Some(authority) = marker {
             select_authority(&mut selected, Arc::new(authority))?;
@@ -169,13 +285,69 @@ fn discover_with_io(
             authority_hash,
         });
     }
-    let portable = selected.ok_or_else(|| {
-        Error::new(
-            ErrorCode::RecoveryRequired,
-            "restricted roots have no generation authority; management recovery is required",
-        )
-    })?;
-    verify_held_generation(Arc::unwrap_or_clone(portable), held)
+    match selected {
+        Some(portable) => {
+            let mut evidence = verify_held_generation(Arc::unwrap_or_clone(portable), held)
+                .map_err(|error| match damaged.pop() {
+                    Some((disk, source)) => source.context(
+                        error.code(),
+                        format!("{}; damaged marker on {disk}", error.message()),
+                    ),
+                    None => error,
+                })?;
+            evidence.rejected_members.extend(damaged);
+            Ok(evidence)
+        }
+        None if !damaged.is_empty() => {
+            let (disk, source) = damaged.pop().expect("invariant: damaged marker present");
+            Err(source.context(
+                ErrorCode::RecoveryRequired,
+                format!("damaged generation marker on {disk} cannot authorize genesis fallback"),
+            ))
+        }
+        None => verify_held_genesis(config, held),
+    }
+}
+
+fn discover_root_authority(
+    root: &DiskRoot,
+    path: &Path,
+    projected: &ValidatedConfig,
+    stops: &[StopHint<'_>],
+) -> Result<Option<PortableAuthority>> {
+    let mut selected = marker_path_at(root, path, projected)?.map(Arc::new);
+    for stop in stops {
+        let directory = path.join("metadata/membership-exits");
+        if root.optional_metadata(&directory)?.is_none() {
+            continue;
+        }
+        let directory = directory.join(stop.intent_digest.to_string());
+        if root.optional_metadata(&directory)?.is_none() {
+            continue;
+        }
+        let Some(file) = root.open_optional_read_regular(&directory.join("authority.json"))? else {
+            continue;
+        };
+        let portable: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
+        if !portable.matches_metadata_projection(projected)? {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "prepared exit authority differs from projected lineage",
+            ));
+        }
+        portable.verify_bootstrap_stop(
+            &crate::DiskRegistrationIdentity {
+                pool_id: stop.pool_id.into(),
+                disk_id: stop.disk_id.into(),
+                slot_id: stop.slot_id.into(),
+                binding_generation: stop.binding_generation,
+            },
+            stop.operation_id,
+            &stop.intent_digest.to_string(),
+        )?;
+        select_authority(&mut selected, Arc::new(portable))?;
+    }
+    Ok(selected.map(Arc::unwrap_or_clone))
 }
 
 fn verify_held_generation(
@@ -193,6 +365,8 @@ fn verify_held_generation(
     };
     let mut config = None;
     let mut evidence = RestrictedGenerationEvidence {
+        config: effective.clone(),
+        #[cfg(test)]
         authority_hash: hash.clone(),
         metadata_members: effective.metadata_members().len(),
         metadata_quorum: effective.metadata_quorum(),
@@ -271,6 +445,7 @@ fn verify_held_generation(
                 &transition,
                 &intent,
             )?;
+            portable.verify_registry_source(&state)?;
             if config.is_none() {
                 config = Some(effective.clone().with_generation(Arc::new(Generation {
                     hash: hash.clone(),
@@ -291,6 +466,12 @@ fn verify_held_generation(
                 .root
                 .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
             predecessor_seal_matches(config, &disk, &held.root, &seal, &expected)?;
+            if portable.exit_registry().is_some() {
+                // A prepared envelope may precede active marker promotion.
+                // Every registry-bearing successor, including Add and Abort,
+                // must retain its own journal after marker/seal promotion.
+                activation_namespace_present(&held.root, &disk, config)?;
+            }
             Ok(())
         })();
         match result {
@@ -310,7 +491,86 @@ fn verify_held_generation(
             None => Error::new(ErrorCode::MetadataQuorumUnavailable, message),
         });
     }
+    evidence.config = config.expect("invariant: fixed majority verified a generation archive");
     Ok(evidence)
+}
+
+fn verify_held_genesis(
+    projected: &ValidatedConfig,
+    held: Vec<HeldCandidate>,
+) -> Result<RestrictedGenerationEvidence> {
+    let mut selected: Option<ValidatedConfig> = None;
+    let mut verified_members = Vec::new();
+    let mut rejected_members = Vec::new();
+    for held in held {
+        let result = (|| {
+            let saved: ValidatedConfig = held.root.read_json_observed(
+                &held.disk.root.join("metadata/pool-membership/config.json"),
+                &mut |_| Ok(()),
+            )?;
+            if !saved.same_genesis_io_authority(projected)
+                || selected
+                    .as_ref()
+                    .is_some_and(|previous| !previous.same_genesis_io_authority(&saved))
+            {
+                return Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "genesis projection differs from fixed saved registration authority",
+                ));
+            }
+            let disk = saved
+                .metadata_members()
+                .find(|disk| disk.disk_id == held.disk.disk_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::ConfigConflict,
+                        "probe is not a saved genesis voter",
+                    )
+                })?;
+            let expected = identity_at(&saved, disk, &held.root.directory(held.root.path())?)?;
+            let stored = decode_seal(
+                &held
+                    .root
+                    .read_bytes(&held.disk.root.join("disk.json"), MAX_METADATA)?,
+            )?;
+            validate_stored_seal(&stored, &expected)?;
+            if selected.is_none() {
+                selected = Some(saved);
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => verified_members.push(held.disk.disk_id),
+            Err(error) => rejected_members.push((held.disk.disk_id, error)),
+        }
+    }
+    let Some(config) = selected else {
+        return Err(match rejected_members.pop() {
+            Some((_, error)) => error.context(
+                ErrorCode::RecoveryRequired,
+                "retained roots have no verified genesis authority",
+            ),
+            None => Error::new(
+                ErrorCode::RecoveryRequired,
+                "retained roots have no verified genesis authority",
+            ),
+        });
+    };
+    if verified_members.len() < config.metadata_quorum() {
+        return Err(Error::new(
+            ErrorCode::MetadataQuorumUnavailable,
+            "retained roots cannot satisfy the original fixed genesis quorum",
+        ));
+    }
+    Ok(RestrictedGenerationEvidence {
+        #[cfg(test)]
+        authority_hash: object_hash("pool-config", &config)?,
+        metadata_members: config.metadata_members().len(),
+        metadata_quorum: config.metadata_quorum(),
+        config,
+        verified_members,
+        rejected_members,
+    })
 }
 
 #[cfg(test)]

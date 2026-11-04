@@ -1,5 +1,5 @@
 use super::*;
-use std::os::{fd::AsFd, unix::fs::symlink};
+use std::os::unix::fs::symlink;
 
 struct Fixture {
     _directory: tempfile::TempDir,
@@ -370,15 +370,23 @@ fn truncated_mountinfo_record_does_not_publish_mount_or_device_facts() {
 fn held_root_mount_observation_does_not_reopen_a_replaced_directory_name() {
     let directory = tempfile::tempdir().unwrap();
     let registered = directory.path().join("registered");
-    fs::create_dir(&registered).unwrap();
-    let held = File::open(&registered).unwrap();
-    let before = read_root_mount(&registered, held.as_fd()).unwrap();
+    let engine = storage_engine::Engine::initialize(
+        &directory.path().join("system"),
+        storage_contract::Config::development([registered.clone()]).unwrap(),
+    )
+    .unwrap();
+    let held = engine.open_disk_observation_directory("P01").unwrap();
+    let before = held
+        .observe(|access| Ok(read_root_mount(&registered, access).unwrap()))
+        .unwrap();
     let original_inode = held.metadata().unwrap().ino();
     fs::rename(&registered, directory.path().join("moved-original")).unwrap();
     // Following the diagnostic name now would fail; no real mount is needed to
     // prove the observation's syscall uses AT_EMPTY_PATH on the retained FD.
     symlink("missing-replacement", &registered).unwrap();
-    let after = read_root_mount(&registered, held.as_fd()).unwrap();
+    let after = held
+        .observe(|access| Ok(read_root_mount(&registered, access).unwrap()))
+        .unwrap();
     assert_eq!(
         (before.id, before.major, before.minor),
         (after.id, after.major, after.minor)

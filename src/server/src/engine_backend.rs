@@ -24,6 +24,7 @@ mod integrity_scrub;
 mod operations;
 mod read_projection;
 mod storage_addition;
+mod storage_lifecycle;
 mod wire;
 use wire::{current_entry_source, field};
 pub(crate) use wire::{error, error_response};
@@ -96,10 +97,8 @@ impl EngineBackend {
             .lock()
             .expect("invariant: service state lock poisoned");
         current_protected_identity(&engine, identity)?;
-        let disk = engine
-            .config()
-            .disks
-            .iter()
+        let registration = engine
+            .registered_disks()
             .find(|disk| disk.slot_id.eq_ignore_ascii_case(slot))
             .ok_or_else(|| {
                 ApiError::new(
@@ -108,6 +107,12 @@ impl EngineBackend {
                     "registered disk slot not found",
                 )
             })?;
+        let disk = engine
+            .config()
+            .disks
+            .iter()
+            .find(|disk| disk.disk_id == registration.disk_id)
+            .expect("invariant: current registration retains its historical definition");
         action(disk, &engine)
     }
     #[cfg(test)]
@@ -877,7 +882,7 @@ impl Backend for EngineBackend {
             .expect("invariant: service state lock poisoned");
         let current = current_protected_identity(&engine, identity)?;
         let branch = Application::new(&mut engine, &current).create_branch(request)?;
-        Ok(branch::capture_owned(engine.state(), branch))
+        branch::capture_current(&engine, &branch)
     }
     fn create_file_branch(
         &self,
@@ -1702,10 +1707,7 @@ impl Backend for EngineBackend {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         repo_for_branch(&engine, id)?;
-        Ok(branch::capture(
-            engine.state(),
-            &engine.state().branches[id],
-        ))
+        branch::capture_current(&engine, &engine.state().branches[id])
     }
     fn branches_snapshot(
         &self,
@@ -1715,13 +1717,13 @@ impl Backend for EngineBackend {
         let engine = self.engine.lock().expect("service state lock poisoned");
         current_protected_identity(&engine, identity)?;
         let repo = repository(&engine, id)?;
-        Ok(engine
+        engine
             .state()
             .branches
             .values()
             .filter(|branch| branch.history_tree_id == repo.history_tree_id)
-            .map(|branch| branch::capture(engine.state(), branch))
-            .collect())
+            .map(|branch| branch::capture_current(&engine, branch))
+            .collect()
     }
     fn repositories_snapshot(
         &self,

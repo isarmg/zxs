@@ -49,7 +49,9 @@ pub(in crate::engine::membership_transition) fn install_marker(
     let directory = generation_directory(disk, &generation.hash);
     root.private_dir(&directory)?;
     root.private_dir(&disk.root.join("metadata/pool-membership"))?;
-    if generation.portable.is_abort() && disk.metadata_member {
+    if (generation.portable.is_abort() || generation.portable.exit_registry().is_some())
+        && disk.metadata_member
+    {
         let current_marker =
             match root.open_optional_read_regular(&disk.root.join(GENERATION_FILE))? {
                 Some(file) => {
@@ -61,7 +63,7 @@ pub(in crate::engine::membership_transition) fn install_marker(
                     {
                         return Err(Error::new(
                             ErrorCode::LogFork,
-                            "Abort marker has an unrelated predecessor",
+                            "generation marker has an unrelated predecessor",
                         ));
                     }
                     hash == generation.hash
@@ -75,7 +77,7 @@ pub(in crate::engine::membership_transition) fn install_marker(
             if current_marker || current_seal {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,
-                    "current Abort authority lost its generation journal",
+                    "current authority lost its generation journal",
                 ));
             }
             root.write_atomic(&journal, &[], false)?;
@@ -107,7 +109,7 @@ pub(crate) fn predecessor_seal_matches(
     if value.get("format").and_then(json_codec::Value::as_str) != Some("membership-pending") {
         let stored = decode_seal(bytes)?;
         if stored.format == expected.format {
-            if generation.portable.is_abort()
+            if (generation.portable.is_abort() || generation.portable.exit_registry().is_some())
                 && disk.metadata_member
                 && root
                     .open_optional_read_regular(&log_path(config, disk))?
@@ -115,7 +117,7 @@ pub(crate) fn predecessor_seal_matches(
             {
                 return Err(Error::new(
                     ErrorCode::RecoveryRequired,
-                    "active Abort generation journal is missing",
+                    "active control generation journal is missing",
                 ));
             }
             return validate_stored_seal(&stored, expected);
@@ -168,6 +170,14 @@ impl Engine {
     /// Complete the pending pure device addition. No payload copies or placement
     /// changes are claimed; original routes and every body remain in place.
     pub fn activate_pending_membership(&mut self) -> Result<OperationResult> {
+        if self.membership_fence.is_none()
+            && self
+                .config
+                .generation()
+                .is_some_and(|generation| generation.portable.is_exit())
+        {
+            return self.activate_pending_disk_exit();
+        }
         if self
             .membership_fence
             .as_ref()
@@ -264,6 +274,7 @@ impl Engine {
         self.disk_resources = Arc::new(DiskResources::generation_handles(&discovered, handles)?);
         self._locks.extend(locks);
         self.config = discovered;
+        self.current_namespaces = None;
         self.membership_fence = None;
         self.journals.clear();
         self.blocked = true;
@@ -294,18 +305,48 @@ impl Engine {
             &status.proposal_hash,
             false,
         )?;
+        let joint = store.portable(
+            status
+                .certificate_hash
+                .as_deref()
+                .expect("invariant: complete certificate"),
+            &status.proposal_hash,
+        )?;
+        let registry = match self
+            .config
+            .generation()
+            .map(|generation| generation.portable.verified_registry())
+            .transpose()?
+            .flatten()
+        {
+            Some(previous) => {
+                if self
+                    .current_namespaces
+                    .as_ref()
+                    .is_none_or(|view| view.registry() != previous.commitment())
+                {
+                    return Err(Error::new(
+                        ErrorCode::RecoveryRequired,
+                        "membership successor lacks the admitted source namespace",
+                    ));
+                }
+                let intent = joint.verify()?.intent;
+                Some(super::registry::RegistryContinuation::prepare(
+                    &previous,
+                    &intent,
+                    &self.state,
+                    &intent.target,
+                )?)
+            }
+            None => None,
+        };
         let portable = PortableAuthority::new(
-            store.portable(
-                status
-                    .certificate_hash
-                    .as_deref()
-                    .expect("invariant: complete certificate"),
-                &status.proposal_hash,
-            )?,
+            joint,
             pending.source.generation_root(),
             self.config
                 .generation()
                 .map(|generation| &generation.portable),
+            registry,
         )?;
         let intent = portable.intent()?;
         let (base, history) = pending.source.generation_base(&intent)?;
@@ -322,6 +363,12 @@ impl Engine {
             base: Arc::new(base),
         });
         generation.next_state()?;
+        if generation.portable.exit_registry().is_some() {
+            generation.portable.prepare_namespace_activation(
+                &generation.base,
+                self.current_namespaces.as_deref(),
+            )?;
+        }
         PreparedMetadataObject::new(
             "membership-generation-bundle",
             &generation.portable,
@@ -332,6 +379,7 @@ impl Engine {
             .clone()
             .with_workspace_limits(Some(self.config.effective_workspace_limits()))?
             .with_generation(Arc::clone(&generation))?;
+        let config = generation.portable.restrict_io(config)?;
         let mut handles = self
             .disk_resources
             .handles()
@@ -348,9 +396,10 @@ impl Engine {
             ));
             handles.push(handle);
         }
+        self.synchronize_bootstrap_roots(&config, &handles)?;
         // A prepared marker reserves this exact authority but never activates a
         // pending seal. Explicit resume can reconstruct missing derived objects.
-        for disk in &config.disks {
+        for disk in config.io_disks() {
             let root = &handles
                 .iter()
                 .find(|handle| handle.seal.disk_id == disk.disk_id)
@@ -367,6 +416,7 @@ impl Engine {
         // Replace in-memory handles, never release any predecessor writer lock.
         let resources = DiskResources::generation_handles(&config, handles)?;
         self.config = config;
+        self.current_namespaces = None;
         self.disk_resources = Arc::new(resources);
         self._locks.extend(locks);
         self.membership_fence = None;
@@ -389,7 +439,10 @@ impl Engine {
         let Some(generation) = self.config.generation().cloned() else {
             return Ok(());
         };
-        if self.disk_resources.handles().count() != self.config.disks.len() {
+        if generation.portable.is_exit() {
+            return self.promote_disk_exit_resources();
+        }
+        if self.disk_resources.handles().count() != self.config.io_disks().count() {
             return Err(Error::new(
                 ErrorCode::MetadataQuorumUnavailable,
                 "activation promotion requires every target root",
@@ -399,12 +452,7 @@ impl Engine {
         if generation.portable.is_abort() {
             self.restore_abort_archives(&generation)?;
         }
-        for disk in self
-            .config
-            .disks
-            .iter()
-            .filter(|disk| !disk.metadata_member)
-        {
+        for disk in self.config.io_disks().filter(|disk| !disk.metadata_member) {
             if let Some(dependency) = generation.portable.data_dependency(&disk.disk_id)? {
                 let handle = self.disk_resources.get(disk)?;
                 dependency.verify_active_seal(&handle.seal)?;
@@ -465,7 +513,7 @@ impl Engine {
             .metadata_members()
             .next()
             .expect("invariant: metadata member");
-        for disk in &self.config.disks {
+        for disk in self.config.io_disks() {
             let handle = self.disk_resources.get(disk)?;
             if disk.metadata_member
                 || generation
@@ -509,7 +557,7 @@ impl Engine {
                 .private_dir(&generation_directory(disk, &generation.hash))?;
         }
         let active_config = self.config.clone();
-        for disk in &active_config.disks {
+        for disk in active_config.io_disks() {
             let Some(handle) = self.disk_resources.available(disk) else {
                 continue;
             };
@@ -541,6 +589,10 @@ impl Engine {
             self.config.generation().cloned().ok_or_else(|| {
                 Error::new(ErrorCode::RecoveryRequired, "no generation authority")
             })?;
+        if generation.portable.is_exit() {
+            return self.complete_disk_exit_generation();
+        }
+        self.admit_disk_exit_io_exclusion()?;
         let expected = generation.result()?;
         if let Some(result) = self.state.operations.get(&expected.operation_id) {
             if result != &expected {
@@ -550,10 +602,11 @@ impl Engine {
                 ));
             }
             let result = result.clone();
+            self.restore_current_disk_exit()?;
             write_json(&self.root.join("config.json"), &self.config, true)?;
             return Ok(result);
         }
-        if self.disk_resources.handles().count() != self.config.disks.len()
+        if self.disk_resources.handles().count() != self.config.io_disks().count()
             || self.journals.len() != self.config.metadata_members().len()
         {
             self.blocked = true;
@@ -575,7 +628,7 @@ impl Engine {
         if matches!(self.index_health(), crate::engine::IndexHealth::Unbuilt) {
             self.rebuild_index()?;
         }
-        for disk in &self.config.disks {
+        for disk in self.config.io_disks() {
             admission::verify_named_root(&self.disk_resources.get(disk)?.root)?;
         }
         let (next, result) = generation.next_state()?;
@@ -585,6 +638,7 @@ impl Engine {
             self.blocked = true;
             return Err(error);
         }
+        self.restore_current_disk_exit()?;
         #[cfg(feature = "fault-injection")]
         self.failpoint("before_membership_activation_projection")?;
         write_json(&self.root.join("config.json"), &self.config, true)?;

@@ -22,6 +22,9 @@ struct PlanningSnapshot {
     config: ValidatedConfig,
     disk_resources: Arc<crate::disk::DiskResources>,
     state: Arc<State>,
+    current_namespaces: Option<Arc<super::CurrentNamespaces>>,
+    workspace_namespace_baselines:
+        std::collections::BTreeMap<String, super::WorkspaceNamespaceBaseline>,
     workspace: Workspace,
     blocked: bool,
     snapshot: Option<String>,
@@ -39,6 +42,8 @@ impl PlanningSnapshot {
             config: &self.config,
             disk_resources: &self.disk_resources,
             state: &self.state,
+            current_namespaces: self.current_namespaces.as_ref(),
+            workspace_namespace_baselines: &self.workspace_namespace_baselines,
             snapshot: &self.snapshot,
             next_slot: self.next_slot,
             blocked: self.blocked,
@@ -144,6 +149,7 @@ impl Engine {
         let replay = self.state.operations.contains_key(&request.operation_id);
         self.repository_for_branch(&workspace.branch_id)?;
         if !replay {
+            self.workspace_namespace_entries(&workspace)?;
             self.require_write()?;
             if workspace.fencing_token != request.fencing_token {
                 return Err(Error::new(
@@ -171,6 +177,13 @@ impl Engine {
             config: self.config.clone(),
             disk_resources: Arc::clone(&self.disk_resources),
             state: Arc::clone(&self.state),
+            current_namespaces: self.current_namespaces.clone(),
+            workspace_namespace_baselines: self
+                .workspace_namespace_baselines
+                .get(&workspace.workspace_id)
+                .map(|baseline| (workspace.workspace_id.clone(), baseline.clone()))
+                .into_iter()
+                .collect(),
             workspace: workspace.clone(),
             blocked: self.blocked,
             snapshot: self.snapshot.clone(),
@@ -229,6 +242,7 @@ impl Engine {
                 .into_result());
         }
         self.require_write()?;
+        self.workspace_namespace_entries(&workspace)?;
         self.repository_for_branch(&workspace.branch_id)?;
         if canonical_json(&workspace)? != prepared.frozen_workspace
             || self.snapshot != prepared.base_snapshot

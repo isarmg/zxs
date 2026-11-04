@@ -72,6 +72,12 @@ struct StorageActivationComplete {
     intent_digest: String,
 }
 
+struct InitialActivationProof {
+    intent: StorageActivationIntent,
+    disk_seals: BTreeMap<String, String>,
+    probe: storage_engine::InitialActivationProbeGuard,
+}
+
 pub(super) fn present(path: &Path) -> Result<bool, ApiError> {
     match path.symlink_metadata() {
         Ok(_) => Ok(true),
@@ -293,7 +299,7 @@ impl SetupRecovery {
         self.write_control(ACTIVATION_INTENT, &intent)?;
         let engine =
             Engine::initialize_held(&self.data_root, config, directories).map_err(engine_error)?;
-        self.write_activation_ready(&intent)?;
+        self.write_activation_ready(&intent, self.activation_seals(&intent)?)?;
         revalidate(identity)?;
         install(engine)?;
         self.write_control(
@@ -316,10 +322,10 @@ impl SetupRecovery {
             self.activation_admitted()?;
             return Ok(());
         }
-        let intent = self.activation_proof()?;
-        let directories = self.activation_directories(&intent)?;
-        let mut engine = Engine::open_for_recovery_held(
-            &self.data_root,
+        let proof = self.activation_proof()?;
+        let directories = self.activation_directories(&proof.intent)?;
+        let mut engine = Engine::open_initial_activation_for_recovery_held(
+            proof.probe,
             self.retained_workspace_limits,
             directories,
         )
@@ -331,17 +337,17 @@ impl SetupRecovery {
                 "pending storage decisions require recovery before activation completion",
             ));
         }
-        self.activation_proof()?;
+        let proof = self.activation_proof()?;
         if !present(&self.data_root.join(ACTIVATION_READY))? {
-            self.write_activation_ready(&intent)?;
+            self.write_activation_ready(&proof.intent, proof.disk_seals)?;
         }
+        let intent_digest = value_digest(&proof.intent)?;
+        drop(proof.probe);
         revalidate(identity)?;
         install(engine)?;
         self.write_control(
             ACTIVATION_COMPLETE,
-            &StorageActivationComplete {
-                intent_digest: value_digest(&intent)?,
-            },
+            &StorageActivationComplete { intent_digest },
         )
     }
 
@@ -351,7 +357,7 @@ impl SetupRecovery {
     ) -> Result<(), ApiError> {
         let config: Config = read_control(&self.data_root.join("config.json"))?;
         if value_digest(&config)? != value_digest(&intent.config)?
-            && !crate::management::storage_addition::admits_configuration(
+            && !crate::management::storage_configuration::admits_configuration(
                 &self.management_root,
                 &config,
                 &intent.config,
@@ -363,6 +369,24 @@ impl SetupRecovery {
             ));
         }
         Ok(())
+    }
+
+    fn initial_activation_probe(
+        &self,
+        intent: &StorageActivationIntent,
+    ) -> Result<storage_engine::InitialActivationProbeGuard, ApiError> {
+        let config: Config = read_control(&self.data_root.join("config.json"))?;
+        // Successor management intents admit ordinary startup, never a replay
+        // of original selections. Equal Config bytes do not exclude a data-only
+        // Exit or a stale projection, so the held locator check is mandatory.
+        if value_digest(&config)? != value_digest(&intent.config)? {
+            return Err(ApiError::conflict(
+                storage_contract::ErrorCode::SetupProofInvalid,
+                "initial activation configuration differs from its retained intent",
+            ));
+        }
+        Engine::begin_initial_activation_probe(&self.data_root, &intent.config)
+            .map_err(engine_error)
     }
 
     fn activation_directories(
@@ -430,23 +454,27 @@ impl SetupRecovery {
             .collect()
     }
 
-    fn write_activation_ready(&self, intent: &StorageActivationIntent) -> Result<(), ApiError> {
+    fn write_activation_ready(
+        &self,
+        intent: &StorageActivationIntent,
+        disk_seals: BTreeMap<String, String>,
+    ) -> Result<(), ApiError> {
         self.write_control(
             ACTIVATION_READY,
             &StorageActivationReady {
                 intent_digest: value_digest(intent)?,
-                disk_seals: self.activation_seals(intent)?,
+                disk_seals,
             },
         )
     }
 
-    fn activation_proof(&self) -> Result<StorageActivationIntent, ApiError> {
+    fn activation_proof(&self) -> Result<InitialActivationProof, ApiError> {
         self.management_intent()?;
         if !self.management_authority_present()? {
             return Err(ApiError::unauthorized());
         }
         let intent: StorageActivationIntent = self.read_durable_control(ACTIVATION_INTENT)?;
-        self.verify_activation_configuration(&intent)?;
+        let probe = self.initial_activation_probe(&intent)?;
         let seals = self.activation_seals(&intent)?;
         if present(&self.data_root.join(ACTIVATION_READY))? {
             let ready: StorageActivationReady = self.read_durable_control(ACTIVATION_READY)?;
@@ -457,7 +485,11 @@ impl SetupRecovery {
                 ));
             }
         }
-        Ok(intent)
+        Ok(InitialActivationProof {
+            intent,
+            disk_seals: seals,
+            probe,
+        })
     }
 }
 

@@ -36,6 +36,8 @@ struct AdmittedConfig {
     genesis_io_authority: Arc<GenesisIoAuthority>,
     workspace_limits: Option<super::RetainedWorkspaceLimits>,
     generation: Option<Arc<super::membership_transition::pending::activation::Generation>>,
+    // Admission-only restriction; never serialized or used to calculate N/Q.
+    io_disks: Option<BTreeSet<String>>,
 }
 
 impl TryFrom<Config> for ValidatedConfig {
@@ -59,6 +61,7 @@ impl TryFrom<Config> for ValidatedConfig {
                 genesis_io_authority,
                 workspace_limits: None,
                 generation: None,
+                io_disks: None,
             }),
         })
     }
@@ -82,6 +85,38 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
+    /// Actual startup resources are a subset of the authenticated configuration.
+    /// Historical registration and fixed voter denominators remain unchanged.
+    pub(crate) fn io_disks(&self) -> impl Iterator<Item = &DiskConfig> {
+        self.disks.iter().filter(|disk| {
+            self.admitted
+                .io_disks
+                .as_ref()
+                .is_none_or(|ids| ids.contains(&disk.disk_id))
+        })
+    }
+
+    pub(crate) fn excludes_io_disk(&self, disk_id: &str) -> bool {
+        self.admitted
+            .io_disks
+            .as_ref()
+            .is_some_and(|ids| !ids.contains(disk_id))
+    }
+
+    pub(crate) fn restrict_io_disks(mut self, ids: BTreeSet<String>) -> Result<Self> {
+        if ids
+            .iter()
+            .any(|id| !self.io_disks().any(|disk| &disk.disk_id == id))
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "I/O admission cannot add or restore a configured disk",
+            ));
+        }
+        Arc::make_mut(&mut self.admitted).io_disks = Some(ids);
+        Ok(self)
+    }
+
     pub(crate) fn same_admission(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.admitted, &other.admitted)
     }

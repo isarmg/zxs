@@ -127,7 +127,12 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `POST /api/admin/disks/preview` | 以 operation_id、已检查目录、槽位、层级、上游和 metadata_member 生成当前池的纯添加预览 |
 | `POST /api/admin/disks` | 提交严格 `{preview}`，保留原 operation_id，真实运行在线纯添加协调器 |
 | `GET /api/admin/disks/addition` | 查询最新持久添加；可传 operation_id 查询原操作，不探测主机磁盘 |
-| `POST /api/admin/disks/addition/resume` | 严格 `{operation_id}`，只继续原目录、角色和目标配置 |
+| `POST /api/admin/disks/addition/resume` | 严格 `{operation_id, continuation:add\|cancel}`，保留原目录、角色和目标配置，明确继续添加或取消 |
+| `POST /api/admin/disks/addition/cancel` | 严格 `{operation_id, preview_digest}`，请求原 pure-add 的固定旧多数认证取消；已发布结果不改写 |
+| `POST /api/admin/disks/exit/preview` | 对当前准确登记身份预览 `planned_offline` 或 `deregister`，绑定已发布源快照、配置和原 operation_id |
+| `POST /api/admin/disks/exit` | 严格 `{preview}`，实际执行退出控制准备、持久 stop、I/O 关闭与 D3 发布 |
+| `GET /api/admin/disks/exit` | 查询最新退出；可传 `operation_id`，准备阶段不等于完成 |
+| `POST /api/admin/disks/exit/resume` | 严格 `{operation_id}`，按引擎真实退出阶段继续原动作，不重新访问已停止目标 |
 
 
 文件管理历史返回 `kind:nodes` 的 `HistoryWindowPage`，正文历史返回 `kind:versions`；不再把版本集合、分支和合并全集夹带在主节点页中，也不从正文来源或时间相邻推断图边。统一节点按 `(sequence DESC,node_id ASC)`，正文按 `(version_sequence ASC,version_id ASC)`，分支按 ID，合并按 `(sequence DESC,merge_id ASC)`；每页替换上一个窗口。`identity.context` 保留准确当前节点／分支及实际路径，即使它们不在本页；`identity.action_max_entries` 是实际 `Config.max_entries` 的十进制文本，不替代完整动作编码的 1 MiB 上限。

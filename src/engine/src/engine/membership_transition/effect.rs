@@ -11,13 +11,22 @@ pub enum MembershipExitAction {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub(super) struct ExitEffect {
-    action: MembershipExitAction,
-    disk_id: String,
-    slot_id: String,
+    pub(super) action: MembershipExitAction,
+    pub(super) disk_id: String,
+    pub(super) slot_id: String,
     #[serialization(with = "storage_contract::u64_string")]
-    binding_generation: u64,
+    pub(super) binding_generation: u64,
 }
 impl ExitEffect {
+    pub(super) fn identity(&self, pool_id: &str) -> crate::DiskRegistrationIdentity {
+        crate::DiskRegistrationIdentity {
+            pool_id: pool_id.to_owned(),
+            disk_id: self.disk_id.clone(),
+            slot_id: self.slot_id.clone(),
+            binding_generation: self.binding_generation,
+        }
+    }
+
     pub(super) fn validate(
         &self,
         original: &ValidatedConfig,
@@ -60,6 +69,76 @@ impl ExitEffect {
             }
         }
         Ok(())
+    }
+}
+
+impl Engine {
+    /// Fence one exact registered directory's lifecycle request. This prepares
+    /// control authority, not an offline/deregistered outcome. The stop is only
+    /// installed after complete independent retained recovery evidence exists.
+    pub fn begin_disk_exit(
+        &mut self,
+        disk_id: &str,
+        action: MembershipExitAction,
+        principal: &str,
+        operation_id: OperationId,
+    ) -> Result<MembershipFenceStatus> {
+        Self::require_actor(principal)?;
+        self.require_no_commit_preparation()?;
+        let (target, effect) = self.disk_exit_target(disk_id, action)?;
+        if self.membership_fence.is_none() && self.snapshot.is_none() {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "exit needs an authenticated published source; no fence was written",
+            ));
+        }
+        self.begin_membership_handoff_with_effect(target, Some(effect), principal, operation_id)
+    }
+
+    fn disk_exit_target(
+        &self,
+        disk_id: &str,
+        action: MembershipExitAction,
+    ) -> Result<(ValidatedConfig, ExitEffect)> {
+        let current = self.registered_disk(disk_id).ok_or_else(|| {
+            Error::new(
+                ErrorCode::ConfigConflict,
+                "exit names no current registration",
+            )
+        })?;
+        if action == MembershipExitAction::PlannedOffline
+            && current.registration_mode != crate::RegistrationMode::Enabled
+        {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "planned offline requires a currently enabled registration",
+            ));
+        }
+        let mut target = (*self.config).clone();
+        let disk = target
+            .disks
+            .iter_mut()
+            .find(|disk| disk.disk_id == disk_id)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ConfigConflict,
+                    "exit names no registered directory",
+                )
+            })?;
+        let effect = ExitEffect {
+            action,
+            disk_id: disk.disk_id.clone(),
+            slot_id: disk.slot_id.clone(),
+            binding_generation: disk.binding_generation,
+        };
+        disk.metadata_member = false;
+        if !target.disks.iter().any(|disk| disk.metadata_member) {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "terminal pool authority is not implemented; no stop or fence was written",
+            ));
+        }
+        Ok((ValidatedConfig::try_from(target)?, effect))
     }
 }
 

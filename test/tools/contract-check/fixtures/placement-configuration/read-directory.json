@@ -25,6 +25,11 @@
       "slot_id": "P03",
       "root": "/srv/zxs/archive",
       "unavailable_reason": "missing_backup_prefixes"
+    },
+    {
+      "slot_id": "P04",
+      "root": "/srv/zxs/offline",
+      "unavailable_reason": "route_unavailable"
     }
   ]
 }

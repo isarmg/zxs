@@ -22,6 +22,8 @@ pub(super) struct Model {
     reading: bool,
     generation: u64,
     acknowledged: bool,
+    cancel_acknowledged: bool,
+    resume_add_acknowledged: bool,
     error: Option<api::Error>,
 }
 impl Model {
@@ -32,12 +34,14 @@ impl Model {
             || self
                 .status
                 .as_ref()
-                .is_some_and(|status| status.state != AdditionState::Completed)
+                .is_some_and(|status| !status.state.is_terminal())
     }
     pub(super) fn invalidate(&mut self) {
         self.preview = None;
         self.operation = None;
         self.acknowledged = false;
+        self.cancel_acknowledged = false;
+        self.resume_add_acknowledged = false;
     }
 }
 fn active(model: &super::Model) -> bool {
@@ -175,14 +179,41 @@ fn preview(state: RwSignal<State>) {
         });
     });
 }
-fn submit(state: RwSignal<State>, resume: bool) {
+#[derive(Clone, Copy)]
+enum Submit {
+    Commit,
+    Resume(AdditionContinuation),
+    Cancel,
+}
+fn resume(state: RwSignal<State>) {
+    let continuation = state.with_untracked(|s| {
+        s.admin_console
+            .storage
+            .addition
+            .status
+            .as_ref()
+            .map(|status| status.continuation)
+    });
+    match continuation {
+        Some(continuation) => submit(state, Submit::Resume(continuation)),
+        // A lost initial response can precede persistence. Reuse the exact
+        // original commit body rather than inventing another operation ID.
+        None => submit(state, Submit::Commit),
+    }
+}
+fn submit(state: RwSignal<State>, action: Submit) {
     let captured = state
         .try_update(|s| {
             if !s.session_active() {
                 return None;
             }
             let model = &mut s.admin_console.storage.addition;
-            if model.sending {
+            if model.sending
+                || model
+                    .status
+                    .as_ref()
+                    .is_some_and(|status| status.state.is_terminal())
+            {
                 return None;
             }
             let operation = model.operation?;
@@ -190,36 +221,50 @@ fn submit(state: RwSignal<State>, resume: bool) {
                 .preview
                 .clone()
                 .or_else(|| model.status.as_ref().map(|status| status.preview.clone()))?;
-            let body = if resume
-                && model
-                    .status
-                    .as_ref()
-                    .is_some_and(|status| status.operation_id == operation)
-            {
-                if !model.submitted
-                    && !model
-                        .status
-                        .as_ref()
-                        .is_some_and(|status| status.state == AdditionState::RecoveryRequired)
-                {
-                    return None;
+            let (path, body) = match action {
+                Submit::Commit => {
+                    if !model.acknowledged && !model.submitted {
+                        return None;
+                    }
+                    (
+                        "/api/admin/disks",
+                        json!(AdditionCommit {
+                            preview: model.preview.clone()?
+                        }),
+                    )
                 }
-                json!(AdditionResume {
-                    operation_id: operation
-                })
-            } else {
-                if !resume && (model.submitted || !model.acknowledged) {
-                    return None;
+                Submit::Resume(continuation) => {
+                    let status = model.status.as_ref()?;
+                    if status.operation_id != operation {
+                        return None;
+                    }
+                    if continuation == AdditionContinuation::Add
+                        && status.continuation == AdditionContinuation::Cancel
+                        && !model.resume_add_acknowledged
+                    {
+                        return None;
+                    }
+                    (
+                        "/api/admin/disks/addition/resume",
+                        json!(AdditionResume {
+                            operation_id: operation,
+                            continuation,
+                        }),
+                    )
                 }
-                json!(AdditionCommit {
-                    preview: model.preview.clone()?
-                })
+                Submit::Cancel => {
+                    if !model.cancel_acknowledged || model.status.is_none() {
+                        return None;
+                    }
+                    (
+                        "/api/admin/disks/addition/cancel",
+                        json!(AdditionCancel {
+                            operation_id: operation,
+                            preview_digest: expected_preview.preview_digest.clone(),
+                        }),
+                    )
+                }
             };
-            let resume = resume
-                && model
-                    .status
-                    .as_ref()
-                    .is_some_and(|status| status.operation_id == operation);
             model.sending = true;
             model.submitted = true;
             model.rejected = false;
@@ -229,21 +274,16 @@ fn submit(state: RwSignal<State>, resume: bool) {
                 s.session_epoch,
                 model.generation,
                 operation,
+                path,
                 body,
-                resume,
                 expected_preview,
             ))
         })
         .flatten();
-    let Some((epoch, generation, operation, body, resume, expected_preview)) = captured else {
+    let Some((epoch, generation, operation, path, body, expected_preview)) = captured else {
         return;
     };
     spawn_local(async move {
-        let path = if resume {
-            "/api/admin/disks/addition/resume"
-        } else {
-            "/api/admin/disks"
-        };
         let result = api::validated_request("POST", path, Some(body), |value| {
             let status: AdditionStatus = decode(value)?;
             validate_status(&status, Some(operation))?;
@@ -313,18 +353,40 @@ fn validate_status(
     if expected.is_some_and(|id| id != status.operation_id)
         || status.preview.request.operation_id != status.operation_id
         || (status.state == AdditionState::Completed) != (status.phase == AdditionPhase::Completed)
-        || (status.state == AdditionState::Completed && status.failure.is_some())
+        || (status.state == AdditionState::Cancelled) != (status.phase == AdditionPhase::Cancelled)
+        || status.state.is_terminal() != status.result.is_some()
+        || (status.state.is_terminal() && status.failure.is_some())
+        || status.result.as_ref().is_some_and(|result| {
+            result.operation_id != status.operation_id
+                || result.commit_state != storage_contract::CommitState::Published
+                || result.request_digest.len() != 64
+                || !result
+                    .request_digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                || result.kind
+                    != if status.state == AdditionState::Cancelled {
+                        "membership-add-cancelled"
+                    } else {
+                        "membership-add"
+                    }
+        })
     {
         return Err(invalid(ResponseError::Identity));
     }
     Ok(())
 }
 fn accept(model: &mut Model, status: AdditionStatus) -> bool {
-    let completed = status.state == AdditionState::Completed;
+    let completed = status.state.is_terminal();
     let newly_completed = completed
-        && !model.status.as_ref().is_some_and(|old| {
-            old.operation_id == status.operation_id && old.state == AdditionState::Completed
-        });
+        && !model
+            .status
+            .as_ref()
+            .is_some_and(|old| old.operation_id == status.operation_id && old.state.is_terminal());
+    if model.status.as_ref() != Some(&status) {
+        model.cancel_acknowledged = false;
+        model.resume_add_acknowledged = false;
+    }
     model.operation = Some(status.operation_id);
     model.submitted = !completed;
     model.status = Some(status);
@@ -432,7 +494,12 @@ pub(super) fn poll(state: RwSignal<State>) {
                     .addition
                     .status
                     .as_ref()
-                    .is_none_or(|status| status.state == AdditionState::Adding))
+                    .is_none_or(|status| {
+                        matches!(
+                            status.state,
+                            AdditionState::Adding | AdditionState::Cancelling
+                        )
+                    }))
     }) {
         load(state);
     }
@@ -478,9 +545,9 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.editable()||s.admin_console.storage.selections.is_empty()) on:click=move |_|preview(state)>{t("预览在线添加", "Preview online addition")}</button>
             {move ||state.with(|s|s.admin_console.storage.addition.preview.clone()).map(|preview|view!{
                 <p class="zxs-row">{format!("{}{} · {}{} → {}",t("新增目录：", "New directories: "),preview.added_directories,t("元数据成员：", "Metadata members: "),preview.original_metadata_members,preview.target_metadata_members)}</p>
-                <p class="zxs-row">{t("提交后将暂停本代写入，复制并验证控制元数据，再发布新成员。中断只能继续同一操作；关闭页面不取消，暂不支持移出成员。", "Submitting pauses writes for this generation, copies and verifies control metadata, then publishes the new membership. Interrupted work resumes the same operation. Closing the page does not cancel it. Member removal is not available.")}</p>
+                <p class="zxs-row">{t("提交后将暂停本代写入，复制并验证控制元数据，再发布新成员。中断后保留原操作编号。关闭页面不会取消；明确申请取消也必须由原成员固定多数的真实决定许可，已经发布的添加不会改称取消。", "Submitting pauses writes for this generation, copies and verifies control metadata, then publishes the new membership. Keep the original operation after interruption. Closing the page does not cancel it. Explicit cancellation requires the original fixed quorum's actual decision; a published addition cannot become cancelled.")}</p>
                 <label class="zxs-row"><input type="checkbox" disabled=move ||state.with(|s|s.admin_console.storage.addition.blocks_edit()) prop:checked=move ||state.with(|s|s.admin_console.storage.addition.acknowledged) on:change=move |event|state.update(|s|{if s.session_active()&&!s.admin_console.storage.addition.blocks_edit(){s.admin_console.storage.addition.acknowledged=event_target_checked(&event);}})/>{t("已核对目录、槽位、层级和元数据角色，确认添加。", "I reviewed the directories, slots, levels and metadata roles and confirm this addition.")}</label>
-                <button type="button" class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.addition.blocks_edit()||!s.admin_console.storage.addition.acknowledged) on:click=move |_|submit(state,false)>{t("添加到当前存储池", "Add to current pool")}</button>
+                <button type="button" class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.addition.blocks_edit()||!s.admin_console.storage.addition.acknowledged) on:click=move |_|submit(state, Submit::Commit)>{t("添加到当前存储池", "Add to current pool")}</button>
             })}
         </Show>
         <Show when=move ||state.with(|s|s.admin_console.storage.addition.submitted)><p class="zxs-row" role="status">{t("添加已提交，正在核对服务器阶段。请保留原操作，不要换用新编号重发。", "The addition was submitted. Checking its server progress. Keep the original operation; do not resubmit with a new ID.")}</p></Show>
@@ -489,8 +556,18 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
             {status.failure.map(|failure|view!{<p class="zxs-row" role="alert">{format!("{}: {}",failure.code,failure.message)}</p>})}
         })}
         <Show when=move ||state.with(|s|s.admin_console.storage.addition.submitted&&!s.admin_console.storage.addition.sending)>
-            <button type="button" class="zxs-button" on:click=move |_|submit(state,true)>{t("继续原添加操作", "Continue original addition")}</button>
+            <button type="button" class="zxs-button" on:click=move |_|resume(state)>{move || state.with(|s| if s.admin_console.storage.addition.status.as_ref().is_some_and(|status| status.continuation == AdditionContinuation::Cancel) { t("继续原取消操作", "Continue original cancellation") } else { t("继续原添加操作", "Continue original addition") })}</button>
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|s.admin_console.storage.addition.reading) on:click=move |_|load(state)>{t("核对原操作", "Check original operation")}</button>
+        </Show>
+        <Show when=move ||state.with(|s|s.admin_console.storage.addition.status.as_ref().is_some_and(|status|!status.state.is_terminal())&&!s.admin_console.storage.addition.sending)>
+            <p class="zxs-row">{t("取消仅适用于尚能取得原成员固定多数取消票的添加。已形成联合多数时不可取消；取消不会删除新目录或已写入的准备材料。", "Cancellation requires the original fixed quorum's Abort votes. An existing joint quorum cannot be cancelled. Cancellation does not delete new directories or preparation data.")}</p>
+            <label class="zxs-row"><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.storage.addition.cancel_acknowledged) on:change=move |event|state.update(|s|{if s.session_active(){s.admin_console.storage.addition.cancel_acknowledged=event_target_checked(&event);}})/>{t("确认申请取消此原添加操作，并保留所有目录数据。", "I confirm cancellation of this original addition, retaining all directory data.")}</label>
+            <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.addition.cancel_acknowledged) on:click=move |_|submit(state, Submit::Cancel)>{t("申请取消原添加", "Request original addition cancellation")}</button>
+            <Show when=move ||state.with(|s|s.admin_console.storage.addition.status.as_ref().is_some_and(|status|status.continuation==AdditionContinuation::Cancel&&status.state==AdditionState::RecoveryRequired))>
+                <p class="zxs-row">{t("取消失败不会自动转回添加。若改为继续添加，已持久化的取消票仍可能拒绝此操作。", "A failed cancellation never automatically resumes addition. If you choose addition instead, existing durable Abort votes can still prevent it.")}</p>
+                <label class="zxs-row"><input type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.storage.addition.resume_add_acknowledged) on:change=move |event|state.update(|s|{if s.session_active(){s.admin_console.storage.addition.resume_add_acknowledged=event_target_checked(&event);}})/>{t("我明确改为继续原添加。", "I explicitly choose to continue the original addition instead.")}</label>
+                <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.addition.resume_add_acknowledged) on:click=move |_|submit(state, Submit::Resume(AdditionContinuation::Add))>{t("改为继续原添加", "Continue addition instead")}</button>
+            </Show>
         </Show>
         {move ||state.with(|s|s.admin_console.storage.addition.error.clone()).map(|error|{let feedback=crate::ui::feedback(&error);view!{<ErrorState message=feedback.message request_id=feedback.request_id/>}})}
     }
@@ -498,6 +575,8 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
 fn state_text(state: AdditionState) -> String {
     match state {
         AdditionState::Adding => t("添加中", "Adding"),
+        AdditionState::Cancelling => t("取消中", "Cancelling"),
+        AdditionState::Cancelled => t("取消已发布", "Cancellation published"),
         AdditionState::RecoveryRequired => t("需要恢复", "Recovery required"),
         AdditionState::Completed => t("添加完成", "Addition complete"),
     }
@@ -510,6 +589,18 @@ fn phase_text(phase: AdditionPhase) -> String {
         AdditionPhase::Enrolling => t("准备新增目录", "Preparing new directories"),
         AdditionPhase::JointDecision => t("确认联合决定", "Confirming joint decision"),
         AdditionPhase::Activating => t("发布新成员", "Publishing membership"),
+        AdditionPhase::CertifyingAbort => {
+            t("认证原成员取消票", "Certifying original-member Abort votes")
+        }
+        AdditionPhase::AbortCertified => t(
+            "取消已获认证，等待发布",
+            "Abort certified, publication pending",
+        ),
+        AdditionPhase::Cancelling => t("发布取消代", "Publishing cancellation generation"),
+        AdditionPhase::Cancelled => t(
+            "原添加已永久取消",
+            "Original addition permanently cancelled",
+        ),
         AdditionPhase::Completed => t("已发布", "Published"),
     }
 }

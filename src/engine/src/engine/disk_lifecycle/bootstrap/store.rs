@@ -15,7 +15,7 @@ const LOCK_FILE: &str = "writer.lock";
 ///
 /// A dedicated advisory lock serializes cooperating readers/writers for this
 /// store's lifetime. Old records are never replaced or deleted. Chain validation
-/// streams one bounded record at a time, with no lifetime record-count limit. There is no automatic GC or root-expansion protocol.
+/// streams one bounded record at a time, with no lifetime record-count limit. There is no automatic GC; root expansion requires independently authenticated held resources.
 /// A complete malicious/external rollback of this directory is out of scope;
 /// crash safety assumes successful file and directory fsync are honored.
 pub(crate) struct BootstrapStore {
@@ -63,8 +63,25 @@ impl BootstrapStore {
     ) -> Result<LoadedLocator> {
         self.publish(None, Record::initial(pool_id, roots)?)
     }
-    /// Persist BEFORE intent/fence is allowed to become durable. Any error,
-    /// including uncertain publication/fsync, forbids proceeding to that fence.
+    /// Caller must authenticate the successor and retain its admitted handles.
+    /// This only adds locator addresses; it cannot remove or clear any stop.
+    pub(crate) fn append_roots(
+        &mut self,
+        previous: &LoadedLocator,
+        roots: Vec<RootObservation>,
+    ) -> Result<LoadedLocator> {
+        match Record::extend(previous, roots)? {
+            Some(record) => self.publish(Some(&previous.head), record),
+            None => {
+                self.sync_current(previous)?;
+                Ok(previous.clone())
+            }
+        }
+    }
+
+    /// Persist after the retained control closure is prepared, but BEFORE any
+    /// irreversible target closure or active Exit marker. Any error, including
+    /// uncertain publication/fsync, forbids advancing that stop boundary.
     /// The exact same request can retry a partially published local update.
     /// A pending stop survives even if the corresponding intent never existed.
     pub(crate) fn append_stop(

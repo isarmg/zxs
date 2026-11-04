@@ -380,13 +380,24 @@ fn validate_metadata_namespace(root: &DiskRoot, expected: &PendingDiskSeal) -> R
 pub(in crate::engine::membership_transition) fn verify_named_root(
     root: &DiskRoot,
 ) -> Result<FileIdentity> {
-    let named = DiskRoot::open(root.path())?;
+    // Even a read-only name comparison is target I/O. Keep the original
+    // bound responsibility before the first name lookup and through teardown;
+    // None is only the explicit unbound pending/bootstrap provenance.
+    let activity = root.retain_io_activity()?;
     let held = FileIdentity::from_fd(root.directory(root.path())?)?;
-    if held != FileIdentity::from_fd(named.directory(named.path())?)? {
+    if let Some(activity) = &activity {
+        activity.check_running()?;
+    }
+    let named = DiskRoot::open(root.path())?;
+    let observed = FileIdentity::from_fd(named.directory(named.path())?)?;
+    if held != observed {
         return Err(Error::new(
             ErrorCode::DiskIdentityMismatch,
             "pending member root moved after admission",
         ));
+    }
+    if let Some(activity) = &activity {
+        activity.check_running()?;
     }
     Ok(held)
 }

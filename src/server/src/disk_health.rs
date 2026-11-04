@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use std::{
-    os::fd::{AsFd, AsRawFd},
+    os::fd::AsRawFd,
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -21,6 +21,7 @@ use std::{
 use storage_contract::disk_details::{
     DiskHealth, DiskHealthAssessment, DiskHealthUnavailable as Reason,
 };
+use storage_engine::{DiskObservationAccess, DiskObservationDirectory};
 
 static QUERY_ACTIVE: AtomicBool = AtomicBool::new(false);
 const OUTPUT_LIMIT: usize = 64 * 1024;
@@ -33,7 +34,11 @@ impl Drop for QuerySlot {
     }
 }
 
-pub(crate) fn observe(root: &Path, directory: &File, hardware: &HardwareObservation) -> DiskHealth {
+pub(crate) fn observe(
+    root: &Path,
+    directory: &DiskObservationDirectory,
+    hardware: &HardwareObservation,
+) -> DiskHealth {
     let reason = match hardware.mapping {
         HardwareMapping::Multiple => Some(Reason::MultipleDevices),
         HardwareMapping::Unknown => Some(Reason::MappingUnknown),
@@ -51,7 +56,7 @@ pub(crate) fn observe(root: &Path, directory: &File, hardware: &HardwareObservat
     let slot = QuerySlot;
     let directory = match directory.try_clone() {
         Ok(directory) => directory,
-        Err(error) => return unavailable(io_reason("clone registered directory", error)),
+        Err(error) => return unavailable(directory_reason(error)),
     };
     let root = root.to_owned();
     let mounted_path = hardware.device_path.clone();
@@ -62,7 +67,12 @@ pub(crate) fn observe(root: &Path, directory: &File, hardware: &HardwareObservat
         .name("disk-smart".into())
         .spawn(move || {
             let _slot = slot;
-            let result = query(&root, &directory, mounted_path.as_deref());
+            // This guard, not the HTTP receiver, owns every query, device file,
+            // child and kill/reap tail. A late worker cannot outlive disk drain.
+            let result = directory
+                .observe(|access| Ok(query(&root, access, mounted_path.as_deref())))
+                .map_err(directory_reason)
+                .and_then(std::convert::identity);
             if send.send(result).is_err() {
                 tracing::debug!("SMART observation completed after caller deadline");
             }
@@ -94,7 +104,11 @@ struct DeviceBinding {
     number: (u32, u32),
 }
 
-fn query(root: &Path, directory: &File, mounted_path: Option<&str>) -> Result<DiskHealth, Reason> {
+fn query(
+    root: &Path,
+    directory: &DiskObservationAccess<'_>,
+    mounted_path: Option<&str>,
+) -> Result<DiskHealth, Reason> {
     let binding = bind(root, directory, mounted_path)?;
     let proc_fd = format!(
         "/proc/{}/fd/{}",
@@ -119,7 +133,7 @@ fn query(root: &Path, directory: &File, mounted_path: Option<&str>) -> Result<Di
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     binding.revalidate(root, directory)?;
-    let (status, bytes) = run(&mut command, QUERY_TIMEOUT)?;
+    let (status, bytes) = run(&mut command, QUERY_TIMEOUT, directory)?;
     binding.revalidate(root, directory)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -133,10 +147,10 @@ fn query(root: &Path, directory: &File, mounted_path: Option<&str>) -> Result<Di
 
 fn bind(
     root: &Path,
-    directory: &File,
+    directory: &DiskObservationAccess<'_>,
     mounted_path: Option<&str>,
 ) -> Result<DeviceBinding, Reason> {
-    let mount = read_root_mount(root, directory.as_fd()).map_err(observation_reason)?;
+    let mount = read_root_mount(root, directory).map_err(observation_reason)?;
     let link = PathBuf::from(format!("/sys/dev/block/{}:{}", mount.major, mount.minor));
     let block =
         fs::canonicalize(&link).map_err(|error| io_reason("resolve SMART device", error))?;
@@ -149,6 +163,7 @@ fn bind(
     {
         return Err(Reason::DeviceChanged);
     }
+    directory.check_running().map_err(directory_reason)?;
     let mounted_sysfs =
         File::open(&block).map_err(|error| io_reason("hold mounted sysfs identity", error))?;
     let mounted_sysfs_path = block.clone();
@@ -182,8 +197,10 @@ fn bind(
     } else {
         return Err(Reason::UnsupportedDevice);
     };
+    directory.check_running().map_err(directory_reason)?;
     let sysfs = File::open(&disk).map_err(|error| io_reason("hold SMART sysfs identity", error))?;
     let device_path = format!("/dev/{}", device.name);
+    directory.check_running().map_err(directory_reason)?;
     let fd = rustix::fs::open(
         &device_path,
         rustix::fs::OFlags::RDONLY
@@ -220,8 +237,8 @@ fn bind(
 }
 
 impl DeviceBinding {
-    fn revalidate(&self, root: &Path, directory: &File) -> Result<(), Reason> {
-        let mount = read_root_mount(root, directory.as_fd()).map_err(observation_reason)?;
+    fn revalidate(&self, root: &Path, directory: &DiskObservationAccess<'_>) -> Result<(), Reason> {
+        let mount = read_root_mount(root, directory).map_err(observation_reason)?;
         same_held_inode(&self.device, Path::new(&self.device_path))?;
         self.revalidate_mount(mount, Path::new("/sys"))
     }
@@ -265,21 +282,54 @@ fn same_held_inode(held: &File, path: &Path) -> Result<(), Reason> {
     Ok(())
 }
 
-fn run(command: &mut Command, timeout: Duration) -> Result<(i32, Vec<u8>), Reason> {
-    let mut child = command.spawn().map_err(|error| match error.kind() {
+/// Child cleanup stays inside the directory's admitted guard, including panic
+/// unwinding. A failed wait cannot silently Drop the child and certify disk drain.
+struct QueryChild<'a, 'directory> {
+    process: Option<std::process::Child>,
+    directory: &'a DiskObservationAccess<'directory>,
+}
+
+impl Drop for QueryChild<'_, '_> {
+    fn drop(&mut self) {
+        let Some(mut process) = self.process.take() else {
+            return;
+        };
+        if let Err(error) = process.kill() {
+            tracing::debug!(?error, "stop SMART child");
+        }
+        if let Err(error) = process.wait() {
+            self.directory
+                .retain_unresolved_process_cleanup(process, error);
+        }
+    }
+}
+
+fn run(
+    command: &mut Command,
+    timeout: Duration,
+    directory: &DiskObservationAccess<'_>,
+) -> Result<(i32, Vec<u8>), Reason> {
+    directory.check_running().map_err(directory_reason)?;
+    let process = command.spawn().map_err(|error| match error.kind() {
         io::ErrorKind::NotFound => Reason::ToolMissing,
         _ => io_reason("execute smartctl", error),
     })?;
-    let result = collect_output(&mut child, timeout);
-    if result.is_err() {
-        // Cleanup may wait on uninterruptible kernel I/O, but only this dedicated
-        // worker and its single global slot remain occupied; HTTP has a deadline.
-        if let Err(error) = child.kill() {
-            tracing::debug!(?error, "stop SMART child");
-        }
-        if let Err(error) = child.wait() {
-            tracing::debug!(?error, "reap SMART child");
-        }
+    let mut child = QueryChild {
+        process: Some(process),
+        directory,
+    };
+    let result = collect_output(
+        child
+            .process
+            .as_mut()
+            .expect("invariant: new SMART child is owned"),
+        timeout,
+        directory,
+    );
+    if result.is_ok() {
+        // collect_output returns success only after try_wait reports the actual
+        // exit and stdout is drained. Error/unwind cleanup belongs to Drop.
+        child.process = None;
     }
     result
 }
@@ -287,6 +337,7 @@ fn run(command: &mut Command, timeout: Duration) -> Result<(i32, Vec<u8>), Reaso
 fn collect_output(
     child: &mut std::process::Child,
     timeout: Duration,
+    directory: &DiskObservationAccess<'_>,
 ) -> Result<(i32, Vec<u8>), Reason> {
     let mut stdout = child
         .stdout
@@ -298,6 +349,7 @@ fn collect_output(
     let mut bytes = Vec::new();
     let mut status = None;
     loop {
+        directory.check_running().map_err(directory_reason)?;
         if Instant::now() >= deadline {
             return Err(Reason::TimedOut);
         }
@@ -401,15 +453,34 @@ fn parse(
 }
 
 fn observation_reason(error: ObservationError) -> Reason {
-    tracing::debug!(?error, "SMART device mapping unavailable");
+    if !matches!(&error, ObservationError::Directory { .. }) {
+        tracing::debug!(?error, "SMART device mapping unavailable");
+    }
     match error {
         ObservationError::Io { source, .. } if source.kind() == io::ErrorKind::PermissionDenied => {
             Reason::PermissionDenied
         }
         ObservationError::MountMissing(_) => Reason::DeviceChanged,
+        ObservationError::Directory { source, .. } => directory_reason(source),
         ObservationError::Io { .. } | ObservationError::Invalid { .. } => Reason::MappingUnknown,
     }
 }
+fn directory_reason(error: storage_engine::Error) -> Reason {
+    tracing::debug!(?error, "SMART registered directory observation unavailable");
+    match error {
+        storage_engine::Error::Filesystem(platform_io::fs_safety::Error::Io(source))
+            if source.kind() == io::ErrorKind::PermissionDenied =>
+        {
+            Reason::PermissionDenied
+        }
+        error => match error.code() {
+            storage_contract::ErrorCode::DiskUnavailable
+            | storage_contract::ErrorCode::DiskIdentityMismatch => Reason::DeviceChanged,
+            _ => Reason::QueryFailed,
+        },
+    }
+}
+
 fn io_reason(operation: &'static str, error: io::Error) -> Reason {
     tracing::debug!(operation, ?error, "SMART observation unavailable");
     if error.kind() == io::ErrorKind::PermissionDenied {

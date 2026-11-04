@@ -88,6 +88,19 @@ impl Candidate {
             },
         }
     }
+    pub(crate) fn new_with_registry(
+        data: CandidateData,
+        authority: &str,
+        commitment: &crate::DiskRegistryCommitment,
+    ) -> Self {
+        Self {
+            data,
+            binding: CandidateBinding::Registry {
+                authority_hash: authority.to_owned(),
+                commitment: commitment.clone(),
+            },
+        }
+    }
     pub(crate) fn generation(&self) -> Option<&str> {
         match &self.binding {
             CandidateBinding::Genesis => None,

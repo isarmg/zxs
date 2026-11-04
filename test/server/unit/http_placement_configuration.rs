@@ -85,6 +85,11 @@ fn placement_configuration_real_response_dto_matches_schema_fixtures() {
                     "/srv/zxs/archive",
                     Some(PrimaryPlacementBlock::MissingBackupPrefixes),
                 ),
+                (
+                    "P04",
+                    "/srv/zxs/offline",
+                    Some(PrimaryPlacementBlock::RouteUnavailable),
+                ),
             ],
         ),
     ] {

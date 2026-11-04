@@ -1,9 +1,8 @@
 //! A durable restriction on discovery, never registration or membership authority.
 //!
-//! This is NOT wired into Engine::open or membership discovery yet. The caller
-//! must load/select here before its first storage-root stat/open, keep subsequent
-//! discovery inside that selection, and authenticate actual authority with its
-//! original fixed N/Q. Any failure means management-only, not Config fallback.
+//! Engine startup loads/selects here before its first storage-root stat/open.
+//! Discovery stays inside that selection and authenticates actual authority with
+//! its original fixed N/Q. Any failure means management-only, not Config fallback.
 //!
 //! Initial roots must come from an already authenticated, held-resource session
 //! or explicitly authorized retained-root recovery. Capturing a held descriptor
@@ -12,8 +11,10 @@
 //! a stop, or re-enables a root. Explicit recovery must use a separate authority
 //! verifier. Directory identities do not imply independent physical devices.
 mod format;
+pub(crate) mod runtime;
 pub(crate) mod store;
 use format::{Head, Record, RootRecord};
+pub(crate) use runtime::{DurableDiskStop, RecoveredDiskStop};
 
 use crate::{Config, OperationId, engine::disk_registry::DiskRegistrationIdentity};
 use platform_io::fs_safety::linux::FileIdentity;
@@ -136,6 +137,11 @@ impl RootObservation {
 )]
 #[serialization(transparent)]
 pub(crate) struct IntentDigest(storage_contract::ContentHash);
+impl std::fmt::Display for IntentDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
 impl IntentDigest {
     pub(crate) fn parse(value: &str) -> Result<Self> {
         value
@@ -153,6 +159,86 @@ pub(crate) struct LoadedLocator {
     record: Record,
 }
 impl LoadedLocator {
+    fn permits_unstopped_relocation(&self, config: &Config) -> bool {
+        self.record.stops.is_empty()
+            && config.disks.len() == self.record.roots.len()
+            && config.disks.iter().all(|disk| {
+                self.record
+                    .roots
+                    .iter()
+                    .any(|root| root.disk_id == disk.disk_id)
+            })
+    }
+
+    pub(crate) fn excludes_binding(&self, binding: &DiskRegistrationIdentity) -> bool {
+        binding.pool_id == self.record.pool_id
+            && self
+                .record
+                .roots
+                .iter()
+                .find(|root| root.disk_id == binding.disk_id)
+                .is_none_or(|root| {
+                    root.slot_id == binding.slot_id
+                        && root.binding_generation == binding.binding_generation
+                        && self
+                            .record
+                            .stops
+                            .iter()
+                            .any(|stop| stop.disk_id == binding.disk_id)
+                })
+    }
+
+    /// Bind only recorded addresses after independent authority verification.
+    /// This is a restriction of resources, not a change to registration or voters.
+    pub(crate) fn restrict_config(
+        &self,
+        config: crate::ValidatedConfig,
+        projected: &Config,
+    ) -> crate::Result<crate::ValidatedConfig> {
+        let permits_relocation = self.permits_unstopped_relocation(projected);
+        let mut allowed = std::collections::BTreeSet::new();
+        let mut roots = Vec::with_capacity(config.disks.len());
+        for disk in &config.disks {
+            let observed = self
+                .record
+                .roots
+                .iter()
+                .find(|root| root.disk_id == disk.disk_id);
+            if let Some(root) = observed {
+                if root.slot_id != disk.slot_id
+                    || root.binding_generation != disk.binding_generation
+                {
+                    return Err(crate::Error::new(
+                        crate::ErrorCode::RecoveryRequired,
+                        "bootstrap binding differs from independently authenticated configuration",
+                    ));
+                }
+                if !self
+                    .record
+                    .stops
+                    .iter()
+                    .any(|stop| stop.disk_id == disk.disk_id)
+                {
+                    allowed.insert(disk.disk_id.clone());
+                }
+                let projected_root = permits_relocation.then(|| {
+                    projected
+                        .disks
+                        .iter()
+                        .find(|disk| disk.disk_id == root.disk_id)
+                        .expect("invariant: complete locator projection")
+                        .root
+                        .clone()
+                });
+                roots.push(projected_root.unwrap_or_else(|| PathBuf::from(&root.path)));
+            } else {
+                roots.push(disk.root.clone());
+            }
+        }
+        config.with_disk_roots(roots)?.restrict_io_disks(allowed)
+    }
+
+    #[cfg(test)]
     pub(crate) fn generation(&self) -> u64 {
         self.head.generation
     }
@@ -174,13 +260,16 @@ impl LoadedLocator {
     }
     /// Pure selection. No filesystem operation, including canonicalize/stat,
     /// occurs here. Stale Config may retain stopped roots but cannot widen the
-    /// selection, remap any recorded binding, or introduce an unknown address.
-    pub(crate) fn select<'a>(&'a self, config: &Config) -> Result<RestrictedProbes<'a>> {
+    /// selection or remap any recorded binding. Before the first stop only, a
+    /// complete projection may relocate the same observed directory identity.
+    /// Once restricted, changed addresses require explicit retained-root recovery.
+    pub(crate) fn select<'a>(&'a self, config: &'a Config) -> Result<RestrictedProbes<'a>> {
         if config.pool_id != self.head.pool_id || config.disks.len() > MAX_ROOTS {
             return Err(BootstrapError::ManagementOnly(
                 "projection pool or size differs",
             ));
         }
+        let permits_relocation = self.permits_unstopped_relocation(config);
         let mut seen_ids = std::collections::BTreeSet::new();
         let mut seen_paths = Vec::new();
         for disk in &config.disks {
@@ -193,15 +282,18 @@ impl LoadedLocator {
                 ));
             }
             seen_paths.push(path.clone());
-            let known = self
+            let Some(known) = self
                 .record
                 .roots
                 .iter()
                 .find(|root| root.disk_id == disk.disk_id)
-                .ok_or(BootstrapError::ManagementOnly(
-                    "projection has an unknown root or alias",
-                ))?;
-            if known.path != path
+            else {
+                // Explicit retained-root recovery can record fewer addresses
+                // than the full historical configuration. Unknown addresses
+                // remain forbidden; Config never expands the probe set.
+                continue;
+            };
+            if (known.path != path && !permits_relocation)
                 || known.slot_id != disk.slot_id
                 || known.binding_generation != disk.binding_generation
             {
@@ -212,15 +304,22 @@ impl LoadedLocator {
         }
         let mut roots = Vec::new();
         for disk_id in &self.record.retained {
-            if !seen_ids.contains(disk_id) {
-                return Err(BootstrapError::ManagementOnly(
-                    "projection lacks a retained metadata root",
-                ));
-            }
             let root = self.record.root(disk_id);
+            let path = if permits_relocation {
+                config
+                    .disks
+                    .iter()
+                    .find(|disk| disk.disk_id == *disk_id)
+                    .expect("invariant: complete locator projection")
+                    .root
+                    .as_path()
+            } else {
+                Path::new(&root.path)
+            };
             roots.push(ReadProbe {
                 root,
                 pool_id: &self.record.pool_id,
+                path,
             });
         }
         Ok(RestrictedProbes { roots })
@@ -267,6 +366,7 @@ impl<'a> RestrictedProbes<'a> {
 pub(crate) struct ReadProbe<'a> {
     root: &'a RootRecord,
     pool_id: &'a str,
+    path: &'a Path,
 }
 impl ReadProbe<'_> {
     pub(crate) fn binding(&self) -> DiskRegistrationIdentity {
@@ -278,7 +378,7 @@ impl ReadProbe<'_> {
         }
     }
     pub(crate) fn path(&self) -> &Path {
-        Path::new(&self.root.path)
+        self.path
     }
     pub(crate) fn disk_id(&self) -> &str {
         &self.root.disk_id

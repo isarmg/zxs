@@ -12,15 +12,83 @@ pub struct ReadDirectory<'a> {
 pub enum DirectorySelection<'a> {
     Capture,
     Page {
-        commit: Option<&'a str>,
+        snapshot: Option<&'a DirectoryReadSnapshot>,
         after: Option<&'a str>,
     },
+}
+
+/// Transport-owned current-directory data. No constructor accepts a peer's
+/// commit ID or entries; every reuse still requires current backend admission.
+#[derive(Clone, Debug)]
+#[cfg_attr(
+    not(feature = "core"),
+    allow(
+        dead_code,
+        reason = "Opaque read metadata is carried but not inspected by coreless backends."
+    )
+)]
+pub struct DirectoryReadSnapshot {
+    pub(crate) branch_id: String,
+    pub(crate) history_tree_id: String,
+    pub(crate) commit_id: String,
+    pub(crate) binding: DirectoryRegistryBinding,
+    pub(crate) entries: DirectoryEntries,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(feature = "core"),
+    allow(
+        dead_code,
+        reason = "Opaque read metadata is carried but not inspected by coreless backends."
+    )
+)]
+pub(crate) struct DirectoryRegistryBinding {
+    pub(crate) pool_id: String,
+    pub(crate) publication: Option<DirectoryRegistryPublication>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(feature = "core"),
+    allow(
+        dead_code,
+        reason = "Opaque read metadata is carried but not inspected by coreless backends."
+    )
+)]
+pub(crate) struct DirectoryRegistryPublication {
+    pub(crate) root_hash: String,
+    pub(crate) view_generation: u64,
+}
+
+#[derive(Clone, Debug)]
+#[cfg_attr(
+    not(feature = "core"),
+    allow(
+        dead_code,
+        reason = "Opaque read metadata is carried but not inspected by coreless backends."
+    )
+)]
+pub(crate) enum DirectoryEntries {
+    Commit(std::sync::Arc<storage_contract::Commit>),
+    Projected(std::sync::Arc<Vec<storage_contract::Entry>>),
+}
+#[cfg(feature = "core")]
+impl DirectoryEntries {
+    pub(crate) fn as_slice(&self) -> &[storage_contract::Entry] {
+        match self {
+            Self::Commit(commit) => &commit.entries,
+            Self::Projected(entries) => entries,
+        }
+    }
 }
 
 /// A bounded page; `more` implies at least one entry. Capture returns an empty page.
 #[derive(Debug, Serialize)]
 pub struct DirectorySnapshot {
     pub commit_id: String,
+    #[serialization(skip)]
+    pub snapshot: DirectoryReadSnapshot,
     pub entries: Vec<smb_protocol::protocol::DirectoryEntry>,
     pub more: bool,
 }

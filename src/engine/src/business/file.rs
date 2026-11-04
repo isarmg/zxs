@@ -1,6 +1,7 @@
 //! Independent file branches: metadata first, complete content on first save.
 use super::*;
 use json_codec::json;
+use std::collections::BTreeSet;
 
 pub(crate) fn selected_file_branch<'a>(
     state: &'a State,
@@ -37,6 +38,81 @@ fn file_snapshot(entries: &[Entry], file: &Entry) -> Vec<Entry> {
         })
         .cloned()
         .collect()
+}
+
+/// Follow an exact path-node head in its independent file namespace as well.
+/// Other aliases can have different frozen contexts; their branch heads must
+/// not be relocated merely because they happen to name the same file ID.
+pub(crate) fn relocate_namespace_file_branch(
+    state: &mut State,
+    context: &FileContext,
+    entries: &std::collections::BTreeMap<&str, &Entry>,
+    file: &Entry,
+    operation: OperationId,
+) -> Result<()> {
+    let Some(node) = context
+        .node_id
+        .as_ref()
+        .and_then(|id| state.file_path_nodes.get(id))
+    else {
+        return Ok(());
+    };
+    if node.operation_id != operation || node.path != file.path() {
+        return Ok(());
+    }
+    let Some(branch) = state
+        .branches
+        .get(&context.branch_id)
+        .filter(|branch| {
+            branch.file_id.as_deref() == Some(file.file_id.as_str())
+                && branch.file_node_id == context.node_id
+        })
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let previous = state.commits.get(&branch.head_commit_id).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::StateInvalid,
+            "file path head missing",
+        )
+    })?;
+    let mut snapshot = vec![file.clone()];
+    let mut key = file.lookup_key();
+    while let Some((parent, _)) = key.rsplit_once('/') {
+        snapshot.push(
+            (**entries
+                .get(parent)
+                .expect("invariant: namespace replay preserved the renamed file's parents"))
+            .clone(),
+        );
+        key = parent;
+    }
+    namespace::sorted(&mut snapshot);
+    if previous.entries == snapshot {
+        return Ok(());
+    }
+    let commit_id = new_id("commit")?;
+    let next = Commit {
+        commit_id: commit_id.clone(),
+        tree_id: new_id("tree")?,
+        parent_commit_ids: vec![previous.commit_id.clone()],
+        entries: snapshot,
+        ..previous.clone()
+    };
+    state.commits.insert(commit_id.clone(), next);
+    let target = state
+        .branches
+        .get_mut(&branch.branch_id)
+        .expect("invariant: exact path-node branch was resolved above");
+    target.head_commit_id = commit_id;
+    target.generation = target.generation.checked_add(1).ok_or_else(|| {
+        Error::new(
+            storage_contract::ErrorCode::ResourceLimit,
+            "branch generation exhausted",
+        )
+    })?;
+    Ok(())
 }
 
 pub(crate) fn synchronize_directory_edits(
@@ -155,6 +231,17 @@ pub(crate) fn publish_selected_file_at(
     principal: &str,
     operation: OperationId,
 ) -> Result<String> {
+    publish_selected_file_at_projected(state, branch_id, path, principal, operation, None)
+}
+
+pub(crate) fn publish_selected_file_at_projected(
+    state: &mut State,
+    branch_id: &str,
+    path: Option<&name_policy::PortablePath>,
+    principal: &str,
+    operation: OperationId,
+    view: Option<&crate::engine::CurrentNamespaces>,
+) -> Result<String> {
     let branch = state.branches.get(branch_id).cloned().ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::BranchNotFound,
@@ -205,7 +292,7 @@ pub(crate) fn publish_selected_file_at(
             "directory is not writable",
         ));
     }
-    let current = state
+    let mut current = state
         .commits
         .get(&main.head_commit_id)
         .cloned()
@@ -215,6 +302,22 @@ pub(crate) fn publish_selected_file_at(
                 "directory head missing",
             )
         })?;
+    if let Some(view) = view {
+        view.require_branch_write(state, &main.branch_id)?;
+        current.entries = view
+            .branch_entries(&main.branch_id, &current.commit_id)?
+            .to_vec();
+        let live: BTreeSet<&str> = current
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
+            .map(|entry| entry.file_id.as_str())
+            .collect();
+        current
+            .pending_file_versions
+            .retain(|file, _| live.contains(file.as_str()));
+        view.remove_hidden_contexts(state, &repository.repository_id, &main.branch_id);
+    }
     let selected_key = path
         .map(name_policy::PortablePath::key)
         .or_else(|| {
@@ -278,6 +381,14 @@ pub(crate) fn publish_selected_file_at(
     } else {
         pending_file_versions.remove(file_id);
     }
+    if let Some(view) = view {
+        view.validate_draft(&main.branch_id, &entries)?;
+    }
+    let live_files: BTreeSet<String> = entries
+        .iter()
+        .filter(|entry| entry.kind == NamespaceEntryKind::File)
+        .map(|entry| entry.file_id.clone())
+        .collect();
     let id = new_id("commit")?;
     state.commits.insert(
         id.clone(),
@@ -304,7 +415,8 @@ pub(crate) fn publish_selected_file_at(
     main.head_commit_id = id.clone();
     // Selection delegates this file to its independent branch. An older
     // directory placeholder must not mask that branch's first real write.
-    main.pending_file_versions.remove(file_id);
+    main.pending_file_versions
+        .retain(|file, _| live_files.contains(file) && file != file_id);
     main.generation = main.generation.checked_add(1).ok_or_else(|| {
         Error::new(
             storage_contract::ErrorCode::ResourceLimit,
@@ -333,11 +445,12 @@ pub(crate) fn publish_selected_file_at(
             inherited_from: None,
         },
     );
-    super::directory::record_directory_edits(
+    super::directory::record_projected_directory_edits(
         state,
         &repository.repository_id,
         &[changed_path],
         None,
+        view,
     )?;
     Ok(id)
 }
@@ -483,7 +596,7 @@ pub(crate) fn create_file_branch_change(
             "directory is not writable",
         ));
     }
-    let current = state
+    let mut current = state
         .commits
         .get(&main.head_commit_id)
         .cloned()
@@ -493,6 +606,21 @@ pub(crate) fn create_file_branch_change(
                 "directory head missing",
             )
         })?;
+    if let Some(view) = engine.current_namespaces {
+        view.require_branch_write(state, &main.branch_id)?;
+        current.entries = view
+            .branch_entries(&main.branch_id, &current.commit_id)?
+            .to_vec();
+        let live: BTreeSet<&str> = current
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
+            .map(|entry| entry.file_id.as_str())
+            .collect();
+        current
+            .pending_file_versions
+            .retain(|file, _| live.contains(file.as_str()));
+    }
     let original = current
         .entries
         .iter()
@@ -589,18 +717,25 @@ impl Engine {
             operation,
             json!({"file_id":file_id,"version_id":version_id,"note":note}),
             |engine, state, _| {
-                let version = state
-                    .versions
-                    .values()
-                    .find(|v| {
-                        v.file_id == file_id && version_id.is_none_or(|id| v.version_id == id)
-                    })
-                    .ok_or_else(|| {
-                        Error::new(
-                            storage_contract::ErrorCode::FileNotFound,
-                            "file or version not found",
-                        )
-                    })?;
+                let version = match version_id {
+                    Some(id) => state
+                        .versions
+                        .get(id)
+                        .filter(|version| version.file_id == file_id),
+                    None => {
+                        engine.require_current_metadata_file(file_id)?;
+                        state
+                            .versions
+                            .values()
+                            .find(|version| version.file_id == file_id)
+                    }
+                }
+                .ok_or_else(|| {
+                    Error::new(
+                        storage_contract::ErrorCode::FileNotFound,
+                        "file or version not found",
+                    )
+                })?;
                 engine.repository_for_history(&version.history_tree_id)?;
                 let notes = if version_id.is_some() {
                     &mut state.version_notes
@@ -629,10 +764,17 @@ impl Engine {
 
             let branch=state.branches.get(&repo.main_branch_id).cloned().ok_or_else(||Error::new(storage_contract::ErrorCode::BranchNotFound,"directory branch missing"))?;
             if branch.state!=BranchState::Active{return Err(Error::new(storage_contract::ErrorCode::BranchNotActive,"directory is not writable"));}
-            let previous=state.commits.get(&branch.head_commit_id).cloned().ok_or_else(||Error::new(storage_contract::ErrorCode::StateInvalid,"directory head missing"))?;
+            let mut previous=state.commits.get(&branch.head_commit_id).cloned().ok_or_else(||Error::new(storage_contract::ErrorCode::StateInvalid,"directory head missing"))?;
+            if let Some(view) = &engine.current_namespaces {
+                view.require_branch_write(state, &repo.main_branch_id)?;
+                view.require_namespace_operation(&change)?;
+                previous.entries = view.branch_entries(&repo.main_branch_id, &previous.commit_id)?.to_vec();
+                view.remove_hidden_contexts(state, repository, &repo.main_branch_id);
+            }
             let mut entries=previous.entries.clone();let deleted=super::apply_namespace(&mut entries,&change)?;
             validate_entries(&mut entries,engine.config.max_entries)?;
-            let renamed_directories=directory::prepare_renamed_directories(state,repository,&previous.entries,std::slice::from_ref(&change))?;
+            if let Some(view) = &engine.current_namespaces { view.validate_draft(&repo.main_branch_id, &entries)?; }
+            let renamed_directories=directory::prepare_current_renamed_directories(state,repository,&previous.entries,&entries,std::slice::from_ref(&change))?;
             super::directory::namespace_locations(state,repository,&previous.entries,&entries,std::slice::from_ref(&change),principal,operation)?;
             let pending_file_versions=previous.pending_file_versions.iter().filter(|(file,_)|entries.iter().any(|entry|entry.kind == NamespaceEntryKind::File&&entry.file_id==file.as_str())).map(|(file,source)|(file.clone(),source.clone())).collect();
             let id=new_id("commit")?;
@@ -643,7 +785,7 @@ impl Engine {
             let mut changed_paths=vec![change.path().to_owned()];
             changed_paths.extend(renamed_directories);
             if let Some(destination)=&change.destination() {changed_paths.push(destination.as_str().to_owned());}
-            let directories=super::directory::record_directory_edits(state,repository,&changed_paths,None)?;
+            let directories=super::directory::record_projected_directory_edits(state,repository,&changed_paths,None,engine.current_namespaces.as_deref())?;
             Ok(json!({"commit_id":id,"branch_id":repo.main_branch_id,"history_tree_id":repo.history_tree_id,"path":change.path(),"action":change.kind(),"directory_branch_ids":directories,"file_node_ids":file_paths::operation_nodes(state,operation)}))
         })
     }

@@ -3,7 +3,7 @@
 use super::pagination::{Page, PageRequest, PageSelector};
 use super::*;
 use crate::backend_listing::SortKey;
-use storage_contract::{Commit, State};
+use storage_contract::State;
 use storage_engine::{Entry, FileVersion};
 
 fn available_on(state: &BackupListingMetadata, slot: &str, version: &str) -> bool {
@@ -196,13 +196,8 @@ fn project(
             let state = scope;
             let repo = &state.repositories[repository_id];
             let version = &state.versions[version_id];
-            let current = current.map(|index| {
-                let namespace = &scope.namespaces[&repo.history_tree_id];
-                (
-                    index,
-                    &engine.state().commits[&namespace.commit_id].entries[index],
-                )
-            });
+            let namespace = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
+            let current = current.map(|index| (index, &namespace.entries()[index]));
             // Resolve against the current entry before overlaying historical content.
             let mut value = if let Some((index, _)) = current {
                 let mut entry = listed_current_entry(engine, repo, index, "")?;
@@ -272,7 +267,7 @@ fn project(
 
 struct NamespaceCapture {
     repository_id: String,
-    commit: Arc<Commit>,
+    namespace: storage_engine::NamespaceSnapshot,
 }
 
 /// Exactly the tables used by backup namespace validation and page selection.
@@ -319,8 +314,7 @@ pub(in crate::engine_backend) struct BackupListingRead {
 
 struct NamespaceWitness {
     repository_id: String,
-    commit_id: String,
-    commit: std::sync::Weak<Commit>,
+    namespace: storage_engine::NamespaceSnapshotWitness,
 }
 
 // Global identity evidence stays small per repository; only selected versions
@@ -359,19 +353,14 @@ impl BackupListingRead {
             .collect::<BTreeMap<_, _>>();
         let mut namespaces = BTreeMap::new();
         for (history, repo) in repositories {
-            // Preserve list_tree_ref's branch/history admission and error order,
-            // without visiting the immutable namespace entries under the mutex.
-            engine.list_tree_ref(&repo.main_branch_id).map_err(error)?;
-            let branch = &state.branches[&repo.main_branch_id];
-            let commit = state
-                .commits
-                .get_shared(&branch.head_commit_id)
-                .expect("invariant: admitted backup namespace has a head commit");
+            let namespace = engine
+                .namespace_snapshot(&repo.main_branch_id)
+                .map_err(error)?;
             namespaces.insert(
                 history.into(),
                 NamespaceCapture {
                     repository_id: repo.repository_id.clone(),
-                    commit,
+                    namespace,
                 },
             );
         }
@@ -475,8 +464,7 @@ impl ListingScope {
                     history,
                     NamespaceWitness {
                         repository_id: namespace.repository_id,
-                        commit_id: namespace.commit.commit_id.clone(),
-                        commit: Arc::downgrade(&namespace.commit),
+                        namespace: namespace.namespace.witness(),
                     },
                 )
             })
@@ -521,7 +509,7 @@ impl ListingScope {
         let state = &self.metadata;
         let mut canonical = BTreeMap::new();
         for namespace in self.namespaces.values() {
-            for (index, entry) in namespace.commit.entries.iter().enumerate() {
+            for (index, entry) in namespace.namespace.entries().iter().enumerate() {
                 if entry.kind != storage_contract::NamespaceEntryKind::File
                     || !latest.contains_key(entry.file_id.as_str())
                 {
@@ -591,6 +579,7 @@ impl SelectedListing {
         {
             return Err(changed());
         }
+        disk(engine, &captured.slot_id)?;
         // Every namespace participated in the global conflict proof, even if it
         // contributed no visible row to this page or the requested directory.
         for namespace in self.scope.namespaces.values() {
@@ -598,21 +587,7 @@ impl SelectedListing {
             if current.repositories.get(&namespace.repository_id) != Some(repo) {
                 return Err(changed());
             }
-            let branch = current
-                .branches
-                .get(&repo.main_branch_id)
-                .filter(|branch| {
-                    branch.history_tree_id == repo.history_tree_id
-                        && branch.head_commit_id == namespace.commit_id
-                })
-                .ok_or_else(changed)?;
-            let commit = current
-                .commits
-                .get_shared(&branch.head_commit_id)
-                .ok_or_else(changed)?;
-            // The token can coincide after replacement. Never apply an old
-            // numeric entry index to a newly allocated namespace with that ID.
-            if !namespace.commit.ptr_eq(&Arc::downgrade(&commit)) {
+            if !engine.namespace_snapshot_matches(&namespace.namespace) {
                 return Err(changed());
             }
         }

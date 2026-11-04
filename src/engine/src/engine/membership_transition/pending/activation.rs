@@ -1,4 +1,4 @@
-//! Hash-linked pure-add generations. The joint authority is portable, while activation
+//! Hash-linked Add, Abort and prescribed Exit generations. Authority is portable; activation
 //! additionally requires held roots, local control archives and actual journals.
 use super::*;
 use crate::engine::membership_transition::archive::persistent::{
@@ -12,6 +12,8 @@ const GENERATION_FILE: &str = "metadata/pool-membership/generation.json";
 type WorkspaceRootAliases = BTreeMap<(String, String, u64), BTreeSet<PathBuf>>;
 
 mod authority;
+pub(in crate::engine) mod exit;
+mod registry;
 pub(in crate::engine::membership_transition) use authority::AuthorityResolver;
 pub(crate) use authority::PortableAuthority;
 pub(in crate::engine::membership_transition) use authority::same_config_projection as authority_config_matches;
@@ -43,12 +45,7 @@ impl Generation {
     pub(crate) fn verify_candidate(&self, candidate: &Candidate) -> Result<()> {
         match candidate.generation() {
             Some(hash) if hash == self.hash && candidate.sequence > self.intent.fence_sequence => {
-                let effective = if self.portable.is_abort() {
-                    self.intent.origin.config()
-                } else {
-                    &self.intent.target
-                };
-                effective.verify_original_candidate_membership(candidate)
+                self.portable.verify_candidate(candidate).map(|_| ())
             }
             _ if self.history.get(&candidate.sequence)
                 == Some(&object_hash("candidate", candidate)?) =>
@@ -78,12 +75,25 @@ impl Generation {
     }
     fn result(&self) -> Result<OperationResult> {
         let effective = self.portable.effective_config()?;
+        let mut outcome = json_codec::json!({"generation": self.hash, "membership_epoch": self.membership_epoch().to_string(), "metadata_members": effective.metadata_members().len(), "topology_generation": self.base.topology_generation.checked_add(1).ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "topology generation exhausted"))?.to_string()});
+        if let Some(effect) = &self.intent.effect {
+            outcome["disk_id"] = effect.disk_id.clone().into();
+            outcome["slot_id"] = effect.slot_id.clone().into();
+            outcome["binding_generation"] = effect.binding_generation.to_string().into();
+            outcome["registration"] = match effect.action {
+                MembershipExitAction::PlannedOffline => "disabled",
+                MembershipExitAction::Deregister => "detached",
+            }
+            .into();
+            outcome["target_io"] = "closed".into();
+        }
         Ok(OperationResult {
             operation_id: self.intent.operation_id,
-            kind: if self.portable.is_abort() {
-                "membership-add-cancelled"
-            } else {
-                "membership-add"
+            kind: match self.intent.effect.as_ref().map(|effect| effect.action) {
+                Some(MembershipExitAction::PlannedOffline) => "disk-planned-offline",
+                Some(MembershipExitAction::Deregister) => "disk-deregister",
+                None if self.portable.is_abort() => "membership-add-cancelled",
+                None => "membership-add",
             }
             .into(),
             commit_id: None,
@@ -94,7 +104,7 @@ impl Generation {
             current_health: storage_contract::CurrentHealth::Healthy,
             request_digest: object_hash(INTENT_KIND, &self.intent)?,
             sequence: self.first_sequence()?,
-            result: json_codec::json!({"generation": self.hash, "membership_epoch": self.membership_epoch().to_string(), "metadata_members": effective.metadata_members().len(), "topology_generation": self.base.topology_generation.checked_add(1).ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "topology generation exhausted"))?.to_string()}),
+            result: outcome,
         })
     }
     fn next_state(&self) -> Result<(State, OperationResult)> {
@@ -172,10 +182,13 @@ mod publication;
 mod recovery;
 pub(crate) use local::verify_local_membership;
 pub(crate) use publication::predecessor_seal_matches;
-pub(crate) use recovery::{discover, latest_restore_config, restore_anchor};
+pub(crate) use recovery::{
+    discover, discover_startup, discover_startup_in_store, latest_restore_config, restore_anchor,
+};
 
 impl Generation {
     pub(crate) fn verify_activation_candidate(&self, candidate: &Candidate) -> Result<()> {
+        self.portable.verify_registry_source(&self.base)?;
         let (state, result) = self.next_state()?;
         let snapshot = prepare_snapshot(&state, MAX_METADATA)?;
         let (history, _) = crate::history_package::prepare_history_manifests(&state, MAX_METADATA)?;

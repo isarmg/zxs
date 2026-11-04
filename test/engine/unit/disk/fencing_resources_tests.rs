@@ -277,3 +277,35 @@ fn last_fence_owner_in_drop_cannot_publish_closed_before_its_actual_fd_closes() 
         excluded(&writer, false);
     });
 }
+
+#[test]
+fn closure_proof_retires_only_its_writer_and_preserves_system_fencing() {
+    let (temporary, handles, locks) = fixture();
+    let target = &handles[0];
+    let binding = target.root.io_binding().unwrap();
+    let tail = binding.admit().unwrap();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.closed_proof().is_err());
+    excluded(&target.root.path().join(".writer.lock"), true);
+    drop(tail);
+    let proof = binding.closed_proof().unwrap();
+    let remaining = locks.excluding_closed(&proof).unwrap();
+    assert_eq!(remaining.len(), locks.len() - 1);
+    assert!(!remaining.disks.contains_key(&target.seal.disk_id));
+    assert_eq!(
+        remaining.system_identity().unwrap(),
+        locks.system_identity().unwrap()
+    );
+    assert_eq!(remaining.activity().unwrap().len(), 1);
+    assert_eq!(
+        locks.activity().err().unwrap().code(),
+        ErrorCode::DiskUnavailable
+    );
+    excluded(&target.root.path().join(".writer.lock"), false);
+    excluded(&handles[1].root.path().join(".writer.lock"), true);
+    excluded(&temporary.path().join("writer.lock"), true);
+    assert_eq!(
+        remaining.excluding_closed(&proof).err().unwrap().code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+}

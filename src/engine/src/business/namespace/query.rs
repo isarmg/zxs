@@ -49,14 +49,16 @@ impl<'a> NamespaceTree<'a> {
     }
 }
 
+impl crate::NamespaceSnapshot {
+    pub fn tree(&self) -> NamespaceTree<'_> {
+        NamespaceTree::from_published_entries(self.entries())
+    }
+}
+
 impl Engine {
-    /// Internal lookup of a commit in this Engine's published State only.
-    /// This does not validate branch/history scope and is not authorization.
-    pub(crate) fn commit_namespace(&self, commit_id: &str) -> Option<NamespaceTree<'_>> {
-        self.state
-            .commits
-            .get(commit_id)
-            .map(|commit| NamespaceTree::from_published_entries(&commit.entries))
+    pub(crate) fn workspace_namespace(&self, workspace: &Workspace) -> Result<NamespaceTree<'_>> {
+        self.workspace_namespace_entries(workspace)
+            .map(NamespaceTree::from_published_entries)
     }
 
     /// Borrow the current published namespace with the same admission and
@@ -71,6 +73,33 @@ impl Engine {
     pub fn namespace_tree_at(&self, branch_id: &str, commit_id: &str) -> Result<NamespaceTree<'_>> {
         self.list_tree_at_ref(branch_id, commit_id)
             .map(NamespaceTree::from_published_entries)
+    }
+}
+
+impl MetadataView {
+    /// Current listing from the same owned registry projection captured with this
+    /// metadata view. Historical business_projection().commits remain unchanged.
+    pub fn namespace_tree(&self, branch_id: &str) -> Result<NamespaceTree<'_>> {
+        let state = self.business_projection();
+        let branch = state
+            .branches
+            .get(branch_id)
+            .ok_or_else(|| Error::new(ErrorCode::BranchNotFound, "branch not found"))?;
+        if branch.state == BranchState::Migrated {
+            return Err(Error::new(
+                ErrorCode::TreeMoved,
+                "branch moved to another history",
+            ));
+        }
+        let commit = state
+            .commits
+            .get(&branch.head_commit_id)
+            .ok_or_else(|| Error::new(ErrorCode::StateInvalid, "branch HEAD missing"))?;
+        let entries = match self.current_namespaces.admitted()? {
+            Some(view) => view.branch_entries(branch_id, &commit.commit_id)?,
+            None => &commit.entries,
+        };
+        Ok(NamespaceTree::from_published_entries(entries))
     }
 }
 

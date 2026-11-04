@@ -3,29 +3,46 @@
 use super::pagination::{Page, PageRequest, PageSelector};
 use super::*;
 use crate::backend_listing::SortKey;
-/// Exactly the tables consumed by primary listing, never an authority or a
-/// general business State. Each clone shares one COW table in constant space.
+/// Only required COW tables and the displayed virtual repositories' namespace
+/// owners, plus O(1) directory projection ownership for branch-choice counts.
+/// No unrelated commit or version table survives the detached scan.
 struct ListingMetadata {
     #[cfg(test)]
     sequence: u64,
     repositories: storage_contract::TrackedMap<Repository>,
-    branches: storage_contract::TrackedMap<storage_contract::Branch>,
-    commits: storage_contract::TrackedRecords<storage_contract::Commit>,
+    namespaces: BTreeMap<String, storage_engine::NamespaceSnapshot>,
     directory_branches: storage_contract::TrackedMap<storage_contract::DirectoryBranch>,
+    directory_namespaces: storage_engine::DirectoryNamespaceView,
     directory_selections: storage_contract::TrackedMap<String>,
 }
 
 impl ListingMetadata {
-    fn capture(state: &storage_contract::State) -> Self {
-        Self {
+    fn capture(engine: &Engine, slot: &str, root: bool) -> Result<Self, ApiError> {
+        let state = engine.state();
+        let namespaces = if root {
+            state
+                .repositories
+                .values()
+                .filter(|repo| repo.primary_slot_id == slot && !repo.file_manager_root)
+                .map(|repo| {
+                    engine
+                        .namespace_snapshot(&repo.main_branch_id)
+                        .map(|namespace| (repo.repository_id.clone(), namespace))
+                        .map_err(error)
+                })
+                .collect::<Result<_, _>>()?
+        } else {
+            BTreeMap::new()
+        };
+        Ok(Self {
             #[cfg(test)]
             sequence: state.sequence,
             repositories: state.repositories.clone(),
-            branches: state.branches.clone(),
-            commits: state.commits.clone(),
+            namespaces,
             directory_branches: state.directory_branches.clone(),
+            directory_namespaces: engine.directory_namespace_view().map_err(error)?,
             directory_selections: state.directory_selections.clone(),
-        }
+        })
     }
 }
 
@@ -44,7 +61,7 @@ struct DirectoryCapture {
     repository: Repository,
     within: String,
     within_key: String,
-    commit: Arc<storage_contract::Commit>,
+    namespace: storage_engine::NamespaceSnapshot,
     preview: Option<storage_engine::DirectoryBranchPreview>,
 }
 
@@ -112,7 +129,7 @@ pub(in crate::engine_backend) fn capture(
     };
     Ok(ListingRead::Primary(Box::new(PrimaryListing {
         scope: ListingScope {
-            view: ListingMetadata::capture(engine.state()),
+            view: ListingMetadata::capture(engine, &slot_id, path.is_empty())?,
             slot_id,
             path,
             directory,
@@ -136,7 +153,7 @@ impl DirectoryCapture {
             })
             .transpose()?;
         let namespace = engine
-            .namespace_tree(&repository.main_branch_id)
+            .namespace_snapshot(&repository.main_branch_id)
             .map_err(error)?;
         let source_path = preview
             .as_ref()
@@ -147,7 +164,7 @@ impl DirectoryCapture {
         if !within.is_empty()
             && !preview.as_ref().map_or_else(
                 || {
-                    namespace.get_key(&within_key).is_some_and(|entry| {
+                    namespace.tree().get_key(&within_key).is_some_and(|entry| {
                         entry.kind == storage_contract::NamespaceEntryKind::Directory
                     })
                 },
@@ -166,17 +183,11 @@ impl DirectoryCapture {
                 "directory not found",
             ));
         }
-        let branch = &engine.state().branches[&repository.main_branch_id];
-        let commit = engine
-            .state()
-            .commits
-            .get_shared(&branch.head_commit_id)
-            .expect("invariant: admitted namespace borrows its existing head commit");
         Ok(Self {
             repository,
             within: within.into(),
             within_key,
-            commit,
+            namespace,
             preview,
         })
     }
@@ -213,21 +224,28 @@ impl PrimaryListing {
             }
             if directory_branches_supported {
                 directory_branches = super::super::directory_scopes::matching_tables(
-                    &state.branches,
-                    &state.commits,
+                    directory.namespace.tree(),
                     &state.directory_branches,
                     repo,
                     Some(&name_policy::path_key(&directory.within)),
                 )
                 .into_iter()
                 .map(|branch| {
-                    crate::DirectoryBranchChoice::capture(
-                        branch,
-                        state.directory_selections.get(&branch.directory_id)
-                            == Some(&branch.directory_branch_id),
-                    )
+                    let current = state.directory_selections.get(&branch.directory_id)
+                        == Some(&branch.directory_branch_id);
+                    let entries = if directory.preview.is_some() {
+                        branch.entries.as_slice()
+                    } else {
+                        state
+                            .directory_namespaces
+                            .entries(&branch.directory_branch_id)
+                            .map_err(error)?
+                    };
+                    Ok(crate::DirectoryBranchChoice::capture_entries(
+                        branch, current, entries,
+                    ))
                 })
-                .collect();
+                .collect::<Result<_, ApiError>>()?;
             }
             let prefix = if directory.within.is_empty() {
                 String::new()
@@ -239,7 +257,7 @@ impl PrimaryListing {
             let entries = directory
                 .preview
                 .as_ref()
-                .map_or(directory.commit.entries.as_slice(), |preview| {
+                .map_or(directory.namespace.entries(), |preview| {
                     preview.branch().entries.as_slice()
                 });
             for (index, entry) in entries.iter().enumerate() {
@@ -293,26 +311,9 @@ fn unchanged_repository(engine: &Engine, captured: &Repository) -> Result<(), Ap
 
 fn unchanged_namespace(
     engine: &Engine,
-    repository: &Repository,
-    captured: &Arc<storage_contract::Commit>,
+    captured: &storage_engine::NamespaceSnapshot,
 ) -> Result<(), ApiError> {
-    let branch = engine
-        .state()
-        .branches
-        .get(&repository.main_branch_id)
-        .filter(|branch| {
-            branch.history_tree_id == repository.history_tree_id
-                && branch.head_commit_id == captured.commit_id
-        })
-        .ok_or_else(changed)?;
-    let current = engine
-        .state()
-        .commits
-        .get_shared(&branch.head_commit_id)
-        .ok_or_else(changed)?;
-    // Config + business_generation can coincide after whole-engine replacement.
-    // An old numeric entry index is usable only against this exact Commit.
-    if !Arc::ptr_eq(&current, captured) {
+    if !engine.namespace_snapshot_matches(&captured.witness()) {
         return Err(changed());
     }
     Ok(())
@@ -323,9 +324,10 @@ impl SelectedListing {
         if engine.listing_snapshot() != self.page.snapshot {
             return Err(changed());
         }
+        disk(engine, &self.scope.slot_id)?;
         if let Some(directory) = &self.scope.directory {
             unchanged_repository(engine, &directory.repository)?;
-            unchanged_namespace(engine, &directory.repository, &directory.commit)?;
+            unchanged_namespace(engine, &directory.namespace)?;
             if let Some(preview) = &directory.preview {
                 engine
                     .preview_directory_branch(
@@ -341,12 +343,7 @@ impl SelectedListing {
                 let state = &self.scope.view;
                 let repo = &state.repositories[id];
                 unchanged_repository(engine, repo)?;
-                let branch = &state.branches[&repo.main_branch_id];
-                let commit = state
-                    .commits
-                    .get_shared(&branch.head_commit_id)
-                    .expect("invariant: admitted virtual repository has a head commit");
-                unchanged_namespace(engine, repo, &commit)?;
+                unchanged_namespace(engine, &state.namespaces[id])?;
             }
         }
         Ok(())
@@ -414,7 +411,7 @@ impl SelectedListing {
                 repository_id: directory.repository.repository_id.clone(),
                 repository_path: directory.within.clone(),
                 branch_id: directory.repository.main_branch_id.clone(),
-                base_head: directory.commit.commit_id.clone(),
+                base_head: directory.namespace.head_commit_id().into(),
             });
         let default_branch_scope = self
             .scope

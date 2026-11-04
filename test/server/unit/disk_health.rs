@@ -116,9 +116,22 @@ fn fake(script: &str) -> Command {
     command
 }
 
+fn query_command(command: &mut Command, timeout: Duration) -> Result<(i32, Vec<u8>), Reason> {
+    let root = tempfile::tempdir().unwrap();
+    let engine = storage_engine::Engine::initialize(
+        &root.path().join("system"),
+        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
+    let directory = engine.open_disk_observation_directory("P01").unwrap();
+    directory
+        .observe(|access| Ok(run(command, timeout, access)))
+        .unwrap()
+}
+
 #[test]
 fn command_output_and_time_are_bounded_and_exit_failure_is_preserved() {
-    let (code, bytes) = run(
+    let (code, bytes) = query_command(
         &mut fake("import sys; print('fixture'); sys.exit(8)"),
         Duration::from_secs(1),
     )
@@ -126,20 +139,20 @@ fn command_output_and_time_are_bounded_and_exit_failure_is_preserved() {
     assert_eq!(code, 8);
     assert_eq!(bytes, b"fixture\n");
     assert_eq!(
-        run(
+        query_command(
             &mut fake("import time; time.sleep(3)"),
-            Duration::from_millis(30)
+            Duration::from_millis(30),
         ),
         Err(Reason::TimedOut)
     );
     assert_eq!(
-        run(&mut fake("print('x' * 100000)"), Duration::from_secs(1)),
+        query_command(&mut fake("print('x' * 100000)"), Duration::from_secs(1)),
         Err(Reason::InvalidOutput)
     );
     assert_eq!(
-        run(
+        query_command(
             &mut Command::new("/nonexistent/zxs-smartctl-fixture"),
-            Duration::from_secs(1)
+            Duration::from_secs(1),
         ),
         Err(Reason::ToolMissing)
     );
@@ -148,15 +161,20 @@ fn command_output_and_time_are_bounded_and_exit_failure_is_preserved() {
 #[test]
 fn unavailable_mapping_never_executes_a_device_query() {
     let root = tempfile::tempdir().unwrap();
-    let fd = File::open(root.path()).unwrap();
+    let engine = storage_engine::Engine::initialize(
+        &root.path().join("system"),
+        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
+    let directory = engine.open_disk_observation_directory("P01").unwrap();
     let mut hardware = HardwareObservation::unknown();
     assert_eq!(
-        observe(root.path(), &fd, &hardware),
+        observe(root.path(), &directory, &hardware),
         unavailable(Reason::MappingUnknown)
     );
     hardware.mapping = HardwareMapping::Multiple;
     assert_eq!(
-        observe(root.path(), &fd, &hardware),
+        observe(root.path(), &directory, &hardware),
         unavailable(Reason::MultipleDevices)
     );
 }
@@ -265,4 +283,104 @@ fn held_node_does_not_follow_path_replacement() {
     let mut text = String::new();
     held.take(32).read_to_string(&mut text).unwrap();
     assert_eq!(text, "old-device");
+}
+
+#[test]
+fn canceled_query_refuses_spawn_before_starting_an_external_process() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = storage_engine::Engine::initialize(
+        &root.path().join("system"),
+        storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+    )
+    .unwrap();
+    let directory = engine.open_disk_observation_directory("P01").unwrap();
+    let result = directory.observe(|access| {
+        let mut stop = engine.inject_disk_quiesce("P01").unwrap();
+        stop.release_control();
+        assert_eq!(
+            run(
+                &mut Command::new("/nonexistent/zxs-smartctl-fixture"),
+                Duration::from_secs(1),
+                access,
+            ),
+            Err(Reason::DeviceChanged),
+        );
+        Ok(())
+    });
+    assert_eq!(
+        result.unwrap_err().code(),
+        storage_contract::ErrorCode::DiskUnavailable
+    );
+}
+
+#[test]
+fn observation_child_is_reaped_before_error_and_panic_release_admission() {
+    for unwind in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let engine = storage_engine::Engine::initialize(
+            &root.path().join("system"),
+            storage_contract::Config::development([root.path().join("disk")]).unwrap(),
+        )
+        .unwrap();
+        let directory = engine.open_disk_observation_directory("P01").unwrap();
+        let mut process_id = None;
+        let mut stop = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            directory.observe(|access| {
+                let process = fake("import time; time.sleep(30)").spawn().unwrap();
+                process_id = Some(process.id());
+                let _child = QueryChild {
+                    process: Some(process),
+                    directory: access,
+                };
+                let mut stopping = engine.inject_disk_quiesce("P01").unwrap();
+                stopping.release_control();
+                assert!(!stopping.is_drained().unwrap());
+                stop = Some(stopping);
+                if unwind {
+                    panic!("controlled observation callback panic");
+                }
+                Err::<(), _>(storage_engine::Error::new(
+                    storage_contract::ErrorCode::OperationAborted,
+                    "controlled observation callback error",
+                ))
+            })
+        }));
+        if unwind {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(
+                result.unwrap().unwrap_err().code(),
+                storage_contract::ErrorCode::OperationAborted
+            );
+        }
+        assert!(stop.unwrap().is_drained().unwrap());
+        let pid =
+            rustix::process::Pid::from_raw(i32::try_from(process_id.unwrap()).unwrap()).unwrap();
+        assert_eq!(
+            rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG).unwrap_err(),
+            rustix::io::Errno::CHILD,
+        );
+    }
+}
+
+#[test]
+fn quiesced_directory_cannot_start_smart_worker_even_for_a_single_mapping() {
+    let root = tempfile::tempdir().unwrap();
+    let disk = root.path().join("disk");
+    let engine = storage_engine::Engine::initialize(
+        &root.path().join("system"),
+        storage_contract::Config::development([disk.clone()]).unwrap(),
+    )
+    .unwrap();
+    let directory = engine.open_disk_observation_directory("P01").unwrap();
+    let mut stop = engine.inject_disk_quiesce("P01").unwrap();
+    stop.release_control();
+    let mut hardware = HardwareObservation::unknown();
+    hardware.mapping = HardwareMapping::Single;
+    assert_eq!(
+        observe(&disk, &directory, &hardware),
+        unavailable(Reason::DeviceChanged)
+    );
+    assert!(stop.is_drained().unwrap());
 }

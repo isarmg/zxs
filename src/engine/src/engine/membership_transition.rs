@@ -1,6 +1,6 @@
-//! Pure-add handoff: generation-owned fence, independent archive, pending joint
-//! authority and explicit activation. Removal remains unsupported; a fence alone
-//! never grants target write authority.
+//! Generation-owned fences, independent archives, pending joint authority and
+//! explicit Add/Abort/Exit activation. A fence or portable control certificate
+//! alone never grants active write or disk lifecycle completion authority.
 use super::{Engine, ValidatedConfig, recovery_checkpoint::Records};
 use crate::{disk::*, journal::*, publication_evidence::verified_object_at, *};
 use data_serialization::{Deserialize, Serialize};
@@ -13,6 +13,7 @@ mod decision;
 mod effect;
 pub use effect::MembershipExitAction;
 use effect::{ExitEffect, validate_transition_target};
+pub use pending::activation::exit::{DiskExitPhase, DiskExitStatus};
 pub(crate) mod pending;
 pub use archive::{
     MembershipArchiveInspection, MembershipControlArchive, MembershipJournalInspection,
@@ -219,6 +220,21 @@ impl Engine {
     ) -> Result<MembershipFenceStatus> {
         Self::require_actor(principal)?;
         self.require_no_commit_preparation()?;
+        if let Some(generation) = self.config.generation()
+            && let Some(registry) = generation.portable.exit_registry()
+            && self.current_namespaces.as_ref().is_none_or(|view| {
+                view.registry() != registry
+                    || view.activation_sequence()
+                        != generation
+                            .first_sequence()
+                            .expect("invariant: admitted generation sequence")
+            })
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "a registry successor requires the admitted current namespace source",
+            ));
+        }
         validate_transition_target(&self.config, &target, effect.as_ref())?;
         let held = directories
             .map(|directories| self.admit_added_directories(&target, directories))

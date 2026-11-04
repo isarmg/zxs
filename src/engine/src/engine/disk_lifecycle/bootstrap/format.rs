@@ -123,6 +123,67 @@ impl Record {
         record.validate()?;
         Ok(record)
     }
+    pub(super) fn extend(
+        previous: &LoadedLocator,
+        observations: Vec<RootObservation>,
+    ) -> Result<Option<Self>> {
+        let mut record = previous.record.clone();
+        for observation in observations {
+            if observation.pool_id != record.pool_id {
+                return Err(BootstrapError::ManagementOnly(
+                    "root expansion changes pool",
+                ));
+            }
+            if let Some(existing) = record
+                .roots
+                .iter_mut()
+                .find(|root| root.disk_id == observation.record.disk_id)
+            {
+                let mut observed = observation.record;
+                // A stop may remove the current voter role, never its historical identity.
+                observed.metadata_member = existing.metadata_member;
+                if !record.stops.is_empty() && observed.path != existing.path {
+                    return Err(BootstrapError::ManagementOnly(
+                        "stopped locator cannot relocate recorded addresses",
+                    ));
+                }
+                let next_path = observed.path.clone();
+                observed.path.clone_from(&existing.path);
+                if &observed != existing {
+                    return Err(BootstrapError::ManagementOnly(
+                        "root expansion rebinds an existing root",
+                    ));
+                }
+                existing.path = next_path;
+            } else {
+                record.roots.push(observation.record);
+            }
+        }
+        if record.roots == previous.record.roots {
+            return Ok(None);
+        }
+        record.roots.sort_by(|a, b| a.disk_id.cmp(&b.disk_id));
+        record.retained = record
+            .roots
+            .iter()
+            .filter(|root| {
+                root.metadata_member
+                    && !record.stops.iter().any(|stop| stop.disk_id == root.disk_id)
+            })
+            .map(|root| root.disk_id.clone())
+            .collect();
+        record.generation =
+            record
+                .generation
+                .checked_add(1)
+                .ok_or(BootstrapError::ManagementOnly(
+                    "locator generation overflow",
+                ))?;
+        record.previous = Some(previous.head.clone());
+        record.validate()?;
+        Ok(Some(record))
+    }
+
     pub(super) fn stop(
         previous: &LoadedLocator,
         target: &DiskRegistrationIdentity,
@@ -221,8 +282,7 @@ impl Record {
             None if self.generation == 1 && self.stops.is_empty() => (),
             Some(head)
                 if head.pool_id == self.pool_id
-                    && head.generation.checked_add(1) == Some(self.generation)
-                    && self.stops.len() as u64 + 1 == self.generation => {}
+                    && head.generation.checked_add(1) == Some(self.generation) => {}
             _ => {
                 return Err(BootstrapError::ManagementOnly(
                     "locator predecessor or stop sequence differs",
@@ -280,9 +340,26 @@ impl Record {
         Ok(())
     }
     pub(super) fn follows(&self, older: &LoadedLocator) -> Result<()> {
+        let preserves_roots = older.record.roots.iter().all(|old| {
+            self.roots
+                .iter()
+                .find(|root| root.disk_id == old.disk_id)
+                .is_some_and(|new| {
+                    let mut rebound = new.clone();
+                    if self.stops.is_empty() && older.record.stops.is_empty() {
+                        rebound.path.clone_from(&old.path);
+                    }
+                    &rebound == old
+                })
+        });
+        let adds_stop =
+            self.roots == older.record.roots && self.stops.len() == older.record.stops.len() + 1;
+        let updates_roots = self.roots != older.record.roots
+            && self.roots.len() >= older.record.roots.len()
+            && self.stops == older.record.stops;
         if self.previous.as_ref() != Some(&older.head)
-            || self.roots != older.record.roots
-            || self.stops.len() != older.record.stops.len() + 1
+            || !preserves_roots
+            || !(adds_stop || updates_roots)
             || !older
                 .record
                 .stops

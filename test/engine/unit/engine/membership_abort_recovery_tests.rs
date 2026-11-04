@@ -355,7 +355,10 @@ fn publish_addition(engine: &mut Engine, target: Config) -> PortableAuthority {
             }],
         )
         .unwrap();
-    engine.commit_membership_joint_decision().unwrap();
+    let joint = engine.resume_membership_joint_decision().unwrap();
+    assert!(joint.original_quorum_accepted());
+    assert!(joint.target_quorum_accepted());
+    assert!(joint.certificate_hash.is_some());
     engine.activate_pending_membership().unwrap();
     engine.config.generation().unwrap().portable.clone()
 }

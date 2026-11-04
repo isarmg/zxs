@@ -3,10 +3,10 @@
 //! Capture configuration and logical accounting while holding the engine;
 //! filesystem/seal probes run later without blocking publication. Never use an
 //! observation as admission for a write: ordinary I/O uses its admitted held
-//! resources, while explicit probes describe the current configured names.
+//! resources, while explicit probes describe currently registered names under
+//! those same bindings' revocable I/O ownership.
 use super::Engine;
 use crate::{disk::*, *};
-use platform_io::fs_safety::linux::{MountPolicy, OpenAt2Root};
 use std::collections::BTreeMap;
 
 /// Current metadata identity probes, detached from the engine lock.
@@ -14,21 +14,27 @@ use std::collections::BTreeMap;
 pub struct MetadataMemberProbe {
     metadata_integrity: std::sync::Arc<super::provenance::MetadataIntegrity>,
     config: ValidatedConfig,
+    resources: std::sync::Arc<DiskResources>,
+    members: Vec<ObservationDisk>,
 }
 
 impl MetadataMemberProbe {
     pub fn member_count(&self) -> usize {
-        self.config.metadata_members().len()
+        self.members.len()
     }
 
-    /// Verify all configured metadata identities at observation time.
+    /// Verify the captured current voter identities at observation time.
     ///
     /// # Errors
     /// Returns the first unavailable or mismatched member, preserving its source.
     pub fn verify(&self) -> Result<()> {
-        for disk in self.config.metadata_members() {
-            self.metadata_integrity
-                .observe(validate_seal(&self.config, disk))?;
+        for disk in &self.members {
+            open_observation(
+                &self.config,
+                &self.resources,
+                disk,
+                Some(&self.metadata_integrity),
+            )?;
         }
         Ok(())
     }
@@ -37,7 +43,14 @@ impl MetadataMemberProbe {
 pub struct DiskObservationPlan {
     metadata_integrity: std::sync::Arc<super::provenance::MetadataIntegrity>,
     config: ValidatedConfig,
+    resources: std::sync::Arc<DiskResources>,
+    disks: Vec<ObservationDisk>,
     used_bytes: BTreeMap<String, u64>,
+}
+
+struct ObservationDisk {
+    config: DiskConfig,
+    registration_mode: RegistrationMode,
 }
 
 /// One non-authoritative observation, never admission for a write.
@@ -113,7 +126,35 @@ impl Engine {
         MetadataMemberProbe {
             metadata_integrity: std::sync::Arc::clone(&self.metadata_integrity),
             config: self.config.clone(),
+            resources: std::sync::Arc::clone(&self.disk_resources),
+            members: self
+                .observation_disks()
+                .into_iter()
+                .filter(|disk| disk.config.metadata_member)
+                .collect(),
         }
+    }
+
+    fn observation_disks(&self) -> Vec<ObservationDisk> {
+        let configured = self
+            .config
+            .disks
+            .iter()
+            .map(|disk| (disk.disk_id.as_str(), disk))
+            .collect::<BTreeMap<_, _>>();
+        self.registered_disks()
+            .map(|registered| {
+                let mut config = (**configured
+                    .get(registered.disk_id)
+                    .expect("invariant: registered binding has a historical disk definition"))
+                .clone();
+                config.metadata_member = registered.metadata_member;
+                ObservationDisk {
+                    config,
+                    registration_mode: registered.registration_mode,
+                }
+            })
+            .collect()
     }
 
     pub fn prepare_disk_observation(&self) -> DiskObservationPlan {
@@ -150,6 +191,8 @@ impl Engine {
         DiskObservationPlan {
             metadata_integrity: std::sync::Arc::clone(&self.metadata_integrity),
             config: self.config.clone(),
+            resources: std::sync::Arc::clone(&self.disk_resources),
+            disks: self.observation_disks(),
             used_bytes,
         }
     }
@@ -160,63 +203,76 @@ impl Engine {
         self.prepare_disk_observation().status()
     }
 
-    /// Open the current registered directory for read-only informational observations.
-    /// The returned descriptor is the same directory object whose seal was verified;
-    /// callers must inspect that descriptor rather than reopening the configured path.
-    /// This does not grant write admission or change metadata-integrity state.
+    /// Open a current registered directory for read-only informational observations.
+    /// Ownership stays revocable across engine-lock release and dedicated workers;
+    /// callers receive no raw File or descriptor. This does not grant writes or
+    /// change metadata-integrity state.
     ///
     /// # Errors
-    /// Preserves missing-root, seal and identity errors without substituting the
-    /// filesystem underneath an unavailable or replaced mountpoint.
-    pub fn open_disk_observation_directory(&self, slot: &str) -> Result<std::fs::File> {
+    /// Rejects Disabled/Detached bindings before any target lookup and preserves
+    /// concrete seal, missing-root and identity errors for enabled bindings.
+    pub fn open_disk_observation_directory(&self, slot: &str) -> Result<DiskObservationDirectory> {
         let disk = self.disk(slot)?;
-        let observed = DiskHandle::open(&self.config, disk, true)?;
-        observed.root.directory(&disk.root)
+        let registered = self
+            .registered_disk(&disk.disk_id)
+            .ok_or_else(|| Error::new(ErrorCode::SlotNotFound, "disk registration is detached"))?;
+        let disk = ObservationDisk {
+            config: disk.clone(),
+            registration_mode: registered.registration_mode,
+        };
+        open_observation(&self.config, &self.disk_resources, &disk, None)
     }
 
-    /// Filesystem capacity is sampled from the actual managed member mount.
-    /// Multiple managed directories may share a filesystem; capacity is not an independent pool.
+    /// Sample filesystem capacity from a currently registered, admitted member.
+    /// Multiple directories may share a filesystem; capacity is not an independent pool.
     pub fn disk_capacity(&self, slot: &str) -> Result<(u64, u64, u64)> {
         let disk = self.disk(slot)?;
-        let identity = validate_seal(&self.config, disk);
-        let identity = if disk.metadata_member {
-            self.metadata_integrity.observe(identity)?
-        } else {
-            identity?
+        let registered = self
+            .registered_disk(&disk.disk_id)
+            .ok_or_else(|| Error::new(ErrorCode::SlotNotFound, "disk registration is detached"))?;
+        let mut config = disk.clone();
+        config.metadata_member = registered.metadata_member;
+        let disk = ObservationDisk {
+            config,
+            registration_mode: registered.registration_mode,
         };
-        capacity(disk, &identity).inspect_err(|error| {
-            if disk.metadata_member && error.code() == ErrorCode::DiskIdentityMismatch {
-                self.metadata_integrity.fault(error);
-            }
-        })
+        let directory = open_observation(
+            &self.config,
+            &self.disk_resources,
+            &disk,
+            Some(&self.metadata_integrity),
+        )?;
+        directory.capacity()
     }
 }
 
-fn capacity(disk: &DiskConfig, seal: &DiskSeal) -> Result<(u64, u64, u64)> {
-    // Pin the validated member, rather than sampling an empty mountpoint on
-    // the system filesystem after a missing/unmounted data disk.
-    let directory = OpenAt2Root::open(&disk.root, MountPolicy::SameMount).map_err(|error| {
-        let message = error.to_string();
-        Error::from(error).context(ErrorCode::DiskIdentityMismatch, message)
-    })?;
-    if directory.identity().device != seal.device || directory.identity().inode != seal.inode {
+fn open_observation(
+    config: &ValidatedConfig,
+    resources: &DiskResources,
+    observation: &ObservationDisk,
+    integrity: Option<&super::provenance::MetadataIntegrity>,
+) -> Result<DiskObservationDirectory> {
+    let disk = &observation.config;
+    if observation.registration_mode == RegistrationMode::Disabled {
         return Err(Error::new(
-            storage_contract::ErrorCode::DiskIdentityMismatch,
-            "disk root changed during capacity observation",
+            ErrorCode::DiskUnavailable,
+            format!("disk {} registration is disabled", disk.slot_id),
         ));
     }
-    filesystem_capacity(directory.directory())
-}
-
-fn filesystem_capacity(directory: &std::fs::File) -> Result<(u64, u64, u64)> {
-    let stat = rustix::fs::fstatvfs(directory).map_err(std::io::Error::from)?;
-    let total = stat.f_blocks.saturating_mul(stat.f_frsize);
-    let available = stat.f_bavail.saturating_mul(stat.f_frsize);
-    let used = stat
-        .f_blocks
-        .saturating_sub(stat.f_bfree)
-        .saturating_mul(stat.f_frsize);
-    Ok((total, available, used))
+    // A detached plan has metadata, not admission. Re-admit before the first
+    // open/stat of a configured name, using its original physical binding gate.
+    let handle = resources.get(disk)?;
+    let lease = handle.root.admit_io()?;
+    let observed = DiskObservationDirectory::open(lease, config, disk, &handle.seal);
+    if disk.metadata_member
+        && let (Some(integrity), Err(error)) = (integrity, &observed)
+        && error.code() != ErrorCode::DiskUnavailable
+    {
+        // A logical stop is not a newly observed metadata fault. Real seal,
+        // identity, decode and read failures retain the original fault scope.
+        integrity.fault(error);
+    }
+    observed
 }
 
 impl DiskObservationPlan {
@@ -233,38 +289,32 @@ impl DiskObservationPlan {
 
     /// Sample each binding once; returned capacities are observations, not later resamples.
     pub fn sample(&self) -> Vec<DiskObservation> {
-        self.config
-            .disks
+        self.disks
             .iter()
-            .map(|disk| {
-                let identity = validate_seal(&self.config, disk);
-                let seal = if disk.metadata_member {
-                    self.metadata_integrity.observe(identity)
-                } else {
-                    identity
-                };
-                let online = seal.is_ok();
-                let capacity = seal
+            .map(|observation| {
+                let disk = &observation.config;
+                let directory = open_observation(
+                    &self.config,
+                    &self.resources,
+                    observation,
+                    Some(&self.metadata_integrity),
+                );
+                let online = directory.is_ok();
+                let capacity = directory
                     .map_err(|source| DiskObservationFailure {
                         slot_id: disk.slot_id.clone(),
                         stage: DiskObservationStage::Seal,
                         source: Box::new(source),
                     })
-                    .and_then(|seal| {
-                        capacity(disk, &seal)
-                            .inspect_err(|error| {
-                                if disk.metadata_member
-                                    && error.code() == ErrorCode::DiskIdentityMismatch
-                                {
-                                    self.metadata_integrity.fault(error);
-                                }
-                            })
-                            .map_err(|source| DiskObservationFailure {
-                                slot_id: disk.slot_id.clone(),
-                                stage: DiskObservationStage::Capacity,
-                                source: Box::new(source),
-                            })
+                    .and_then(|directory| {
+                        directory.capacity().map_err(|source| DiskObservationFailure {
+                            slot_id: disk.slot_id.clone(),
+                            stage: DiskObservationStage::Capacity,
+                            source: Box::new(source),
+                        })
                     });
+                let online = online
+                    && !matches!(&capacity, Err(error) if error.source.code() == ErrorCode::DiskUnavailable);
                 let status = ObservedDiskStatus {
                     slot_id: disk.slot_id.clone(),
                     disk_id: disk.disk_id.clone(),

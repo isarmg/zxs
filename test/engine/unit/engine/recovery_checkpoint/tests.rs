@@ -7,6 +7,8 @@ use std::os::unix::fs::PermissionsExt;
 mod lifecycle_tests;
 #[path = "membership_io_tests.rs"]
 mod membership_io_tests;
+#[path = "scope_tests.rs"]
+mod scope_tests;
 
 fn setup() -> (tempfile::TempDir, std::path::PathBuf, Config) {
     let temp = tempfile::tempdir().unwrap();
@@ -658,12 +660,13 @@ fn non_utf8_directory_name_retains_source_and_classification() {
 fn coverage_mismatch_reasons_distinguish_members_content_and_io() {
     let (_temp, root, config) = setup();
     let engine = reopen(&root).0;
+    let scope = CheckpointScope::admit(&engine).unwrap().unwrap();
     let envelope: Envelope = read_json(&path(&config.disks[0])).unwrap();
     let mut checkpoint = envelope.checkpoint;
     let disk = &config.disks[0];
     let entries = checkpoint.coverage.remove(&disk.disk_id).unwrap();
     assert!(matches!(
-        verify_coverage(&engine, &checkpoint, &BTreeSet::new()),
+        verify_coverage(&scope, &checkpoint, &BTreeSet::new()),
         Err(Error::Checkpoint(CheckpointError::Members))
     ));
     checkpoint.coverage.insert(disk.disk_id.clone(), entries);
@@ -680,12 +683,12 @@ fn coverage_mismatch_reasons_distinguish_members_content_and_io() {
     changed[0] ^= 1;
     std::fs::write(&covered, &changed).unwrap();
     assert!(matches!(
-        verify_coverage(&engine, &checkpoint, &BTreeSet::new()),
+        verify_coverage(&scope, &checkpoint, &BTreeSet::new()),
         Err(Error::Checkpoint(CheckpointError::FileContent(_)))
     ));
     std::fs::write(&covered, &bytes).unwrap();
     std::fs::remove_file(&covered).unwrap();
-    let error = verify_coverage(&engine, &checkpoint, &BTreeSet::new()).unwrap_err();
+    let error = verify_coverage(&scope, &checkpoint, &BTreeSet::new()).unwrap_err();
     assert_eq!(error.code(), ErrorCode::CheckpointInvalid);
     match error {
         Error::Context { source, .. } => {
@@ -742,6 +745,7 @@ fn coverage_entry_budget_has_its_own_cause() {
 fn checkpoint_inventory_load_and_save_stay_on_the_admitted_root() {
     let (_temp, system, config) = setup();
     let engine = reopen(&system).0;
+    let scope = CheckpointScope::admit(&engine).unwrap().unwrap();
     let envelope: Envelope = read_json(&path(&config.disks[0])).unwrap();
     let journals = config
         .disks
@@ -769,7 +773,7 @@ fn checkpoint_inventory_load_and_save_stay_on_the_admitted_root() {
     private_dir(&disk.root).unwrap();
     write_atomic(&path(disk), b"replacement checkpoint", false).unwrap();
 
-    verify_coverage(&engine, &envelope.checkpoint, &BTreeSet::new()).unwrap();
+    verify_coverage(&scope, &envelope.checkpoint, &BTreeSet::new()).unwrap();
     assert_eq!(
         load(&engine, &prefixes, &Records::new()).unwrap(),
         Some(envelope.checkpoint.clone())
@@ -787,7 +791,7 @@ fn checkpoint_inventory_load_and_save_stay_on_the_admitted_root() {
     std::fs::write(&seal_path, b"{").unwrap();
     assert!(
         matches!(
-            verify_coverage(&engine, &saved.checkpoint, &BTreeSet::new()),
+            verify_coverage(&scope, &saved.checkpoint, &BTreeSet::new()),
             Err(Error::Context {
                 code: ErrorCode::DiskIdentityMismatch,
                 source,
@@ -824,7 +828,7 @@ fn checkpoint_inventory_load_and_save_stay_on_the_admitted_root() {
     changed_seal.binding_generation += 1;
     write_json(&seal_path, &changed_seal, true).unwrap();
     assert_eq!(
-        verify_coverage(&engine, &saved.checkpoint, &BTreeSet::new())
+        verify_coverage(&scope, &saved.checkpoint, &BTreeSet::new())
             .unwrap_err()
             .code(),
         ErrorCode::DiskIdentityMismatch

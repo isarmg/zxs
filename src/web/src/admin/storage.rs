@@ -13,6 +13,7 @@ use storage_contract::storage_directories::{
 use web_interface::{components::ErrorState, i18n::t, prelude::*, tasks::spawn_local};
 
 mod addition;
+pub(super) mod lifecycle;
 mod response;
 #[derive(Debug, error_definition::Error)]
 pub enum ResponseError {
@@ -66,14 +67,18 @@ pub(super) struct Model {
     development: bool,
     confirmed: bool,
     addition: addition::Model,
+    lifecycle: lifecycle::Model,
 }
 impl Model {
     pub(super) fn reload_blocked(&self) -> bool {
-        self.mutation || self.unknown || self.discovery_unknown || self.addition.blocks_edit()
+        self.mutation
+            || self.unknown
+            || self.discovery_unknown
+            || (self.addition.blocks_edit() || self.lifecycle.blocks_edit())
     }
     fn editable(&self) -> bool {
         !self.busy
-            && !self.addition.blocks_edit()
+            && !(self.addition.blocks_edit() || self.lifecycle.blocks_edit())
             && !self.unknown
             && !self.discovery_unknown
             && self.success.is_none()
@@ -84,7 +89,7 @@ impl Model {
     }
     fn can_set_root(&self) -> bool {
         !self.busy
-            && !self.addition.blocks_edit()
+            && !(self.addition.blocks_edit() || self.lifecycle.blocks_edit())
             && !self.unknown
             && !self.discovery_unknown
             && self.success.is_none()
@@ -158,6 +163,7 @@ pub(super) fn refreshing(state: &State) -> bool {
 }
 pub(super) fn poll(state: RwSignal<State>) {
     addition::poll(state);
+    lifecycle::poll(state);
     let needed = state.with_untracked(|s| {
         let model = &s.admin_console.storage;
         s.session_active()
@@ -211,6 +217,7 @@ pub(super) fn load(state: RwSignal<State>) {
         if load_disks {
             super::disks::load(state);
             addition::load(state);
+            lifecycle::load(state);
         }
     });
 }

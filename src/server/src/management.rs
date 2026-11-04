@@ -23,6 +23,8 @@ use std::{
 mod disk_notes;
 mod integrity_scrub;
 pub(crate) mod storage_addition;
+pub(crate) mod storage_configuration;
+pub(crate) mod storage_lifecycle;
 use integrity_scrub::IntegrityScrubService;
 mod setup_command;
 use setup_command::SetupCommand;
@@ -889,9 +891,9 @@ impl Backend for ManagementBackend {
             })?
             .to_owned();
         let hardware = match directory.as_ref() {
-            Some(directory) => {
-                crate::disk_hardware::observe(&disk.root, std::os::fd::AsFd::as_fd(directory))
-            }
+            Some(directory) => directory
+                .observe(|access| Ok(crate::disk_hardware::observe(&disk.root, access)))
+                .map_err(ApiError::invalid_source)?,
             None => crate::disk_hardware::HardwareObservation::unknown(),
         };
         let health = match directory.as_ref() {
@@ -1509,7 +1511,11 @@ impl Backend for ManagementBackend {
         }
         if matches!(
             action,
-            "disk_add_preview" | "disk_add_commit" | "disk_add_status" | "disk_add_resume"
+            "disk_add_preview"
+                | "disk_add_commit"
+                | "disk_add_status"
+                | "disk_add_resume"
+                | "disk_add_cancel"
         ) {
             return self.storage_addition(
                 action,
@@ -1520,6 +1526,16 @@ impl Backend for ManagementBackend {
                         .discovery_root()
                         .map(|settings| settings.discovery_root)
                 },
+            );
+        }
+        if matches!(
+            action,
+            "disk_exit_preview" | "disk_exit_commit" | "disk_exit_status" | "disk_exit_resume"
+        ) {
+            return self.storage_exit(
+                action,
+                input,
+                identity.as_ref().ok_or_else(ApiError::unauthorized)?,
             );
         }
         if action == "storage_status" {

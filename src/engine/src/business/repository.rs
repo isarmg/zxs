@@ -148,14 +148,22 @@ impl Engine {
         // An unused operation may resolve the existing disk root. A published
         // operation must first match its original owner and creation request,
         // and return that receipt rather than the root's current SMB binding.
-        if !self.state.operations.contains_key(&operation)
-            && let Some(repo) = self
+        if !self.state.operations.contains_key(&operation) {
+            let current = self.admitted_current_namespaces()?;
+            if let Some(current) = current {
+                current.require_write_slot(&primary)?;
+            }
+            if let Some(repo) = self
                 .state
                 .repositories
                 .values()
                 .find(|r| r.file_manager_root && r.primary_slot_id == primary)
-        {
-            return Ok(repo.clone());
+            {
+                if let Some(current) = current {
+                    current.require_branch_write(&self.state, &repo.main_branch_id)?;
+                }
+                return Ok(repo.clone());
+            }
         }
         self.create_repository_kind(
             &storage_contract::RepositoryName::parse(&format!("ZXS disk {primary}"))?,
@@ -177,7 +185,6 @@ impl Engine {
         operation: OperationId,
         file_manager_root: bool,
     ) -> Result<Repository> {
-        self.route(primary, copies)?;
         let mut input =
             json!({"name":name.as_str(),"primary_slot_id":primary,"target_copies":copies});
         if file_manager_root {
@@ -189,6 +196,9 @@ impl Engine {
             operation,
             input,
             |engine, state, _| {
+                // Current routes authorize a new root, never overwrite the
+                // meaning of a permanent creation receipt after a later exit.
+                engine.route(primary, copies)?;
                 if state
                     .repositories
                     .values()

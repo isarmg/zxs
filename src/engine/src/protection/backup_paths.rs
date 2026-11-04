@@ -55,14 +55,23 @@ fn within(root: &str, path: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 pub(super) fn scope_path<'a>(state: &'a State, policy: &'a ProtectionPolicy) -> Option<&'a str> {
+    let entries = &namespace(state, &policy.repository_id)
+        .expect("invariant: admitted policy belongs to an existing repository")
+        .entries;
+    scope_path_in(entries, policy)
+}
+
+/// Resolve stable scopes against the caller's admitted namespace. Historical
+/// callers explicitly retain their own Commit entries instead of becoming current.
+pub(super) fn scope_path_in<'a>(
+    entries: &'a [Entry],
+    policy: &'a ProtectionPolicy,
+) -> Option<&'a str> {
     if policy.scope_directory_id.as_deref() == Some(policy.repository_id.as_str()) {
         return Some("");
     }
-    let commit = namespace(state, &policy.repository_id)
-        .expect("invariant: admitted policy belongs to an existing repository");
     if let Some(directory) = &policy.scope_directory_id {
-        return commit
-            .entries
+        return entries
             .iter()
             .find(|entry| {
                 entry.kind == NamespaceEntryKind::Directory && entry.entry_id == *directory
@@ -70,8 +79,7 @@ pub(super) fn scope_path<'a>(state: &'a State, policy: &'a ProtectionPolicy) -> 
             .map(|entry| entry.path());
     }
     if let Some(file) = &policy.scope_file_id {
-        return commit
-            .entries
+        return entries
             .iter()
             .find(|entry| entry.kind == NamespaceEntryKind::File && entry.file_id == *file)
             .map(|entry| entry.path());
@@ -79,7 +87,7 @@ pub(super) fn scope_path<'a>(state: &'a State, policy: &'a ProtectionPolicy) -> 
     Some(&policy.path_prefix)
 }
 fn policy_applies(
-    state: &State,
+    entries: &[Entry],
     policy: &ProtectionPolicy,
     file: Option<&str>,
     path: &str,
@@ -90,7 +98,7 @@ fn policy_applies(
     if let Some(expected) = &policy.scope_file_id {
         return file.is_some_and(|file| file == expected);
     }
-    scope_path(state, policy).is_some_and(|root| within(root, path))
+    scope_path_in(entries, policy).is_some_and(|root| within(root, path))
 }
 pub(super) fn effective_policy<'a>(
     state: &'a State,
@@ -98,15 +106,23 @@ pub(super) fn effective_policy<'a>(
     file: Option<&str>,
     path: &str,
 ) -> Option<&'a ProtectionPolicy> {
+    let entries = &namespace(state, repository)
+        .expect("invariant: placement caller resolved the repository")
+        .entries;
+    effective_policy_in(state, entries, repository, file, path)
+}
+
+pub(super) fn effective_policy_in<'a>(
+    state: &'a State,
+    entries: &[Entry],
+    repository: &str,
+    file: Option<&str>,
+    path: &str,
+) -> Option<&'a ProtectionPolicy> {
     let file = file.or_else(|| {
-        find_unordered(
-            &namespace(state, repository)
-                .expect("invariant: placement caller resolved the repository")
-                .entries,
-            path,
-        )
-        .filter(|entry| entry.kind == NamespaceEntryKind::File)
-        .map(|entry| entry.file_id.as_str())
+        find_unordered(entries, path)
+            .filter(|entry| entry.kind == NamespaceEntryKind::File)
+            .map(|entry| entry.file_id.as_str())
     });
     if let Some(policy) = file
         .and_then(|file| state.file_backup_policies.get(file))
@@ -126,10 +142,10 @@ pub(super) fn effective_policy<'a>(
         .protection_policies
         .values()
         .filter(|policy| {
-            policy.repository_id == repository && policy_applies(state, policy, file, path)
+            policy.repository_id == repository && policy_applies(entries, policy, file, path)
         })
         .max_by_key(|policy| {
-            let depth = scope_path(state, policy).map_or(0, |path| {
+            let depth = scope_path_in(entries, policy).map_or(0, |path| {
                 path.split('/').filter(|part| !part.is_empty()).count()
             });
             // A rename can bring a stable scope onto an existing path rule.
@@ -406,12 +422,15 @@ fn backup_path(prefix: &str, relative: &str) -> Result<String> {
 }
 pub(crate) fn apply_backup_paths(
     state: &mut State,
+    current_entries: &[Entry],
     repository: &str,
     file: &str,
     path: &str,
     route: &[String],
 ) -> Result<()> {
-    let Some(policy) = effective_policy(state, repository, Some(file), path).cloned() else {
+    let Some(policy) =
+        effective_policy_in(state, current_entries, repository, Some(file), path).cloned()
+    else {
         return Ok(());
     };
     if policy.backup_prefixes.is_empty() {
@@ -424,7 +443,7 @@ pub(crate) fn apply_backup_paths(
         }
         return Ok(());
     }
-    let root = scope_path(state, &policy).unwrap_or(&policy.path_prefix);
+    let root = scope_path_in(current_entries, &policy).unwrap_or(&policy.path_prefix);
     let relative = relative_path(root, path, policy.scope_file_id.is_some());
     let locations = route
         .iter()

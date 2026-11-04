@@ -39,7 +39,7 @@ fn every_bound_root_entry_rejects_before_opening_or_mutating() {
     unavailable(root.directory(directory.path()));
     unavailable(root.entries(&child));
     unavailable(root.open_regular(&file));
-    unavailable(root.open_optional_regular(&file));
+    unavailable(root.open_optional_read_regular(&file));
     unavailable(root.open_leased_regular(&file));
     unavailable(root.open_read_regular(&file));
     unavailable(root.private_directory(&child));
@@ -343,4 +343,35 @@ fn derived_root_registration_racing_quiesce_never_leaves_a_live_descriptor() {
             Err(error) => assert_eq!(error.code(), ErrorCode::DiskUnavailable),
         }
     }
+}
+
+#[test]
+fn admitted_resources_require_exact_closure_domain_to_remove_a_handle() {
+    let (_directory, target) = disk();
+    let (_other_directory, other) = disk();
+    let resources = DiskResources {
+        disks: [(target.seal.disk_id.clone(), Arc::clone(&target))].into(),
+    };
+    let binding = target.root.io_binding().unwrap();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    let proof = binding.closed_proof().unwrap();
+    assert_eq!(
+        resources
+            .excluding_closed(&proof)
+            .unwrap()
+            .handles()
+            .count(),
+        0
+    );
+    let other_resources = DiskResources {
+        disks: [(other.seal.disk_id.clone(), Arc::clone(&other))].into(),
+    };
+    assert_eq!(
+        other_resources
+            .excluding_closed(&proof)
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::DiskIdentityMismatch
+    );
 }

@@ -717,3 +717,91 @@ fn a_quiescing_wrapper_never_calls_the_underlying_reader_again() {
     drop(reader);
     assert!(binding.status().unwrap().drained());
 }
+
+#[test]
+fn final_closure_proof_waits_for_real_tail_and_pins_the_closed_domain() {
+    let (_directory, config, handle) = disk();
+    let binding = handle.root.io_binding().unwrap().clone();
+    assert_eq!(
+        binding.closed_proof().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    let tail = binding.admit().unwrap();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert_eq!(
+        binding.closed_proof().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    drop(tail);
+    let proof = binding.closed_proof().unwrap();
+    assert_eq!(proof.identity(), &DiskIoIdentity::from(&handle.seal));
+    proof.verify_binding(&binding).unwrap();
+    let seal = handle.seal.clone();
+    drop(handle);
+    drop(binding);
+    let reopened = DiskIoBinding::new(&seal, &config).unwrap();
+    assert_eq!(
+        reopened.admit().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    proof.verify_binding(&reopened).unwrap();
+    let (_other_directory, _other_config, other) = disk();
+    assert_eq!(
+        proof
+            .verify_binding(other.root.io_binding().unwrap())
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskIdentityMismatch
+    );
+}
+
+#[test]
+fn recovered_stop_waits_for_every_physical_domain_of_the_logical_binding() {
+    let (_directory, config, handle) = disk();
+    let binding = handle.root.io_binding().unwrap();
+    let identity = crate::DiskRegistrationIdentity {
+        pool_id: handle.seal.pool_id.clone(),
+        disk_id: handle.seal.disk_id.clone(),
+        slot_id: handle.seal.slot_id.clone(),
+        binding_generation: handle.seal.binding_generation,
+    };
+    assert_eq!(
+        RecoveredDiskIo::admit_identity(&identity)
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskUnavailable
+    );
+    let mut relocated_seal = handle.seal.clone();
+    relocated_seal.inode += 1;
+    let relocated = DiskIoBinding::new(&relocated_seal, &config).unwrap();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert_eq!(
+        RecoveredDiskIo::admit_identity(&identity)
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskUnavailable
+    );
+    drop(relocated.begin_quiesce().unwrap().unwrap());
+    let stopped = RecoveredDiskIo::admit_identity(&identity).unwrap();
+    assert_eq!(stopped.identity(), &identity);
+    relocated_seal.inode += 1;
+    assert_eq!(
+        DiskIoBinding::new(&relocated_seal, &config)
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskUnavailable
+    );
+    let retained = RecoveredDiskIo::admit_identity(&identity).unwrap();
+    drop(stopped);
+    assert_eq!(
+        DiskIoBinding::new(&relocated_seal, &config)
+            .unwrap_err()
+            .code(),
+        ErrorCode::DiskUnavailable
+    );
+    drop(retained);
+    // Only the process-local guard ends here; the persistent bootstrap stop
+    // remains a separate mandatory authority boundary for every Engine opener.
+    let new_domain = DiskIoBinding::new(&relocated_seal, &config).unwrap();
+    drop(new_domain.admit().unwrap());
+}

@@ -52,6 +52,12 @@ enum CurrentContext<'a> {
     Resolved(Option<&'a storage_contract::FileContext>),
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum PendingScope<'a> {
+    Current(storage_engine::NamespaceTree<'a>),
+    Historical,
+}
+
 /// Borrowed, request-local source resolution. Only `pending_versions` can use
 /// the direct-entry path, because it iterates this resolver's own snapshot.
 /// External entries always retain the checked first-match lookup semantics.
@@ -59,6 +65,8 @@ pub(super) struct PendingSources<'a> {
     engine: &'a Engine,
     branch: &'a str,
     commit: &'a storage_contract::Commit,
+    entries: &'a [storage_contract::Entry],
+    scope: PendingScope<'a>,
     current: Option<&'a storage_contract::Branch>,
     main_repository: Option<&'a str>,
     #[cfg(test)]
@@ -70,11 +78,12 @@ impl<'a> PendingSources<'a> {
         engine: &'a Engine,
         branch: &'a str,
         commit: &'a storage_contract::Commit,
+        scope: PendingScope<'a>,
     ) -> Self {
         let state = engine.state();
         let current = state.branches.get(branch);
         let main_repository = current
-            .filter(|current| current.head_commit_id == commit.commit_id)
+            .filter(|_| matches!(scope, PendingScope::Current(_)))
             .and_then(|_| {
                 state
                     .repositories
@@ -86,6 +95,11 @@ impl<'a> PendingSources<'a> {
             engine,
             branch,
             commit,
+            entries: match scope {
+                PendingScope::Current(namespace) => namespace.entries(),
+                PendingScope::Historical => &commit.entries,
+            },
+            scope,
             current,
             main_repository,
             #[cfg(test)]
@@ -94,7 +108,7 @@ impl<'a> PendingSources<'a> {
     }
 
     fn visible(&self, entry: &storage_contract::Entry) -> Option<&'a storage_contract::Entry> {
-        self.commit.entries.iter().find(|visible| {
+        self.entries.iter().find(|visible| {
             #[cfg(test)]
             self.matching_visits.set(self.matching_visits.get() + 1);
             visible.lookup_key() == entry.lookup_key() && visible.file_id == entry.file_id
@@ -109,27 +123,23 @@ impl<'a> PendingSources<'a> {
     }
 
     pub(super) fn pending_versions(&self) -> std::collections::BTreeMap<String, String> {
-        let historical = self
-            .current
-            .filter(|current| current.head_commit_id != self.commit.commit_id)
-            .map(|_| {
-                let mut contexts = std::collections::BTreeMap::new();
-                for tree in self
-                    .engine
-                    .state()
-                    .directory_trees
-                    .values()
-                    .filter(|tree| tree.commit_id == self.commit.commit_id)
-                {
-                    for (key, context) in &tree.file_contexts {
-                        // BTreeMap iteration preserves the original first tree.
-                        contexts.entry(key.as_str()).or_insert(context);
-                    }
+        let historical = matches!(self.scope, PendingScope::Historical).then(|| {
+            let mut contexts = std::collections::BTreeMap::new();
+            for tree in self
+                .engine
+                .state()
+                .directory_trees
+                .values()
+                .filter(|tree| tree.commit_id == self.commit.commit_id)
+            {
+                for (key, context) in &tree.file_contexts {
+                    // BTreeMap iteration preserves the original first tree.
+                    contexts.entry(key.as_str()).or_insert(context);
                 }
-                contexts
-            });
-        self.commit
-            .entries
+            }
+            contexts
+        });
+        self.entries
             .iter()
             .filter(|entry| entry.kind == storage_contract::NamespaceEntryKind::File)
             .filter_map(|entry| {
@@ -157,8 +167,8 @@ impl<'a> PendingSources<'a> {
         historical: Option<&std::collections::BTreeMap<&str, &'a storage_contract::FileContext>>,
     ) -> Option<&'a str> {
         let state = self.engine.state();
-        let current = self.current?;
-        if current.head_commit_id == self.commit.commit_id {
+        self.current?;
+        if matches!(self.scope, PendingScope::Current(_)) {
             if let Some(repository) = self.main_repository {
                 let owned;
                 let context = match context {
@@ -203,7 +213,7 @@ impl<'a> PendingSources<'a> {
             .filter(|version| **version == entry.version_id)
             .map(String::as_str)
             .or_else(|| {
-                (current.head_commit_id == self.commit.commit_id)
+                matches!(self.scope, PendingScope::Current(_))
                     .then(|| self.engine.pending_file_source(self.branch, &entry.file_id))
                     .flatten()
             })
@@ -215,41 +225,33 @@ impl<'a> PendingSources<'a> {
     }
 }
 
-pub(super) fn pending_entry_source<'a>(
-    engine: &'a Engine,
-    branch: &'a str,
-    commit: &'a storage_contract::Commit,
-    entry: &storage_contract::Entry,
-) -> Option<&'a str> {
-    PendingSources::new(engine, branch, commit).checked(entry)
-}
-
 pub(super) fn current_entry_source<'a>(
     engine: &'a Engine,
     branch: &'a str,
     entry: &storage_contract::Entry,
+    namespace: storage_engine::NamespaceTree<'a>,
 ) -> Option<&'a str> {
     let current = engine.state().branches.get(branch)?;
     let commit = engine.state().commits.get(&current.head_commit_id)?;
-    pending_entry_source(engine, branch, commit, entry)
+    PendingSources::new(engine, branch, commit, PendingScope::Current(namespace)).checked(entry)
 }
 
-/// The index resolves against this resolver's own current commit. Unlike the
-/// checked external-entry API, callers cannot substitute another snapshot's
-/// entry and no repeated path scan is necessary.
+/// The index and context come from this exact admitted current namespace, not
+/// the immutable commit whose unfiltered offsets can differ after deregistration.
 pub(super) fn current_entry_source_at_index<'a>(
     engine: &'a Engine,
     branch: &'a str,
     index: usize,
     context: Option<&storage_contract::FileContext>,
+    namespace: storage_engine::NamespaceTree<'a>,
 ) -> Option<&'a str> {
     let current = engine.state().branches.get(branch)?;
     let commit = engine.state().commits.get(&current.head_commit_id)?;
-    let entry = commit.entries.get(index)?;
+    let entry = namespace.entries().get(index)?;
     if entry.kind != storage_contract::NamespaceEntryKind::File {
         return None;
     }
-    PendingSources::new(engine, branch, commit).resolve(
+    PendingSources::new(engine, branch, commit, PendingScope::Current(namespace)).resolve(
         entry,
         entry,
         CurrentContext::Resolved(context),

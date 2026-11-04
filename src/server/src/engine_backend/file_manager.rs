@@ -10,12 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend_activity::utc_timestamp;
 
-fn disk<'a>(engine: &'a Engine, slot: &str) -> Result<&'a storage_engine::DiskConfig, ApiError> {
+fn disk<'a>(
+    engine: &'a Engine,
+    slot: &str,
+) -> Result<storage_engine::RegisteredDisk<'a>, ApiError> {
     engine
-        .config()
-        .disks
-        .iter()
-        .find(|d| d.slot_id == slot)
+        .registered_disks()
+        .find(|disk| disk.slot_id == slot)
         .ok_or_else(|| {
             ApiError::new(
                 ::http::StatusCode::NOT_FOUND,
@@ -272,7 +273,8 @@ fn listed_current_entry(
     use crate::{ListingEntry, ListingLocation, ListingVersion};
     #[cfg(test)]
     LISTED_ENTRY_PROJECTIONS.set(LISTED_ENTRY_PROJECTIONS.get() + 1);
-    let entry = &engine.list_tree_ref(&repo.main_branch_id).map_err(error)?[index];
+    let namespace = engine.namespace_tree(&repo.main_branch_id).map_err(error)?;
+    let entry = &namespace.entries()[index];
     let display = if prefix.is_empty() {
         entry.path().to_owned()
     } else {
@@ -294,6 +296,7 @@ fn listed_current_entry(
                     &repo.main_branch_id,
                     index,
                     context.as_deref(),
+                    namespace,
                 ),
             );
             let node = context
@@ -522,7 +525,7 @@ impl FileHistoryRead {
             super::branch::capture_content(
                 state,
                 Some(&entry.version_id),
-                current_entry_source(engine, &repo.main_branch_id, entry),
+                current_entry_source(engine, &repo.main_branch_id, entry, tree),
             )
         });
         Ok(Self {
@@ -884,3 +887,7 @@ mod time_tests;
 #[cfg(test)]
 #[path = "../../../../test/server/unit/engine_backend/file_manager/listing_integration_tests.rs"]
 mod listing_integration_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/server/unit/engine_backend/file_manager/deregistration_listing_tests.rs"]
+mod deregistration_listing_tests;

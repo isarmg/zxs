@@ -119,17 +119,16 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
         Some("missing"),
     ] {
         let old: BTreeMap<_, _> =
-            crate::engine_backend::directory_scopes::matching(engine.state(), repository, key)
+            crate::engine_backend::directory_scopes::matching(&engine, repository, key)
+                .unwrap()
                 .into_iter()
                 .map(|branch| (branch.directory_branch_id.as_str(), branch))
                 .collect();
-        let new: BTreeMap<_, _> = crate::engine_backend::directory_scopes::matching_unordered(
-            engine.state(),
-            repository,
-            key,
-        )
-        .map(|branch| (branch.directory_branch_id.as_str(), branch))
-        .collect();
+        let new: BTreeMap<_, _> =
+            crate::engine_backend::directory_scopes::matching_unordered(&engine, repository, key)
+                .unwrap()
+                .map(|branch| (branch.directory_branch_id.as_str(), branch))
+                .collect();
         assert_eq!(
             json_codec::to_vec(&old).unwrap(),
             json_codec::to_vec(&new).unwrap()
@@ -247,4 +246,178 @@ fn directory_scopes_capture_requested_shape_once_and_outlive_engine() {
     drop(backend);
     assert_eq!(json_codec::to_value(full).unwrap(), expected);
     assert_eq!(json_codec::to_value(summary).unwrap(), expected_summary);
+}
+
+fn all_scope_ids(
+    backend: &EngineBackend,
+    identity: &Identity,
+    repo: &str,
+    projection: DirectoryBranchProjection,
+) -> BTreeMap<String, String> {
+    let snapshot = backend
+        .directory_scopes(
+            identity,
+            ReadDirectoryScopes {
+                repository_id: repo,
+                filter: &DirectoryBranchFilter::All,
+                projection,
+            },
+        )
+        .unwrap();
+    match snapshot.branches {
+        DirectoryScopeRows::Full(rows) => rows
+            .into_iter()
+            .map(|row| (row.branch.directory_branch_id, row.branch.directory_id))
+            .collect(),
+        DirectoryScopeRows::Summary(rows) => rows
+            .into_iter()
+            .map(|row| (row.directory_branch_id, row.directory_id))
+            .collect(),
+    }
+}
+
+#[test]
+fn all_current_scopes_exclude_deleted_and_reused_directory_identities_but_keep_root_choices() {
+    let (_root, mut engine, repo, identity) = fixture();
+    save_projection_file(&mut engine, &repo.main_branch_id, "dir/file", b"original");
+    for path in [None, Some(name_policy::LookupPath::parse("dir").unwrap())] {
+        engine
+            .initialize_directory_scope(
+                &repo.repository_id,
+                path.as_ref(),
+                "owner",
+                storage_contract::OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        engine
+            .create_directory_branches(
+                &repo.repository_id,
+                path.as_ref(),
+                &storage_contract::BranchName::parse("frozen").unwrap(),
+                "owner",
+                storage_contract::OperationId::generate().unwrap(),
+            )
+            .unwrap();
+    }
+    let old_id = engine
+        .namespace_tree(&repo.main_branch_id)
+        .unwrap()
+        .get("dir")
+        .unwrap()
+        .entry_id
+        .clone();
+    let historical = engine
+        .state()
+        .directory_branches
+        .values()
+        .find(|branch| branch.directory_id == old_id && branch.name == "frozen")
+        .unwrap()
+        .clone();
+    let root_branches: BTreeMap<_, _> = engine
+        .state()
+        .directory_branches
+        .values()
+        .filter(|branch| branch.directory_id == repo.repository_id)
+        .map(|branch| {
+            (
+                branch.directory_branch_id.clone(),
+                branch.directory_id.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(root_branches.len(), 2);
+    engine
+        .file_namespace(
+            &repo.repository_id,
+            storage_engine::NamespaceOperation::parse(
+                storage_contract::NamespaceOperationKind::DeleteTree,
+                "dir",
+                None,
+            )
+            .unwrap(),
+            "owner",
+            storage_contract::OperationId::generate().unwrap(),
+        )
+        .unwrap();
+    let backend = EngineBackend::new(engine);
+    for projection in [
+        DirectoryBranchProjection::Full,
+        DirectoryBranchProjection::Summary,
+    ] {
+        assert_eq!(
+            all_scope_ids(&backend, &identity, &repo.repository_id, projection),
+            root_branches
+        );
+    }
+    {
+        let mut engine = backend.engine.lock().unwrap();
+        save_projection_file(&mut engine, &repo.main_branch_id, "dir/new", b"replacement");
+        engine
+            .initialize_directory_scope(
+                &repo.repository_id,
+                Some(&name_policy::LookupPath::parse("dir").unwrap()),
+                "owner",
+                storage_contract::OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        engine
+            .create_directory_branches(
+                &repo.repository_id,
+                Some(&name_policy::LookupPath::parse("dir").unwrap()),
+                &storage_contract::BranchName::parse("new-frozen").unwrap(),
+                "owner",
+                storage_contract::OperationId::generate().unwrap(),
+            )
+            .unwrap();
+    }
+    let new_id = {
+        let engine = backend.engine.lock().unwrap();
+        engine
+            .namespace_tree(&repo.main_branch_id)
+            .unwrap()
+            .get("dir")
+            .unwrap()
+            .entry_id
+            .clone()
+    };
+    assert_ne!(old_id, new_id);
+    for projection in [
+        DirectoryBranchProjection::Full,
+        DirectoryBranchProjection::Summary,
+    ] {
+        let rows = all_scope_ids(&backend, &identity, &repo.repository_id, projection);
+        assert_eq!(rows.len(), 4);
+        assert!(
+            rows.values()
+                .all(|id| id == &repo.repository_id || id == &new_id)
+        );
+        assert_eq!(rows.values().filter(|id| *id == &new_id).count(), 2);
+        assert!(root_branches.keys().all(|branch| rows.contains_key(branch)));
+        assert!(!rows.contains_key(&historical.directory_branch_id));
+    }
+    // Removed identities remain available through the explicit history API.
+    let history = backend
+        .directory_history(
+            &identity,
+            storage_contract::directory_history::DirectoryHistoryRequest::parse(
+                &repo.repository_id,
+                &old_id,
+                storage_contract::directory_history::DirectoryHistoryCollection::Branches,
+                BTreeMap::new(),
+            )
+            .unwrap(),
+            storage_contract::history_window::HistoryWindowCancellation::new(),
+        )
+        .unwrap();
+    assert!(
+        history
+            .branches
+            .iter()
+            .any(|branch| branch.directory_branch_id == historical.directory_branch_id)
+    );
+    let engine = backend.engine.lock().unwrap();
+    assert_eq!(
+        engine.state().directory_branches[&historical.directory_branch_id],
+        historical
+    );
 }

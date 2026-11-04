@@ -33,13 +33,14 @@ impl Session {
                 entry_id: &entry_id,
                 path: path.as_ref(),
                 selection: crate::DirectorySelection::Page {
-                    commit: cursor.as_ref().map(|cursor| cursor.commit_id.as_str()),
+                    snapshot: cursor.as_ref().map(|cursor| &cursor.snapshot),
                     after: cursor.as_ref().and_then(|cursor| cursor.after.as_deref()),
                 },
             },
         )?;
         let crate::DirectorySnapshot {
-            commit_id,
+            commit_id: _,
+            snapshot,
             entries,
             more,
         } = snapshot;
@@ -50,7 +51,7 @@ impl Session {
             .map(|node| node.entry.lookup_key().to_owned())
             .or_else(|| cursor.and_then(|cursor| cursor.after));
         if let Some(Handle::Directory(directory)) = self.handles.get_mut(&handle) {
-            directory.cursor = Some(DirectoryCursor { commit_id, after });
+            directory.cursor = Some(DirectoryCursor { snapshot, after });
         }
         Ok(json_codec::to_value(page).expect("invariant: directory page serializes"))
     }

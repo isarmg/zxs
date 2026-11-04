@@ -433,3 +433,235 @@ fn restricted_discovery_missing_retained_roots_never_falls_back_to_config() {
             .contains(&Touch::Stat(fixture.target.disks[3].root.clone()))
     );
 }
+
+struct StartupFixture {
+    _temp: tempfile::TempDir,
+    system: PathBuf,
+    config: ValidatedConfig,
+}
+impl StartupFixture {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let system = temp.path().join("system");
+        let config =
+            Config::development((0..3).map(|index| temp.path().join(format!("disk-{index}"))))
+                .unwrap();
+        let engine = Engine::initialize(&system, config).unwrap();
+        let config = engine.config.clone();
+        drop(engine);
+        Self {
+            _temp: temp,
+            system,
+            config,
+        }
+    }
+    fn locator(&self) -> PathBuf {
+        self.system
+            .join(crate::engine::disk_lifecycle::bootstrap::runtime::DIRECTORY)
+    }
+    fn stop_first(&self) {
+        let mut store = open_store(&self.system).unwrap();
+        let before = store.reload(&self.config.pool_id).unwrap();
+        let stopped = store
+            .append_stop(
+                &before,
+                &binding(&self.config, &self.config.disks[0]),
+                OperationId::generate().unwrap(),
+                IntentDigest::parse(&"a".repeat(64)).unwrap(),
+            )
+            .unwrap();
+        store.sync_current(&stopped).unwrap();
+    }
+}
+
+#[test]
+fn production_startup_gate_precedes_first_stat_with_stale_config_and_present_target() {
+    let fixture = StartupFixture::new();
+    let unchanged = storage_contract::canonical_json(&fixture.config).unwrap();
+    fixture.stop_first();
+    let target = &fixture.config.disks[0].root;
+    assert!(target.is_dir());
+    // A target marker which would fail any accidental contents access remains
+    // physically present. The callback counts stat as well as open before I/O.
+    fs::write(target.join("disk.json"), b"must not be read").unwrap();
+    let mut io = CountedIo::default();
+    let error = discover_startup_with_io(&fixture.system, fixture.config.clone(), &mut io)
+        .err()
+        .unwrap();
+    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+    io.assert_only(
+        &fixture.config.disks[1..]
+            .iter()
+            .map(|disk| disk.root.clone())
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        storage_contract::canonical_json(&fixture.config).unwrap(),
+        unchanged
+    );
+    assert_eq!(
+        Engine::open(&fixture.system).err().unwrap().code(),
+        ErrorCode::RecoveryRequired
+    );
+}
+
+#[test]
+fn production_open_installs_and_consumes_genesis_locator_without_changing_fixed_membership() {
+    let fixture = StartupFixture::new();
+    let engine = Engine::open(&fixture.system).unwrap();
+    assert_eq!(engine.config.metadata_members().len(), 3);
+    assert_eq!(engine.config.metadata_quorum(), 2);
+    assert_eq!(engine.config.io_disks().count(), 3);
+}
+
+#[test]
+fn production_startup_missing_corrupt_or_absent_system_locator_never_stats_storage() {
+    for failure in 0..4 {
+        let fixture = StartupFixture::new();
+        match failure {
+            0 => fs::remove_file(fixture.locator().join("head.json")).unwrap(),
+            1 => fs::write(fixture.locator().join("head.json"), b"{").unwrap(),
+            2 => fs::remove_dir_all(fixture.locator()).unwrap(),
+            3 => fs::remove_dir_all(&fixture.system).unwrap(),
+            _ => unreachable!(),
+        }
+        let mut io = CountedIo::default();
+        let error = discover_startup_with_io(&fixture.system, fixture.config.clone(), &mut io)
+            .err()
+            .unwrap();
+        assert_eq!(error.code(), ErrorCode::RecoveryRequired);
+        assert!(io.touches.is_empty());
+        assert_eq!(
+            Engine::open(&fixture.system).err().unwrap().code(),
+            ErrorCode::RecoveryRequired
+        );
+    }
+}
+
+#[test]
+fn production_startup_arbitrary_valid_hint_edit_cannot_lower_authority_quorum() {
+    let fixture = StartupFixture::new();
+    let record_path = fixture.locator().join("record-00000000000000000001.json");
+    let mut record: json_codec::Value = decode_strict(&fs::read(&record_path).unwrap()).unwrap();
+    let retained_id = fixture.config.disks[0].disk_id.clone();
+    for root in record["roots"].as_array_mut().unwrap() {
+        root["metadata_member"] = (root["disk_id"].as_str() == Some(retained_id.as_str())).into();
+    }
+    record["retained"] = json_codec::Value::Array(vec![retained_id.into()]);
+    let (bytes, hash) =
+        storage_contract::encode_hashed_object("bootstrap-locator", &record).unwrap();
+    fs::write(record_path, bytes).unwrap();
+    let head_path = fixture.locator().join("head.json");
+    let mut head: json_codec::Value = decode_strict(&fs::read(&head_path).unwrap()).unwrap();
+    head["record_hash"] = hash.into();
+    fs::write(head_path, storage_contract::canonical_json(&head).unwrap()).unwrap();
+    let mut io = CountedIo::default();
+    let error = discover_startup_with_io(&fixture.system, fixture.config.clone(), &mut io)
+        .err()
+        .unwrap();
+    assert_eq!(error.code(), ErrorCode::MetadataQuorumUnavailable);
+    io.assert_only(&[fixture.config.disks[0].root.clone()]);
+    assert_eq!(fixture.config.metadata_members().len(), 3);
+    assert_eq!(fixture.config.metadata_quorum(), 2);
+}
+
+#[test]
+fn production_explicit_restore_never_expands_to_saved_config_root_addresses() {
+    let fixture = StartupFixture::new();
+    let unrequested = &fixture.config.disks[0].root;
+    assert!(unrequested.is_dir());
+    fs::write(
+        unrequested.join("disk.json"),
+        b"unrequested retained root must not be opened",
+    )
+    .unwrap();
+    let restored_system = fixture._temp.path().join("restored-system");
+    let retained: Vec<_> = fixture.config.disks[1..]
+        .iter()
+        .map(|disk| disk.root.clone())
+        .collect();
+    let restored = Engine::restore_from_disks(&restored_system, &retained).unwrap();
+    assert_eq!(restored.config.disks.len(), 3);
+    assert_eq!(restored.config.metadata_quorum(), 2);
+    assert_eq!(restored.config.io_disks().count(), 2);
+    assert!(
+        restored
+            .config
+            .excludes_io_disk(&fixture.config.disks[0].disk_id)
+    );
+    drop(restored);
+    let reopened = Engine::open(&restored_system).unwrap();
+    assert_eq!(reopened.config.io_disks().count(), 2);
+    assert_eq!(
+        fs::read(unrequested.join("disk.json")).unwrap(),
+        b"unrequested retained root must not be opened"
+    );
+}
+
+#[test]
+fn production_startup_wrong_pool_hint_never_selects_another_pool_or_stats_roots() {
+    let fixture = StartupFixture::new();
+    let head_path = fixture.locator().join("head.json");
+    let mut head: json_codec::Value = decode_strict(&fs::read(&head_path).unwrap()).unwrap();
+    head["pool_id"] = format!("pool_{}", "f".repeat(32)).into();
+    fs::write(head_path, storage_contract::canonical_json(&head).unwrap()).unwrap();
+    let mut io = CountedIo::default();
+    assert_eq!(
+        discover_startup_with_io(&fixture.system, fixture.config.clone(), &mut io)
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
+    assert!(io.touches.is_empty());
+}
+
+#[test]
+fn production_unstopped_relocation_is_identity_checked_and_frozen_before_first_stop() {
+    let fixture = StartupFixture::new();
+    let moved: Vec<_> = fixture
+        .config
+        .disks
+        .iter()
+        .enumerate()
+        .map(|(index, disk)| {
+            let path = fixture._temp.path().join(format!("relocated-{index}"));
+            fs::rename(&disk.root, &path).unwrap();
+            path
+        })
+        .collect();
+    let config = fixture
+        .config
+        .clone()
+        .with_disk_roots(moved.clone())
+        .unwrap();
+    write_json(&fixture.system.join("config.json"), &config, true).unwrap();
+    let engine = Engine::open(&fixture.system).unwrap();
+    assert_eq!(
+        engine
+            .config
+            .disks
+            .iter()
+            .map(|disk| disk.root.clone())
+            .collect::<Vec<_>>(),
+        moved
+    );
+    let target = binding(&config, &config.disks[0]);
+    let operation = OperationId::generate().unwrap();
+    let digest = "b".repeat(64);
+    let stop = engine
+        .synchronize_disk_exit_stop(&target, operation, &digest)
+        .unwrap();
+    assert!(stop.matches(&target, operation, &digest));
+    drop(stop);
+    drop(engine);
+    let mut io = CountedIo::default();
+    assert_eq!(
+        discover_startup_with_io(&fixture.system, config, &mut io)
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::RecoveryRequired
+    );
+    io.assert_only(&moved[1..]);
+}

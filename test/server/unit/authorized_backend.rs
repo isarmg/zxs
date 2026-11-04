@@ -413,6 +413,18 @@ impl Backend for RecordingBackend {
         )?;
         Ok(crate::DirectorySnapshot {
             commit_id: "commit".into(),
+            snapshot: crate::DirectoryReadSnapshot {
+                branch_id: request.branch.into(),
+                history_tree_id: "history".into(),
+                commit_id: "commit".into(),
+                binding: crate::backend_read::DirectoryRegistryBinding {
+                    pool_id: "pool".into(),
+                    publication: None,
+                },
+                entries: crate::backend_read::DirectoryEntries::Projected(std::sync::Arc::new(
+                    Vec::new(),
+                )),
+            },
             entries: Vec::new(),
             more: false,
         })

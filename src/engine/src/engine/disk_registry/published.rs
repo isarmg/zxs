@@ -2,6 +2,8 @@
 //! The trust seed is an admitted Engine; successors are checked against that exact
 //! predecessor. Publication verification is separate from lifecycle completion.
 use super::{DiskRegistrationIdentity, Engine};
+use crate::State;
+use crate::engine::ValidatedConfig;
 use crate::{
     Error, ErrorCode, OperationId, Result, decode_strict,
     disk::MAX_METADATA,
@@ -15,10 +17,7 @@ use crate::{
 use data_serialization::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[allow(
-    dead_code,
-    reason = "occurrence proofs await atomic lifecycle publication and consumer wiring"
-)]
+pub(in crate::engine) mod continuation;
 pub(in crate::engine) mod occurrence;
 
 const REGISTRY_KIND: &str = "disk-lifecycle-registry";
@@ -196,63 +195,175 @@ impl Engine {
     /// Pure preparation from the admitted authority and published metadata. No
     /// filesystem reads or writes and no replacement of the live registry.
     pub fn prepare_disk_registry_base(&self) -> Result<PreparedDiskRegistry> {
-        encode_registry(self.disk_registry_base_state())
+        if let Some(view) = &self.current_namespaces {
+            let authority = self
+                .config
+                .generation_hash()
+                .expect("invariant: admitted registry has generation");
+            let snapshot = self
+                .snapshot
+                .as_deref()
+                .ok_or_else(|| invalid("registry source has no publication"))?;
+            return view.registry_state.prepare_continuation(
+                &self.config,
+                &self.config,
+                continuation::RegistryBoundary {
+                    authority,
+                    snapshot,
+                    sequence: self.state.sequence,
+                    topology_generation: self.state.topology_generation,
+                },
+            );
+        }
+        if self
+            .config
+            .generation()
+            .is_some_and(|generation| generation.portable.exit_registry().is_some())
+        {
+            return Err(invalid("registry source has not been admitted"));
+        }
+        encode_registry(base_state(
+            &self.config,
+            &self.state,
+            self.snapshot.as_deref(),
+        ))
     }
-    fn disk_registry_base_state(&self) -> RegistryState {
-        let mut topology = BTreeMap::new();
-        let mut registrations = BTreeMap::new();
-        let mut voters = BTreeMap::new();
-        for disk in &self.config.disks {
-            let identity = DiskRegistrationIdentity {
-                pool_id: self.config.pool_id.clone(),
-                disk_id: disk.disk_id.clone(),
-                slot_id: disk.slot_id.clone(),
-                binding_generation: disk.binding_generation,
-            };
-            topology.insert(
-                disk.disk_id.clone(),
-                HistoricalDiskDefinition {
-                    identity: identity.clone(),
-                    level: disk.level,
-                    upstream_slot_id: disk.upstream_slot_id.clone(),
-                    original_metadata_member: disk.metadata_member,
-                    capacity_bytes: disk.capacity_bytes,
-                },
-            );
-            registrations.insert(
-                disk.disk_id.clone(),
-                Registration {
-                    identity: identity.clone(),
-                    mode: RegistrationMode::Enabled,
-                },
-            );
-            if disk.metadata_member {
-                voters.insert(disk.disk_id.clone(), identity);
-            }
-        }
-        RegistryState {
-            source: RegistrySource {
-                pool_id: self.config.pool_id.clone(),
-                membership_authority: self.config.generation_hash().map(str::to_owned),
-                snapshot_hash: self.snapshot.clone(),
-                sequence: self.state.sequence,
-                topology_generation: self.state.topology_generation,
+}
+
+fn base_state(config: &ValidatedConfig, state: &State, snapshot: Option<&str>) -> RegistryState {
+    base_state_at(
+        config,
+        RegistrySource {
+            pool_id: config.pool_id.clone(),
+            membership_authority: config.generation_hash().map(str::to_owned),
+            snapshot_hash: snapshot.map(str::to_owned),
+            sequence: state.sequence,
+            topology_generation: state.topology_generation,
+        },
+    )
+}
+
+fn base_state_at(config: &ValidatedConfig, source: RegistrySource) -> RegistryState {
+    let mut topology = BTreeMap::new();
+    let mut registrations = BTreeMap::new();
+    let mut voters = BTreeMap::new();
+    for disk in &config.disks {
+        let identity = DiskRegistrationIdentity {
+            pool_id: config.pool_id.clone(),
+            disk_id: disk.disk_id.clone(),
+            slot_id: disk.slot_id.clone(),
+            binding_generation: disk.binding_generation,
+        };
+        topology.insert(
+            disk.disk_id.clone(),
+            HistoricalDiskDefinition {
+                identity: identity.clone(),
+                level: disk.level,
+                upstream_slot_id: disk.upstream_slot_id.clone(),
+                original_metadata_member: disk.metadata_member,
+                capacity_bytes: disk.capacity_bytes,
             },
-            view_generation: 1,
-            predecessor: None,
-            topology,
-            registrations,
-            voters,
-            detached: BTreeMap::new(),
-            pending_exit: None,
+        );
+        registrations.insert(
+            disk.disk_id.clone(),
+            Registration {
+                identity: identity.clone(),
+                mode: RegistrationMode::Enabled,
+            },
+        );
+        if disk.metadata_member {
+            voters.insert(disk.disk_id.clone(), identity);
         }
+    }
+    RegistryState {
+        source,
+        view_generation: 1,
+        predecessor: None,
+        topology,
+        registrations,
+        voters,
+        detached: BTreeMap::new(),
+        pending_exit: None,
     }
 }
 
 impl VerifiedDiskRegistry {
+    pub(in crate::engine) fn matches_frozen_source(
+        &self,
+        config: &ValidatedConfig,
+        state: &State,
+        snapshot: Option<&str>,
+        authority: Option<&str>,
+    ) -> bool {
+        self.state
+            == base_state_at(
+                config,
+                RegistrySource {
+                    pool_id: config.pool_id.clone(),
+                    membership_authority: authority.map(str::to_owned),
+                    snapshot_hash: snapshot.map(str::to_owned),
+                    sequence: state.sequence,
+                    topology_generation: state.topology_generation,
+                },
+            )
+    }
+
+    pub(in crate::engine) fn verify_frozen_source(
+        config: &ValidatedConfig,
+        authority: Option<&str>,
+        snapshot: &str,
+        sequence: u64,
+        topology_generation: u64,
+        expected: &DiskRegistryCommitment,
+        read: impl FnMut(&'static str, &str) -> Result<Vec<u8>>,
+    ) -> Result<Self> {
+        let loaded = load_registry(expected, read)?;
+        let source = RegistrySource {
+            pool_id: config.pool_id.clone(),
+            membership_authority: authority.map(str::to_owned),
+            snapshot_hash: Some(snapshot.to_owned()),
+            sequence,
+            topology_generation,
+        };
+        if loaded != base_state_at(config, source) {
+            return Err(invalid(
+                "registry predecessor differs from authenticated frozen boundary",
+            ));
+        }
+        Ok(Self {
+            commitment: expected.clone(),
+            state: loaded,
+        })
+    }
+
+    pub(in crate::engine) fn verify_lifecycle_candidate(
+        &self,
+        candidate: &Candidate,
+        expected_authority: &str,
+    ) -> Result<()> {
+        self.check_candidate(candidate, expected_authority)
+    }
+
     pub fn commitment(&self) -> &DiskRegistryCommitment {
         &self.commitment
     }
+    pub(in crate::engine) fn registered_definitions(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&HistoricalDiskDefinition, RegistrationMode, bool)> {
+        self.state.registrations.iter().map(|(id, registration)| {
+            let topology = self
+                .state
+                .topology
+                .get(id)
+                .expect("invariant: verified registration has historical identity");
+            (
+                topology,
+                registration.mode,
+                self.state.voters.contains_key(id),
+            )
+        })
+    }
+
     pub fn historical_topology(&self) -> impl ExactSizeIterator<Item = &HistoricalDiskDefinition> {
         self.state.topology.values()
     }

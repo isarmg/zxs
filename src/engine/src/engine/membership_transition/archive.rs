@@ -128,7 +128,10 @@ impl<'a> FrozenEpoch<'a> {
                 "candidate belongs to another frozen epoch",
             ));
         }
-        self.config.verify_original_candidate_membership(candidate)
+        match &self.activation {
+            Some((portable, _)) => portable.verify_candidate(candidate).map(|_| ()),
+            None => self.config.verify_original_candidate_membership(candidate),
+        }
     }
     fn verify_activation(&self, candidate: &Candidate) -> Result<()> {
         if candidate.sequence == self.first_sequence

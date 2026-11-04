@@ -116,6 +116,12 @@ fn workspace_locations(
 
 impl Engine {
     pub(crate) fn persist_workspace(&mut self, w: &Workspace) -> Result<()> {
+        if self.current_namespaces.is_some() && w.purpose == WorkspacePurpose::HistoricalBranch {
+            return Err(Error::new(
+                ErrorCode::HistoricalSaveRequiresBranch,
+                "historical workspace import has not been admitted for the current disk registry",
+            ));
+        }
         let canonical = encode_metadata(w, MAX_METADATA)?;
         self.persist_workspace_as(w, &canonical, WorkspaceRetention::Resident)
     }
@@ -235,7 +241,8 @@ impl Engine {
     }
 
     pub(crate) fn load_workspaces(&mut self) -> Result<()> {
-        self.load_workspace_mirrors(true)
+        self.load_workspace_mirrors(true)?;
+        self.restore_namespace_workspace_baselines()
     }
 
     fn workspace_locations(&self) -> Result<Vec<WorkspaceLocation>> {

@@ -1,5 +1,5 @@
 //! Existing-pool directory addition. These receipts are distinct from first setup.
-use crate::{ErrorCode, OperationId, storage_directories::CandidateSelection};
+use crate::{ErrorCode, OperationId, OperationResult, storage_directories::CandidateSelection};
 use data_serialization::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +42,23 @@ pub struct AdditionCommit {
 #[serialization(deny_unknown_fields)]
 pub struct AdditionResume {
     pub operation_id: OperationId,
+    /// Explicitly choosing Add after a failed cancellation does not override
+    /// any immutable Abort vote. The engine decides which outcome is possible.
+    pub continuation: AdditionContinuation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(deny_unknown_fields)]
+pub struct AdditionCancel {
+    pub operation_id: OperationId,
+    pub preview_digest: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serialization(rename_all = "snake_case")]
+pub enum AdditionContinuation {
+    Add,
+    Cancel,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,15 +70,26 @@ pub enum AdditionPhase {
     Enrolling,
     JointDecision,
     Activating,
+    CertifyingAbort,
+    AbortCertified,
+    Cancelling,
     Completed,
+    Cancelled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serialization(rename_all = "snake_case")]
 pub enum AdditionState {
     Adding,
+    Cancelling,
     RecoveryRequired,
     Completed,
+    Cancelled,
+}
+impl AdditionState {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,17 +99,20 @@ pub struct AdditionFailure {
     pub message: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct AdditionStatus {
     pub operation_id: OperationId,
     pub state: AdditionState,
     pub phase: AdditionPhase,
+    pub continuation: AdditionContinuation,
+    /// Exact permanent engine result, present only after actual publication.
+    pub result: Option<OperationResult>,
     pub preview: AdditionPreview,
     pub failure: Option<AdditionFailure>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
 pub struct AdditionStatusResponse {
     pub operation: Option<AdditionStatus>,

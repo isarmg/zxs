@@ -57,6 +57,15 @@ pub struct DirectoryBranchChoice {
 impl DirectoryBranchChoice {
     #[cfg(feature = "core")]
     pub(crate) fn capture(branch: &DirectoryBranch, current: bool) -> Self {
+        Self::capture_entries(branch, current, &branch.entries)
+    }
+
+    #[cfg(feature = "core")]
+    pub(crate) fn capture_entries(
+        branch: &DirectoryBranch,
+        current: bool,
+        entries: &[Entry],
+    ) -> Self {
         let DirectoryBranch {
             directory_branch_id,
             repository_id,
@@ -66,7 +75,7 @@ impl DirectoryBranchChoice {
             parent_branch_id,
             head_tree_id,
             commit_id,
-            entries,
+            entries: _,
             file_branches: _,
             file_contexts: _,
             inherited_files: _,

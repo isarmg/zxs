@@ -231,6 +231,8 @@ fn durable_pending_intent_blocks_a_different_plan_and_survives_reopen() {
             preview,
             state: AdditionState::Adding,
             phase: AdditionPhase::Prepared,
+            continuation: AdditionContinuation::Add,
+            result: None,
             failure: None,
         },
     };
@@ -263,7 +265,8 @@ fn durable_pending_intent_blocks_a_different_plan_and_survives_reopen() {
         &f,
         "disk_add_resume",
         json!(AdditionResume {
-            operation_id: record.status.operation_id
+            operation_id: record.status.operation_id,
+            continuation: AdditionContinuation::Add,
         }),
     )
     .unwrap();
@@ -295,4 +298,286 @@ fn active_addition_gate_rejects_another_plan_without_changing_storage_admission(
         ErrorCode::StorageRetryRunning
     );
     assert_eq!(crate::lock(&f.backend.inner.state).admitted, before);
+}
+
+/// Stop through the real coordinator's persistence boundary, not a business hook.
+fn pending_at(f: &Fixture, phase: AdditionPhase) -> StoredAddition {
+    let request = request(selection(f, "interrupted-addition"), "N01", true);
+    let backend = f.backend.inner.addition_backend().unwrap();
+    let (preview, target, directories) = f
+        .backend
+        .prepare_addition(
+            &backend,
+            &f.identity,
+            request,
+            f.discovery.to_str().unwrap(),
+        )
+        .unwrap();
+    let directory = PrivateDirectory::open_existing(&f.backend.inner.management_root)
+        .unwrap()
+        .create_child(&EntryName::new(DIRECTORY).unwrap())
+        .unwrap();
+    let mut record = StoredAddition {
+        format: Format::Addition,
+        principal: f.identity.principal.clone(),
+        target,
+        archive: None,
+        status: AdditionStatus {
+            operation_id: preview.request.operation_id,
+            state: AdditionState::Adding,
+            phase: AdditionPhase::Prepared,
+            continuation: AdditionContinuation::Add,
+            result: None,
+            preview,
+            failure: None,
+        },
+    };
+    save(&directory, &record).unwrap();
+    write(&directory, &latest_name(), &record.status.operation_id).unwrap();
+    let intent = record.clone();
+    let failure = backend
+        .run_storage_addition(
+            &f.identity,
+            &intent,
+            Some(directories),
+            |observed, archive| {
+                record.status.phase = observed;
+                if let Some(archive) = archive {
+                    record.archive = Some(archive);
+                }
+                save(&directory, &record)?;
+                if observed == phase {
+                    Err(ApiError::conflict(
+                        ErrorCode::RecoveryRequired,
+                        "test interrupts admitted coordinator",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+    assert_eq!(failure.code, ErrorCode::RecoveryRequired);
+    record.status.state = AdditionState::RecoveryRequired;
+    save(&directory, &record).unwrap();
+    record
+}
+fn cancel(f: &Fixture, record: &StoredAddition) -> Result<Value, ApiError> {
+    command(
+        f,
+        "disk_add_cancel",
+        json!(AdditionCancel {
+            operation_id: record.status.operation_id,
+            preview_digest: record.status.preview.preview_digest.clone(),
+        }),
+    )
+}
+fn resume(
+    f: &Fixture,
+    record: &StoredAddition,
+    continuation: AdditionContinuation,
+) -> Result<Value, ApiError> {
+    command(
+        f,
+        "disk_add_resume",
+        json!(AdditionResume {
+            operation_id: record.status.operation_id,
+            continuation,
+        }),
+    )
+}
+fn reopen(f: &Fixture) {
+    crate::lock(&f.backend.inner.state).backend = None;
+    let engine = storage_engine::Engine::open(&f.data).unwrap();
+    let backend = Arc::new(EngineBackend::new(engine));
+    backend
+        .set_management_auth(crate::lock(&f.auth).reader())
+        .unwrap();
+    f.backend.inner.set(Some(backend), StorageState::ReadOnly);
+}
+
+#[test]
+fn cancelled_addition_retains_original_receipt_and_does_not_reopen_target() {
+    let f = fixture();
+    let record = pending_at(&f, AdditionPhase::Enrolling);
+    let target = PathBuf::from(
+        &record.status.preview.request.additions[0]
+            .selection
+            .root_path,
+    );
+    let preserved = target.with_extension("preserved");
+    fs::rename(&target, &preserved).unwrap();
+    std::os::unix::fs::symlink(f.discovery.join("unavailable-target"), &target).unwrap();
+    let cancelled: AdditionStatus = json_codec::from_value(cancel(&f, &record).unwrap()).unwrap();
+    assert_eq!(cancelled.state, AdditionState::Cancelled);
+    assert_eq!(cancelled.phase, AdditionPhase::Cancelled);
+    let result = cancelled.result.as_ref().unwrap();
+    assert_eq!(result.operation_id, record.status.operation_id);
+    assert_eq!(result.kind, "membership-add-cancelled");
+    assert_eq!(
+        result.commit_state,
+        storage_contract::CommitState::Published
+    );
+    assert_eq!(
+        result.request_digest,
+        record.archive.as_ref().unwrap().transition_hash
+    );
+    assert!(
+        fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(preserved.is_dir());
+    assert_eq!(cancel(&f, &record).unwrap(), json!(cancelled));
+    assert_eq!(
+        resume(&f, &record, AdditionContinuation::Add).unwrap(),
+        json!(cancelled)
+    );
+    assert_eq!(
+        command(
+            &f,
+            "disk_add_commit",
+            json!(AdditionCommit {
+                preview: record.status.preview.clone()
+            })
+        )
+        .unwrap(),
+        json!(cancelled)
+    );
+    reopen(&f);
+    assert_eq!(
+        resume(&f, &record, AdditionContinuation::Cancel).unwrap(),
+        json!(cancelled)
+    );
+    let config = f
+        .backend
+        .inner
+        .addition_backend()
+        .unwrap()
+        .addition_configuration(&f.identity)
+        .unwrap();
+    assert_eq!(config.disks.len(), 1);
+    let next = preview(&f, request(selection(&f, "next-addition"), "N02", false));
+    assert_eq!(
+        command(
+            &f,
+            "disk_add_commit",
+            json!(AdditionCommit { preview: next })
+        )
+        .unwrap()["state"],
+        "completed"
+    );
+}
+
+#[test]
+fn joint_quorum_rejects_cancel_without_reclassifying_add_or_silently_resuming_it() {
+    let f = fixture();
+    let record = pending_at(&f, AdditionPhase::Activating);
+    assert_eq!(
+        cancel(&f, &record).unwrap_err().code,
+        ErrorCode::RecoveryRequired
+    );
+    let status = f
+        .backend
+        .addition_status(&f.identity, Some(record.status.operation_id))
+        .unwrap()
+        .operation
+        .unwrap();
+    assert_eq!(status.state, AdditionState::RecoveryRequired);
+    assert_eq!(status.continuation, AdditionContinuation::Cancel);
+    assert!(status.result.is_none());
+    // Replaying the original commit body must preserve the cancellation choice.
+    assert!(
+        command(
+            &f,
+            "disk_add_commit",
+            json!(AdditionCommit {
+                preview: record.status.preview.clone()
+            })
+        )
+        .is_err()
+    );
+    let completed = resume(&f, &record, AdditionContinuation::Add).unwrap();
+    assert_eq!(completed["state"], "completed");
+    assert_eq!(completed["result"]["kind"], "membership-add");
+    assert_eq!(cancel(&f, &record).unwrap(), completed);
+}
+
+#[test]
+fn published_cancellation_wins_after_control_projection_loss_and_engine_reopen() {
+    let f = fixture();
+    let mut record = pending_at(&f, AdditionPhase::Enrolling);
+    let directory =
+        PrivateDirectory::open_existing(f.backend.inner.management_root.join(DIRECTORY)).unwrap();
+    record.status.continuation = AdditionContinuation::Cancel;
+    record.status.state = AdditionState::Cancelling;
+    save(&directory, &record).unwrap();
+    let intent = record.clone();
+    let result = f
+        .backend
+        .inner
+        .addition_backend()
+        .unwrap()
+        .run_storage_addition(&f.identity, &intent, None, |phase, archive| {
+            record.status.phase = phase;
+            if let Some(archive) = archive {
+                record.archive = Some(archive);
+            }
+            save(&directory, &record)
+        })
+        .unwrap();
+    assert_eq!(result.kind, "membership-add-cancelled");
+    // Deliberately omit the terminal management projection, as after response loss.
+    assert!(
+        read_record(&directory, record.status.operation_id)
+            .unwrap()
+            .unwrap()
+            .status
+            .result
+            .is_none()
+    );
+    reopen(&f);
+    let status = f
+        .backend
+        .addition_status(&f.identity, Some(record.status.operation_id))
+        .unwrap()
+        .operation
+        .unwrap();
+    assert_eq!(status.state, AdditionState::Cancelled);
+    assert_eq!(status.result, Some(result));
+    assert_eq!(
+        resume(&f, &record, AdditionContinuation::Cancel).unwrap(),
+        json!(status)
+    );
+}
+
+#[test]
+fn cancellation_binds_original_preview_and_current_session_without_fake_pre_fence_success() {
+    let f = fixture();
+    let record = pending_at(&f, AdditionPhase::Fencing);
+    let mismatch = command(
+        &f,
+        "disk_add_cancel",
+        json!(AdditionCancel {
+            operation_id: record.status.operation_id,
+            preview_digest: "0".repeat(64),
+        }),
+    )
+    .unwrap_err();
+    assert_eq!(mismatch.code, ErrorCode::IdempotencyKeyReused);
+    assert!(cancel(&f, &record).is_err());
+    let status = f
+        .backend
+        .addition_status(&f.identity, Some(record.status.operation_id))
+        .unwrap()
+        .operation
+        .unwrap();
+    assert!(!status.state.is_terminal());
+    assert_eq!(status.continuation, AdditionContinuation::Cancel);
+    crate::lock(&f.auth).logout(&f.token).unwrap();
+    assert_eq!(
+        cancel(&f, &record).unwrap_err().code,
+        ErrorCode::Unauthorized
+    );
 }
