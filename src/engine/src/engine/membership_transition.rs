@@ -7,6 +7,7 @@ use data_serialization::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod archive;
+mod decision;
 mod effect;
 pub use effect::MembershipExitAction;
 use effect::{ExitEffect, validate_transition_target};

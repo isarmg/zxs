@@ -68,6 +68,18 @@ pub(super) struct MemberIdentity {
     inode: u64,
     simulation: bool,
 }
+impl MemberIdentity {
+    pub(super) fn verify_physical_root(&self, root: &DiskRoot) -> Result<()> {
+        let physical = admission::verify_named_root(root)?;
+        if physical.device != self.device || physical.inode != self.inode {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "membership decision root identity differs",
+            ));
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum PendingFormat {
     #[serialization(rename = "membership-pending")]
@@ -127,10 +139,9 @@ struct PendingDisk {
     root: Arc<DiskRoot>,
     seal: PendingDiskSeal,
     reservation_name: String,
-    _reservation_lock: Arc<File>,
     // Same .writer.lock as ordinary Engine initialization. Never reacquire an
     // old member lock, nor add this resource to normal Engine::disk_resources.
-    _lock: Arc<File>,
+    _lock: Arc<crate::disk::FenceOwner>,
 }
 enum MemberResource {
     Retained(Arc<DiskHandle>),

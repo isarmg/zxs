@@ -147,7 +147,7 @@ pub struct Engine {
     commit_preparation: Arc<std::sync::atomic::AtomicBool>,
     history_query_proof: Mutex<index::QueryProof>,
     recovery_warnings: RecoveryWarnings,
-    _locks: Vec<File>,
+    _locks: crate::disk::WriterLocks,
     #[cfg(feature = "fault-injection")]
     fault: Option<FaultInjection>,
 }
@@ -333,12 +333,8 @@ impl Engine {
 
     /// Detached filesystem work must keep the same OS lock descriptions alive
     /// until completion or cancellation, even if its original Engine is dropped.
-    pub(crate) fn retain_writer_locks(&self) -> Result<Vec<File>> {
-        Ok(self
-            ._locks
-            .iter()
-            .map(File::try_clone)
-            .collect::<std::io::Result<Vec<_>>>()?)
+    pub(crate) fn retain_writer_locks(&self) -> Result<crate::disk::WriterLocks> {
+        self._locks.retain()
     }
 
     /// Candidate membership is immutable and must never shrink with availability.
@@ -777,6 +773,7 @@ impl Engine {
         Ok(engine)
     }
     pub(crate) fn require_recovery_locks(&self) -> Result<()> {
+        self._locks.require_all(&self.config.disks)?;
         if self._locks.len() != self.config.disks.len() + 1 {
             return Err(Error::new(
                 storage_contract::ErrorCode::RecoveryRequired,

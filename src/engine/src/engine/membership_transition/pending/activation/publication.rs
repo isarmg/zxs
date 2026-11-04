@@ -183,13 +183,14 @@ impl Engine {
             .collect::<Vec<_>>();
         let mut locks = Vec::new();
         for (disk, added) in pending.added_resources() {
-            let root = DiskRoot::from_directory(
-                disk.root.clone(),
-                added.root.directory(added.root.path())?,
-            )?;
+            let root = added.root.retained(disk.root.clone())?;
             let seal = crate::disk::identity_at(&discovered, disk, &root.directory(root.path())?)?;
-            handles.push(Arc::new(DiskHandle::new(root, seal, &discovered)?));
-            locks.push(added._lock.try_clone()?);
+            let handle = Arc::new(DiskHandle::new(root, seal, &discovered)?);
+            locks.push((
+                disk.disk_id.clone(),
+                crate::disk::DiskWriter::adopt(&handle.root, Arc::clone(&added._lock))?,
+            ));
+            handles.push(handle);
         }
         self.disk_resources = Arc::new(DiskResources::generation_handles(&discovered, handles)?);
         self._locks.extend(locks);
@@ -217,8 +218,10 @@ impl Engine {
             .root()
             .private_child(&member_directory(&first.disk, &pending.transition_hash))?;
         let store = joint::store::JointStore::open(
+            first.resource.root(),
             &parent,
             &first.enrollment.identity,
+            &pending.transition_hash,
             &status.proposal_hash,
             false,
         )?;
@@ -267,13 +270,14 @@ impl Engine {
             .collect::<Vec<_>>();
         let mut locks = Vec::new();
         for (disk, added) in pending.added_resources() {
-            let root = DiskRoot::from_directory(
-                disk.root.clone(),
-                added.root.directory(added.root.path())?,
-            )?;
+            let root = added.root.retained(disk.root.clone())?;
             let seal = crate::disk::identity_at(&config, disk, &root.directory(root.path())?)?;
-            handles.push(Arc::new(DiskHandle::new(root, seal, &config)?));
-            locks.push(added._lock.try_clone()?);
+            let handle = Arc::new(DiskHandle::new(root, seal, &config)?);
+            locks.push((
+                disk.disk_id.clone(),
+                crate::disk::DiskWriter::adopt(&handle.root, Arc::clone(&added._lock))?,
+            ));
+            handles.push(handle);
         }
         // A prepared marker reserves this exact authority but never activates a
         // pending seal. Explicit resume can reconstruct missing derived objects.
@@ -353,8 +357,10 @@ impl Engine {
                 ));
             }
             let store = joint::store::JointStore::open(
+                &handle.root,
                 &parent,
                 identity,
+                &transition,
                 &generation.portable.joint.proposal_hash,
                 false,
             )?;

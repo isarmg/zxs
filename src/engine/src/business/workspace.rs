@@ -49,7 +49,7 @@ pub struct UploadPreparation {
     claim: UploadPreparationClaim,
     // Cross-disk writer fencing stays separate from the target upload lease.
     // Revoking this upload must not release another disk's fencing ownership.
-    _locks: Vec<std::fs::File>,
+    _locks: WriterLocks,
 }
 
 pub struct PreparedUpload {

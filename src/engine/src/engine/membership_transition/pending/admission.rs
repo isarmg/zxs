@@ -129,16 +129,12 @@ impl Engine {
         }
         let mut resources = BTreeMap::new();
         for (disk, root, seal, reservation_name) in roots {
-            let (root, lock, directory_lock) = match fence.prepared_roots.get(&disk.disk_id) {
+            let (root, lock) = match fence.prepared_roots.get(&disk.disk_id) {
                 Some(prepared) => {
                     // The caller's FD only confirms its selection. All writes keep
                     // the resource and locks actually admitted before the fence.
                     reservation::verify_writer(&prepared.root, &prepared.writer)?;
-                    (
-                        Arc::clone(&prepared.root),
-                        Arc::clone(&prepared.writer),
-                        Arc::clone(&prepared.directory_lock),
-                    )
+                    (Arc::clone(&prepared.root), Arc::clone(&prepared.writer))
                 }
                 None => {
                     let directory_lock = root.directory(root.path())?;
@@ -146,8 +142,9 @@ impl Engine {
                     // A fence is never issued before this name is synchronized.
                     let lock = root.open_regular(&root.path().join(".writer.lock"))?;
                     reservation::lock(&lock)?;
+                    let lock = crate::disk::FenceOwner::new(lock, Some(directory_lock));
                     reservation::verify_writer(&root, &lock)?;
-                    (Arc::new(root), Arc::new(lock), Arc::new(directory_lock))
+                    (Arc::new(root), lock)
                 }
             };
             verify_named_root(&root)?;
@@ -159,7 +156,6 @@ impl Engine {
                     seal,
                     reservation_name,
                     _lock: lock,
-                    _reservation_lock: directory_lock,
                 })),
             );
         }
@@ -342,33 +338,41 @@ pub(super) fn inspect_new_root(
         }
     }
     if bound {
-        validate_metadata_namespace(root, &expected.transition_hash)?;
+        validate_metadata_namespace(root, expected)?;
     }
     Ok(bound)
 }
-fn validate_metadata_namespace(root: &DiskRoot, transition: &str) -> Result<()> {
+fn validate_metadata_namespace(root: &DiskRoot, expected: &PendingDiskSeal) -> Result<()> {
     let metadata = root.path().join("metadata");
     if root.optional_metadata(&metadata)?.is_none() {
         return Ok(());
     }
     for name in root.entries(&metadata)? {
-        if name.map_err(fs_error)?.as_os_str() != "membership-pending" {
+        let name = name.map_err(fs_error)?;
+        if !matches!(
+            name.as_os_str().to_str(),
+            Some("membership-pending" | "membership-decisions")
+        ) {
             return Err(Error::new(
                 ErrorCode::UnsafePath,
                 "pending disk has an active metadata namespace",
             ));
         }
-    }
-    let pending = metadata.join("membership-pending");
-    if root.optional_metadata(&pending)?.is_none() {
-        return Ok(());
-    }
-    for name in root.entries(&pending)? {
-        if name.map_err(fs_error)?.as_os_str() != transition {
-            return Err(Error::new(
-                ErrorCode::ConfigConflict,
-                "pending disk has a different transition namespace",
-            ));
+        let namespace = metadata.join(name.as_path());
+        for entry in root.entries(&namespace)? {
+            if entry.map_err(fs_error)?.as_os_str() != expected.transition_hash.as_str() {
+                return Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "pending disk has a different transition namespace",
+                ));
+            }
+            if name.as_os_str() == "membership-decisions" {
+                super::super::decision::DecisionStore::inspect_preparation(
+                    root,
+                    &expected.identity,
+                    &expected.transition_hash,
+                )?;
+            }
         }
     }
     Ok(())

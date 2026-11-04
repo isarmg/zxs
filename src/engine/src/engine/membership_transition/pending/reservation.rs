@@ -120,11 +120,9 @@ pub(super) fn lock(file: &File) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn verify_writer(root: &DiskRoot, held: &File) -> Result<()> {
+pub(super) fn verify_writer(root: &DiskRoot, held: &crate::disk::FenceOwner) -> Result<()> {
     let named = root.open_regular(&root.path().join(".writer.lock"))?;
-    if FileIdentity::from_fd(&named)? != FileIdentity::from_fd(held)?
-        || named.metadata()?.len() != 0
-    {
+    if FileIdentity::from_fd(&named)? != held.writer_identity()? || named.metadata()?.len() != 0 {
         return Err(Error::new(
             ErrorCode::DiskIdentityMismatch,
             "membership writer lock was replaced or contains unrelated bytes",
@@ -146,8 +144,7 @@ pub(in crate::engine::membership_transition) struct ReservedRoot {
     pub(super) root: Arc<DiskRoot>,
     pub(in crate::engine::membership_transition) identity: MemberIdentity,
     pub(super) name: String,
-    pub(super) writer: Arc<File>,
-    pub(super) directory_lock: Arc<File>,
+    pub(super) writer: Arc<crate::disk::FenceOwner>,
 }
 impl ReservedRoot {
     pub(in crate::engine::membership_transition) fn verify_unsealed(&self) -> Result<()> {
@@ -365,8 +362,7 @@ impl Engine {
                 root: Arc::new(root),
                 identity,
                 name,
-                writer: Arc::new(writer),
-                directory_lock: Arc::new(directory_lock),
+                writer: crate::disk::FenceOwner::new(writer, Some(directory_lock)),
             };
             reserved.verify_unsealed()?;
             prepared.insert(disk_id, reserved);

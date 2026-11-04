@@ -83,13 +83,26 @@ impl ExitFixture {
         assert!(status.all_control_metadata_synchronized());
     }
     fn store(&self, index: usize) -> JointStore {
-        JointStore {
-            root: DiskRoot::open(
-                &member_directory(&self.original.disks[index], &self.archive.transition_hash)
-                    .join("joint"),
-            )
-            .unwrap(),
-        }
+        let pending = self.engine.pending_membership.as_ref().unwrap();
+        let member = pending
+            .members
+            .iter()
+            .find(|member| member.disk.disk_id == self.original.disks[index].disk_id)
+            .unwrap();
+        let parent = member
+            .resource
+            .root()
+            .private_child(&member_directory(&member.disk, &pending.transition_hash))
+            .unwrap();
+        JointStore::open(
+            member.resource.root(),
+            &parent,
+            &member.enrollment.identity,
+            &pending.transition_hash,
+            &pending.joint.as_ref().unwrap().status.proposal_hash,
+            false,
+        )
+        .unwrap()
     }
     fn reopen(self, restore: bool) -> Self {
         let Self {

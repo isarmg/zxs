@@ -370,8 +370,10 @@ impl Engine {
                     ));
                 }
                 let store = joint::store::JointStore::open(
+                    &handle.root,
                     &parent,
                     identity,
+                    &transition,
                     &generation.portable.joint.proposal_hash,
                     false,
                 )?;

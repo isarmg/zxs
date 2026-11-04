@@ -164,8 +164,12 @@ impl Fixture {
     ) -> std::result::Result<RestrictedGenerationEvidence, RestrictedDiscoveryFailure> {
         discover_store_with_io(&self.store, &self.original, io)
     }
-    fn joint_journal(&self, index: usize) -> PathBuf {
-        member_directory(&self.target.disks[index], &self.transition).join("joint/journal.bin")
+    fn joint_decision(&self, index: usize) -> PathBuf {
+        self.target.disks[index]
+            .root
+            .join("metadata/membership-decisions")
+            .join(&self.transition)
+            .join("decision.json")
     }
 }
 fn binding(config: &Config, disk: &DiskConfig) -> DiskRegistrationIdentity {
@@ -285,9 +289,9 @@ fn restricted_discovery_missing_archive_cannot_be_replaced_by_excluded_target_ar
 }
 
 #[test]
-fn restricted_discovery_torn_joint_journal_is_not_repaired_or_synchronized() {
+fn restricted_discovery_torn_joint_decision_is_not_repaired_or_synchronized() {
     let fixture = Fixture::new();
-    let journal = fixture.joint_journal(0);
+    let journal = fixture.joint_decision(0);
     fs::OpenOptions::new()
         .append(true)
         .open(&journal)

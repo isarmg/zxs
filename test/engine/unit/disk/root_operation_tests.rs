@@ -284,3 +284,63 @@ fn retained_root_identity_failure_releases_its_original_operation() {
         .write_atomic(&directory.path().join("still-active"), b"value", false)
         .unwrap();
 }
+
+#[test]
+fn binding_adoption_keeps_bootstrap_alias_and_retained_generation_on_one_root_fd() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let config =
+        ValidatedConfig::try_from(Config::development([directory.path().to_owned()]).unwrap())
+            .unwrap();
+    let bootstrap = DiskRoot::open(directory.path()).unwrap();
+    let adopted = bootstrap.retained(directory.path().to_owned()).unwrap();
+    let seal = identity_at(
+        &config,
+        &config.disks[0],
+        bootstrap.operation().unwrap().held().directory(),
+    )
+    .unwrap();
+    let handle = DiskHandle::new(adopted, seal, &config).unwrap();
+    let retained = handle.root.retained(directory.path().to_owned()).unwrap();
+    assert!(Arc::ptr_eq(&bootstrap.directory, &handle.root.directory));
+    assert!(Arc::ptr_eq(&retained.directory, &handle.root.directory));
+    assert_eq!(open_descriptors_for(directory.path()), 1);
+    let path = directory.path().join("value");
+    bootstrap.write_atomic(&path, b"retained", false).unwrap();
+    let binding = handle.root.io_binding().unwrap();
+    assert!(bootstrap.io.is_none());
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    assert!(binding.status().unwrap().drained());
+    assert_eq!(open_descriptors_for(directory.path()), 0);
+    unavailable(bootstrap.open_read_regular(&path));
+    unavailable(bootstrap.retained(directory.path().to_owned()));
+    unavailable(retained.directory(directory.path()));
+    assert_eq!(fs::read(path).unwrap(), b"retained");
+}
+
+#[test]
+fn derived_root_registration_racing_quiesce_never_leaves_a_live_descriptor() {
+    for _ in 0..32 {
+        let (directory, handle) = disk();
+        let child = directory.path().join("child");
+        handle.root.private_dir(&child).unwrap();
+        let barrier = Barrier::new(2);
+        let binding = handle.root.io_binding().unwrap();
+        let derived = std::thread::scope(|threads| {
+            let deriving = threads.spawn(|| {
+                barrier.wait();
+                handle.root.private_child(&child)
+            });
+            barrier.wait();
+            drop(binding.begin_quiesce().unwrap().unwrap());
+            deriving.join().unwrap()
+        });
+        assert!(binding.status().unwrap().drained());
+        assert_eq!(open_descriptors_for(&child), 0);
+        assert_eq!(open_descriptors_for(directory.path()), 0);
+        match derived {
+            Ok(root) => unavailable(root.entries(&child)),
+            Err(error) => assert_eq!(error.code(), ErrorCode::DiskUnavailable),
+        }
+    }
+}

@@ -332,10 +332,7 @@ fn membership_preparation_original_held_resources_are_consumed_by_enrollment() {
         let prepared = &held[&disk.disk_id];
         assert!(Arc::ptr_eq(&prepared.root, &pending.root));
         assert!(Arc::ptr_eq(&prepared.writer, &pending._lock));
-        assert!(Arc::ptr_eq(
-            &prepared.directory_lock,
-            &pending._reservation_lock
-        ));
+        // The same typed fence owns both the writer and directory reservation.
     }
 }
 

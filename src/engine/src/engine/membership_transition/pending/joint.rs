@@ -1,5 +1,8 @@
 //! Durable joint decisions while every business path remains fenced. Nothing in
 //! this namespace is an active-generation journal or a normal operation result.
+#[cfg(feature = "fault-injection")]
+use super::super::decision::DecisionFault;
+use super::super::decision::{DecisionReceipt, DecisionStore};
 use super::*;
 use crate::metadata_map::{Encoder, ProofMeasure, Reference};
 use std::collections::BTreeSet;
@@ -26,7 +29,7 @@ pub struct MembershipJointVote {
     pub binding_generation: u64,
     pub role: MembershipJointRole,
     pub acceptance_hash: String,
-    pub frame_hash: String,
+    pub decision_hash: String,
 }
 /// Synchronized observations from the latest explicit joint attempt. A failed
 /// attempt clears previous observations first; this is not a background health
@@ -90,11 +93,11 @@ impl MembershipJointDecisionStatus {
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum JointFormat {
-    #[serialization(rename = "fenced-joint-decision")]
+    #[serialization(rename = "fenced-joint-slot-decision")]
     Joint,
-    #[serialization(rename = "fenced-device-decision")]
+    #[serialization(rename = "fenced-device-slot-decision")]
     Devices,
-    #[serialization(rename = "fenced-exit-control-decision")]
+    #[serialization(rename = "fenced-exit-control-slot-decision")]
     ExitControl,
 }
 #[derive(Serialize, Deserialize)]
@@ -146,8 +149,7 @@ pub(super) struct JointFault {
 #[cfg(feature = "fault-injection")]
 #[derive(Clone, Copy)]
 pub(super) enum JointFaultStage {
-    Journal(JournalFault),
-    Opening(OpeningFault),
+    Decision(DecisionFault),
     Completion(OpeningFault),
 }
 
@@ -171,7 +173,7 @@ struct JointBinding {
 struct JointVote {
     identity: MemberIdentity,
     acceptance_hash: String,
-    receipt: Receipt,
+    decision: DecisionReceipt,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -261,7 +263,7 @@ impl JointProgress {
             binding_generation: identity.binding_generation,
             role,
             acceptance_hash: vote.acceptance_hash.clone(),
-            frame_hash: vote.receipt.frame_hash.clone(),
+            decision_hash: vote.decision.hash().to_owned(),
         });
     }
 }
@@ -276,6 +278,7 @@ impl CheckedMember {
         verify_receipt_directories(member, &self.directory, &self.archive)?;
         if let Some(joint) = joint {
             verify_child(&self.directory, &joint.root)?;
+            joint.decision.verify_names()?;
         }
         Ok(())
     }
@@ -297,10 +300,18 @@ impl Engine {
     #[cfg(feature = "fault-injection")]
     pub fn inject_membership_joint_fault_once(&mut self, disk_id: &str, point: &str) -> Result<()> {
         let stage = match point {
-            "partial-write" => JointFaultStage::Journal(JournalFault::PartialWrite),
-            "journal-sync" => JointFaultStage::Journal(JournalFault::Sync),
-            "opening-file-sync" => JointFaultStage::Opening(OpeningFault::FileSync),
-            "opening-directory-sync" => JointFaultStage::Opening(OpeningFault::DirectorySync),
+            "partial-write" => JointFaultStage::Decision(DecisionFault::StagingWrite),
+            "journal-sync" => JointFaultStage::Decision(DecisionFault::PreparedFileSync),
+            "opening-file-sync" => JointFaultStage::Decision(DecisionFault::FileSync),
+            "opening-directory-sync" => JointFaultStage::Decision(DecisionFault::DirectorySync),
+            "decision-no-replace" => JointFaultStage::Decision(DecisionFault::NoReplace),
+            "decision-published-reply" => JointFaultStage::Decision(DecisionFault::PublishedReply),
+            "decision-unknown-publication" => {
+                JointFaultStage::Decision(DecisionFault::UnknownPublication)
+            }
+            "decision-published-durability" => {
+                JointFaultStage::Decision(DecisionFault::PublishedDurability)
+            }
             "completion-file-sync" => JointFaultStage::Completion(OpeningFault::FileSync),
             "completion-directory-sync" => JointFaultStage::Completion(OpeningFault::DirectorySync),
             _ => {
@@ -348,7 +359,7 @@ impl Engine {
     }
 
     /// Reverify complete installed certificates without filling missing objects,
-    /// truncating journals or appending votes. Actual journals and the completion
+    /// changing named decisions or appending votes. Actual decisions and the completion
     /// file/parent are resynchronized; dependency objects are read and verified,
     /// relying on the barriers preceding the original vote/root. This fails on missing local
     /// closure even if another target or the source archive has the object.
@@ -392,14 +403,28 @@ impl Engine {
             .expect("invariant: pending target requires fence");
         let proposal = PreparedProposal::new(pending, fence, &checked)?;
         pending.joint = Some(JointProgress::new(pending, &proposal, fence));
+        // Hold every original writer lock and inspect every shared choice before
+        // any new Joint vote. Even a visible minority Abort vetoes continuation.
+        for member in &pending.members {
+            DecisionStore::open(
+                member.resource.root(),
+                &member.enrollment.identity,
+                &pending.transition_hash,
+                install,
+            )
+            .and_then(|store| store.require_joint_allowed())
+            .map_err(|error| joint_error(error, "decision preflight", Some(&member.disk)))?;
+        }
         let mut stores = Vec::new();
         let mut votes = BTreeMap::new();
         for (member, checked) in pending.members.iter().zip(&checked) {
             let result = (|| {
                 checked.verify_names(member, None)?;
                 let store = JointStore::open(
+                    member.resource.root(),
                     &checked.directory,
                     &member.enrollment.identity,
+                    &pending.transition_hash,
                     &proposal.object.hash,
                     install,
                 )?;
@@ -419,40 +444,30 @@ impl Engine {
                 ))?;
                 checked.verify_names(member, Some(&store))?;
                 let acceptance = &proposal.acceptances[&member.disk.disk_id];
-                let mut journal = PendingJournal::open_joint_at(
-                    &store.root,
-                    store.root.path(),
-                    proposal.sequence,
+                #[cfg(feature = "fault-injection")]
+                let fault = match &pending.joint_fault {
+                    Some(JointFault {
+                        disk_id,
+                        stage: JointFaultStage::Decision(fault),
+                    }) if disk_id == &member.disk.disk_id => {
+                        let fault = Some(*fault);
+                        pending.joint_fault = None;
+                        fault
+                    }
+                    _ => None,
+                };
+                let decision = store.decision.joint_receipt(
                     &proposal.object.hash,
                     &acceptance.hash,
+                    install,
+                    #[cfg(feature = "fault-injection")]
+                    fault,
                 )?;
-                if !install {
-                    journal.require_complete()?;
-                }
-                #[cfg(feature = "fault-injection")]
-                {
-                    if let Some(fault) = &pending.joint_fault
-                        && fault.disk_id == member.disk.disk_id
-                    {
-                        match fault.stage {
-                            JointFaultStage::Journal(fault) => {
-                                journal.fault = Some(fault);
-                                pending.joint_fault = None;
-                            }
-                            JointFaultStage::Opening(fault) => {
-                                journal.opening_fault = Some(fault);
-                                pending.joint_fault = None;
-                            }
-                            JointFaultStage::Completion(_) => {}
-                        }
-                    }
-                }
-                let receipt = journal.synchronize(&member.disk)?;
                 checked.verify_names(member, Some(&store))?;
                 let vote = JointVote {
                     identity: member.enrollment.identity.clone(),
                     acceptance_hash: acceptance.hash.clone(),
-                    receipt,
+                    decision,
                 };
                 Ok((store, vote))
             })();
@@ -469,7 +484,7 @@ impl Engine {
             self.failpoint(&format!("after_membership_joint_vote_{}", votes.len()))?;
         }
         pending.verify_data_readiness()?;
-        let (certificate, objects) = proposal.certificate(votes)?;
+        let (certificate, objects) = proposal.certificate(&votes)?;
         pending
             .joint
             .as_mut()
@@ -484,7 +499,7 @@ impl Engine {
                 }
                 // All certificate dependency reads below are from this store.
                 store.verify_certificate(&certificate.hash, &proposal.object.hash, &member.disk)?;
-                // Recheck the held local archive, bootstrap and exact singleton,
+                // Recheck the held local archive, bootstrap and exact decision,
                 // rather than using the earlier in-memory observation as proof.
                 self.check_joint_control(member, &pending.source)?;
                 checked.verify_names(member, Some(store))?;
@@ -552,7 +567,12 @@ impl Engine {
         // A prior member may have moved while a later certificate was being
         // installed. Do not turn the earlier observations into global success.
         for ((member, checked), store) in pending.members.iter().zip(&checked).zip(&stores) {
-            if let Err(error) = checked.verify_names(member, Some(store)) {
+            let result = checked.verify_names(member, Some(store)).and_then(|()| {
+                store
+                    .decision
+                    .verify_receipt(&votes[&member.disk.disk_id].decision, false)
+            });
+            if let Err(error) = result {
                 pending
                     .joint
                     .as_mut()
@@ -562,7 +582,7 @@ impl Engine {
                     .retain(|id| id != &member.disk.disk_id);
                 return Err(joint_error(
                     error,
-                    "final directory identity",
+                    "final member decision",
                     Some(&member.disk),
                 ));
             }

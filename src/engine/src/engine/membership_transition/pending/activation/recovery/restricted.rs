@@ -310,8 +310,10 @@ fn verify_held_generation(
                 .root
                 .private_child(&member_directory(&disk, &transition))?;
             let store = joint::store::JointStore::open(
+                &held.root,
                 &parent,
                 identity,
+                &transition,
                 &portable.joint.proposal_hash,
                 false,
             )?;

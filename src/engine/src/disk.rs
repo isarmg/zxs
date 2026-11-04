@@ -16,6 +16,8 @@ pub use admission::DiskFile;
 pub(crate) use admission::{DiskIoBinding, DiskIoLease, UploadFinish, UploadIo};
 mod owned;
 pub(crate) use owned::{DiskDirectoryEntries, DiskHandle, DiskResources, DiskRoot};
+mod fencing;
+pub(crate) use fencing::{DiskWriter, FenceOwner, WriterLocks};
 
 pub(crate) fn fs_error(e: platform_io::fs_safety::Error) -> Error {
     e.into()

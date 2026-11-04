@@ -411,11 +411,7 @@ impl Engine {
         }
         let system = DiskRoot::open(&self.root)?;
         let named_lock = system.open_regular(&self.root.join("writer.lock"))?;
-        let held_lock = self
-            ._locks
-            .first()
-            .expect("invariant: Engine holds its system writer lock");
-        if FileIdentity::from_fd(named_lock)? != FileIdentity::from_fd(held_lock)?
+        if FileIdentity::from_fd(named_lock)? != self._locks.system_identity()?
             || destination_identity == FileIdentity::from_fd(system.directory(system.path())?)?
         {
             return Err(Error::new(

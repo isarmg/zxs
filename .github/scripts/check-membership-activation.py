@@ -39,6 +39,9 @@ IO_ENGINE_GROUPS = (
     ("upload-regressions", "upload_",
      ("--skip", "upload_admission_tests", "--skip", "disk::admission::upload::tests::")),
     ("disk-export", "disk::export_tests::", ()),
+    ("writer-fencing", "disk::fencing::tests::", ()),
+    ("workspace-commit", "engine::workspace_commit::tests::", ()),
+    ("workspace-inventory-fencing", "engine::workspace_storage::inventory::tests::", ()),
 )
 IO_PLATFORM_GROUPS = (
     ("platform-payload", "payload::tests::", ()),

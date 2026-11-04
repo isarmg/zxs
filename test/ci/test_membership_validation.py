@@ -40,6 +40,9 @@ class MembershipValidation(unittest.TestCase):
         self.assertIn("upload-workspaces", labels)
         self.assertIn("upload-regressions", labels)
         self.assertIn("disk-export", labels)
+        self.assertIn("writer-fencing", labels)
+        self.assertIn("workspace-commit", labels)
+        self.assertIn("workspace-inventory-fencing", labels)
 
     def test_empty_test_inventory_is_a_failure(self):
         inventory = subprocess.CompletedProcess([], 0, "0 tests, 0 benchmarks\n", "")

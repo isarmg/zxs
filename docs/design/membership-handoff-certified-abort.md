@@ -166,3 +166,18 @@
 模型 `test/models/membership_handoff_abort_model.py` 仅Python标准库；未来GitHub命令：`python3 -m unittest discover -s test/models -p 'membership_handoff_abort_model.py' -v`。本轮未运行模型、Rust构建或测试，不把静态设计当集成验证。
 
 成本：旧全历史archive成本不变；决策扫描O(N)，witness分页O(Q至N)，单票依赖对象既有同步+staged file sync+parent dir sync，重试保持file+dir屏障。新证据resolver/复制遍历与ancestor数及证明闭包线性；不进入业务数据热路径、不依靠缓存省略真实边界验证。
+
+## 9. 第一阶段源码：共享槽，尚无生产取消能力（2026-11-04）
+
+本节记录后续源码批次的实现边界，不把本文模型当作已执行的证明。新增 `membership_transition/decision.rs`，每个实际成员根只有 `metadata/membership-decisions/<I>/decision.json` 一个选择名；`binding.json` 只绑定 I 和完整 `MemberIdentity`，不把 P、G、outcome 或在线成员数放进目录。空中性目录／精确 binding 临时前缀可恢复，已命名但缺 binding、损坏、未知格式或截断的 decision 都失败保留。
+
+- Joint 的完整临时记录经 `AtomicFile::stage().prepare().create()`，先文件同步、NOREPLACE 发布、父目录同步。发布结果不确定或冲突必须重新读实际命名槽；同 choice 重试及已见的同 choice 都重新 file+dir 同步。确认后再次核验根、目录、binding、命名文件 inode 和完整记录，才返回内部 receipt。
+- Joint 在任何新票前检查全部实际参与者的共享槽，任一可见 Abort 都否决继续 Joint，包括不足旧 Q 的部分 Abort；原始 O/Q 仍来自认证 origin，现 pure-add 的完整目标票和独立 oldQ/newQ 规则未放宽。
+- `JointVote.decision` 内嵌完整 `DecisionReceipt {record_hash, record}`，且接受项仍绑定 P、enrollment、bootstrap 和真实 control receipt。独立 certificate map／portable authority／完整 ancestor archive 原有闭包自然携带该记录，不依赖源根外带一个未复制的 decision 文件。portable 认证不替代实际本盘槽：同步验证、activation、重启恢复和只读受限 discovery 都重新核对自己的真实选择；全员最终检查再核对命名记录，缓存 status 不算票。
+- 新实验 proposal/certificate format 为 `fenced-joint-slot-decision`、`fenced-device-slot-decision`、`fenced-exit-control-slot-decision`。旧 `joint/journal.bin` 无论完整、空或损坏都明确拒绝，不转换、不截断、不删除；旧 Joint singleton writer 仅留 `cfg(test)` 反例入口，生产不再调用。旧 proposal/certificate 不能通过新 schema。现有用户数据、原 Candidate、TransitionIntent 和 FrozenArchive 字节未重写，未支持的实验成员证据只拒绝访问，不重置池。
+- 对外观察字段 `MembershipJointVote.frame_hash` 改为 `decision_hash`，其语义是 domain-separated `membership-decision` 哈希，不再伪称 journal frame。
+- Abort 只有解析识别和测试构造。生产没有 AbortCore 构造、固定旧 Q 聚合、独立 witness、取消 generation、恢复写或取消成功 API；第 8 节第二至四阶段仍未完成，exit 激活也未开放。
+
+新增／扩充测试源码覆盖 Joint/Abort 与不同值的所有前后选择、真实竞争、完整／部分 staging 不算票、NOREPLACE 已准备对象冲突、结果丢失、Unknown/Published 读回及再次同步失败、同选择重试屏障、损坏保留、身份/intent/binding 错误、旧 singleton 无第二授权路、部分 Abort 全员 veto、实际 Joint 成功/部分完成/系统目录丢失/重启、portable 与实际槽区分、最终命名记录改变、受限恢复不修复坏票。故障注入是组件边界模拟，不是物理掉电：AtomicFile 自身的 prepare fsync 和 rename/parent sync 仍使用既有平台原语；测试对实际 create 成功后模拟丢失的 syscall 回复，并要求真实读回与确认屏障。
+
+开销限于成员控制路径：预扫 O(N)，一个成员一条不可覆盖选择；receipt 重试保留 file+dir 两道屏障，最终检查读取每个实际选择。原全历史 archive 成本和业务热路径未改变。仅固定 Rust 1.99 rustfmt 与 `git diff --check` 已执行；本机未运行 Cargo 编译/check/test/Clippy 或 Python 模型，运行验证须由 GitHub 对合批 commit 执行。

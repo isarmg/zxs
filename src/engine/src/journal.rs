@@ -138,15 +138,6 @@ pub(crate) fn scan_path_at(root: &DiskRoot, path: &Path) -> Result<Scan> {
     }
 }
 
-/// Inspect a joint singleton without acquiring a writer, repairing or syncing.
-/// Unlike active journals, absence is not a valid empty membership vote.
-pub(crate) fn scan_joint_read_only_at(root: &DiskRoot, path: &Path) -> Result<Scan> {
-    scan_frames_namespace(
-        BufReader::new(root.open_regular(path)?),
-        JournalNamespace::Joint,
-    )
-}
-
 mod pending;
 pub(crate) use pending::PendingJournal;
 

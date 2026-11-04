@@ -12,6 +12,93 @@ struct Fixture {
     version: String,
 }
 
+fn descriptor_numbers(path: &std::path::Path) -> Vec<String> {
+    let mut descriptors = fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| {
+            let entry = entry.unwrap();
+            match fs::read_link(entry.path()) {
+                Ok(target) if target == path => {
+                    Some(entry.file_name().to_string_lossy().into_owned())
+                }
+                Ok(_) => None,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => panic!("cannot inspect descriptor: {error}"),
+            }
+        })
+        .collect::<Vec<_>>();
+    descriptors.sort_unstable();
+    descriptors
+}
+
+#[test]
+fn added_pending_root_and_reservation_transfer_the_same_descriptors_into_generation() {
+    let mut fixture = Fixture::new();
+    let (disk, pending_root, pending_fence) = {
+        let (disk, pending) = fixture
+            .engine
+            .pending_membership
+            .as_ref()
+            .unwrap()
+            .added_resources()
+            .next()
+            .unwrap();
+        (
+            disk.clone(),
+            Arc::clone(&pending.root),
+            Arc::clone(&pending._lock),
+        )
+    };
+    let writer_path = disk.root.join(".writer.lock");
+    let writer_before = descriptor_numbers(&writer_path);
+    let root_before = descriptor_numbers(&disk.root);
+    assert_eq!(writer_before.len(), 1);
+    assert_eq!(
+        root_before.len(),
+        2,
+        "root descriptor plus its directory reservation"
+    );
+    let writer_identity = pending_fence.writer_identity().unwrap();
+    assert!(pending_root.io_binding().is_err());
+    fixture.engine.activate_pending_membership().unwrap();
+    assert_eq!(descriptor_numbers(&writer_path), writer_before);
+    assert_eq!(descriptor_numbers(&disk.root), root_before);
+    assert_eq!(pending_fence.writer_identity().unwrap(), writer_identity);
+    let current = fixture.engine.disk_resources.get(&disk).unwrap();
+    let binding = current.root.io_binding().unwrap();
+    let ordinary = binding.status().unwrap().ordinary;
+    let lease = pending_root.admit_io().unwrap();
+    assert_eq!(binding.status().unwrap().ordinary, ordinary + 1);
+    let transition = binding.begin_quiesce().unwrap().unwrap();
+    drop(transition);
+    assert!(!binding.status().unwrap().drained());
+    assert_eq!(
+        pending_root.directory(&disk.root).err().unwrap().code(),
+        ErrorCode::DiskUnavailable
+    );
+    drop(lease);
+    assert!(binding.status().unwrap().drained());
+    assert!(descriptor_numbers(&writer_path).is_empty());
+    assert!(descriptor_numbers(&disk.root).is_empty());
+    assert_eq!(
+        pending_fence.writer_identity().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert_eq!(
+        pending_root
+            .retained(disk.root.clone())
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::DiskUnavailable
+    );
+    for path in [&writer_path, &disk.root] {
+        let file = fs::File::open(path).unwrap();
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
+    }
+    assert!(disk.root.join("disk.json").is_file());
+}
+
 #[test]
 fn admitted_generation_retains_io_gate_without_revoking_historical_read_authority() {
     let mut fixture = Fixture::new();
@@ -19,7 +106,21 @@ fn admitted_generation_retains_io_gate_without_revoking_historical_read_authorit
     let old = Arc::clone(fixture.engine.disk_resources.get(&disk).unwrap());
     let binding = old.root.io_binding().unwrap().clone();
     let lease = old.root.admit_io().unwrap();
+    let writer_path = disk.root.join(".writer.lock");
+    let competitor = fs::File::options()
+        .read(true)
+        .write(true)
+        .open(&writer_path)
+        .unwrap();
     fixture.engine.activate_pending_membership().unwrap();
+    assert_eq!(
+        rustix::fs::flock(
+            &competitor,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive
+        )
+        .unwrap_err(),
+        rustix::io::Errno::WOULDBLOCK
+    );
     lease.check_running().unwrap();
     assert!(matches!(
         binding.begin_quiesce(),
@@ -42,6 +143,34 @@ fn admitted_generation_retains_io_gate_without_revoking_historical_read_authorit
     assert!(!binding.status().unwrap().drained());
     drop(lease);
     assert!(binding.status().unwrap().drained());
+    rustix::fs::flock(
+        &competitor,
+        rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    )
+    .unwrap();
+    assert!(old.root.directory(&disk.root).is_err());
+    assert!(current.root.directory(&disk.root).is_err());
+    for other in fixture
+        .engine
+        .config
+        .disks
+        .iter()
+        .filter(|other| other.disk_id != disk.disk_id)
+    {
+        let writer = fs::File::options()
+            .read(true)
+            .write(true)
+            .open(other.root.join(".writer.lock"))
+            .unwrap();
+        assert_eq!(
+            rustix::fs::flock(
+                &writer,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive
+            )
+            .unwrap_err(),
+            rustix::io::Errno::WOULDBLOCK
+        );
+    }
 }
 
 #[test]

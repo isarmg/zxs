@@ -1,12 +1,9 @@
 //! Owned, non-publishing workspace preparation, followed by one serialized decision.
 use super::{DetachedPublication, Engine, MutationPlan};
 use crate::*;
-use std::{
-    fs::File,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 struct PreparationAdmission(Arc<AtomicBool>);
@@ -33,7 +30,7 @@ struct PlanningSnapshot {
     integrity_scrub_schedule: Option<std::sync::Weak<super::integrity_scrub::ScheduleState>>,
     next_slot: u64,
     replay: Option<OperationResult>,
-    locks: Vec<File>,
+    locks: crate::disk::WriterLocks,
 }
 impl PlanningSnapshot {
     fn context(&self) -> super::PlanningContext<'_> {
@@ -76,7 +73,7 @@ pub struct PreparedWorkspaceCommit {
     base_slot: u64,
     base_sequence: u64,
     frozen_config: Vec<u8>,
-    _locks: Vec<File>,
+    _locks: crate::disk::WriterLocks,
     _admission: Option<PreparationAdmission>,
 }
 
@@ -167,8 +164,7 @@ impl Engine {
             .retryable());
         }
         let admission = PreparationAdmission(self.commit_preparation.clone());
-        // Duplicate the existing open-file descriptions: they keep this pool's
-        // process locks alive even if the original Engine is dropped meanwhile.
+        // Share the exact per-disk fencing owners without duplicating descriptors.
         let locks = self.retain_writer_locks()?;
         let snapshot = PlanningSnapshot {
             root: self.root.clone(),
@@ -286,6 +282,7 @@ impl Engine {
 impl WorkspaceCommitPreparation {
     /// Run on a bounded blocking worker, outside the live Engine mutex.
     pub fn execute(mut self) -> Result<PreparedWorkspaceCommit> {
+        let _activity = self.snapshot.locks.activity()?;
         let replay = self.snapshot.replay.take();
         let engine = self.snapshot.context();
         let plan = if let Some(envelope) = self.wire_body.take() {

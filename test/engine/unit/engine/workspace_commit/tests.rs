@@ -1,6 +1,81 @@
 use super::*;
 
 #[test]
+fn detached_commit_keeps_exact_writer_ownership_after_engine_drop() {
+    for execute in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("state");
+        let primary = temp.path().join("primary");
+        let mut engine =
+            Engine::initialize(&root, Config::development([primary.clone()]).unwrap()).unwrap();
+        let repo = engine
+            .create_repository(
+                &storage_contract::RepositoryName::parse("detached fence").unwrap(),
+                "P01",
+                1,
+                "admin",
+                storage_contract::OperationId::generate().unwrap(),
+            )
+            .unwrap();
+        let workspace = engine
+            .create_workspace(&repo.main_branch_id, "admin")
+            .unwrap();
+        engine
+            .stage_bytes(&workspace.workspace_id, "file.txt", b"prepared payload")
+            .unwrap();
+        let request = CommitRequest {
+            workspace_id: workspace.workspace_id,
+            operation_id: storage_contract::OperationId::generate().unwrap(),
+            principal: "admin".into(),
+            expected_head: workspace.base_head,
+            fencing_token: workspace.fencing_token,
+            message: "prepared".into(),
+            request_digest: None,
+        };
+        let preparation = engine.prepare_workspace_commit(request, None).unwrap();
+        drop(engine);
+        let writer = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .open(primary.join(".writer.lock"))
+            .unwrap();
+        assert_eq!(
+            rustix::fs::flock(
+                &writer,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive
+            )
+            .unwrap_err(),
+            rustix::io::Errno::WOULDBLOCK
+        );
+        if execute {
+            let prepared = preparation.execute().unwrap();
+            assert_eq!(
+                Engine::open(&root).err().unwrap().code(),
+                ErrorCode::WriterAlreadyActive
+            );
+            assert_eq!(
+                rustix::fs::flock(
+                    &writer,
+                    rustix::fs::FlockOperation::NonBlockingLockExclusive
+                )
+                .unwrap_err(),
+                rustix::io::Errno::WOULDBLOCK
+            );
+            drop(prepared);
+        } else {
+            drop(preparation);
+        }
+        rustix::fs::flock(
+            &writer,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .unwrap();
+        drop(writer);
+        Engine::open(&root).unwrap();
+    }
+}
+
+#[test]
 fn detached_snapshot_keeps_only_target_and_preserves_live_retained_evidence() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("state");

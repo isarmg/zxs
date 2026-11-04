@@ -124,6 +124,20 @@ fn retained_verification_revokes_the_fd_without_removing_published_bytes() {
 fn cancellation_during_copy_keeps_real_resources_counted_until_cleanup_tail() {
     let (_temp, handle, directory, source) = fixture();
     let upload = UploadIo::new(&handle.root, &directory, File::open(&source).unwrap()).unwrap();
+    let writer = handle.root.lock_file().unwrap();
+    rustix::fs::flock(
+        &writer,
+        rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    )
+    .unwrap();
+    let fence =
+        crate::disk::DiskWriter::adopt(&handle.root, crate::disk::FenceOwner::new(writer, None))
+            .unwrap();
+    let competitor = File::options()
+        .read(true)
+        .write(true)
+        .open(handle.root.path().join(".writer.lock"))
+        .unwrap();
     let binding = handle.root.io_binding().unwrap();
     let timeout = Duration::from_secs(30);
     std::thread::scope(|threads| {
@@ -166,7 +180,17 @@ fn cancellation_during_copy_keeps_real_resources_counted_until_cleanup_tail() {
             .unwrap();
         let written = File::open(&temporary).unwrap();
         assert_eq!(written.metadata().unwrap().len(), 65536);
+        // Removing the Engine's owner cannot release a copying worker's fence.
+        drop(fence);
         let transition = binding.begin_quiesce().unwrap().unwrap();
+        assert_eq!(
+            rustix::fs::flock(
+                &competitor,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive
+            )
+            .unwrap_err(),
+            rustix::io::Errno::WOULDBLOCK
+        );
         assert_eq!(binding.status().unwrap().ordinary, 1);
         assert_eq!(descriptors(&directory), 1);
         assert_eq!(descriptors(&temporary), 2);
@@ -191,8 +215,21 @@ fn cancellation_during_copy_keeps_real_resources_counted_until_cleanup_tail() {
         assert_eq!(descriptors(&directory), 0);
         assert_eq!(descriptors(&source), 0);
         assert!(fs::read_dir(&directory).unwrap().next().is_none());
+        assert_eq!(
+            rustix::fs::flock(
+                &competitor,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive
+            )
+            .unwrap_err(),
+            rustix::io::Errno::WOULDBLOCK
+        );
         drop(transition);
         assert!(binding.status().unwrap().drained());
+        rustix::fs::flock(
+            &competitor,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .unwrap();
     });
 }
 

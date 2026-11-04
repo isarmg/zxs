@@ -1,7 +1,7 @@
 use super::*;
 
-/// A single control bootstrap or member-bound joint accept in separate inactive
-/// membership namespaces.
+/// A single control bootstrap in its inactive membership namespace. Legacy
+/// joint singleton construction is restricted to rejection tests.
 /// Opening only scans: repair, creation and durability fences require explicit synchronization.
 /// The caller owns serialization and validates the archive before synchronization.
 pub(crate) struct PendingJournal {
@@ -41,6 +41,9 @@ impl PendingJournal {
         )
     }
 
+    // Retained only for legacy-format rejection tests. No production caller
+    // may create a second membership voting namespace.
+    #[cfg(test)]
     pub(crate) fn open_joint_at(
         root: &DiskRoot,
         directory: &Path,

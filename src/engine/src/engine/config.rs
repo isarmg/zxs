@@ -235,7 +235,7 @@ pub(super) fn read_recovery_anchor(path: &Path, seal: &DiskSeal) -> Result<Valid
     Ok(config)
 }
 
-pub(super) fn acquire_locks(root: &Path, disks: &DiskResources) -> Result<Vec<File>> {
+pub(super) fn acquire_locks(root: &Path, disks: &DiskResources) -> Result<WriterLocks> {
     let system = File::from(
         rustix::fs::open(
             root.join("writer.lock"),
@@ -248,26 +248,34 @@ pub(super) fn acquire_locks(root: &Path, disks: &DiskResources) -> Result<Vec<Fi
         )
         .map_err(std::io::Error::from)?,
     );
-    let files =
-        std::iter::once(Ok(system)).chain(disks.handles().map(|disk| disk.root.lock_file()));
-    let mut locks = Vec::new();
-    for file in files {
-        let f = file?;
-        platform_io::fs_safety::linux::SingleLinkRequirement::check(&f).map_err(|e| {
-            let message = e.to_string();
-            Error::from(e).context(storage_contract::ErrorCode::UnsafePath, message)
-        })?;
-        rustix::fs::flock(&f, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
-            |source| {
-                Error::from(std::io::Error::from(source)).context(
-                    storage_contract::ErrorCode::WriterAlreadyActive,
-                    "another process owns this pool or disk",
-                )
-            },
-        )?;
-        locks.push(f);
+    acquire_writer(&system)?;
+    let mut locks = WriterLocks::new(system);
+    for disk in disks.handles() {
+        let file = disk.root.lock_file()?;
+        acquire_writer(&file)?;
+        let owner = FenceOwner::new(file, None);
+        locks.insert(
+            disk.seal.disk_id.clone(),
+            DiskWriter::adopt(&disk.root, owner)?,
+        );
     }
     Ok(locks)
+}
+
+fn acquire_writer(f: &File) -> Result<()> {
+    platform_io::fs_safety::linux::SingleLinkRequirement::check(f).map_err(|e| {
+        let message = e.to_string();
+        Error::from(e).context(storage_contract::ErrorCode::UnsafePath, message)
+    })?;
+    rustix::fs::flock(f, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
+        |source| {
+            Error::from(std::io::Error::from(source)).context(
+                storage_contract::ErrorCode::WriterAlreadyActive,
+                "another process owns this pool or disk",
+            )
+        },
+    )?;
+    Ok(())
 }
 fn validate_config(c: &Config) -> Result<()> {
     validate_id(&c.pool_id, "pool")?;

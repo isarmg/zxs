@@ -4,7 +4,6 @@ pub(super) struct PreparedProposal {
     pub(super) object: PreparedMetadataObject,
     pub(super) objects: Vec<PreparedMetadataObject>,
     pub(super) acceptances: BTreeMap<String, PreparedMetadataObject>,
-    pub(super) sequence: u64,
     format: JointFormat,
 }
 impl PreparedProposal {
@@ -139,19 +138,18 @@ impl PreparedProposal {
             object,
             objects: encoder.finish(),
             acceptances,
-            sequence: fence.intent.fence_sequence,
             format,
         })
     }
 
     pub(super) fn certificate(
         &self,
-        votes: BTreeMap<String, JointVote>,
+        votes: &BTreeMap<String, JointVote>,
     ) -> Result<(PreparedMetadataObject, Vec<PreparedMetadataObject>)> {
         let mut encoder = Encoder::new(MAX_METADATA);
         let map = votes
-            .into_iter()
-            .map(|(key, vote)| Ok((key, json_codec::to_value(vote)?)))
+            .iter()
+            .map(|(key, vote)| Ok((key.clone(), json_codec::to_value(vote)?)))
             .collect::<Result<json_codec::Map<_, _>>>()?;
         let object = PreparedMetadataObject::new(
             CERTIFICATE_KIND,
@@ -172,14 +170,18 @@ impl PreparedProposal {
 
 pub(in crate::engine::membership_transition::pending) struct JointStore {
     pub(super) root: DiskRoot,
+    pub(super) decision: DecisionStore,
 }
 impl JointStore {
     pub(in crate::engine::membership_transition::pending) fn open(
+        disk: &DiskRoot,
         parent: &DiskRoot,
         identity: &MemberIdentity,
+        transition: &str,
         proposal: &str,
         install: bool,
     ) -> Result<Self> {
+        let decision = DecisionStore::open(disk, identity, transition, install)?;
         let path = parent.path().join("joint");
         if install {
             parent.private_dir(&path)?;
@@ -207,7 +209,7 @@ impl JointStore {
                     root.open_regular(&path.join(name.as_path()))?;
                 } else if !matches!(
                     name.as_os_str().to_str(),
-                    Some(BINDING_FILE | CERTIFICATE_FILE | "objects" | "journal.bin")
+                    Some(BINDING_FILE | CERTIFICATE_FILE | "objects")
                 ) {
                     return Err(Error::new(
                         ErrorCode::UnsafePath,
@@ -220,7 +222,7 @@ impl JointStore {
             root.write_json(&path.join(BINDING_FILE), &binding, false)?;
         }
         verify_child(parent, &root)?;
-        Ok(Self { root })
+        Ok(Self { root, decision })
     }
 
     pub(super) fn object_path(&self, kind: &str, hash: &str) -> Result<PathBuf> {
@@ -287,35 +289,24 @@ impl JointStore {
         proposal_hash: &str,
         local: &DiskConfig,
     ) -> Result<()> {
-        let (verified, votes) = verify_certificate_with(
-            &mut |kind, hash| self.load(kind, hash),
-            expected,
-            proposal_hash,
-        )?;
-        let vote = votes.get(&local.disk_id).ok_or_else(missing_member)?;
-        let mut journal = PendingJournal::open_joint_at(
-            &self.root,
-            self.root.path(),
-            verified.proposal.fence_sequence,
-            proposal_hash,
-            &vote.acceptance_hash,
-        )?;
-        journal.require_complete()?;
-        if journal.synchronize(local)? != vote.receipt {
-            return Err(Error::new(
-                ErrorCode::LogFork,
-                "certificate local vote differs from actual journal",
-            ));
-        }
-        Ok(())
+        self.verify_local_certificate(expected, proposal_hash, local, true)
     }
-    /// Verify existing local bytes only. Discovery must not use the repairing
-    /// `verify_certificate` path, even when its journal already looks complete.
+    /// Discovery verifies only existing bytes; it never creates or synchronizes
+    /// a decision and cannot manufacture a durable receipt from a cached status.
     pub(in crate::engine::membership_transition::pending) fn verify_certificate_read_only(
         &self,
         expected: &str,
         proposal_hash: &str,
         local: &DiskConfig,
+    ) -> Result<()> {
+        self.verify_local_certificate(expected, proposal_hash, local, false)
+    }
+    fn verify_local_certificate(
+        &self,
+        expected: &str,
+        proposal_hash: &str,
+        local: &DiskConfig,
+        synchronize: bool,
     ) -> Result<()> {
         let (_, votes) = verify_certificate_with(
             &mut |kind, hash| self.load(kind, hash),
@@ -323,29 +314,16 @@ impl JointStore {
             proposal_hash,
         )?;
         let vote = votes.get(&local.disk_id).ok_or_else(missing_member)?;
-        let scan = crate::journal::scan_joint_read_only_at(
-            &self.root,
-            &self.root.path().join("journal.bin"),
-        )?;
-        if scan.torn_tail || scan.records.len() != 1 {
-            return Err(Error::new(
-                ErrorCode::RecoveryRequired,
-                "joint discovery requires an existing untorn singleton",
-            ));
-        }
-        let (record, frame_hash) = &scan.records[0];
-        if vote.receipt.disk_id != local.disk_id
-            || vote.receipt.slot_id != local.slot_id
+        if vote.identity.disk_id != local.disk_id
+            || vote.identity.slot_id != local.slot_id
             || vote.identity.binding_generation != local.binding_generation
-            || &vote.receipt.record != record
-            || &vote.receipt.frame_hash != frame_hash
         {
             return Err(Error::new(
-                ErrorCode::LogFork,
-                "certificate local vote differs from read-only journal observation",
+                ErrorCode::DiskIdentityMismatch,
+                "certificate local member differs",
             ));
         }
-        Ok(())
+        self.decision.verify_receipt(&vote.decision, synchronize)
     }
     pub(in crate::engine::membership_transition::pending) fn portable(
         &self,
@@ -631,11 +609,9 @@ fn verify_certificate_with(
                 "joint vote member binding differs",
             ));
         }
-        verify_singleton(
-            &vote.receipt,
+        vote.decision.verify_joint(
+            &verified.proposal.transition_hash,
             &vote.identity,
-            RecordType::MembershipJointAccept,
-            verified.proposal.fence_sequence,
             proposal_hash,
             &vote.acceptance_hash,
         )?;

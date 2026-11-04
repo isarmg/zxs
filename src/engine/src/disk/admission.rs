@@ -8,6 +8,7 @@ mod upload;
 pub(crate) use upload::{UploadFinish, UploadIo};
 
 use super::DiskSeal;
+use super::fencing::{FenceDescriptor, FenceOwner};
 use crate::{Error, ErrorCode, Result, ValidatedConfig};
 use platform_io::fs_safety::{EntryName, linux::DirectoryEntries};
 use std::{
@@ -89,6 +90,12 @@ struct GateState {
     control: usize,
     failed: bool,
     resources: BTreeMap<usize, Weak<dyn RevocableResource>>,
+    roots: BTreeMap<usize, Arc<dyn FinalResource>>,
+    fence: Weak<FenceOwner>,
+    fence_descriptor: Option<Arc<FenceDescriptor>>,
+    // Operations pin the exact acquired lock even after its Engine is dropped.
+    // Idle read plans retain only roots/gates and do not retain writer ownership.
+    active_fence: Option<Arc<FenceOwner>>,
 }
 
 #[derive(Debug)]
@@ -96,6 +103,10 @@ enum Phase {
     Active,
     #[cfg(any(test, feature = "fault-injection"))]
     Quiescing(Arc<()>),
+    #[cfg(any(test, feature = "fault-injection"))]
+    Closing,
+    #[cfg(any(test, feature = "fault-injection"))]
+    Closed,
 }
 
 impl Phase {
@@ -103,7 +114,7 @@ impl Phase {
         match responsibility {
             Responsibility::Ordinary => matches!(self, Self::Active),
             #[cfg(any(test, feature = "fault-injection"))]
-            Responsibility::Control => true,
+            Responsibility::Control => matches!(self, Self::Quiescing(_)),
         }
     }
 }
@@ -114,6 +125,7 @@ pub(crate) struct DiskIoStatus {
     pub(crate) quiescing: bool,
     pub(crate) ordinary: usize,
     pub(crate) control: usize,
+    resources_closed: bool,
 }
 
 #[cfg(any(test, feature = "fault-injection"))]
@@ -121,7 +133,7 @@ impl DiskIoStatus {
     /// Zero is meaningful only after ordinary admission has been closed.
     /// This does not certify persistence, membership removal or complete coverage.
     pub(crate) fn drained(self) -> bool {
-        self.quiescing && self.ordinary == 0 && self.control == 0
+        self.quiescing && self.ordinary == 0 && self.control == 0 && self.resources_closed
     }
 }
 
@@ -154,6 +166,10 @@ impl DiskIoGate {
 }
 
 impl DiskIoBinding {
+    pub(super) fn same_domain(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.gate, &other.gate)
+    }
+
     pub(crate) fn new(seal: &DiskSeal, authority: &ValidatedConfig) -> Result<Self> {
         let identity = DiskIoIdentity::from(seal);
         let mut gates = binding_gates().lock().map_err(|_| {
@@ -175,6 +191,10 @@ impl DiskIoBinding {
                         control: 0,
                         failed: false,
                         resources: BTreeMap::new(),
+                        roots: BTreeMap::new(),
+                        fence: Weak::new(),
+                        fence_descriptor: None,
+                        active_fence: None,
                     }),
                 });
                 gates.insert(identity, Arc::downgrade(&gate));
@@ -278,7 +298,59 @@ impl DiskIoBinding {
         // Each count owns a distinct Arc allocation, so allocation limits bound
         // this counter below usize::MAX. No filesystem work runs under the lock.
         state.ordinary += 1;
+        if state.active_fence.is_none() {
+            state.active_fence = state.fence.upgrade();
+        }
         Ok(self.lease(Responsibility::Ordinary))
+    }
+
+    pub(super) fn register_root(&self, root: &Arc<dyn FinalResource>) -> Result<()> {
+        let mut state = self.gate.state()?;
+        // The caller holds an ordinary lease. Even a late registration must
+        // join final closure before that counted operation can retire.
+        state.roots.insert(root.key(), Arc::clone(root));
+        if !matches!(state.phase, Phase::Active) {
+            return Err(self.gate.unavailable());
+        }
+        Ok(())
+    }
+
+    pub(super) fn unregister_root(&self, key: usize) {
+        let retired = match self.gate.state.lock() {
+            Ok(mut state) => state.roots.remove(&key),
+            Err(_) => {
+                tracing::error!("root cleanup found poisoned disk admission");
+                None
+            }
+        };
+        drop(retired);
+    }
+
+    pub(super) fn register_fence(&self, fence: &Arc<FenceOwner>) -> Result<()> {
+        let mut state = self.gate.state()?;
+        let held = state.fence.upgrade();
+        if held.as_ref().is_some_and(|held| !Arc::ptr_eq(held, fence)) {
+            drop(state);
+            drop(held);
+            return Err(Error::new(
+                ErrorCode::WriterAlreadyActive,
+                "disk binding already owns another writer lock",
+            ));
+        }
+        state.fence = Arc::downgrade(fence);
+        let retired = state.fence_descriptor.replace(fence.descriptor());
+        if state.ordinary != 0 {
+            state.active_fence = Some(Arc::clone(fence));
+        }
+        let active = matches!(state.phase, Phase::Active);
+        drop(state);
+        drop(retired);
+        drop(held);
+        if active {
+            Ok(())
+        } else {
+            Err(self.gate.unavailable())
+        }
     }
 
     fn lease(&self, responsibility: Responsibility) -> DiskIoLease {
@@ -294,9 +366,10 @@ impl DiskIoBinding {
     pub(crate) fn status(&self) -> Result<DiskIoStatus> {
         let state = self.gate.state()?;
         Ok(DiskIoStatus {
-            quiescing: matches!(state.phase, Phase::Quiescing(_)),
+            quiescing: !matches!(state.phase, Phase::Active),
             ordinary: state.ordinary,
             control: state.control,
+            resources_closed: matches!(state.phase, Phase::Closed),
         })
     }
 
@@ -312,12 +385,15 @@ impl DiskIoBinding {
                 "stale disk I/O authority cannot initiate quiescing",
             ));
         }
-        if matches!(state.phase, Phase::Quiescing(_)) {
+        if !matches!(state.phase, Phase::Active) {
             return Ok(None);
         }
         let transition = Arc::new(());
         state.phase = Phase::Quiescing(Arc::clone(&transition));
         state.control = 1;
+        if state.active_fence.is_none() {
+            state.active_fence = state.fence.upgrade();
+        }
         let resources = std::mem::take(&mut state.resources);
         let controller = DiskIoTransition {
             gate: Arc::clone(&self.gate),
@@ -380,7 +456,48 @@ impl Drop for LeaseOwner {
         } else {
             *count -= 1;
         }
+        let idle = state.ordinary == 0;
+        #[cfg(any(test, feature = "fault-injection"))]
+        let idle = idle && state.control == 0;
+        let released = if idle && !state.failed {
+            state.active_fence.take()
+        } else {
+            None
+        };
+        #[cfg(any(test, feature = "fault-injection"))]
+        let terminal = if idle && !state.failed && matches!(state.phase, Phase::Quiescing(_)) {
+            state.phase = Phase::Closing;
+            Some((
+                std::mem::take(&mut state.roots),
+                state.fence_descriptor.clone(),
+            ))
+        } else {
+            None
+        };
+        // No destructor, filesystem work or resource lock under the gate lock.
+        drop(state);
+        #[cfg(any(test, feature = "fault-injection"))]
+        if let Some((roots, fence)) = terminal {
+            for root in roots.into_values() {
+                root.close();
+            }
+            if let Some(fence) = fence {
+                fence.close();
+            }
+            match self.binding.gate.state.lock() {
+                Ok(mut state) => state.phase = Phase::Closed,
+                Err(_) => tracing::error!("disk final close found poisoned admission"),
+            }
+        }
+        drop(released);
     }
+}
+
+/// Long-lived roots close only after every ordinary and control tail, never at
+/// reader revocation. Implementations expose no descriptor outside a scoped use.
+pub(super) trait FinalResource: Send + Sync + std::fmt::Debug {
+    fn key(&self) -> usize;
+    fn close(&self);
 }
 
 /// One admitted operation, including its blocking work and final cleanup. It is

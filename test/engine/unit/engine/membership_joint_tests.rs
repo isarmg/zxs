@@ -94,6 +94,35 @@ impl Fixture {
     fn path(&self, index: usize) -> PathBuf {
         member_directory(&self.target.disks[index], &self.archive.transition_hash).join("joint")
     }
+    fn decision_path(&self, index: usize) -> PathBuf {
+        self.target.disks[index]
+            .root
+            .join("metadata/membership-decisions")
+            .join(&self.archive.transition_hash)
+            .join("decision.json")
+    }
+    fn store(&self, index: usize) -> JointStore {
+        let pending = self.engine.pending_membership.as_ref().unwrap();
+        let member = pending
+            .members
+            .iter()
+            .find(|member| member.disk.disk_id == self.target.disks[index].disk_id)
+            .unwrap();
+        let parent = member
+            .resource
+            .root()
+            .private_child(&member_directory(&member.disk, &pending.transition_hash))
+            .unwrap();
+        JointStore::open(
+            member.resource.root(),
+            &parent,
+            &member.enrollment.identity,
+            &pending.transition_hash,
+            &pending.joint.as_ref().unwrap().status.proposal_hash,
+            false,
+        )
+        .unwrap()
+    }
     fn run(&mut self) -> MembershipJointDecisionStatus {
         self.engine.resume_membership_joint_decision().unwrap()
     }
@@ -173,7 +202,7 @@ fn membership_joint_two_to_four_preserves_original_bytes_and_never_activates() {
         result
             .votes
             .iter()
-            .map(|vote| &vote.frame_hash)
+            .map(|vote| &vote.decision_hash)
             .collect::<BTreeSet<_>>()
             .len(),
         4
@@ -223,10 +252,12 @@ fn membership_joint_independent_quorums_do_not_imply_all_target_completion() {
 fn membership_joint_each_member_partial_write_sync_and_opening_failure_resume_same_proposal() {
     for index in 0..4 {
         for stage in [
-            JointFaultStage::Journal(JournalFault::PartialWrite),
-            JointFaultStage::Journal(JournalFault::Sync),
-            JointFaultStage::Opening(OpeningFault::FileSync),
-            JointFaultStage::Opening(OpeningFault::DirectorySync),
+            JointFaultStage::Decision(DecisionFault::StagingWrite),
+            JointFaultStage::Decision(DecisionFault::PreparedFileSync),
+            JointFaultStage::Decision(DecisionFault::FileSync),
+            JointFaultStage::Decision(DecisionFault::DirectorySync),
+            JointFaultStage::Decision(DecisionFault::NoReplace),
+            JointFaultStage::Decision(DecisionFault::PublishedReply),
         ] {
             let mut fixture = Fixture::new(2, 2, false);
             fixture.fault(index, stage);
@@ -235,17 +266,14 @@ fn membership_joint_each_member_partial_write_sync_and_opening_failure_resume_sa
             assert_eq!(status.synchronized_target_votes, index);
             assert!(!status.all_certificates_synchronized());
             let old = (0..index)
-                .map(|i| fs::read(fixture.path(i).join("journal.bin")).unwrap())
+                .map(|i| fs::read(fixture.decision_path(i)).unwrap())
                 .collect::<Vec<_>>();
             fixture.reopen(false);
             let completed = fixture.run();
             assert_eq!(completed.proposal_hash, status.proposal_hash);
             assert!(completed.all_certificates_synchronized());
             for (i, bytes) in old.into_iter().enumerate() {
-                assert_eq!(
-                    fs::read(fixture.path(i).join("journal.bin")).unwrap(),
-                    bytes
-                );
+                assert_eq!(fs::read(fixture.decision_path(i)).unwrap(), bytes);
             }
             assert_blocked(&mut fixture.engine);
         }
@@ -290,7 +318,17 @@ fn membership_joint_bound_proposal_and_unbound_unknown_material_are_preserved() 
         .enrollment
         .identity
         .clone();
-    assert!(JointStore::open(&root, &identity, &"e".repeat(64), true).is_err());
+    assert!(
+        JointStore::open(
+            &DiskRoot::open(&fixture.target.disks[0].root).unwrap(),
+            &root,
+            &identity,
+            &fixture.archive.transition_hash,
+            &"e".repeat(64),
+            true
+        )
+        .is_err()
+    );
     assert_eq!(files(&path), before);
     let unknown = fixture.path(1);
     private_dir(&unknown).unwrap();
@@ -304,8 +342,8 @@ fn membership_joint_bound_proposal_and_unbound_unknown_material_are_preserved() 
 fn membership_joint_foreign_or_modified_vote_and_suffix_fail_without_repair() {
     let mut fixture = Fixture::new(2, 2, false);
     fixture.run();
-    let first = fs::read(fixture.path(0).join("journal.bin")).unwrap();
-    let path = fixture.path(1).join("journal.bin");
+    let first = fs::read(fixture.decision_path(0)).unwrap();
+    let path = fixture.decision_path(1);
     let original = fs::read(&path).unwrap();
     for bytes in [
         first,
@@ -324,9 +362,7 @@ fn membership_joint_foreign_or_modified_vote_and_suffix_fail_without_repair() {
 fn membership_joint_certificate_missing_local_page_cannot_use_other_target() {
     let mut fixture = Fixture::new(2, 2, false);
     let status = fixture.run();
-    let store = JointStore {
-        root: DiskRoot::open(&fixture.path(2)).unwrap(),
-    };
+    let store = fixture.store(2);
     let certificate: Certificate = store
         .typed(CERTIFICATE_KIND, status.certificate_hash.as_ref().unwrap())
         .unwrap();
@@ -388,7 +424,7 @@ fn membership_joint_control_revalidation_clears_previous_success() {
 
 #[test]
 fn membership_joint_member_archive_and_joint_rename_never_reports_false_success() {
-    for target in ["member", "archive", "joint"] {
+    for target in ["member", "archive", "joint", "decision"] {
         for stage in ["dependencies", "completion"] {
             let mut fixture = Fixture::new(2, 2, false);
             let disk = &fixture.target.disks[0];
@@ -406,6 +442,7 @@ fn membership_joint_member_archive_and_joint_rename_never_reports_false_success(
                 "member" => member,
                 "archive" => member.join("control-archive"),
                 "joint" => member.join("joint"),
+                "decision" => fixture.decision_path(0).parent().unwrap().to_path_buf(),
                 _ => unreachable!(),
             };
             let displaced = path.with_extension("displaced");
@@ -464,9 +501,7 @@ fn membership_joint_each_member_bound_phase_failure_and_real_io_conflict_resume(
 fn membership_joint_certificate_rejects_relabelled_duplicate_foreign_and_modified_votes() {
     let mut fixture = Fixture::new(2, 2, false);
     let status = fixture.run();
-    let store = JointStore {
-        root: DiskRoot::open(&fixture.path(0)).unwrap(),
-    };
+    let store = fixture.store(0);
     let certificate: Certificate = store
         .typed(CERTIFICATE_KIND, status.certificate_hash.as_ref().unwrap())
         .unwrap();
@@ -482,6 +517,10 @@ fn membership_joint_certificate_rejects_relabelled_duplicate_foreign_and_modifie
         "generation",
         "acceptance",
         "frame",
+        "decision-intent",
+        "decision-choice",
+        "decision-acceptance",
+        "legacy-receipt",
         "missing",
     ] {
         let mut votes = original.clone();
@@ -507,8 +546,31 @@ fn membership_joint_certificate_rejects_relabelled_duplicate_foreign_and_modifie
                         value["acceptance_hash"] = original[first]["acceptance_hash"].clone()
                     }
                     "frame" => {
-                        value["receipt"]["frame_hash"] =
+                        value["decision"]["record_hash"] =
                             json_codec::to_value("f".repeat(64)).unwrap()
+                    }
+                    "decision-intent" | "decision-choice" | "decision-acceptance" => {
+                        let record = &mut value["decision"]["record"];
+                        match corruption {
+                            "decision-intent" => {
+                                record["transition_hash"] =
+                                    json_codec::to_value("e".repeat(64)).unwrap()
+                            }
+                            "decision-choice" => {
+                                record["choice"] = json_codec::json!({"kind": "Abort", "core_hash": "e".repeat(64), "acceptance_hash": "f".repeat(64)})
+                            }
+                            "decision-acceptance" => {
+                                record["choice"]["acceptance_hash"] =
+                                    json_codec::to_value("d".repeat(64)).unwrap()
+                            }
+                            _ => unreachable!(),
+                        }
+                        let hash = object_hash("membership-decision", record).unwrap();
+                        value["decision"]["record_hash"] = json_codec::to_value(hash).unwrap();
+                    }
+                    "legacy-receipt" => {
+                        value.as_object_mut().unwrap().remove("decision");
+                        value["receipt"] = json_codec::json!({});
                     }
                     _ => unreachable!(),
                 }
@@ -544,7 +606,7 @@ fn membership_joint_certificate_rejects_relabelled_duplicate_foreign_and_modifie
 
 #[test]
 fn membership_joint_final_sweep_rejects_member_moved_after_its_completion() {
-    for target in ["member", "archive", "joint"] {
+    for target in ["member", "archive", "joint", "decision"] {
         let mut fixture = Fixture::new(2, 2, false);
         let barrier = Arc::new(std::sync::Barrier::new(2));
         fixture
@@ -555,6 +617,7 @@ fn membership_joint_final_sweep_rejects_member_moved_after_its_completion() {
             "member" => member,
             "archive" => member.join("control-archive"),
             "joint" => member.join("joint"),
+            "decision" => fixture.decision_path(0).parent().unwrap().to_path_buf(),
             _ => unreachable!(),
         };
         std::thread::scope(|scope| {
@@ -580,9 +643,7 @@ fn membership_joint_final_sweep_rejects_member_moved_after_its_completion() {
 fn membership_joint_certificate_manifest_pages_large_synthetic_lists() {
     let mut fixture = Fixture::new(2, 2, false);
     let status = fixture.run();
-    let store = JointStore {
-        root: DiskRoot::open(&fixture.path(0)).unwrap(),
-    };
+    let store = fixture.store(0);
     let certificate: Certificate = store
         .typed(CERTIFICATE_KIND, status.certificate_hash.as_ref().unwrap())
         .unwrap();
@@ -626,9 +687,7 @@ fn membership_joint_certificate_manifest_pages_large_synthetic_lists() {
 fn membership_joint_corrupt_binding_dependency_and_completion_are_preserved() {
     let mut fixture = Fixture::new(2, 2, false);
     let status = fixture.run();
-    let store = JointStore {
-        root: DiskRoot::open(&fixture.path(1)).unwrap(),
-    };
+    let store = fixture.store(1);
     let vote = &status.votes[1];
     for path in [
         store.root.path().join(BINDING_FILE),
@@ -659,6 +718,158 @@ fn membership_joint_corrupt_binding_dependency_and_completion_are_preserved() {
         fs::write(path, original).unwrap();
         assert_eq!(fixture.run(), status);
     }
+}
+
+#[test]
+fn membership_joint_partial_abort_vetoes_every_new_vote_and_survives_restart() {
+    let mut fixture = Fixture::new(3, 2, true);
+    let pending = fixture.engine.pending_membership.as_ref().unwrap();
+    let last = pending
+        .members
+        .iter()
+        .find(|member| member.disk.disk_id == fixture.original.disks[2].disk_id)
+        .unwrap();
+    let decisions = DecisionStore::open(
+        last.resource.root(),
+        &last.enrollment.identity,
+        &pending.transition_hash,
+        true,
+    )
+    .unwrap();
+    decisions
+        .abort_for_test(&"a".repeat(64), &"b".repeat(64))
+        .unwrap();
+    let selected = fs::read(fixture.decision_path(2)).unwrap();
+    for restart in [false, true] {
+        if restart {
+            fixture.reopen(false);
+        }
+        assert!(fixture.engine.resume_membership_joint_decision().is_err());
+        let status = fixture.engine.membership_joint_decision_status().unwrap();
+        assert!(status.votes.is_empty());
+        assert!(!status.original_quorum_accepted());
+        for index in [0, 1, 3, 4] {
+            assert!(!fixture.decision_path(index).exists());
+        }
+        assert_eq!(fs::read(fixture.decision_path(2)).unwrap(), selected);
+        assert_blocked(&mut fixture.engine);
+    }
+}
+
+#[test]
+fn membership_joint_minority_joint_is_preserved_when_another_member_selects_abort() {
+    let mut fixture = Fixture::new(5, 1, false);
+    fixture
+        .engine
+        .inject_fault_once("after_membership_joint_vote_1");
+    assert!(fixture.engine.resume_membership_joint_decision().is_err());
+    let first = fs::read(fixture.decision_path(0)).unwrap();
+    let pending = fixture.engine.pending_membership.as_ref().unwrap();
+    let last = &pending.members[4];
+    let decisions = DecisionStore::open(
+        last.resource.root(),
+        &last.enrollment.identity,
+        &pending.transition_hash,
+        true,
+    )
+    .unwrap();
+    decisions
+        .abort_for_test(&"a".repeat(64), &"b".repeat(64))
+        .unwrap();
+    assert!(fixture.engine.resume_membership_joint_decision().is_err());
+    assert_eq!(fs::read(fixture.decision_path(0)).unwrap(), first);
+    for index in [1, 2, 3, 5] {
+        assert!(!fixture.decision_path(index).exists());
+    }
+    assert_blocked(&mut fixture.engine);
+}
+
+#[test]
+fn membership_joint_portable_embeds_decisions_but_cannot_replace_missing_actual_votes() {
+    let mut fixture = Fixture::new(2, 2, false);
+    let status = fixture.run();
+    let store = fixture.store(0);
+    let portable = store
+        .portable(
+            status.certificate_hash.as_ref().unwrap(),
+            &status.proposal_hash,
+        )
+        .unwrap();
+    let encoded = canonical_json(&portable).unwrap();
+    assert!(
+        String::from_utf8(encoded.clone())
+            .unwrap()
+            .contains("fenced-membership-decision")
+    );
+    let detached: store::PortableJoint = decode_strict(&encoded).unwrap();
+    detached.verify().unwrap();
+    fs::remove_file(fixture.decision_path(0)).unwrap();
+    detached.verify().unwrap();
+    assert!(fixture.engine.verify_membership_joint_decision().is_err());
+    assert!(!fixture.decision_path(0).exists());
+    assert!(
+        !fixture
+            .engine
+            .membership_joint_decision_status()
+            .unwrap()
+            .all_certificates_synchronized()
+    );
+}
+
+#[test]
+fn membership_joint_old_singleton_format_is_rejected_without_conversion() {
+    let mut fixture = Fixture::new(2, 2, false);
+    let path = fixture.path(1);
+    private_dir(&path).unwrap();
+    let root = DiskRoot::open(&path).unwrap();
+    let mut journal = PendingJournal::open_joint_at(
+        &root,
+        &path,
+        fixture
+            .engine
+            .membership_fence
+            .as_ref()
+            .unwrap()
+            .intent
+            .fence_sequence,
+        &"c".repeat(64),
+        &"d".repeat(64),
+    )
+    .unwrap();
+    journal.synchronize(&fixture.target.disks[1]).unwrap();
+    let bytes = fs::read(path.join("journal.bin")).unwrap();
+    assert!(fixture.engine.resume_membership_joint_decision().is_err());
+    for index in 0..4 {
+        assert!(!fixture.decision_path(index).exists());
+    }
+    assert_eq!(fs::read(path.join("journal.bin")).unwrap(), bytes);
+    assert_blocked(&mut fixture.engine);
+}
+
+#[test]
+fn membership_joint_final_sweep_rejects_decision_corrupted_after_its_completion() {
+    let mut fixture = Fixture::new(2, 2, false);
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    fixture
+        .engine
+        .inject_pause_once("after_membership_joint_certificate_1", Arc::clone(&barrier));
+    let path = fixture.decision_path(0);
+    std::thread::scope(|scope| {
+        let run = scope.spawn(|| fixture.engine.resume_membership_joint_decision());
+        barrier.wait();
+        fs::write(&path, b"{").unwrap();
+        barrier.wait();
+        assert!(run.join().unwrap().is_err());
+    });
+    assert_eq!(fs::read(path).unwrap(), b"{");
+    assert!(
+        !fixture
+            .engine
+            .membership_joint_decision_status()
+            .unwrap()
+            .all_certificates_synchronized()
+    );
+    assert_blocked(&mut fixture.engine);
 }
 
 #[path = "membership_exit_joint_tests.rs"]

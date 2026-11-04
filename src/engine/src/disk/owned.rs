@@ -1,17 +1,84 @@
 //! Held filesystem resources, separate from serializable configuration and writer locks.
 use super::admission::DiskIoResource;
+use super::admission::FinalResource;
 use super::*;
 use platform_io::fs_safety::linux::DirectoryEntries;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{Arc, OnceLock, RwLock, RwLockReadGuard},
 };
 
 /// A path is an address below this held root, never a request to reopen the root.
 pub(crate) struct DiskRoot {
     path: PathBuf,
-    directory: OpenAt2Root,
+    directory: Arc<HeldRoot>,
     io: Option<DiskIoBinding>,
+}
+
+/// One descriptor shared by generation views. The initial binding is permanent:
+/// an older unbound alias cannot turn an adopted or closed root into bootstrap I/O.
+#[derive(Debug)]
+struct HeldRoot {
+    directory: Arc<RootDescriptor>,
+    binding: OnceLock<DiskIoBinding>,
+}
+
+impl HeldRoot {
+    fn access(&self) -> Result<RwLockReadGuard<'_, Option<OpenAt2Root>>> {
+        self.directory.access()
+    }
+}
+
+/// This gate-owned cell never owns a gate, avoiding both a strong cycle and the
+/// weak-upgrade race with the last root wrapper's descriptor teardown.
+#[derive(Debug)]
+struct RootDescriptor {
+    directory: RwLock<Option<OpenAt2Root>>,
+}
+
+impl RootDescriptor {
+    fn access(&self) -> Result<RwLockReadGuard<'_, Option<OpenAt2Root>>> {
+        let directory = self
+            .directory
+            .read()
+            .map_err(|_| Error::new(ErrorCode::RecoveryRequired, "held disk root lock poisoned"))?;
+        if directory.is_none() {
+            return Err(Error::new(
+                ErrorCode::DiskUnavailable,
+                "held disk root is closed",
+            ));
+        }
+        Ok(directory)
+    }
+}
+
+impl FinalResource for RootDescriptor {
+    fn key(&self) -> usize {
+        std::ptr::from_ref(self) as usize
+    }
+
+    fn close(&self) {
+        let mut directory = match self.directory.write() {
+            Ok(directory) => directory,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let retired = directory.take();
+        // A second closer must wait for the actual close, not only observe None.
+        // OpenAt2Root has no lease/destructor callback into this resource or gate.
+        drop(retired);
+        drop(directory);
+    }
+}
+
+impl Drop for HeldRoot {
+    fn drop(&mut self) {
+        // A concurrent finalizer owns the same descriptor cell until this close
+        // has finished, even after this wrapper's last Arc is gone.
+        self.directory.close();
+        if let Some(binding) = self.binding.get() {
+            binding.unregister_root(self.directory.key());
+        }
+    }
 }
 
 /// A directory cursor never exposes its underlying stream or descriptor. Bound
@@ -62,6 +129,61 @@ impl Iterator for DiskDirectoryEntries {
 impl std::iter::FusedIterator for DiskDirectoryEntries {}
 
 impl DiskRoot {
+    fn held(path: PathBuf, directory: OpenAt2Root, io: Option<DiskIoBinding>) -> Result<Self> {
+        let root = Self {
+            path,
+            directory: Arc::new(HeldRoot {
+                directory: Arc::new(RootDescriptor {
+                    directory: RwLock::new(Some(directory)),
+                }),
+                binding: OnceLock::new(),
+            }),
+            io,
+        };
+        if let Some(binding) = &root.io {
+            root.register(binding)?;
+        }
+        Ok(root)
+    }
+
+    fn register(&self, binding: &DiskIoBinding) -> Result<()> {
+        let _admission = binding.admit()?;
+        if let Some(existing) = self.directory.binding.get() {
+            return Self::same_domain(existing, binding);
+        }
+        let directory =
+            self.directory.directory.directory.write().map_err(|_| {
+                Error::new(ErrorCode::RecoveryRequired, "held disk root lock poisoned")
+            })?;
+        if directory.is_none() {
+            return Err(Error::new(
+                ErrorCode::DiskUnavailable,
+                "held disk root is closed",
+            ));
+        }
+        let existing = self.directory.binding.get_or_init(|| binding.clone());
+        Self::same_domain(existing, binding)?;
+        let erased: Arc<dyn FinalResource> = self.directory.directory.clone();
+        let result = binding.register_root(&erased);
+        drop(directory);
+        result
+    }
+
+    fn same_domain(existing: &DiskIoBinding, requested: &DiskIoBinding) -> Result<()> {
+        if existing.same_domain(requested) {
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "held root already belongs to another disk I/O binding",
+            ))
+        }
+    }
+
+    fn binding(&self) -> Option<&DiskIoBinding> {
+        self.io.as_ref().or_else(|| self.directory.binding.get())
+    }
+
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
@@ -73,11 +195,7 @@ impl DiskRoot {
         let path = private.path().to_path_buf();
         let directory = OpenAt2Root::from_private_directory(private, MountPolicy::SameMount)
             .map_err(fs_error)?;
-        Ok(Self {
-            path,
-            directory,
-            io: None,
-        })
+        Self::held(path, directory, None)
     }
 
     /// Bootstrap an explicitly held, not-yet-bound directory. Never use this to
@@ -90,29 +208,27 @@ impl DiskRoot {
         // Validate every named ancestor without using that reopened resource as
         // the destination. All writes retain the caller's original descriptor.
         let named = Self::open(&path)?;
-        if directory.identity() != named.directory.identity() {
+        if directory.identity() != named.operation()?.held().identity() {
             return Err(Error::new(
                 ErrorCode::DiskIdentityMismatch,
                 "selected storage directory changed before initialization",
             ));
         }
-        Ok(Self {
-            path,
-            directory,
-            io: None,
-        })
+        Self::held(path, directory, None)
     }
 
     fn bind_io(&mut self, seal: &DiskSeal, config: &ValidatedConfig) -> Result<()> {
-        self.io = Some(match &self.io {
+        let binding = match self.binding() {
             Some(binding) => binding.for_authority(seal, config)?,
             None => DiskIoBinding::new(seal, config)?,
-        });
+        };
+        self.register(&binding)?;
+        self.io = Some(binding);
         Ok(())
     }
 
     pub(crate) fn io_binding(&self) -> Result<&DiskIoBinding> {
-        self.io.as_ref().ok_or_else(|| {
+        self.binding().ok_or_else(|| {
             Error::new(
                 ErrorCode::ConfigInvalid,
                 "root has no admitted disk I/O binding",
@@ -127,13 +243,13 @@ impl DiskRoot {
     /// Opening and the real file lifetime share the same admitted operation.
     /// Legacy raw-file entry points still need migration before offline is safe.
     pub(crate) fn open_leased_regular(&self, path: &Path) -> Result<DiskFile> {
-        let operation = RootOperation {
-            root: self,
-            lease: Some(self.admit_io()?),
-        };
+        let operation = self.operation_with(Some(self.admit_io()?))?;
         let file = operation.open_regular(path)?;
-        let file = operation
-            .lease
+        let RootOperation {
+            directory, lease, ..
+        } = operation;
+        drop(directory);
+        let file = lease
             .expect("invariant: leased open owns an admitted operation")
             .hold(file);
         file.check_running()?;
@@ -143,7 +259,7 @@ impl DiskRoot {
     /// Preserve this root's already established provenance. Bootstrap roots are
     /// explicitly unbound; a managed root never falls back after admission fails.
     pub(crate) fn open_read_regular(&self, path: &Path) -> Result<ReadFile> {
-        match &self.io {
+        match self.binding() {
             Some(_) => self.open_leased_regular(path).map(Into::into),
             None => self.open_regular(path).map(Into::into),
         }
@@ -157,11 +273,7 @@ impl DiskRoot {
         let directory = operation.directory(path)?;
         let directory =
             OpenAt2Root::from_directory(directory, MountPolicy::SameMount).map_err(fs_error)?;
-        Ok(Self {
-            path: path.to_owned(),
-            directory,
-            io: self.io.clone(),
-        })
+        Self::held(path.to_owned(), directory, self.binding().cloned())
     }
 
     fn relative(&self, path: &Path) -> Result<RelativePath> {
@@ -177,11 +289,28 @@ impl DiskRoot {
     /// One synchronous operation, including every nested syscall and cleanup.
     /// A bound root never falls back to bootstrap access on admission failure.
     fn operation(&self) -> Result<RootOperation<'_>> {
-        let lease = match &self.io {
+        let directory = self.directory.access()?;
+        let lease = match self.binding() {
             Some(binding) => Some(binding.admit()?),
             None => None,
         };
-        Ok(RootOperation { root: self, lease })
+        Ok(RootOperation {
+            root: self,
+            directory,
+            lease,
+        })
+    }
+
+    fn operation_with(&self, lease: Option<DiskIoLease>) -> Result<RootOperation<'_>> {
+        Ok(RootOperation {
+            root: self,
+            directory: self.directory.access()?,
+            lease,
+        })
+    }
+
+    pub(crate) fn retained(&self, path: PathBuf) -> Result<Self> {
+        self.operation()?.retained_root(path)
     }
 
     /// Transfer the opening operation into the actual directory stream. Late
@@ -189,7 +318,11 @@ impl DiskRoot {
     pub(crate) fn entries(&self, path: &Path) -> Result<DiskDirectoryEntries> {
         let operation = self.operation()?;
         let entries = operation.entries(path)?;
-        DiskDirectoryEntries::new(entries, operation.lease)
+        let RootOperation {
+            directory, lease, ..
+        } = operation;
+        drop(directory);
+        DiskDirectoryEntries::new(entries, lease)
     }
 
     /// Return identity evidence only, with the opened directory closed before
@@ -296,10 +429,7 @@ impl DiskRoot {
     ) -> Result<T> {
         let lease = transition.take_drained_control(self.io_binding()?)?;
         let control = RootControl {
-            operation: RootOperation {
-                root: self,
-                lease: Some(lease),
-            },
+            operation: self.operation_with(Some(lease))?,
         };
         run(&control)
     }
@@ -311,18 +441,20 @@ impl DiskRoot {
 /// its lease retires only after its stack-owned files and atomic writers do.
 struct RootOperation<'a> {
     root: &'a DiskRoot,
+    // Release the descriptor borrow before the operation can trigger final close.
+    directory: RwLockReadGuard<'a, Option<OpenAt2Root>>,
     lease: Option<DiskIoLease>,
 }
 
 impl RootOperation<'_> {
+    fn held(&self) -> &OpenAt2Root {
+        self.directory
+            .as_ref()
+            .expect("invariant: root operation owns an open directory")
+    }
     /// Keep the exact revocation domain when a successor retains this binding.
     /// This never creates a new active gate for an existing disk.
     fn retained_root(&self, path: PathBuf) -> Result<DiskRoot> {
-        let private =
-            PrivateDirectory::from_directory(self.directory(self.root.path())?, path.clone())
-                .map_err(fs_error)?;
-        let directory = OpenAt2Root::from_private_directory(private, MountPolicy::SameMount)
-            .map_err(fs_error)?;
         // Revalidate the named address under the original lease, never by
         // constructing an unbound DiskRoot that could become an escape hatch.
         let named = OpenAt2Root::from_private_directory(
@@ -330,7 +462,7 @@ impl RootOperation<'_> {
             MountPolicy::SameMount,
         )
         .map_err(fs_error)?;
-        if directory.identity() != named.identity() {
+        if self.held().identity() != named.identity() {
             return Err(Error::new(
                 ErrorCode::DiskIdentityMismatch,
                 "selected storage directory changed before generation retention",
@@ -338,8 +470,8 @@ impl RootOperation<'_> {
         }
         Ok(DiskRoot {
             path,
-            directory,
-            io: self.root.io.clone(),
+            directory: Arc::clone(&self.root.directory),
+            io: self.root.binding().cloned(),
         })
     }
 
@@ -355,7 +487,7 @@ impl RootOperation<'_> {
         match path {
             None => Ok(File::from(
                 rustix::fs::openat(
-                    self.root.directory.directory(),
+                    self.held().directory(),
                     ".",
                     rustix::fs::OFlags::RDONLY
                         | rustix::fs::OFlags::DIRECTORY
@@ -364,7 +496,7 @@ impl RootOperation<'_> {
                 )
                 .map_err(std::io::Error::from)?,
             )),
-            Some(path) => self.root.directory.open_directory(path).map_err(fs_error),
+            Some(path) => self.held().open_directory(path).map_err(fs_error),
         }
     }
 
@@ -386,18 +518,16 @@ impl RootOperation<'_> {
 
     fn entries(&self, path: &Path) -> Result<DirectoryEntries> {
         if path == self.root.path {
-            self.root.directory.entries().map_err(fs_error)
+            self.held().entries().map_err(fs_error)
         } else {
-            self.root
-                .directory
+            self.held()
                 .entries_at(&self.root.relative(path)?)
                 .map_err(fs_error)
         }
     }
 
     fn open_regular(&self, path: &Path) -> Result<File> {
-        self.root
-            .directory
+        self.held()
             .open_file(&self.root.relative(path)?, false)
             .map_err(fs_error)
     }
@@ -429,7 +559,7 @@ impl RootOperation<'_> {
 
     fn optional_metadata(&self, path: &Path) -> Result<Option<fs::Metadata>> {
         if path == self.root.path {
-            return Ok(Some(self.root.directory.directory().metadata()?));
+            return Ok(Some(self.held().directory().metadata()?));
         }
         let (parent, name) = self.parent(path)?;
         match rustix::fs::openat2(
@@ -560,15 +690,14 @@ impl RootOperation<'_> {
     }
 
     fn available(&self) -> Result<u64> {
-        let stat =
-            rustix::fs::fstatvfs(self.root.directory.directory()).map_err(std::io::Error::from)?;
+        let stat = rustix::fs::fstatvfs(self.held().directory()).map_err(std::io::Error::from)?;
         Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
     }
 
     fn lock_file(&self) -> Result<File> {
         let file = File::from(
             rustix::fs::openat2(
-                self.root.directory.directory(),
+                self.held().directory(),
                 ".writer.lock",
                 rustix::fs::OFlags::CREATE
                     | rustix::fs::OFlags::RDWR
@@ -626,7 +755,7 @@ impl DiskHandle {
 
     pub(crate) fn open(config: &ValidatedConfig, disk: &DiskConfig, sealed: bool) -> Result<Self> {
         let root = DiskRoot::open(&disk.root)?;
-        let seal = identity_at(config, disk, root.directory.directory())?;
+        let seal = identity_at(config, disk, root.operation()?.held().directory())?;
         if sealed {
             let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
             validate_stored_seal(&decode_seal(&bytes)?, &seal)?;
@@ -700,7 +829,7 @@ impl DiskResources {
         let mut identities = BTreeSet::new();
         for (disk, directory) in config.disks.iter().zip(directories) {
             let root = DiskRoot::from_directory(disk.root.clone(), directory)?;
-            let identity = root.directory.identity();
+            let identity = root.operation()?.held().identity();
             if !identities.insert((identity.device, identity.inode)) {
                 return Err(Error::new(
                     ErrorCode::ConfigInvalid,
@@ -713,7 +842,7 @@ impl DiskResources {
                     "storage activation requires an empty held directory; existing contents are preserved",
                 ));
             }
-            let seal = identity_at(config, disk, root.directory.directory())?;
+            let seal = identity_at(config, disk, root.operation()?.held().directory())?;
             disks.insert(
                 disk.disk_id.clone(),
                 Arc::new(DiskHandle::new(root, seal, config)?),
@@ -733,14 +862,14 @@ impl DiskResources {
         let mut identities = BTreeSet::new();
         for (disk, directory) in config.disks.iter().zip(directories) {
             let root = DiskRoot::from_directory(disk.root.clone(), directory)?;
-            let identity = root.directory.identity();
+            let identity = root.operation()?.held().identity();
             if !identities.insert((identity.device, identity.inode)) {
                 return Err(Error::new(
                     ErrorCode::ConfigInvalid,
                     "selected recovery directories name the same held storage root",
                 ));
             }
-            let seal = identity_at(config, disk, root.directory.directory())?;
+            let seal = identity_at(config, disk, root.operation()?.held().directory())?;
             let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
             validate_stored_seal(&decode_seal(&bytes)?, &seal)?;
             disks.insert(
