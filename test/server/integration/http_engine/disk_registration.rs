@@ -1,8 +1,8 @@
-//! Online registration is an authenticated refusal, not a storage command.
+//! Embedded engines have no system-management addition coordinator.
 use super::*;
 
 #[tokio::test]
-async fn online_disk_registration_retains_offline_refusal_and_body_boundary() {
+async fn embedded_disk_addition_requires_management_and_retains_body_boundary() {
     let root = tempfile::tempdir().unwrap();
     let app = application(root.path());
     let token = login(&app, "admin", "integration-test-password").await;
@@ -20,15 +20,15 @@ async fn online_disk_registration_retains_offline_refusal_and_body_boundary() {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
         let bytes = http_routing::body::to_bytes(response.into_body(), 1024 * 1024)
             .await
             .unwrap();
         let error: Value = json_codec::from_slice(&bytes).unwrap();
-        assert_eq!(error["error"]["code"], "OFFLINE_CONFIGURATION_REQUIRED");
+        assert_eq!(error["error"]["code"], "UNSUPPORTED_OPERATION");
         assert_eq!(
             error["error"]["message"],
-            "disk registration requires an explicit offline configuration and topology migration"
+            "operation is not supported by this build"
         );
         assert_eq!(error["error"]["retryable"], false);
     }

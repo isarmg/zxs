@@ -63,158 +63,235 @@ pub(crate) fn discover(config: ValidatedConfig) -> Result<ValidatedConfig> {
     discover_unrestricted_legacy(config)
 }
 
+struct DiscoveryRoot {
+    disk: DiskConfig,
+    root: DiskRoot,
+    authority: Option<Arc<PortableAuthority>>,
+}
+
 fn discover_unrestricted_legacy(config: ValidatedConfig) -> Result<ValidatedConfig> {
-    let mut selected: Option<PortableAuthority> = None;
+    let mut selected = None;
+    let mut damaged_marker = None;
+    let mut authenticated_markers = BTreeMap::new();
     let mut pending = config.disks.clone();
-    let mut visited = std::collections::BTreeSet::new();
-    while let Some(disk) = pending.pop() {
-        if !visited.insert(disk.disk_id.clone()) || disk_unavailable(&disk)? {
-            continue;
-        }
-        let root = DiskRoot::open(&disk.root)?;
-        let candidate = (|| -> Result<Option<PortableAuthority>> {
-            let directory = disk.root.join("metadata/pool-membership");
-            let file = if root
-                .optional_metadata(&disk.root.join("metadata"))?
-                .is_some()
-                && root.optional_metadata(&directory)?.is_some()
-            {
-                root.directory(&directory)?;
-                root.open_optional_regular(&disk.root.join(GENERATION_FILE))?
-            } else {
-                None
-            };
-            let Some(file) = file else {
-                // A fence may name an existing empty target before enrollment.
-                // Absence here is not authority and does not admit that root.
-                let Some(seal_file) = root.open_optional_regular(&disk.root.join("disk.json"))?
-                else {
-                    return Ok(None);
-                };
-                let seal_bytes = read_file_bytes(seal_file, MAX_METADATA)?;
-                if let Ok(seal) = decode_seal(&seal_bytes)
-                    && matches!(seal.format, DiskSealFormat::MembershipGeneration { .. })
+    let mut visited = BTreeSet::new();
+    while !pending.is_empty() {
+        let mut held = Vec::with_capacity(pending.len());
+        // Authenticate every already-authorized root before following any hint.
+        // A predecessor fence on one root cannot race discovery of an Abort
+        // marker on another root into probing the rejected target.
+        for disk in std::mem::take(&mut pending) {
+            if !visited.insert(disk.disk_id.clone()) || disk_unavailable(&disk)? {
+                continue;
+            }
+            let root = DiskRoot::open(&disk.root)?;
+            let authority = match marker_at(&root, &disk, &config) {
+                Ok(authority) => authority.map(Arc::new),
+                Err(error)
+                    if matches!(
+                        error.code(),
+                        ErrorCode::InvalidJson | ErrorCode::ObjectCorrupt
+                    ) =>
                 {
-                    return Err(Error::new(
-                        ErrorCode::RecoveryRequired,
-                        "active seal has no generation marker",
-                    ));
+                    // A damaged copy grants no locator or authority. Keep its
+                    // configured vote in N/Q and require an intact fixed majority
+                    // before returning any selected generation below.
+                    damaged_marker.get_or_insert(error);
+                    continue;
                 }
-                return Ok(None);
+                Err(error) => return Err(error),
             };
-            let authority: PortableAuthority =
-                decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
-            authority.add_joint()?;
-            let intent = authority.intent()?;
-            if !authority.matches_metadata_projection(&config)? {
-                return Err(Error::new(
-                    ErrorCode::ConfigConflict,
-                    "system projection differs from generation lineage",
-                ));
+            if let Some(authority) = &authority {
+                authenticated_markers.insert(disk.disk_id.clone(), authority.hash()?);
+                select_authority(&mut selected, Arc::clone(authority))?;
             }
-            pending.extend(
-                intent
-                    .target
-                    .disks
-                    .iter()
-                    .filter(|candidate| {
-                        !config
-                            .disks
-                            .iter()
-                            .any(|known| known.disk_id == candidate.disk_id)
-                    })
-                    .cloned(),
-            );
-            Ok(Some(authority))
-        })()?;
-        // Routing hints never authorize admission. Read each held root's own
-        // generation namespace; stale system projections must find a later fence.
-        if config
-            .disks
-            .iter()
-            .any(|old| old.disk_id == disk.disk_id && old.metadata_member)
-        {
-            let mut paths = vec![crate::journal::log_path(&disk)];
-            if let Ok(seal) =
-                root.read_json_observed::<DiskSeal>(&disk.root.join("disk.json"), &mut |_| Ok(()))
-                && let DiskSealFormat::MembershipGeneration { authority_hash } = seal.format
-            {
-                paths.push(generation_directory(&disk, &authority_hash).join("journal.bin"));
-            }
-            for path in paths {
-                if let Ok(scan) = crate::journal::scan_path_at(&root, &path) {
-                    for (record, _) in scan
-                        .records
-                        .iter()
-                        .filter(|(record, _)| record.record_type == RecordType::MembershipFence)
-                    {
-                        if let Ok(intent) = load_object_at::<TransitionIntent>(
-                            &root,
-                            &disk,
-                            INTENT_KIND,
-                            &record.object_hash,
-                        ) && config.same_metadata_membership(intent.origin.config())
-                            && !candidate
-                                .as_ref()
-                                .map(|authority| authority.rejects_transition(&record.object_hash))
-                                .transpose()?
-                                .unwrap_or(false)
-                        {
-                            pending.extend(
-                                intent
-                                    .target
-                                    .disks
-                                    .iter()
-                                    .filter(|candidate| {
-                                        !config
-                                            .disks
-                                            .iter()
-                                            .any(|known| known.disk_id == candidate.disk_id)
-                                    })
-                                    .cloned(),
-                            );
-                        }
-                    }
-                }
-            }
+            held.push(DiscoveryRoot {
+                disk,
+                root,
+                authority,
+            });
         }
-        match candidate {
-            Some(authority) => {
-                if let Some(previous) = &selected {
-                    let previous_hash = previous.hash()?;
-                    let hash = authority.hash()?;
-                    if previous_hash == hash || authority.contains(&previous_hash)? {
-                        selected = Some(authority);
-                    } else if !previous.contains(&hash)? {
-                        return Err(Error::new(
-                            ErrorCode::LogFork,
-                            "roots select conflicting generation authorities",
-                        ));
-                    }
-                } else {
-                    selected = Some(authority);
-                }
+        for held in held {
+            if let Some(authority) = &held.authority {
+                // Abort retains the origin. Its rejected target is history,
+                // never a root locator or permission to perform target I/O.
+                append_unknown_disks(&mut pending, &config, &authority.effective_config()?.disks);
             }
-            None => (),
+            if config
+                .disks
+                .iter()
+                .any(|old| old.disk_id == held.disk.disk_id && old.metadata_member)
+            {
+                append_fence_hints(&mut pending, &config, &held, selected.as_deref())?;
+            }
         }
     }
     match selected {
-        Some(portable) => admit_discovered(portable, &config),
-        None => Ok(config),
+        Some(portable) => {
+            if damaged_marker.is_some() {
+                let effective = portable.effective_config()?;
+                let hash = portable.hash()?;
+                let intact = effective
+                    .metadata_members()
+                    .filter(|disk| authenticated_markers.get(&disk.disk_id) == Some(&hash))
+                    .count();
+                if intact < effective.metadata_quorum() {
+                    return Err(Error::new(
+                        ErrorCode::MetadataQuorumUnavailable,
+                        "damaged generation markers have no intact fixed-authority majority",
+                    ));
+                }
+            }
+            admit_discovered(Arc::unwrap_or_clone(portable), &config)
+        }
+        None => match damaged_marker {
+            Some(error) => Err(error),
+            None => Ok(config),
+        },
     }
+}
+
+fn append_unknown_disks(
+    pending: &mut Vec<DiskConfig>,
+    config: &ValidatedConfig,
+    disks: &[DiskConfig],
+) {
+    pending.extend(
+        disks
+            .iter()
+            .filter(|candidate| {
+                !config
+                    .disks
+                    .iter()
+                    .any(|known| known.disk_id == candidate.disk_id)
+            })
+            .cloned(),
+    );
+}
+
+fn append_fence_hints(
+    pending: &mut Vec<DiskConfig>,
+    config: &ValidatedConfig,
+    held: &DiscoveryRoot,
+    selected: Option<&PortableAuthority>,
+) -> Result<()> {
+    let DiscoveryRoot {
+        disk,
+        root,
+        authority,
+    } = held;
+    // Hints do not authorize admission. Inspect only this held root's own
+    // journal namespaces, with the complete authenticated batch lineage.
+    let mut paths = vec![crate::journal::log_path(disk)];
+    if let Ok(seal) =
+        root.read_json_observed::<DiskSeal>(&disk.root.join("disk.json"), &mut |_| Ok(()))
+        && let DiskSealFormat::MembershipGeneration { authority_hash } = seal.format
+    {
+        paths.push(generation_directory(disk, &authority_hash).join("journal.bin"));
+    }
+    for path in paths {
+        if let Ok(scan) = crate::journal::scan_path_at(root, &path) {
+            for (record, _) in scan
+                .records
+                .iter()
+                .filter(|(record, _)| record.record_type == RecordType::MembershipFence)
+            {
+                let mut rejected = false;
+                for authority in [selected, authority.as_deref()].into_iter().flatten() {
+                    rejected |= authority.rejects_transition(&record.object_hash)?;
+                }
+                if rejected {
+                    continue;
+                }
+                if let Ok(intent) =
+                    load_object_at::<TransitionIntent>(root, disk, INTENT_KIND, &record.object_hash)
+                    && config.same_metadata_membership(intent.origin.config())
+                {
+                    append_unknown_disks(pending, config, &intent.target.disks);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn marker_at(
+    root: &DiskRoot,
+    disk: &DiskConfig,
+    projected: &ValidatedConfig,
+) -> Result<Option<PortableAuthority>> {
+    let directory = disk.root.join("metadata/pool-membership");
+    let file = if root
+        .optional_metadata(&disk.root.join("metadata"))?
+        .is_some()
+        && root.optional_metadata(&directory)?.is_some()
+    {
+        root.directory(&directory)?;
+        root.open_optional_read_regular(&disk.root.join(GENERATION_FILE))?
+    } else {
+        None
+    };
+    let Some(file) = file else {
+        if let Some(file) = root.open_optional_read_regular(&disk.root.join("disk.json"))? {
+            let bytes = read_file_bytes(file, MAX_METADATA)?;
+            let value: json_codec::Value = decode_strict(&bytes)?;
+            if value.get("format").and_then(json_codec::Value::as_str) == Some("membership-pending")
+            {
+                let _: PendingDiskSeal = decode_strict(&bytes)?;
+                return Ok(None);
+            }
+            let seal = decode_seal(&bytes)?;
+            if matches!(seal.format, DiskSealFormat::MembershipGeneration { .. }) {
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "active seal lacks its generation marker",
+                ));
+            }
+        }
+        return Ok(None);
+    };
+    let portable: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
+    if !portable.matches_metadata_projection(projected)? {
+        return Err(Error::new(
+            ErrorCode::ConfigConflict,
+            "projection differs from authenticated generation lineage",
+        ));
+    }
+    Ok(Some(portable))
+}
+
+fn select_authority(
+    selected: &mut Option<Arc<PortableAuthority>>,
+    authority: Arc<PortableAuthority>,
+) -> Result<()> {
+    if let Some(previous) = selected {
+        let previous_hash = previous.hash()?;
+        let hash = authority.hash()?;
+        if previous_hash != hash && !authority.contains(&previous_hash)? {
+            if !previous.contains(&hash)? {
+                return Err(Error::new(
+                    ErrorCode::LogFork,
+                    "roots select conflicting generation authorities",
+                ));
+            }
+            return Ok(());
+        }
+    }
+    // Different valid witnesses for one core have the same generation hash.
+    *selected = Some(authority);
+    Ok(())
 }
 
 fn admit_discovered(
     portable: PortableAuthority,
     projected: &ValidatedConfig,
 ) -> Result<ValidatedConfig> {
-    portable.add_joint()?;
     let intent = portable.intent()?;
     let hash = portable.hash()?;
     let transition = object_hash(INTENT_KIND, &intent)?;
     let original = portable.genesis_config()?;
     let epoch = portable.epoch()?;
-    let mut target = intent.target.clone();
+    let mut target = portable.effective_config()?;
     let roots = target
         .disks
         .iter()
@@ -284,7 +361,7 @@ pub(crate) fn restore_anchor(
     original: ValidatedConfig,
 ) -> Result<ValidatedConfig> {
     let root = DiskRoot::open(path)?;
-    let Some(file) = root.open_optional_regular(&path.join(GENERATION_FILE))? else {
+    let Some(file) = root.open_optional_read_regular(&path.join(GENERATION_FILE))? else {
         if matches!(seal.format, DiskSealFormat::MembershipGeneration { .. }) {
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
@@ -294,10 +371,8 @@ pub(crate) fn restore_anchor(
         return Ok(original);
     };
     let portable: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
-    portable.add_joint()?;
-    let intent = portable.intent()?;
     original.verify_saved_metadata_membership(&portable.genesis_config()?)?;
-    let target = intent.target.clone();
+    let target = portable.effective_config()?;
     let paths = target
         .disks
         .iter()
@@ -357,28 +432,37 @@ impl Engine {
                 let parent = handle
                     .root
                     .private_child(&member_directory(disk, &transition))?;
-                let verified = generation.portable.add_joint()?.verify()?;
-                let identity = &verified.dependencies[&disk.disk_id].enrollment.identity;
-                let physical = FileIdentity::from_fd(handle.root.directory(handle.root.path())?)?;
-                if identity.device != physical.device || identity.inode != physical.inode {
-                    return Err(Error::new(
-                        ErrorCode::DiskIdentityMismatch,
-                        "active member differs from joint identity",
-                    ));
+                if generation.portable.is_abort() {
+                    generation
+                        .portable
+                        .verify_abort_member(&handle.root, disk)?;
+                    require_abort_journal(&handle.root, disk, &generation.hash)?;
+                } else {
+                    let joint = generation.portable.add_joint()?;
+                    let verified = joint.verify()?;
+                    let identity = &verified.dependencies[&disk.disk_id].enrollment.identity;
+                    let physical =
+                        FileIdentity::from_fd(handle.root.directory(handle.root.path())?)?;
+                    if identity.device != physical.device || identity.inode != physical.inode {
+                        return Err(Error::new(
+                            ErrorCode::DiskIdentityMismatch,
+                            "active member differs from joint identity",
+                        ));
+                    }
+                    let store = joint::store::JointStore::open(
+                        &handle.root,
+                        &parent,
+                        identity,
+                        &transition,
+                        &joint.proposal_hash,
+                        false,
+                    )?;
+                    store.verify_certificate(
+                        &joint.certificate_hash,
+                        &joint.proposal_hash,
+                        disk,
+                    )?;
                 }
-                let store = joint::store::JointStore::open(
-                    &handle.root,
-                    &parent,
-                    identity,
-                    &transition,
-                    &generation.portable.add_joint()?.proposal_hash,
-                    false,
-                )?;
-                store.verify_certificate(
-                    &generation.portable.add_joint()?.certificate_hash,
-                    &generation.portable.add_joint()?.proposal_hash,
-                    disk,
-                )?;
                 read_generation_base(
                     parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?,
                     &generation.portable.archive_hash()?,
@@ -454,6 +538,22 @@ impl Engine {
     }
 }
 
+fn require_abort_journal(root: &DiskRoot, disk: &DiskConfig, hash: &str) -> Result<()> {
+    // Abort installs this durable empty leaf before publishing its marker.
+    // A healthy frozen archive cannot recreate a lost current-generation log.
+    root.open_read_regular(&generation_directory(disk, hash).join("journal.bin"))
+        .map(|_| ())
+        .map_err(|source| {
+            source.context(
+                ErrorCode::RecoveryRequired,
+                format!(
+                    "Abort generation journal is unavailable for {}",
+                    disk.disk_id
+                ),
+            )
+        })
+}
+
 /// Missing *parents* are expected only before this root's marker/seal promotion.
 /// A published/current marker or seal cannot use that absence to erase a fence.
 fn activation_namespace_present(
@@ -470,7 +570,18 @@ fn activation_namespace_present(
             .optional_metadata(&generation_directory(disk, &generation.hash))?
             .is_some()
     {
-        return Ok(true);
+        if !generation.portable.is_abort()
+            || root
+                .open_optional_read_regular(
+                    &generation_directory(disk, &generation.hash).join("journal.bin"),
+                )?
+                .is_some()
+        {
+            return Ok(true);
+        }
+        // An unmarked staging directory may precede the first durable leaf.
+        // A current marker or active seal below makes absence corruption, not
+        // permission to reconstruct an empty journal from the frozen base.
     }
     let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
     let expected = identity_at(config, disk, &root.directory(root.path())?)?;
@@ -482,7 +593,7 @@ fn activation_namespace_present(
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 format!(
-                    "active generation namespace is missing for {}",
+                    "active generation namespace or journal is missing for {}",
                     disk.disk_id
                 ),
             ));
@@ -490,7 +601,7 @@ fn activation_namespace_present(
     }
     let membership = disk.root.join("metadata/pool-membership");
     if root.optional_metadata(&membership)?.is_some()
-        && let Some(file) = root.open_optional_regular(&disk.root.join(GENERATION_FILE))?
+        && let Some(file) = root.open_optional_read_regular(&disk.root.join(GENERATION_FILE))?
     {
         let portable: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
         portable.intent()?;
@@ -499,7 +610,7 @@ fn activation_namespace_present(
             return Err(Error::new(
                 ErrorCode::RecoveryRequired,
                 format!(
-                    "prepared generation marker lacks its namespace for {}",
+                    "prepared generation marker lacks its namespace or journal for {}",
                     disk.disk_id
                 ),
             ));

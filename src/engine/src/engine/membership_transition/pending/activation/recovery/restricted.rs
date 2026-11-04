@@ -1,6 +1,6 @@
 //! Fixed probe set, read-only local evidence. This is not Engine admission.
 //! Nothing here reconciles pending stop intents, proves latest publication, or
-//! activates an exit generation. Current PortableAuthority supports pure adds.
+//! activates an exit generation. Abort evidence retains the original fixed N/Q.
 use super::*;
 use crate::engine::disk_lifecycle::bootstrap::{
     BootstrapError, ReadProbe, RestrictedProbes, store::BootstrapStore,
@@ -15,7 +15,7 @@ pub(crate) enum RestrictedDiscoveryFailure {
 }
 
 /// A read-only observation, deliberately without Config, State, root handles,
-/// admission conversion, or write capability. The target N/Q comes from the
+/// admission conversion, or write capability. The effective N/Q comes from the
 /// authenticated authority; the probe count never changes its denominator.
 #[derive(Debug)]
 pub(crate) struct RestrictedGenerationEvidence {
@@ -143,7 +143,7 @@ fn discover_with_io(
     // No fence, authority, archive or Config path can append to this list.
     let candidates = candidates(probes, config)?;
     let mut held = Vec::with_capacity(candidates.len());
-    let mut selected: Option<PortableAuthority> = None;
+    let mut selected = None;
     for ProbeCandidate { probe, disk } in candidates {
         match io.stat(probe) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -161,7 +161,7 @@ fn discover_with_io(
         let marker = marker_at(&root, &disk, config)?;
         let authority_hash = marker.as_ref().map(PortableAuthority::hash).transpose()?;
         if let Some(authority) = marker {
-            select_authority(&mut selected, authority)?;
+            select_authority(&mut selected, Arc::new(authority))?;
         }
         held.push(HeldCandidate {
             disk,
@@ -175,75 +175,7 @@ fn discover_with_io(
             "restricted roots have no generation authority; management recovery is required",
         )
     })?;
-    verify_held_generation(portable, held)
-}
-
-fn marker_at(
-    root: &DiskRoot,
-    disk: &DiskConfig,
-    projected: &ValidatedConfig,
-) -> Result<Option<PortableAuthority>> {
-    let directory = disk.root.join("metadata/pool-membership");
-    let file = if root
-        .optional_metadata(&disk.root.join("metadata"))?
-        .is_some()
-        && root.optional_metadata(&directory)?.is_some()
-    {
-        root.directory(&directory)?;
-        root.open_optional_regular(&disk.root.join(GENERATION_FILE))?
-    } else {
-        None
-    };
-    let Some(file) = file else {
-        if let Some(file) = root.open_optional_regular(&disk.root.join("disk.json"))? {
-            let bytes = read_file_bytes(file, MAX_METADATA)?;
-            let value: json_codec::Value = decode_strict(&bytes)?;
-            if value.get("format").and_then(json_codec::Value::as_str) == Some("membership-pending")
-            {
-                // A typed pending seal without a marker supplies no generation
-                // evidence. It cannot vote or turn into a fallback projection.
-                let _: PendingDiskSeal = decode_strict(&bytes)?;
-                return Ok(None);
-            }
-            let seal = decode_seal(&bytes)?;
-            if matches!(seal.format, DiskSealFormat::MembershipGeneration { .. }) {
-                return Err(Error::new(
-                    ErrorCode::RecoveryRequired,
-                    "active seal lacks its marker",
-                ));
-            }
-        }
-        return Ok(None);
-    };
-    let portable: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
-    portable.add_joint()?;
-    if !portable.matches_metadata_projection(projected)? {
-        return Err(Error::new(
-            ErrorCode::ConfigConflict,
-            "projection differs from restricted lineage",
-        ));
-    }
-    Ok(Some(portable))
-}
-fn select_authority(
-    selected: &mut Option<PortableAuthority>,
-    authority: PortableAuthority,
-) -> Result<()> {
-    if let Some(previous) = selected {
-        let previous_hash = previous.hash()?;
-        let hash = authority.hash()?;
-        if previous_hash != hash && !authority.contains(&previous_hash)? {
-            if !previous.contains(&hash)? {
-                return Err(Error::new(
-                    ErrorCode::LogFork,
-                    "restricted roots have conflicting authorities",
-                ));
-            }
-            return Ok(());
-        }
-    }
-    *selected = Some(authority);
-    Ok(())
+    verify_held_generation(Arc::unwrap_or_clone(portable), held)
 }
 
 fn verify_held_generation(
@@ -253,18 +185,22 @@ fn verify_held_generation(
     let intent = portable.intent()?;
     let hash = portable.hash()?;
     let transition = object_hash(INTENT_KIND, &intent)?;
-    let verified = portable.add_joint()?.verify()?;
+    let effective = portable.effective_config()?;
+    let joint = if portable.is_abort() {
+        None
+    } else {
+        Some(portable.add_joint()?.verify()?)
+    };
     let mut config = None;
     let mut evidence = RestrictedGenerationEvidence {
         authority_hash: hash.clone(),
-        metadata_members: intent.target.metadata_members().len(),
-        metadata_quorum: intent.target.metadata_quorum(),
+        metadata_members: effective.metadata_members().len(),
+        metadata_quorum: effective.metadata_quorum(),
         verified_members: Vec::new(),
         rejected_members: Vec::new(),
     };
     for held in held {
-        let Some(member) = intent
-            .target
+        let Some(member) = effective
             .metadata_members()
             .find(|disk| disk.disk_id == held.disk.disk_id)
         else {
@@ -283,20 +219,6 @@ fn verify_held_generation(
             // The authenticated member supplies identity/role, never its address.
             let mut disk = member.clone();
             disk.root = held.disk.root.clone();
-            let dependency = verified.dependencies.get(&disk.disk_id).ok_or_else(|| {
-                Error::new(
-                    ErrorCode::RecoveryRequired,
-                    "selected authority lacks member dependency",
-                )
-            })?;
-            let physical = FileIdentity::from_fd(held.root.directory(held.root.path())?)?;
-            let identity = &dependency.enrollment.identity;
-            if identity != &admission::member_identity(&intent.target, &disk, physical) {
-                return Err(Error::new(
-                    ErrorCode::DiskIdentityMismatch,
-                    "retained root differs from joint enrollment",
-                ));
-            }
             let saved: ValidatedConfig = held.root.read_json_observed(
                 &disk.root.join("metadata/pool-membership/config.json"),
                 &mut |_| Ok(()),
@@ -307,19 +229,42 @@ fn verify_held_generation(
             let parent = held
                 .root
                 .private_child(&member_directory(&disk, &transition))?;
-            let store = joint::store::JointStore::open(
-                &held.root,
-                &parent,
-                identity,
-                &transition,
-                &portable.add_joint()?.proposal_hash,
-                false,
-            )?;
-            store.verify_certificate_read_only(
-                &portable.add_joint()?.certificate_hash,
-                &portable.add_joint()?.proposal_hash,
-                &disk,
-            )?;
+            match &joint {
+                None => {
+                    portable.verify_abort_member(&held.root, &disk)?;
+                    require_abort_journal(&held.root, &disk, &hash)?;
+                }
+                Some(verified) => {
+                    let dependency = verified.dependencies.get(&disk.disk_id).ok_or_else(|| {
+                        Error::new(
+                            ErrorCode::RecoveryRequired,
+                            "selected authority lacks member dependency",
+                        )
+                    })?;
+                    let physical = FileIdentity::from_fd(held.root.directory(held.root.path())?)?;
+                    let identity = &dependency.enrollment.identity;
+                    if identity != &admission::member_identity(&effective, &disk, physical) {
+                        return Err(Error::new(
+                            ErrorCode::DiskIdentityMismatch,
+                            "retained root differs from joint enrollment",
+                        ));
+                    }
+                    let joint = portable.add_joint()?;
+                    let store = joint::store::JointStore::open(
+                        &held.root,
+                        &parent,
+                        identity,
+                        &transition,
+                        &joint.proposal_hash,
+                        false,
+                    )?;
+                    store.verify_certificate_read_only(
+                        &joint.certificate_hash,
+                        &joint.proposal_hash,
+                        &disk,
+                    )?;
+                }
+            }
             let (state, history) = read_generation_base(
                 parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?,
                 &portable.archive_hash()?,
@@ -327,7 +272,7 @@ fn verify_held_generation(
                 &intent,
             )?;
             if config.is_none() {
-                config = Some(intent.target.clone().with_generation(Arc::new(Generation {
+                config = Some(effective.clone().with_generation(Arc::new(Generation {
                     hash: hash.clone(),
                     workspace_roots: portable.workspace_root_aliases()?,
                     portable: portable.clone(),
@@ -371,3 +316,7 @@ fn verify_held_generation(
 #[cfg(test)]
 #[path = "../../../../../../../../test/engine/unit/engine/restricted_generation_discovery_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../../../../../test/engine/unit/engine/membership_abort_recovery_tests.rs"]
+mod abort_tests;

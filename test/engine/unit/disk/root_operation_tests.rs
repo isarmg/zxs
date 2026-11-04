@@ -54,7 +54,7 @@ fn every_bound_root_entry_rejects_before_opening_or_mutating() {
     unavailable(root.write_atomic(&file, b"changed", true));
     unavailable(root.write_json(&file, &18u64, true));
     unavailable(root.sync_dir(&child));
-    unavailable(root.remove_file(&file));
+    unavailable(root.remove_file_synced(&file));
     unavailable(root.available());
     unavailable(root.private_child(&child));
     unavailable(derived.read_bytes(&file, 64));

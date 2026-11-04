@@ -193,12 +193,16 @@ fn membership_joint_exit_union_roles_preserve_registration_body_and_permanent_re
             .unwrap()
             .source
             .generation_root();
-        let proposed_authority: activation::PortableAuthority =
-            json_codec::from_value(json_codec::json!({"joint": portable, "archive": archive}))
-                .unwrap();
-        assert_eq!(
-            proposed_authority.intent().unwrap_err().code(),
-            ErrorCode::RecoveryRequired
+        // Preparation-only joint evidence is rejected at the strict authority
+        // decode boundary, before it can be mistaken for an active exit core.
+        let error = json_codec::from_value::<activation::PortableAuthority>(
+            json_codec::json!({"joint": portable, "archive": archive}),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("exit control evidence cannot authorize lifecycle activation")
         );
         assert_eq!(
             result

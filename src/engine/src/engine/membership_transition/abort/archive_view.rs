@@ -7,14 +7,12 @@ pub(in crate::engine::membership_transition) struct ArchivedAbortMember {
     pub(in crate::engine::membership_transition) fence: Receipt,
 }
 
-#[cfg(test)]
 pub(in crate::engine::membership_transition) struct VerifiedAbortArchive {
     root: ArchiveRoot,
     intent: TransitionIntent,
     members: BTreeMap<String, ArchivedAbortMember>,
 }
 
-#[cfg(test)]
 impl VerifiedAbortArchive {
     /// The expected hashes must come from the admitted handoff, never from the
     /// directory's self-declared root. Complete F verification is unchanged.
@@ -109,6 +107,101 @@ pub(in crate::engine::membership_transition) struct PortableAbortArchive {
 }
 
 impl PortableAbortArchive {
+    #[cfg(test)]
+    pub(in crate::engine::membership_transition) fn read_for_test(
+        root: DiskRoot,
+        expected: &MembershipControlArchive,
+    ) -> Result<Self> {
+        Self::read(root, expected)
+    }
+
+    /// Check the real original journal byte-for-byte against F. The active seal
+    /// may advance to G, but the predecessor journal and its fence never change.
+    pub(in crate::engine::membership_transition) fn verify_live_member(
+        &self,
+        archive: &ArchiveRoot,
+        transition: &str,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+        generation: &str,
+    ) -> Result<()> {
+        let (intent, members) = self.verify(archive, transition)?;
+        let original = members.get(&disk.disk_id).ok_or_else(|| {
+            Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "Abort root is not an original metadata member",
+            )
+        })?;
+        let configured = intent
+            .origin
+            .config()
+            .disks
+            .iter()
+            .find(|old| old.disk_id == disk.disk_id)
+            .expect("invariant: verified archive member belongs to original config");
+        let mut projection = disk.clone();
+        projection.root.clone_from(&configured.root);
+        if !pending::admission::same_disk(configured, &projection) {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "Abort member binding differs",
+            ));
+        }
+        let identity = pending::admission::member_identity(
+            intent.origin.config(),
+            configured,
+            FileIdentity {
+                device: original.seal.device,
+                inode: original.seal.inode,
+            },
+        );
+        identity.verify_physical_root(root)?;
+        let stored = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
+        let mut expected = original.seal.clone();
+        if stored.format != expected.format {
+            expected.format = DiskSealFormat::MembershipGeneration {
+                authority_hash: generation.to_owned(),
+            };
+        }
+        validate_stored_seal(&stored, &expected)?;
+        if matches!(&stored.format, DiskSealFormat::MembershipGeneration { authority_hash } if authority_hash == generation)
+            && root
+                .open_optional_read_regular(
+                    &pending::activation::generation_directory(disk, generation)
+                        .join("journal.bin"),
+                )?
+                .is_none()
+        {
+            return Err(Error::new(
+                ErrorCode::RecoveryRequired,
+                "active Abort generation journal is missing",
+            ));
+        }
+        let entries = crate::metadata_map::read_map(&archive.members, |kind, hash| {
+            let value = self.objects.get(&format!("{kind}/{hash}")).ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ObjectCorrupt,
+                    "Abort archive member page missing",
+                )
+            })?;
+            AuthenticatedMetadataObject::authenticate(kind, hash, value.clone())
+        })?;
+        let member: ArchivedMember = json_codec::from_value(entries[&disk.disk_id].clone())?;
+        let path = match intent.origin.predecessor() {
+            Some(hash) => pending::activation::generation_directory(disk, hash).join("journal.bin"),
+            None => crate::journal::log_path(disk),
+        };
+        let (bytes, hash) =
+            hash_original_journal(root.open_read_regular(&path)?, member.journal.bytes)?;
+        if bytes != member.journal.bytes || hash != member.journal.content_hash {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "Abort original journal differs from exact frozen archive",
+            ));
+        }
+        Ok(())
+    }
+
     pub(in crate::engine::membership_transition) fn verify(
         &self,
         root: &ArchiveRoot,
@@ -203,8 +296,7 @@ impl PortableAbortArchive {
         Ok((intent, members))
     }
 
-    #[cfg(test)]
-    pub(in crate::engine::membership_transition) fn read_for_test(
+    pub(in crate::engine::membership_transition) fn read(
         root: DiskRoot,
         expected: &MembershipControlArchive,
     ) -> Result<Self> {
@@ -240,4 +332,25 @@ impl PortableAbortArchive {
             .collect::<Result<_>>()?;
         Ok(Self { objects, seals })
     }
+}
+
+/// The admitted reader owns its real descriptor and checks cancellation after
+/// EOF as well as during each read, before its digest can authorize a vote.
+fn hash_original_journal(mut file: ReadFile, expected_bytes: u64) -> Result<(u64, String)> {
+    let limit = expected_bytes.checked_add(1).ok_or_else(|| {
+        Error::new(
+            ErrorCode::ResourceLimit,
+            "original journal byte limit overflow",
+        )
+    })?;
+    let mut digest = blake3::Hasher::new();
+    let bytes = {
+        let mut reader = HashingReader {
+            reader: (&mut file).take(limit),
+            digest: &mut digest,
+        };
+        std::io::copy(&mut reader, &mut std::io::sink())?
+    };
+    file.check_running()?;
+    Ok((bytes, digest.finalize().to_hex().to_string()))
 }

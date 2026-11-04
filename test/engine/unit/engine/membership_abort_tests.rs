@@ -882,3 +882,6 @@ fn membership_abort_successor_binds_authenticated_predecessor_and_original_confi
     );
     assert_eq!(files(&fixture.source), before);
 }
+
+#[path = "membership_abort_runtime_tests.rs"]
+mod runtime_tests;

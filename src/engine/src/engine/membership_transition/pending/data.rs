@@ -88,7 +88,7 @@ impl DataDependency {
         let path = self.path(root.path());
         let directory = path.parent().expect("invariant: readiness has a parent");
         let held = root.private_child(directory)?;
-        let file = held.open_regular(&path)?;
+        let file = held.open_read_regular(&path)?;
         self.verify_bytes(&read_file_bytes(file.try_clone()?, MAX_METADATA)?)?;
         file.sync_all()?;
         held.sync_dir(directory)?;
@@ -144,7 +144,7 @@ impl PendingDataDisk {
             .map_err(fs_error)?;
         let path = self.dependency.path(&self.disk.root);
         let expected = encode_metadata(&self.dependency, MAX_METADATA)?;
-        if let Some(file) = held.open_optional_regular(&path)? {
+        if let Some(file) = held.open_optional_read_regular(&path)? {
             self.dependency
                 .verify_bytes(&read_file_bytes(file, MAX_METADATA)?)?;
         }

@@ -23,7 +23,7 @@ fn typed_parent_io_handles_root_children_and_missing_nested_directories() {
         assert_eq!(bytes, b"owned");
         assert!(root.open_optional_regular(&path).unwrap().is_some());
         assert!(root.optional_metadata(&path).unwrap().unwrap().is_file());
-        root.remove_file(&path).unwrap();
+        root.remove_file_synced(&path).unwrap();
         assert!(root.open_optional_regular(&path).unwrap().is_none());
     }
     assert_eq!(

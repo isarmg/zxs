@@ -124,9 +124,11 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `PUT /api/repositories/{repository}/placement-configuration` | 自动创建或更新当前路径的主盘规则；同时校验目录身份、规则 ID 和代数，保留历史正文及独立子规则 |
 | `GET /api/versions/{version}/placement` | 该版本一级归属、冻结路由、每级健康和迁移残留 |
 | `GET /api/admin/disks` | 磁盘状态，仅授权管理员 |
-| `POST /api/admin/disks` | 当前身份准入后以 `409 OFFLINE_CONFIGURATION_REQUIRED` 拒绝在线登记；登记需要显式离线配置和拓扑迁移 |
-| `POST /api/admin/disks/{disk}/drain` | 排空前检查和迁移任务 |
-| `POST /api/admin/disks/{disk}/eject` | 检查后安全卸载 |
+| `POST /api/admin/disks/preview` | 以 operation_id、已检查目录、槽位、层级、上游和 metadata_member 生成当前池的纯添加预览 |
+| `POST /api/admin/disks` | 提交严格 `{preview}`，保留原 operation_id，真实运行在线纯添加协调器 |
+| `GET /api/admin/disks/addition` | 查询最新持久添加；可传 operation_id 查询原操作，不探测主机磁盘 |
+| `POST /api/admin/disks/addition/resume` | 严格 `{operation_id}`，只继续原目录、角色和目标配置 |
+
 
 文件管理历史返回 `kind:nodes` 的 `HistoryWindowPage`，正文历史返回 `kind:versions`；不再把版本集合、分支和合并全集夹带在主节点页中，也不从正文来源或时间相邻推断图边。统一节点按 `(sequence DESC,node_id ASC)`，正文按 `(version_sequence ASC,version_id ASC)`，分支按 ID，合并按 `(sequence DESC,merge_id ASC)`；每页替换上一个窗口。`identity.context` 保留准确当前节点／分支及实际路径，即使它们不在本页；`identity.action_max_entries` 是实际 `Config.max_entries` 的十进制文本，不替代完整动作编码的 1 MiB 上限。
 
@@ -155,7 +157,7 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 
 管理初始化不建立零成员池；`storage_pending:true` 只表示管理员已创建、存储尚未配置。目录选择分别携带挂载路径和实际存储根，可使用挂载点内嵌套目录；必须既存、空、0700 且属于服务账号，不执行挂载、格式化或权限修改。身份在使用时重新校验，选择 DTO 不代替授权。
 
-首次激活／补全回执为 `{activated:true,restart_required:bool,recovering:bool}`，后两者恰一为真。客户端断开不取消已接管的有界激活任务；未知结果先查询状态，仅凭 `completion_available` 补全原意图。公开预设初始化及旧初始化补全路由已移除；恢复系统接口不变。既有池热增盘／移除仍未实现，不能把首次激活或旧不支持的 `POST /api/admin/disks` 宣称为在线扩容。
+首次激活／补全回执为 `{activated:true,restart_required:bool,recovering:bool}`，后两者恰一为真。客户端断开不取消已接管的有界激活任务；未知结果先查询状态，仅凭 `completion_available` 补全原意图。公开预设初始化及旧初始化补全路由已移除；恢复系统接口不变。已有池纯添加另有持久协议和 Web 控件；首次回执不是增盘完成证明。添加状态区分 `adding/recovery_required/completed`，包含原预览、当前阶段与具体失败。只有引擎确认同一 operation_id 的 `membership-add` 已发布结果并同步控制记录后才返回完成。移出和排空没有产品入口，见[在线目录成员管理](design/online-disk-management.md)。
 
 <a id="s15-03"></a>
 

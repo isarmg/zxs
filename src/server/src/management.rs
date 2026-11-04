@@ -22,6 +22,7 @@ use std::{
 
 mod disk_notes;
 mod integrity_scrub;
+pub(crate) mod storage_addition;
 use integrity_scrub::IntegrityScrubService;
 mod setup_command;
 use setup_command::SetupCommand;
@@ -57,6 +58,7 @@ struct Inner {
     generation: AtomicU64,
     disk_observation: Mutex<Option<(std::time::Instant, Vec<crate::DiskSample>)>>,
     disk_notes: Mutex<()>,
+    storage_addition: Mutex<()>,
     capabilities: Mutex<crate::Capabilities>,
     setup_disks: BTreeMap<String, PathBuf>,
     setup_configs: BTreeMap<String, PathBuf>,
@@ -208,6 +210,7 @@ pub fn open_service_with_options(
             generation: AtomicU64::new(0),
             disk_observation: Mutex::new(None),
             disk_notes: Mutex::new(()),
+            storage_addition: Mutex::new(()),
             capabilities: Mutex::new(crate::Capabilities::unavailable()),
             setup_disks,
             setup_configs,
@@ -384,6 +387,12 @@ impl Inner {
     }
     fn drain(&self) -> Result<(), ApiError> {
         self.stop();
+        let _addition = self.storage_addition.lock().map_err(|_| {
+            ApiError::conflict(
+                storage_contract::ErrorCode::RecoveryRequired,
+                "storage addition coordinator failed during shutdown",
+            )
+        })?;
         let worker = match self.recovery_worker.lock() {
             Ok(mut worker) => worker.take(),
             Err(poisoned) => poisoned.into_inner().take(),
@@ -1498,6 +1507,21 @@ impl Backend for ManagementBackend {
             return Ok(json_codec::to_value(setup.status())
                 .expect("invariant: recovery status serializes"));
         }
+        if matches!(
+            action,
+            "disk_add_preview" | "disk_add_commit" | "disk_add_status" | "disk_add_resume"
+        ) {
+            return self.storage_addition(
+                action,
+                input,
+                identity.as_ref().ok_or_else(ApiError::unauthorized)?,
+                || {
+                    setup
+                        .discovery_root()
+                        .map(|settings| settings.discovery_root)
+                },
+            );
+        }
         if action == "storage_status" {
             identity.as_ref().ok_or_else(ApiError::unauthorized)?;
             return Ok(json_codec::to_value(setup.storage_status())
@@ -1509,6 +1533,12 @@ impl Backend for ManagementBackend {
                 .expect("invariant: discovery settings serialize"));
         }
         if action == "set_discovery_root" {
+            let _addition = self.inner.storage_addition.try_lock().map_err(|_| {
+                ApiError::conflict(
+                    storage_contract::ErrorCode::StorageRetryRunning,
+                    "storage addition admission is running",
+                )
+            })?;
             let request: storage_contract::storage_directories::SetDiscoveryRootRequest =
                 json_codec::from_value(input).map_err(ApiError::invalid_source)?;
             return setup
@@ -1543,21 +1573,28 @@ impl Backend for ManagementBackend {
             identity.as_ref().ok_or_else(ApiError::unauthorized)?;
             let request: storage_contract::storage_directories::InspectRequest =
                 json_codec::from_value(input).map_err(ApiError::invalid_source)?;
-            if setup.storage_status().state
-                != crate::setup_recovery::StorageActivationState::Pending
-            {
-                return Err(ApiError::conflict(
-                    storage_contract::ErrorCode::StorageActive,
-                    "new storage selection requires a management-only installation",
-                ));
+            let mut excluded = vec![
+                self.inner.data_root.clone(),
+                self.inner.management_root.clone(),
+            ];
+            let backend = { crate::lock(&self.inner.state).backend.clone() };
+            if let Some(backend) = backend {
+                excluded.extend(
+                    backend
+                        .addition_configuration(
+                            identity
+                                .as_ref()
+                                .expect("invariant: authenticated directory inspection"),
+                        )?
+                        .disks
+                        .into_iter()
+                        .map(|disk| disk.root),
+                );
             }
             return crate::storage_directories::inspect_within(
                 &setup.discovery_root()?.discovery_root,
                 &request,
-                &[
-                    self.inner.data_root.clone(),
-                    self.inner.management_root.clone(),
-                ],
+                &excluded,
             )
             .map_err(ApiError::from)
             .map(|value| {
@@ -1591,6 +1628,12 @@ impl Backend for ManagementBackend {
         // Keep typed admission before lifecycle changes; later execution owns
         // these same DTOs, not a second decode of the original JSON.
         let command = SetupCommand::parse(action, input)?;
+        let _addition = self.inner.storage_addition.try_lock().map_err(|_| {
+            ApiError::conflict(
+                storage_contract::ErrorCode::StorageRetryRunning,
+                "a storage addition is running",
+            )
+        })?;
         let resumes_storage = command.resumes_storage();
         if self.inner.recovering.swap(true, Ordering::SeqCst) {
             return Err(ApiError::conflict(
@@ -1833,6 +1876,12 @@ impl Backend for ManagementBackend {
             .clone()
             .ok_or_else(ApiError::unauthorized)?;
         crate::lock(&auth).revalidate_identity(identity)?;
+        let _addition = self.inner.storage_addition.try_lock().map_err(|_| {
+            ApiError::conflict(
+                storage_contract::ErrorCode::StorageRetryRunning,
+                "a storage addition is running",
+            )
+        })?;
         self.inner.start_recovery(true)?;
         Ok(self.management_status())
     }

@@ -149,8 +149,14 @@ fn membership_activation_data_only_then_mixed_keeps_voters_and_standalone_proofs
         reference["hash"].as_str().unwrap()
     );
     assert!(objects.remove(&page).is_some());
-    let missing: PortableAuthority = json_codec::from_value(missing).unwrap();
-    assert!(missing.intent().is_err());
+    // Portable admission now verifies its dependency closure while decoding,
+    // before a typed authority can escape into any consumer.
+    let error = json_codec::from_value::<PortableAuthority>(missing).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("portable membership dependency missing")
+    );
     assert_lock_held(&first_added[0].root);
     assert!(
         !first_added[0]

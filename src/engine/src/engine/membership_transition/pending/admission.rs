@@ -284,7 +284,7 @@ pub(super) fn inspect_new_root(
         .entries(root.path())?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(fs_error)?;
-    let stored = root.open_optional_regular(&root.path().join("disk.json"))?;
+    let stored = root.open_optional_read_regular(&root.path().join("disk.json"))?;
     let bound = match stored {
         None => false,
         Some(file) => {
@@ -377,7 +377,9 @@ fn validate_metadata_namespace(root: &DiskRoot, expected: &PendingDiskSeal) -> R
     }
     Ok(())
 }
-pub(super) fn verify_named_root(root: &DiskRoot) -> Result<FileIdentity> {
+pub(in crate::engine::membership_transition) fn verify_named_root(
+    root: &DiskRoot,
+) -> Result<FileIdentity> {
     let named = DiskRoot::open(root.path())?;
     let held = FileIdentity::from_fd(root.directory(root.path())?)?;
     if held != FileIdentity::from_fd(named.directory(named.path())?)? {

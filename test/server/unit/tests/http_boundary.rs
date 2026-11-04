@@ -414,6 +414,16 @@ struct PanickingBackend {
 }
 
 impl Backend for PanickingBackend {
+    fn setup_operation(
+        &self,
+        _: &'static str,
+        _: Value,
+        _: Option<&str>,
+        _: Option<&Identity>,
+    ) -> Result<Value, ApiError> {
+        panic!("private storage addition backend panic detail")
+    }
+
     fn operation_outcome(
         &self,
         _: &crate::auth::Identity,

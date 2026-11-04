@@ -350,7 +350,13 @@ impl SetupRecovery {
         intent: &StorageActivationIntent,
     ) -> Result<(), ApiError> {
         let config: Config = read_control(&self.data_root.join("config.json"))?;
-        if value_digest(&config)? != value_digest(&intent.config)? {
+        if value_digest(&config)? != value_digest(&intent.config)?
+            && !crate::management::storage_addition::admits_configuration(
+                &self.management_root,
+                &config,
+                &intent.config,
+            )?
+        {
             return Err(ApiError::conflict(
                 storage_contract::ErrorCode::SetupProofInvalid,
                 "storage configuration differs from its activation intent",

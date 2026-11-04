@@ -6,10 +6,9 @@ use crate::{disk::*, journal::*, publication_evidence::verified_object_at, *};
 use data_serialization::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-mod archive;
-// Read-only Abort ancestry. Vote aggregation and cancellation publication are
-// not production operations; their fixture builders remain explicitly gated.
 mod abort;
+mod archive;
+pub use abort::MembershipAbortStatus;
 mod decision;
 mod effect;
 pub use effect::MembershipExitAction;
@@ -164,7 +163,7 @@ impl Engine {
 
     /// Experimental first barrier, not an add/remove operation. It permanently
     /// pauses that generation's business decisions. Pure-add activation is explicit;
-    /// cancellation and removal are not supported.
+    /// certified cancellation is explicit; removal uses its separate lifecycle.
     /// Every added directory is reserved and writer-locked before the old fence.
     /// Partial preparation is resumable only by the same operation and exact roots.
     /// A failed append may have persisted: inspect/reopen and retry the same intent.
@@ -179,6 +178,27 @@ impl Engine {
         self.begin_membership_handoff_with_effect(target, None, principal, operation_id)
     }
 
+    /// Bind an authorized caller's exact directory handles before any source
+    /// preparation, new-root reservation or old-generation fence is written.
+    /// The supplied set must contain every added directory exactly once.
+    pub fn begin_membership_handoff_with_directories(
+        &mut self,
+        target: Config,
+        principal: &str,
+        operation_id: OperationId,
+        directories: Vec<PendingMemberDirectory>,
+    ) -> Result<MembershipFenceStatus> {
+        let target = ValidatedConfig::try_from(target)?;
+        pending::admission::validate_pure_add_target(&self.config, &target, &self.root)?;
+        self.begin_membership_handoff_prepared(
+            target,
+            None,
+            principal,
+            operation_id,
+            Some(directories),
+        )
+    }
+
     fn begin_membership_handoff_with_effect(
         &mut self,
         target: ValidatedConfig,
@@ -186,9 +206,23 @@ impl Engine {
         principal: &str,
         operation_id: OperationId,
     ) -> Result<MembershipFenceStatus> {
+        self.begin_membership_handoff_prepared(target, effect, principal, operation_id, None)
+    }
+
+    fn begin_membership_handoff_prepared(
+        &mut self,
+        target: ValidatedConfig,
+        effect: Option<ExitEffect>,
+        principal: &str,
+        operation_id: OperationId,
+        directories: Option<Vec<PendingMemberDirectory>>,
+    ) -> Result<MembershipFenceStatus> {
         Self::require_actor(principal)?;
         self.require_no_commit_preparation()?;
         validate_transition_target(&self.config, &target, effect.as_ref())?;
+        let held = directories
+            .map(|directories| self.admit_added_directories(&target, directories))
+            .transpose()?;
         if let Some(fence) = &self.membership_fence {
             if fence.intent.operation_id != operation_id
                 || fence.intent.principal != principal
@@ -200,6 +234,26 @@ impl Engine {
                     ErrorCode::IdempotencyKeyReused,
                     "the pending membership handoff has a different actor, operation or target",
                 ));
+            }
+            if let Some(held) = &held {
+                for (id, root) in held {
+                    let disk = target
+                        .disks
+                        .iter()
+                        .find(|disk| disk.disk_id == *id)
+                        .expect("invariant: admitted added directory belongs to target");
+                    let actual = pending::admission::member_identity(
+                        &target,
+                        disk,
+                        pending::admission::verify_named_root(root)?,
+                    );
+                    if fence.intent.added_roots.get(id) != Some(&actual) {
+                        return Err(Error::new(
+                            ErrorCode::DiskIdentityMismatch,
+                            "held directory differs from the durable membership intent",
+                        ));
+                    }
+                }
             }
         } else {
             self.require_write()?;
@@ -234,7 +288,7 @@ impl Engine {
                 ));
             }
             let prepared_roots =
-                self.prepare_added_roots(&origin, &target, principal, operation_id)?;
+                self.prepare_added_roots(&origin, &target, principal, operation_id, held)?;
             let intent = TransitionIntent {
                 operation_id,
                 principal: principal.to_owned(),

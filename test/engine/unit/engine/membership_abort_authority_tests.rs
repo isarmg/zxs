@@ -297,7 +297,7 @@ fn membership_abort_frozen_first_candidate_is_prescribed_and_uses_original_membe
 }
 
 #[test]
-fn membership_abort_current_head_refuses_add_discovery_before_rejected_target_probe() {
+fn membership_abort_current_head_recovers_without_rejected_target_probe() {
     let fixture = read_fixture();
     let intent = fixture.authority.intent().unwrap();
     let rejected = &intent.target.disks.last().unwrap().root;
@@ -306,27 +306,47 @@ fn membership_abort_current_head_refuses_add_discovery_before_rejected_target_pr
         fixture.temp.path().join("preserved-rejected-target"),
     )
     .unwrap();
-    // Following this path would fail UnsafePath, not the explicit Abort gate.
     std::os::unix::fs::symlink("/unreachable-abort-target", rejected).unwrap();
+    let source = archive::persistent::PendingControlArchive::from_installed(
+        DiskRoot::open(&fixture.source).unwrap(),
+        &fixture.reference.root_hash,
+        &fixture.reference.transition_hash,
+    )
+    .unwrap();
+    let hash = fixture.authority.hash().unwrap();
     for disk in &fixture.original.disks {
-        fs::write(
-            disk.root.join("metadata/pool-membership/generation.json"),
-            canonical_json(&fixture.authority).unwrap(),
+        let root = DiskRoot::open(&disk.root).unwrap();
+        let path = pending::member_directory(disk, &fixture.reference.transition_hash)
+            .join(pending::CONTROL_ARCHIVE_DIRECTORY);
+        root.private_dir(&path).unwrap();
+        source.install(root.private_child(&path).unwrap()).unwrap();
+        root.write_atomic(
+            &pending::activation::generation_directory(disk, &hash).join("journal.bin"),
+            &[],
+            false,
+        )
+        .unwrap();
+        root.write_json(
+            &disk.root.join("metadata/pool-membership/generation.json"),
+            &fixture.authority,
+            false,
         )
         .unwrap();
     }
     let before = files(&fixture.original.disks[0].root);
-    let error =
+    let config =
         pending::activation::discover(ValidatedConfig::try_from(fixture.original.clone()).unwrap())
-            .unwrap_err();
-    assert_eq!(error.code(), ErrorCode::RecoveryRequired);
-    assert!(error.to_string().contains("Abort authority is read-only"));
+            .unwrap();
+    assert_eq!(config.generation_hash(), Some(hash.as_str()));
+    assert_eq!(config.disks.len(), fixture.original.disks.len());
     assert_preserved(&before);
-    let error = Engine::resume_membership_activation(&fixture.temp.path().join("system"))
-        .err()
-        .unwrap();
-    assert!(error.to_string().contains("Abort authority is read-only"));
-    assert_preserved(&before);
+    let recovered =
+        Engine::resume_membership_activation(&fixture.temp.path().join("system")).unwrap();
+    assert_eq!(
+        recovered.state.operations[&intent.operation_id].kind,
+        "membership-add-cancelled"
+    );
+    assert!(!recovered.blocked);
 }
 
 #[test]

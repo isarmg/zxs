@@ -18,6 +18,9 @@ pub(crate) fn public_routes() -> Router<AppState> {
 pub(crate) fn protected_routes() -> Router<AppState> {
     Router::new()
         .route("/api/admin/storage/status", get(storage_status))
+        .route("/api/admin/disks/preview", post(addition_preview))
+        .route("/api/admin/disks/addition", get(addition_status))
+        .route("/api/admin/disks/addition/resume", post(addition_resume))
         .route(
             "/api/admin/storage/discovery-root",
             get(discovery_root).put(set_discovery_root),
@@ -229,6 +232,7 @@ async fn protected_mutation(
     // The ordinary authorize middleware has checked the session and CSRF.
     let limit = match action {
         "activate" => MAX_ACTIVATION_BODY_BYTES,
+        "disk_add_preview" => crate::JSON_BODY_LIMIT,
         "set_discovery_root" => MAX_DIRECTORY_BODY_BYTES,
         _ => super::MAX_SETUP_BODY_BYTES,
     };
@@ -361,3 +365,41 @@ async fn recovery_commit(
 #[cfg(test)]
 #[path = "../../../../test/server/unit/setup_recovery/http_tests.rs"]
 mod tests;
+
+async fn addition_preview(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "disk_add_preview").await
+}
+async fn addition_resume(
+    State(state): State<AppState>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    protected_mutation(state, request, "disk_add_resume").await
+}
+#[derive(data_serialization::Deserialize)]
+#[serialization(deny_unknown_fields)]
+struct AdditionQuery {
+    operation_id: Option<storage_contract::OperationId>,
+}
+async fn addition_status(
+    State(state): State<AppState>,
+    crate::http_boundary::ApiQuery(query): crate::http_boundary::ApiQuery<AdditionQuery>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let identity = request
+        .extensions()
+        .get::<Identity>()
+        .cloned()
+        .ok_or_else(ApiError::unauthorized)?;
+    dispatch(
+        state,
+        "disk_add_status",
+        json!({"operation_id":query.operation_id}),
+        None,
+        Some(identity),
+    )
+    .await
+    .map(Json)
+}

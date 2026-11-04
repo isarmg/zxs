@@ -387,7 +387,7 @@ fn admit_member_directory(
         }
         for name in names {
             if platform_io::fs_safety::AtomicFile::is_temporary_name(&name) {
-                root.open_regular(&path.join(name.as_path()))?;
+                root.open_read_regular(&path.join(name.as_path()))?;
             } else if !matches!(
                 name.as_os_str().to_str(),
                 Some("member.json" | "control-archive" | "objects" | "journal.bin" | "joint")
@@ -442,7 +442,7 @@ fn install_bootstrap(
     for name in root.entries(&path)? {
         let name = name.map_err(fs_error)?;
         if platform_io::fs_safety::AtomicFile::is_temporary_name(&name) {
-            root.open_regular(&path.join(name.as_path()))?;
+            root.open_read_regular(&path.join(name.as_path()))?;
         } else if name.as_os_str() != filename.as_str() {
             return Err(Error::new(
                 ErrorCode::ObjectCorrupt,

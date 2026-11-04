@@ -55,7 +55,7 @@ pub use engine::{
     HistoryWindowRead, IndexFailure, IndexFailureStage, IndexHealth, IntegrityScrubArea,
     IntegrityScrubBatch, IntegrityScrubBatchAdmission, IntegrityScrubCancellation,
     IntegrityScrubCompletion, IntegrityScrubIssue, IntegrityScrubOutcome, IntegrityScrubPlan,
-    IntegrityScrubReport, IntegrityScrubSchedule, IntegrityScrubTarget,
+    IntegrityScrubReport, IntegrityScrubSchedule, IntegrityScrubTarget, MembershipAbortStatus,
     MembershipArchiveInspection, MembershipControlArchive, MembershipExitAction,
     MembershipFenceStatus, MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
     MembershipJournalInspection, MetadataMemberProbe, MetadataView, ObservedDiskStatus,

@@ -3,7 +3,7 @@
 use super::*;
 use pending::MemberIdentity;
 use platform_io::fs_safety::{AtomicFile, EntryName, linux::FileIdentity};
-use std::{fs::File, path::PathBuf};
+use std::path::PathBuf;
 
 const DECISION_KIND: &str = "membership-decision";
 const BINDING_FILE: &str = "binding.json";
@@ -34,8 +34,6 @@ enum Choice {
         proposal_hash: String,
         acceptance_hash: String,
     },
-    // Recognized to veto Joint and preserve the shared exclusion rule. There is
-    // intentionally no production constructor or abort/cancellation authority.
     Abort {
         core_hash: String,
         acceptance_hash: String,
@@ -177,7 +175,7 @@ impl DecisionStore {
         };
         let binding_path = store.root.path().join(BINDING_FILE);
         let names = store.names()?;
-        match store.root.open_optional_regular(&binding_path)? {
+        match store.root.open_optional_read_regular(&binding_path)? {
             Some(file) => {
                 let saved: Binding = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
                 if saved != store.binding {
@@ -230,7 +228,7 @@ impl DecisionStore {
         };
         if store
             .root
-            .open_optional_regular(&store.root.path().join(BINDING_FILE))?
+            .open_optional_read_regular(&store.root.path().join(BINDING_FILE))?
             .is_some()
         {
             store.observe()?;
@@ -268,13 +266,13 @@ impl DecisionStore {
                 // A complete or torn temp never occupies the decision slot.
                 // Admit the regular leaf without promoting, repairing or deleting it.
                 let path = self.root.path().join(name.as_path());
-                let read = self
-                    .root
-                    .open_optional_regular(&path)
-                    .and_then(|file| match file {
-                        Some(file) => read_file_bytes(file, MAX_METADATA).map(|_| ()),
-                        None => Ok(()),
-                    });
+                let read =
+                    self.root
+                        .open_optional_read_regular(&path)
+                        .and_then(|file| match file {
+                            Some(file) => read_file_bytes(file, MAX_METADATA).map(|_| ()),
+                            None => Ok(()),
+                        });
                 // Another chooser can unlink its losing temp between open
                 // and single-link validation. Only proven name absence may
                 // dismiss this non-voting staging error.
@@ -319,18 +317,19 @@ impl DecisionStore {
         }
         Ok(())
     }
-    fn observe(&self) -> Result<Option<(File, DecisionRecord)>> {
+    fn observe(&self) -> Result<Option<(ReadFile, DecisionRecord)>> {
         self.names()?;
         self.verify_names()?;
         let Some(file) = self
             .root
-            .open_optional_regular(&self.root.path().join(DECISION_FILE))?
+            .open_optional_read_regular(&self.root.path().join(DECISION_FILE))?
         else {
             return Ok(None);
         };
         let record: DecisionRecord =
             decode_strict(&read_file_bytes(file.try_clone()?, MAX_METADATA)?)?;
         record.validate(&self.binding)?;
+        file.check_running()?;
         Ok(Some((file, record)))
     }
     /// Called for all original members before the first fresh Joint vote. The
@@ -366,6 +365,77 @@ impl DecisionStore {
             fault,
         )
     }
+    /// Read every available old slot before the first new choice. An impossible
+    /// Abort quorum must not consume remaining slots and prevent a future Joint.
+    pub(super) fn can_choose_abort(&self, core: &str, acceptance: &str) -> Result<bool> {
+        let expected = self.abort_record(core, acceptance)?;
+        match self.observe()? {
+            Some((_, record)) if matches!(record.choice, Choice::Joint { .. }) => Ok(false),
+            Some((_, record)) if record != expected => Err(Error::new(
+                ErrorCode::LogFork,
+                "member selected another Abort core",
+            )),
+            _ => Ok(true),
+        }
+    }
+
+    /// Joint minorities are immutable, but do not prevent another fixed old
+    /// majority choosing Abort. Any different Abort core remains a hard fork.
+    pub(super) fn abort_receipt(
+        &self,
+        core: &str,
+        acceptance: &str,
+    ) -> Result<Option<DecisionReceipt>> {
+        if let Some((_, record)) = self.observe()?
+            && matches!(record.choice, Choice::Joint { .. })
+        {
+            return Ok(None);
+        }
+        let record = self.abort_record(core, acceptance)?;
+        self.select(
+            &record,
+            true,
+            #[cfg(feature = "fault-injection")]
+            None,
+        )
+        .map(Some)
+    }
+
+    pub(super) fn verify_abort_compatible(
+        &self,
+        core: &str,
+        acceptance: &str,
+        expected: Option<&DecisionReceipt>,
+    ) -> Result<()> {
+        if let Some(expected) = expected {
+            return self.verify_receipt(expected, false);
+        }
+        if let Some((_, record)) = self.observe()?
+            && matches!(record.choice, Choice::Abort { .. })
+            && record != self.abort_record(core, acceptance)?
+        {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "member selected another Abort core",
+            ));
+        }
+        Ok(())
+    }
+
+    fn abort_record(&self, core: &str, acceptance: &str) -> Result<DecisionRecord> {
+        validate_hash(core)?;
+        validate_hash(acceptance)?;
+        Ok(DecisionRecord {
+            format: DecisionFormat::Decision,
+            transition_hash: self.binding.transition_hash.clone(),
+            identity: self.binding.identity.clone(),
+            choice: Choice::Abort {
+                core_hash: core.to_owned(),
+                acceptance_hash: acceptance.to_owned(),
+            },
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn abort_for_test(&self, core: &str, acceptance: &str) -> Result<DecisionReceipt> {
         let record = DecisionRecord {
@@ -385,6 +455,32 @@ impl DecisionStore {
         )
     }
     fn select(
+        &self,
+        expected: &DecisionRecord,
+        install: bool,
+        #[cfg(feature = "fault-injection")] fault: Option<DecisionFault>,
+    ) -> Result<DecisionReceipt> {
+        // This outer responsibility outlives every atomic staging descriptor,
+        // uncertain-publication readback, sync and error cleanup in select_held.
+        let activity = self.root.retain_io_activity()?;
+        let result = self.select_held(
+            expected,
+            install,
+            #[cfg(feature = "fault-injection")]
+            fault,
+        );
+        match result {
+            Ok(receipt) => {
+                if let Some(activity) = &activity {
+                    activity.check_running()?;
+                }
+                Ok(receipt)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn select_held(
         &self,
         expected: &DecisionRecord,
         install: bool,
@@ -481,7 +577,7 @@ impl DecisionStore {
     }
     fn confirm(
         &self,
-        file: File,
+        file: ReadFile,
         record: DecisionRecord,
         expected: &DecisionRecord,
         #[cfg(feature = "fault-injection")] fault: Option<DecisionFault>,
@@ -509,17 +605,21 @@ impl DecisionStore {
         }
         self.root.sync_dir(self.root.path())?;
         self.verify_named_record(&file, &record)?;
+        file.check_running()?;
         Ok(DecisionReceipt {
             record_hash: object_hash(DECISION_KIND, &record)?,
             record,
         })
     }
-    fn verify_named_record(&self, file: &File, record: &DecisionRecord) -> Result<()> {
+    fn verify_named_record(&self, file: &ReadFile, record: &DecisionRecord) -> Result<()> {
         self.verify_names()?;
         let (named, read_back) = self.observe()?.ok_or_else(|| {
             Error::new(ErrorCode::LogFork, "membership decision name disappeared")
         })?;
-        if FileIdentity::from_fd(file)? != FileIdentity::from_fd(&named)? || &read_back != record {
+        if FileIdentity::from_metadata(&file.metadata()?)
+            != FileIdentity::from_metadata(&named.metadata()?)
+            || &read_back != record
+        {
             return Err(Error::new(
                 ErrorCode::LogFork,
                 "membership decision changed before confirmation",

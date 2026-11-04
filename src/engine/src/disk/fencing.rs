@@ -152,6 +152,29 @@ impl WriterLocks {
         self.disks.values().map(DiskWriter::admit).collect()
     }
 
+    /// Bind the retained OS writer lock to the actual named member lock. The
+    /// caller keeps this owner and its I/O activity alive through publication.
+    pub(crate) fn verify_disk(&self, disk: &crate::DiskConfig, root: &DiskRoot) -> Result<()> {
+        let writer = self.disks.get(&disk.disk_id).ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "member writer lock is not held",
+            )
+        })?;
+        let _activity = root.io_binding()?.admit()?;
+        writer.held()?;
+        let named = root.open_regular(&root.path().join(".writer.lock"))?;
+        if FileIdentity::from_fd(&named)? != writer.fence.writer_identity()?
+            || named.metadata()?.len() != 0
+        {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "member writer lock was replaced or contains unrelated bytes",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn require_all(&self, disks: &[crate::DiskConfig]) -> Result<()> {
         for disk in disks {
             self.disks

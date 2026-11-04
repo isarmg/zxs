@@ -351,7 +351,7 @@ fn repair_member(
         match root.optional_metadata(&path)? {
             Some(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
                 // Never replace an unsafe entry, even if a healthy replica exists.
-                let replace = match root.open_optional_regular(&path)? {
+                let replace = match root.open_optional_read_regular(&path)? {
                     None => false,
                     Some(file) => match read_file_bytes(file, MAX_METADATA) {
                         Ok(existing) => existing != bytes,

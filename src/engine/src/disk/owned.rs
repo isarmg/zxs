@@ -246,6 +246,14 @@ impl DiskRoot {
         self.binding().map(DiskIoBinding::admit).transpose()
     }
 
+    /// A synchronous multi-step protocol retains this admission until every
+    /// stack-owned descriptor, atomic staging file and cleanup tail is dropped.
+    /// None means an explicitly unbound bootstrap root, never failed admission.
+    /// This does not grant transition-control access or permit a raw FD escape.
+    pub(crate) fn retain_io_activity(&self) -> Result<Option<DiskIoLease>> {
+        self.optional_io_lease()
+    }
+
     /// Transfer this exact opening responsibility into the journal's private
     /// composite owner. Neither its descriptor nor its lease escapes separately.
     pub(crate) fn journal_directory(&self, path: &Path) -> Result<JournalIo> {
@@ -326,6 +334,61 @@ impl DiskRoot {
         drop(directory);
         let file = operation.into_read_file(file)?;
         VerifiedCopy::new(file, version, checksums)
+    }
+
+    /// Retain the destination operation through frozen-byte comparison, staging
+    /// cleanup, rename, file/directory synchronization and final descriptor close.
+    /// No raw descriptor or publication receipt escapes this operation.
+    pub(crate) fn copy_verified_bytes_synced(
+        &self,
+        path: &Path,
+        input: &mut ReadFile,
+        expectation: platform_io::payload::Expectation,
+    ) -> Result<()> {
+        let operation = self.operation()?;
+        let directory = operation.private_directory(path.parent().ok_or_else(|| {
+            Error::new(ErrorCode::UnsafePath, "copy destination has no parent")
+        })?)?;
+        match operation.open_optional_regular(path)? {
+            Some(mut file) => {
+                match platform_io::payload::verify_full_observed(
+                    &mut file,
+                    expectation,
+                    &mut || {
+                        operation.check_running().map_err(|error| {
+                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, error)
+                        })
+                    },
+                ) {
+                    Ok(_) => (),
+                    Err(
+                        error @ (platform_io::payload::Error::Length { .. }
+                        | platform_io::payload::Error::Digest),
+                    ) => {
+                        return Err(Error::from(error)
+                            .context(ErrorCode::ObjectCollision, "existing frozen bytes differ"));
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+                file.sync_all()?;
+                directory.sync().map_err(fs_error)?;
+            }
+            None => {
+                let name =
+                    platform_io::fs_safety::EntryName::new(path.file_name().ok_or_else(|| {
+                        Error::new(ErrorCode::UnsafePath, "copy destination has no name")
+                    })?)
+                    .map_err(fs_error)?;
+                let mut reader = OperationCopyReader {
+                    input,
+                    operation: &operation,
+                };
+                platform_io::payload::write_full(&directory, &name, &mut reader, expectation)?;
+            }
+        }
+        // Once publication starts, finish durability and cleanup even when
+        // quiescing arrives. Report cancellation after that tail, never success.
+        operation.check_running()
     }
 
     /// Admit a private descendant and retain that exact directory descriptor.
@@ -469,10 +532,6 @@ impl DiskRoot {
         self.operation()?.sync_dir(path)
     }
 
-    pub(crate) fn remove_file(&self, path: &Path) -> Result<()> {
-        self.operation()?.remove_file(path)
-    }
-
     /// Both directory descriptors and all durability tails stay inside one
     /// admitted operation. No pathname mutation can outlive its writer fence.
     pub(crate) fn rename_noreplace_synced(&self, from: &Path, to: &Path) -> Result<()> {
@@ -538,6 +597,24 @@ struct RootOperation<'a> {
     // Release the descriptor borrow before the operation can trigger final close.
     directory: RwLockReadGuard<'a, Option<OpenAt2Root>>,
     lease: Option<DiskIoLease>,
+}
+
+struct OperationCopyReader<'a, 'root> {
+    input: &'a mut ReadFile,
+    operation: &'a RootOperation<'root>,
+}
+impl Read for OperationCopyReader<'_, '_> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        self.operation
+            .check_running()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))?;
+        let maximum = bytes.len().min(64 * 1024);
+        let read = self.input.read(&mut bytes[..maximum])?;
+        self.operation
+            .check_running()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))?;
+        Ok(read)
+    }
 }
 
 enum RenameSyncOrder {
@@ -711,7 +788,9 @@ impl RootOperation<'_> {
     }
 
     fn read_bytes(&self, path: &Path, maximum: usize) -> Result<Vec<u8>> {
-        read_file_bytes(self.open_regular(path)?, maximum)
+        read_file_bytes_observed(self.open_regular(path)?, maximum, &mut |_| {
+            self.check_running()
+        })
     }
 
     fn read_bytes_observed(
@@ -720,7 +799,10 @@ impl RootOperation<'_> {
         maximum: usize,
         observe: &mut impl FnMut(usize) -> Result<()>,
     ) -> Result<Vec<u8>> {
-        read_file_bytes_observed(self.open_regular(path)?, maximum, observe)
+        read_file_bytes_observed(self.open_regular(path)?, maximum, &mut |bytes| {
+            observe(bytes)?;
+            self.check_running()
+        })
     }
 
     fn read_json_observed<T: data_serialization::de::DeserializeOwned>(
@@ -807,13 +889,6 @@ impl RootOperation<'_> {
 
     fn sync_dir(&self, path: &Path) -> Result<()> {
         self.directory(path)?.sync_all()?;
-        Ok(())
-    }
-
-    fn remove_file(&self, path: &Path) -> Result<()> {
-        let (parent, name) = self.parent(path)?;
-        rustix::fs::unlinkat(&parent, name.as_os_str(), rustix::fs::AtFlags::empty())
-            .map_err(std::io::Error::from)?;
         Ok(())
     }
 

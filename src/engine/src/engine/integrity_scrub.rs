@@ -830,7 +830,7 @@ fn verify_version_metadata_observed(
     }
     if allows_missing_proof
         && root
-            .open_optional_regular(&directory.join("publication-proof.json"))?
+            .open_optional_read_regular(&directory.join("publication-proof.json"))?
             .is_none()
     {
         return Ok(LocalReplicaMetadata::AcknowledgedUnavailable);

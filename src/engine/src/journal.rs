@@ -1490,7 +1490,10 @@ pub(crate) fn verify_local_publication_at(
         directory,
         version,
         &mut |path| root.read_bytes_observed(path, MAX_METADATA, observe),
-        &mut |path| root.open_optional_regular(path).map(|file| file.is_some()),
+        &mut |path| {
+            root.open_optional_read_regular(path)
+                .map(|file| file.is_some())
+        },
         metadata,
     )
 }

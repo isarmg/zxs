@@ -1748,3 +1748,64 @@ fn journal_writers_keep_original_authority_across_real_generation_activation() {
     assert!(binding.status().unwrap().drained());
     assert!(descriptor_numbers(&old_path).is_empty());
 }
+
+#[test]
+fn membership_activation_bad_markers_cannot_form_a_smaller_majority() {
+    let mut fixture = Fixture::new();
+    fixture.engine.activate_pending_membership().unwrap();
+    let damaged: Vec<_> = fixture
+        .target
+        .disks
+        .iter()
+        .filter(|disk| disk.metadata_member)
+        .take(2)
+        .cloned()
+        .collect();
+    for disk in &damaged {
+        fs::write(disk.root.join(GENERATION_FILE), b"broken").unwrap();
+    }
+    let before: Vec<_> = damaged.iter().map(|disk| files(&disk.root)).collect();
+    let Fixture { temp, engine, .. } = fixture;
+    drop(engine);
+    assert_eq!(
+        Engine::open(&temp.path().join("system"))
+            .err()
+            .unwrap()
+            .code(),
+        ErrorCode::MetadataQuorumUnavailable
+    );
+    for (disk, original) in damaged.iter().zip(before) {
+        assert_eq!(files(&disk.root), original);
+    }
+}
+
+#[test]
+fn membership_activation_bad_marker_cannot_be_removed_by_editing_voter_role() {
+    let mut fixture = Fixture::new();
+    fixture.engine.activate_pending_membership().unwrap();
+    let bad = fixture
+        .target
+        .disks
+        .iter()
+        .find(|disk| disk.metadata_member)
+        .unwrap()
+        .clone();
+    fs::write(bad.root.join(GENERATION_FILE), b"broken").unwrap();
+    let before = files(&bad.root);
+    let Fixture {
+        temp,
+        engine,
+        mut target,
+        ..
+    } = fixture;
+    drop(engine);
+    target
+        .disks
+        .iter_mut()
+        .find(|disk| disk.disk_id == bad.disk_id)
+        .unwrap()
+        .metadata_member = false;
+    write_json(&temp.path().join("system/config.json"), &target, true).unwrap();
+    assert!(Engine::open(&temp.path().join("system")).is_err());
+    assert_eq!(files(&bad.root), before);
+}

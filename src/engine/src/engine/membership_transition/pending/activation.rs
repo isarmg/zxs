@@ -77,10 +77,15 @@ impl Generation {
         (operation == self.intent.operation_id).then(|| format!("tx_{}", &self.hash[..32]))
     }
     fn result(&self) -> Result<OperationResult> {
-        self.portable.add_joint()?;
+        let effective = self.portable.effective_config()?;
         Ok(OperationResult {
             operation_id: self.intent.operation_id,
-            kind: "membership-add".into(),
+            kind: if self.portable.is_abort() {
+                "membership-add-cancelled"
+            } else {
+                "membership-add"
+            }
+            .into(),
             commit_id: None,
             history_tree_id: None,
             branch_id: None,
@@ -89,7 +94,7 @@ impl Generation {
             current_health: storage_contract::CurrentHealth::Healthy,
             request_digest: object_hash(INTENT_KIND, &self.intent)?,
             sequence: self.first_sequence()?,
-            result: json_codec::json!({"generation": self.hash, "membership_epoch": self.membership_epoch().to_string(), "metadata_members": self.intent.target.metadata_members().len(), "topology_generation": self.base.topology_generation.checked_add(1).ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "topology generation exhausted"))?.to_string()}),
+            result: json_codec::json!({"generation": self.hash, "membership_epoch": self.membership_epoch().to_string(), "metadata_members": effective.metadata_members().len(), "topology_generation": self.base.topology_generation.checked_add(1).ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "topology generation exhausted"))?.to_string()}),
         })
     }
     fn next_state(&self) -> Result<(State, OperationResult)> {
@@ -138,9 +143,6 @@ pub(in crate::engine::membership_transition) fn verify_frozen_activation(
     base: Arc<State>,
     candidate: &Candidate,
 ) -> Result<()> {
-    if portable.is_abort() {
-        return super::super::abort::verify_frozen_candidate(portable, &base, candidate);
-    }
     let generation = Generation {
         hash: portable.hash()?,
         workspace_roots: portable.workspace_root_aliases()?,
@@ -164,6 +166,7 @@ pub(crate) fn log_path(config: &ValidatedConfig, disk: &DiskConfig) -> PathBuf {
     }
 }
 
+mod cancellation;
 mod local;
 mod publication;
 mod recovery;

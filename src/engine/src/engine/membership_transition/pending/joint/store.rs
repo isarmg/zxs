@@ -206,7 +206,7 @@ impl JointStore {
             }
             for name in names {
                 if platform_io::fs_safety::AtomicFile::is_temporary_name(&name) {
-                    root.open_regular(&path.join(name.as_path()))?;
+                    root.open_read_regular(&path.join(name.as_path()))?;
                 } else if !matches!(
                     name.as_os_str().to_str(),
                     Some(BINDING_FILE | CERTIFICATE_FILE | "objects")
@@ -357,7 +357,7 @@ impl JointStore {
         if install {
             self.root.write_atomic(&path, certificate.bytes(), false)?;
         }
-        let file = self.root.open_regular(&path)?;
+        let file = self.root.open_read_regular(&path)?;
         let bytes = read_file_bytes(file.try_clone()?, MAX_METADATA)?;
         AuthenticatedMetadataObject::authenticate(
             CERTIFICATE_KIND,

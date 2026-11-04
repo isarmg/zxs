@@ -679,6 +679,25 @@ pub fn revalidate_within(
     Ok(held)
 }
 
+/// Resume only the same named directory after enrollment has changed its ctime.
+/// The engine additionally verifies its reservation, exact configuration and seal.
+#[cfg(feature = "core")]
+pub(crate) fn reopen_addition(
+    selected: &CandidateSelection,
+) -> std::result::Result<File, crate::ApiError> {
+    let root = absolute(&selected.root_path)?;
+    let observed = observe(&root, &mounts()?)?;
+    if observed.root_identity.device != selected.root_identity.device
+        || observed.root_identity.inode != selected.root_identity.inode
+    {
+        return Err(Error::Changed.into());
+    }
+    let directory = observed.storage.into_directory();
+    fs_safety::PrivateDirectory::from_directory(directory.try_clone().map_err(Error::from)?, root)
+        .map_err(Error::from)?;
+    Ok(directory)
+}
+
 #[cfg(test)]
 #[path = "../../../test/server/unit/storage_directories.rs"]
 mod tests;

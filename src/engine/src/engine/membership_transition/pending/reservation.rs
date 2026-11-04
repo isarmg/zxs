@@ -191,12 +191,55 @@ fn inspect_unsealed(root: &DiskRoot, name: &str, empty_allowed: bool) -> Result<
 }
 
 impl Engine {
+    pub(in crate::engine::membership_transition) fn admit_added_directories(
+        &self,
+        target: &ValidatedConfig,
+        directories: Vec<PendingMemberDirectory>,
+    ) -> Result<BTreeMap<String, DiskRoot>> {
+        let added = target
+            .disks
+            .iter()
+            .filter(|disk| {
+                !self
+                    .config
+                    .disks
+                    .iter()
+                    .any(|old| old.disk_id == disk.disk_id)
+            })
+            .map(|disk| (disk.disk_id.as_str(), disk))
+            .collect::<BTreeMap<_, _>>();
+        if directories.len() != added.len() {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "caller must hold every added directory exactly once",
+            ));
+        }
+        let mut held = BTreeMap::new();
+        for selected in directories {
+            let disk = added.get(selected.disk_id.as_str()).ok_or_else(|| {
+                Error::new(
+                    ErrorCode::ConfigConflict,
+                    "held directory is not an added member",
+                )
+            })?;
+            let root = DiskRoot::from_directory(disk.root.clone(), selected.directory)?;
+            if held.insert(selected.disk_id, root).is_some() {
+                return Err(Error::new(
+                    ErrorCode::ConfigConflict,
+                    "duplicate held added directory",
+                ));
+            }
+        }
+        Ok(held)
+    }
+
     pub(in crate::engine::membership_transition) fn prepare_added_roots(
         &mut self,
         origin: &Origin,
         target: &ValidatedConfig,
         principal: &str,
         operation_id: OperationId,
+        mut held: Option<BTreeMap<String, DiskRoot>>,
     ) -> Result<BTreeMap<String, ReservedRoot>> {
         if !target.disks.iter().any(|disk| {
             !origin
@@ -239,7 +282,12 @@ impl Engine {
                 .iter()
                 .any(|old| old.disk_id == disk.disk_id)
         }) {
-            let root = DiskRoot::open(&disk.root)?;
+            let root = match &mut held {
+                Some(held) => held
+                    .remove(&disk.disk_id)
+                    .expect("invariant: caller admission covered every added directory"),
+                None => DiskRoot::open(&disk.root)?,
+            };
             let directory_lock = root.directory(root.path())?;
             lock(&directory_lock)?;
             let physical = admission::verify_named_root(&root)?;

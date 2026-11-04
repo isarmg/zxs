@@ -4,10 +4,7 @@ use super::*;
 use crate::metadata_map::{Encoder, ProofMeasure, Reference};
 use platform_io::fs_safety::linux::FileIdentity;
 use platform_io::fs_safety::{AdvisoryLock, RelativePath};
-use std::{
-    fs::File,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 const ROOT_KIND: &str = "membership-control-archive";
 pub(super) const SEAL_KIND: &str = "membership-publication-seal";
@@ -51,6 +48,8 @@ struct ArchivedMember {
 /// root is never an authority to select a transition or permit new writes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MembershipControlArchive {
+    /// Diagnostic locator only; root_hash remains the independent trust anchor.
+    pub archive_path: PathBuf,
     pub root_hash: String,
     pub transition_hash: String,
 }
@@ -116,7 +115,7 @@ impl ArchiveStore {
                 if platform_io::fs_safety::AtomicFile::is_temporary_name(&name) {
                     store
                         .root
-                        .open_regular(&store.root.path().join(name.as_path()))?;
+                        .open_read_regular(&store.root.path().join(name.as_path()))?;
                     continue;
                 }
                 if !matches!(
@@ -361,35 +360,16 @@ impl ArchiveStore {
         mut input: ReadFile,
         expected: &MembershipJournalInspection,
     ) -> Result<()> {
-        let path = directory.join("journal.bin");
-        let directory = self.root.private_directory(directory)?;
-        match self.root.open_optional_regular(&path)? {
-            Some(file) => {
-                let (bytes, hash) = hash_file(&file, expected.bytes)?;
-                if bytes != expected.bytes || hash != expected.content_hash {
-                    return Err(Error::new(
-                        ErrorCode::ObjectCollision,
-                        "existing archived journal differs",
-                    ));
-                }
-                file.sync_all()?;
-                directory.sync().map_err(fs_error)
-            }
-            None => {
-                let digest = blake3::Hash::from_hex(&expected.content_hash)
-                    .expect("invariant: journal inspection produced BLAKE3 hex");
-                platform_io::payload::write_full(
-                    &directory,
-                    &platform_io::fs_safety::EntryName::new("journal.bin").map_err(fs_error)?,
-                    &mut input,
-                    platform_io::payload::Expectation {
-                        bytes: expected.bytes,
-                        blake3: Some(digest),
-                    },
-                )?;
-                Ok(())
-            }
-        }
+        let digest = blake3::Hash::from_hex(&expected.content_hash)
+            .expect("invariant: journal inspection produced BLAKE3 hex");
+        self.root.copy_verified_bytes_synced(
+            &directory.join("journal.bin"),
+            &mut input,
+            platform_io::payload::Expectation {
+                bytes: expected.bytes,
+                blake3: Some(digest),
+            },
+        )
     }
 }
 impl AuthorityResolver for &ArchiveStore {
@@ -409,22 +389,6 @@ fn valid_hash(hash: &str) -> bool {
 fn content_hash(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
-fn hash_file(file: &File, expected_bytes: u64) -> Result<(u64, String)> {
-    let limit = expected_bytes.checked_add(1).ok_or_else(|| {
-        Error::new(
-            ErrorCode::ResourceLimit,
-            "archive journal byte limit overflow",
-        )
-    })?;
-    let mut digest = blake3::Hasher::new();
-    let mut reader = HashingReader {
-        reader: file.take(limit),
-        digest: &mut digest,
-    };
-    let bytes = std::io::copy(&mut reader, &mut std::io::sink())?;
-    Ok((bytes, digest.finalize().to_hex().to_string()))
-}
-
 struct ArchivedSource<'a> {
     store: &'a ArchiveStore,
     observe: &'a mut dyn FnMut(usize) -> Result<()>,
@@ -514,9 +478,94 @@ impl ControlSource for ArchivedSource<'_> {
 }
 
 impl Engine {
+    fn managed_control_archive_path(&self, intent: &TransitionIntent) -> PathBuf {
+        self.root
+            .join("membership-control-archives")
+            .join(intent.operation_id.to_string())
+    }
+
+    /// The only system-root exception is this operation's reserved namespace.
+    /// No archive may alias or overlap an original or proposed storage root.
+    fn require_control_archive_location(
+        &self,
+        destination: &Path,
+        intent: &TransitionIntent,
+    ) -> Result<()> {
+        for root in self.config.disks.iter().chain(intent.target.disks.iter()) {
+            let root = absolute_path(&root.root)?;
+            if destination.starts_with(&root) || root.starts_with(destination) {
+                return Err(Error::new(
+                    ErrorCode::UnsafePath,
+                    "control archive overlaps a registered storage directory",
+                ));
+            }
+        }
+        let system = absolute_path(&self.root)?;
+        if system.starts_with(destination)
+            || (destination.starts_with(&system)
+                && destination != self.managed_control_archive_path(intent))
+        {
+            return Err(Error::new(
+                ErrorCode::UnsafePath,
+                "control archive is outside the reserved operation namespace",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Build the frozen control evidence in this operation's system-managed
+    /// private directory. Users need not provision a second storage directory.
+    /// This does not enrol another disk or create a deregistration backup.
+    pub fn build_managed_membership_control_archive(&mut self) -> Result<MembershipControlArchive> {
+        let fence = self.membership_fence.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "archive requires a membership fence",
+            )
+        })?;
+        let path = self.managed_control_archive_path(&fence.intent);
+        self.require_control_archive_location(&path, &fence.intent)?;
+        let system = DiskRoot::open(&self.root)?;
+        let named_lock = system.open_read_regular(&self.root.join("writer.lock"))?;
+        if FileIdentity::from_metadata(&named_lock.metadata()?) != self._locks.system_identity()? {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "system writer identity changed before archive preparation",
+            ));
+        }
+        system.private_dir(&path)?;
+        self.build_membership_control_archive(&path)
+    }
+
     /// A rename after Engine admission must not defeat the lexical exclusion
     /// above. Reopen only original names to compare with held identities; never
     /// use those reopened handles as sources. Target paths are not admitted here.
+    fn admit_abort_control_archive_directory(&self, destination: &Path) -> Result<DiskRoot> {
+        let archive = DiskRoot::open(destination)?;
+        let identity = FileIdentity::from_fd(archive.directory(archive.path())?)?;
+        // A complete F does not need every original to remain reachable. Compare
+        // against their already-admitted identities, then recheck each live voter.
+        if self.disk_resources.handles().any(|handle| {
+            handle.seal.device == identity.device && handle.seal.inode == identity.inode
+        }) {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "Abort archive aliases an original root",
+            ));
+        }
+        let system = DiskRoot::open(&self.root)?;
+        let lock = system.open_read_regular(&self.root.join("writer.lock"))?;
+        if FileIdentity::from_metadata(&lock.metadata()?) != self._locks.system_identity()?
+            || identity == FileIdentity::from_fd(system.directory(system.path())?)?
+        {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "Abort archive aliases or differs from held system identity",
+            ));
+        }
+        Ok(archive)
+    }
+
     fn admit_control_archive_directory(&self, destination: &Path) -> Result<DiskRoot> {
         let destination = DiskRoot::open(destination)?;
         let destination_identity =
@@ -558,22 +607,7 @@ impl Engine {
                 "archive requires a membership fence",
             )
         })?;
-        for path in self
-            .config
-            .disks
-            .iter()
-            .chain(fence.intent.target.disks.iter())
-            .map(|disk| &disk.root)
-            .chain(std::iter::once(&self.root))
-        {
-            let path = absolute_path(path)?;
-            if destination.starts_with(&path) || path.starts_with(&destination) {
-                return Err(Error::new(
-                    ErrorCode::UnsafePath,
-                    "control archive must be separate from original, target and system directories",
-                ));
-            }
-        }
+        self.require_control_archive_location(&destination, &fence.intent)?;
         let inspected = self.inspect_membership_metadata_archive()?;
         let destination = self.admit_control_archive_directory(&destination)?;
         let (store, _lock) = ArchiveStore::admit(destination, &inspected.transition_hash)?;
@@ -666,6 +700,7 @@ impl Engine {
             .root
             .write_atomic(&store.path(ROOT_FILE), prepared.bytes(), false)?;
         Ok(MembershipControlArchive {
+            archive_path: store.root.path().to_owned(),
             root_hash: prepared.hash,
             transition_hash: inspected.transition_hash,
         })
@@ -686,6 +721,18 @@ impl PendingControlArchive {
         path: &Path,
         expected_root: &str,
     ) -> Result<Self> {
+        let archive = Self::open_abort(engine, path, expected_root)?;
+        archive.verify_current_fence(engine)?;
+        Ok(archive)
+    }
+
+    /// Complete independent F admission. Abort checks only its actual available
+    /// original voters against F, without requiring every old or target root.
+    pub(in crate::engine::membership_transition) fn open_abort(
+        engine: &Engine,
+        path: &Path,
+        expected_root: &str,
+    ) -> Result<Self> {
         if !valid_hash(expected_root) {
             return Err(Error::new(
                 ErrorCode::ObjectCorrupt,
@@ -699,23 +746,9 @@ impl PendingControlArchive {
                 "pending enrollment requires original fence",
             )
         })?;
-        for root in engine
-            .config
-            .disks
-            .iter()
-            .chain(fence.intent.target.disks.iter())
-            .map(|disk| &disk.root)
-            .chain(std::iter::once(&engine.root))
-        {
-            if path.starts_with(root) || root.starts_with(&path) {
-                return Err(Error::new(
-                    ErrorCode::UnsafePath,
-                    "source archive overlaps a pool directory",
-                ));
-            }
-        }
+        engine.require_control_archive_location(&path, &fence.intent)?;
         let store = ArchiveStore {
-            root: engine.admit_control_archive_directory(&path)?,
+            root: engine.admit_abort_control_archive_directory(&path)?,
         };
         let root = json_codec::from_value(
             AuthenticatedMetadataObject::authenticate(
@@ -736,8 +769,56 @@ impl PendingControlArchive {
             expected_root: expected_root.to_owned(),
             inspection,
         };
-        archive.verify_current_fence(engine)?;
         Ok(archive)
+    }
+
+    pub(in crate::engine::membership_transition) fn from_installed(
+        directory: DiskRoot,
+        expected_root: &str,
+        transition: &str,
+    ) -> Result<Self> {
+        let store = ArchiveStore { root: directory };
+        let root: ArchiveRoot = json_codec::from_value(
+            AuthenticatedMetadataObject::authenticate(
+                ROOT_KIND,
+                expected_root,
+                decode_strict(
+                    &store
+                        .root
+                        .read_bytes(&store.path(ROOT_FILE), MAX_METADATA)?,
+                )?,
+            )?
+            .into_value(),
+        )?;
+        let inspection = verify_root(&store, &root, transition)?;
+        Ok(Self {
+            store,
+            root,
+            expected_root: expected_root.to_owned(),
+            inspection,
+        })
+    }
+
+    pub(in crate::engine::membership_transition) fn abort_material(
+        &self,
+    ) -> Result<(
+        abort_view::VerifiedAbortArchive,
+        abort_view::PortableAbortArchive,
+    )> {
+        let expected = MembershipControlArchive {
+            archive_path: self.store.root.path().to_owned(),
+            root_hash: self.expected_root.clone(),
+            transition_hash: self.root.transition_hash.clone(),
+        };
+        let verified = abort_view::VerifiedAbortArchive::read(
+            self.store.root.private_child(self.store.root.path())?,
+            &expected,
+        )?;
+        let portable = abort_view::PortableAbortArchive::read(
+            self.store.root.private_child(self.store.root.path())?,
+            &expected,
+        )?;
+        Ok((verified, portable))
     }
 
     pub(in crate::engine::membership_transition) fn identity(&self) -> Result<FileIdentity> {
@@ -797,7 +878,10 @@ impl PendingControlArchive {
         &self,
         root: DiskRoot,
     ) -> Result<DiskRoot> {
-        let (destination, _lock) = ArchiveStore::admit(root, &self.root.transition_hash)?;
+        // Retain the archive advisory lock and every copy/sync/cleanup tail
+        // through one admitted responsibility on an already-bound old root.
+        let activity = root.retain_io_activity()?;
+        let (destination, lock) = ArchiveStore::admit(root, &self.root.transition_hash)?;
         let copied = verify_root_copying(
             &self.store,
             &self.root,
@@ -825,6 +909,10 @@ impl PendingControlArchive {
         destination
             .root
             .write_atomic(&destination.path(ROOT_FILE), prepared.bytes(), false)?;
+        drop(lock);
+        if let Some(activity) = &activity {
+            activity.check_running()?;
+        }
         Ok(destination.root)
     }
 }

@@ -1528,3 +1528,40 @@ async fn authenticated_storage_request_budgets_accept_full_candidates_and_reject
     }
     assert_eq!(probe.mutations.load(Ordering::SeqCst), 3);
 }
+
+#[tokio::test]
+async fn existing_pool_addition_routes_keep_session_origin_and_csrf_boundaries() {
+    let (_temp, app, probe) = configured_app(false, true);
+    let token = proxy_admin_token(&app).await;
+    for (method, path) in [
+        ("POST", "/api/admin/disks/preview"),
+        ("POST", "/api/admin/disks"),
+        ("POST", "/api/admin/disks/addition/resume"),
+        ("GET", "/api/admin/disks/addition"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                proxy_request(method, path, "192.0.2.20")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        if method == "POST" {
+            let response = app
+                .clone()
+                .oneshot(
+                    proxy_request(method, path, "192.0.2.20")
+                        .header("cookie", format!("zxs_session={token}"))
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+        }
+    }
+    assert_eq!(probe.mutations.load(Ordering::SeqCst), 0);
+}

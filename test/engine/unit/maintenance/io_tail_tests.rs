@@ -209,17 +209,59 @@ fn cleanup_retry_distinguishes_unlinked_and_absent_payload_without_republishing(
 #[test]
 fn cleanup_missing_payload_parent_preserves_original_not_found_error() {
     let mut pending = PendingCleanup::new();
+    let disk = pending.engine.config.disks[0].clone();
     let payload = pending.payloads[0].clone();
     let parent = payload.parent().unwrap();
-    let retained = parent.with_file_name("retained-versions");
-    fs::rename(parent, &retained).unwrap();
+    let container = parent.parent().unwrap();
+    let retained = pending.temporary.path().join("retained-container");
+    // Move the whole owner out of the namespace. Leaving its owner marker
+    // without versions is a layout error before the unlink can be attempted.
+    fs::rename(container, &retained).unwrap();
+    let directory = pending.directory(&disk);
+    let content = crate::container_storage::content_path_at(
+        &pending.engine.disk_resources.get(&disk).unwrap().root,
+        &directory,
+        &pending.engine.state.versions[&pending.first],
+        &mut |_| Ok(()),
+    )
+    .unwrap();
+    assert!(!content.parent().unwrap().exists());
     let original = files_below(&retained);
+    let immutable = files_below(&disk.root.join("metadata"));
+    let state = canonical_json(pending.engine.state()).unwrap();
     let error = pending.retry().unwrap_err();
     let Error::Filesystem(platform_io::fs_safety::Error::Io(source)) = error else {
         panic!("missing cleanup parent lost its I/O source: {error}");
     };
     assert_eq!(source.kind(), io::ErrorKind::NotFound);
+    assert!(directory.join("purged.json").is_file());
     assert_eq!(files_below(&retained), original);
+    assert_files_unchanged(&immutable);
+    assert_eq!(canonical_json(pending.engine.state()).unwrap(), state);
+    assert!(!container.exists());
+    assert!(!parent.exists());
+    for payload in &pending.payloads[1..] {
+        assert_eq!(fs::read(payload).unwrap(), b"old body");
+    }
+}
+
+#[test]
+fn cleanup_missing_owned_versions_directory_preserves_layout_rejection() {
+    let mut pending = PendingCleanup::new();
+    let disk = pending.engine.config.disks[0].clone();
+    let payload = pending.payloads[0].clone();
+    let parent = payload.parent().unwrap();
+    let retained = parent.with_file_name("retained-versions");
+    fs::rename(parent, &retained).unwrap();
+    let original = files_below(&retained);
+    let immutable = files_below(&disk.root.join("metadata"));
+    let state = canonical_json(pending.engine.state()).unwrap();
+    let error = pending.retry().unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ContainerLayoutInvalid);
+    assert_eq!(error.message(), "owned container has no version directory");
+    assert_eq!(files_below(&retained), original);
+    assert_files_unchanged(&immutable);
+    assert_eq!(canonical_json(pending.engine.state()).unwrap(), state);
     assert!(!parent.exists());
     for payload in &pending.payloads[1..] {
         assert_eq!(fs::read(payload).unwrap(), b"old body");

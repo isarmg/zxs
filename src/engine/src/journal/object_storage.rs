@@ -40,7 +40,7 @@ pub(crate) fn object_path(d: &DiskConfig, kind: &str, hash: &str) -> PathBuf {
 fn directory_exists(root: &DiskRoot, path: &Path) -> Result<bool> {
     match root.optional_metadata(path)? {
         Some(_) => {
-            root.directory(path)?;
+            root.directory_identity(path)?;
             Ok(true)
         }
         None => Ok(false),
@@ -57,7 +57,7 @@ fn kind_directory(root: &DiskRoot, d: &DiskConfig, kind: &str) -> Result<Option<
     Ok(Some(path))
 }
 fn add_existing(root: &DiskRoot, path: PathBuf, out: &mut Vec<PathBuf>) -> Result<()> {
-    if root.open_optional_regular(&path)?.is_some() {
+    if root.open_optional_read_regular(&path)?.is_some() {
         out.push(path);
     }
     Ok(())
@@ -277,7 +277,7 @@ fn inventory_hash(root: &DiskRoot, path: &Path) -> Result<String> {
                 "invalid object filename",
             )
         })?;
-    root.open_regular(path)?;
+    root.open_read_regular(path)?;
     Ok(hash.to_owned())
 }
 

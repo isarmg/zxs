@@ -1,20 +1,14 @@
-//! Read-only, detached Abort authority evidence. Online builders remain test-only.
-//! A fixed core names the rejected pure-add intent and its exact frozen archive;
-//! any valid OLD-Q witness proves that core without changing its generation hash.
-//! This neither selects Abort in production nor clears a fence, installs authority,
-//! publishes a cancellation result, or grants ordinary write permission.
+//! Certified cancellation of an uncompleted pure addition. Immutable generation
+//! identity is separate from any fixed-original-majority witness.
 use super::*;
 use crate::metadata_map::Reference;
-#[cfg(test)]
 use crate::metadata_map::{Encoder, ProofMeasure};
-#[cfg(test)]
 use archive::persistent::abort_view::VerifiedAbortArchive;
 use archive::persistent::{
     ArchiveRoot,
     abort_view::{ArchivedAbortMember, PortableAbortArchive},
 };
 use decision::DecisionReceipt;
-#[cfg(test)]
 use decision::DecisionStore;
 use pending::{MemberIdentity, activation::AUTHORITY_KIND};
 use platform_io::fs_safety::linux::FileIdentity;
@@ -47,6 +41,61 @@ pub(super) struct AbortAuthorityEvidence {
 }
 
 impl AbortAuthorityEvidence {
+    pub(super) fn status(&self, core: &AbortCore) -> Result<MembershipAbortStatus> {
+        let (intent, members) = self.archive.verify(&core.archive, &core.transition_hash)?;
+        let context = AbortContext::from_members(core.archive.clone(), &intent, &members)?;
+        let verified = self.witness.verify(&context)?;
+        Ok(MembershipAbortStatus {
+            operation_id: intent.operation_id,
+            transition_hash: core.transition_hash.clone(),
+            generation_hash: context.generation.hash.clone(),
+            confirmed_members: verified.decisions.len(),
+            original_members: context.acceptances.len(),
+            original_quorum: context.quorum(),
+        })
+    }
+
+    pub(super) fn verify_member(
+        &self,
+        core: &AbortCore,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+    ) -> Result<()> {
+        let (intent, members) = self.archive.verify(&core.archive, &core.transition_hash)?;
+        let context = AbortContext::from_members(core.archive.clone(), &intent, &members)?;
+        let verified = self.witness.verify(&context)?;
+        self.archive.verify_live_member(
+            &core.archive,
+            &core.transition_hash,
+            root,
+            disk,
+            &context.generation.hash,
+        )?;
+        let acceptance = context.acceptance(&disk.disk_id)?;
+        let expected = verified.decisions.get(&disk.disk_id);
+        let mut path = root.path().join("metadata");
+        for part in ["membership-decisions", &core.transition_hash] {
+            path.push(part);
+            if root.optional_metadata(&path)?.is_none() {
+                return if expected.is_some() {
+                    Err(Error::new(
+                        ErrorCode::RecoveryRequired,
+                        "Abort witness lacks its actual original decision",
+                    ))
+                } else {
+                    Ok(())
+                };
+            }
+            root.directory_identity(&path)?;
+        }
+        let store = DecisionStore::open(root, &acceptance.identity, &core.transition_hash, false)?;
+        store.verify_abort_compatible(
+            &context.generation.hash,
+            &object_hash(ACCEPTANCE_KIND, acceptance)?,
+            expected,
+        )
+    }
+
     pub(super) fn verify(&self, core: &AbortCore) -> Result<TransitionIntent> {
         let (intent, members) = self.archive.verify(&core.archive, &core.transition_hash)?;
         let context = AbortContext::from_members(core.archive.clone(), &intent, &members)?;
@@ -131,7 +180,6 @@ struct AbortContext {
 }
 
 impl AbortContext {
-    #[cfg(test)]
     fn from_archive(archive: VerifiedAbortArchive) -> Result<Self> {
         Self::from_members(archive.root().clone(), archive.intent(), archive.members())
     }
@@ -278,7 +326,6 @@ impl AbortContext {
 
     /// Caller retains the original writer locks through certification. This
     /// method confirms an existing choice only; it cannot install an Abort vote.
-    #[cfg(test)]
     fn observe_vote(
         &self,
         disk_id: &str,
@@ -313,7 +360,6 @@ impl AbortContext {
         })
     }
 
-    #[cfg(test)]
     fn certify(&self, observations: &[ObservedAbortVote]) -> Result<PortableAbortEvidence> {
         let mut encoder = Encoder::new(MAX_METADATA);
         let mut votes = json_codec::Map::new();
@@ -387,7 +433,6 @@ impl AbortContext {
     }
 }
 
-#[cfg(test)]
 struct ObservedAbortVote {
     disk_id: String,
     vote: AbortVote,
@@ -395,7 +440,6 @@ struct ObservedAbortVote {
     root: DiskRoot,
 }
 
-#[cfg(test)]
 fn verify_original_seal(root: &DiskRoot, acceptance: &AbortAcceptance) -> Result<()> {
     let seal = decode_seal(&root.read_bytes(&root.path().join("disk.json"), MAX_METADATA)?)?;
     if object_hash("membership-original-seal", &seal)? != acceptance.original_seal_hash {
@@ -409,6 +453,7 @@ fn verify_original_seal(root: &DiskRoot, acceptance: &AbortAcceptance) -> Result
 
 #[derive(Debug, PartialEq, Eq)]
 struct VerifiedAbortCertificate {
+    decisions: BTreeMap<String, DecisionReceipt>,
     #[cfg(test)]
     core_hash: String,
     #[cfg(test)]
@@ -455,6 +500,7 @@ impl PortableAbortEvidence {
                 "abort certificate lacks a fixed original majority",
             ));
         }
+        let mut decisions = BTreeMap::new();
         #[cfg(test)]
         let mut voters = BTreeSet::new();
         for (disk_id, value) in votes {
@@ -469,6 +515,7 @@ impl PortableAbortEvidence {
                 ));
             }
             context.verify_vote(&vote, expected)?;
+            decisions.insert(disk_id.clone(), vote.decision.clone());
             #[cfg(test)]
             voters.insert(disk_id);
         }
@@ -479,6 +526,7 @@ impl PortableAbortEvidence {
             ));
         }
         Ok(VerifiedAbortCertificate {
+            decisions,
             #[cfg(test)]
             core_hash: self.core_hash.clone(),
             #[cfg(test)]
@@ -489,65 +537,9 @@ impl PortableAbortEvidence {
     }
 }
 
-/// Historical verification only: reproduce the unique cancellation snapshot
-/// without installing markers, selecting slots, publishing, or unblocking writes.
-pub(super) fn verify_frozen_candidate(
-    portable: &pending::activation::PortableAuthority,
-    base: &State,
-    candidate: &Candidate,
-) -> Result<()> {
-    let intent = portable.intent()?;
-    let generation = portable.hash()?;
-    let sequence = intent
-        .fence_sequence
-        .checked_add(1)
-        .ok_or_else(|| Error::new(ErrorCode::ResourceLimit, "abort sequence exhausted"))?;
-    let topology_generation = base.topology_generation.checked_add(1).ok_or_else(|| {
-        Error::new(
-            ErrorCode::ResourceLimit,
-            "abort topology generation exhausted",
-        )
-    })?;
-    let result = OperationResult {
-        operation_id: intent.operation_id,
-        kind: "membership-add-cancelled".into(),
-        commit_id: None,
-        history_tree_id: None,
-        branch_id: None,
-        commit_state: storage_contract::CommitState::Published,
-        protection_at_publish: storage_contract::ProtectionAtPublish::NotApplicable,
-        current_health: storage_contract::CurrentHealth::Healthy,
-        request_digest: object_hash(INTENT_KIND, &intent)?,
-        sequence,
-        result: json_codec::json!({"generation": generation, "membership_epoch": portable.epoch()?.to_string(), "metadata_members": intent.origin.config().metadata_members().len(), "topology_generation": topology_generation.to_string()}),
-    };
-    let mut state = base.clone();
-    state.sequence = sequence;
-    state.topology_generation = topology_generation;
-    state.operations.insert(intent.operation_id, result.clone());
-    state
-        .operation_principals
-        .insert(intent.operation_id, intent.principal.clone());
-    let snapshot = prepare_snapshot(&state, MAX_METADATA)?;
-    let (history, _) = crate::history_package::prepare_history_manifests(&state, MAX_METADATA)?;
-    if candidate.sequence != sequence
-        || candidate.operation_id != intent.operation_id
-        || candidate.request_digest != result.request_digest
-        || candidate.snapshot_hash != snapshot.hash
-        || candidate.previous_snapshot != intent.boundary.map(|boundary| boundary.snapshot_hash)
-        || !candidate.versions.is_empty()
-        || &candidate.history_roots != history.reference()
-        || candidate.transaction_id != format!("tx_{}", &generation[..32])
-    {
-        return Err(Error::new(
-            ErrorCode::LogFork,
-            "first Abort candidate is not the prescribed cancellation",
-        ));
-    }
-    portable.verify_candidate(candidate)?;
-    Ok(())
-}
-
 #[cfg(test)]
 #[path = "../../../../../test/engine/unit/engine/membership_abort_tests.rs"]
 pub(in crate::engine::membership_transition) mod tests;
+
+mod runtime;
+pub use runtime::MembershipAbortStatus;

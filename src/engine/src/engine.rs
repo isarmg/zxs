@@ -58,10 +58,11 @@ mod history_window;
 pub use history_window::{FileHistorySourceRead, HistoryWindowCancellation, HistoryWindowRead};
 pub(crate) mod membership_transition;
 pub use membership_transition::{
-    MembershipArchiveInspection, MembershipControlArchive, MembershipExitAction,
-    MembershipFenceStatus, MembershipJointDecisionStatus, MembershipJointRole, MembershipJointVote,
-    MembershipJournalInspection, PendingMemberControlReceipt, PendingMemberDirectory,
-    PendingMembershipStatus, verify_membership_control_archive,
+    MembershipAbortStatus, MembershipArchiveInspection, MembershipControlArchive,
+    MembershipExitAction, MembershipFenceStatus, MembershipJointDecisionStatus,
+    MembershipJointRole, MembershipJointVote, MembershipJournalInspection,
+    PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
+    verify_membership_control_archive,
 };
 mod recovery;
 use recovery::RecoveryMode;

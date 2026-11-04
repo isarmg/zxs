@@ -227,17 +227,45 @@ impl AuthorityNode {
 }
 
 impl PortableAuthority {
-    /// Runtime activation remains Add-only. A validated historical Abort is not
-    /// permission to enter the existing Add promotion/publication state machine.
+    /// Add-only resources must never be inferred from an Abort authority.
     pub(super) fn add_joint(&self) -> Result<&PortableJoint> {
         match &self.head {
             AuthorityCore::Add(node) => Ok(&node.joint),
             AuthorityCore::Abort(_) => Err(Error::new(
                 ErrorCode::RecoveryRequired,
-                "Abort authority is read-only; cancellation activation is not implemented",
+                "Abort authority has no Joint addition certificate",
             )),
         }
     }
+    pub(in crate::engine::membership_transition) fn abort_status(
+        &self,
+    ) -> Result<super::super::super::abort::MembershipAbortStatus> {
+        let AuthorityCore::Abort(core) = &self.head else {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "authority is not an Abort",
+            ));
+        };
+        self.evidence[&self.hash()?].status(core)
+    }
+
+    pub(in crate::engine::membership_transition) fn verify_abort_member(
+        &self,
+        root: &DiskRoot,
+        disk: &DiskConfig,
+    ) -> Result<()> {
+        self.lineage()?;
+        match &self.head {
+            AuthorityCore::Abort(core) => {
+                self.evidence[&self.hash()?].verify_member(core, root, disk)
+            }
+            AuthorityCore::Add(_) => Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "expected Abort authority",
+            )),
+        }
+    }
+
     pub(in crate::engine::membership_transition) fn is_abort(&self) -> bool {
         matches!(self.head, AuthorityCore::Abort(_))
     }
@@ -381,7 +409,7 @@ impl PortableAuthority {
         Ok(object_hash(AUTHORITY_KIND, &self.head)?)
     }
 
-    pub(super) fn archive_hash(&self) -> Result<String> {
+    pub(in crate::engine::membership_transition) fn archive_hash(&self) -> Result<String> {
         Ok(object_hash(
             "membership-control-archive",
             self.head.archive(),
@@ -595,6 +623,14 @@ impl PortableAuthority {
 
     #[cfg(test)]
     pub(in crate::engine::membership_transition) fn abort_for_test(
+        core: AbortCore,
+        witness: AbortAuthorityEvidence,
+        predecessor: Option<&Self>,
+    ) -> Result<Self> {
+        Self::new_abort(core, witness, predecessor)
+    }
+
+    pub(in crate::engine::membership_transition) fn new_abort(
         core: AbortCore,
         witness: AbortAuthorityEvidence,
         predecessor: Option<&Self>,

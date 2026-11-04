@@ -1104,7 +1104,7 @@ fn workspace_directories_clear(
             // A known name cannot hide a directory, symlink or special file.
             location
                 .root()
-                .open_regular(&directory.join(entry.as_path()))?;
+                .open_read_regular(&directory.join(entry.as_path()))?;
         }
     }
     Ok(true)

@@ -55,7 +55,7 @@ HTTP 默认监听 `0.0.0.0:7400`，可通过 `--listen` 指定其他 IPv4 或 IP
 
 登录后，管理员使用 `/api/admin/storage/status`、`/directories`、`/directories/inspect` 查询首次存储状态和真实挂载目录；通过 `/activate` 提交已检查的选择，使用 `/complete-activation` 补全有持久证明的原意图。挂载路径与实际存储根分别保存，允许挂载点内的嵌套子目录。根须已存在、为空、由服务账号拥有且权限为 0700；操作不挂载、格式化或 chmod。仅本地开发测试可显式设置 `--allow-development-setup` 使用目录模拟盘，模拟盘不证明设备独立性或断电安全。
 
-激活由有界服务任务持有，不因 HTTP 客户端断开而取消。结果未知先查询状态；补全只恢复原绑定意图，不重选目录或重置管理员。已有池热增盘／移除仍不支持，`POST /api/admin/disks` 不因此成为可用增盘入口。后续方案及上线前验收见[在线磁盘成员管理提案（未实现）](../design/online-disk-management.md)。
+激活由有界服务任务持有，不因 HTTP 客户端断开而取消。结果未知先查询状态；补全只恢复原绑定意图，不重选目录或重置管理员。已有池的纯添加使用独立预览、提交和原操作恢复接口，见[在线目录成员管理](../design/online-disk-management.md)。`POST /api/admin/disks` 由持久管理协调器执行真实的 fence、受管控制归档、enroll、联合决定和 activation，不复用首次激活。移出、下线和擦除未接入产品入口。
 
 `--setup-disk` 白名单仍服务既有离线恢复用途，`POST /api/setup/restore-system` 保持原授权与凭据恢复语义。公开 `preset-preview`、`initialize-preset`、`complete-initialization` 路由已移除，不提供旧初始化格式兼容。缺少可信权威或凭据损坏不得推断为新安装，也不得自动创建管理员。
 

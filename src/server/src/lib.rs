@@ -2641,21 +2641,21 @@ async fn register_disk(
     State(state): State<AppState>,
     http_routing::Extension(identity): http_routing::Extension<Identity>,
     request: Request,
-) -> Result<Response, ApiError> {
-    // Even this offline-only endpoint retains the HTTP JSON syntax and size boundary.
-    json_body(request).await?;
+) -> Result<Json<Value>, ApiError> {
+    let input = json_body(request).await?;
     let permit = state
         .backend_slots
         .clone()
         .try_acquire_owned()
-        .map_err(|source| ApiError::limit("HTTP backend capacity reached").with_source(source))?;
-    match crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
-        .run(move |backend| backend.register_disk(&identity))
+        .map_err(|source| {
+            ApiError::limit("management operation capacity reached").with_source(source)
+        })?;
+    crate::http_job::HttpBackendJob::new(state.backend, state.auth, permit)
+        .run(move |backend| {
+            backend.setup_operation("disk_add_commit", input, None, Some(&identity))
+        })
         .await
-    {
-        Ok(impossible) => match impossible {},
-        Err(error) => Err(error),
-    }
+        .map(Json)
 }
 
 async fn management_status(State(state): State<AppState>) -> Json<Value> {

@@ -12,6 +12,7 @@ use storage_contract::storage_directories::{
 };
 use web_interface::{components::ErrorState, i18n::t, prelude::*, tasks::spawn_local};
 
+mod addition;
 mod response;
 #[derive(Debug, error_definition::Error)]
 pub enum ResponseError {
@@ -64,23 +65,26 @@ pub(super) struct Model {
     selections: Vec<CandidateSelection>,
     development: bool,
     confirmed: bool,
+    addition: addition::Model,
 }
 impl Model {
     pub(super) fn reload_blocked(&self) -> bool {
-        self.mutation || self.unknown || self.discovery_unknown
+        self.mutation || self.unknown || self.discovery_unknown || self.addition.blocks_edit()
     }
     fn editable(&self) -> bool {
         !self.busy
+            && !self.addition.blocks_edit()
             && !self.unknown
             && !self.discovery_unknown
             && self.success.is_none()
             && self
                 .snapshot
                 .as_ref()
-                .is_some_and(|s| s.state == StorageState::Pending)
+                .is_some_and(|s| matches!(s.state, StorageState::Pending | StorageState::Active))
     }
     fn can_set_root(&self) -> bool {
         !self.busy
+            && !self.addition.blocks_edit()
             && !self.unknown
             && !self.discovery_unknown
             && self.success.is_none()
@@ -92,6 +96,10 @@ impl Model {
     }
     fn can_activate(&self) -> bool {
         self.editable()
+            && self
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.state == StorageState::Pending)
             && self.confirmed
             && !self.selections.is_empty()
             && self.selections.len() <= 32
@@ -108,6 +116,7 @@ impl Model {
         self.inspected = None;
         self.confirmed = false;
         self.error = None;
+        self.addition.invalidate();
     }
 }
 
@@ -148,6 +157,7 @@ pub(super) fn refreshing(state: &State) -> bool {
     state.admin_console.storage.busy
 }
 pub(super) fn poll(state: RwSignal<State>) {
+    addition::poll(state);
     let needed = state.with_untracked(|s| {
         let model = &s.admin_console.storage;
         s.session_active()
@@ -200,6 +210,7 @@ pub(super) fn load(state: RwSignal<State>) {
         }) == Some(true);
         if load_disks {
             super::disks::load(state);
+            addition::load(state);
         }
     });
 }
@@ -216,6 +227,9 @@ fn finish_load(
                 model.listing = None;
                 model.inspected = None;
                 model.selections.clear();
+                if !model.addition.blocks_edit() {
+                    addition::selected(model);
+                }
                 model.browse_path = settings.discovery_root.clone();
             }
             model.discovery_input = settings.discovery_root.clone();
@@ -232,8 +246,14 @@ fn finish_load(
                 }
                 model.unknown = false;
                 model.activation_error = None;
-                model.selections.clear();
-                model.inspected = None;
+                if model
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|previous| previous.state == StorageState::Pending)
+                {
+                    model.selections.clear();
+                    model.inspected = None;
+                }
             }
             if !snapshot.allow_development {
                 model.development = false;
@@ -478,6 +498,7 @@ fn add_selection(state: RwSignal<State>) {
             model.selections.push(candidate);
         }
         model.confirmed = false;
+        addition::selected(model);
     });
 }
 fn remove_selection(state: RwSignal<State>, id: &str) {
@@ -488,6 +509,7 @@ fn remove_selection(state: RwSignal<State>, id: &str) {
                 .selections
                 .retain(|item| item.selection_id != id);
             s.admin_console.storage.confirmed = false;
+            addition::selected(&mut s.admin_console.storage);
         }
     });
 }
@@ -566,7 +588,7 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
         <label class="zxs-form-field"><span>{t("存储发现目录", "Storage discovery directory")}</span><input class="zxs-input" data-storage-discovery-root="" type="text" autocomplete="off" disabled=move ||state.with(|s|!s.admin_console.storage.can_set_root()) prop:value=move ||state.with(|s|s.admin_console.storage.discovery_input.clone()) on:input=move |event|state.update(|s|{if s.session_active() && s.admin_console.storage.can_set_root(){s.admin_console.storage.discovery_input=event_target_value(&event);}})/></label>
         <button type="button" class="zxs-button" data-storage-save-discovery-root="" disabled=move ||state.with(|s|!s.admin_console.storage.can_set_root()||s.admin_console.storage.discovery_input==s.admin_console.storage.discovery_root||s.admin_console.storage.discovery_input.is_empty()) on:click=move |_|save_discovery_root(state)>{t("保存发现目录", "Save discovery directory")}</button>
         <Show when=move ||state.with(|s|s.admin_console.storage.discovery_unknown)><p class="zxs-row" role="alert">{t("目录设置结果未知，请刷新状态核对后再继续。", "The directory setting outcome is unknown. Refresh status before continuing.")}</p></Show>
-        <Show when=move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().is_some_and(|s|s.state==StorageState::Pending)&&s.admin_console.storage.success.is_none())>
+        <Show when=move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().is_some_and(|s|matches!(s.state,StorageState::Pending|StorageState::Active))&&s.admin_console.storage.success.is_none())>
             <p class="zxs-row">{t("挂载目录与实际存储目录分开设置。仅使用当前已挂载文件系统和服务已有权限，不格式化、不自动挂载、不修改权限。", "Set the mount directory and actual storage directory separately. Only mounted filesystems and existing service permissions are used. No formatting, automatic mounting, or permission changes occur.")}</p>
             <div class="zxs-form-grid">{input(state,"browse",t("浏览目录", "Browse directory"))}</div>
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) on:click=move |_|{let path=state.with_untracked(|s|s.admin_console.storage.browse_path.clone());browse(state,if path.is_empty(){state.with_untracked(|s|s.admin_console.storage.discovery_root.clone())}else{path})}>{t("浏览", "Browse")}</button>
@@ -583,12 +605,15 @@ pub(super) fn view(state: RwSignal<State>) -> impl IntoView {
                 <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) data-storage-add-selection="" on:click=move |_|add_selection(state)>{t("加入待添加列表", "Add to selection")}</button>
             </Show>
             <For each=move ||state.with(|s|s.admin_console.storage.selections.clone()) key=|item|item.selection_id.clone() children=move |item|{let id=item.selection_id;view!{<div class="zxs-flow"><p class="zxs-row">{format!("{} → {}",item.mount_path,item.root_path)}</p><button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.editable()) on:click=move |_|remove_selection(state,&id)>{t("移除待添加项", "Remove selection")}</button></div>}}/>
+            <Show when=move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().is_some_and(|s|s.state==StorageState::Pending))>
             <Show when=move ||state.with(|s|s.admin_console.storage.snapshot.as_ref().is_some_and(|s|s.allow_development))><label class="zxs-row"><input data-storage-development="" type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.storage.development) disabled=move ||state.with(|s|!s.admin_console.storage.editable()) on:change=move |event|state.update(|s|{if s.session_active()&&s.admin_console.storage.editable(){s.admin_console.storage.development=event_target_checked(&event);s.admin_console.storage.confirmed=false;}})/>{t("开发模拟目录（非生产）", "Development simulation directories (not production)")}</label></Show>
             <p class="zxs-row">{t("列表第一项为 P01 主存储，后续项按顺序建立逐级备份链，全部作为元数据成员；正常写入需要所有成员在线。单目录只有一份副本，同一设备上的多个目录不提供磁盘故障冗余。", "The first selection is P01 primary storage. Later selections form a tiered backup chain; all are metadata members and must be online for normal writes. One directory holds one copy. Multiple directories on one device do not protect against disk failure.")}</p>
             <p class="zxs-row">{move ||state.with(|s|{let members=s.admin_console.storage.selections.len();if members==0 {String::new()}else{format!("{}{}{}{}{}",t("元数据成员：", "Metadata members: "),members,t("；系统恢复至少需要原成员中的 ", "; system recovery requires at least "),members/2+1,t(" 个一致成员。", " consistent original members."))}})}</p>
             <label class="zxs-row"><input data-storage-confirm="" type="checkbox" prop:checked=move ||state.with(|s|s.admin_console.storage.confirmed) disabled=move ||state.with(|s|!s.admin_console.storage.editable()) on:change=move |event|state.update(|s|{if s.session_active()&&s.admin_console.storage.editable(){s.admin_console.storage.confirmed=event_target_checked(&event);}})/>{t("确认将列表中的空目录用于新存储池，创建存储身份与元数据。", "Use the selected empty directories for the new storage pool and create their storage identities and metadata.")}</label>
             <button type="button" class="zxs-button" disabled=move ||state.with(|s|!s.admin_console.storage.can_activate()) data-storage-activate="" on:click=move |_|activate(state,false)>{t("添加并激活存储", "Add and activate storage")}</button>
+            </Show>
         </Show>
+        {addition::view(state)}
         <Show when=move ||state.with(|s|s.admin_console.storage.unknown)><p class="zxs-row" role="alert">{t("激活结果未知，禁止重新提交。刷新状态核对；只有服务器验证的原激活可以继续。关闭页面不会取消服务器操作。", "Activation outcome is unknown; resubmission is blocked. Refresh status to check. Only the server-verified original activation can be completed. Closing this page does not cancel the server operation.")}</p></Show>
         <Show when=move ||state.with(|s|s.admin_console.storage.can_complete())><p class="zxs-row">{t("服务器已验证原激活的中断证明。继续只完成原目录与当前账户的绑定，不重建管理员或选择新目录。", "The server verified the interrupted activation. Continuing only completes the original directories' binding to the current account; it does not recreate the administrator or select new directories.")}</p><button type="button" class="zxs-button" data-storage-complete="" on:click=move |_|activate(state,true)>{t("继续原激活", "Complete original activation")}</button></Show>
         <Show when=move ||state.with(|s|s.admin_console.storage.success.is_some())><p class="zxs-row" role="status">{move ||state.with(|s|if s.admin_console.storage.success==Some(Success::RestartRequired){t("存储已激活，服务需要本地重启。不要再次添加。", "Storage was activated; the service needs a local restart. Do not add it again.")}else{t("存储已激活，正在打开。请刷新状态核对。", "Storage was activated and is opening. Refresh status to check.")})}</p></Show>

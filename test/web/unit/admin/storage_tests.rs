@@ -1,7 +1,7 @@
 use super::*;
 use storage_contract::storage_directories::{DirectoryIdentity, MountIdentity};
 
-fn candidate(root: &str) -> CandidateSelection {
+pub(super) fn candidate(root: &str) -> CandidateSelection {
     CandidateSelection {
         selection_id: format!("selection-{root}"),
         discovery_root: "/mnt".into(),

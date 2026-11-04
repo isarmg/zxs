@@ -1,40 +1,91 @@
 //! Explicit generation resource promotion and prescribed publication.
 use super::*;
 
-fn install_marker(root: &DiskRoot, disk: &DiskConfig, generation: &Generation) -> Result<()> {
-    let path = disk.root.join(GENERATION_FILE);
-    let file = if root
-        .optional_metadata(&disk.root.join("metadata/pool-membership"))?
-        .is_some()
-    {
-        root.open_optional_regular(&path)?
-    } else {
-        None
-    };
-    let replace = match file {
-        Some(file) => {
-            let previous: PortableAuthority = decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
-            previous.intent()?;
-            let hash = previous.hash()?;
-            if hash != generation.hash
-                && Some(hash.as_str()) != generation.intent.origin.predecessor()
-            {
+/// Envelope evidence is not generation identity. Equivalent valid witnesses
+/// retain the named bytes and repeat both durability barriers.
+fn install_envelope(
+    root: &DiskRoot,
+    path: &Path,
+    generation: &Generation,
+    advance: bool,
+) -> Result<()> {
+    if let Some(file) = root.open_optional_read_regular(path)? {
+        let bytes = read_file_bytes(file, MAX_METADATA)?;
+        let saved: PortableAuthority = decode_strict(&bytes)?;
+        let hash = saved.hash()?;
+        if hash == generation.hash {
+            return root.write_atomic(path, &bytes, false);
+        }
+        if !advance || Some(hash.as_str()) != generation.intent.origin.predecessor() {
+            return Err(Error::new(
+                ErrorCode::LogFork,
+                "generation marker is not this authority or its exact predecessor",
+            ));
+        }
+        return root.write_json(path, &generation.portable, true);
+    }
+    match root.write_json(path, &generation.portable, false) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            // An uncertain create is resolved at the actual immutable name.
+            let Some(file) = root.open_optional_read_regular(path)? else {
+                return Err(error);
+            };
+            let bytes = read_file_bytes(file, MAX_METADATA)?;
+            let saved: PortableAuthority = decode_strict(&bytes)?;
+            if saved.hash()? != generation.hash {
+                return Err(error);
+            }
+            root.write_atomic(path, &bytes, false)
+        }
+    }
+}
+
+pub(in crate::engine::membership_transition) fn install_marker(
+    root: &DiskRoot,
+    disk: &DiskConfig,
+    generation: &Generation,
+) -> Result<()> {
+    let directory = generation_directory(disk, &generation.hash);
+    root.private_dir(&directory)?;
+    root.private_dir(&disk.root.join("metadata/pool-membership"))?;
+    if generation.portable.is_abort() && disk.metadata_member {
+        let current_marker =
+            match root.open_optional_read_regular(&disk.root.join(GENERATION_FILE))? {
+                Some(file) => {
+                    let saved: PortableAuthority =
+                        decode_strict(&read_file_bytes(file, MAX_METADATA)?)?;
+                    let hash = saved.hash()?;
+                    if hash != generation.hash
+                        && Some(hash.as_str()) != generation.intent.origin.predecessor()
+                    {
+                        return Err(Error::new(
+                            ErrorCode::LogFork,
+                            "Abort marker has an unrelated predecessor",
+                        ));
+                    }
+                    hash == generation.hash
+                }
+                None => false,
+            };
+        let seal = decode_seal(&root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?)?;
+        let current_seal = matches!(&seal.format, DiskSealFormat::MembershipGeneration { authority_hash } if authority_hash == &generation.hash);
+        let journal = directory.join("journal.bin");
+        if root.open_optional_read_regular(&journal)?.is_none() {
+            if current_marker || current_seal {
                 return Err(Error::new(
-                    ErrorCode::LogFork,
-                    "generation marker is not this authority or its exact predecessor",
+                    ErrorCode::RecoveryRequired,
+                    "current Abort authority lost its generation journal",
                 ));
             }
-            hash != generation.hash
+            root.write_atomic(&journal, &[], false)?;
         }
-        None => false,
-    };
-    root.private_dir(&generation_directory(disk, &generation.hash))?;
-    root.write_json(
-        &generation_directory(disk, &generation.hash).join("authority.json"),
-        &generation.portable,
-        false,
-    )?;
-    root.write_json(&path, &generation.portable, replace)
+    }
+    for object in generation.portable.node_objects()? {
+        write_object_bytes_at(root, disk, object.kind(), &object.hash, object.bytes())?;
+    }
+    install_envelope(root, &directory.join("authority.json"), generation, false)?;
+    install_envelope(root, &disk.root.join(GENERATION_FILE), generation, true)
 }
 
 pub(crate) fn predecessor_seal_matches(
@@ -56,6 +107,17 @@ pub(crate) fn predecessor_seal_matches(
     if value.get("format").and_then(json_codec::Value::as_str) != Some("membership-pending") {
         let stored = decode_seal(bytes)?;
         if stored.format == expected.format {
+            if generation.portable.is_abort()
+                && disk.metadata_member
+                && root
+                    .open_optional_read_regular(&log_path(config, disk))?
+                    .is_none()
+            {
+                return Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "active Abort generation journal is missing",
+                ));
+            }
             return validate_stored_seal(&stored, expected);
         }
         let mut predecessor = expected.clone();
@@ -133,6 +195,13 @@ impl Engine {
         let previous = self.config.generation_hash().map(str::to_owned);
         let discovered = discover(self.config.clone())?;
         if discovered.generation_hash() != self.config.generation_hash() {
+            if discovered
+                .generation()
+                .is_some_and(|generation| generation.portable.is_abort())
+            {
+                self.resume_abort_generation(discovered)?;
+                return self.activate_pending_membership();
+            }
             let pending = self.pending_membership.take().ok_or_else(|| {
                 Error::new(
                     ErrorCode::RecoveryRequired,
@@ -327,6 +396,9 @@ impl Engine {
             ));
         }
         let transition = object_hash(INTENT_KIND, &generation.intent)?;
+        if generation.portable.is_abort() {
+            self.restore_abort_archives(&generation)?;
+        }
         for disk in self
             .config
             .disks
@@ -347,6 +419,18 @@ impl Engine {
             let parent = handle
                 .root
                 .private_child(&member_directory(disk, &transition))?;
+            if generation.portable.is_abort() {
+                generation
+                    .portable
+                    .verify_abort_member(&handle.root, disk)?;
+                read_generation_base(
+                    parent.private_child(&parent.path().join(CONTROL_ARCHIVE_DIRECTORY))?,
+                    &generation.portable.archive_hash()?,
+                    &transition,
+                    &generation.intent,
+                )?;
+                continue;
+            }
             let verified = generation.portable.add_joint()?.verify()?;
             let identity = &verified.dependencies[&disk.disk_id].enrollment.identity;
             let physical = FileIdentity::from_fd(handle.root.directory(handle.root.path())?)?;
@@ -434,11 +518,7 @@ impl Engine {
                 .root
                 .read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
             predecessor_seal_matches(&self.config, disk, &handle.root, &bytes, &handle.seal)?;
-            handle.root.write_json(
-                &disk.root.join(GENERATION_FILE),
-                &generation.portable,
-                false,
-            )?;
+            install_marker(&handle.root, disk, &generation)?;
             handle
                 .root
                 .private_dir(&generation_directory(disk, &generation.hash))?;

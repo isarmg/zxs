@@ -1,6 +1,6 @@
 # 尚未形成旧侧多数的 handoff：certified abort 设计
 
-状态：**共享选择槽及 Abort 历史只读解析已有源码；生产取消、取消首发布和恢复写仍未实现，未允许部署**。原设计只读基线 `3305c192`，2026-11-04；各源码阶段边界见第 9、10 节。本机未运行构建或测试。范围只限 pure-add；不修改原 Candidate、TransitionIntent、FrozenArchive、旧 journal 字节，不增加旧版本兼容/迁移。
+状态：**共享选择槽、生产 Abort 认证／取消首发布／原根恢复及后续 Add 已接入源码；尚未运行构建、测试或模型，未允许部署**。原设计只读基线 `3305c192`，2026-11-04；历史源码阶段边界见第 9、10 节，当前生产接线见第 11 节。本机未运行构建或测试。范围只限 pure-add；不修改原 Candidate、TransitionIntent、FrozenArchive、旧 journal 字节，不增加旧版本兼容/迁移。
 
 ## 1. 结论及真正边界
 
@@ -197,3 +197,18 @@
 新增测试源码覆盖同 G 不同合法证书的 core 字节等价、独立 resolver 能力、envelope 精确闭包、缺 seal/I/map page、未知/混合 schema、只读 prescribed cancellation Candidate、当前 Abort 头在 Add 恢复写入和 rejected-target 探测前拒绝、坏/缺 marker 不回退，以及**用显式测试 journal writer 构造的完整 Abort 后继冻结归档**。该归档走实际外部 archive 验证、`read_generation_base`、独立复制和 scrub 路径，覆盖所有 live roots 不可用、证书更换、缺/坏/额外/换绑证据、缺原 journal 或 publication object 时不能从仍健全的源 F 回退。原 Add→Abort 测试另保留 Add 原 core/portable 字节的比较。这些是待执行测试定义，不是已通过的运行证据，也不证明生产 Abort→Add 协调器存在。
 
 成本与限制：portable envelope 有 MAX_METADATA 总字节上限；身份投影额外存储 O(原成员数+F.members 页)，witness 为 O(Q 至 N)。归档读取/复制保留原完整历史检查，新增按 ancestor G 命名的有界证据读，scrub 计入读取字节和证据叶预算。未增加业务写热路径或减少任何 fsync。源码机仅执行固定 rustfmt 与 `git diff --check`；Cargo/default/fault-injection/Clippy、测试计数和端到端故障验收必须在独立构建环境对准确提交运行。后续仍需生产旧槽聚合、同 G envelope 的 marker 安装、原根推广、取消首 publication 和恢复协调，才可能恢复普通写。
+
+
+## 11. 生产取消与恢复接线（2026-11-04，未执行测试）
+
+生产入口为 `Engine::certify_membership_abort(archive_path, expected_root)` 与 `cancel_membership_handoff`。前者返回固定旧 N/Q、实际同步票数、原 operation/I 和稳定 G；后者继续完成取消首 publication。`resume_membership_fence` 只补已承认 pure-add 的原 fence，不重新准备或探测 target；F 尚未形成时仍要求完整旧日志。受管归档位于系统目录该 operation 的固定子目录，路径仅是定位信息，不进入 I/F/G 的哈希，也不是注销磁盘的数据备份。
+
+- 完整 F 的认证入口不要求全部旧根在线。先保留所有拟用旧成员的 I/O 责任和真实 writer owner，逐一比较命名锁 inode、旧 seal／物理身份及原 journal 的精确 F 字节。所有可用槽先扫描一次；若现存 Joint 使可用空槽／同 G Abort 达不到固定旧 Q，不写任何新 Abort 选择。投票前先独立安装 F、core 和 acceptance，之后走共享 no-replace 槽与 file+dir 屏障；聚合前再验证旧日志、锁和真实票。
+- 证书不改变 G。各参与旧元数据根先持久新 G 的空 journal，再安装 generation authority envelope／主 marker；相同 G 的不同有效 witness 保留本盘原 envelope 字节并重做同步，不按证书或票数选择新代。已 current marker／active seal 而缺 journal 明确失败，不能从健全 F 重造空当前日志。
+- 取消只保留／推广原成员资源，少数 Joint 原槽不覆盖。每个在线原元数据根都核对实际 slot、原 seal、完整 F 和原 journal。显式推广可从一个独立验证完整的旧 F 补齐此前未参与旧根的归档副本，随后目标独立重验；只读 discovery 不修复，损坏已命名内容不覆盖。取消后保留 target 上 reservation、pending 和其它物理文件。
+- `Generation::result/next_state/verify_activation_candidate` 统一规定 Add 与取消的首状态，不再单独手写只读取消候选。取消结果为永久 `membership-add-cancelled`，沿用原 operation、actor、I digest，sequence=fence+1、topology_generation+1；新 G 的首 publication 成功后才恢复普通写。认证只有旧 Q 时可完成，但缺任何原配置资源时首 publication 继续阻塞；旧 fence、原 journal、原 Candidate 和既有 Add core 字节不变。
+- 启动先认证整批已授权根的所有 marker 并选完整 lineage，再决定 fence hint。当前 Abort 使用 origin，有 Abort 祖先的后继 Add 也过滤被取消 I 的 target；坏 marker、矛盾 lineage 不回退。恢复按 effective config 的固定 N/Q，不按可用数缩小。后续 Add 使用取消 G 作为 predecessor，继承永久取消结果及其独立证据归档。
+
+新增生产测试定义覆盖 target 为不可访问符号链接时取消及恢复、少数 Joint、JointQ／不可达 AbortQ、仅旧 Q 认证后等待原资源、同 G 不同 witness marker 重试、取消后新 Add 和 marker／seal／Candidate／Accept／Finalize／Publication／投影中断。恢复侧另定义混合旧／新 marker、未知 marker、当前日志丢失与未发布 staging、Add→Abort 和 Abort→Add ancestry 的实际文件场景。**这些仅为未运行的测试源码，不是通过证据**。本批只执行固定 Rust 1.99 rustfmt 和 `git diff --check`，未运行 Cargo build/check/test/Clippy、故障测试、模型、CI、真实设备或部署。
+
+成本仍限成员控制面：槽扫描 O(N)，证书 O(Q 至 N)，完整 F 的复制与边界重验保留已有全历史成本；新增旧 journal 精确散列发生于取消认证／恢复，不进入普通业务写热路径。每个选择和 envelope 保留原子写及 file+dir 同步，未减少 fsync 或用缓存替代真实本盘证明。

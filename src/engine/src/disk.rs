@@ -197,6 +197,7 @@ pub(crate) fn read_file_bytes(file: impl Into<crate::ReadFile>, maximum: usize) 
             "metadata grew beyond limit",
         ));
     }
+    file.check_running()?;
     Ok(output)
 }
 
@@ -261,6 +262,7 @@ pub(crate) fn read_file_bytes_observed(
             break;
         }
     }
+    observe(0)?;
     Ok(output)
 }
 
