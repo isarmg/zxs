@@ -258,9 +258,27 @@ fn membership_joint_each_member_partial_write_sync_and_opening_failure_resume_sa
             JointFaultStage::Decision(DecisionFault::DirectorySync),
             JointFaultStage::Decision(DecisionFault::NoReplace),
             JointFaultStage::Decision(DecisionFault::PublishedReply),
+            JointFaultStage::Decision(DecisionFault::UnknownPublicationFileSync),
+            JointFaultStage::Decision(DecisionFault::PublishedDurabilityDirectorySync),
         ] {
             let mut fixture = Fixture::new(2, 2, false);
-            fixture.fault(index, stage);
+            let named_fault = match stage {
+                JointFaultStage::Decision(DecisionFault::UnknownPublicationFileSync) => {
+                    Some("decision-unknown-publication-file-sync")
+                }
+                JointFaultStage::Decision(DecisionFault::PublishedDurabilityDirectorySync) => {
+                    Some("decision-published-durability-directory-sync")
+                }
+                _ => None,
+            };
+            if let Some(point) = named_fault {
+                fixture
+                    .engine
+                    .inject_membership_joint_fault_once(&fixture.target.disks[index].disk_id, point)
+                    .unwrap();
+            } else {
+                fixture.fault(index, stage);
+            }
             assert!(fixture.engine.resume_membership_joint_decision().is_err());
             let status = fixture.engine.membership_joint_decision_status().unwrap();
             assert_eq!(status.synchronized_target_votes, index);

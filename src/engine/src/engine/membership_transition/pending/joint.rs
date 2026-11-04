@@ -309,8 +309,14 @@ impl Engine {
             "decision-unknown-publication" => {
                 JointFaultStage::Decision(DecisionFault::UnknownPublication)
             }
+            "decision-unknown-publication-file-sync" => {
+                JointFaultStage::Decision(DecisionFault::UnknownPublicationFileSync)
+            }
             "decision-published-durability" => {
                 JointFaultStage::Decision(DecisionFault::PublishedDurability)
+            }
+            "decision-published-durability-directory-sync" => {
+                JointFaultStage::Decision(DecisionFault::PublishedDurabilityDirectorySync)
             }
             "completion-file-sync" => JointFaultStage::Completion(OpeningFault::FileSync),
             "completion-directory-sync" => JointFaultStage::Completion(OpeningFault::DirectorySync),

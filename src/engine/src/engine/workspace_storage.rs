@@ -8,7 +8,6 @@ use crate::{disk::*, *};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, btree_map::Entry},
-    fs,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
