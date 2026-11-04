@@ -1096,6 +1096,49 @@ impl Backend for EngineBackend {
             )
             .map_err(error)
     }
+    fn placement_configuration(
+        &self,
+        identity: &Identity,
+        request: crate::ReadPlacementConfiguration,
+    ) -> Result<storage_contract::PlacementConfigurationSnapshot, ApiError> {
+        let engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        current_protected_identity(&engine, identity)?;
+        engine
+            .placement_configuration(&request.repository_id, &request.path)
+            .map_err(error)
+    }
+    fn configure_placement(
+        &self,
+        identity: &Identity,
+        request: crate::ConfigurePlacement,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        let mut engine = self
+            .engine
+            .lock()
+            .expect("invariant: service state lock poisoned");
+        let current = current_protected_identity(&engine, identity)?;
+        engine
+            .configure_placement(storage_engine::PlacementConfigurationRequest {
+                repository_id: &request.repository_id,
+                path: &request.path,
+                primary_slot_id: &request.primary_slot_id,
+                expected_scope_id: &request.expected_scope_id,
+                expected_rule_id: request.expected_rule_id.as_deref(),
+                expected_generation: request.expected_generation,
+                principal: &current.principal,
+                operation_id: request.operation_id,
+            })
+            .map_err(|failure| match failure.code() {
+                storage_contract::ErrorCode::RouteIncomplete
+                | storage_contract::ErrorCode::ScopeChanged => {
+                    ApiError::conflict(failure.code(), &failure.message()).with_source(failure)
+                }
+                _ => error(failure),
+            })
+    }
     fn backup_configuration(
         &self,
         identity: &Identity,

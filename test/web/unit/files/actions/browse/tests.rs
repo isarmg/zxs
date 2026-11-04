@@ -40,6 +40,7 @@ fn navigation_actions_keep_session_authority_and_only_change_the_file_view() {
             assert_eq!(s.page, Page::Files);
             assert!(s.files.slot.is_empty() && s.files.directory.is_empty());
             assert_eq!(s.files.query, "new query");
+            assert_eq!(s.files.query_draft, "new query");
             assert_eq!(s.files.generation, 4);
             assert!(!s.files.loading_disks && !s.files.loading);
             assert!(s.authenticated);
@@ -72,7 +73,7 @@ fn navigation_away_and_back_rejects_old_listing_work_without_hiding_session_expi
             Navigation::Disk("P01".into()),
         ] {
             state.update(|s| s.files.navigate(destination));
-            // Also rejects a queued debounce tick after returning to the same path.
+            // Returning to the same path cannot admit a previous listing response.
             assert!(!current_listing(state, 3, "P01", "", old_generation));
         }
         let generation = state.with_untracked(|s| s.files.generation);
@@ -553,6 +554,7 @@ fn query_change_resets_page_local_state_before_any_read() {
         search(state, "new query".into());
         state.with_untracked(|s| {
             assert_eq!(s.files.query, "new query");
+            assert_eq!(s.files.query_draft, "new query");
             assert!(s.files.cursor.is_none());
             assert!(s.files.next_cursor.is_none());
             assert!(s.files.previous_cursor.is_none());
@@ -740,5 +742,51 @@ fn choosing_a_directory_branch_only_changes_the_local_read_view() {
         });
         return_to_default(state);
         assert!(state.with_untracked(|s| s.files.directory_preview.is_none()));
+    });
+}
+
+#[test]
+fn editing_and_clearing_search_preserve_the_submitted_page_until_enter() {
+    Owner::new().with(|| {
+        let state = RwSignal::new(State::default());
+        state.update(|s| {
+            s.files.query = "committed".into();
+            s.files.query_draft = "committed".into();
+            s.files.cursor = Some("current".into());
+            s.files.next_cursor = Some("next".into());
+            s.files.previous_cursor = Some("previous".into());
+            s.files.checked_entries.insert("selected".into());
+            s.files.entries = vec![crate::files::test_entries::entry(
+                json_codec::json!({"entry_id":"old"}),
+            )]
+            .into();
+            s.files.loaded = true;
+            s.files.loading = true;
+            s.files.generation = 7;
+        });
+        let entries = state.with_untracked(|s| s.files.entries.clone());
+        for query in ["another", "", "资料"] {
+            edit_search(state, query.into());
+            state.with_untracked(|s| {
+                assert_eq!(s.files.query_draft, query);
+                assert_eq!(s.files.query, "committed");
+                assert_eq!(s.files.cursor.as_deref(), Some("current"));
+                assert_eq!(s.files.next_cursor.as_deref(), Some("next"));
+                assert_eq!(s.files.previous_cursor.as_deref(), Some("previous"));
+                assert!(s.files.checked_entries.contains("selected"));
+                assert!(std::sync::Arc::ptr_eq(&s.files.entries, &entries));
+                assert!(s.files.loaded && s.files.loading);
+                assert_eq!(s.files.generation, 7);
+            });
+        }
+        edit_search(state, String::new());
+        search(state, state.with_untracked(|s| s.files.query_draft.clone()));
+        state.with_untracked(|s| {
+            assert!(s.files.query.is_empty() && s.files.query_draft.is_empty());
+            assert!(s.files.entries.is_empty() && s.files.checked_entries.is_empty());
+            assert!(s.files.cursor.is_none());
+            assert!(!s.files.loaded && !s.files.loading);
+            assert_eq!(s.files.generation, 8);
+        });
     });
 }

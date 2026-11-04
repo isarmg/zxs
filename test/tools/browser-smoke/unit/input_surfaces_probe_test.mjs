@@ -28,7 +28,10 @@ const makeControl = (tag = 'INPUT', type = 'text') => {
             if (selector === ':disabled') return this.disabled || this.inheritedDisabled;
             assert.equal(selector, ':focus-visible'); return this.focusVisible;
         },
-        closest(selector) { assert.equal(selector, '.authentication-shell .authentication-card'); return this.anonymous ? {} : null; },
+        closest(selector) {
+            if (selector === '.zxs-file-search') return this.searchFrame ?? null;
+            assert.equal(selector, '.authentication-shell .authentication-card'); return this.anonymous ? {} : null;
+        },
         querySelectorAll(selector) { assert.equal(selector, '[data-zxs-contour-decoration]'); return this.decorations; },
     };
 };
@@ -131,4 +134,53 @@ check('anonymous solid line at rest is rejected', f=>{anonymous(f);f.input.style
 check('anonymous missing keyboard focus is rejected', f=>{anonymous(f);f.input.focusVisible=true;}, false, 'bottomWidth');
 check('anonymous dashed keyboard focus is rejected', f=>{anonymous(f);f.input.focusVisible=true;f.input.style.borderBottomWidth='3px';f.input.style.borderBottomStyle='dashed';}, false, 'bottomStyle');
 check('anonymous transparent keyboard focus is rejected', f=>{anonymous(f);f.input.focusVisible=true;f.input.style.borderBottomWidth='3px';f.input.style.borderBottomStyle='solid';f.input.style.borderBottomColor='transparent';}, false, 'bottomStyle');
+const folderSearch = f => {
+    const input = f.input;
+    input.type = 'search';
+    input.style.borderBottomWidth = '0px';
+    input.style.borderBottomStyle = 'none';
+    input.attrs.placeholder = input.attrs['aria-label'];
+    const frame = {
+        tagName: 'LABEL', textContent: '',
+        style: {...input.style},
+        getBoundingClientRect: () => ({left: 31, top: 39, right: 273, bottom: 85, width: 242, height: 46}),
+        querySelectorAll(selector) { assert.equal(selector, 'input'); return [input]; },
+    };
+    for (const side of ['Top', 'Right', 'Bottom', 'Left']) frame.style[`border${side}Width`] = '1px';
+    input.searchFrame = frame;
+    input.parentElement = frame;
+};
+check('folder search fills one label with no underline', folderSearch, true);
+check('folder search focus is on the outer frame', f => {
+    folderSearch(f); f.input.focusVisible = true;
+    Object.assign(f.input.searchFrame.style, {outlineWidth: '2px', outlineStyle: 'solid'});
+}, true);
+check('folder search must retain native input focus semantics', f => {
+    folderSearch(f); f.input.focusVisible = true;
+}, false, 'searchSurface');
+check('folder search cannot hide its outer keyboard focus color', f => {
+    folderSearch(f); f.input.focusVisible = true;
+    Object.assign(f.input.searchFrame.style, {outlineWidth: '2px', outlineStyle: 'solid', outlineColor: 'transparent'});
+}, false, 'searchSurface');
+check('folder search cannot keep the old underline', f => {
+    folderSearch(f); f.input.style.borderBottomWidth = '1px';
+}, false, 'bottomWidth');
+check('folder search cannot retain a zero-width dashed line', f => {
+    folderSearch(f); f.input.style.borderBottomStyle = 'dashed';
+}, false, 'bottomStyle');
+check('folder search cannot retain a permanent visible label', f => {
+    folderSearch(f); f.input.searchFrame.textContent = 'Search this folder';
+}, false, 'searchSurface');
+check('folder search requires a stable accessible name', f => {
+    folderSearch(f); delete f.input.attrs['aria-label'];
+}, false, 'searchSurface');
+check('folder search cannot keep an internal left column', f => {
+    folderSearch(f); f.input.box = box(112, 160);
+}, false, 'searchSurface');
+check('folder search cannot leave vertical dead space', f => {
+    folderSearch(f); f.input.box = {...f.input.box, top: 44, height: 40};
+}, false, 'searchSurface');
+check('folder search does not relax unrelated input styles', f => {
+    folderSearch(f); f.textarea.style.borderBottomWidth = '0px';
+}, false);
 console.log(`PASS ${cases} text input observer model cases; no browser rendering executed`);

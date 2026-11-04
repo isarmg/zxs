@@ -8187,6 +8187,199 @@
           }
         }
       }
+    },
+    "/api/repositories/{repository}/placement-configuration": {
+      "get": {
+        "operationId": "getPlacementConfiguration",
+        "description": "读取仓库根或目录的真实范围身份、精确规则基线、当前有效主盘和一级盘候选物理根；不会创建规则。要求有效管理员 Bearer 或同源会话 Cookie。省略 path 等同空字符串。",
+        "parameters": [
+          {
+            "name": "repository",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": ""
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "当前目录主盘配置与候选可用性。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlacementConfigurationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST 等：请求形状、目录路径或目标不合法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "缺少、过期或已撤销的管理员会话；不返回配置。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "认证或写入 Origin/CSRF 检查未通过。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "仓库或当前目录不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；不确定写入结果使用原 operation_id 查询或重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "configurePlacement",
+        "description": "为当前仓库根或真实目录创建或更新精确主盘规则，保留独立子规则与全部既有版本正文；只改变后续写入放置。要求当前管理员认证；Cookie 写入同时要求精确 Origin 和 X-CSRF-Token，Bearer 请求不要求 CSRF 但所提供 Origin 仍须有效。提交时检查范围身份、精确规则 ID 和代数；冲突整笔拒绝，重新读取后明确提交，不能自动覆盖。",
+        "parameters": [
+          {
+            "name": "repository",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RepositoryId"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": false,
+            "description": "使用会话 Cookie 写入时必须提供匹配令牌；Bearer 认证不要求。",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigurePlacementRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "placement.configure 操作回执；相同 operation_id 与相同输入返回原结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenericOperation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_REQUEST 等：请求形状、目录路径或目标不合法；BACKUP_PREFIX_REQUIRED：目标链所需备份逻辑前缀未配置。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "缺少、过期或已撤销的管理员会话；不返回配置。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "认证或写入 Origin/CSRF 检查未通过。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "仓库或当前目录不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "结构化错误；不确定写入结果使用原 operation_id 查询或重试。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFIG_CONFLICT：精确规则 ID 或代数变化；SCOPE_CHANGED：路径已指向不同目录；ROUTE_INCOMPLETE：目标主盘无法组成要求的完整副本链。冲突不修改当前配置，重新读取后明确提交，不自动减少副本数。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -15013,6 +15206,156 @@
           "history_root",
           "branch"
         ]
+      },
+      "PlacementConfigurationScope": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/DirectoryId"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "path"
+        ],
+        "additionalProperties": false,
+        "description": "仓库根或当前主命名空间中的真实目录身份；根 path 为空且 id 为 repository_id，目录 id 为 entry_id。文件不是主盘配置范围。"
+      },
+      "PrimaryPlacementTarget": {
+        "type": "object",
+        "properties": {
+          "slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "unavailable_reason": {
+            "enum": [
+              null,
+              "insufficient_copies",
+              "missing_backup_prefixes"
+            ]
+          }
+        },
+        "required": [
+          "slot_id",
+          "root",
+          "unavailable_reason"
+        ],
+        "additionalProperties": false,
+        "description": "一级盘候选及登记物理根。null 表示可选；insufficient_copies 表示完整副本链不足，missing_backup_prefixes 表示目标链所需备份逻辑前缀未配置。"
+      },
+      "PlacementConfigurationResponse": {
+        "type": "object",
+        "properties": {
+          "repository_id": {
+            "$ref": "#/components/schemas/RepositoryId"
+          },
+          "repository_name": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/PlacementConfigurationScope"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "primary_slot_id": {
+            "$ref": "#/components/schemas/SlotId"
+          },
+          "inherited": {
+            "type": "boolean"
+          },
+          "required_copies": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrimaryPlacementTarget"
+            }
+          }
+        },
+        "required": [
+          "repository_id",
+          "repository_name",
+          "scope",
+          "rule_id",
+          "generation",
+          "primary_slot_id",
+          "inherited",
+          "required_copies",
+          "targets"
+        ],
+        "additionalProperties": false,
+        "description": "只读主盘规则投影。rule_id/generation 只属于精确路径规则；无精确规则时显式返回 null/\"0\" 且 inherited=true，primary_slot_id 是当前有效主盘。required_copies 包含主副本；独立子主盘规则不被父范围覆盖。"
+      },
+      "ConfigurePlacementRequest": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "空字符串选择仓库根，否则必须通过 PortablePath 验证并解析为真实目录；不接受文件。"
+          },
+          "primary_slot_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_scope_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_rule_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_generation": {
+            "$ref": "#/components/schemas/UInt64"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/OperationId"
+          },
+          "repository_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "可省略；若提供必须与 URL repository 完全相等，否则返回 400 INVALID_REQUEST。"
+          }
+        },
+        "required": [
+          "path",
+          "primary_slot_id",
+          "expected_scope_id",
+          "expected_rule_id",
+          "expected_generation",
+          "operation_id"
+        ],
+        "additionalProperties": false,
+        "description": "以 GET 返回的稳定范围身份、可空精确规则 ID 和十进制 u64 代数更新当前路径规则。expected_rule_id 必须显式提供；身份字符串非空，精确匹配在提交时校验。复用 operation_id 可查询或重试同一请求；不同输入不得复用。"
       }
     }
   }

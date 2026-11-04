@@ -13,7 +13,7 @@ pub(crate) use history::{
 };
 
 pub(crate) use browse::{
-    change_page, go_directory, go_root, load_disks, load_entries, open_disk,
+    change_page, edit_search, go_directory, go_root, load_disks, load_entries, open_disk,
     preview_directory_branch, return_to_default, return_to_default_file, search, select_entry,
 };
 pub(crate) use mutation::{

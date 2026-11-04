@@ -51,6 +51,9 @@ pub use backend_file_history::{
     ContentNodeKind, FileHistorySnapshot, HistoryBranch, HistoryNode, HistoryRevision,
     HistoryVersion, HistoryVersionData, ReadFileHistory, RenameNodeKind, RevisionKind,
 };
+mod backend_placement_configuration;
+mod http_placement_configuration;
+pub use backend_placement_configuration::{ConfigurePlacement, ReadPlacementConfiguration};
 mod backend_backup_configuration;
 mod http_backup_configuration;
 pub use backend_backup_configuration::{ConfigureBackups, ReadBackupConfiguration};
@@ -598,6 +601,20 @@ pub trait Backend: Send + Sync {
         identity: &Identity,
         request: CreateDiskWriteSession,
     ) -> Result<crate::DiskWriteSession, ApiError>;
+    fn placement_configuration(
+        &self,
+        _identity: &Identity,
+        _request: ReadPlacementConfiguration,
+    ) -> Result<storage_contract::PlacementConfigurationSnapshot, ApiError> {
+        Err(ApiError::unsupported())
+    }
+    fn configure_placement(
+        &self,
+        _identity: &Identity,
+        _request: ConfigurePlacement,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        Err(ApiError::unsupported())
+    }
     fn backup_configuration(
         &self,
         identity: &Identity,
@@ -1198,6 +1215,22 @@ impl Backend for AuthorizedBackend {
     ) -> Result<crate::DiskWriteSession, crate::ApiError> {
         self.backend
             .create_disk_write_session(&self.current(identity)?, request)
+    }
+    fn placement_configuration(
+        &self,
+        identity: &Identity,
+        request: ReadPlacementConfiguration,
+    ) -> Result<storage_contract::PlacementConfigurationSnapshot, ApiError> {
+        self.backend
+            .placement_configuration(&self.current(identity)?, request)
+    }
+    fn configure_placement(
+        &self,
+        identity: &Identity,
+        request: ConfigurePlacement,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.backend
+            .configure_placement(&self.current(identity)?, request)
     }
     fn backup_configuration(
         &self,

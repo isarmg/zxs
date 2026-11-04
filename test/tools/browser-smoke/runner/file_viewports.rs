@@ -76,9 +76,7 @@ fn capture_views(browser: &Browser, output: Option<&Path>) -> Result<()> {
         let first = browser.css(".zxs-file-search input")?;
         browser.click(&first)?;
         browser.keys(&first, "\u{e004}")?;
-        if browser.script("const e=document.activeElement;const s=getComputedStyle(e);return e.matches(':focus-visible')&&parseFloat(s.outlineWidth)>0&&s.outlineStyle!=='none'")? != true {
-            return Err(format!("{width}x{height} file-browser keyboard focus is invisible").into());
-        }
+        accessibility::select_focus(browser, ".zxs-file-manager .zxs-select-trigger", "keyboard")?;
         // WebDriver scrolls controls into view; return to the real page heading.
         browser.script("window.scrollTo(0,0);return true")?;
         let filename = format!("viewport-{width}x{height}.png");

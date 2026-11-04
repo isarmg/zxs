@@ -28,6 +28,8 @@ const controls = visible.map((node, index) => {
     const effectiveDisabled = node.matches(':disabled');
     const focusVisible = node.matches(':focus-visible');
     const anonymous = node.closest('.authentication-shell .authentication-card') !== null;
+    const searchFrame = node.closest('.zxs-file-search');
+    const search = searchFrame !== null;
     const css = getComputedStyle(node);
     const rect = node.getBoundingClientRect();
     const borders = Object.fromEntries(['Top', 'Right', 'Bottom', 'Left'].map(side => [side.toLowerCase(), {
@@ -45,12 +47,26 @@ const controls = visible.map((node, index) => {
         decorations: node.querySelectorAll('[data-zxs-contour-decoration]').length,
     };
     const opacity = Number(css.opacity);
+    const frameCss = search ? getComputedStyle(searchFrame) : null;
+    const frameRect = search ? searchFrame.getBoundingClientRect() : null;
+    const searchSurface = search ? {
+        label: searchFrame.tagName === 'LABEL' && node.parentElement === searchFrame,
+        singleInput: searchFrame.querySelectorAll('input').length === 1,
+        noPermanentText: searchFrame.textContent.trim() === '',
+        accessibleName: !!node.getAttribute('aria-label') && node.getAttribute('aria-label') === node.getAttribute('placeholder'),
+        fullWidth: Math.abs(rect.left - frameRect.left - parseFloat(frameCss.borderLeftWidth)) <= 1
+            && Math.abs(frameRect.right - rect.right - parseFloat(frameCss.borderRightWidth)) <= 1,
+        fullHeight: Math.abs(rect.top - frameRect.top - parseFloat(frameCss.borderTopWidth)) <= 1
+            && Math.abs(frameRect.bottom - rect.bottom - parseFloat(frameCss.borderBottomWidth)) <= 1,
+        keyboardFocus: !focusVisible || (parseFloat(frameCss.outlineWidth) >= 2 && frameCss.outlineStyle === 'solid' && alpha(frameCss.outlineColor) > 0),
+    } : null;
     const checks = {
         connected: node.isConnected,
         noRectangle: ['top', 'right', 'left'].every(side => borders[side].width === 0),
-        bottomStyle: anonymous && !focusVisible ? borders.bottom.style === 'none'
+        bottomStyle: search || (anonymous && !focusVisible) ? borders.bottom.style === 'none'
             : borders.bottom.style === (anonymous ? 'solid' : 'dashed') && alpha(borders.bottom.color) > 0,
-        bottomWidth: borders.bottom.width === (focusVisible ? 3 : anonymous ? 0 : 1),
+        bottomWidth: borders.bottom.width === (search ? 0 : focusVisible ? 3 : anonymous ? 0 : 1),
+        searchSurface: !search || Object.values(searchSurface).every(Boolean),
         noOutline: !outlineVisible,
         noImages: css.backgroundImage === 'none' && css.borderImageSource === 'none',
         noShadow: css.boxShadow === 'none',
@@ -66,7 +82,7 @@ const controls = visible.map((node, index) => {
     return {
         valid: failures.length === 0, failures, checks, index,
         tag: node.tagName, type: node.type, name: node.getAttribute('name'), label: node.getAttribute('aria-label'),
-        disabled, effectiveDisabled, focusVisible, anonymous, opacity,
+        disabled, effectiveDisabled, focusVisible, anonymous, search, searchSurface, opacity,
         rect: {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height},
         borders, outline, outlineVisible, contour,
         backgroundColor: css.backgroundColor, backgroundImage: css.backgroundImage,

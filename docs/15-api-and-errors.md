@@ -119,7 +119,9 @@ Web 和保留的受控 HTTP 客户端使用统一 HTTPS 业务契约；SMB 基�
 | `GET /api/backup-topologies/default` | 当前池唯一拓扑的已发布代际、盘位直接来源和目录绑定；供已认证管理员查看，不接纳其它拓扑名别名 |
 | `POST /api/backup-topology-plans` | 用户指定一级/二级/后续来源映射，预检路由和数据迁移 |
 | `POST /api/storage-slots/{slot}/replacement-plans` | 用户为同一逻辑角色指定替换物理盘，保留来源映射 |
-| `PUT /api/primary-placement-rules/{rule}` | 条件设置仓库/目录的一级盘规则，只影响新版本；旧版另迁移 |
+| `PUT /api/primary-placement-rules/{rule}` | 按规则 ID 和预期代数设置现行路径的主盘，只影响后续新版本，不搬移旧版本 |
+| `GET /api/repositories/{repository}/placement-configuration?path=…` | 读取当前仓库根或目录的真实身份、主盘规则基线与可选主盘根路径；不创建规则 |
+| `PUT /api/repositories/{repository}/placement-configuration` | 自动创建或更新当前路径的主盘规则；同时校验目录身份、规则 ID 和代数，保留历史正文及独立子规则 |
 | `GET /api/versions/{version}/placement` | 该版本一级归属、冻结路由、每级健康和迁移残留 |
 | `GET /api/admin/disks` | 磁盘状态，仅授权管理员 |
 | `POST /api/admin/disks` | 当前身份准入后以 `409 OFFLINE_CONFIGURATION_REQUIRED` 拒绝在线登记；登记需要显式离线配置和拓扑迁移 |

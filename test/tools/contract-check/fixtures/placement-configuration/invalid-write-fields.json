@@ -1,0 +1,102 @@
+[
+  {
+    "field": "path",
+    "value": null
+  },
+  {
+    "field": "path",
+    "value": 1
+  },
+  {
+    "field": "primary_slot_id",
+    "value": ""
+  },
+  {
+    "field": "primary_slot_id",
+    "value": null
+  },
+  {
+    "field": "expected_scope_id",
+    "value": ""
+  },
+  {
+    "field": "expected_scope_id",
+    "value": null
+  },
+  {
+    "field": "expected_rule_id",
+    "value": ""
+  },
+  {
+    "field": "expected_rule_id",
+    "value": 0
+  },
+  {
+    "field": "expected_rule_id",
+    "value": false
+  },
+  {
+    "field": "expected_generation",
+    "value": 0
+  },
+  {
+    "field": "expected_generation",
+    "value": null
+  },
+  {
+    "field": "expected_generation",
+    "value": ""
+  },
+  {
+    "field": "expected_generation",
+    "value": "00"
+  },
+  {
+    "field": "expected_generation",
+    "value": "01"
+  },
+  {
+    "field": "expected_generation",
+    "value": "+1"
+  },
+  {
+    "field": "expected_generation",
+    "value": " 1"
+  },
+  {
+    "field": "expected_generation",
+    "value": "1\n"
+  },
+  {
+    "field": "expected_generation",
+    "value": "-1"
+  },
+  {
+    "field": "expected_generation",
+    "value": "1.0"
+  },
+  {
+    "field": "expected_generation",
+    "value": "18446744073709551616"
+  },
+  {
+    "field": "operation_id",
+    "value": null
+  },
+  {
+    "field": "operation_id",
+    "value": ""
+  },
+  {
+    "field": "operation_id",
+    "value": "op_00000000000000000000000000000004\n"
+  },
+  {
+    "field": "operation_id",
+    "value": "rule_00000000000000000000000000000004"
+  },
+  {
+    "field": "unknown",
+    "value": true
+  }
+]

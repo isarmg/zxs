@@ -34,6 +34,8 @@ mod history_query;
 mod optional_identities;
 #[path = "http_engine/paginated_listing.rs"]
 mod paginated_listing;
+#[path = "http_engine/placement_configuration.rs"]
+mod placement_configuration;
 #[path = "http_engine/plan_lookup.rs"]
 mod plan_lookup;
 #[path = "../unit/projection_failure.rs"]

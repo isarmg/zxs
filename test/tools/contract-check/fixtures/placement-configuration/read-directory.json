@@ -1,0 +1,30 @@
+{
+  "repository_id": "repo_00000000000000000000000000000001",
+  "repository_name": "工作资料",
+  "scope": {
+    "id": "entry_00000000000000000000000000000002",
+    "path": "docs"
+  },
+  "rule_id": "rule_00000000000000000000000000000003",
+  "generation": "18446744073709551615",
+  "primary_slot_id": "P01",
+  "inherited": false,
+  "required_copies": 3,
+  "targets": [
+    {
+      "slot_id": "P01",
+      "root": "/srv/zxs/primary",
+      "unavailable_reason": null
+    },
+    {
+      "slot_id": "P02",
+      "root": "/srv/zxs/secondary",
+      "unavailable_reason": "insufficient_copies"
+    },
+    {
+      "slot_id": "P03",
+      "root": "/srv/zxs/archive",
+      "unavailable_reason": "missing_backup_prefixes"
+    }
+  ]
+}

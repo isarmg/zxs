@@ -11,8 +11,79 @@ fn check(browser: &Browser, label: &str, expression: &str) -> Result<()> {
         }
     })
 }
-fn search(browser: &Browser, query: &str) -> Result<()> {
+fn draft(browser: &Browser, query: &str) -> Result<()> {
     browser.script(&format!("const input=document.querySelector('.zxs-file-search input');input.focus();input.value={};input.dispatchEvent(new Event('input',{{bubbles:true}}));return true",json!(query)))?;
+    Ok(())
+}
+fn search(browser: &Browser, query: &str) -> Result<()> {
+    draft(browser, query)?;
+    browser.keys(&browser.css(".zxs-file-search input")?, "\u{e007}")
+}
+
+// Inspect the actual Chrome user-agent shadow control, then use its real hit
+// target. Never replace the clear button or assign the input value in this path.
+fn native_clear_node(node: &Value) -> Option<&Value> {
+    let clear = node["attributes"].as_array().is_some_and(|attributes| {
+        attributes
+            .chunks_exact(2)
+            .any(|pair| pair[0] == "id" && pair[1] == "search-clear")
+    });
+    if clear {
+        return Some(node);
+    }
+    ["children", "shadowRoots"]
+        .into_iter()
+        .filter_map(|key| node[key].as_array())
+        .flatten()
+        .find_map(native_clear_node)
+}
+
+fn native_clear(browser: &Browser) -> Result<()> {
+    browser.script("const i=document.querySelector('.zxs-file-search input');i.scrollIntoView({block:'center'});i.focus();return true")?;
+    let document = browser.cdp("DOM.getDocument", json!({"depth":0,"pierce":true}))?;
+    let input = browser.cdp(
+        "DOM.querySelector",
+        json!({"nodeId":document["root"]["nodeId"],"selector":".zxs-file-search input"}),
+    )?;
+    let tree = browser.cdp(
+        "DOM.describeNode",
+        json!({"nodeId":input["nodeId"],"depth":-1,"pierce":true}),
+    )?;
+    let clear = native_clear_node(&tree["node"])
+        .ok_or("Chrome did not expose the native search clear button")?;
+    let bounds = browser.cdp(
+        "DOM.getBoxModel",
+        json!({"backendNodeId":clear["backendNodeId"]}),
+    )?;
+    let quad = bounds["model"]["content"]
+        .as_array()
+        .ok_or("native search clear button has no content quad")?;
+    if quad.len() != 8 {
+        return Err("native search clear button has an invalid content quad".into());
+    }
+    let coordinate = |index: usize| quad[index].as_f64().ok_or("invalid clear coordinate");
+    let x = (coordinate(0)? + coordinate(4)?) / 2.0;
+    let y = (coordinate(1)? + coordinate(5)?) / 2.0;
+    for kind in ["mousePressed", "mouseReleased"] {
+        browser.cdp(
+            "Input.dispatchMouseEvent",
+            json!({"type":kind,"button":"left","clickCount":1,"x":x,"y":y}),
+        )?;
+    }
+    Ok(())
+}
+
+fn cleared_draft_stays_local(browser: &Browser) -> Result<()> {
+    // Observe beyond the former 250ms debounce window; checking only the first
+    // frame would miss a native-clear/search-event path that still submits later.
+    let unchanged = browser.command(
+        "POST",
+        "/execute/async",
+        Some(json!({"script":"const done=arguments[arguments.length-1];setTimeout(()=>{const i=document.querySelector('.zxs-file-search input'),s=window.__zxsPaging;done(i.value===''&&i.matches(':placeholder-shown')&&document.activeElement===i&&s.calls.length===s.clearCalls&&s.calls.at(-1).query==='paged-204'&&document.querySelectorAll('.zxs-file-table tbody tr').length===1&&document.querySelector('.zxs-file-name').textContent.trim()==='paged-204.txt')},350)","args":[]})),
+    )?;
+    if unchanged != true {
+        return Err("clearing changed the listing or sent a request before Enter".into());
+    }
     Ok(())
 }
 
@@ -61,6 +132,25 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "select all is page-local",
                 "return document.querySelectorAll('.zxs-entry-checkbox:checked').length===200",
             )?;
+            browser.script(
+                "window.__zxsPaging.draftCalls=window.__zxsPaging.calls.length;return true",
+            )?;
+            let input = browser.css(".zxs-file-search input")?;
+            browser.keys(&input, "paged-204")?;
+            let unchanged = browser.command(
+                "POST",
+                "/execute/async",
+                Some(json!({"script":"const done=arguments[arguments.length-1];setTimeout(()=>done(window.__zxsPaging.calls.length===window.__zxsPaging.draftCalls&&document.querySelectorAll('.zxs-entry-checkbox:checked').length===200&&document.querySelectorAll('.zxs-file-table tbody tr').length===200),350)","args":[]})),
+            )?;
+            if unchanged != true {
+                return Err("typing submitted a query or changed the loaded selection".into());
+            }
+            browser.click(&browser.button("Refresh", "刷新")?)?;
+            check(
+                browser,
+                "refresh uses the committed query without replacing draft text",
+                "return window.__zxsPaging.calls.at(-1).query===''&&document.querySelectorAll('.zxs-file-table tbody tr').length===200&&document.querySelector('.zxs-file-search input').value==='paged-204'&&!document.querySelector('[aria-busy=true]')",
+            )?;
             let before_page = page_layout::file_row_shrink_start(browser)?;
             let next = browser.button("Next page", "下一页")?;
             browser.click(&next)?;
@@ -68,6 +158,11 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 browser,
                 "next page replaces rows and clears checks",
                 "return document.querySelectorAll('.zxs-file-table tbody tr').length===5&&document.querySelector('.zxs-file-name').textContent.trim()==='paged-200.txt'&&document.querySelectorAll('.zxs-entry-checkbox:checked').length===0",
+            )?;
+            check(
+                browser,
+                "pagination uses the committed query and preserves its draft",
+                "return window.__zxsPaging.calls.at(-1).query===''&&document.querySelector('.zxs-file-search input').value==='paged-204'",
             )?;
             page_layout::file_row_shrink_finish(browser, before_page, "pagination")?;
             // Synthetic response, real product DOM: first/middle/last rows at
@@ -96,13 +191,44 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "return document.querySelectorAll('.zxs-file-table tbody tr').length===1&&document.querySelector('.zxs-file-name').textContent.trim()==='paged-204.txt'&&window.__zxsPaging.calls.at(-1).cursor===null&&document.activeElement===document.querySelector('.zxs-file-search input')",
             )?;
             page_layout::file_row_shrink_finish(browser, before_query, "search")?;
+            for native in [false, true] {
+                if native {
+                    search(browser, "paged-204")?;
+                    check(
+                        browser,
+                        "restore the submitted filter before testing native clear",
+                        "return document.querySelector('.zxs-file-search input').value==='paged-204'&&document.querySelectorAll('.zxs-file-table tbody tr').length===1&&!document.querySelector('[aria-busy=true]')",
+                    )?;
+                }
+                browser.script(
+                    "window.__zxsPaging.clearCalls=window.__zxsPaging.calls.length;return true",
+                )?;
+                if native {
+                    native_clear(browser)?;
+                } else {
+                    browser.keys(&input, "\u{e009}a\u{e000}\u{e003}")?;
+                }
+                cleared_draft_stays_local(browser)?;
+            }
+            browser.keys(&input, "\u{e007}")?;
+            check(
+                browser,
+                "Enter on an empty draft restores page one",
+                "return window.__zxsPaging.calls.at(-1).query===''&&window.__zxsPaging.calls.at(-1).cursor===null&&document.querySelectorAll('.zxs-file-table tbody tr').length===200&&document.activeElement===document.querySelector('.zxs-file-search input')",
+            )?;
             search(browser, "slow-query")?;
             check(
                 browser,
                 "first delayed query is in flight",
                 "return window.__zxsPaging.pending.length===1",
             )?;
-            search(browser, "paged-001")?;
+            draft(browser, "paged-001")?;
+            check(
+                browser,
+                "editing does not abort the already submitted query",
+                "return window.__zxsPaging.aborted===0&&window.__zxsPaging.calls.at(-1).query==='slow-query'&&document.querySelector('.zxs-file-search input').value==='paged-001'",
+            )?;
+            browser.keys(&input, "\u{e007}")?;
             check(
                 browser,
                 "superseded fetch signal aborts and replacement renders",
@@ -125,6 +251,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "navigation query is in flight",
                 "return window.__zxsPaging.pending.length===2",
             )?;
+            draft(browser, "unsubmitted-navigation")?;
             browser.click(&browser.button("All disks", "所有硬盘")?)?;
             check(
                 browser,
@@ -156,6 +283,11 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     page_layout::file_row_sizes(browser)?;
     browser.click(&browser.css(".zxs-disk-entry[data-slot='P01']:not([disabled])")?)?;
     open_fixture_directory(browser)?;
+    check(
+        browser,
+        "directory navigation clears committed and unsubmitted search text",
+        "const i=document.querySelector('.zxs-file-search input');return i.value===''&&i.matches(':placeholder-shown')&&document.querySelector('.zxs-file-name').textContent.trim()==='browser-smoke.txt'",
+    )?;
     println!(
         "PASS synthetic 205-entry pagination DOM bounds, page selection, global-query request, AbortController and late-query/navigation fences (not engine-scale evidence)"
     );

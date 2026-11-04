@@ -146,7 +146,7 @@ class FoundationCoverageReachabilityTests(unittest.TestCase):
 
     def test_browser_producer_dependency_is_required(self):
         self.edit('.github/workflows/ci.yml',
-                  '    needs: [web-production, smb-sdk]', '    needs: smb-sdk')
+                  '    needs: [static, web-production, smb-sdk]', '    needs: [static, smb-sdk]')
         with self.assertRaises(AssertionError):
             self.validate()
 

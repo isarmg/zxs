@@ -97,7 +97,7 @@ jobs:
       - name: Check affected native targets and no-core server
         if: needs.static.outputs.test_only_retry != 'true'
         run: |
-          cargo clippy --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p contract-check --all-targets -- -D warnings
+          cargo clippy --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p contract-check -p browser-smoke --all-targets -- -D warnings
           cargo clippy --locked --offline -p storage-server --no-default-features --all-targets -- -D warnings
       - name: Lint the changed contract validation target
         if: needs.static.outputs.test_only_retry == 'true'
@@ -145,7 +145,8 @@ jobs:
 
   web-production:
     name: Exact-head production WASM for browser validation
-    needs: static
+    # Independent inputs: overlap compilation with static checks, but keep both
+    # mandatory before consuming the generated assets in the browser job.
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -184,7 +185,7 @@ jobs:
 
   browser-smoke:
     name: Real Chrome with production WASM and host server
-    needs: web-production
+    needs: [static, web-production]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -241,6 +242,7 @@ jobs:
             artifacts/viewport-previews/
             artifacts/browser-smoke/diagnostics/*.png
             artifacts/browser-smoke/diagnostics/*.json
+            artifacts/browser-smoke/placement/
             target/csr-template-check/output/validation.json
           if-no-files-found: warn
           retention-days: 7

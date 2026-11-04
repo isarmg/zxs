@@ -120,7 +120,8 @@ jobs:
 
   web-production:
     name: Production WASM build
-    needs: static
+    # Compile in parallel with preflight. Browser acceptance still requires
+    # static checks, this build and the same-commit Samba SDK job to succeed.
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -161,7 +162,7 @@ jobs:
 
   browser-smoke:
     name: "Standalone ELF: Debian 13 server + host Chrome"
-    needs: [web-production, smb-sdk]
+    needs: [static, web-production, smb-sdk]
     runs-on: ubuntu-24.04
     # Compile one release-profile graph for both product and browser harness.
     timeout-minutes: 60
@@ -296,6 +297,15 @@ jobs:
         with:
           name: login-previews
           path: artifacts/login-previews/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Retain real primary placement browser evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: primary-placement-browser-${{ github.sha }}
+          path: artifacts/browser-smoke/placement/
           if-no-files-found: warn
           retention-days: 7
 

@@ -52063,7 +52063,7 @@
   "external_test_mappings_sha256": {
     "compliance/external-tests/binding-text-tools.json": "6c3afd7724be2e6f975a7650a96328d125bda493fadb3968480dd918d945f05d",
     "compliance/external-tests/foundation.json": "7553f119ba2b1a530ea7c8126701f0410a88945425a76ceb7e7643f6cbb1fecf",
-    "compliance/external-tests/integrated.json": "388b16756414a65b62406aa52b5745cb4fdfd3658f936295fbe0aa651c199f50",
+    "compliance/external-tests/integrated.json": "feffe5b9ea583033187e24959071afc1fc97fc7c909c10580f18178440a4d162",
     "compliance/external-tests/ring.json": "091524345f2f7aa89bd364032bb4813c3268382af75243f41eedcdca888994f9"
   },
   "external_tests": {
@@ -79149,7 +79149,7 @@
       ]
     },
     "src/interface": {
-      "bytes": 84376,
+      "bytes": 85555,
       "directory": "src/interface",
       "file_count": 18,
       "files": [
@@ -79173,7 +79173,7 @@
         },
         {
           "path": "test/interface/integration/style_contracts.rs",
-          "sha256": "8d62bdac4193b7d88ee5bd8e4e688c44cb0baaa67dfdcbb56d920ad4d24b41a7",
+          "sha256": "0636275eaad089b54cb7910b411da2bb03f5f932f1495f951d588c5b9e9b5b50",
           "source": "src/interface/tests/style_contracts.rs",
           "source_sha256_before": "82c878873c25b7f1a59261e4a577dd68c5cc0dd48eb986cb32b221f33f2826b8"
         },

@@ -43,6 +43,7 @@ class ValidationBatchWorkflow(unittest.TestCase):
             '-p storage-engine --test branch_alias_operations',
             '-p storage-server --test http_engine',
             '-p storage-server --no-default-features --all-targets',
+            '-p contract-check -p browser-smoke --all-targets -- -D warnings',
             '-p web-app -p web-interface',
             'bash .github/scripts/check.sh contracts',
             'bash .github/scripts/check.sh smb-protocol',
@@ -55,6 +56,18 @@ class ValidationBatchWorkflow(unittest.TestCase):
         for broad in ['check.sh workspace', 'check.sh security', 'check-foundation.sh',
                       'release-publish.sh', 'release-assemble.sh', 'select-ci-suites.py']:
             self.assertNotIn(broad, self.batch)
+
+    def test_independent_wasm_build_overlaps_static_without_bypassing_it(self):
+        parts = re.split(r'^  ([a-z][a-z-]+):$',
+                         self.batch.split('\njobs:\n', 1)[1], flags=re.MULTILINE)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        # A build can start early, but no browser evidence may bypass either
+        # source governance or the exact-run production assets and CSR fixture.
+        self.assertNotRegex(jobs['web-production'], r'(?m)^    (?:needs|if):')
+        self.assertIn('bash .github/scripts/check.sh static', jobs['static'])
+        self.assertIn('bash .github/scripts/check.sh web-production', jobs['web-production'])
+        self.assertIn('    needs: [static, web-production]\n', jobs['browser-smoke'])
+        self.assertNotRegex(jobs['browser-smoke'], r'(?m)^    if:')
 
     def test_reuse_is_bound_to_one_parent_source_tree_and_exact_paths(self):
         script = textwrap.dedent(self.batch.split('        id: scope\n        run: |\n', 1)[1]
@@ -165,6 +178,7 @@ class ValidationBatchWorkflow(unittest.TestCase):
         self.assertNotIn('github-token:', self.batch)
         self.assertIn('name: web-dist', self.batch)
         self.assertIn('name: csr-template-fixture', self.batch)
+        self.assertIn('            artifacts/browser-smoke/placement/\n', self.batch)
         for action in re.findall(r'uses: (actions/[^\s]+)', self.batch):
             self.assertRegex(action, r'^actions/[a-z-]+@[0-9a-f]{40}$')
 

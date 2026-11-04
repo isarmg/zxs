@@ -320,7 +320,7 @@ def invoked_scripts():
                 if command[0] in {'bash', 'python3'} and len(command) > 1 and not command[1].startswith('-'):
                     reachable[shard].add(command[1])
     # The browser gate executes the template produced by this dependency job.
-    assert '    needs: [web-production, smb-sdk]' in jobs['browser-smoke']
+    assert '    needs: [static, web-production, smb-sdk]' in jobs['browser-smoke']
     reachable['browser-smoke'].update(reachable['web-production'])
     for command, conditional, _ in job_runs(jobs['browser-smoke']):
         if '.github/scripts/check-csr-browser.py' not in command:

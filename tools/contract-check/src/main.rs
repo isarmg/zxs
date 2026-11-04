@@ -882,3 +882,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../test/tools/contract-check/unit/history_window_tests.rs"]
 mod history_window_tests;
+
+#[cfg(test)]
+#[path = "../../../test/tools/contract-check/unit/placement_configuration_tests.rs"]
+mod placement_configuration_tests;

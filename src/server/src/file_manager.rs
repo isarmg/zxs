@@ -88,6 +88,10 @@ pub(crate) fn routes() -> Router<AppState> {
             post(http_file_tags::submit),
         )
         .route(
+            "/api/repositories/{repository}/placement-configuration",
+            get(http_placement_configuration::read).put(http_placement_configuration::configure),
+        )
+        .route(
             "/api/repositories/{repository}/backup-configuration",
             get(http_backup_configuration::read).put(http_backup_configuration::configure),
         )

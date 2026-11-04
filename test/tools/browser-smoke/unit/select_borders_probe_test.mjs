@@ -82,7 +82,7 @@ for(const property of ['backgroundImage','borderImageSource']){
     f=fixture();f.trigger.style[property]='url("blob:paint")';f.pixelColor=60;assert.equal((await f.run()).valid,false,'gray image border');
     f=fixture();f.trigger.style[property]='url("blob:paint")';f.missingEdge=true;assert.equal((await f.run()).valid,false,'three sides are insufficient');
     f=fixture();f.trigger.style[property]='url("blob:paint")';f.detached=true;assert.equal((await f.run()).valid,false,'detached image paint');
-    f=fixture();f.trigger.style[property]='url("blob:paint")';f.centerAlpha=0;assert.equal((await f.run()).valid,false,'missing control fill');
+    f=fixture();f.trigger.style[property]='url("blob:paint")';f.centerAlpha=0;assert.equal((await f.run()).valid,true,'transparent Select surface retains its black border');
     f=fixture();f.trigger.style[property]='url("blob:paint")';f.decodeFails=true;assert.equal((await f.run()).valid,false,'broken image decode');
 }
 f=fixture().withForeground();assert.equal((await f.run()).valid,true,'foreground path with transparent center');assert.deepEqual(f.revoked,['blob:foreground']);

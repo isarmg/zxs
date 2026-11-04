@@ -59,6 +59,8 @@ pub enum ErrorSource {
     WorkspaceCapacity(#[source] json_codec::Error),
     #[error("invalid disk list: {0}")]
     DiskList(#[source] json_codec::Error),
+    #[error("invalid primary placement configuration: {0}")]
+    PlacementConfiguration(#[source] json_codec::Error),
     #[error("invalid backup configuration: {0}")]
     BackupConfiguration(#[source] json_codec::Error),
     #[error("{0}")]

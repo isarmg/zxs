@@ -18,6 +18,7 @@ pub(crate) enum Kind {
     Merge,
     Tags,
     Backup,
+    Placement,
 }
 #[derive(Clone, Default)]
 pub(crate) struct Publication {
@@ -55,6 +56,7 @@ pub(crate) fn settle(model: &mut Model, id: &str, status: SaveStatus) {
                 match kind {
                     Kind::Merge => model.merge = None,
                     Kind::Backup => model.backup = None,
+                    Kind::Placement => model.placement = None,
                     Kind::Tags => {
                         model.tag_edit = None;
                         model.checked_nodes.clear();
@@ -81,7 +83,8 @@ pub(crate) fn submit(
 ) {
     if state.with_untracked(|s| {
         !actions::write_allowed(s)
-            || kind != Kind::Backup && super::model::selected_entry_read_only(&s.files)
+            || !matches!(kind, Kind::Backup | Kind::Placement)
+                && super::model::selected_entry_read_only(&s.files)
             || s.files
                 .publications
                 .get(&kind)

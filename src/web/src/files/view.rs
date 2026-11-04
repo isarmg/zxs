@@ -164,8 +164,24 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Rename,None)><FileIcon name="rename"/>{t("重命名","Rename")}</button>
             <button class="zxs-button" disabled=move ||batch_disabled.get() on:click=move |_|batch::start(state,batch::Kind::Delete,None)><FileIcon name="delete"/>{t("删除","Delete")}</button>
             {branch::control(state,t("创建目录分支","Create folder branch"),branch::Target::CurrentDirectory,create_branch_disabled)}
+            <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||!actions::write_allowed(s)) on:click=move |_|super::placement::start_current(state)>{t("主盘规则","Primary placement")}</button>
             <button class="zxs-button" disabled=move ||state.with(|s|s.files.repository_id.is_empty()||actions::pending(s)) on:click=move |_|backup::start_current(state)>{t("备份设置","Backup settings")}</button>
-            <div class="zxs-file-search zxs-form-grid"><label class="zxs-form-field"><span>{t("搜索当前文件夹","Search this folder")}</span><input class="zxs-input zxs-input--compact" type="search" aria-label=t("搜索当前文件夹","Search this folder") placeholder=t("搜索当前文件夹","Search this folder") prop:value=move ||state.with(|s|s.files.query.clone()) on:input=move |event|actions::search(state,event_target_value(&event))/></label></div>
+            <label class="zxs-file-search zxs-form-grid">
+                <input class="zxs-input zxs-input--compact" type="search"
+                    aria-label=t("搜索当前文件夹","Search this folder")
+                    placeholder=t("搜索当前文件夹","Search this folder")
+                    prop:value=move ||state.with(|s|s.files.query_draft.clone())
+                    on:input=move |event|actions::edit_search(state,event_target_value(&event))
+                    on:keydown=move |event:web_sys::KeyboardEvent|{
+                        if event.key()=="Enter"&&!event.is_composing(){
+                            event.prevent_default();
+                            if !event.repeat(){
+                                let query=state.with_untracked(|s|s.files.query_draft.clone());
+                                actions::search(state,query);
+                            }
+                        }
+                    }/>
+            </label>
         </div>
         <div class="zxs-file-toolbar zxs-flow zxs-surface-end">
             <Select label=t("浏览目录分支","Browse folder branch") options=folder_options value=folder_value disabled=folder_disabled placeholder=t("尚无目录分支","No folder branches") on_change=Callback::new(move |value:String|actions::preview_directory_branch(state,value))/>
@@ -177,6 +193,7 @@ fn directory(state: RwSignal<State>) -> impl IntoView {
         <Show when=move ||state.with(|s|s.files.loaded&&s.files.writable&&!s.files.directory_branches_supported)><p class="zxs-row">{t("请选择具体文件夹后管理目录分支；此硬盘根目录包含多个已有的文件目录。","Select a specific folder to manage folder branches; this disk root contains multiple existing file namespaces.")}</p></Show>
         <Show when=move ||state.with(|s|s.files.loaded&&!s.files.writable&&s.files.directory_preview.is_none())><p class="zxs-row">{t("此硬盘目录当前只读。","This disk directory is read only.")}</p></Show>
         {backup::view(state)}
+        {super::placement::view(state)}
         {batch::view(state)}
         <div class="zxs-file-layout zxs-stack zxs-surface"><section class="zxs-content-panel zxs-file-list-panel zxs-frame zxs-stack zxs-stack--flush">{file_table(state)}</section></div>
     }

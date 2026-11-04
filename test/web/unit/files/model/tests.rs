@@ -69,7 +69,6 @@ fn navigation_resets_only_location_owned_state() {
             total_entries: 205,
             listing_failed: true,
             listing_cancellation: None,
-            search_delay: None,
             directory_branches: vec![branch(json!({"current":true}))],
             directory_file_count: 210,
             directory_branches_supported: true,
@@ -97,6 +96,7 @@ fn navigation_resets_only_location_owned_state() {
             batch: None,
             merge: None,
             backup: None,
+            placement: None,
             tag_edit: None,
             checked_nodes: crate::files::tags::tests::selection(&["old-node"]),
             publications: [(
@@ -112,18 +112,27 @@ fn navigation_resets_only_location_owned_state() {
             polling_operations: vec!["original".into()],
             mutation_pending: true,
             query: "old query".into(),
+            query_draft: "unsubmitted query".into(),
         };
 
         model.navigate(destination);
         assert_eq!((&*model.slot, &*model.directory), (slot, directory));
         assert_eq!(model.query, query);
+        assert_eq!(
+            model.query_draft,
+            if slot.is_empty() {
+                "unsubmitted query"
+            } else {
+                ""
+            }
+        );
         assert_eq!(model.loaded, loaded);
         assert!(!model.writable && !model.loading && !model.listing_failed);
         assert!(model.entries.is_empty());
         assert!(model.cursor.is_none());
         assert!(model.next_cursor.is_none() && model.previous_cursor.is_none());
         assert_eq!(model.total_entries, 0);
-        assert!(model.search_delay.is_none() && model.listing_cancellation.is_none());
+        assert!(model.listing_cancellation.is_none());
         assert_eq!(model.generation, 8);
         assert!(model.directory_branches.is_empty());
         assert_eq!(model.directory_file_count, 0);
@@ -134,7 +143,7 @@ fn navigation_resets_only_location_owned_state() {
         assert_eq!(model.history_generation, 12);
         assert!(model.checked_entries.is_empty() && model.checked_nodes.is_empty());
         assert!(model.batch.is_none() && model.merge.is_none());
-        assert!(model.backup.is_none() && model.tag_edit.is_none());
+        assert!(model.backup.is_none() && model.placement.is_none() && model.tag_edit.is_none());
 
         assert_eq!(model.disks, disks);
         assert!(model.disks_loaded && model.loading_disks);

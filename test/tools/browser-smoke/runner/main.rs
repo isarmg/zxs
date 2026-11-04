@@ -46,6 +46,7 @@ mod metadata;
 mod naming;
 mod note_recovery;
 mod page_layout;
+mod placement_configuration;
 mod server_launcher;
 mod session_delivery;
 use metadata::{assert_metadata_only, metadata_edit, open_fixture_directory};
@@ -490,10 +491,12 @@ fn run() -> Result<()> {
     let mut server_container_image = None;
     let mut screenshot: Option<PathBuf> = None;
     let mut contour_evidence: Option<PathBuf> = None;
+    let mut placement_only = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cli-bin" => cli_binary = args.next().ok_or("--cli-bin requires a path")?.into(),
             "--embedded-web" => embedded_web = true,
+            "--placement-only" => placement_only = true,
             "--server-container-image" => {
                 server_container_image = Some(
                     args.next()
@@ -513,7 +516,7 @@ fn run() -> Result<()> {
             }
             _ => {
                 return Err(format!(
-                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--server-container-image IMAGE] [--screenshot PNG] [--contour-evidence DIR]"
+                    "unknown argument {arg}; usage: browser-smoke [--cli-bin PATH] [--web-dir PATH] [--embedded-web] [--server-container-image IMAGE] [--screenshot PNG] [--contour-evidence DIR] [--placement-only]"
                 )
                 .into());
             }
@@ -521,6 +524,12 @@ fn run() -> Result<()> {
     }
     if contour_evidence.is_some() && screenshot.is_some() {
         return Err("--contour-evidence and --screenshot are separate validation modes".into());
+    }
+    if placement_only && (contour_evidence.is_some() || screenshot.is_some()) {
+        return Err(
+            "--placement-only cannot be combined with contour or file-manager screenshot modes"
+                .into(),
+        );
     }
     server_launcher::configure(server_container_image, embedded_web)?;
     let cli_binary = cli_binary.canonicalize()?;
@@ -614,7 +623,9 @@ fn run() -> Result<()> {
                 .ok_or("missing WebDriver session")?
                 .to_owned(),
         };
-        let result = if let Some(directory) = &contour_evidence {
+        let result = if placement_only {
+            placement_configuration::run(&browser, &cli_binary, server_assets, &pool, root, &password)
+        } else if let Some(directory) = &contour_evidence {
             contour_evidence::run(&browser, &origin, &web, directory)
         } else {
             exercise(&browser, &origin, &password, screenshot.as_deref())
@@ -623,6 +634,9 @@ fn run() -> Result<()> {
                 })
                 .and_then(|()| {
                     management::setup(&browser, &cli_binary, server_assets, root, &password)
+                })
+                .and_then(|()| {
+                    placement_configuration::run(&browser, &cli_binary, server_assets, &pool, root, &password)
                 })
         };
         if result.is_err() {

@@ -109,38 +109,23 @@ pub(crate) fn reload_entries(state: RwSignal<State>) {
     request_page(state, false);
 }
 
+pub(crate) fn edit_search(state: RwSignal<State>, query: String) {
+    state.update(|s| s.files.query_draft = query);
+}
+
+/// Enter submits immediately; only submission replaces the page and its selection.
 pub(crate) fn search(state: RwSignal<State>, query: String) {
     state.update(|s| {
         s.notices.leave();
         s.files.cancel_listing();
         s.files.reset_page();
+        s.files.query_draft.clone_from(&query);
         s.files.query = query;
         s.files.entries = Default::default();
         s.files.loaded = false;
         s.files.clear_selection();
     });
-    if !state.with_untracked(|s| s.session_active() && !s.files.slot.is_empty()) {
-        return;
-    }
-    let (epoch, slot, directory, generation) = state.with_untracked(|s| {
-        (
-            s.session_epoch,
-            s.files.slot.clone(),
-            s.files.directory.clone(),
-            s.files.generation,
-        )
-    });
-    // Coalesce typing before doing directory work. Navigation cancels the timer
-    // immediately, and the same generation fence covers an already queued tick.
-    let delay = gloo_timers::callback::Timeout::new(250, move || {
-        if current_listing(state, epoch, &slot, &directory, generation) {
-            request_page(state, false);
-        }
-    });
-    state.update(|s| {
-        s.files.loading = true;
-        s.files.search_delay = Some(std::sync::Arc::new(send_wrapper::SendWrapper::new(delay)));
-    });
+    request_page(state, false);
 }
 
 /// Choosing a branch is a read. Only the separate default action publishes it.

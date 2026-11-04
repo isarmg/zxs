@@ -98,7 +98,6 @@ pub(crate) struct Model {
     pub total_entries: u64,
     pub listing_failed: bool,
     pub listing_cancellation: Option<crate::api::ReadCancellation>,
-    pub search_delay: Option<Arc<send_wrapper::SendWrapper<gloo_timers::callback::Timeout>>>,
     pub directory_branches: Vec<DirectoryBranch>,
     pub directory_file_count: u64,
     pub directory_branches_supported: bool,
@@ -124,13 +123,17 @@ pub(crate) struct Model {
     pub batch: Option<super::batch::Draft>,
     pub merge: Option<super::merge::Draft>,
     pub backup: Option<super::backup::Draft>,
+    pub placement: Option<super::placement::Draft>,
     pub tag_edit: Option<super::tags::Draft>,
     pub checked_nodes: super::tags::Selection,
     pub publications: super::review::Publications,
     pub operations: Vec<FileOperation>,
     pub polling_operations: Vec<String>,
     pub mutation_pending: bool,
+    /// Last explicitly submitted query, used by refresh and pagination.
     pub query: String,
+    /// Editable text; typing and clearing do not change the current listing.
+    pub query_draft: String,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct DirectoryPreview {
@@ -174,11 +177,13 @@ impl Model {
                 self.slot = slot;
                 self.directory.clear();
                 self.query.clear();
+                self.query_draft.clear();
                 self.loaded = false;
             }
             Navigation::Directory(directory) => {
                 self.directory = directory;
                 self.query.clear();
+                self.query_draft.clear();
                 self.loaded = false;
             }
         }
@@ -204,7 +209,6 @@ impl Model {
 
     /// Page-local selection is never carried to unloaded entries.
     pub(crate) fn cancel_listing(&mut self) {
-        self.search_delay = None;
         if let Some(cancellation) = self.listing_cancellation.take() {
             cancellation.abort();
         }
@@ -225,6 +229,7 @@ impl Model {
         self.cancel_history();
         self.merge = None;
         self.backup = None;
+        self.placement = None;
         self.tag_edit = None;
         self.checked_nodes.clear();
         self.selected = None;

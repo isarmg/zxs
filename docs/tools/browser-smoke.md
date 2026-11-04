@@ -118,6 +118,29 @@ Node mock-host 自测仅核对探针隔离、暂停/释放和恢复，不运行 
 
 匿名字段探针核对六行直接 DOM 顺序、label 的 for/id 与实际输入关联、共享行高、信息提示和操作的边界；不再要求已删除的左标签右输入组合框。Node 模型覆盖错序、额外/隐藏行、错误状态、字段或动作过小、内容溢出、内部装饰复活以及外框绘制弱化等拒绝条件。
 
-原生文本输入外观探针 `input_surfaces.js` 在实际登录/设置、账户（含已呈现的SMB字段）、管理表单和文件搜索上读取 computed style，覆盖亮暗主题与320/980等视口。它对登录/首设卡内输入断言平时无边线、键盘焦点实线3px，对其余页面仍断言普通虚线1px、键盘焦点虚线3px；禁止其余三边、矩形outline、背景图、border-image、box-shadow和残留G4绘制资格；同时记录禁用态和clientWidth边界，绝不读取字段值或改变产品DOM。Select仍独立验证真实黑色外框与键盘焦点环，模型测试只验证探针本身，不替代真实Chrome执行。
+原生文本输入外观探针 `input_surfaces.js` 在实际登录/设置、账户（含已呈现的SMB字段）、管理表单和文件搜索上读取 computed style，覆盖亮暗主题与320/980等视口。它对登录/首设卡内输入断言平时无边线、键盘焦点实线3px，文件搜索断言全内容区输入、无下划线、无常驻标签且键盘焦点位于外围框；对其余页面仍断言普通虚线1px、键盘焦点虚线3px；禁止其余三边、矩形outline、背景图、border-image、box-shadow和残留G4绘制资格；同时记录禁用态和clientWidth边界，绝不读取字段值或改变产品DOM。Select仍独立验证真实黑色外框与键盘焦点环，模型测试只验证探针本身，不替代真实Chrome执行。
 
 文件行小数滚动分成两项独立验收：DPR2 下对 0.5、1.5、7.5 的滚动请求记录浏览器实际值，允许浏览器自身量化，但产品 CSS 偏移必须始终与原生值相差小于 0.01 CSS px；随后仅将真实列表面板临时设为 CSS `zoom: 2`，再次请求同组偏移，必须实际读到非整数原生值并满足同一同步阈值。浏览器的量化与缩放关系见 [WPT 原生滚动测试](https://github.com/web-platform-tests/wpt/blob/master/css/cssom-view/scroll-offsets-fractional-zoom.html)；DPR 不是一定产生小数的保证。不替换 scrollLeft getter、不合成 scroll 事件、不跳过小数断言。共享几何探针以 `currentCSSZoom` 将 CSS 长度换算为真实视口坐标，保持 0.5px 几何阈值；不会把取整的 clientWidth 误当缩放后的精确宽度。每个样本在恢复 zoom 前保存请求值、实际值、CSS 偏移、DPR、zoom 与几何 JSON，成功或失败都还原面板原有 zoom 值及优先级。
+
+文件搜索验收使用产品的原生 search input 与真实 WASM：点击外框左、中、右位置必须聚焦同一输入；空值提示可见、输入后提示隐藏且读屏名称不变。真实键盘录入后观察超过旧 250ms 防抖窗口，列表、勾选和请求数必须保持；组词确认／长按 Enter 的合成 guard 用例单独标明，不代替实际输入法硬件验收。提交使用 WebDriver 真实 Enter，查询即时替换列表并保留焦点。205 项夹具另断言编辑期间翻页仍使用已提交条件、键盘清空与原生 × 分别观察 350ms 后请求数及原列表不变、空草稿 Enter 恢复第一页、目录切换清除草稿，以及已有的中止与迟到响应围栏。外观探针仍在明暗主题及四种文件页视口执行，不排除搜索输入，也不移除功能来满足样式检查。这些验收必须由真实 Chrome 执行后才能记为通过，源码与模型不能替代浏览器证据。
+
+原生 × 用例通过 Chrome DevTools 读取目标输入的真实 user-agent shadow `search-clear` 控件及边界，再发送实际指针按下／抬起；找不到原生控件或点击后输入未清空都明确失败，不用脚本改 value 冒充原生清空。350ms 请求计数从每种清空动作之前记录，独立覆盖旧 250ms 延迟窗口。
+控件身份依据 Chromium 的 [shadow 元素名称](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/html/shadow/shadow_element_names.json5)及[原生清空实现](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/html/forms/text_control_inner_elements.cc)，不是页面自建按钮。
+
+
+## 主盘规则对象入口
+
+正常冒烟最后追加独立真实主盘验收；`--placement-only` 只运行这组验收，不代表整个冒烟通过。它仍启动实际 Chrome、生产 WASM 和真实临时守护进程，不接受外部用户池路径。夹具另建 P01→B01→C01、P02→B02 两条备份链，不改变既有三盘冒烟夹具。运行方式：
+
+```sh
+cargo run --locked --offline -p browser-smoke -- \
+  --cli-bin "$PWD/target/native/debug/zxs" --web-dir "$PWD/build/web" --placement-only
+```
+
+- 通过仓库当前目录和文件夹详情打开“主盘规则”，检查真实仓库/目录身份与 nullable rule ID、UInt64 字符串代数自动进入请求，界面没有手填 ID/代数输入框。使用显示的实际主盘路径选择 P02。
+- 第二个真实 HTTP 会话先更新同一规则；陈旧浏览器保存得到真实 `409 CONFIG_CONFLICT`，保持编辑器并重读实际新代数。成功保存后只丢失原始响应递交，再暂缓原操作结果的原始 Response；保存和关闭均锁定，原生重复点击不发第二次写入，释放查询后完成原操作。
+- protected 目录实际要求两份但未配置 B02 前缀。读模型返回 `missing_backup_prefixes`，真实选择器禁选；独立真实 PUT 得到 `400 BACKUP_PREFIX_REQUIRED`，错误目录身份得到 `409 SCOPE_CHANGED`，配置不变。真实目录分支只读预览与备份盘禁写，匿名 PUT 为 401。
+- 暂缓原始 GET 后关闭编辑器，以及退出后重新登录并打开另一个目录，再释放旧 Response；旧响应不能恢复已关闭或旧会话编辑器。没有伪造业务响应、状态码或应用私有状态。
+- 停止测试守护进程后，以真实引擎验证旧版本记录、物理位置、校验后字节和独立备份策略均不变，再提交唯一一个新版本。新版本必须仅放到 P02。重启真实守护进程后，浏览器历史树必须仍包含两个旧版本和一个新版本；Web 全程不得调用文件正文接口。
+
+成功运行生成 `artifacts/browser-smoke/placement/evidence.json`、`future-placement.png` 与 `preserved-history.png`，包含真实对象基线、响应与图中版本；不保存令牌、Cookie、密码或认证请求。失败保留独立诊断，所有临时响应包装均清理。新增测试源码、编译成功或单测成功不能替代此真实浏览器命令的执行结果。

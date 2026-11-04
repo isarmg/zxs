@@ -28,6 +28,7 @@ fn search(browser: &Browser, empty: bool) -> Result<()> {
         ""
     };
     browser.script(&format!("const input=document.querySelector('.zxs-file-search input');input.value={};input.dispatchEvent(new Event('input',{{bubbles:true}}));return true",json!(query)))?;
+    browser.keys(&browser.css(".zxs-file-search input")?, "\u{e007}")?;
     wait_for("real file query for separator layout", || {
         if browser.script(&format!("const page=document.querySelector('.zxs-file-manager'),nav=page.querySelector('.zxs-file-pagination');return page.getAttribute('aria-busy')==='false'&&(page.querySelectorAll('tbody tr').length===0)==={empty}&&![...nav.querySelectorAll('button')].some(e=>['Retry','重试'].includes(e.textContent.trim()))"))? == true { Ok(()) } else { Err("real file query is pending or failed".into()) }
     })

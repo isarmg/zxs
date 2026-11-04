@@ -12,7 +12,18 @@
 :root .zxs-select .zxs-select-trigger.zxs-input { border-color: #000; }
 .zxs-select-trigger:disabled { opacity: 1; cursor: not-allowed; }
 .zxs-select-trigger:disabled :is(.zxs-select-value, .zxs-select-arrow) { opacity: .6; }
-:root .zxs-select .zxs-select-trigger:focus-visible { outline: 2px solid var(--zxs-focus, Highlight); outline-offset: 3px; }
+/* The shared G4 painter follows these shadow offsets around its exact contour.
+ * Paint mode keeps the outer ring intact at the corners; the label clips itself.
+ * Keep the 1px black control border and a distinct 2px keyboard ring with a gap. */
+:root .zxs-select .zxs-select-trigger:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--zxs-bg-page, #fff), 0 0 0 5px var(--zxs-focus, Highlight);
+  --zxs-contour-mode: paint;
+}
+/* Forced colors suppress box shadows. Retain the system focus indicator there. */
+@media (forced-colors: active) {
+  :root .zxs-select .zxs-select-trigger:focus-visible { outline: 2px solid Highlight; outline-offset: 3px; box-shadow: none; }
+}
 .zxs-select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zxs-select-trigger .zxs-select-arrow { display: block; flex: none; width: 1em; height: 1em; fill: none; transform-origin: center; }
 .zxs-select-trigger[aria-expanded=true] .zxs-select-arrow { transform: rotate(90deg); }

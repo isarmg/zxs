@@ -54,7 +54,7 @@ console.log(JSON.stringify(results));
             'exercise': ['0', '1', '2', '1', '2', '1'],
             'merge_review': ['2', '1'],
             'graph_merge_review': ['1', '2', '1'],
-            'fields_and_cancellation': ['1', '1', '0'],
+            'fields_and_cancellation': ['1', '2', '1', '1', '0'],
         })
         self.assertEqual(re.findall(
             r'^    (merge_review|graph_merge_review|fields_and_cancellation)\(browser\)',
@@ -70,9 +70,20 @@ console.log(JSON.stringify(results));
             'one source cannot choose or submit a result',
             'historical inputs keep source bases across graph pages',
             'chosen result survives leaving its page',
-            'cancelling graph merge removes only its selection controls',
+            'cancelling graph merge preserves the current window and removes only its selection controls',
         ):
             self.assertIn(contract, graph_merge)
+        fields = scenarios['fields_and_cancellation']
+        self.assertEqual(re.findall(
+            r'click\(browser, "(Locate current node|Next history page|Previous history page)"'
+            r'[^\n]+\n\s+graph\(browser, (\d+)\)', fields),
+            [('Next history page', '2'), ('Locate current node', '1'),
+             ('Locate current node', '1')])
+        for contract in (
+            'field review starts with the current node outside the visible window',
+            'field review locates the exact current node',
+        ):
+            self.assertIn(contract, fields)
         self.assertIn('for _ in 0..4', source)
         self.assertIn(".zxs-node-checkbox').click()", source)
 

@@ -27,6 +27,24 @@ fn assert_retained_row(snapshot: Value) -> Result<()> {
     }
 }
 
+fn search_surface(browser: &Browser) -> Result<()> {
+    for position in [0.03, 0.5, 0.97] {
+        let point = browser.script(&format!(
+            "document.activeElement.blur();const f=document.querySelector('.zxs-file-search');f.scrollIntoView({{block:'center'}});const r=f.getBoundingClientRect();return {{x:r.left+r.width*{position},y:r.top+r.height/2}}"
+        ))?;
+        for kind in ["mousePressed", "mouseReleased"] {
+            browser.cdp(
+                "Input.dispatchMouseEvent",
+                json!({"type":kind,"button":"left","clickCount":1,"x":point["x"],"y":point["y"]}),
+            )?;
+        }
+        if browser.script("const i=document.querySelector('.zxs-file-search input');return document.activeElement===i&&i.matches(':placeholder-shown')&&i.getAttribute('aria-label')===i.placeholder")? != true {
+            return Err("search surface click did not focus its empty named input".into());
+        }
+    }
+    accessibility::input_surfaces(browser)
+}
+
 pub(super) fn run(browser: &Browser) -> Result<()> {
     // Opening Details retains an entry for that page, not a checked file row.
     // Return through real navigation with the pointer still outside the table.
@@ -81,8 +99,22 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         let snapshot = browser.script("const s=window.__zxsFileRow;return {rowConnected:s.row.isConnected,buttonSame:s.row.querySelector('.zxs-file-name')===s.button,checkboxSame:s.row.querySelector('.zxs-entry-checkbox')===s.check,checked:s.check.checked,rowSelected:s.row.getAttribute('aria-selected')==='true',rowSurfaceShown:getComputedStyle(s.row.querySelector('.zxs-file-row-surface')).opacity==='1',focused:document.activeElement===s.check}")?;
         assert_retained_row(snapshot)
     })?;
+    search_surface(browser)?;
     let search = browser.css(".zxs-file-search input")?;
     browser.keys(&search, "browser-smoke")?;
+    // Composition-confirming Enter and held Enter are not search submissions.
+    // These two events exercise the guard; the actual submission below uses WebDriver.
+    browser.script("const i=document.querySelector('.zxs-file-search input');i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',isComposing:true,bubbles:true,cancelable:true}));i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',repeat:true,bubbles:true,cancelable:true}));return true")?;
+    let retained = browser.command(
+        "POST",
+        "/execute/async",
+        Some(json!({"script":"const done=arguments[arguments.length-1];setTimeout(()=>{const i=document.querySelector('.zxs-file-search input'),s=window.__zxsFileRow;done(i.value==='browser-smoke'&&!i.matches(':placeholder-shown')&&i.getAttribute('aria-label')===i.placeholder&&document.activeElement===i&&s.row.isConnected&&s.check.checked&&s.row.getAttribute('aria-selected')==='true')},350)","args":[]})),
+    )?;
+    if retained != true {
+        return Err("editing or guarded Enter replaced the selected row before submission".into());
+    }
+    accessibility::input_surfaces(browser)?;
+    browser.keys(&search, "\u{e007}")?;
     wait_for(
         "server search resets page-local selection and preserves input focus",
         || {
@@ -94,6 +126,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         },
     )?;
     browser.script("const input=document.querySelector('.zxs-file-search input');input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));return true")?;
+    browser.keys(&search, "\u{e007}")?;
     wait_for("cleared file query finishes loading", || {
         if browser.script("return document.querySelector('.zxs-file-search input').value===''&&document.querySelectorAll('.zxs-file-table tbody tr').length===1&&document.querySelector('.zxs-file-name').textContent.trim()==='browser-smoke.txt'&&!document.querySelector('[aria-busy=true]')")? == true {
             Ok(())

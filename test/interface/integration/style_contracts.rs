@@ -360,3 +360,25 @@ fn smb_selection_and_passwords_share_aligned_form_groups() {
     assert!(css.contains(":root :is(input,textarea).zxs-input {"));
     assert!(css.contains("border: 0; border-bottom: 1px dashed"));
 }
+
+#[test]
+fn folder_search_uses_one_input_surface_and_explicit_enter_submission() {
+    let view = include_str!("../../../src/web/src/files/view.rs");
+    let search = view
+        .split("<label class=\"zxs-file-search zxs-form-grid\">")
+        .nth(1)
+        .expect("full-width search label")
+        .split("</label>")
+        .next()
+        .unwrap();
+    assert!(!search.contains("<span") && !search.contains("zxs-form-field"));
+    assert!(search.contains("aria-label=t(\"搜索当前文件夹\",\"Search this folder\")"));
+    assert!(search.contains("placeholder=t(\"搜索当前文件夹\",\"Search this folder\")"));
+    assert!(search.contains("on:input=move |event|actions::edit_search"));
+    assert!(search.contains("event.key()==\"Enter\"&&!event.is_composing()"));
+    assert!(search.contains("if !event.repeat()"));
+    assert!(search.contains("actions::search(state,query)"));
+    let css = include_str!("../../../src/web/public/styles/components/file-manager.css");
+    assert!(css.contains(".zxs-file-search > input.zxs-input:focus-visible { border: 0; }"));
+    assert!(css.contains(".zxs-file-search:has(> input:focus-visible) { outline: 2px solid"));
+}

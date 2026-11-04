@@ -1,0 +1,8 @@
+{
+  "path": "docs",
+  "primary_slot_id": "P01",
+  "expected_scope_id": "entry_00000000000000000000000000000002",
+  "expected_rule_id": "rule_00000000000000000000000000000003",
+  "expected_generation": "18446744073709551615",
+  "operation_id": "op_00000000000000000000000000000004"
+}

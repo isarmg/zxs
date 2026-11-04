@@ -1063,6 +1063,22 @@ impl Backend for ManagementBackend {
             .backend()?
             .create_disk_write_session(identity, request)
     }
+    fn placement_configuration(
+        &self,
+        identity: &Identity,
+        request: crate::ReadPlacementConfiguration,
+    ) -> Result<storage_contract::PlacementConfigurationSnapshot, ApiError> {
+        self.inner
+            .backend()?
+            .placement_configuration(identity, request)
+    }
+    fn configure_placement(
+        &self,
+        identity: &Identity,
+        request: crate::ConfigurePlacement,
+    ) -> Result<storage_contract::OperationResult, ApiError> {
+        self.inner.backend()?.configure_placement(identity, request)
+    }
     fn backup_configuration(
         &self,
         identity: &crate::auth::Identity,

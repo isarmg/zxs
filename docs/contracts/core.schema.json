@@ -6812,6 +6812,156 @@
         "history_root",
         "branch"
       ]
+    },
+    "PlacementConfigurationScope": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/DirectoryId"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "path"
+      ],
+      "additionalProperties": false,
+      "description": "仓库根或当前主命名空间中的真实目录身份；根 path 为空且 id 为 repository_id，目录 id 为 entry_id。文件不是主盘配置范围。"
+    },
+    "PrimaryPlacementTarget": {
+      "type": "object",
+      "properties": {
+        "slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unavailable_reason": {
+          "enum": [
+            null,
+            "insufficient_copies",
+            "missing_backup_prefixes"
+          ]
+        }
+      },
+      "required": [
+        "slot_id",
+        "root",
+        "unavailable_reason"
+      ],
+      "additionalProperties": false,
+      "description": "一级盘候选及登记物理根。null 表示可选；insufficient_copies 表示完整副本链不足，missing_backup_prefixes 表示目标链所需备份逻辑前缀未配置。"
+    },
+    "PlacementConfigurationResponse": {
+      "type": "object",
+      "properties": {
+        "repository_id": {
+          "$ref": "#/$defs/RepositoryId"
+        },
+        "repository_name": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/PlacementConfigurationScope"
+        },
+        "rule_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "primary_slot_id": {
+          "$ref": "#/$defs/SlotId"
+        },
+        "inherited": {
+          "type": "boolean"
+        },
+        "required_copies": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PrimaryPlacementTarget"
+          }
+        }
+      },
+      "required": [
+        "repository_id",
+        "repository_name",
+        "scope",
+        "rule_id",
+        "generation",
+        "primary_slot_id",
+        "inherited",
+        "required_copies",
+        "targets"
+      ],
+      "additionalProperties": false,
+      "description": "只读主盘规则投影。rule_id/generation 只属于精确路径规则；无精确规则时显式返回 null/\"0\" 且 inherited=true，primary_slot_id 是当前有效主盘。required_copies 包含主副本；独立子主盘规则不被父范围覆盖。"
+    },
+    "ConfigurePlacementRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "空字符串选择仓库根，否则必须通过 PortablePath 验证并解析为真实目录；不接受文件。"
+        },
+        "primary_slot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected_scope_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected_rule_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_generation": {
+          "$ref": "#/$defs/UInt64"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "repository_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "可省略；若提供必须与 URL repository 完全相等，否则返回 400 INVALID_REQUEST。"
+        }
+      },
+      "required": [
+        "path",
+        "primary_slot_id",
+        "expected_scope_id",
+        "expected_rule_id",
+        "expected_generation",
+        "operation_id"
+      ],
+      "additionalProperties": false,
+      "description": "以 GET 返回的稳定范围身份、可空精确规则 ID 和十进制 u64 代数更新当前路径规则。expected_rule_id 必须显式提供；身份字符串非空，精确匹配在提交时校验。复用 operation_id 可查询或重试同一请求；不同输入不得复用。"
     }
   }
 }

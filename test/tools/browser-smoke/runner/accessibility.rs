@@ -10,7 +10,9 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
     result?;
     cleanup?;
     theme_cleanup?;
-    println!("PASS real input keyboard focus and Select contour fallback visibility in light/dark");
+    println!(
+        "PASS real input keyboard focus and Select G4 keyboard/pointer focus and contour fallback in light/dark"
+    );
     Ok(())
 }
 
@@ -82,11 +84,21 @@ fn check(browser: &Browser) -> Result<()> {
         browser.click(&trigger)?;
         visible_menu(browser, false, theme, "normal paint")?;
         black_select_borders(browser, theme)?;
+        select_focus(
+            browser,
+            ".zxs-history-toolbar .zxs-select-trigger",
+            "pointer",
+        )?;
         browser.keys(&trigger, "\u{e00c}")?; // Escape.
         browser.keys(&trigger, "\u{e015}")?; // ArrowDown reopens with keyboard focus.
         visible_menu(browser, false, theme, "keyboard reopen")?;
         black_select_borders(browser, theme)?;
-        if browser.script("const e=document.querySelector('.zxs-history-toolbar .zxs-select-trigger'),s=getComputedStyle(e);return document.activeElement===e&&e.matches(':focus-visible')&&parseFloat(s.outlineWidth)>0&&s.outlineStyle!=='none'&&!!document.getElementById(e.getAttribute('aria-activedescendant'))")? != true {
+        select_focus(
+            browser,
+            ".zxs-history-toolbar .zxs-select-trigger",
+            "keyboard",
+        )?;
+        if browser.script("const e=document.querySelector('.zxs-history-toolbar .zxs-select-trigger');return !!document.getElementById(e.getAttribute('aria-activedescendant'))")? != true {
             return Err(format!("Select keyboard focus or active option lost in {theme}").into());
         }
         browser.keys(&trigger, "\u{e00c}")?;
@@ -121,8 +133,93 @@ fn check(browser: &Browser) -> Result<()> {
         visible_menu(browser, false, theme, "after decoration restoration")?;
         black_select_borders(browser, theme)?;
         browser.keys(&trigger, "\u{e00c}")?;
+        select_focus_viewports(browser, theme)?;
     }
     Ok(())
+}
+
+/// Decode actual G4 paint, not just a CSS declaration or a contour state marker.
+pub(super) fn select_focus(browser: &Browser, selector: &str, expected: &str) -> Result<()> {
+    wait_for(
+        "Select focus paint matches the actual input modality",
+        || {
+            let evidence = browser.command(
+            "POST",
+            "/execute/async",
+            Some(json!({"script": include_str!("select_focus.js"), "args": [selector, expected]})),
+        )?;
+            if evidence["valid"] == true {
+                Ok(())
+            } else {
+                Err(format!("Select {expected} focus: {evidence}").into())
+            }
+        },
+    )
+}
+
+fn select_focus_viewports(browser: &Browser, theme: &str) -> Result<()> {
+    let selector = ".zxs-history-toolbar .zxs-select-trigger";
+    with_cleanup(
+        || {
+            for (width, height, mobile) in [(980, 760, false), (390, 844, true)] {
+                browser.cdp(
+                    "Emulation.setDeviceMetricsOverride",
+                    json!({"width":width,"height":height,"deviceScaleFactor":1,"mobile":mobile}),
+                )?;
+                browser.cdp(
+                    "Emulation.setTouchEmulationEnabled",
+                    json!({"enabled":mobile}),
+                )?;
+                browser.click(&browser.button("History", "历史记录")?)?;
+                let trigger = browser.css(selector)?;
+                if mobile {
+                    let center = browser.script("const r=document.querySelector('.zxs-history-toolbar .zxs-select-trigger').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}")?;
+                    browser.cdp(
+                        "Input.dispatchTouchEvent",
+                        json!({"type":"touchStart","touchPoints":[center]}),
+                    )?;
+                    browser.cdp(
+                        "Input.dispatchTouchEvent",
+                        json!({"type":"touchEnd","touchPoints":[]}),
+                    )?;
+                } else {
+                    browser.click(&trigger)?;
+                }
+                visible_menu(browser, false, theme, "pointer input")?;
+                select_focus(browser, selector, "pointer")?;
+                black_select_borders(browser, theme)?;
+                browser.keys(&trigger, "\u{e00c}")?;
+                // Real Shift+Tab then Tab must blur and restore keyboard focus.
+                browser.keys(&trigger, "\u{e008}\u{e004}\u{e000}")?;
+                select_focus(browser, selector, "blurred")?;
+                browser.keys(&browser.css(":focus")?, "\u{e004}")?;
+                select_focus(browser, selector, "keyboard")?;
+                browser.keys(&trigger, "\u{e015}")?;
+                visible_menu(browser, false, theme, "Tab and ArrowDown")?;
+                select_focus(browser, selector, "keyboard")?;
+                black_select_borders(browser, theme)?;
+                browser.keys(&trigger, "\u{e00c}")?;
+                select_focus(browser, selector, "keyboard")?;
+                browser.cdp(
+                    "Emulation.setEmulatedMedia",
+                    json!({"features":[{"name":"forced-colors","value":"active"}]}),
+                )?;
+                select_focus(browser, selector, "forced")?;
+                browser.cdp("Emulation.setEmulatedMedia", json!({"features":[]}))?;
+                select_focus(browser, selector, "keyboard")?;
+            }
+            Ok(())
+        },
+        || {
+            browser.cdp("Emulation.setEmulatedMedia", json!({"features":[]}))?;
+            browser.cdp(
+                "Emulation.setTouchEmulationEnabled",
+                json!({"enabled":false}),
+            )?;
+            browser.cdp("Emulation.clearDeviceMetricsOverride", json!({}))?;
+            Ok(())
+        },
+    )
 }
 
 /// Observe real text controls without adding, disabling or restyling product DOM.

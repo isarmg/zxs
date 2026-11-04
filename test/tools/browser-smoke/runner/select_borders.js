@@ -64,7 +64,9 @@ const done=arguments[arguments.length-1];
                 const edgePixels=[horizontal(0,Math.ceil(h*.25)),vertical(Math.floor(w*.75),w),horizontal(Math.floor(h*.75),h),vertical(0,Math.ceil(w*.25))];
                 const centerAlpha=pixels[(Math.floor(h/2)*w+Math.floor(w/2))*4+3];
                 const stable=node.isConnected&&(foreground?foreground.isConnected&&livePath.getAttribute('d')===pathData&&getComputedStyle(livePath).fill===black&&getComputedStyle(livePath).fillRule==='evenodd':getComputedStyle(node)[property]===source);
-                paint={valid:stable&&edgePixels.every(n=>n>0)&&(foreground?centerAlpha===0:centerAlpha>=200),property,stable,edgePixels,centerAlpha};
+                // A transparent Select surface is intentional in content-blocks.
+                // Only a foreground overlay must leave its content hole clear.
+                paint={valid:stable&&edgePixels.every(n=>n>0)&&(!foreground||centerAlpha===0),property,stable,edgePixels,centerAlpha};
             } finally {
                 if(ownedUrl)URL.revokeObjectURL(ownedUrl);
             }
