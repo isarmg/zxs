@@ -461,7 +461,31 @@ pub(crate) struct DiskIoTransition {
 
 #[cfg(any(test, feature = "fault-injection"))]
 impl DiskIoTransition {
+    /// Reserve the unique responsibility. Holding it does not authorize a root
+    /// transition write while earlier ordinary operations are still draining.
     pub(crate) fn take_control(&mut self, binding: &DiskIoBinding) -> Result<DiskIoLease> {
+        drop(self.current_state(binding)?);
+        self.consume_control()
+    }
+
+    /// Root control I/O starts only after the real tails of ordinary operations
+    /// have retired. A busy result leaves the unique lease available for retry.
+    /// Once quiescing has zero ordinary owners, no ordinary admission can race
+    /// this check: the gate is closed and every pre-admitted owner is counted.
+    #[cfg(test)]
+    pub(crate) fn take_drained_control(&mut self, binding: &DiskIoBinding) -> Result<DiskIoLease> {
+        let state = self.current_state(binding)?;
+        if state.ordinary != 0 {
+            return Err(Error::new(
+                ErrorCode::DiskUnavailable,
+                "disk transition I/O is waiting for ordinary operation cleanup",
+            ));
+        }
+        drop(state);
+        self.consume_control()
+    }
+
+    fn current_state(&self, binding: &DiskIoBinding) -> Result<MutexGuard<'_, GateState>> {
         if !Arc::ptr_eq(&self.gate, &binding.gate) {
             return Err(Error::new(
                 ErrorCode::DiskIdentityMismatch,
@@ -475,6 +499,10 @@ impl DiskIoTransition {
                 "control lease does not own the current quiescing transition",
             ));
         }
+        Ok(state)
+    }
+
+    fn consume_control(&mut self) -> Result<DiskIoLease> {
         self.control.take().ok_or_else(|| {
             Error::new(
                 ErrorCode::ConfigConflict,

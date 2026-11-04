@@ -1,6 +1,6 @@
 # 0013：成员配置代际、历史证明与在线交接
 
-状态：固定成员身份与恢复锚已接入；独立实验分支实现首个纯新增元数据成员的 fence、控制归档、pending/joint、代际激活及恢复闭环。首次批次已在 GitHub 定向验证，尚未合入或发布；重复纯添加的后继批次正在独立验证，不包含移除、排空及增删 HTTP/Web。下文早期阶段的完成条件只说明各自边界，不等于激活完成。
+状态：固定成员身份与恢复锚已接入；独立实验分支实现首个纯新增元数据成员的 fence、控制归档、pending/joint、代际激活及恢复闭环。首次批次已在 GitHub 定向验证，尚未合入或发布；重复纯添加的后继批次已通过 GitHub 定向验证，非投票与混合新增源码另批待验，不包含移除、排空及增删 HTTP/Web。下文早期阶段的完成条件只说明各自边界，不等于激活完成。
 
 ## 固定成员基础边界
 
@@ -155,7 +155,7 @@ scrub 按确切旧 publication 的序号顺序恢复已承认不可用的副本�
 
 ## 重复纯添加的后继实验
 
-本批只支持每块新增盘均为 metadata voter，不支持仅新增 data-only 或混合新增；原有 data-only 保留。源码实现连续代际，但尚未执行本批 GitHub 验证，验收清单见[重复添加验证](../validation/repeated-membership-activation.md)。它不开放下线、删除或 HTTP/Web。
+本批只支持每块新增盘均为 metadata voter，不支持仅新增 data-only 或混合新增；原有 data-only 保留。该 metadata-voter 批次已通过 GitHub 定向验证，准确提交与范围见[重复添加验证](../validation/repeated-membership-activation.md)。它不开放下线、删除或 HTTP/Web。
 
 `Origin::Successor` 明确绑定前驱 authority hash 与该次交接的源配置。前驱配置必须是被认证前驱的 target 配置；恢复路径只允许路径投影不同，成员、角色、路由、绑定和设置保持一致。每次 fence 追加到源代自己的活动日志，目标仍有独立固定 N/Q 的 joint 证明；前驱激活必须在冻结日志中完整发布，不能只凭一个准备中的 marker 建立下一代。
 
@@ -196,7 +196,7 @@ scrub 按确切旧 publication 的序号顺序恢复已承认不可用的副本�
 5. 全新成员持久保存同一完成证书，证书绑定双侧决定、完整新侧 readiness、原结果及新拓扑/放置。完成证书可移交旧物理盘的证明责任，但不能代替新集合对更晚 fence 的启动观察。
 6. 仅完整持久闭包成立后，原子发布新 Engine 配置/状态并允许后续写；系统 `config.json` 最后更新为可重建投影。旧锁和目录仅逻辑退役，数据保留。失败的系统投影更新不能把已成立的交接改报为“未发生”。
 
-首个纯添加使用前节明确的权威、bootstrap 与固定首条发布；一般后继链、退出与退休隔离仍未实现。本节描述一般方向，不表示任意成员过渡已支持。
+首个纯添加使用前节明确的权威、bootstrap 与固定首条发布；重复纯添加由前述后继链实现，退出与退休隔离仍未实现。本节描述一般方向，不表示任意成员过渡已支持。
 
 ## 保留历史与排空
 
@@ -216,6 +216,21 @@ scrub 按确切旧 publication 的序号顺序恢复已承认不可用的副本�
 4. 真实核心操作通过后才公布预览/提交/查询 API，再接 Web。覆盖同幂等键同意图重试、异意图冲突、撤权、重启、响应丢失与重复点击。不能用不可执行占位按钮提前宣称阶段完成。
 
 临时目录故障测试不证明物理掉电、硬件缓存诚实性、跨主机 fencing 或恶意/克隆回滚磁盘安全；这些均另行验收。只有配置代数或本机 inode/flock 不能覆盖这些边界。
+
+
+<a id="data-only-addition"></a>
+
+## 非投票新盘与混合新增实验
+
+后续独立批次扩展为 pure-add 的全部新增设备，不再要求每块新增盘都投票。相同 voters 的 data-only 添加也必须经过准确新 intent、全部旧 fence、每代归档、joint 与活动发布，不能直接改系统配置。旧/新 N/Q 仍只按各代 metadata voters 固定计算，设备数量增长不增票。
+
+新增非投票根与 metadata 成员资源分开持有，原身份预检、根描述符与写锁均保留。非投票根使用独立 `data-ready.json`，包含精确 pending seal、physical identity、transition/target/archive 绑定；它没有 control archive、control journal 或 joint vote。全部新增 seal 先同步，ready 文件及目录再同步并确认 held/named 目录身份。已绑定的同意图显式续作可补缺失 ready；合法原子临时文件须匹配本 op canonical ready 的完整字节或严格前缀，保留原临时文件并重新原子写完整记录。未知非空初始材料、冲突字节或坏正式 ready 不能接管、吞掉或覆盖。
+
+包含新增 nonvoter 的 `fenced-device-decision` proposal 通过分页引用绑定准确非投票新盘清单，certificate 的每一 metadata vote 绑定同一 proposal。已有 `fenced-joint-decision` 哈希对象表示不变且只接受没有新增 nonvoter 的过渡；不得把数据盘藏在旧形态中。缺 ready、缺 dependency 页、设备身份重复或自改 seal 无法替代已认证身份。runtime 激活、冷启动和独立本盘 proof 均沿前驱链定位该盘最初准入；普通发现不补写 ready。
+
+新数据盘先仅安装自身 readiness、配置锚与 portable authority，既无正文也无旧正文 proof，不宣称补齐历史副本。之后实际业务可以在新 primary 写入或按新合法备份路由生成副本；旧版本 placement 不变。数据盘作为后续代际既存资源时，按旧候选的准确归档根保存 inclusion proof。全部新增资源和锁进入活动集合，系统配置仍最后投影。
+
+此批仍待 GitHub 执行，不扩大为下线、删除或 API/Web；具体定向故障与数据验收见[非投票与混合新增验证](../validation/data-membership-addition.md)。
 
 ## 关联
 

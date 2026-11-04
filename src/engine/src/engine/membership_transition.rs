@@ -19,6 +19,14 @@ pub use pending::{
 
 const INTENT_KIND: &str = "membership-transition";
 
+fn changes_registered_membership(config: &ValidatedConfig, target: &ValidatedConfig) -> bool {
+    !config.same_metadata_membership(target)
+        || target
+            .disks
+            .iter()
+            .any(|disk| !config.disks.iter().any(|old| old.disk_id == disk.disk_id))
+}
+
 /// Genesis and a completed predecessor are distinct authority origins.
 /// A successor must carry the exact predecessor hash; it cannot restart Genesis.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -200,10 +208,12 @@ impl Engine {
     }
 
     fn validate_handoff_target(&self, target: &ValidatedConfig) -> Result<()> {
-        if target.pool_id != self.config.pool_id || self.config.same_metadata_membership(target) {
+        if target.pool_id != self.config.pool_id
+            || !changes_registered_membership(&self.config, target)
+        {
             return Err(Error::new(
                 ErrorCode::ConfigConflict,
-                "handoff must retain the pool identity and change its fixed metadata members",
+                "handoff must retain the pool identity and change voters or add registered devices",
             ));
         }
         Ok(())

@@ -11,6 +11,7 @@ use std::{
 
 pub(crate) mod activation;
 mod admission;
+mod data;
 mod joint;
 pub use joint::{MembershipJointDecisionStatus, MembershipJointVote};
 pub(super) const CONTROL_ARCHIVE_DIRECTORY: &str = "control-archive";
@@ -18,7 +19,7 @@ const ENROLLMENT_KIND: &str = "membership-pending-member";
 const BOOTSTRAP_KIND: &str = "member-control-bootstrap";
 const PENDING_SEAL_KIND: &str = "membership-pending-seal";
 
-/// Caller-opened, existing private root for one newly added member. The Engine
+/// Caller-opened, existing private root for one newly added device. The Engine
 /// verifies both this descriptor and its exact configured name before writing.
 pub struct PendingMemberDirectory {
     pub disk_id: String,
@@ -40,6 +41,8 @@ pub struct PendingMembershipStatus {
     pub transition_hash: String,
     pub control_archive_root: String,
     pub target_metadata_members: usize,
+    pub added_data_disks: usize,
+    pub ready_data_disks: Vec<String>,
     pub control_receipts: Vec<PendingMemberControlReceipt>,
 }
 impl PendingMembershipStatus {
@@ -148,6 +151,8 @@ pub(in crate::engine) struct PendingMembership {
     transition_hash: String,
     archive_root: String,
     members: Vec<PendingMember>,
+    data_disks: Vec<data::PendingDataDisk>,
+    ready_data_disks: Vec<String>,
     receipts: BTreeMap<String, Receipt>,
     joint: Option<joint::JointProgress>,
     #[cfg(feature = "fault-injection")]
@@ -156,11 +161,32 @@ pub(in crate::engine) struct PendingMembership {
     joint_fault: Option<joint::JointFault>,
 }
 impl PendingMembership {
+    fn added_resources(&self) -> impl Iterator<Item = (&DiskConfig, &PendingDisk)> {
+        self.members
+            .iter()
+            .filter_map(|member| match &member.resource {
+                MemberResource::Added(resource) => Some((&member.disk, resource.as_ref())),
+                MemberResource::Retained(_) => None,
+            })
+            .chain(
+                self.data_disks
+                    .iter()
+                    .map(|disk| (&disk.disk, disk.resource.as_ref())),
+            )
+    }
+    fn verify_data_readiness(&self) -> Result<()> {
+        for disk in &self.data_disks {
+            disk.verify_ready()?;
+        }
+        Ok(())
+    }
     fn status(&self) -> PendingMembershipStatus {
         PendingMembershipStatus {
             transition_hash: self.transition_hash.clone(),
             control_archive_root: self.archive_root.clone(),
             target_metadata_members: self.members.len(),
+            added_data_disks: self.data_disks.len(),
+            ready_data_disks: self.ready_data_disks.clone(),
             control_receipts: self
                 .members
                 .iter()
@@ -187,7 +213,7 @@ impl Engine {
             .map(PendingMembership::status)
     }
 
-    /// Explicitly enroll/resume only pure additions under the current original
+    /// Explicitly enroll/resume only pure device additions under the current original
     /// fence. All supplied roots must already exist and be private. Retained
     /// resources/locks are reused; new resources remain pending until dropped.
     ///
@@ -230,6 +256,7 @@ impl Engine {
         // An older observation is not evidence that this invocation reverified
         // a target. Preserve only actual synchronized progress of this attempt.
         pending.receipts.clear();
+        pending.ready_data_disks.clear();
         pending.joint = None;
         let result = self.resume_pending_control(&mut pending);
         let status = pending.status();
@@ -244,18 +271,29 @@ impl Engine {
         for member in &pending.members {
             self.validate_pending_resource(member)?;
         }
+        for disk in &pending.data_disks {
+            disk.validate()?;
+        }
         #[cfg(feature = "fault-injection")]
         let mut sealed = 0;
-        for member in &pending.members {
-            let root = member.resource.root();
-            if let MemberResource::Added(disk) = &member.resource {
-                root.write_json(&member.disk.root.join("disk.json"), &disk.seal, false)?;
-                #[cfg(feature = "fault-injection")]
-                {
-                    sealed += 1;
-                    self.failpoint(&format!("after_membership_pending_seal_{sealed}"))?;
-                }
+        for (disk, resource) in pending.added_resources() {
+            resource
+                .root
+                .write_json(&disk.root.join("disk.json"), &resource.seal, false)?;
+            #[cfg(feature = "fault-injection")]
+            {
+                sealed += 1;
+                self.failpoint(&format!("after_membership_pending_seal_{sealed}"))?;
             }
+        }
+        for disk in &pending.data_disks {
+            disk.synchronize()?;
+            pending.ready_data_disks.push(disk.disk.disk_id.clone());
+            #[cfg(feature = "fault-injection")]
+            self.failpoint(&format!(
+                "after_membership_data_ready_{}",
+                disk.disk.disk_id
+            ))?;
         }
         for member in &pending.members {
             let root = member.resource.root();

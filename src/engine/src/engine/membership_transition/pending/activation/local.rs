@@ -39,6 +39,10 @@ pub(crate) fn verify_local_membership(
                 let intent = portable.intent()?;
                 let original = portable.genesis_config()?;
                 original.verify_saved_metadata_membership(&saved)?;
+                if let Some(dependency) = portable.data_dependency(&seal.disk_id)? {
+                    dependency.verify_active_seal(seal)?;
+                    dependency.verify_bytes(&read(&dependency.path(root))?)?;
+                }
                 Ok((portable, intent))
             })();
             // These files describe the shared root authority. Failed reads or

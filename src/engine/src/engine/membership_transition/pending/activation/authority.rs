@@ -119,7 +119,7 @@ impl AuthorityNode {
                 .disks
                 .iter()
                 .filter(|disk| !original.disks.iter().any(|old| old.disk_id == disk.disk_id))
-                .any(|disk| !disk.metadata_member || disk.binding_generation != 1)
+                .any(|disk| disk.binding_generation != 1)
         {
             return Err(Error::new(
                 ErrorCode::ConfigConflict,
@@ -131,6 +131,17 @@ impl AuthorityNode {
 }
 
 impl PortableAuthority {
+    pub(super) fn data_dependency(&self, disk_id: &str) -> Result<Option<data::DataDependency>> {
+        // The lineage proves additions are permanent and identities never change.
+        self.lineage()?;
+        for node in std::iter::once(&self.head).chain(self.predecessors.values()) {
+            let mut verified = node.joint.verify()?;
+            if let Some(dependency) = verified.data_disks.remove(disk_id) {
+                return Ok(Some(dependency));
+            }
+        }
+        Ok(None)
+    }
     pub(in crate::engine::membership_transition) fn load(
         hash: &str,
         mut load: impl FnMut(&'static str, &str) -> Result<AuthenticatedMetadataObject>,

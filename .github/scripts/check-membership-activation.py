@@ -25,9 +25,12 @@ GROUPS = (
 )
 IO_ENGINE_GROUPS = (
     ("disk-admission", "disk::admission::tests::", ()),
+    ("root-operations", "disk::owned::", ()),
+    ("root-admission", "disk::admission_tests::", ()),
+    ("deregistration-impact", "engine::disk_registry::tests::", ()),
     ("io-authority", "engine::config::io_authority::tests::", ()),
     ("guarded-engine-reads", "engine::reads::tests::", ()),
-    ("verified-payloads", "engine::verified_payloads::tests::", ()),
+    ("verified-payloads", "engine::publication::verified_payloads::tests::", ()),
     ("workspace-range", "business::file::pending_regressions::", ()),
 )
 IO_SERVER_GROUPS = (

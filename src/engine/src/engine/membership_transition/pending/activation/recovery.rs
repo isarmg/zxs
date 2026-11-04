@@ -387,6 +387,34 @@ impl Engine {
                 });
             }
         }
+        for disk in self
+            .config
+            .disks
+            .iter()
+            .filter(|disk| !disk.metadata_member)
+        {
+            let Some(handle) = self.disk_resources.available(disk) else {
+                continue;
+            };
+            let Some(dependency) = generation.portable.data_dependency(&disk.disk_id)? else {
+                continue;
+            };
+            let result = (|| {
+                self.config.verify_root_membership(&handle.root, disk)?;
+                dependency.verify_active_seal(&handle.seal)?;
+                dependency.verify_local(&handle.root)
+            })();
+            if let Err(source) = result {
+                rejected.insert(disk.disk_id.clone());
+                warnings.push(crate::engine::RecoverySealFailure {
+                    context: crate::engine::RecoverySealContext::MembershipAnchor {
+                        disk_id: disk.disk_id.clone(),
+                        slot_id: disk.slot_id.clone(),
+                    },
+                    source,
+                });
+            }
+        }
         if self
             .config
             .metadata_members()

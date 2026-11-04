@@ -832,7 +832,7 @@ fn verify_epoch(
     let config = epoch.config;
     Engine::require_actor(&intent.principal)?;
     if config.pool_id != intent.target.pool_id
-        || config.same_metadata_membership(&intent.target)
+        || !changes_registered_membership(config, &intent.target)
         || intent.fence_sequence == u64::MAX
         || intent.fence_sequence <= intent.boundary.as_ref().map_or(0, |base| base.sequence)
     {

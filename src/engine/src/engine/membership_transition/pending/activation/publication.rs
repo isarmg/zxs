@@ -48,6 +48,10 @@ pub(crate) fn predecessor_seal_matches(
         .generation()
         .expect("invariant: generation resource admission");
     let identity = FileIdentity::from_fd(root.directory(root.path())?)?;
+    if let Some(dependency) = generation.portable.data_dependency(&disk.disk_id)? {
+        dependency.verify_active_seal(expected)?;
+        dependency.verify_local(root)?;
+    }
     let value: json_codec::Value = decode_strict(bytes)?;
     if value.get("format").and_then(json_codec::Value::as_str) != Some("membership-pending") {
         let stored = decode_seal(bytes)?;
@@ -99,7 +103,7 @@ pub(crate) fn predecessor_seal_matches(
 }
 
 impl Engine {
-    /// Complete the pending pure metadata addition. No payload copies or placement
+    /// Complete the pending pure device addition. No payload copies or placement
     /// changes are claimed; original routes and every body remain in place.
     pub fn activate_pending_membership(&mut self) -> Result<OperationResult> {
         if self.config.generation().is_some() && self.membership_fence.is_none() {
@@ -168,20 +172,14 @@ impl Engine {
             .map(Arc::clone)
             .collect::<Vec<_>>();
         let mut locks = Vec::new();
-        for member in &pending.members {
-            if let MemberResource::Added(added) = &member.resource {
-                let root = DiskRoot::from_directory(
-                    member.disk.root.clone(),
-                    added.root.directory(added.root.path())?,
-                )?;
-                let seal = crate::disk::identity_at(
-                    &discovered,
-                    &member.disk,
-                    &root.directory(root.path())?,
-                )?;
-                handles.push(Arc::new(DiskHandle::new(root, seal, &discovered)?));
-                locks.push(added._lock.try_clone()?);
-            }
+        for (disk, added) in pending.added_resources() {
+            let root = DiskRoot::from_directory(
+                disk.root.clone(),
+                added.root.directory(added.root.path())?,
+            )?;
+            let seal = crate::disk::identity_at(&discovered, disk, &root.directory(root.path())?)?;
+            handles.push(Arc::new(DiskHandle::new(root, seal, &discovered)?));
+            locks.push(added._lock.try_clone()?);
         }
         self.disk_resources = Arc::new(DiskResources::generation_handles(&discovered, handles)?);
         self._locks.extend(locks);
@@ -257,17 +255,14 @@ impl Engine {
             .map(Arc::clone)
             .collect::<Vec<_>>();
         let mut locks = Vec::new();
-        for member in &pending.members {
-            if let MemberResource::Added(added) = &member.resource {
-                let root = DiskRoot::from_directory(
-                    member.disk.root.clone(),
-                    added.root.directory(added.root.path())?,
-                )?;
-                let seal =
-                    crate::disk::identity_at(&config, &member.disk, &root.directory(root.path())?)?;
-                handles.push(Arc::new(DiskHandle::new(root, seal, &config)?));
-                locks.push(added._lock.try_clone()?);
-            }
+        for (disk, added) in pending.added_resources() {
+            let root = DiskRoot::from_directory(
+                disk.root.clone(),
+                added.root.directory(added.root.path())?,
+            )?;
+            let seal = crate::disk::identity_at(&config, disk, &root.directory(root.path())?)?;
+            handles.push(Arc::new(DiskHandle::new(root, seal, &config)?));
+            locks.push(added._lock.try_clone()?);
         }
         // A prepared marker reserves this exact authority but never activates a
         // pending seal. Explicit resume can reconstruct missing derived objects.
@@ -317,6 +312,18 @@ impl Engine {
             ));
         }
         let transition = object_hash(INTENT_KIND, &generation.intent)?;
+        for disk in self
+            .config
+            .disks
+            .iter()
+            .filter(|disk| !disk.metadata_member)
+        {
+            if let Some(dependency) = generation.portable.data_dependency(&disk.disk_id)? {
+                let handle = self.disk_resources.get(disk)?;
+                dependency.verify_active_seal(&handle.seal)?;
+                dependency.verify_local(&handle.root)?;
+            }
+        }
         // Independently admit every available target's own archive and journal.
         for disk in self.config.metadata_members() {
             let Some(handle) = self.disk_resources.available(disk) else {
@@ -359,27 +366,37 @@ impl Engine {
             .expect("invariant: metadata member");
         for disk in &self.config.disks {
             let handle = self.disk_resources.get(disk)?;
-            let source_disk = if disk.metadata_member { disk } else { first };
-            let source = self.disk_resources.get(source_disk)?.root.private_child(
-                &member_directory(source_disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY),
-            )?;
-            install_generation_archive(
-                source,
-                &handle.root,
-                disk,
-                &generation.portable.archive_hash()?,
-                &generation.intent,
-            )
-            .map_err(|error| {
-                let code = error.code();
-                error.context(
-                    code,
-                    format!(
-                        "install generation control objects for disk {}",
-                        disk.disk_id
-                    ),
+            if disk.metadata_member
+                || generation
+                    .intent
+                    .origin
+                    .config()
+                    .disks
+                    .iter()
+                    .any(|old| old.disk_id == disk.disk_id)
+            {
+                let source_disk = if disk.metadata_member { disk } else { first };
+                let source = self.disk_resources.get(source_disk)?.root.private_child(
+                    &member_directory(source_disk, &transition).join(CONTROL_ARCHIVE_DIRECTORY),
+                )?;
+                install_generation_archive(
+                    source,
+                    &handle.root,
+                    disk,
+                    &generation.portable.archive_hash()?,
+                    &generation.intent,
                 )
-            })?;
+                .map_err(|error| {
+                    let code = error.code();
+                    error.context(
+                        code,
+                        format!(
+                            "install generation control objects for disk {}",
+                            disk.disk_id
+                        ),
+                    )
+                })?;
+            }
             handle.root.write_json(
                 &disk.root.join("metadata/pool-membership/config.json"),
                 &generation.original,

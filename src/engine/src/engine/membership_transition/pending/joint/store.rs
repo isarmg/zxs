@@ -5,6 +5,7 @@ pub(super) struct PreparedProposal {
     pub(super) objects: Vec<PreparedMetadataObject>,
     pub(super) acceptances: BTreeMap<String, PreparedMetadataObject>,
     pub(super) sequence: u64,
+    format: JointFormat,
 }
 impl PreparedProposal {
     pub(super) fn new(
@@ -44,10 +45,36 @@ impl PreparedProposal {
                 })?,
             );
         }
+        let format = if pending.data_disks.is_empty() {
+            JointFormat::FencedJointDecision
+        } else {
+            JointFormat::FencedDeviceDecision
+        };
+        let data_disks = if pending.data_disks.is_empty() {
+            None
+        } else {
+            let dependencies = pending
+                .data_disks
+                .iter()
+                .map(|disk| {
+                    Ok((
+                        disk.disk.disk_id.clone(),
+                        json_codec::to_value(&disk.dependency)?,
+                    ))
+                })
+                .collect::<Result<json_codec::Map<_, _>>>()?;
+            Some(
+                encoder
+                    .map_root(dependencies, ProofMeasure::Plain)?
+                    .reference()
+                    .clone(),
+            )
+        };
         let object = PreparedMetadataObject::new(
             PROPOSAL_KIND,
             &Proposal {
-                format: JointFormat::FencedJointDecision,
+                format,
+                data_disks,
                 transition_hash: fence.hash.clone(),
                 original_config_hash: object_hash("membership-original", config)?,
                 target_config_hash: object_hash("membership-target", &fence.intent.target)?,
@@ -89,6 +116,7 @@ impl PreparedProposal {
             objects: encoder.finish(),
             acceptances,
             sequence: fence.intent.fence_sequence,
+            format,
         })
     }
 
@@ -104,7 +132,7 @@ impl PreparedProposal {
         let object = PreparedMetadataObject::new(
             CERTIFICATE_KIND,
             &Certificate {
-                format: JointFormat::FencedJointDecision,
+                format: self.format,
                 proposal_hash: self.object.hash.clone(),
                 votes: encoder
                     .map_root(map, ProofMeasure::Plain)?
@@ -405,7 +433,52 @@ fn verify_proposal_with(load: &mut ObjectReader<'_>, expected: &str) -> Result<V
             return Err(missing_member());
         }
     }
+    let added_data = intent
+        .target
+        .disks
+        .iter()
+        .filter(|disk| {
+            !disk.metadata_member && !config.disks.iter().any(|old| old.disk_id == disk.disk_id)
+        })
+        .collect::<Vec<_>>();
+    let data_values = match (&proposal.format, &proposal.data_disks) {
+        (JointFormat::FencedJointDecision, None) if added_data.is_empty() => json_codec::Map::new(),
+        (JointFormat::FencedDeviceDecision, Some(reference)) if !added_data.is_empty() => {
+            crate::metadata_map::read_map(reference, |kind, hash| load(kind, hash))?
+        }
+        _ => {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "joint device dependency format differs",
+            ));
+        }
+    };
+    if data_values.len() != added_data.len() {
+        return Err(Error::new(
+            ErrorCode::ConfigConflict,
+            "joint added data device set differs",
+        ));
+    }
+    let mut data_disks = BTreeMap::new();
+    for disk in added_data {
+        let dependency: data::DataDependency = json_codec::from_value(
+            data_values
+                .get(&disk.disk_id)
+                .ok_or_else(missing_member)?
+                .clone(),
+        )?;
+        dependency.verify(disk, &intent, &proposal.control_archive_root)?;
+        let identity = &dependency.seal.identity;
+        if !physical.insert((identity.device, identity.inode)) {
+            return Err(Error::new(
+                ErrorCode::DiskIdentityMismatch,
+                "joint data device repeats physical identity",
+            ));
+        }
+        data_disks.insert(disk.disk_id.clone(), dependency);
+    }
     Ok(VerifiedProposal {
+        data_disks,
         proposal,
         intent,
         dependencies,
@@ -424,6 +497,12 @@ fn verify_certificate_with(
         ));
     }
     let verified = verify_proposal_with(load, proposal_hash)?;
+    if certificate.format != verified.proposal.format {
+        return Err(Error::new(
+            ErrorCode::LogFork,
+            "certificate format differs from proposal",
+        ));
+    }
     let votes = crate::metadata_map::read_map(&certificate.votes, |kind, hash| load(kind, hash))?;
     if votes.len() != verified.dependencies.len() {
         return Err(Error::new(
@@ -521,6 +600,7 @@ pub(in crate::engine::membership_transition) struct VerifiedProposal {
     pub(in crate::engine::membership_transition) proposal: Proposal,
     pub(in crate::engine::membership_transition) intent: TransitionIntent,
     pub(in crate::engine::membership_transition) dependencies: BTreeMap<String, TargetDependency>,
+    pub(in crate::engine::membership_transition) data_disks: BTreeMap<String, data::DataDependency>,
 }
 fn missing_member() -> Error {
     Error::new(

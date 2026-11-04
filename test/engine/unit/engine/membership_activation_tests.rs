@@ -1422,3 +1422,6 @@ fn membership_activation_successor_missing_ancestor_archive_is_isolated_without_
     assert_eq!(reopened.take_recovery_warnings().seals.len(), 1);
     assert_eq!(files(&bad.root), before);
 }
+
+#[path = "membership_data_addition_tests.rs"]
+mod data_additions;

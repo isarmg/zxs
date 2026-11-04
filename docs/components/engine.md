@@ -6,6 +6,7 @@
 | --- | --- |
 | `engine.rs` | 生命周期、业务准入、操作查询、在克隆状态上组合一次业务变更 |
 | `engine/config.rs` | 拓扑与额度配置、独占操作系统锁 |
+| `engine/disk_registry.rs`、`engine/disk_lifecycle/plan.rs` | 借用当前已准入登记与冻结业务图，生成不执行注销的分页影响预览 |
 | `disk/owned.rs` | 同代磁盘根与身份所有权、盘内 FD 相对 I/O；不持 writer lock |
 | `engine/publication.rs` | 正文准备、精确元数据预检、持久决定与发布屏障 |
 | `engine/recovery.rs` | 仅沿已验证发布前缀回放，协调未完成决定 |
@@ -164,3 +165,7 @@ cargo check --locked --offline -p storage-engine
 `cargo test -p storage-engine --lib engine::observations` 覆盖损坏 seal、未知/成功零容量区分及错误投影；零容量用 Linux nsfs 的实际 `fstatvfs` 成功样本，不伪装设备已满。独立错误测试位于同一测试模块，但默认忽略：先用 `cargo test -p storage-engine --lib --no-run` 构建，再将 Cargo 输出的测试二进制路径传给 `bash test/engine/unit/engine/observations/run-io-faults.sh <binary> <output-dir>`。runner 以进程局部 read interposer 注入 seal EACCES，以 strace 注入实际 fstatfs EIO，并检查 trace 的 INJECTED 证据；不修改生产业务函数或系统 ptrace 策略。仅在原本允许 ptrace 的 Linux CI/宿主运行；环境拒绝时明确记为未完成，不能算测试通过。容量 syscall 失败保留原 metadata epoch，seal 失败撤销旧 epoch；两者不是写入准入测试或物理掉盘验收。
 
 CI/机械入口为 `python3 .github/scripts/check-disk-observation-io.py`：从本轮 Cargo JSON 中只选择唯一且 build-finished 成功的 storage-engine libtest，不按 target 文件名猜旧二进制；构建警告、丢失/重复 artifact、空测试、少/多注入命中或 ptrace 拒绝均失败，不降级跳过。runner 验证一次 seal EACCES 命中和两次容量 EIO 命中（sample 与 status 各一次），日志输出独立测试结果及 syscall trace。该入口需要宿主已有 `cc` 和 `strace`；机械负测试为 `python3 -m unittest discover -s test/ci -p test_disk_observation_io.py`，不执行真实 ptrace。
+
+## 可恢复注销的纯影响预览（P1）
+
+`Engine::preview_disk_deregistration` 只回答假设移除一个准确登记后，哪些版本及冻结命名空间 occurrence 仍有其他登记持有者。它不会注销、写恢复入口、停止 I/O、修改 Config/State/索引或把备份升级为主盘。接口是受信本地域 API，应用仍负责当前管理员认证；预览不是执行权限或“可安全删除”结论。实现与后续边界见[纯影响规划](../design/disk-deregistration-preview.md)。

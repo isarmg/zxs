@@ -9,6 +9,15 @@ use std::{
 
 mod config;
 pub use config::ValidatedConfig;
+mod disk_registry;
+pub use disk_registry::{DiskRegistrationIdentity, RegisteredDisk};
+mod disk_lifecycle;
+pub use disk_lifecycle::{
+    DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
+    FrozenDeregistrationBoundary, ImpactPage, ImpactPageSize, NamespaceDeregistrationPreview,
+    NamespaceOccurrenceImpact, NamespaceOccurrenceScan, OccurrenceVisibility, RegisteredHolders,
+    RegistrationEffect, TargetPlacementRole, VersionDeregistrationImpact, VersionImpactScan,
+};
 mod planning;
 pub(crate) use planning::PlanningContext;
 mod index;

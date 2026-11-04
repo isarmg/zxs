@@ -17,6 +17,13 @@ mod disk;
 mod engine;
 mod file_stamp;
 mod historical_save;
+pub use engine::{
+    DeregistrationNamespace, DeregistrationPlanError, DeregistrationPreview,
+    DiskRegistrationIdentity, FrozenDeregistrationBoundary, ImpactPage, ImpactPageSize,
+    NamespaceDeregistrationPreview, NamespaceOccurrenceImpact, NamespaceOccurrenceScan,
+    OccurrenceVisibility, RegisteredDisk, RegisteredHolders, RegistrationEffect,
+    TargetPlacementRole, VersionDeregistrationImpact, VersionImpactScan,
+};
 pub use engine::{PreparedWorkspaceCommit, WorkspaceCommitPreparation};
 mod history_package;
 mod journal;

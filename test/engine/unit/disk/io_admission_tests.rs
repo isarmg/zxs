@@ -10,6 +10,7 @@ use std::{
 
 fn disk() -> (tempfile::TempDir, ValidatedConfig, Arc<DiskHandle>) {
     let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let config =
         ValidatedConfig::try_from(Config::development([directory.path().to_path_buf()]).unwrap())
             .unwrap();

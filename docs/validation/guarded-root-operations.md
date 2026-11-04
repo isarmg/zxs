@@ -1,0 +1,102 @@
+# 已绑定根的同步 I/O 准入边界
+
+本批接续[受控读取生命周期](guarded-disk-read-lifetimes.md)，只完成已绑定
+`DiskRoot` 的同步调用范围。它不是生产下线入口，也不证明全盘已经停止 I/O。
+
+## 本批能力
+
+- 普通根方法先获取私有 `RootOperation`。绑定存在而准入失败时直接返回错误，
+  不允许降级成未绑定访问。根目录自身的 stat、sync、available 和无需 mkdir
+  的 `private_dir(root)` 也经过同一入口。
+- 一次调用只有一个普通 lease。相对路径打开、递归 mkdir、metadata、读字节、
+  JSON 编解码、原子写、目录同步和 unlink 都借用该操作；内部不重新获取许可。
+  在开始后遇到 quiesce 的同步调用可以完成自己的有限工作和必要错误清理。
+  普通计数只在这些栈内资源销毁后退出，不在撤销通知时提前退出。
+- `open_leased_regular` 把同一操作的 lease 移入现有可撤销文件 owner，
+  打开与交付之间不再获取第二份许可；若期间已撤销，文件不能逃逸注册。
+- `private_child` 复制原 gate。generation retention 的打开、命名地址验证和
+  identity 读取使用同一操作，保留原 gate，不再经过未绑定根构造器。
+  子根和持有旧根的 Arc 不能通过这些方法恢复普通准入。
+- 本批仅 test 构建提供 `with_transition_io`。`begin_quiesce` 先关闭普通准入；
+  `take_drained_control` 校验同一 gate 和 transition，并要求普通计数为零。
+  尚有普通尾部时返回 `DiskUnavailable`，不消费控制 lease，不调用回调。
+  计数为零后才消费唯一控制 lease，回调结束或失败后不可再用同一 transition
+  开始另一控制作用域。没有超时或固定轮询次数替代 drain 证明。
+- `RootControl` 仅暴露上限固定为 MAX_METADATA 的同步读取和原子 JSON 写入。它不暴露根、File、FD、
+  PrivateDirectory、迭代器、子根或新的准入函数，没有 Clone 或布尔忽略开关。
+  原有 fault `take_control` 仍只用于责任占位；它不是过渡根写入能力。
+
+每个普通同步入口增加一次现有 gate 准入/退出和一个 lease 分配，内部嵌套调用
+不增加 gate 次数。没有文件系统调用持有 gate 锁，没有改变原子写顺序、fsync
+预算或既有原子文件错误来源。本批没有性能测量，不能据此声称吞吐提升。
+
+## 明确未覆盖的返回生命周期
+
+以下接口现在只覆盖打开、验证及其失败清理；成功返回后的原始资源仍需迁移：
+
+- `directory`、`open_regular`、`open_optional_regular` 返回的 `File`。
+- `private_directory` 返回的 `PrivateDirectory`。
+- `entries` 返回的 `DirectoryEntries`；后续 next/getdents 和关闭并未被本批追踪。
+- 根及派生根长期持有的目录 FD。
+- `lock_file` 的返回文件和已持有 writer 锁。writer 锁必须保持到认证 fence 之后，
+  不能像普通读者一样撤销；本批不改其释放策略。
+
+因此 Journal、Upload/PreparedUpload、scratch Drop、scrub、maintenance、repair，
+以及调用方利用原始目录 FD 执行的 rename/link/unlink 仍不构成全生命周期闭包。
+本批没有新增或迁移这些调用方的多步骤事务。普通计数为零仅表示已纳入 gate 的
+责任结束，不代表上述长期资源已经关闭，也不代表现有所有业务路径均已纳入 gate。
+
+## 未绑定构造的生产调用分类
+
+`DiskRoot::open` 和 `from_directory` 仍是显式的未绑定构造，不从路径字符串猜测
+磁盘归属。现存调用尚未统一替换成独立 bootstrap/已认证磁盘能力类型：
+
+1. 身份、冷启动及持有目录接纳：`disk/owned.rs` 的 DiskHandle open、activation、
+   initialize_held、recover_held，在身份、disk.json、空目录等检查后才绑定。
+2. 纯路径/独立离线工具及 payload 帮助函数：`disk.rs`、`container_storage.rs`。
+3. journal 冷读、对象存储及 publication evidence：`journal.rs`、
+   `journal/object_storage.rs`、`publication_evidence.rs`。
+4. membership 的 pending admission、activation/recovery/publication 和 archive：
+   `engine/membership_transition/pending/admission.rs`、
+   `pending/activation/{recovery,publication}.rs`、`archive/persistent.rs`。
+   这里既有新盘 bootstrap，也有由已有 held directory 再构造根的路径，
+   必须逐个迁移，不能把此分类误读为全部只在首次启动运行。
+5. 系统目录和维护辅助：`engine/workspace_storage.rs` 打开系统 workspaces 根，
+   `engine/integrity_scrub.rs` 的目录地址辅助路径。
+
+此外，自由路径函数（例如 `disk_unavailable`、seal 探测和独立 offline 工具）
+并不通过已绑定 RootOperation。本批不把它们视为已有的禁止 I/O 状态加载机制。
+下一阶段需要显式区分 bootstrap/system/offline 与已认证磁盘能力，迁移真实运行
+调用方；绑定失败不得回退到未绑定根。本批没有修改 membership_transition 源码。
+
+## 定向验证内容与实际状态
+
+新增测试放在 `test/engine/unit/disk/root_operation_tests.rs`，经 owned 私有模块接线：
+
+- 所有普通根入口、派生根和 retained 根在 quiesce 后拒绝，且不改文件或创建锁。
+- barrier 暂停真实文件读取，检查其 FD 和 ordinary 计数仍在，控制回调不能进入；
+  正常返回及 observer 错误后检查 FD 已关闭，才允许控制读取。
+- JSON 编码过程中启动 quiesce，后续嵌套 mkdir/原子写仍由原操作完成。
+- 真实平台 AtomicFile 先 stage/prepare，再制造 no-clobber 冲突；确认临时文件
+  已 unlink、原文件保留、普通 owner 未退出时仍拒绝控制操作，退出后只允许一次。
+  这是已有原子清理原语的作用域测试，不是新增 syscall 故障注入或物理掉电测试。
+- 另一 binding 不能消费控制能力，回调失败仍释放能力；retained identity 不符
+  时释放原操作且不破坏原根。
+
+建议 GitHub 定向执行 `storage-engine` 的
+`disk::owned::root_operation_tests`、`disk::admission::tests`，并回归原
+`disk::admission_tests` 及 HTTP/SMB 的读取撤销测试。正常与 fault 特性都需编译。
+
+本批准备阶段只做源码编辑、直接 rustfmt 和 git diff 检查。没有在云电脑运行
+cargo/check/test/clippy，没有真实盘操作、部署或权限变更；测试用例尚未执行。
+必须由协调者对最终提交在 GitHub 验证，不能把此文档或静态审阅当作通过证据。
+
+## 仍然阻止生产下线的条件
+
+持久禁止状态必须在启动探测前加载，所有长期资源和清理尾部必须完成迁移；
+保持服务还需要认证旧/新多数的移出票及正确 writer fencing。未满足这些条件
+前不能对用户宣称磁盘已离线或零 I/O。
+
+离线/下线应保留登记和数据，仅禁止该盘 I/O。删除登记应先在盘根持久写入可恢复
+登记文件，再移除登记与独占内容的当前可见性，不擦除原文件。本批不实现删除、
+搬盘、在线下线 API 或 Web 接口。

@@ -73,6 +73,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
+          cargo test -p storage-engine --doc disk_lifecycle --locked --offline \
+            2>&1 | tee target/membership-validation/preview-borrow-doc.log
           cargo run -p contract-check --locked --offline -- --root . \
             2>&1 | tee target/membership-validation/contracts.log
       - name: Preserve source-bound text evidence

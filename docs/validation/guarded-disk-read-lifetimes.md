@@ -5,6 +5,11 @@ operation. It introduces process-local ownership for selected managed disk reads
 and tests cancellation through a fault-injection-only entry point. There is no
 production administrative endpoint that marks a disk disabled.
 
+The managed object is a registered ZXS storage directory, not the operating
+system's block device. A metadata member is a role of that storage directory.
+Directories on the same filesystem are supported; distinct device numbers are
+not required. This work does not format, mount, unmount or disable OS devices.
+
 ## Implemented boundary
 
 - Verified physical disk bindings share an admission gate across Engine instances.
@@ -45,8 +50,10 @@ any validated result is claimed; this document is not itself a pass report.
 
 ## Remaining implementation
 
-Raw bound-root operations, journals, writer locks, uploads and cleanup paths are
-not yet comprehensively governed by this read gate. Writer locks must remain held
+The next [bound-root synchronous operation slice](guarded-root-operations.md)
+accounts synchronous root calls, but raw returned resource lifetimes, journals,
+writer locks, uploads and cleanup paths are not yet comprehensively governed
+by this read gate. Writer locks must remain held
 through fencing, not be revoked as ordinary readers. A production coordinator
 still needs controlled transition IO, durable prohibit-IO state loaded before
 startup probes, certified old/new voting changes, and verified recovery.

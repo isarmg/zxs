@@ -33,6 +33,8 @@ pub struct MembershipJointDecisionStatus {
     pub synchronized_original_votes: usize,
     pub target_members: usize,
     pub target_quorum: usize,
+    pub added_data_disks: usize,
+    pub ready_data_disks: Vec<String>,
     pub synchronized_target_votes: usize,
     pub votes: Vec<MembershipJointVote>,
     pub certificate_hash: Option<String>,
@@ -52,13 +54,16 @@ impl MembershipJointDecisionStatus {
         self.joint_quorum_accepted()
             && self.synchronized_target_votes == self.target_members
             && self.certificate_members.len() == self.target_members
+            && self.ready_data_disks.len() == self.added_data_disks
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum JointFormat {
     #[serialization(rename = "fenced-joint-decision")]
     FencedJointDecision,
+    #[serialization(rename = "fenced-device-decision")]
+    FencedDeviceDecision,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -75,6 +80,8 @@ pub(super) struct Proposal {
     fence_sequence: u64,
     original_members: Reference,
     target_members: Reference,
+    #[serialization(default, skip_serializing_if = "Option::is_none")]
+    data_disks: Option<Reference>,
 }
 #[derive(Serialize, Deserialize)]
 #[serialization(deny_unknown_fields)]
@@ -170,6 +177,8 @@ impl JointProgress {
                 synchronized_original_votes: 0,
                 target_members: pending.members.len(),
                 target_quorum: fence.intent.target.metadata_quorum(),
+                added_data_disks: pending.data_disks.len(),
+                ready_data_disks: pending.ready_data_disks.clone(),
                 synchronized_target_votes: 0,
                 votes: Vec::new(),
                 certificate_hash: None,
@@ -296,6 +305,7 @@ impl Engine {
         })?;
         pending.joint = None;
         pending.receipts.clear();
+        pending.ready_data_disks.clear();
         let result = self.joint_decision(&mut pending, install);
         let status = pending.joint.as_ref().map(|joint| joint.status.clone());
         self.pending_membership = Some(pending);
@@ -309,6 +319,12 @@ impl Engine {
             .source
             .verify_current_fence(self)
             .map_err(|error| joint_error(error, "source/original fence", None))?;
+        pending.verify_data_readiness()?;
+        pending.ready_data_disks = pending
+            .data_disks
+            .iter()
+            .map(|disk| disk.disk.disk_id.clone())
+            .collect();
         let checked = self.check_joint_controls(pending)?;
         let fence = self
             .membership_fence
@@ -392,6 +408,7 @@ impl Engine {
             #[cfg(feature = "fault-injection")]
             self.failpoint(&format!("after_membership_joint_vote_{}", votes.len()))?;
         }
+        pending.verify_data_readiness()?;
         let (certificate, objects) = proposal.certificate(votes)?;
         pending
             .joint
@@ -461,6 +478,16 @@ impl Engine {
                     .certificate_members
                     .len()
             ))?;
+        }
+        if let Err(error) = pending.verify_data_readiness() {
+            pending
+                .joint
+                .as_mut()
+                .expect("invariant: proposal established")
+                .status
+                .ready_data_disks
+                .clear();
+            return Err(error);
         }
         // A prior member may have moved while a later certificate was being
         // installed. Do not turn the earlier observations into global success.

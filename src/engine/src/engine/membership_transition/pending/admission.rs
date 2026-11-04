@@ -53,8 +53,7 @@ impl Engine {
             .collect::<Vec<_>>();
         if added.is_empty()
             || added.iter().any(|disk| {
-                !disk.metadata_member
-                    || disk.binding_generation != 1
+                disk.binding_generation != 1
                     || old_slots.contains(&disk.slot_id.to_ascii_lowercase())
             })
         {
@@ -64,7 +63,7 @@ impl Engine {
             if disk.root.starts_with(&self.root) || self.root.starts_with(&disk.root) {
                 return Err(Error::new(
                     ErrorCode::UnsafePath,
-                    "pending target overlaps system directory",
+                    "pending storage directory overlaps the ZXS control-state directory",
                 ));
             }
         }
@@ -215,6 +214,34 @@ impl Engine {
                 bootstrap,
             });
         }
+        let mut data_disks = Vec::new();
+        for disk in fence.intent.target.disks.iter().filter(|disk| {
+            !disk.metadata_member
+                && !fence
+                    .intent
+                    .origin
+                    .config()
+                    .disks
+                    .iter()
+                    .any(|old| old.disk_id == disk.disk_id)
+        }) {
+            let MemberResource::Added(resource) = resources
+                .remove(&disk.disk_id)
+                .expect("invariant: every added data root was admitted")
+            else {
+                unreachable!("invariant: additions own pending roots");
+            };
+            data_disks.push(data::PendingDataDisk {
+                disk: disk.clone(),
+                dependency: data::DataDependency::new(resource.seal.clone()),
+                resource,
+            });
+        }
+        assert!(
+            resources.is_empty(),
+            "invariant: every added root has an owner"
+        );
+        data_disks.sort_by(|a, b| a.disk.disk_id.cmp(&b.disk.disk_id));
         // Keep stable observable progress, independent of a caller's config order.
         members.sort_by(|a, b| a.disk.disk_id.cmp(&b.disk.disk_id));
         Ok(PendingMembership {
@@ -222,6 +249,8 @@ impl Engine {
             transition_hash: fence.hash.clone(),
             archive_root: archive_root.to_owned(),
             members,
+            data_disks,
+            ready_data_disks: Vec::new(),
             receipts: BTreeMap::new(),
             joint: None,
             #[cfg(feature = "fault-injection")]
@@ -249,7 +278,11 @@ impl Engine {
     }
 }
 
-fn inspect_new_root(root: &DiskRoot, expected: &PendingDiskSeal, own_lock: bool) -> Result<bool> {
+pub(super) fn inspect_new_root(
+    root: &DiskRoot,
+    expected: &PendingDiskSeal,
+    own_lock: bool,
+) -> Result<bool> {
     let names = root
         .entries(root.path())?
         .collect::<std::result::Result<Vec<_>, _>>()
@@ -352,7 +385,7 @@ pub(super) fn member_identity(
 fn unsupported() -> Error {
     Error::new(
         ErrorCode::ConfigConflict,
-        "pending enrollment supports only unchanged original members plus fresh generation-one metadata members",
+        "pending enrollment supports only unchanged original members plus fresh generation-one devices",
     )
 }
 pub(super) fn same_disk(old: &DiskConfig, new: &DiskConfig) -> bool {
