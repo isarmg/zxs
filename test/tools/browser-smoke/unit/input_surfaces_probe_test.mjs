@@ -142,7 +142,9 @@ const folderSearch = f => {
     input.attrs.placeholder = input.attrs['aria-label'];
     const frame = {
         tagName: 'LABEL', textContent: '',
-        style: {...input.style},
+        style: {...input.style, maskImage: 'none', clipPath: 'none', borderImageOutset: '0px'},
+        attrs: {'data-zxs-contour-state': 'clip'},
+        getAttribute(name) { return this.attrs[name] ?? null; },
         getBoundingClientRect: () => ({left: 31, top: 39, right: 273, bottom: 85, width: 242, height: 46}),
         querySelectorAll(selector) { assert.equal(selector, 'input'); return [input]; },
     };
@@ -151,16 +153,26 @@ const folderSearch = f => {
     input.parentElement = frame;
 };
 check('folder search fills one label with no underline', folderSearch, true);
-check('folder search focus is on the outer frame', f => {
+const roundedSearchFocus = f => {
     folderSearch(f); f.input.focusVisible = true;
-    Object.assign(f.input.searchFrame.style, {outlineWidth: '2px', outlineStyle: 'solid'});
-}, true);
+    f.input.searchFrame.attrs['data-zxs-contour-state'] = 'paint';
+    Object.assign(f.input.searchFrame.style, {borderImageSource: 'url("blob:g4-focus")', borderImageOutset: '7px'});
+};
+check('folder search focus uses unmasked G4 paint', roundedSearchFocus, true);
 check('folder search must retain native input focus semantics', f => {
     folderSearch(f); f.input.focusVisible = true;
 }, false, 'searchSurface');
-check('folder search cannot hide its outer keyboard focus color', f => {
-    folderSearch(f); f.input.focusVisible = true;
-    Object.assign(f.input.searchFrame.style, {outlineWidth: '2px', outlineStyle: 'solid', outlineColor: 'transparent'});
+check('folder search cannot retain a native rectangular outline', f => {
+    roundedSearchFocus(f); Object.assign(f.input.searchFrame.style, {outlineWidth: '2px', outlineStyle: 'solid'});
+}, false, 'searchSurface');
+check('folder search rejects clipped G4 focus corners', f => {
+    roundedSearchFocus(f); f.input.searchFrame.style.maskImage = 'url("blob:clip")';
+}, false, 'searchSurface');
+check('folder search rejects missing G4 focus image', f => {
+    roundedSearchFocus(f); f.input.searchFrame.style.borderImageSource = 'none';
+}, false, 'searchSurface');
+check('folder search rejects an image without focus ring room', f => {
+    roundedSearchFocus(f); f.input.searchFrame.style.borderImageOutset = '2px';
 }, false, 'searchSurface');
 check('folder search cannot keep the old underline', f => {
     folderSearch(f); f.input.style.borderBottomWidth = '1px';

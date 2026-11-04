@@ -49,6 +49,8 @@ const controls = visible.map((node, index) => {
     const opacity = Number(css.opacity);
     const frameCss = search ? getComputedStyle(searchFrame) : null;
     const frameRect = search ? searchFrame.getBoundingClientRect() : null;
+    const frameOutline = search && parseFloat(frameCss.outlineWidth) > 0
+        && !['none', 'hidden'].includes(frameCss.outlineStyle) && alpha(frameCss.outlineColor) > 0;
     const searchSurface = search ? {
         label: searchFrame.tagName === 'LABEL' && node.parentElement === searchFrame,
         singleInput: searchFrame.querySelectorAll('input').length === 1,
@@ -58,7 +60,11 @@ const controls = visible.map((node, index) => {
             && Math.abs(frameRect.right - rect.right - parseFloat(frameCss.borderRightWidth)) <= 1,
         fullHeight: Math.abs(rect.top - frameRect.top - parseFloat(frameCss.borderTopWidth)) <= 1
             && Math.abs(frameRect.bottom - rect.bottom - parseFloat(frameCss.borderBottomWidth)) <= 1,
-        keyboardFocus: !focusVisible || (parseFloat(frameCss.outlineWidth) >= 2 && frameCss.outlineStyle === 'solid' && alpha(frameCss.outlineColor) > 0),
+        noRectangle: !frameOutline,
+        keyboardFocus: !focusVisible || (searchFrame.getAttribute('data-zxs-contour-state') === 'paint'
+                && frameCss.maskImage === 'none' && frameCss.clipPath === 'none'
+                && frameCss.borderImageSource.startsWith('url("blob:')
+                && parseFloat(frameCss.borderImageOutset) >= 5),
     } : null;
     const checks = {
         connected: node.isConnected,

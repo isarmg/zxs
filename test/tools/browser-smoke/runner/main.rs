@@ -275,7 +275,6 @@ fn exercise(
     password: &str,
     screenshot: Option<&Path>,
 ) -> Result<()> {
-    diagnostics::install(browser)?;
     tree_frames::install(browser)?;
     let viewport_previews = env::var_os("ZXS_VIEWPORT_PREVIEWS").map(PathBuf::from);
     let login_previews = env::var_os("ZXS_LOGIN_PREVIEWS").map(PathBuf::from);
@@ -628,12 +627,20 @@ fn run() -> Result<()> {
         } else if let Some(directory) = &contour_evidence {
             contour_evidence::run(&browser, &origin, &web, directory)
         } else {
-            exercise(&browser, &origin, &password, screenshot.as_deref())
-                .and_then(|()| {
-                    management::run(&browser, &cli_binary, server_assets, &pool, root, &password)
-                })
+            // First setup owns separate private pools and daemon lifetimes. Run
+            // it before unrelated history probes can stop the normal scenario.
+            // Install error observation before its first navigation, then clear
+            // its loopback cookies before opening the original seeded server.
+            diagnostics::install(&browser)
                 .and_then(|()| {
                     management::setup(&browser, &cli_binary, server_assets, root, &password)
+                })
+                .and_then(|()| {
+                    browser.command("DELETE", "/cookie", None)?;
+                    exercise(&browser, &origin, &password, screenshot.as_deref())
+                })
+                .and_then(|()| {
+                    management::run(&browser, &cli_binary, server_assets, &pool, root, &password)
                 })
                 .and_then(|()| {
                     placement_configuration::run(&browser, &cli_binary, server_assets, &pool, root, &password)

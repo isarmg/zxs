@@ -93,18 +93,18 @@ jobs:
       - name: Install repository Rust toolchain
         run: rustup show active-toolchain
       - name: Format affected Rust packages
-        run: cargo fmt -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p smb-vfs -p browser-smoke -p contract-check -- --check
+        run: cargo fmt -p platform-io -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p smb-vfs -p browser-smoke -p contract-check -- --check
       - name: Check affected native targets and no-core server
         if: needs.static.outputs.test_only_retry != 'true'
         run: |
-          cargo clippy --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p contract-check -p browser-smoke --all-targets -- -D warnings
+          cargo clippy --locked --offline -p platform-io -p storage-engine -p storage-server -p storage-client -p storage-contract -p smb-protocol -p contract-check -p browser-smoke --all-targets -- -D warnings
           cargo clippy --locked --offline -p storage-server --no-default-features --all-targets -- -D warnings
       - name: Lint the changed contract validation target
         if: needs.static.outputs.test_only_retry == 'true'
         run: cargo clippy --locked --offline -p contract-check --all-targets -- -D warnings
       - name: Exercise engine, server, client and wire unit contracts
         if: needs.static.outputs.test_only_retry != 'true'
-        run: cargo test --locked --offline -p storage-engine -p storage-server -p storage-client -p storage-contract --lib
+        run: cargo test --locked --offline -p platform-io -p storage-engine -p storage-server -p storage-client -p storage-contract --lib
       - name: Exercise history integration
         if: needs.static.outputs.test_only_retry != 'true'
         run: cargo test --locked --offline -p storage-engine --test branch_alias_operations

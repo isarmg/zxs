@@ -39,6 +39,9 @@ class ValidationBatchWorkflow(unittest.TestCase):
                                 'web-production', 'browser-smoke', 'smb-sdk'})
         for command in [
             'bash .github/scripts/check.sh static',
+            'cargo fmt -p platform-io -p storage-engine',
+            'cargo clippy --locked --offline -p platform-io -p storage-engine',
+            'cargo test --locked --offline -p platform-io -p storage-engine',
             '-p storage-client -p storage-contract --lib',
             '-p storage-engine --test branch_alias_operations',
             '-p storage-server --test http_engine',

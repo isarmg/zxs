@@ -15,7 +15,13 @@
 /* The label is the one search surface. Its native input fills the content box;
  * focus belongs to that outer surface, never an inner underline or partition. */
 .zxs-file-search > input.zxs-input,.zxs-file-search > input.zxs-input:focus-visible { border: 0; }
-.zxs-file-search:has(> input:focus-visible) { outline: 2px solid var(--zxs-focus,Highlight); outline-offset: 3px; }
+/* Reuse the G4 outer-ring paint used by Select. A native outline stays square;
+ * clip mode would cut off shadow pixels that follow the curved corners. */
+.zxs-file-search:has(> input:focus-visible) {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--zxs-bg-page, #fff), 0 0 0 5px var(--zxs-focus, Highlight);
+  --zxs-contour-mode: paint;
+}
 .zxs-file-list-panel { --zxs-file-row-height: var(--zxs-compact-row-height); --zxs-file-icon-size: 1em; }
 .zxs-file-list-panel .zxs-table-scroll { container-type: inline-size; --zxs-file-scroll-left: 0px; min-width: 0; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; --zxs-contour-extent: 0px; }
 .zxs-file-table { width: 100%; border-collapse: collapse; text-align: start; }

@@ -1,5 +1,6 @@
-//! Real directory history responses through production WASM. Only listing
-//! writability and response timing are intercepted; no history nodes are invented.
+//! Real directory history responses through production WASM. Only the listing's
+//! read-only preview envelope and response timing are synthetic; no history
+//! nodes, branch identities or parent relations are invented.
 use super::*;
 
 fn check(browser: &Browser, label: &str, script: &str) -> Result<()> {
@@ -15,7 +16,7 @@ fn check(browser: &Browser, label: &str, script: &str) -> Result<()> {
 pub(super) fn run(browser: &Browser) -> Result<()> {
     browser.script(r#"
         const original=window.fetch;
-        const p=window.__zxsDirectoryHistory={nodes:null,branches:null,writes:0,hold:false,pending:null,lastAnchor:null,
+        const p=window.__zxsDirectoryHistory={nodes:null,branches:null,writes:0,readonlyPages:0,hold:false,pending:null,lastAnchor:null,
             restore:()=>{window.fetch=original;if(p.pending)p.pending.release();}};
         window.fetch=async function(...args){
             const input=args[0],url=new URL(typeof input==='string'?input:input.url,location.href);
@@ -23,8 +24,13 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
             if(url.origin!==location.origin)return original.apply(this,args);
             if(url.pathname.startsWith('/api/')&&!['GET','HEAD'].includes(method))p.writes++;
             const response=await original.apply(this,args);
-            if(method==='GET'&&url.pathname.endsWith('/entries')&&response.ok){
-                const body=await response.json();body.writable=false;
+            if(method==='GET'&&url.pathname==='/api/file-manager/disks/P01/entries'&&url.searchParams.get('path')===''&&response.ok){
+                const body=await response.json();
+                if(body.slot_id!=='P01'||body.path!==''||body.writable!==true||body.backup||body.preview)
+                    throw new Error('readonly history fixture requires the real writable primary root listing');
+                // The admitted primary read-only mode is a preview. Flipping
+                // writable alone produces an impossible page, correctly rejected.
+                body.preview=true;body.writable=false;p.readonlyPages++;
                 return new Response(JSON.stringify(body),{status:200,headers:{'Content-Type':'application/json'}});
             }
             if(method==='GET'&&/\/directories\/[^/]+\/history(?:\/branches)?$/.test(url.pathname)){
@@ -50,7 +56,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
                 "readonly folder renders actual nodes and shared branch heads",
                 r#"
             const p=window.__zxsDirectoryHistory,panel=document.querySelector('.zxs-directory-history');
-            if(!p.nodes||!p.branches||!panel||panel.getAttribute('aria-busy')!=='false')return false;
+            if(!p.readonlyPages||!p.nodes||!p.branches||!panel||panel.getAttribute('aria-busy')!=='false')return false;
             const expected=p.nodes.nodes.map(node=>node.tree_id).sort(),actual=Array.from(panel.querySelectorAll('[data-directory-tree-id]'),node=>node.dataset.directoryTreeId).sort();
             const branches=Array.from(panel.querySelectorAll('[data-directory-branch-id]'),node=>node.dataset.directoryBranchId).sort();
             return expected.length>0&&JSON.stringify(expected)===JSON.stringify(actual)&&new Set(actual).size===actual.length
@@ -112,7 +118,7 @@ pub(super) fn run(browser: &Browser) -> Result<()> {
         "//button[contains(@class,'zxs-file-name')][normalize-space(.)='browser-smoke.txt']",
     )?)?;
     println!(
-        "PASS real readonly folder nodes, measured SVG parent connectors, shared heads, branch locator and graph-preserving refresh without writes"
+        "PASS real folder history under a synthetic read-only preview envelope: measured SVG parent connectors, shared heads, branch locator and graph-preserving refresh without writes"
     );
     Ok(())
 }

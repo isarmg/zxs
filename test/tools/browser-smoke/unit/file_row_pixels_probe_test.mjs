@@ -48,5 +48,34 @@ for (const xs of [[0, 1], [62, 63]]) {
     await check(clipped, false);
 }
 model = fixture('focus'); model.scene.color = '#000000'; await check(model, false);
+function searchFocus(focused = true) {
+    const model = fixture('search-focus');
+    Object.assign(model.scene, {focused, color: '#444444', page: '#f2f2f2', extent: 9,
+        clip: {width: 64, height: 36}, frame: {x: 8, y: 8, width: 48, height: 20}});
+    if (focused) {
+        for (const [x, y] of [[32, 4], [59, 18], [32, 31], [4, 18]]) model.put(x, y, focus);
+        for (const [cx, cy] of [[10, 10], [53, 10], [53, 25], [10, 25]]) {
+            for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) model.put(x, y, focus);
+        }
+    }
+    return model;
+}
+await check(searchFocus(), true);
+await check(searchFocus(false), true);
+for (const [x, y] of [[4, 4], [59, 4], [59, 31], [4, 31]]) {
+    const square = searchFocus(); square.put(x, y, focus); await check(square, false);
+}
+for (const [x, y] of [[32, 4], [59, 18], [32, 31], [4, 18]]) {
+    const missing = searchFocus(); missing.put(x, y, panel); await check(missing, false);
+    const retained = searchFocus(false); retained.put(x, y, focus); await check(retained, false);
+}
+for (const [x, y] of [[32, 6], [57, 18], [32, 29], [6, 18]]) {
+    const noGap = searchFocus(); noGap.put(x, y, focus); await check(noGap, false);
+}
+for (const [x, y] of [[10, 10], [53, 10], [53, 25], [10, 25]]) {
+    const clipped = searchFocus();
+    for (let cy = y - 1; cy <= y + 1; cy++) for (let cx = x - 1; cx <= x + 1; cx++) clipped.put(cx, cy, panel);
+    await check(clipped, false);
+}
 model = fixture('unknown'); await check(model, false);
 console.log(`PASS ${checks} screenshot pixel-observer model cases (not browser screenshots)`);

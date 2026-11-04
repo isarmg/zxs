@@ -47,6 +47,7 @@ pub(super) fn files(browser: &Browser) -> Result<()> {
                     accessibility::select_theme(browser, theme)?;
                     for (width, height) in VIEWS {
                         viewport(browser, width, height)?;
+                        file_row_visual::search_focus(browser)?;
                         accessibility::input_surfaces(browser)?;
                         file_row_geometry(browser)?;
                         if !empty && let Some(directory) = &previews {

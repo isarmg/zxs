@@ -25,7 +25,9 @@ fn search(browser: &Browser, query: &str) -> Result<()> {
 fn native_clear_node(node: &Value) -> Option<&Value> {
     let clear = node["attributes"].as_array().is_some_and(|attributes| {
         attributes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .any(|pair| pair[0] == "id" && pair[1] == "search-clear")
     });
     if clear {

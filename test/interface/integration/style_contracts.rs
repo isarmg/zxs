@@ -380,5 +380,15 @@ fn folder_search_uses_one_input_surface_and_explicit_enter_submission() {
     assert!(search.contains("actions::search(state,query)"));
     let css = include_str!("../../../src/web/public/styles/components/file-manager.css");
     assert!(css.contains(".zxs-file-search > input.zxs-input:focus-visible { border: 0; }"));
-    assert!(css.contains(".zxs-file-search:has(> input:focus-visible) { outline: 2px solid"));
+    let focus = css
+        .split(".zxs-file-search:has(> input:focus-visible) {")
+        .nth(1)
+        .expect("search focus paint")
+        .split('}')
+        .next()
+        .unwrap();
+    assert!(focus.contains("outline: 0;"));
+    assert!(focus.contains("--zxs-contour-mode: paint;"));
+    assert!(focus.contains("box-shadow: 0 0 0 3px"));
+    assert!(focus.contains("0 0 0 5px var(--zxs-focus, Highlight)"));
 }

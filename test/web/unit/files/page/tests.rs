@@ -647,8 +647,11 @@ fn independent_selection_and_page_share_entity_identity_and_count_constraints() 
 #[test]
 fn preview_pages_preserve_body_identity_and_never_grant_write_authority() {
     let mut value = response(1);
-    value["preview"] = true.into();
     value["writable"] = false.into();
+    // Read-only primary listings must declare their preview mode, not silently
+    // change the ordinary primary page's authority contract.
+    assert!(parse(value.clone()).is_err());
+    value["preview"] = true.into();
     value["entries"][0]["read_only"] = true.into();
     let page = parse(value.clone()).unwrap();
     assert!(page.preview());
