@@ -10,6 +10,7 @@ use std::{
 pub(crate) struct DiskRoot {
     path: PathBuf,
     directory: OpenAt2Root,
+    io: Option<DiskIoBinding>,
 }
 
 impl DiskRoot {
@@ -21,7 +22,11 @@ impl DiskRoot {
         let path = private.path().to_path_buf();
         let directory = OpenAt2Root::from_private_directory(private, MountPolicy::SameMount)
             .map_err(fs_error)?;
-        Ok(Self { path, directory })
+        Ok(Self {
+            path,
+            directory,
+            io: None,
+        })
     }
 
     pub(crate) fn from_directory(path: PathBuf, directory: File) -> Result<Self> {
@@ -38,20 +43,64 @@ impl DiskRoot {
                 "selected storage directory changed before initialization",
             ));
         }
-        Ok(Self { path, directory })
+        Ok(Self {
+            path,
+            directory,
+            io: None,
+        })
+    }
+
+    fn bind_io(&mut self, seal: &DiskSeal, config: &ValidatedConfig) -> Result<()> {
+        self.io = Some(match &self.io {
+            Some(binding) => binding.for_authority(seal, config)?,
+            None => DiskIoBinding::new(seal, config)?,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn io_binding(&self) -> Result<&DiskIoBinding> {
+        self.io.as_ref().ok_or_else(|| {
+            Error::new(
+                ErrorCode::ConfigInvalid,
+                "root has no admitted disk I/O binding",
+            )
+        })
+    }
+
+    pub(crate) fn admit_io(&self) -> Result<DiskIoLease> {
+        self.io_binding()?.admit()
+    }
+
+    /// Opening and the real file lifetime share the same admitted operation.
+    /// Legacy raw-file entry points still need migration before offline is safe.
+    pub(crate) fn open_leased_regular(&self, path: &Path) -> Result<DiskFile> {
+        let lease = self.admit_io()?;
+        let file = lease.hold(self.open_regular(path)?);
+        file.check_running()?;
+        Ok(file)
     }
 
     /// Admit a private descendant and retain that exact directory descriptor.
     /// Its diagnostic path remains relative to this held resource, not a fresh
     /// named-path root; enumeration can reopen only "." beneath the admitted FD.
     pub(crate) fn private_child(&self, path: &Path) -> Result<Self> {
+        let _lease = self.io.as_ref().map(DiskIoBinding::admit).transpose()?;
         let directory = self.directory(path)?;
         let directory =
             OpenAt2Root::from_directory(directory, MountPolicy::SameMount).map_err(fs_error)?;
         Ok(Self {
             path: path.to_owned(),
             directory,
+            io: self.io.clone(),
         })
+    }
+
+    /// Keep the exact revocation domain when a successor retains this binding.
+    /// This never creates a new active gate for an existing disk.
+    fn retained_root(&self, path: PathBuf) -> Result<Self> {
+        let mut root = Self::from_directory(path, self.directory(self.path())?)?;
+        root.io = self.io.clone();
+        Ok(root)
     }
 
     fn relative(&self, path: &Path) -> Result<RelativePath> {
@@ -310,6 +359,15 @@ pub(crate) struct DiskHandle {
 }
 
 impl DiskHandle {
+    pub(crate) fn new(
+        mut root: DiskRoot,
+        seal: DiskSeal,
+        config: &ValidatedConfig,
+    ) -> Result<Self> {
+        root.bind_io(&seal, config)?;
+        Ok(Self { root, seal })
+    }
+
     pub(crate) fn open(config: &ValidatedConfig, disk: &DiskConfig, sealed: bool) -> Result<Self> {
         let root = DiskRoot::open(&disk.root)?;
         let seal = identity_at(config, disk, root.directory.directory())?;
@@ -317,22 +375,7 @@ impl DiskHandle {
             let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
             validate_stored_seal(&decode_seal(&bytes)?, &seal)?;
         }
-        Ok(Self { root, seal })
-    }
-
-    pub(crate) fn verify_publication(
-        &self,
-        directory: &Path,
-        version: &FileVersion,
-        metadata: &crate::engine::provenance::MetadataReadContext<'_>,
-    ) -> Result<()> {
-        crate::journal::verify_local_publication_at(
-            &self.root,
-            directory,
-            version,
-            &mut |_| Ok(()),
-            Some(metadata),
-        )
+        Self::new(root, seal, config)
     }
 
     pub(crate) fn open_payload(
@@ -376,7 +419,10 @@ impl DiskResources {
             crate::engine::membership_transition::pending::activation::predecessor_seal_matches(
                 config, disk, &root, &bytes, &seal,
             )?;
-            disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle { root, seal }));
+            disks.insert(
+                disk.disk_id.clone(),
+                Arc::new(DiskHandle::new(root, seal, config)?),
+            );
         }
         Ok(Self { disks })
     }
@@ -408,7 +454,10 @@ impl DiskResources {
                 ));
             }
             let seal = identity_at(config, disk, root.directory.directory())?;
-            disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle { root, seal }));
+            disks.insert(
+                disk.disk_id.clone(),
+                Arc::new(DiskHandle::new(root, seal, config)?),
+            );
         }
         Ok(Self { disks })
     }
@@ -434,7 +483,10 @@ impl DiskResources {
             let seal = identity_at(config, disk, root.directory.directory())?;
             let bytes = root.read_bytes(&disk.root.join("disk.json"), MAX_METADATA)?;
             validate_stored_seal(&decode_seal(&bytes)?, &seal)?;
-            disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle { root, seal }));
+            disks.insert(
+                disk.disk_id.clone(),
+                Arc::new(DiskHandle::new(root, seal, config)?),
+            );
         }
         Ok(Self { disks })
     }
@@ -443,20 +495,30 @@ impl DiskResources {
         config: &ValidatedConfig,
         handles: Vec<Arc<DiskHandle>>,
     ) -> Result<Self> {
+        if config.generation().is_none() {
+            return Err(Error::new(
+                ErrorCode::ConfigConflict,
+                "retained resources require an admitted membership generation",
+            ));
+        }
         let mut disks = BTreeMap::new();
+        let mut bindings = Vec::new();
         for handle in handles {
+            let _lease = handle.root.admit_io()?;
             let disk = config
                 .disks
                 .iter()
                 .find(|disk| disk.disk_id == handle.seal.disk_id)
                 .expect("invariant: retained generation disk");
-            let root = DiskRoot::from_directory(
-                disk.root.clone(),
-                handle.root.directory(handle.root.path())?,
-            )?;
+            let root = handle.root.retained_root(disk.root.clone())?;
             let seal = identity_at(config, disk, &root.directory(root.path())?)?;
-            disks.insert(disk.disk_id.clone(), Arc::new(DiskHandle { root, seal }));
+            bindings.push(handle.root.io_binding()?.clone());
+            disks.insert(
+                disk.disk_id.clone(),
+                Arc::new(DiskHandle::new(root, seal, config)?),
+            );
         }
+        DiskIoBinding::activate_generation(&bindings, config)?;
         Ok(Self { disks })
     }
     pub(crate) fn get(&self, disk: &DiskConfig) -> Result<&Arc<DiskHandle>> {

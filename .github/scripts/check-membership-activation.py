@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Build only engine unit tests, then reuse that binary for bounded CI groups."""
+"""Reuse package unit-test binaries for bounded membership and disk-IO groups."""
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -22,19 +23,38 @@ GROUPS = (
     ("disk-identity", "disk::identity_tests::", ()),
     ("read-provenance", "version_health_fallback_observes_shared_membership", ()),
 )
+IO_ENGINE_GROUPS = (
+    ("disk-admission", "disk::admission::tests::", ()),
+    ("io-authority", "engine::config::io_authority::tests::", ()),
+    ("guarded-engine-reads", "engine::reads::tests::", ()),
+    ("verified-payloads", "engine::verified_payloads::tests::", ()),
+)
+IO_SERVER_GROUPS = (
+    ("http-transfer", "transfer::tests::", ()),
+    ("smb-stream-read", "smb_rpc::tests::stream_read_tests::", ()),
+    ("smb-bounded-lifecycle", "smb_rpc::tests::bounded_lifecycle_tests::", ()),
+    ("smb-close", "smb_rpc::tests::close_tests::", ()),
+)
 
 
-def build():
+def build_command(package):
+    command = ["cargo", "test", "-p", package, "--lib"]
+    if package == "storage-engine":
+        command += ["--features", "fault-injection"]
+    # Server unit tests enable the engine's hooks through their dev-dependency;
+    # storage-server itself has no fault-injection feature.
+    return command + ["--locked", "--offline", "--no-run", "--message-format=json"]
+
+
+def build(package):
     spec = importlib.util.spec_from_file_location(
         "rust_diagnostics", ROOT / ".github/scripts/check-rust-diagnostics.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     diagnostics = module.CargoDiagnostics(sys.stderr)
-    command = ["cargo", "test", "-p", "storage-engine", "--lib", "--features",
-               "fault-injection", "--locked", "--offline", "--no-run",
-               "--message-format=json"]
+    command = build_command(package)
     executables = set()
-    with (EVIDENCE / "build.jsonl").open("w") as log:
+    with (EVIDENCE / f"{package}-build.jsonl").open("w") as log:
         with subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE,
                               text=True, encoding="utf-8") as process:
             for number, line in enumerate(process.stdout, 1):
@@ -44,15 +64,15 @@ def build():
                     continue
                 event = json.loads(line)
                 if (event.get("reason") == "compiler-artifact"
-                        and event["target"]["name"] == "storage_engine"
+                        and event["target"]["name"] == package.replace("-", "_")
                         and event["target"]["kind"] == ["lib"]
                         and event["profile"]["test"] and event["executable"]):
                     executables.add(event["executable"])
             status = diagnostics.result(process.wait())
     if status:
-        raise RuntimeError(f"engine unit-test build failed with status {status}")
+        raise RuntimeError(f"{package} unit-test build failed with status {status}")
     if len(executables) != 1:
-        raise RuntimeError(f"expected one engine unit-test artifact, got {executables}")
+        raise RuntimeError(f"expected one {package} unit-test artifact, got {executables}")
     return Path(executables.pop())
 
 
@@ -78,15 +98,25 @@ def run_group(binary, label, test_filter, extra):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--disk-io", action="store_true",
+                        help="also validate guarded engine, HTTP and SMB read lifetimes")
+    options = parser.parse_args()
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     summary = {"commit": subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(), "groups": []}
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        "disk_io": options.disk_io, "binaries": {}, "groups": []}
     try:
-        binary = build()
-        with binary.open("rb") as source:
-            summary["unit_binary_sha256"] = hashlib.file_digest(source, "sha256").hexdigest()
-        for label, test_filter, extra in GROUPS:
-            summary["groups"].append(run_group(binary, label, test_filter, extra))
+        packages = [("storage-engine", GROUPS + (IO_ENGINE_GROUPS if options.disk_io else ()))]
+        if options.disk_io:
+            packages.append(("storage-server", IO_SERVER_GROUPS))
+        for package, groups in packages:
+            binary = build(package)
+            with binary.open("rb") as source:
+                summary["binaries"][package] = hashlib.file_digest(source, "sha256").hexdigest()
+            for label, test_filter, extra in groups:
+                result = run_group(binary, label, test_filter, extra)
+                summary["groups"].append({"package": package, **result})
         return int(any(group["exit_code"] != 0 for group in summary["groups"]))
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         summary["error"] = str(error)

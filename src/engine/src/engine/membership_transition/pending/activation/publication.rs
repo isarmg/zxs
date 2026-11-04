@@ -174,14 +174,12 @@ impl Engine {
                     member.disk.root.clone(),
                     added.root.directory(added.root.path())?,
                 )?;
-                handles.push(Arc::new(DiskHandle {
-                    seal: crate::disk::identity_at(
-                        &discovered,
-                        &member.disk,
-                        &root.directory(root.path())?,
-                    )?,
-                    root,
-                }));
+                let seal = crate::disk::identity_at(
+                    &discovered,
+                    &member.disk,
+                    &root.directory(root.path())?,
+                )?;
+                handles.push(Arc::new(DiskHandle::new(root, seal, &discovered)?));
                 locks.push(added._lock.try_clone()?);
             }
         }
@@ -265,14 +263,9 @@ impl Engine {
                     member.disk.root.clone(),
                     added.root.directory(added.root.path())?,
                 )?;
-                handles.push(Arc::new(DiskHandle {
-                    seal: crate::disk::identity_at(
-                        &config,
-                        &member.disk,
-                        &root.directory(root.path())?,
-                    )?,
-                    root,
-                }));
+                let seal =
+                    crate::disk::identity_at(&config, &member.disk, &root.directory(root.path())?)?;
+                handles.push(Arc::new(DiskHandle::new(root, seal, &config)?));
                 locks.push(added._lock.try_clone()?);
             }
         }

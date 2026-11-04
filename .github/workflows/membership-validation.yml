@@ -1,4 +1,4 @@
-name: Experimental membership activation
+name: Experimental membership and disk IO
 
 on:
   push:
@@ -21,7 +21,7 @@ env:
 
 jobs:
   membership:
-    name: First pure-add activation and affected engine boundaries
+    name: Membership generations and guarded read lifetimes
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -43,11 +43,12 @@ jobs:
             python3 .github/scripts/check-workflows.py
             python3 .github/scripts/check-architecture.py
             python3 -m unittest discover -s test/ci -p 'test_workflows.py'
-            cargo fmt -p storage-engine -- --check
+            python3 -m unittest discover -s test/ci -p 'test_membership_validation.py'
+            cargo fmt -p storage-engine -p storage-server -- --check
           } 2>&1 | tee target/membership-validation/static.log
-      - name: Compile one unit-test binary and run affected groups
+      - name: Compile unit-test binaries once and run affected groups
         if: ${{ !cancelled() }}
-        run: python3 .github/scripts/check-membership-activation.py
+        run: python3 .github/scripts/check-membership-activation.py --disk-io
       - name: Check hook-free production and Clippy
         if: ${{ !cancelled() }}
         run: |
@@ -59,6 +60,15 @@ jobs:
             -p storage-engine --lib --features fault-injection --locked --offline \
             --message-format=json -- -D warnings \
             2>&1 | tee target/membership-validation/clippy.log
+          python3 .github/scripts/check-rust-diagnostics.py -- cargo check \
+            -p storage-server --lib --locked --offline --message-format=json \
+            2>&1 | tee target/membership-validation/server-production.log
+          python3 .github/scripts/check-rust-diagnostics.py -- cargo check \
+            -p storage-server --lib --no-default-features --locked --offline --message-format=json \
+            2>&1 | tee target/membership-validation/server-no-core.log
+          python3 .github/scripts/check-rust-diagnostics.py -- cargo clippy \
+            -p storage-server --lib --locked --offline --message-format=json -- -D warnings \
+            2>&1 | tee target/membership-validation/server-clippy.log
       - name: Check document contracts
         if: ${{ !cancelled() }}
         run: |

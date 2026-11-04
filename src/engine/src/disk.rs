@@ -11,6 +11,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+mod admission;
+pub use admission::DiskFile;
+pub(crate) use admission::{DiskIoBinding, DiskIoLease};
 mod owned;
 pub(crate) use owned::{DiskHandle, DiskResources, DiskRoot};
 
@@ -413,7 +416,7 @@ impl From<storage_contract::Error> for CopyFailure {
 }
 
 pub(crate) fn verified_full_copy<'a>(
-    source: File,
+    source: impl std::os::unix::fs::FileExt,
     destination: &Path,
     version: &'a FileVersion,
     max_bytes: u64,
@@ -434,7 +437,7 @@ pub(crate) fn verified_full_copy<'a>(
 
 pub(crate) fn verified_full_copy_at<'a>(
     root: &DiskRoot,
-    source: File,
+    source: impl std::os::unix::fs::FileExt,
     destination: &Path,
     version: &'a FileVersion,
     max_bytes: u64,
@@ -466,7 +469,7 @@ pub(crate) fn verified_full_copy_at<'a>(
 }
 
 fn full_copy_to_path(
-    source: File,
+    source: impl std::os::unix::fs::FileExt,
     destination: &Path,
     chunk_bytes: u32,
     max_bytes: u64,
@@ -525,7 +528,7 @@ pub(crate) fn full_copy_held(
 }
 
 fn full_copy_checked(
-    source: File,
+    source: impl std::os::unix::fs::FileExt,
     directory: &File,
     destination_name: &EntryName,
     chunk_bytes: u32,

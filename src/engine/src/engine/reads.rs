@@ -11,20 +11,20 @@ impl Engine {
         self.planning_context().used_bytes(slot)
     }
     pub(crate) fn valid_replica(&self, version_id: &str) -> Result<(ReadSource, FileVersion)> {
-        self.with_replica(version_id, |disk, directory, version| {
-            disk.verify_payload(directory, version)?;
+        self.with_replica(version_id, |disk, directory, version, lease| {
+            verify_read_payload(disk, directory, version, lease)?;
             let content = crate::container_storage::content_path_at(
                 &disk.root,
                 directory,
                 version,
-                &mut |_| Ok(()),
+                &mut |_| lease.check_running(),
             )?;
             Ok((ReadSource::on_disk(disk, content), version.clone()))
         })
     }
-    fn verified_replica(&self, version_id: &str) -> Result<(std::fs::File, FileVersion, PathBuf)> {
-        self.with_replica(version_id, |disk, directory, version| {
-            let mut file = disk.verify_payload(directory, version)?;
+    fn verified_replica(&self, version_id: &str) -> Result<(DiskFile, FileVersion, PathBuf)> {
+        self.with_replica(version_id, |disk, directory, version, lease| {
+            let mut file = verify_read_payload(disk, directory, version, lease)?;
             use std::io::{Seek, SeekFrom};
             file.seek(SeekFrom::Start(0))?;
             Ok((file, version.clone(), directory.to_path_buf()))
@@ -34,7 +34,7 @@ impl Engine {
     fn with_replica<T>(
         &self,
         version_id: &str,
-        mut read: impl FnMut(&Arc<DiskHandle>, &Path, &FileVersion) -> Result<T>,
+        mut read: impl FnMut(&Arc<DiskHandle>, &Path, &FileVersion, &DiskIoLease) -> Result<T>,
     ) -> Result<T> {
         if self
             .state
@@ -64,6 +64,7 @@ impl Engine {
             let d = self.disk(slot)?;
             let candidate = (|| {
                 let disk = self.disk_resources.get(d)?;
+                let lease = disk.root.admit_io()?;
                 let dir = version_dir(d, &version.history_tree_id, version_id);
                 let metadata = MetadataReadContext::for_disk(
                     &self.config,
@@ -71,8 +72,14 @@ impl Engine {
                     d.metadata_member
                         .then_some(self.metadata_integrity.as_ref()),
                 );
-                disk.verify_publication(&dir, version, &metadata)?;
-                read(disk, &dir, version)
+                crate::journal::verify_local_publication_at(
+                    &disk.root,
+                    &dir,
+                    version,
+                    &mut |_| lease.check_running(),
+                    Some(&metadata),
+                )?;
+                read(disk, &dir, version, &lease)
             })();
             match candidate {
                 Ok(replica) => return Ok(replica),
@@ -102,7 +109,7 @@ impl Engine {
         reads.acquire(version_id.into())?;
         drop(reads);
         Ok(OpenedContent {
-            file,
+            file: file.into(),
             size: version.logical_size,
             content_hash: version.content_hash,
             lease: ReadLease {
@@ -131,7 +138,10 @@ impl Engine {
                 "workspace item not found",
             )
         })?;
-        let file = self.planning_context().staged_source(&w, staged)?.open()?;
+        let file = self
+            .planning_context()
+            .staged_source(&w, staged)?
+            .open_leased()?;
         let key = staged
             .base_version_id
             .clone()
@@ -160,15 +170,15 @@ impl Engine {
             .open()
     }
     pub fn read_checksums(&self, version: &str) -> Result<Vec<u8>> {
-        self.with_replica(version, |disk, directory, version| {
-            let (file, checks, manifest) = disk.open_payload(directory, version)?;
-            verify_open_payload_observed(file, manifest, version, &mut |_| Ok(()))?;
+        self.with_replica(version, |disk, directory, version, lease| {
+            let (file, checks, manifest) = open_read_payload(disk, directory, version, lease)?;
+            verify_read_file(file, manifest, version)?;
             Ok(checks)
         })
     }
     pub fn export_version(&self, version_id: &str, destination: &Path) -> Result<()> {
-        self.with_replica(version_id, |disk, directory, version| {
-            let (file, _, _) = disk.open_payload(directory, version)?;
+        self.with_replica(version_id, |disk, directory, version, lease| {
+            let (file, _, _) = open_read_payload(disk, directory, version, lease)?;
             match verified_full_copy(file, destination, version, version.logical_size) {
                 Ok(_) => Ok(Ok(())),
                 Err(CopyFailure::Source(error)) => Err(error),
@@ -212,6 +222,126 @@ impl Engine {
     }
 }
 
+/// The named proof is itself a managed resource, not a side read authorized by
+/// the payload's lease. Cancellation is observed between 64 KiB reads even for
+/// a maximum-sized manifest.
+fn read_checksums_leased(
+    disk: &DiskHandle,
+    directory: &Path,
+    version: &FileVersion,
+) -> Result<Vec<u8>> {
+    let length = checksum_manifest_length(version)?;
+    let mut file = disk
+        .root
+        .open_leased_regular(&directory.join("checksums.bin"))?;
+    if file.metadata()?.len() != length as u64 {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "checksum manifest length differs",
+        ));
+    }
+    let mut checks = vec![0; length];
+    for chunk in checks.chunks_mut(64 * 1024) {
+        file.read_exact(chunk)?;
+    }
+    if file.read(&mut [0; 1])? != 0
+        || blake3::hash(&checks).to_hex().as_str() != version.checksum_manifest_hash
+    {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "checksum manifest digest differs",
+        ));
+    }
+    Ok(checks)
+}
+
+fn open_read_payload_file(
+    disk: &DiskHandle,
+    directory: &Path,
+    version: &FileVersion,
+    lease: &DiskIoLease,
+) -> Result<DiskFile> {
+    let path =
+        crate::container_storage::content_path_at(&disk.root, directory, version, &mut |_| {
+            lease.check_running()
+        })?;
+    let file = disk.root.open_leased_regular(&path)?;
+    if file.metadata()?.len() != version.logical_size {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "payload length differs",
+        ));
+    }
+    Ok(file)
+}
+
+fn open_read_payload(
+    disk: &DiskHandle,
+    directory: &Path,
+    version: &FileVersion,
+    lease: &DiskIoLease,
+) -> Result<(DiskFile, Vec<u8>, ChecksumManifest)> {
+    let checks = read_checksums_leased(disk, directory, version)?;
+    let manifest = ChecksumManifest::decode(&checks)?;
+    if manifest.logical_size != version.logical_size
+        || manifest.chunk_bytes != version.checksum_chunk_bytes
+    {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "checksum header differs from version",
+        ));
+    }
+    let file = open_read_payload_file(disk, directory, version, lease)?;
+    Ok((file, checks, manifest))
+}
+
+fn verify_read_payload(
+    disk: &DiskHandle,
+    directory: &Path,
+    version: &FileVersion,
+    lease: &DiskIoLease,
+) -> Result<DiskFile> {
+    let (file, _, manifest) = open_read_payload(disk, directory, version, lease)?;
+    verify_read_file(file, manifest, version)
+}
+
+fn verify_read_file(
+    mut file: DiskFile,
+    manifest: ChecksumManifest,
+    version: &FileVersion,
+) -> Result<DiskFile> {
+    let mut full = blake3::Hasher::new();
+    let mut buffer = vec![0; manifest.chunk_bytes as usize];
+    let mut remaining = version.logical_size;
+    for expected in manifest.chunks {
+        let length = remaining.min(buffer.len() as u64) as usize;
+        for block in buffer[..length].chunks_mut(64 * 1024) {
+            file.read_exact(block)?;
+        }
+        if blake3::hash(&buffer[..length]).as_bytes() != &expected {
+            return Err(Error::new(
+                ErrorCode::ChecksumMismatch,
+                "payload chunk differs",
+            ));
+        }
+        full.update(&buffer[..length]);
+        remaining -= length as u64;
+    }
+    if file.read(&mut [0; 1])? != 0 || file.metadata()?.len() != version.logical_size {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "payload length changed during verification",
+        ));
+    }
+    if ContentHash::from_digest(full.finalize()) != version.content_hash {
+        return Err(Error::new(
+            ErrorCode::ChecksumMismatch,
+            "complete payload hash differs",
+        ));
+    }
+    Ok(file)
+}
+
 /// A metadata-only snapshot acquired while the caller serializes Engine access.
 /// The lease is acquired before releasing that lock, so purge cannot remove the
 /// selected version while publication evidence and payload handles are opened.
@@ -225,8 +355,8 @@ pub struct ContentReadPlan {
 }
 
 pub struct RangeContent {
-    pub fallback_files: Vec<std::fs::File>,
-    pub file: std::fs::File,
+    pub fallback_files: Vec<DiskFile>,
+    pub file: DiskFile,
     pub size: u64,
     pub content_hash: crate::ContentHash,
     pub manifest: ChecksumManifest,
@@ -333,8 +463,12 @@ impl ContentReadPlan {
         checksum_manifest_length(&self.version)
     }
 
-    fn authenticate_replica(&self, disk: &DiskConfig) -> Result<(&DiskHandle, PathBuf)> {
+    fn authenticate_replica(
+        &self,
+        disk: &DiskConfig,
+    ) -> Result<(&DiskHandle, PathBuf, DiskIoLease)> {
         let handle = self.disk_resources.get(disk)?;
+        let lease = handle.root.admit_io()?;
         let dir = version_dir(
             disk,
             &self.version.history_tree_id,
@@ -346,8 +480,14 @@ impl ContentReadPlan {
             disk.metadata_member
                 .then_some(self.metadata_integrity.as_ref()),
         );
-        handle.verify_publication(&dir, &self.version, &metadata)?;
-        Ok((handle, dir))
+        crate::journal::verify_local_publication_at(
+            &handle.root,
+            &dir,
+            &self.version,
+            &mut |_| lease.check_running(),
+            Some(&metadata),
+        )?;
+        Ok((handle, dir, lease))
     }
 
     /// One decoded proof for all exact-version replicas; each member's local
@@ -359,24 +499,16 @@ impl ContentReadPlan {
         let mut first_error: Option<Error> = None;
         for disk in &self.disks {
             let candidate = (|| {
-                let (handle, dir) = self.authenticate_replica(disk)?;
+                let (handle, dir, lease) = self.authenticate_replica(disk)?;
                 if selected.is_some() {
                     // Digest equality binds these bytes to the same descriptor;
                     // decoding the identical hash array again adds no proof.
-                    drop(read_authenticated_checksums_at(
-                        &handle.root,
-                        &dir,
-                        &self.version,
-                    )?);
-                    let file = open_payload_file_observed_at(
-                        &handle.root,
-                        &dir,
-                        &self.version,
-                        &mut |_| Ok(()),
-                    )?;
+                    drop(read_checksums_leased(handle, &dir, &self.version)?);
+                    let file = open_read_payload_file(handle, &dir, &self.version, &lease)?;
                     fallback_files.push(file);
                 } else {
-                    let (file, checks, manifest) = handle.open_payload(&dir, &self.version)?;
+                    let (file, checks, manifest) =
+                        open_read_payload(handle, &dir, &self.version, &lease)?;
                     drop(checks);
                     selected = Some((file, manifest));
                 }
@@ -413,8 +545,9 @@ impl ContentReadPlan {
         for disk in &self.disks {
             match self
                 .authenticate_replica(disk)
-                .and_then(|(handle, dir)| handle.open_payload(&dir, &self.version))
-            {
+                .and_then(|(handle, dir, lease)| {
+                    open_read_payload(handle, &dir, &self.version, &lease)
+                }) {
                 Ok((_, checks, _)) => return Ok(checks),
                 Err(error) => {
                     first_error.get_or_insert(error);
@@ -443,7 +576,18 @@ impl WorkspaceReadPlan {
         let mut buffer = [0; 65536];
         let mut remaining = self.0.size;
         loop {
-            let count = self.0.file.read(&mut buffer)?;
+            self.0.file.check_running().map_err(|source| {
+                source.context(
+                    ErrorCode::ContentUnavailable,
+                    "workspace content is unavailable",
+                )
+            })?;
+            let count = self.0.file.read(&mut buffer).map_err(|source| {
+                Error::from(source).context(
+                    ErrorCode::ContentUnavailable,
+                    "workspace payload read failed",
+                )
+            })?;
             if count == 0 {
                 break;
             }
@@ -462,7 +606,12 @@ impl WorkspaceReadPlan {
             ));
         }
         use std::io::{Seek, SeekFrom};
-        self.0.file.seek(SeekFrom::Start(0))?;
+        self.0.file.seek(SeekFrom::Start(0)).map_err(|source| {
+            Error::from(source).context(
+                ErrorCode::ContentUnavailable,
+                "workspace payload seek failed",
+            )
+        })?;
         Ok(self.0)
     }
 }

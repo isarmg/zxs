@@ -11,6 +11,8 @@ use std::{
 
 mod membership;
 use membership::MetadataMembership;
+mod io_authority;
+use io_authority::GenesisIoAuthority;
 
 /// A pool configuration admitted at a file or public API boundary.
 /// Only root rebinding and restart-only limits can change after admission.
@@ -31,6 +33,7 @@ struct AdmittedConfig {
     config: Config,
     metadata_members: Box<[usize]>,
     membership: MetadataMembership,
+    genesis_io_authority: Arc<GenesisIoAuthority>,
     workspace_limits: Option<super::RetainedWorkspaceLimits>,
     generation: Option<Arc<super::membership_transition::pending::activation::Generation>>,
 }
@@ -41,6 +44,7 @@ impl TryFrom<Config> for ValidatedConfig {
     fn try_from(config: Config) -> Result<Self> {
         validate_config(&config)?;
         let membership = MetadataMembership::from_config(&config);
+        let genesis_io_authority = Arc::new(GenesisIoAuthority::from_config(&config));
         let metadata_members = config
             .disks
             .iter()
@@ -52,6 +56,7 @@ impl TryFrom<Config> for ValidatedConfig {
                 config,
                 metadata_members,
                 membership,
+                genesis_io_authority,
                 workspace_limits: None,
                 generation: None,
             }),
@@ -77,8 +82,17 @@ impl Deref for ValidatedConfig {
 }
 
 impl ValidatedConfig {
-    pub(super) fn same_admission(&self, other: &Self) -> bool {
+    pub(crate) fn same_admission(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.admitted, &other.admitted)
+    }
+
+    /// Context equality only. Authentication still belongs to Genesis admission
+    /// or the verified successor; neither schema validity nor equal voters suffice.
+    pub(crate) fn same_genesis_io_authority(&self, other: &Self) -> bool {
+        Arc::ptr_eq(
+            &self.admitted.genesis_io_authority,
+            &other.admitted.genesis_io_authority,
+        ) || self.admitted.genesis_io_authority == other.admitted.genesis_io_authority
     }
 
     pub(crate) fn verify_candidate_membership(
@@ -131,7 +145,7 @@ impl ValidatedConfig {
         Ok(self)
     }
 
-    pub(super) fn same_metadata_membership(&self, other: &Self) -> bool {
+    pub(crate) fn same_metadata_membership(&self, other: &Self) -> bool {
         self.admitted.membership == other.admitted.membership
     }
 

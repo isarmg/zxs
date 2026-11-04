@@ -958,3 +958,253 @@ fn invalid_read_release_keeps_purge_fenced_after_the_owner_is_gone() {
         ErrorCode::RecoveryRequired
     );
 }
+
+fn read_bindings(engine: &Engine) -> Vec<DiskIoBinding> {
+    engine
+        .config
+        .disks
+        .iter()
+        .map(|disk| {
+            engine
+                .disk_resources
+                .get(disk)
+                .unwrap()
+                .root
+                .io_binding()
+                .unwrap()
+                .clone()
+        })
+        .collect()
+}
+
+#[test]
+fn prepared_content_and_checksum_reads_cannot_open_after_all_disks_quiesce() {
+    let (_temp, engine, version) = committed_fixture();
+    let content = engine.prepare_content(&version).unwrap();
+    let checksums = engine.prepare_content(&version).unwrap();
+    let bindings = read_bindings(&engine);
+    let placement = engine.state.placements[&version].route_slot_ids.clone();
+    for binding in &bindings {
+        assert_eq!(binding.status().unwrap().ordinary, 0);
+        drop(binding.begin_quiesce().unwrap().unwrap());
+        assert!(binding.status().unwrap().drained());
+    }
+    assert_eq!(
+        content.open().err().unwrap().code(),
+        ErrorCode::ContentUnavailable
+    );
+    assert_eq!(
+        checksums.checksums().unwrap_err().code(),
+        ErrorCode::ContentUnavailable
+    );
+    assert_eq!(
+        engine.open_content(&version).err().unwrap().code(),
+        ErrorCode::ContentUnavailable
+    );
+    assert_eq!(
+        engine.read_checksums(&version).unwrap_err().code(),
+        ErrorCode::ContentUnavailable
+    );
+    assert_eq!(engine.state.placements[&version].route_slot_ids, placement);
+    assert_eq!(engine.config.disks.len(), bindings.len());
+    for binding in &bindings {
+        assert!(binding.status().unwrap().drained());
+    }
+}
+
+#[test]
+fn range_replica_resources_are_cancelled_per_disk_even_while_idle() {
+    let (_temp, engine, version) = committed_fixture();
+    let mut content = engine.prepare_content(&version).unwrap().open().unwrap();
+    let mut clone = content.file.try_clone().unwrap();
+    let primary = engine
+        .disk_resources
+        .get(
+            engine
+                .disk(&engine.state.placements[&version].route_slot_ids[0])
+                .unwrap(),
+        )
+        .unwrap()
+        .root
+        .io_binding()
+        .unwrap();
+    assert!(primary.status().unwrap().ordinary > 0);
+    drop(primary.begin_quiesce().unwrap().unwrap());
+    // Neither the original HTTP/SMB owner nor its clone must be polled or
+    // dropped to close idle descriptors. The control result remains truthful.
+    assert!(primary.status().unwrap().drained());
+    assert_eq!(
+        content.file.check_running().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert_eq!(
+        clone.read(&mut [0]).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert!(!content.fallback_files.is_empty());
+    let mut bytes = Vec::new();
+    content.fallback_files[0].read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"original");
+    for binding in read_bindings(&engine) {
+        drop(binding.begin_quiesce().unwrap());
+        assert!(binding.status().unwrap().drained());
+    }
+    for file in &mut content.fallback_files {
+        assert_eq!(
+            file.read(&mut [0]).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+}
+
+#[test]
+fn detached_read_plan_skips_a_quiesced_replica_without_changing_placement() {
+    let (_temp, engine, version) = committed_fixture();
+    let content = engine.prepare_content(&version).unwrap();
+    let checksums = engine.prepare_content(&version).unwrap();
+    let placement = engine.state.placements[&version].route_slot_ids.clone();
+    let primary = engine
+        .disk_resources
+        .get(engine.disk(&placement[0]).unwrap())
+        .unwrap();
+    let binding = primary.root.io_binding().unwrap();
+    drop(binding.begin_quiesce().unwrap().unwrap());
+    let mut bytes = Vec::new();
+    content
+        .open()
+        .unwrap()
+        .file
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(bytes, b"original");
+    assert!(!checksums.checksums().unwrap().is_empty());
+    assert!(binding.status().unwrap().drained());
+    assert_eq!(engine.state.placements[&version].route_slot_ids, placement);
+}
+
+#[test]
+fn workspace_read_plan_keeps_its_disk_gate_after_preparation() {
+    let (_temp, engine, workspace) = fixture();
+    let staged = engine.workspace(&workspace.workspace_id).unwrap();
+    let item = staged.files.keys().next().unwrap();
+    let plan = engine
+        .prepare_workspace_content(&workspace.workspace_id, item, "admin")
+        .unwrap();
+    let bindings = read_bindings(&engine);
+    let held = bindings
+        .iter()
+        .find(|binding| binding.status().unwrap().ordinary > 0)
+        .unwrap();
+    drop(held.begin_quiesce().unwrap().unwrap());
+    assert!(held.status().unwrap().drained());
+    let error = plan.open().err().unwrap();
+    assert_eq!(error.code(), ErrorCode::ContentUnavailable);
+}
+
+#[test]
+fn external_read_source_does_not_borrow_an_unrelated_disk_gate() {
+    let (temp, engine, _workspace) = fixture();
+    let path = temp.path().join("external-source");
+    fs::write(&path, b"local bytes").unwrap();
+    let mut file = ReadSource::external(path).open_leased().unwrap();
+    for binding in read_bindings(&engine) {
+        drop(binding.begin_quiesce().unwrap().unwrap());
+        assert!(binding.status().unwrap().drained());
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"local bytes");
+}
+
+#[test]
+fn reopening_the_engine_keeps_old_read_plans_in_the_same_disk_revocation_domain() {
+    let (temp, engine, version) = committed_fixture();
+    let plan = engine.prepare_content(&version).unwrap();
+    let checksums = engine.prepare_content(&version).unwrap();
+    let mut full = engine.open_content(&version).unwrap();
+    let mut range = engine.prepare_content(&version).unwrap().open().unwrap();
+    let old_bindings = read_bindings(&engine);
+    drop(engine);
+    let reopened = Engine::open(&temp.path().join("state")).unwrap();
+    // Opening a successor engine must preserve the original held-read contract
+    // until actual quiescing, not revoke every reader merely to release locks.
+    let mut first = [0; 1];
+    full.file.read_exact(&mut first).unwrap();
+    assert_eq!(first, [b'o']);
+    range.file.read_exact(&mut first).unwrap();
+    assert_eq!(first, [b'o']);
+    for binding in read_bindings(&reopened) {
+        drop(binding.begin_quiesce().unwrap().unwrap());
+        assert!(binding.status().unwrap().drained());
+    }
+    for binding in old_bindings {
+        assert!(binding.status().unwrap().quiescing);
+        assert!(binding.status().unwrap().drained());
+    }
+    assert_eq!(
+        full.file.read(&mut first).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    for file in std::iter::once(&mut range.file).chain(&mut range.fallback_files) {
+        assert_eq!(
+            file.read(&mut first).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+    assert_eq!(
+        plan.open().err().unwrap().code(),
+        ErrorCode::ContentUnavailable
+    );
+    assert_eq!(
+        checksums.checksums().unwrap_err().code(),
+        ErrorCode::ContentUnavailable
+    );
+}
+
+#[test]
+fn an_engine_reopen_cannot_reactivate_a_quiescing_binding_held_by_old_readers() {
+    let (temp, engine, version) = committed_fixture();
+    let plan = engine.prepare_content(&version).unwrap();
+    let bindings = read_bindings(&engine);
+    for binding in &bindings {
+        drop(binding.begin_quiesce().unwrap().unwrap());
+    }
+    drop(engine);
+    // Startup may reject this still-owned runtime transition or reconstruct a
+    // metadata view, but neither outcome may mint a fresh active payload gate.
+    match Engine::open(&temp.path().join("state")) {
+        Ok(reopened) => {
+            assert_eq!(
+                reopened.open_content(&version).err().unwrap().code(),
+                ErrorCode::ContentUnavailable
+            );
+            for binding in read_bindings(&reopened) {
+                assert!(binding.status().unwrap().quiescing);
+            }
+        }
+        Err(error) => {
+            let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+            let mut unavailable = false;
+            while let Some(source) = cause {
+                unavailable |= source
+                    .downcast_ref::<Error>()
+                    .is_some_and(|source| source.code() == ErrorCode::DiskUnavailable)
+                    || source
+                        .downcast_ref::<storage_contract::Error>()
+                        .is_some_and(|source| source.code() == ErrorCode::DiskUnavailable);
+                cause = source.source();
+            }
+            assert!(
+                unavailable,
+                "startup failed for a reason other than disk quiescing: {error:?}"
+            );
+        }
+    }
+    assert_eq!(
+        plan.open().err().unwrap().code(),
+        ErrorCode::ContentUnavailable
+    );
+    for binding in bindings {
+        assert!(binding.status().unwrap().drained());
+    }
+}

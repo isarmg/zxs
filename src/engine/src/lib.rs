@@ -36,7 +36,9 @@ pub use business::{
     NamespaceTree, PreparedUpload, UploadPreparation, validate_branch_name,
 };
 pub use degraded_recovery::RecoveryPlan;
-pub use disk::{offline_check, offline_export};
+pub use disk::{DiskFile, offline_check, offline_export};
+#[cfg(feature = "fault-injection")]
+pub use engine::DiskQuiesceFault;
 pub use engine::{
     ContentReadPlan, DiskObservation, DiskObservationFailure, DiskObservationPlan,
     DiskObservationStage, Engine, HistoryWindowCancellation, HistoryWindowRead, IndexFailure,
@@ -48,7 +50,7 @@ pub use engine::{
     MembershipJointVote, MembershipJournalInspection, MetadataMemberProbe, MetadataView,
     ObservedDiskStatus, OpenedContent, OperationReadObservation, OperationReadPlan,
     OperationRecord, PendingMemberControlReceipt, PendingMemberDirectory, PendingMembershipStatus,
-    RangeContent, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
+    RangeContent, ReadFile, ReadLease, RecoverySealContext, RecoverySealFailure, RecoveryWarnings,
     RetainedWorkspaceLimits, ValidatedConfig, WorkspaceInventory, WorkspaceInventoryRecord,
     WorkspaceReadPlan, verify_membership_control_archive,
 };

@@ -308,3 +308,125 @@ fn dispatched_read_retains_the_verified_slice_after_cache_release() {
     assert!(active.read_cache.is_none());
     assert_eq!(bytes.as_ref(), b"ld");
 }
+
+fn quiesce_read_disk(backend: &LostCommitReply, slot: &str) -> storage_engine::DiskQuiesceFault {
+    let mut fault = backend
+        .inner
+        .test_with_engine_locked(|engine| engine.inject_disk_quiesce(slot).unwrap());
+    assert!(!fault.is_drained().unwrap());
+    fault.release_control();
+    fault
+}
+
+fn read_slots(backend: &LostCommitReply, version: &str) -> Vec<String> {
+    backend
+        .inner
+        .test_with_engine_locked(|engine| engine.state().placements[version].route_slot_ids.clone())
+}
+
+fn read_descriptor_identities(session: &Session, handle: u64) -> Vec<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let Handle::Read(content, _) = &session.handles[&handle] else {
+        panic!("expected an immutable read handle");
+    };
+    std::iter::once(&content.file)
+        .chain(&content.fallback_files)
+        .map(|file| {
+            let metadata = file.metadata().unwrap();
+            (metadata.dev(), metadata.ino())
+        })
+        .collect()
+}
+
+fn matching_read_descriptors(identity: (u64, u64)) -> usize {
+    use std::os::unix::fs::MetadataExt;
+    fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter(|entry| match fs::metadata(entry.as_ref().unwrap().path()) {
+            Ok(metadata) => (metadata.dev(), metadata.ino()) == identity,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => panic!("inspect test descriptor: {error}"),
+        })
+        .count()
+}
+
+#[test]
+fn idle_smb_handles_release_real_payload_descriptors_without_another_rpc() {
+    let (_temp, shared, backend, branch) = fixture();
+    let mut active = session(shared, &branch);
+    let (opened, _placeholder) = open_file(&mut active, false);
+    let files = read_descriptor_identities(&active, opened.handle);
+    let slots = read_slots(&backend, opened.version_id.as_deref().unwrap());
+    assert!(
+        files
+            .iter()
+            .all(|identity| matching_read_descriptors(*identity) > 0)
+    );
+    for slot in &slots {
+        let fault = quiesce_read_disk(&backend, slot);
+        assert_eq!(fault.ordinary_count().unwrap(), 0);
+        assert!(fault.is_drained().unwrap());
+    }
+    // The SMB session and handle are still live. No read, timeout or close is
+    // needed to retire the actual disk files held by that idle handle.
+    assert!(active.handles.contains_key(&opened.handle));
+    assert!(
+        files
+            .iter()
+            .all(|identity| matching_read_descriptors(*identity) == 0)
+    );
+    active.authorize_read(opened.handle).unwrap();
+    assert_eq!(
+        active.read(opened.handle, 0, 3).unwrap_err().code,
+        storage_contract::ErrorCode::ContentUnavailable
+    );
+    active.close(opened.handle, true).unwrap();
+}
+
+#[test]
+fn a_cached_smb_chunk_cannot_revive_a_fully_cancelled_handle() {
+    let (_temp, shared, backend, branch) = fixture();
+    let mut active = session(shared, &branch);
+    let (opened, _placeholder) = open_file(&mut active, false);
+    assert_eq!(read_session(&mut active, opened.handle, 0, 1), b"o");
+    assert!(active.read_cache.is_some());
+    for slot in read_slots(&backend, opened.version_id.as_deref().unwrap()) {
+        assert!(quiesce_read_disk(&backend, &slot).is_drained().unwrap());
+    }
+    for (offset, length) in [(1, 2), (0, 0), (3, 1)] {
+        let error = active.read(opened.handle, offset, length).unwrap_err();
+        assert_eq!(error.code, storage_contract::ErrorCode::ContentUnavailable);
+    }
+    assert!(active.read_cache.is_none());
+    active.close(opened.handle, true).unwrap();
+}
+
+#[test]
+fn an_open_smb_handle_uses_only_the_still_admitted_replica() {
+    let (_temp, shared, backend, branch) = fixture();
+    let mut active = session(shared, &branch);
+    let (opened, _placeholder) = open_file(&mut active, false);
+    let files = read_descriptor_identities(&active, opened.handle);
+    let slots = read_slots(&backend, opened.version_id.as_deref().unwrap());
+    assert!(quiesce_read_disk(&backend, &slots[0]).is_drained().unwrap());
+    assert_eq!(matching_read_descriptors(files[0]), 0);
+    assert!(
+        files[1..]
+            .iter()
+            .all(|identity| matching_read_descriptors(*identity) > 0)
+    );
+    assert_eq!(read_session(&mut active, opened.handle, 0, 3), b"old");
+    for slot in &slots[1..] {
+        assert!(quiesce_read_disk(&backend, slot).is_drained().unwrap());
+    }
+    assert!(
+        files
+            .iter()
+            .all(|identity| matching_read_descriptors(*identity) == 0)
+    );
+    assert_eq!(
+        active.read(opened.handle, 0, 3).unwrap_err().code,
+        storage_contract::ErrorCode::ContentUnavailable
+    );
+    active.close(opened.handle, true).unwrap();
+}

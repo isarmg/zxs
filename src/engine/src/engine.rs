@@ -51,9 +51,14 @@ mod recovery_checkpoint;
 mod workspace_budget;
 mod workspace_limits;
 pub use workspace_limits::RetainedWorkspaceLimits;
+#[cfg(feature = "fault-injection")]
+mod disk_io_fault;
 mod source;
+#[cfg(feature = "fault-injection")]
+pub use disk_io_fault::DiskQuiesceFault;
 mod workspace_storage;
 use config::acquire_locks;
+pub use source::ReadFile;
 pub(crate) use source::ReadSource;
 pub use workspace_storage::{WorkspaceInventory, WorkspaceInventoryRecord};
 
@@ -227,7 +232,7 @@ impl Drop for ReadLease {
     }
 }
 pub struct OpenedContent {
-    pub file: File,
+    pub file: ReadFile,
     pub size: u64,
     pub content_hash: crate::ContentHash,
     pub lease: ReadLease,

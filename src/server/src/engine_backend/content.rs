@@ -70,8 +70,8 @@ impl EngineBackend {
         let content = plan.open().map_err(error)?;
         Ok(Content {
             checksum_manifest: Some(content.manifest),
-            fallback_files: content.fallback_files,
-            file: content.file,
+            fallback_files: content.fallback_files.into_iter().map(Into::into).collect(),
+            file: content.file.into(),
             size: content.size,
             hash: content.content_hash.to_string(),
             lease: Box::new((content.lease, proof_memory)),
@@ -95,7 +95,7 @@ impl EngineBackend {
         Ok(Content {
             checksum_manifest: None,
             fallback_files: Vec::new(),
-            file: opened.file,
+            file: opened.file.into(),
             size: opened.size,
             hash: opened.content_hash.to_string(),
             lease: Box::new(opened.lease),

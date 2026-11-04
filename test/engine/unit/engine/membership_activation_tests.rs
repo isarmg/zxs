@@ -11,6 +11,79 @@ struct Fixture {
     history: String,
     version: String,
 }
+
+#[test]
+fn admitted_generation_retains_io_gate_without_revoking_historical_read_authority() {
+    let mut fixture = Fixture::new();
+    let disk = fixture.engine.config.disks[0].clone();
+    let old = Arc::clone(fixture.engine.disk_resources.get(&disk).unwrap());
+    let binding = old.root.io_binding().unwrap().clone();
+    let lease = old.root.admit_io().unwrap();
+    fixture.engine.activate_pending_membership().unwrap();
+    lease.check_running().unwrap();
+    assert!(matches!(
+        binding.begin_quiesce(),
+        Err(error) if error.code() == ErrorCode::ConfigConflict
+    ));
+    let current = fixture.engine.disk_resources.get(&disk).unwrap();
+    let transition = current
+        .root
+        .io_binding()
+        .unwrap()
+        .begin_quiesce()
+        .unwrap()
+        .unwrap();
+    drop(transition);
+    assert_eq!(
+        lease.check_running().unwrap_err().code(),
+        ErrorCode::DiskUnavailable
+    );
+    assert!(binding.status().unwrap().quiescing);
+    assert!(!binding.status().unwrap().drained());
+    drop(lease);
+    assert!(binding.status().unwrap().drained());
+}
+
+#[test]
+fn a_later_retained_root_failure_preserves_every_old_io_control_authority() {
+    let mut fixture = Fixture::new();
+    let old = fixture
+        .engine
+        .disk_resources
+        .handles()
+        .cloned()
+        .collect::<Vec<_>>();
+    let last = fixture.target.disks.last().unwrap().clone();
+    let displaced = fixture.temp.path().join("displaced-activation-root");
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    fixture.engine.inject_pause_once(
+        &format!("after_membership_activation_marker_{}", last.disk_id),
+        Arc::clone(&barrier),
+    );
+    let worker = std::thread::spawn(move || {
+        let result = fixture.engine.activate_pending_membership();
+        (fixture, result)
+    });
+    barrier.wait();
+    fs::rename(&last.root, &displaced).unwrap();
+    fs::create_dir(&last.root).unwrap();
+    fs::set_permissions(&last.root, fs::Permissions::from_mode(0o700)).unwrap();
+    barrier.wait();
+    let (fixture, result) = worker.join().unwrap();
+    assert_eq!(result.unwrap_err().code(), ErrorCode::DiskIdentityMismatch);
+    assert!(fixture.engine.config.generation().is_none());
+    fs::remove_dir(&last.root).unwrap();
+    fs::rename(&displaced, &last.root).unwrap();
+    // Earlier roots were prepared successfully, but none may have published the
+    // new authority before the final root's identity validation failed.
+    for handle in old {
+        let binding = handle.root.io_binding().unwrap();
+        let transition = binding.begin_quiesce().unwrap().unwrap();
+        drop(transition);
+        assert!(binding.status().unwrap().drained());
+    }
+}
+
 impl Fixture {
     fn new() -> Self {
         Self::prepared(|_, _| {})
