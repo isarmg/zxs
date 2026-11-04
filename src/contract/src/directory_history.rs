@@ -63,7 +63,9 @@ impl DirectoryHistoryCursor {
         };
         let bytes = encoded
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| Ok(digit(pair[0])? * 16 + digit(pair[1])?))
             .collect::<Result<Vec<u8>>>()?;
         let payload: CursorPayload = crate::decode_strict(&bytes)?;

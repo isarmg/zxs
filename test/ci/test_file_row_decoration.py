@@ -46,7 +46,8 @@ class FileRowDecoration(unittest.TestCase):
     def test_decoration_does_not_replace_native_rows_or_actions(self):
         view = (ROOT / 'src/web/src/files/view.rs').read_text()
         self.assertEqual(view.count('<span class="zxs-file-row-surface" aria-hidden="true"></span>'), 2)
-        self.assertEqual(view.count('on:scroll=sync_row_viewport'), 2)
+        self.assertEqual(view.count('web_interface::ev::on(web_interface::ev::Custom::new("scroll"), sync_row_viewport)'), 2)
+        self.assertNotIn('on:scroll=', view)
         self.assertIn('js_sys::Reflect::get(scroll.as_ref(), &"scrollLeft".into())', view)
         self.assertNotIn('scroll.scroll_left()', view)
         self.assertIn('<tr class:is-selected=move ||checked.get()', view)

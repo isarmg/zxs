@@ -78,7 +78,7 @@ fn disk_roots(state: RwSignal<State>) -> impl IntoView {
                 DiskRoots::Empty => return view!{<EmptyState message=t("没有可访问的硬盘目录。","No disk directories are available.")/>}.into_any(),
                 DiskRoots::Disks(disks) => disks,
             };
-            view!{<div class="zxs-file-layout zxs-stack zxs-surface"><section class="zxs-content-panel zxs-file-list-panel zxs-frame zxs-stack zxs-stack--flush" aria-label=t("硬盘目录","Disk directories")><div class="zxs-table-scroll" on:scroll=sync_row_viewport>
+            view!{<div class="zxs-file-layout zxs-stack zxs-surface"><section class="zxs-content-panel zxs-file-list-panel zxs-frame zxs-stack zxs-stack--flush" aria-label=t("硬盘目录","Disk directories")><div class="zxs-table-scroll" {web_interface::ev::on(web_interface::ev::Custom::new("scroll"), sync_row_viewport)}>
                 <table class="zxs-table zxs-file-table zxs-disk-table">
                     <thead><tr><th scope="col"><span class="zxs-file-row-decoration" aria-hidden="true"></span>{t("名称","Name")}</th><th scope="col">{t("访问权限","Access")}</th><th scope="col">{t("可用空间","Available space")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>
                     <tbody>{disks.into_iter().map(move |disk|{
@@ -186,7 +186,7 @@ fn file_table(state: RwSignal<State>) -> impl IntoView {
     let disabled = Memo::new(move |_| state.with(|s| !actions::write_allowed(s)));
     view! {
         <div aria-busy=move ||state.with(|s|s.files.loading).to_string()>
-            <div class="zxs-table-scroll" on:scroll=sync_row_viewport><table class="zxs-table zxs-file-table" aria-label=t("文件列表：每页最多 200 项","Files: up to 200 entries per page")><thead><tr><th scope="col"><span class="zxs-file-row-decoration" aria-hidden="true"></span><label class="zxs-file-check zxs-flow"><input type="checkbox" aria-label=t("选择本页全部条目（最多 200 项）","Select all entries on this page (up to 200)") disabled=move ||disabled.get() prop:checked=move ||rows.with(|rows|!rows.is_empty()&&state.with(|s|rows.iter().all(|row|s.files.checked_entries.contains(&row.check_id)))) on:change=move |event|{
+            <div class="zxs-table-scroll" {web_interface::ev::on(web_interface::ev::Custom::new("scroll"), sync_row_viewport)}><table class="zxs-table zxs-file-table" aria-label=t("文件列表：每页最多 200 项","Files: up to 200 entries per page")><thead><tr><th scope="col"><span class="zxs-file-row-decoration" aria-hidden="true"></span><label class="zxs-file-check zxs-flow"><input type="checkbox" aria-label=t("选择本页全部条目（最多 200 项）","Select all entries on this page (up to 200)") disabled=move ||disabled.get() prop:checked=move ||rows.with(|rows|!rows.is_empty()&&state.with(|s|rows.iter().all(|row|s.files.checked_entries.contains(&row.check_id)))) on:change=move |event|{
                 let checked=event_target_checked(&event);
                 rows.with_untracked(|rows|state.update(|s|{for row in rows {if row.current_entry(s).is_some(){if checked{s.files.checked_entries.insert(row.check_id.clone());}else{s.files.checked_entries.remove(&row.check_id);}}}}));
             }/><span>{t("名称","Name")}</span></label></th><th scope="col">{t("类型","Type")}</th><th scope="col">{t("大小","Size")}</th><th scope="col">{t("操作","Actions")}</th></tr></thead>

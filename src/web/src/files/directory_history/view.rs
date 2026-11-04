@@ -113,7 +113,7 @@ pub(in crate::files) fn view(state: RwSignal<State>) -> impl IntoView {
                     <Show when=move ||node.with(|node|node.as_ref().is_some_and(|node|node.parent_tree_id.is_none()))><span class="zxs-row">{t("无父关系","No parent relationships")}</span></Show>
                 </article>}
             })}
-            <section class="zxs-stack zxs-directory-history-branches"><h4 class="zxs-row">{t("目录分支","Folder branches")}</h4>
+            <section class="zxs-stack zxs-directory-history-branches"><p class="zxs-row" role="heading" {web_interface::attr::custom::custom_attribute("aria-level", "4")}>{t("目录分支","Folder branches")}</p>
                 <p class="zxs-row">{t("下列分支名称来自独立分页；点击可定位该分支引用的真实节点。这里只查看历史，不改变默认分支。","Branch names are independently paginated. Locate the real node referenced by a branch. Viewing this history does not change the default branch.")}</p>
                 <For each=move ||model.with(|model|model.branches.as_ref().map(|page|page.branches.clone()).unwrap_or_default()) key=|branch|branch.directory_branch_id.clone() children=move |branch| {
                     let tree=StoredValue::new(branch.head_tree_id);

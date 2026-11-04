@@ -303,7 +303,7 @@ pub(crate) fn node_control(state: RwSignal<State>, id: String) -> impl IntoView 
         <Show when=move ||active.get().is_none()>
             <button class="zxs-button" disabled=move ||disabled.get() on:click=move |_|start_from_node(state,id.get_value())>{t("从此节点合并","Merge from this node")}</button>
         </Show>
-        <For each=move ||active.get().into_iter().collect::<Vec<_>>() key=|instance|*instance children=move |instance|view!{
+        <For each={move ||active.get().into_iter().collect::<Vec<_>>()} key=|instance|*instance children=move |instance|view!{
             <button class="zxs-button" data-history-merge-input=id.get_value() aria-pressed=move ||state.with(|s|s.files.merge.as_ref().and_then(|draft|draft.historical.as_ref()).is_some_and(|selection|selection.sources.contains_key(&id.get_value()))).to_string()
                 disabled=move ||disabled.get() on:click=move |_|select_source(state,instance,&id.get_value())>{move ||state.with(|s|if s.files.merge.as_ref().and_then(|draft|draft.historical.as_ref()).is_some_and(|selection|selection.sources.contains_key(&id.get_value())){t("已选为合并输入","Selected merge input")}else{t("选择为合并输入","Select merge input")})}</button>
             <button class="zxs-button" data-history-merge-result=id.get_value() aria-pressed=move ||state.with(|s|s.files.merge.as_ref().and_then(|draft|draft.chosen.as_ref()).is_some_and(|node|node.id==id.get_value())).to_string()
